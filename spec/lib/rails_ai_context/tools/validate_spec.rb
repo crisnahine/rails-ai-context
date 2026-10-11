@@ -445,6 +445,80 @@ RSpec.describe RailsAiContext::Tools::Validate do
         expect(text).to include("skipped (line 2 is JSX, which node does not parse)")
         expect(text).to include("0/0 files passed")
       end
+
+      # The pre-commit hook runs this, and stopped every commit of a MobX store
+      # its bundler compiles: "Invalid or unexpected token".
+      it "skips a decorator wherever one may start, and fails an @ that starts none" do
+        store = validate_js("store.js", <<~JS)
+          import { observable, action } from "mobx"
+
+          class Store {
+            @observable count = 0
+
+            @action.bound
+            inc() { this.count++ }
+          }
+          export default Store
+        JS
+        expect(store).to include("skipped (line 4 is a decorator, which node does not parse)", "0/0 files passed")
+        expect(validate_js("tag.js", "@customElement(\"x-tag\")\nexport class Tag extends HTMLElement {}\n"))
+          .to include("skipped (line 1 is a decorator, which node does not parse)")
+        expect(validate_js("panel.js", "export @controller class Panel {}\n")).to include("skipped (line 1 is a decorator")
+
+        expect(validate_js("mail.js", "const to = support@example.com\n"))
+          .to include("mail.js:1:18: SyntaxError: Invalid or unexpected token", "0/1 files passed")
+        expect(validate_js("member.js", "const name = user.@name\n")).to include("member.js:1:18: SyntaxError")
+      end
+
+      # A Flow file is compiled by Babel or flow-remove-types; node's error
+      # may be Flow's syntax or the file's own, so it is named, not failed.
+      it "skips a file that declares Flow, naming where node stopped" do
+        text = validate_js("typed.js", <<~JS)
+          /* @flow strict */
+
+          export function add(a: number, b: number): number {
+            return a + b
+          }
+        JS
+
+        expect(text).to include("skipped (it is Flow (@flow), which node does not parse; node stops at " \
+                                "typed.js:3:21: SyntaxError: Unexpected token ':')")
+        expect(text).to include("0/0 files passed")
+      end
+
+      context "in an app that compiles its JavaScript with Babel" do
+        let(:annotated) { "export function add(a: number, b: number): number {\n  return a + b\n}\n" }
+
+        it "skips what node cannot parse, naming the config and where node stopped" do
+          File.write(File.join(dir, "babel.config.json"), %({ "presets": ["@babel/preset-typescript"] }\n))
+
+          expect(validate_js("add.js", annotated))
+            .to include("skipped (Babel compiles it (tmp/js_check/babel.config.json), taking syntax node does not parse; " \
+                        "node stops at add.js:1:21: SyntaxError: Unexpected token ':')")
+        end
+
+        it "finds a .babelrc or a package.json babel key in a directory above the file" do
+          FileUtils.mkdir_p(File.join(dir, "nested"))
+          File.write(File.join(dir, ".babelrc"), "{}\n")
+          File.write(File.join(dir, "nested/add.js"), annotated)
+          expect(described_class.call(files: [ "tmp/js_check/nested/add.js" ]).content.first[:text])
+            .to include("skipped (Babel compiles it (tmp/js_check/.babelrc)")
+
+          File.delete(File.join(dir, ".babelrc"))
+          File.write(File.join(dir, "package.json"), %({ "babel": { "presets": ["@babel/preset-flow"] } }\n))
+          expect(described_class.call(files: [ "tmp/js_check/nested/add.js" ]).content.first[:text])
+            .to include('skipped (Babel compiles it ("babel" in tmp/js_check/package.json), taking syntax node does not parse')
+        end
+      end
+
+      # Nothing compiles these, so node's verdict is the commit's: TypeScript
+      # and esbuild refuse annotations in a .js file too.
+      it "still fails a real error, and TypeScript's annotations, in a .js file nothing compiles" do
+        expect(validate_js("add.js", "export function add(a: number) {\n  return a\n}\n"))
+          .to include("add.js:1:21: SyntaxError: Unexpected token ':'", "0/1 files passed")
+        expect(validate_js("flowless.js", "// a note about @flowers\nexport function add(a: number) {}\n"))
+          .to include("flowless.js:2:21: SyntaxError: Unexpected token ':'")
+      end
     end
 
     context "without node" do

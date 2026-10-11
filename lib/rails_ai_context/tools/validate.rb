@@ -318,6 +318,21 @@ module RailsAiContext
       # does not parse, rather than a broken script.
       JSX_TAG = %r{<(?:/?[A-Za-z]|>)}
 
+      # A decorator: `@` opening a name or a parenthesis where a class or a
+      # member starts, `export @dec class` included - never straight after
+      # a name, a `.` or a closing bracket. Babel, TypeScript and esbuild
+      # compile one; Node 22 parses none.
+      DECORATOR = /(?<![\p{Alnum}_$.)\]])(?:export\s+(?:default\s+)?)?@[\p{Alpha}_$(]/
+
+      # Flow reads its pragma - `// @flow`, `/* @flow strict */` - from the
+      # comments a file opens with.
+      LEADING_COMMENTS = %r{\A(?:#![^\n]*)?(?:\s|//[^\n]*|/\*.*?\*/)*}m
+      FLOW_PRAGMA = /@flow\b/
+
+      # Where Babel reads its configuration, besides a "babel" key in package.json.
+      BABEL_CONFIGS = %w[babel.config.js babel.config.cjs babel.config.mjs babel.config.cts babel.config.json
+                         .babelrc .babelrc.js .babelrc.cjs .babelrc.mjs .babelrc.cts .babelrc.json].freeze
+
       # `node -c file.js` leaves the module system to Node, and for a .js file
       # whose package declares no type Node 22 decides it by retrying as a
       # module - a retry the check skips, so every Stimulus controller passed,
@@ -336,11 +351,61 @@ module RailsAiContext
         return [ true, nil, [] ] if ok
 
         line = output[/^\[stdin\]:(\d+)$/, 1]&.to_i
-        if node_message(output) == "SyntaxError: Unexpected token '<'" && line && source.lines[line - 1].to_s.match?(JSX_TAG)
-          return [ :skipped, "line #{line} is JSX, which node does not parse" ]
+        error = node_error(output, line, File.basename(full_path.to_s))
+        compiled = compiled_syntax(full_path, source, output, line, error)
+        compiled ? [ :skipped, compiled ] : [ false, error, [] ]
+      end
+
+      # Why what node stopped at is no verdict on the file: syntax node does
+      # not parse that the app's own toolchain compiles, so a commit is
+      # never stopped for it. JSX and a decorator are told by where node
+      # stopped. In a file that declares Flow, or one Babel compiles, any
+      # syntax may be the toolchain's, and node's error is named beside the
+      # skip. nil where nothing compiles the file and node's error is its
+      # own - TypeScript's annotations in a .js file among them, which
+      # neither TypeScript nor esbuild takes there.
+      private_class_method def self.compiled_syntax(full_path, source, output, line, error)
+        text = source.lines[line - 1].to_s if line
+        if node_message(output) == "SyntaxError: Unexpected token '<'" && text&.match?(JSX_TAG)
+          return "line #{line} is JSX, which node does not parse"
         end
 
-        [ false, node_error(output, line, File.basename(full_path.to_s)), [] ]
+        column = caret_column(output)
+        return "line #{line} is a decorator, which node does not parse" if column && text&.index(DECORATOR, column) == column
+        return "it is Flow (@flow), which node does not parse; node stops at #{error}" if source[LEADING_COMMENTS].match?(FLOW_PRAGMA)
+
+        config = babel_config(full_path)
+        "Babel compiles it (#{config}), taking syntax node does not parse; node stops at #{error}" if config
+      end
+
+      # The Babel configuration a file is compiled with, named from the app's
+      # root: one in its directory or any above it, up to the top of the
+      # app's repository, where a JavaScript workspace keeps one for every
+      # package in it - or the app's root outside one. nil for none.
+      private_class_method def self.babel_config(full_path)
+        root = File.realpath(rails_app.root.to_s)
+        top = RailsAiContext::SafePath.git_root(root) || root
+        dir = File.dirname(full_path.to_s)
+        shown = ->(path) { Pathname.new(path).relative_path_from(Pathname.new(root)).to_s }
+        while dir == top || dir.start_with?("#{top}/")
+          name = BABEL_CONFIGS.find { |config| File.file?(File.join(dir, config)) }
+          return shown.(File.join(dir, name)) if name
+
+          manifest = File.join(dir, "package.json")
+          return %("babel" in #{shown.(manifest)}) if babel_key?(manifest)
+
+          dir = File.dirname(dir)
+        end
+        nil
+      end
+
+      private_class_method def self.babel_key?(manifest)
+        return false unless File.file?(manifest)
+
+        data = JSON.parse(RailsAiContext::SafeFile.read(manifest).to_s)
+        data.is_a?(Hash) && data.key?("babel")
+      rescue JSON::ParserError
+        false
       end
 
       private_class_method def self.node_check(source, type)
@@ -384,9 +449,14 @@ module RailsAiContext
           return lines.any? ? lines.join("\n") : "syntax error"
         end
 
-        caret = output.lines.map(&:chomp).find { |l| l.match?(/\A\s*\^+\s*\z/) }
-        column = caret&.index("^")
+        column = caret_column(output)
         "#{basename}:#{line}#{":#{column}" if column}: #{message}"
+      end
+
+      # Where on its line node stopped: the caret under the source line it
+      # prints, which keeps that line's tabs.
+      private_class_method def self.caret_column(output)
+        output.lines.map(&:chomp).find { |l| l.match?(/\A\s*\^+\s*\z/) }&.index("^")
       end
 
       # Without node, balanced brackets are all that is known, which is no

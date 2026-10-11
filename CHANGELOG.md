@@ -165,6 +165,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never back up over the tree it walks, each linked directory once, so a
   link that leads round in a circle ends. Where a link leads is asked at
   every check, so one whose directory appears later is followed too.
+- **The pre-commit hook no longer stops a commit for JavaScript the app's
+  own toolchain compiles.** `rails_validate` failed a Flow file
+  (`Typed.js:3:21: SyntaxError: Unexpected token ':'`), a MobX store's
+  decorators (`Invalid or unexpected token`) and any syntax a Babel config
+  adds, since node parses none of them. A decorator is now skipped as JSX
+  is, naming its line. A file that declares Flow (`// @flow`), or one Babel
+  compiles - a `babel.config.*` or `.babelrc*` file, or a `"babel"` key in
+  `package.json`, in its folder or one above it up to the top of the
+  repository - is skipped with node's error named beside it, since that may
+  be the toolchain's syntax or the file's own mistake. Type annotations in a
+  `.js` file nothing compiles, and a plain syntax error, still fail.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which
