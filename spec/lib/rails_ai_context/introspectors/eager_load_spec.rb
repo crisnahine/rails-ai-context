@@ -31,7 +31,10 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       rootless = double("engine", root: nil)
       allow(Rails::Engine).to receive(:subclasses).and_return([ rootless, enclosing, unrelated ])
       loaded = []
-      allow(described_class).to receive(:load_dir) { |path| loaded << path }
+      allow(described_class).to receive(:load_dir) do |path|
+        loaded << path
+        {}
+      end
 
       described_class.dir(dummy, kind: "app/models")
 
@@ -76,6 +79,83 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       expect(Object.autoload?(:Nested)).to be_nil
       expect(Nested.autoload?(:ZzFine)).to be_nil
       expect(Nested.const_defined?(:ZzFine, false)).to be true
+    end
+  end
+
+  # Requiring a file that does not compile raised a SyntaxError out of Ruby's
+  # compiler, and with web-console in the bundle (bindex's raise hook) that
+  # crashed the server. A file whose class body names its constant requires
+  # it too, through the autoload.
+  describe "a file that does not compile" do
+    let(:dir) { Dir.mktmpdir }
+    let(:loader) { Zeitwerk::Loader.new.tap { |l| l.push_dir(dir); l.setup } }
+
+    before do
+      File.write(File.join(dir, "zz_parent.rb"), "class ZzParent\n  def broken(\nend\n")
+      File.write(File.join(dir, "zz_child.rb"), "class ZzChild < ZzParent\nend\n")
+      File.write(File.join(dir, "zz_grandchild.rb"), "class ZzGrandchild < ZzChild\nend\n")
+      File.write(File.join(dir, "zz_bystander.rb"), "class ZzBystander\n  def parent = ZzParent\nend\n")
+      allow(RailsAiContext::PathResolver).to receive(:dirs_for).and_return([ dir ])
+      allow(Rails.autoloaders).to receive(:main).and_return(loader)
+      allow(RailsAiContext).to receive(:log_warn)
+    end
+
+    # Without reloading enabled, unload leaves what was loaded defined.
+    after do
+      loader.unload
+      loader.unregister if loader.respond_to?(:unregister)
+      %i[ZzParent ZzChild ZzGrandchild ZzBystander].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+      FileUtils.remove_entry(dir)
+    end
+
+    def syntax_errors_raised
+      raised = []
+      trace = TracePoint.new(:raise) { |tp| raised << tp.raised_exception if tp.raised_exception.is_a?(SyntaxError) }
+      trace.enable { yield }
+      raised
+    end
+
+    it "is never required, nor is a file whose class body needs it, and the rest loads" do
+      raised = syntax_errors_raised { described_class.dir(dir, kind: "app/models") }
+
+      expect(raised).to be_empty
+      expect([ Object.autoload?(:ZzParent), Object.autoload?(:ZzChild), Object.autoload?(:ZzGrandchild) ]).to all(be_a(String))
+      expect(Object.autoload?(:ZzBystander)).to be_nil
+      expect(Object.const_defined?(:ZzBystander, false)).to be true
+    end
+
+    it "says why each was left out, once for each version of the file" do
+      2.times { described_class.dir(dir, kind: "app/models") }
+
+      expect(RailsAiContext).to have_received(:log_warn)
+        .with(a_string_matching(/Left unloaded: \S*zz_parent\.rb:3: syntax error, unexpected 'end'/)).once
+      expect(RailsAiContext).to have_received(:log_warn)
+        .with(a_string_matching(/Left unloaded: \S*zz_child\.rb needs ZzParent, which does not compile: \S*zz_parent\.rb:3:/)).once
+      expect(RailsAiContext).to have_received(:log_warn)
+        .with(a_string_matching(/Left unloaded: \S*zz_grandchild\.rb needs ZzChild, which needs a file that does not compile: \S*zz_parent\.rb:3:/)).once
+    end
+
+    # After a reload every file is unloaded again; only an edited one costs a read.
+    it "reads a file again only once its stat changes" do
+      Dir.glob(File.join(dir, "*.rb")).each { |file| File.utime(Time.now - 60, Time.now - 60, file) }
+      allow(Prism).to receive(:parse_file_success?).and_call_original
+
+      2.times { described_class.dir(dir, kind: "app/models") }
+      expect(Prism).to have_received(:parse_file_success?).with(File.join(dir, "zz_child.rb"), any_args).once
+
+      File.write(File.join(dir, "zz_child.rb"), "class ZzChild < ZzParent\n  X = 1\nend\n")
+      described_class.dir(dir, kind: "app/models")
+      expect(Prism).to have_received(:parse_file_success?).with(File.join(dir, "zz_child.rb"), any_args).twice
+    end
+
+    it "loads the file once it compiles" do
+      described_class.dir(dir, kind: "app/models")
+      File.write(File.join(dir, "zz_parent.rb"), "class ZzParent\nend\n")
+
+      described_class.dir(dir, kind: "app/models")
+
+      expect([ Object.autoload?(:ZzParent), Object.autoload?(:ZzChild), Object.autoload?(:ZzGrandchild) ]).to all(be_nil)
+      expect(ZzGrandchild.superclass.superclass.name).to eq("ZzParent")
     end
   end
 
