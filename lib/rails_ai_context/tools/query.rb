@@ -1615,38 +1615,44 @@ module RailsAiContext
         return "_Query returned 0 rows._" if rows.empty?
 
         lines = []
-        lines << columns.join(",")
+        lines << columns.map { |col| csv_field(col.to_s) }.join(",")
         rows.each do |row|
-          lines << row.map { |val|
-            formatted = format_cell(val)
-            # Quote values that contain commas, quotes, or newlines
-            if formatted.include?(",") || formatted.include?('"') || formatted.include?("\n") || formatted.include?("\r")
-              "\"#{formatted.gsub('"', '""')}\""
-            else
-              formatted
-            end
-          }.join(",")
+          lines << row.map { |val| csv_field(csv_cell(val)) }.join(",")
         end
 
         lines.join("\n")
       end
 
+      # A CSV cell is the value itself: NULL is an empty field, and nothing is
+      # escaped beyond CSV quoting or cut short - the markdown cell's `_NULL_`,
+      # `\|` and 100-character cut are table rendering, not data. Binary data is
+      # not text, so it stays the [BLOB] marker.
+      private_class_method def self.csv_cell(val)
+        return "" if val.nil?
+        return "[BLOB]" if val.is_a?(String) && val.encoding == Encoding::ASCII_8BIT
+
+        val.to_s
+      end
+
+      # RFC 4180: a field holding a comma, a quote or a line break is quoted, its
+      # quotes doubled.
+      private_class_method def self.csv_field(text)
+        text.match?(/[",\r\n]/) ? "\"#{text.gsub('"', '""')}\"" : text
+      end
+
+      # A markdown table cell. A line break would end the table row, so it is
+      # shown as the two characters `\n`; a pipe would end the cell, so it is
+      # escaped, in a shortened value too.
       private_class_method def self.format_cell(val)
         return "_NULL_" if val.nil?
 
         if val.is_a?(String)
           # Detect binary/BLOB data
-          if val.encoding == Encoding::ASCII_8BIT
-            return "[BLOB]"
-          end
+          return "[BLOB]" if val.encoding == Encoding::ASCII_8BIT
 
-          # Truncate long strings
-          if val.length > 100
-            return "#{val[0...100]}..."
-          end
-
-          # Escape pipe characters for markdown tables
-          return val.gsub("|", "\\|")
+          text = val.gsub(/\r\n|\r|\n/, "\\n")
+          text = "#{text[0...100]}..." if text.length > 100
+          return text.gsub("|", "\\|")
         end
 
         val.to_s
