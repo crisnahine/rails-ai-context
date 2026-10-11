@@ -574,6 +574,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
               t.string :token, null: false
               t.string :name
               t.string :slug, default: "x", null: false
+              t.datetime :seen_at
+              t.datetime :touched_at
             end
           end
         end
@@ -583,6 +585,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
             change_column :widgets, :token, :string, null: true
             change_column :widgets, :name, :string, default: "unnamed"
             change_column :widgets, :slug, :text
+            change_column :widgets, :seen_at, :datetime, default: -> { "CURRENT_TIMESTAMP" }
+            change_table(:widgets) { |t| t.change :touched_at, :datetime, default: -> { "CURRENT_TIMESTAMP" } }
           end
         end
       RELAX
@@ -590,6 +594,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("| token | string | yes |  |")
       expect(text).to include("| name | string | yes | unnamed |")
       expect(text).to include("| slug | text | **NO** | x |")
+      expect(text).to include(%q(| seen_at | datetime | yes | -> { "CURRENT_TIMESTAMP" } |))
+      expect(text).to include(%q(| touched_at | datetime | yes | -> { "CURRENT_TIMESTAMP" } |))
     end
 
     it "keeps where: on the index a t.references declares" do

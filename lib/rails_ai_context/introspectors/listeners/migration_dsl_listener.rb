@@ -97,7 +97,7 @@ module RailsAiContext
           when :rename_column
             result[:new_name] = literal_string(args[2])
           when :change_column
-            result[:column_type] = literal_string(args[2])
+            result.merge!(column_type: literal_string(args[2]), default_source: default_source(node), default_proc: proc_default?(node))
           when :change_column_null
             # The nullability is the third positional, not a keyword.
             result[:null] = boolean_value(args[2])
