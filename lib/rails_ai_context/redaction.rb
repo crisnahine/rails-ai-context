@@ -66,7 +66,13 @@ module RailsAiContext
     CREDENTIAL_SHAPE = /[a-f0-9]{16,}|sk_|pk_/i
 
     ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
-    EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
+    # An address in any script (jürgen@example.com, anna@münchen.de). It starts
+    # where a run of name characters starts and takes the name whole, with
+    # nothing to give back, so a 1 MB line of near-addresses costs a pass,
+    # not a pass per character.
+    EMAIL_PATTERN = /(?<![\p{L}\p{M}\p{N}._%+-])[\p{L}\p{M}\p{N}._%+-]++@(?:[\p{L}\p{M}\p{N}-]++\.)+[\p{L}\p{M}]{2,}(?![\p{L}\p{M}\p{N}-])/
+    # The same for a line in another encoding, which a Unicode pattern cannot read.
+    ASCII_EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
     DOTENV_LINE = /\[dotenv\]\s+Set\s+.*/i
     # A log value: quoted whole, or bare up to a space, a quote or a separator,
     # so the quotes and the comma around it survive its redaction.
@@ -283,7 +289,7 @@ module RailsAiContext
           name = Regexp.last_match(:name)
           log_secret?(name, Regexp.last_match(:value)) ? "#{name}=#{FILTERED}" : m
         end
-        result.gsub!(EMAIL_PATTERN, EMAIL)
+        result.gsub!(result.encoding == Encoding::UTF_8 ? EMAIL_PATTERN : ASCII_EMAIL_PATTERN, EMAIL)
 
         result.gsub!(LOG_SECRET_ASSIGNMENT) { filter_assignment(Regexp.last_match) }
 
