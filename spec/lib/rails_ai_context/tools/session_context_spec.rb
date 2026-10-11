@@ -104,6 +104,35 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       annotations = described_class.annotations_value
       expect(annotations.read_only_hint).to eq(true)
     end
+
+    # A 100 KB mark came back whole, was kept whole, and the next summary
+    # was 100,402 bytes.
+    it "echoes and keeps a long mark as an answer echoes it" do
+      long = "a" * 100_000
+
+      replies = [ described_class.call(mark: "schema:#{long}"), described_class.call(mark: long),
+                  described_class.call(action: "summary"), described_class.call(action: "status") ]
+
+      expect(replies.map { |r| r.content.first[:text].length }).to all(be < 1_000)
+      expect(replies.first.content.first[:text]).to include("#{"a" * 80}... (100000 characters)")
+      expect(RailsAiContext::Tools::BaseTool.session_queries.first[:params].length).to be < 120
+    end
+
+    it "keeps the latest queries of a session and says how many it dropped" do
+      base = RailsAiContext::Tools::BaseTool
+      (base::MAX_SESSION_QUERIES + 3).times { |i| base.session_record("rails_get_schema", { table: "t#{i}" }) }
+      base.session_record("rails_get_schema", { table: "t3" })
+      base.session_record("rails_get_schema", { table: "fresh" })
+
+      kept = base.session_queries.map { |q| q[:params][:table] }
+      text = described_class.call(action: "status").content.first[:text]
+
+      expect(kept.size).to eq(base::MAX_SESSION_QUERIES)
+      expect(kept).to include("t3", "fresh")
+      expect(kept).not_to include("t0", "t1", "t2", "t4")
+      expect(text).to include("_4 older queries dropped: the record keeps the latest #{base::MAX_SESSION_QUERIES}._")
+      expect(described_class.call(action: "summary").content.first[:text]).to include("4 older queries dropped")
+    end
   end
 
   # The note tells an agent which surface cannot track a session; in a

@@ -755,7 +755,7 @@ The pool and the cache are read inside the MCP server process, and the answer sa
 
 ### `rails_session_context`
 
-Session-aware context tracking across tool calls within a conversation. Pass `action` or `mark`; a call with neither is an error.
+Session-aware context tracking across tool calls within a conversation. Pass `action` or `mark`; a call with neither is an error. A conversation's record keeps its latest 200 queries, and `status` and `summary` say how many older ones it dropped; a param longer than 80 characters is kept as its first 80 and its length.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
