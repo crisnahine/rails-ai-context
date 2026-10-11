@@ -32,7 +32,7 @@ that is `--mcp-only`.
 Three more prompts appear only when they apply:
 
 - **Remove their generated files?** - on a re-run that drops a tool you picked before. Default: keep them. A yes removes only what the gem generated, never a rule file or a line you wrote.
-- **Install a pre-commit hook that checks staged Ruby and ERB files for syntax errors?** - in a git repo that has no pre-commit hook yet. Default: no.
+- **Install a pre-commit hook that checks staged Ruby, ERB and JavaScript files for syntax errors?** - in a git repo that has no pre-commit hook yet. Default: no.
 - **Delete them?** - in a terminal, when rule files left over from before v5.0.0 are found. Default: no.
 
 `--defaults` skips every prompt and takes each default: all five tools, keep the files, MCP config + context files, no hook, keep legacy files. Every step is listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).

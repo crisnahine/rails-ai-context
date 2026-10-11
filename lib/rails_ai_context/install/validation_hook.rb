@@ -169,6 +169,9 @@ module RailsAiContext
       # a syntax check needs no booted app. stderr is shown, so a check that
       # cannot run at all (a bundle that does not resolve) says so.
       #
+      # JavaScript is staged too: validate parses .js, .mjs and .cjs with
+      # node, and a broken Stimulus controller otherwise committed unchecked.
+      #
       # @param apps [Array<String>] app paths from the top of the work tree,
       #   "." for the top itself
       # @param standalone [Boolean] validate with the gem's binary on the
@@ -187,8 +190,8 @@ module RailsAiContext
 
         <<~HOOK
           #!/bin/bash
-          # rails-ai-context: check the staged Ruby and ERB files before a commit.
-          # A commit whose staged .rb or .erb files do not parse is stopped.
+          # rails-ai-context: check the staged Ruby, ERB and JavaScript files before a commit.
+          # A commit whose staged .rb, .erb, .js, .mjs or .cjs files do not parse is stopped.
           # Remove this file or the rails-ai-context section to disable.
           # rails-ai-context apps: #{listed}
 
@@ -200,7 +203,7 @@ module RailsAiContext
             files=""
             while IFS= read -r -d '' name; do
               case "$name" in
-                *.rb|*.erb) ;;
+                *.rb|*.erb|*.js|*.mjs|*.cjs) ;;
                 *) continue ;;
               esac
               case "$name" in

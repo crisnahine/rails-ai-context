@@ -28,6 +28,14 @@ RSpec.describe RailsAiContext::Install::ValidationHook do
       expect(script).not_to include("2>/dev/null")
     end
 
+    # validate parses JavaScript with node, and a broken Stimulus controller
+    # was left out of the staged files and committed unchecked.
+    it "hands validation the staged JavaScript as well as Ruby and ERB" do
+      script = described_class.script([ "." ], standalone: false)
+
+      expect(script).to include("*.rb|*.erb|*.js|*.mjs|*.cjs) ;;")
+    end
+
     it "validates with the binary in a standalone install, which has no rake tasks" do
       script = described_class.script([ "." ], standalone: true)
 
