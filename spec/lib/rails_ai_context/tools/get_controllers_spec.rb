@@ -5,6 +5,35 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetControllers do
+  # A controller left unloaded because its file does not compile was listed
+  # with its actions and answered with its filters, where
+  # rails_get_model_details names a broken model's error.
+  describe "a controller whose file does not compile" do
+    let(:broken) { Rails.root.join("app", "controllers", "broken_widgets_controller.rb") }
+
+    around do |example|
+      File.write(broken, "class BrokenWidgetsController < ApplicationController\n  def index\n    @widgets = Post.where(id: 1\n  end\nend\n")
+      example.run
+    ensure
+      FileUtils.rm_f(broken)
+    end
+
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: RailsAiContext::Introspectors::ControllerIntrospector.new(Rails.application).call
+      )
+    end
+
+    it "names the error in the listing and in its own answer" do
+      listing = described_class.call.content.first[:text]
+      answer = described_class.call(controller: "BrokenWidgetsController").content.first[:text]
+
+      expect(listing).to match(%r{^- \*\*BrokenWidgetsController\*\* - \[UNAVAILABLE: app/controllers/broken_widgets_controller\.rb:\d+: syntax error, })
+      expect(answer).to match(%r{\AError inspecting BrokenWidgetsController: app/controllers/broken_widgets_controller\.rb:\d+: syntax error, })
+    end
+  end
+
   # SafeCall normalizes `detail` before the tool body runs, so a junk value
   # reaches the standard listing rather than falling out of the case.
   describe "a detail value no tool declares" do

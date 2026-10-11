@@ -18,7 +18,7 @@ module RailsAiContext
       end
 
       def call
-        EagerLoad.dir(app.root, kind: "app/controllers")
+        left_out = EagerLoad.dir(app.root, kind: "app/controllers")
         controllers = discover_controllers
 
         result = controllers.each_with_object({}) do |ctrl, hash|
@@ -35,7 +35,11 @@ module RailsAiContext
         discover_from_filesystem.each do |path_name, record|
           next if result.key?(path_name)
 
-          name, details = detail_for(record, path_name)
+          # Never loaded: a file that does not compile, or whose class body
+          # needs one that does not (see EagerLoad). Its source is not what
+          # Rails runs, so why it cannot load is the answer, as for a model.
+          unloaded = left_out.to_h[record.path] || EagerLoad.skipped(record.path)
+          name, details = detail_for(record, path_name, unloaded: unloaded)
           next if name.nil? || result.key?(name)
 
           result[name] = details
@@ -241,13 +245,17 @@ module RailsAiContext
       end
 
       # What both tiers do with a file: read it, name it by what it declares,
-      # and extract. A file it cannot read is an entry saying so, not a gap.
-      def detail_for(record, path_name)
+      # and extract. A file it cannot read is an entry saying so, not a gap,
+      # and so is one the booted tier left unloaded (`unloaded:` says why),
+      # whose source is never read for facts.
+      def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
         return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source, path_name)
 
         name = DeclaredConstant.resolve(source, path_name)
+        return [ name, { error: unloaded, file: record.file } ] if unloaded
+
         [ name, extract_details_from_source(record, name, source) ]
       end
 

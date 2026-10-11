@@ -221,6 +221,37 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(formats).to contain_exactly("html", "json", "xml")
       end
     end
+
+    # A file that does not compile is left unloaded (see EagerLoad), and the
+    # walk of the files reflection never saw then read its source as though
+    # Rails ran it: actions, filters, and no word of the error a model's
+    # answer gives. So did a subclass of it, which cannot load either.
+    context "with a controller file the app cannot load" do
+      let(:broken) { Rails.root.join("app", "controllers", "broken_widgets_controller.rb") }
+      let(:child) { Rails.root.join("app", "controllers", "zz_special_widgets_controller.rb") }
+
+      around do |example|
+        File.write(broken, "class BrokenWidgetsController < ApplicationController\n  before_action :x\n\n" \
+                           "  def index\n    @widgets = Post.where(id: 1\n  end\nend\n")
+        File.write(child, "class ZzSpecialWidgetsController < BrokenWidgetsController\n  def show\n  end\nend\n")
+        example.run
+      ensure
+        FileUtils.rm_f([ broken, child ])
+      end
+
+      it "names each with why it is left unloaded, and nothing its source holds" do
+        broken_entry = result[:controllers]["BrokenWidgetsController"]
+        child_entry = result[:controllers]["ZzSpecialWidgetsController"]
+
+        expect(broken_entry.keys).to contain_exactly(:error, :file)
+        expect(broken_entry[:file]).to eq("app/controllers/broken_widgets_controller.rb")
+        expect(broken_entry[:error]).to match(%r{\Aapp/controllers/broken_widgets_controller\.rb:\d+: syntax error, })
+        expect(child_entry).to eq(
+          error: "app/controllers/zz_special_widgets_controller.rb needs BrokenWidgetsController, which does not compile: #{broken_entry[:error]}",
+          file: "app/controllers/zz_special_widgets_controller.rb"
+        )
+      end
+    end
   end
 
   describe "permit list extraction" do

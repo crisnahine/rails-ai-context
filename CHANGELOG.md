@@ -322,6 +322,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose class body names its constant (a subclass of a broken
   `ApplicationRecord`). The answer gives the error, and the log names each
   file once.
+- **`rails_get_controllers` names a controller whose file does not
+  compile.** A controller left unloaded by a syntax error in its file, or in
+  a file its class body needs (its parent controller), was listed with the
+  actions and filters its source read as, with no word that Rails cannot
+  load it. Its entry now gives the error, in every listing and in its own
+  answer, as `rails_get_model_details` does for a model.
 - **Live reload loads no app code on the watching thread.** Listen's
   callback only marks a reload as pending; the next tool call reloads on its
   own thread. `watch` reloads and regenerates on its main thread and keeps
