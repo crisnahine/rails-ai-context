@@ -734,5 +734,40 @@ RSpec.describe RailsAiContext::Server do
         expect(after).to eq(before)
       end
     end
+
+    # The SDK ended the connection on a frame past its 4 MiB limit and
+    # reported it only through MCP.configuration's reporter, which nothing
+    # set: no answer, nothing on stderr, exit 0.
+    it "answers a frame past the size limit with a JSON-RPC error, names it on stderr and ends in failure" do
+      require "open3"
+
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "serve.rb")
+        File.write(script, <<~RUBY)
+          $LOAD_PATH.unshift(#{File.expand_path("../../../lib", __dir__).inspect})
+          require "rails_ai_context"
+          require "mcp"
+
+          begin
+            RailsAiContext::Server.new(RailsAiContext::StaticApp.new(#{dir.inspect}), transport: :stdio).start
+          rescue RailsAiContext::Error => e
+            $stderr.puts "Error: \#{e.message}"
+            exit 1
+          end
+        RUBY
+        initialize = JSON.generate(jsonrpc: "2.0", id: 1, method: "initialize",
+                                   params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "spec", version: "1" } })
+        frame = "#{initialize}\n#{"x" * (5 * 1024 * 1024)}\n"
+
+        out, err, status = Open3.capture3(RbConfig.ruby, script, stdin_data: frame, chdir: dir)
+
+        messages = out.lines.map { |line| JSON.parse(line) }
+        expect(messages.first["id"]).to eq(1)
+        expect(messages.last).to include("id" => nil, "error" => a_hash_including("code" => -32600, "message" => /exceeds 4194304 bytes/))
+        expect(err).to include("[rails-ai-context] unhandled exception: MCP::Server::RequestHandlerError: stdio frame exceeds 4194304 bytes")
+        expect(err).to include("Error: MCP stdio connection closed: stdio frame exceeds 4194304 bytes")
+        expect(status.exitstatus).to eq(1)
+      end
+    end
   end
 end

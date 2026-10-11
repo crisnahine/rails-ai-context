@@ -173,6 +173,10 @@ directory. Fixes:
 - Large schema files (>10MB) slow down schema introspection
 - Run `rails ai:doctor` - it checks schema size and view count
 
+### The stdio server stops with "MCP stdio connection closed: stdio frame exceeds 4194304 bytes"
+
+The MCP SDK reads one JSON-RPC message per line and refuses a line of 4 MiB or more. The server answers the client with a JSON-RPC `-32600` error, prints the reason on stderr and exits 1. The message is too large for any client to need; look for a tool argument the client filled with a whole file.
+
 ### HTTP answers an HTML error page while a migration is pending
 
 In development Rails answers every request with its pending-migration page, and the mounted engine is a route like any other. Run the migration, or use `auto_mount`, stdio or the standalone server, which all answer ahead of that check; `rails_runtime_info` lists the pending migrations.

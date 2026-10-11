@@ -187,6 +187,24 @@ module RailsAiContext
         "answer says when app code changed since."
     end
 
+    # Anything that still escapes a tool (schema validation bugs, SDK-level
+    # failures) is named on stderr instead of vanishing into a bare JSON-RPC
+    # internal error, in one line; the backtrace is DEBUG's, as it is for a
+    # boot failure. Routine protocol-level errors (unknown tool, invalid
+    # params) are expected traffic, not bugs - the mcp gem already turns them
+    # into a proper JSON-RPC error response, so here they get one quiet line.
+    EXCEPTION_REPORTER = lambda { |exception, _server_context|
+      if exception.is_a?(MCP::Server::RequestHandlerError) && exception.error_type != :internal_error
+        $stderr.puts "[rails-ai-context] request error (#{exception.error_type}): #{exception.message}"
+      elsif ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: #{exception.message}"
+        Array(exception.backtrace).first(10).each { |line| $stderr.puts "    #{line}" }
+      else
+        $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: " \
+                     "#{exception.message.to_s.lines.first&.strip} (DEBUG=1 prints the backtrace)"
+      end
+    }
+
     # Build and return the configured MCP::Server instance
     def build
       config = RailsAiContext.configuration
@@ -194,24 +212,7 @@ module RailsAiContext
       validated_custom_tools = self.class.resolve_custom_tools(config)
 
       mcp_config = MCP::Configuration.new(
-        # Anything that still escapes a tool (schema validation bugs, SDK-level
-        # failures) is named on stderr instead of vanishing into a bare
-        # JSON-RPC internal error, in one line; the backtrace is DEBUG's, as
-        # it is for a boot failure. Routine protocol-level errors (unknown
-        # tool, invalid params) are expected traffic, not bugs - the mcp gem
-        # already turns them into a proper JSON-RPC error response, so here
-        # they get one quiet line.
-        exception_reporter: lambda { |exception, _server_context|
-          if exception.is_a?(MCP::Server::RequestHandlerError) && exception.error_type != :internal_error
-            $stderr.puts "[rails-ai-context] request error (#{exception.error_type}): #{exception.message}"
-          elsif ENV["DEBUG"]
-            $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: #{exception.message}"
-            Array(exception.backtrace).first(10).each { |line| $stderr.puts "    #{line}" }
-          else
-            $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: " \
-                         "#{exception.message.to_s.lines.first&.strip} (DEBUG=1 prints the backtrace)"
-          end
-        },
+        exception_reporter: EXCEPTION_REPORTER,
         instrumentation_callback: Instrumentation.callback
       )
 
@@ -233,6 +234,7 @@ module RailsAiContext
     # Start the MCP server with the configured transport
     def start
       server = build
+      report_transport_errors
 
       case transport_type
       when :stdio
@@ -245,6 +247,18 @@ module RailsAiContext
     end
 
     private
+
+    # The SDK's transports report through MCP.configuration's reporter, not
+    # the server's, so a stdio frame past the size limit ended the server
+    # with nothing on stderr. This process serves only this server, so the
+    # process-wide reporter is this one too, unless the app set its own.
+    def report_transport_errors
+      configuration = MCP.configuration
+      return unless configuration.respond_to?(:exception_reporter=)
+      return if configuration.respond_to?(:exception_reporter?) && configuration.exception_reporter?
+
+      configuration.exception_reporter = EXCEPTION_REPORTER
+    end
 
     # Read the list off the server rather than rebuilding it. Recomputing it
     # from the registry drops any custom tool that is not a BaseTool, so the
@@ -277,6 +291,9 @@ module RailsAiContext
     # Writes to the saved channel, since the session points $stdout and fd 1
     # at stderr so nothing a tool prints reaches the JSON-RPC stream.
     class StdioChannelTransport < MCP::Server::Transports::StdioTransport
+      # The frame past the SDK's size limit that ended the connection, if one did.
+      attr_reader :frame_error
+
       # The SDK sets UTF-8 on $stdout, which is $stderr here; it goes on the channel instead.
       def initialize(server, channel)
         stderr_encoding = [ $stdout.external_encoding, $stdout.internal_encoding ]
@@ -290,6 +307,20 @@ module RailsAiContext
         @channel.puts(message.is_a?(String) ? message : JSON.generate(message))
         @channel.flush
       end
+
+      private
+
+      # The SDK ends the connection when a frame passes its size limit (4 MiB)
+      # without a newline, and the server exited 0 with the client's request
+      # unanswered. The client gets a JSON-RPC error first, and the failure
+      # is kept for start_stdio to end on.
+      def read_line(io)
+        super
+      rescue MCP::Server::RequestHandlerError => e
+        @frame_error = e
+        send_response({ jsonrpc: "2.0", id: nil, error: { code: McpEdge::INVALID_REQUEST, message: "Invalid Request: #{e.message}" } })
+        raise
+      end
     end
 
     def start_stdio(server)
@@ -300,6 +331,7 @@ module RailsAiContext
         RailsAiContext.stdio_open = true
         maybe_start_live_reload(server)
         transport.open
+        raise RailsAiContext::Error, "MCP stdio connection closed: #{transport.frame_error.message}" if transport.frame_error
       end
     ensure
       RailsAiContext.stdio_open = false
