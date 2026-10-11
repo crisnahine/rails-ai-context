@@ -274,7 +274,7 @@ module RailsAiContext
         return true if lock.direct?(gem_name) || ENGINE_GEMS.include?(gem_name)
         return Dir.exist?(File.join(root, "test")) if gem_name == "minitest"
 
-        AppKind::FRAMEWORK_RAILTIES.key?(gem_name) && lock.present?("rails") && AppKind.loads_framework?(root, gem_name)
+        lock.present?("rails") && AppKind.loads_framework?(root, gem_name)
       end
 
       # What the app does with Redis is a question the app answers. The fixed

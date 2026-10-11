@@ -37,7 +37,7 @@ module RailsAiContext
     # railtie and leaves this one out (a require, or a list it requires in a
     # loop) and never configures it; a file it cannot read is taken to load it.
     def loads_framework?(root, gem_name)
-      railtie = FRAMEWORK_RAILTIES.fetch(gem_name)
+      railtie = FRAMEWORK_RAILTIES[gem_name] or return false
       framework = File.dirname(railtie)
       source = RailsAiContext::SafeFile.read(File.join(root.to_s, "config", "application.rb"))
       tree = source && RailsAiContext::AstCache.parse_string(source)
