@@ -135,7 +135,9 @@ jobs:
   # every other spec builds SQLite apps as on Linux.
   e2e-os:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # A Windows runner builds and bundles each test app several times slower
+    # than Linux: the whole suite ran 34 minutes there.
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
@@ -184,7 +186,7 @@ jobs:
 
       - name: Run E2E harness
         run: bundle exec rspec spec/e2e --format documentation --format json --out tmp/e2e-report.json
-        timeout-minutes: 40
+        timeout-minutes: 80
 
       - name: Upload E2E report on failure
         if: failure()
