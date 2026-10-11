@@ -2,6 +2,7 @@
 
 require "open3"
 require "json"
+require "prism"
 require "rbconfig"
 require "tmpdir"
 
@@ -179,8 +180,6 @@ module RailsAiContext
       # sorts by a numeric confidence, which the JSON spells as a name.
       ExternalWarning = Data.define(:warning_type, :confidence, :confidence_name, :file, :line,
                                     :message, :cwe_id, :code, :link) do
-        def format_code = code
-
         def self.from_json(warning)
           name = warning["confidence"].to_s
           ExternalWarning.new(
@@ -508,6 +507,8 @@ module RailsAiContext
       private_class_method def self.format_full(warnings, checks_run)
         lines = [ "# Security Scan Results (Full)", "" ]
         lines << scan_headline(warnings, checks_run)
+        # A file is read and filtered once, however many warnings it holds.
+        sources = Hash.new { |read, path| read[path] = read_source(path) }
 
         warnings.each do |w|
           lines << ""
@@ -517,16 +518,74 @@ module RailsAiContext
           lines << "- **Message:** #{w.message}"
           lines << "- **CWE:** #{Array(w.cwe_id).join(', ')}" if w.cwe_id&.any?
 
-          if w.code
+          code = w.code && warning_source(w, sources[w.file.relative])
+          if code
             lines << "- **Code:**"
-            lines << "  ```ruby"
-            lines << "  #{RailsAiContext::Redaction.redact_source(w.format_code.to_s, path: w.file.relative)}"
+            lines << "  ```#{RailsAiContext::ViewFile.fence(w.file.relative)}"
+            code.each { |line| lines << "  #{line}".rstrip }
             lines << "  ```"
           end
 
           lines << "- **More info:** #{w.link}" if w.link
         end
         lines.join("\n")
+      end
+
+      # A statement longer than this is shown by the one line the warning names.
+      MAX_CODE_LINES = 12
+
+      # A file a warning names, as written and with each line filtered as every
+      # slice of the app's source a tool shows is: the whole file at once, so a
+      # line inside a PEM key still knows it is in one. Nil for a file this tool
+      # may not read.
+      private_class_method def self.read_source(path)
+        content, = RailsAiContext::SafePath.read(path, under: rails_app.root.to_s)
+        content && [ content, RailsAiContext::Redaction.redact_source_lines(content.lines.map(&:chomp), path: path) ]
+      end
+
+      # The code a warning is about, as its file has it. Brakeman's own code
+      # line is not the file: it writes the value of each variable and constant
+      # it can follow in place of the name, so a literal assigned to `api_token`
+      # a line up, or to a constant in an initializer, sat in the call with no
+      # name beside it for the filter to know it by.
+      #
+      # @return [Array<String>, nil] the lines, or nil when the warning names no
+      #   line of a file this tool may read
+      private_class_method def self.warning_source(warning, source)
+        content, redacted = source
+        line = warning.line.to_i
+        return nil unless redacted && line.between?(1, redacted.size)
+
+        span = statement_span(content, line, warning.file.relative)
+        shown = redacted[span.begin - 1, span.size]
+        indent = shown.reject { |text| text.strip.empty? }.map { |text| text[/\A\s*/].size }.min.to_i
+        shown.map { |text| text[indent..].to_s }
+      end
+
+      # Brakeman names the line its input is on, which in a call written across
+      # lines can be a lone `:role,`. In Ruby the innermost statement holding
+      # that line is what reads, when it fits in MAX_CODE_LINES.
+      private_class_method def self.statement_span(content, line, path)
+        return line..line unless File.extname(path) == ".rb"
+
+        holds = ->(node) { node.location.start_line <= line && line <= node.location.end_line }
+        found = nil
+        nodes = [ RailsAiContext::AstCache.parse_string(content).value ]
+        while (node = nodes.shift)
+          # A `#{...}` holds statements too, but they are part of the string.
+          next if node.is_a?(Prism::EmbeddedStatementsNode)
+
+          if node.is_a?(Prism::StatementsNode)
+            node.body.select(&holds).each do |statement|
+              found = statement.location if found.nil? || statement.location.length < found.length
+            end
+          end
+          # A node that does not reach the line holds nothing that does.
+          nodes.concat(node.compact_child_nodes.select(&holds))
+        end
+        return line..line unless found && found.end_line - found.start_line < MAX_CODE_LINES
+
+        found.start_line..found.end_line
       end
     end
   end

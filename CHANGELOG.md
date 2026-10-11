@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   among them, while the same template read by `path:` and every layout had
   them filtered. Each file in the listing is now filtered as one read by
   path is, a mailer's views (`controller:"user_mailer"`) included.
+- **`rails_security_scan` shows a warning's code as the file has it.** At
+  `detail:"full"` the code was Brakeman's own line, which writes the value
+  of each variable and constant it can follow in place of the name: a token
+  assigned to `api_token` on the line above, or to a constant in an
+  initializer, sat in the `system(...)` call as a bare literal, with no name
+  left for the redaction to know it by. The answer now shows the statement
+  the warning names, read from its file and filtered as every other slice of
+  the app's source is: a call written across lines whole, up to 12 lines,
+  and a template's line fenced as the template it is. A warning in a file
+  the tools may not read shows no code.
 - **`rails_search_code` in trace mode checks its `path` like every other
   mode.** `match_type: "trace"` joined the path to the root unchecked, so
   `path: "../../elsewhere"` searched outside the app and printed the source

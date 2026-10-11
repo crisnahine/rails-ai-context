@@ -392,6 +392,111 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
     end
 
+    # Brakeman's code line is the expression after it wrote each value it
+    # could follow in place of the name: the literal assigned to `api_token`
+    # sat in the call with no name beside it for the filter to know it by.
+    # The full answer shows the file's own statement, filtered as every slice
+    # of the app's source is.
+    describe "the code a full answer shows" do
+      around do |example|
+        Dir.mktmpdir("scan-code") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/controllers"))
+          FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+          File.write(File.join(root, "app/controllers/hooks_controller.rb"), <<~'RUBY')
+            class HooksController < ApplicationController
+              def ping
+                api_token = "tok-FAKE-NOT-REAL-0040"
+                system("curl -s -H 'X-Token: #{api_token}' #{params[:url]}")
+                head :ok
+              end
+
+              def user_params
+                params.require(:user).permit(
+                  :name,
+                  :role
+                )
+              end
+
+              def search
+                @rows = ActiveRecord::Base.connection.execute(
+                  "SELECT * FROM posts WHERE title = '#{params[:t]}'"
+                )
+              end
+            end
+          RUBY
+          File.write(File.join(root, "app/views/posts/show.html.erb"), <<~'ERB')
+            <h1>Post</h1>
+            <%= raw params[:body] %>
+          ERB
+          @root = root
+          example.run
+        end
+      end
+
+      def warning(file:, line:, code:, type: "Command Injection")
+        { "warning_type" => type, "message" => "Possible #{type.downcase}", "file" => file, "line" => line,
+          "confidence" => "High", "code" => code, "cwe_id" => [ 77 ] }
+      end
+
+      def full_scan(*warnings)
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.1.0")
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return([ { "scan_info" => { "checks_performed" => %w[Execute] }, "warnings" => warnings }, nil ])
+        described_class.call(detail: "full").content.first[:text]
+      end
+
+      it "shows the line as the file has it, not the value brakeman wrote in place of a name" do
+        text = full_scan(warning(file: "app/controllers/hooks_controller.rb", line: 4,
+                                 code: %(system("curl -s -H 'X-Token: \#{"tok-FAKE-NOT-REAL-0040"}' \#{params[:url]}"))))
+
+        expect(text).to include(%(  ```ruby\n  system("curl -s -H 'X-Token: \#{api_token}' \#{params[:url]}")\n  ```))
+        expect(text).not_to include("tok-FAKE")
+      end
+
+      it "shows the whole statement when brakeman names a line inside it" do
+        text = full_scan(warning(file: "app/controllers/hooks_controller.rb", line: 11, type: "Mass Assignment",
+                                 code: "params.require(:user).permit(:name, :role)"))
+
+        expect(text).to include("  ```ruby\n  params.require(:user).permit(\n    :name,\n    :role\n  )\n  ```")
+      end
+
+      # The `#{...}` on the named line holds a statement of its own, and it is
+      # the string's, not the code's.
+      it "reads past an interpolation to the statement around it" do
+        text = full_scan(warning(file: "app/controllers/hooks_controller.rb", line: 17, type: "SQL Injection",
+                                 code: %(ActiveRecord::Base.connection.execute("SELECT * FROM posts WHERE title = '\#{params[:t]}'"))))
+
+        expect(text).to include("  ```ruby\n  @rows = ActiveRecord::Base.connection.execute(\n" \
+                                "    \"SELECT * FROM posts WHERE title = '\#{params[:t]}'\"\n  )\n  ```")
+      end
+
+      it "fences a template's line as the template it is" do
+        text = full_scan(warning(file: "app/views/posts/show.html.erb", line: 2, type: "Cross-Site Scripting", code: "params[:body]"))
+
+        expect(text).to include("  ```erb\n  <%= raw params[:body] %>\n  ```")
+      end
+
+      it "shows no code it cannot read from the file, rather than brakeman's" do
+        text = full_scan(warning(file: "app/controllers/gone_controller.rb", line: 3, code: %(system("\#{"tok-FAKE-NOT-REAL-0040"}"))))
+
+        expect(text).to include("app/controllers/gone_controller.rb:3")
+        expect(text).not_to include("**Code:**")
+        expect(text).not_to include("tok-FAKE")
+      end
+
+      it "reads and filters a file once however many warnings it holds" do
+        allow(RailsAiContext::Redaction).to receive(:redact_source_lines).and_call_original
+
+        text = full_scan(warning(file: "app/controllers/hooks_controller.rb", line: 4, code: "system(params[:url])"),
+                         warning(file: "app/controllers/hooks_controller.rb", line: 17, code: "execute(params[:t])"))
+
+        expect(text.scan("**Code:**").size).to eq(2)
+        expect(RailsAiContext::Redaction).to have_received(:redact_source_lines).once
+      end
+    end
+
     context "when brakeman is nowhere on the machine" do
       before do
         described_class.instance_variable_set(:@brakeman_available, nil)
@@ -508,12 +613,18 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
 
       it "returns full format with code and links" do
-        result = described_class.call(detail: "full")
-        text = result.content.first[:text]
-        expect(text).to include("Full")
-        expect(text).to include("CWE:** 89")
-        expect(text).to include("brakemanscanner.org")
-        expect(text).to include("```ruby")
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app/controllers"))
+          File.write(File.join(root, "app/controllers/users_controller.rb"), "\n" * 14 + %(    User.where("name = \#{params[:name]}")\n))
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          result = described_class.call(detail: "full")
+          text = result.content.first[:text]
+          expect(text).to include("Full")
+          expect(text).to include("CWE:** 89")
+          expect(text).to include("brakemanscanner.org")
+          expect(text).to include(%(```ruby\n  User.where("name = \#{params[:name]}")\n  ```))
+        end
       end
 
       it "filters results by file" do
