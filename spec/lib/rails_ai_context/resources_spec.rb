@@ -193,6 +193,20 @@ RSpec.describe RailsAiContext::Resources do
       end
     end
 
+    # The URI came back whole, in the message and again in the data.
+    it "echoes a 100 KB URI shortened when the read fails" do
+      skip "needs the SDK's ResourceNotFoundError" unless defined?(MCP::Server::ResourceNotFoundError)
+
+      uri = "rails-ai-context://views/../#{"a" * 100_000}"
+      shortened = "#{uri[0, 80]}... (#{uri.length} characters)"
+      expect { read_handler.call(uri: uri) }
+        .to raise_error(MCP::Server::ResourceNotFoundError, "Resource not found: #{shortened}") { |error|
+          expect(error.error_data).to eq(uri: shortened)
+        }
+      expect { read_handler.call(uri: "rails://models/#{"a" * 100_000}") }
+        .to raise_error(MCP::Server::RequestHandlerError, "Model '#{"a" * 80}... (100000 characters)' not found")
+    end
+
     it "delegates rails-ai-context:// URIs to VFS" do
       vfs_result = [ { uri: "rails-ai-context://models/User", mimeType: "application/json", text: '{"ok":true}' } ]
       allow(RailsAiContext::VFS).to receive(:resolve).and_return(vfs_result)

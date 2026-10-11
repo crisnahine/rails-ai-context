@@ -455,7 +455,8 @@ module RailsAiContext
 
         # Before the join, which would turn an absolute path into a subpath of
         # the root and leave it looking merely absent.
-        return [ nil, error_response("Path not allowed: #{path}") ] if RailsAiContext::SafePath.traversal?(path) || sensitive_file?(path)
+        return [ nil, error_response("Path not allowed: #{echo_input(path)}") ] if RailsAiContext::SafePath.traversal?(path)
+        return [ nil, error_response("Path not allowed: #{echo_input(path)} (sensitive file)") ] if sensitive_file?(path)
 
         search_path = File.join(root, path)
         # A symlink under the root can still resolve outside it; that check is
@@ -469,11 +470,11 @@ module RailsAiContext
         real_search = File.realpath(search_path)
         inside = RailsAiContext::SafePath.contained?(real_search, real_root)
         linked = !inside && RailsAiContext::SafePath.linked_in(search_path, real_search, root, root)
-        return [ nil, error_response("Path not allowed: #{path}") ] unless inside || linked
+        return [ nil, error_response("Path not allowed: #{echo_input(path)}") ] unless inside || linked
         # A file named as the path is read whatever it is linked to, so the
         # name it has where it lives is asked too.
         real_name = real_search.delete_prefix("#{linked || real_root}/")
-        return [ nil, error_response("Path not allowed: #{path}") ] if File.file?(real_search) && sensitive_file?(real_name)
+        return [ nil, error_response("Path not allowed: #{echo_input(path)} (sensitive file)") ] if File.file?(real_search) && sensitive_file?(real_name)
 
         [ search_path, nil ]
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG

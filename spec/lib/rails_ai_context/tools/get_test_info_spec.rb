@@ -734,7 +734,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
           RailsAiContext.configuration.sensitive_patterns = original
         end
 
-        expect(text).to include("refused")
+        expect(text).to start_with("Path not allowed")
         expect(text).not_to include("Searched:")
         expect(text).to include("or names a sensitive file")
         expect(text).not_to end_with("it leaves the app root.")

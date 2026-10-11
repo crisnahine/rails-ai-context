@@ -61,7 +61,7 @@ module RailsAiContext
         # a path would otherwise come back as the log of that basename not
         # being there rather than as the refusal it is.
         if file.to_s.match?(%r{[/\\]|\.\.})
-          return error_response("Path not allowed: #{file}. Name a log file in log/, without a path (e.g. 'production').")
+          return error_response("Path not allowed: #{echo_input(file)}. Name a log file in log/, without a path (e.g. 'production').")
         end
 
         requested = lines&.to_i
@@ -84,8 +84,8 @@ module RailsAiContext
         relative = log_relative(file)
         located = locate_log(relative)
         case located.refusal
-        when :traversal, :outside then return error_response("Path not allowed: #{relative}")
-        when :sensitive then return error_response("Path not allowed: #{relative} (sensitive file)")
+        when :traversal, :outside then return error_response("Path not allowed: #{echo_input(relative)}")
+        when :sensitive then return error_response("Path not allowed: #{echo_input(relative)} (sensitive file)")
         end
         path = located.ok? ? located.realpath : nil
         available = available_log_files

@@ -238,7 +238,8 @@ RSpec.describe RailsAiContext::Tools::GetView do
 
       it "denies a sensitive name under app/views" do
         result = described_class.call(path: ".env")
-        expect(result.content.first[:text]).to include("Access denied")
+        expect(result.error?).to be(true)
+        expect(result.content.first[:text]).to eq("Path not allowed: .env (sensitive file)")
       end
     end
 
