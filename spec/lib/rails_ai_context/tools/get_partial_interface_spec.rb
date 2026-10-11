@@ -564,6 +564,47 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(html).to eq(%w[app/controllers/cards_controller.rb:8 app/controllers/cards_controller.rb:14 app/controllers/cards_controller.rb:18])
       expect(json).to eq(%w[app/controllers/cards_controller.rb:3 app/controllers/cards_controller.rb:9 app/controllers/cards_controller.rb:14])
     end
+
+    # A `format:` local read as the format to look the partial up in, so
+    # both calls that render the date partial were dropped and it answered
+    # "No render calls found". Rails reads only `formats:`, and only among
+    # the options of the hash form.
+    it "reads `format:` and every key inside `locals:` as a local, never as a format" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/shared"))
+      FileUtils.mkdir_p(File.join(@root, "app/controllers"))
+      File.write(File.join(@root, "app/views/shared/_date.html.erb"),
+                 "<%# locals: (date:, format: :long) %>\n<time><%= l(date, format: format) %></time>\n")
+      File.write(File.join(@root, "app/views/posts/_dates.html.erb"), <<~ERB)
+        <p><%= render "shared/date", date: @post.created_at, format: :short %></p>
+        <p><%= render partial: "shared/date", locals: { date: @post.updated_at, format: :long } %></p>
+      ERB
+      File.write(File.join(@root, "app/controllers/stamps_controller.rb"), <<~RUBY)
+        class StampsController < ApplicationController
+          def show
+            render partial: "shared/date", locals: { date: Time.current, formats: [ :json ] }
+          end
+        end
+      RUBY
+
+      expect(sites_and_locals("shared/date").first)
+        .to eq(%w[app/views/posts/_dates.html.erb:1 app/views/posts/_dates.html.erb:2 app/controllers/stamps_controller.rb:3])
+    end
+
+    # `render "posts/post", formats: [:json]` hands the html partial a local
+    # named formats; only `render partial: ..., formats:` looks up json.
+    it "reads `formats:` as the lookup format only among the options of the hash form" do
+      File.write(File.join(@root, "app/views/posts/feed.html.erb"), <<~ERB)
+        <%= render "posts/post", post: @post, formats: [:json] %>
+        <%= render formats: [:json], partial: "posts/post", locals: { post: @post } %>
+        <%= render(:partial => "posts/post", :formats => %i[json], :locals => { :post => @post }) %>
+      ERB
+
+      html = sites_and_locals("posts/post").first.grep(/feed/)
+      json = sites_and_locals("posts/_post.json.jbuilder").first.grep(/feed/)
+
+      expect(html).to eq(%w[app/views/posts/feed.html.erb:1])
+      expect(json).to eq(%w[app/views/posts/feed.html.erb:2 app/views/posts/feed.html.erb:3])
+    end
   end
 
   describe "the standard and full renderings" do

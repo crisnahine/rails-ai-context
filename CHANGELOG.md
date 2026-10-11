@@ -1023,7 +1023,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rails_get_partial_interface` finds Turbo Stream, broadcast and
   jbuilder render sites** and jbuilder locals, lists a partial's render
   sites by the format each one looks up, and lists no helper as a local;
-  `rails_get_view` lists those partials.
+  `rails_get_view` lists those partials. A call names a format the way
+  Rails reads one, as `formats:` among the options it renders with: a
+  `format:` passed to the partial, or any key inside `locals:`, is a local,
+  and so is every key of `render "shared/date", date: d, format: :short`.
 - **Render maps and frame sources keep their closing brackets.**
 - **`rails_get_turbo_map` wires a stream by the records and names it is
   built from**, says "can't tell" for what it cannot resolve, and says when

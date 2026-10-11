@@ -378,20 +378,42 @@ module RailsAiContext
 
       # `render partial: "posts/post", formats: [:json]`: the formats a call
       # names, which Rails looks the partial up in whatever the request asked.
-      FORMATS_OPTION = /\bformats?:\s*(\[[^\]]*\]|:\w+|["']\w+["'])/
+      # Action View reads `options[:formats]` alone, from the hash it renders
+      # with: the one holding `partial:`, or json.partial!'s keywords. So a
+      # `format:` is a local, as is any key inside `locals: {}`, and in
+      # `render "shared/date", date: d, format: :short` every key is one.
+      FORMATS_OPTION = /(?<![\w:])(?:formats:|:formats\s*=>)\s*(?:%[iIwW])?(\[[^\]]*\]|:\w+|["']\w+["'])/
 
-      private_class_method def self.named_formats(call)
-        call[FORMATS_OPTION, 1]&.scan(/\w+/)
+      # The formats the options beside offset `at` name: those of the
+      # innermost bracket group holding it, or of the whole call, read with
+      # each hash and call nested there blanked. nil for no offset, which a
+      # call that names its partial first has.
+      private_class_method def self.named_formats(call, at)
+        return nil unless at
+
+        level = +""
+        RailsAiContext::Brackets.each_top_level(call, comments: :ruby) do |piece, kind|
+          from = level.length
+          return named_formats(piece[1...-1], at - from - 1) if kind == :group && at > from && at < from + piece.length - 1
+
+          nested = kind == :comment || (kind == :group && !piece.start_with?("["))
+          level << (nested ? " " * piece.length : piece)
+        end
+        level[FORMATS_OPTION, 1]&.scan(/\w+/)
       end
 
-      # The formats a call in Ruby renders its partial in. A Turbo Stream
-      # builder renders html, and so do a broadcast and
+      # Where a render names the partial as its `partial:` option, or nil
+      # where it names it first, as the shorthand does.
+      private_class_method def self.partial_key_at(line, name)
+        line =~ /(?:\bpartial:|:partial\s*=>)\s*(["'])#{Regexp.escape(name)}\1/
+      end
+
+      # The formats a call in Ruby renders its partial in when it names none.
+      # A Turbo Stream builder renders html, and so do a broadcast and
       # ApplicationController.render outside a request. In a controller or a
       # helper the request decides, html or json alike, unless the call sits
       # in a `format.json { }` block of a respond_to.
       private_class_method def self.code_site_formats(call, relative, line, format_blocks)
-        named = named_formats(call)
-        return named if named
         return [ "html" ] if call.match?(/\bturbo_stream\.\w+/)
 
         block = format_blocks.select { |from, to, _| from <= line && line <= to }.max_by(&:first)
@@ -484,9 +506,12 @@ module RailsAiContext
           start -= 1 while start.positive? && lines[start - 1].rstrip.end_with?(",")
           call = call_lines(lines, start)
           site = { file: relative, line: start + 1, locals: partial_call_locals(call), snippet: call.squish }
+          # The name's own offset in the call: the options it is rendered
+          # with sit beside it, inside json.partial!'s parentheses too.
+          named = named_formats(call, match.begin(1) - lines.first(start).sum(&:length))
           if code
-            site[:formats] = code_site_formats(call, relative, start + 1, blocks ||= format_blocks(content))
-          elsif (named = named_formats(call))
+            site[:formats] = named || code_site_formats(call, relative, start + 1, blocks ||= format_blocks(content))
+          elsif named
             site[:formats] = named
           end
           sites << site
@@ -589,7 +614,7 @@ module RailsAiContext
               locals_passed = extract_locals_from_render(line)
 
               site = { file: relative, line: line_num, locals: locals_passed, snippet: snippet }
-              named = named_formats(line)
+              named = named_formats(line, partial_key_at(line, search_name))
               site[:formats] = named if named
               sites << site
               matched_line = true
