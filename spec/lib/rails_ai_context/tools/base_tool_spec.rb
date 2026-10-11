@@ -276,7 +276,6 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
         "search_code path" => -> { tools::SearchCode.call(pattern: "x", path: huge) },
         "view controller" => -> { tools::GetView.call(controller: huge) },
         "view path" => -> { tools::GetView.call(path: huge) },
-        "read_logs file" => -> { tools::ReadLogs.call(file: huge) },
         "session_context mark" => -> { tools::SessionContext.call(mark: huge) }
       }
 

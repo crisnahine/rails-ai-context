@@ -120,12 +120,15 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).not_to include("Cache miss")
     end
 
-    # A 100 KB search came back whole in the answer that found nothing.
-    it "echoes a search that matches nothing shortened, with its length" do
-      text = described_class.call(search: "a" * 100_000).content.first[:text]
+    # A 100 KB search or log name came back whole in the answer that found
+    # nothing.
+    it "echoes a search or a log name that matches nothing shortened, with its length" do
+      search = described_class.call(search: "a" * 100_000).content.first[:text]
+      file = described_class.call(file: "a" * 100_000).content.first[:text]
 
-      expect(text).to include("No entries matching level:all search:\"#{"a" * 80}... (100000 characters)\"")
-      expect(text.length).to be < 1_000
+      expect(search).to include("No entries matching level:all search:\"#{"a" * 80}... (100000 characters)\"")
+      expect(file).to include("Log file '#{"a" * 80}... (100000 characters)' not found.")
+      expect([ search, file ].map(&:length)).to all(be < 1_000)
     end
 
     it "does not let the search term match text that redaction hides" do
