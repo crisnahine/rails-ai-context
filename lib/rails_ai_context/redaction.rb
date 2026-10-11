@@ -210,7 +210,18 @@ module RailsAiContext
 
     # YAML writes a string unquoted, so there a secret-named key's plain
     # scalar is a literal too.
-    YAML_SCALAR = /\A(?<head>\s*["']?(?<name>#{KEY_NAME})["']?:[ \t]+)(?<value>[^\s#][^#]*?)(?<tail>\s+#.*)?\z/
+    # A Ruby library's YAML may write its keys as symbols (`:password: ...` in config/sidekiq.yml).
+    YAML_SCALAR = /\A(?<head>\s*:?["']?(?<name>#{KEY_NAME})["']?:[ \t]+)(?<value>[^\s#][^#]*?)(?<tail>\s+#.*)?\z/
+
+    # A mapping a secret's name names holds the secret in its `value`. Heroku's app.json writes
+    # `"STRIPE_SECRET_KEY": { "value": "..." }` on one line or across several, a YAML file
+    # `STRIPE_SECRET_KEY:` over `value: ...`, and render.yaml and a Kubernetes manifest name a
+    # list entry by a sibling (`- key: CLIENT_SECRET`, `- name: API_TOKEN`) over its `value:`.
+    NAMED_OBJECT = /"(?<name>#{DASHED_KEY_NAME})"[ \t]*:[ \t]*\{[^{}]*\}/
+    NAMED_VALUE_PAIR = /(?<head>"value"[ \t]*:[ \t]*")(?<value>[^"]*)"/
+    NAMING_LINE = /\A(?<indent>[ \t]*)(?:-[ \t]+(?:key|name)[ \t]*:[ \t]+["']?(?<name>#{KEY_NAME})["']?|["']?(?<name>#{KEY_NAME})["']?[ \t]*:[ \t]*\{?)[ \t]*\z/
+    VALUE_LINE = /\A(?<head>[ \t]*["']?value["']?[ \t]*:[ \t]*)(?:(?<quote>["'])(?<value>[^"']*)\k<quote>|(?<value>[^\s"'#,{\[][^#,]*?))(?<tail>[ \t]*,?[ \t]*(?:#.*)?)\z/
+    STRUCTURED_FILE = /#{YAML_FILE}|\.json(?:\.(?:#{PLACEHOLDER_NAMES}))*\z/
 
     class << self
       # Source slices and config values.
@@ -249,6 +260,7 @@ module RailsAiContext
             "#{match[:name]}=#{FILTERED}"
           end
           result = result.gsub(FLAG_ARGUMENT) { |m| filter_flag(m, Regexp.last_match, example) }
+          result = result.gsub(NAMED_OBJECT) { |m| filter_named_object(m, Regexp.last_match, example) }
         end
         result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
         result = CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) }
@@ -256,10 +268,14 @@ module RailsAiContext
         path.to_s.match?(YAML_FILE) && !locale ? yaml_scalar(result, example) : result
       end
 
-      # Consecutive lines, so a PEM key across them is filtered whole; the line
-      # count is kept, since callers number the lines.
+      # Consecutive lines, so a PEM key across them is filtered whole, and in a
+      # YAML or JSON file a `value` under a mapping a secret's name names; the
+      # line count is kept, since callers number the lines.
       def redact_source_lines(lines, path: nil)
-        outside_key_bodies(lines) { |line| redact_source_line(line, path: path) }
+        redacted = outside_key_bodies(lines) { |line| redact_source_line(line, path: path) }
+        return redacted unless path.to_s.match?(STRUCTURED_FILE) && !path.to_s.match?(%r{(?:\A|/)locales?/})
+
+        named_values(redacted, path.to_s.match?(EXAMPLE_FILE))
       end
 
       # A slice of the app's source - a method body, a template - as a tool
@@ -406,6 +422,40 @@ module RailsAiContext
       def key_name(name)
         spelled = name.tr("-", "_")
         spelled if spelled.match?(WHOLE_KEY_NAME)
+      end
+
+      # A one-line object a secret's name names, with its `"value"` filtered when it is that secret.
+      def filter_named_object(text, match, example)
+        name = key_name(match[:name])
+        return text unless name
+
+        text.sub(NAMED_VALUE_PAIR) do |pair|
+          value = Regexp.last_match(:value)
+          keyed_secret?(name, value, example) ? %(#{Regexp.last_match(:head)}#{FILTERED}") : pair
+        end
+      end
+
+      # The `value` lines of each mapping a secret's name names (NAMING_LINE), up to the line
+      # that leaves it: one no deeper than the name. A boolean or null is no secret.
+      def named_values(lines, example)
+        named = nil
+        lines.map do |line|
+          if (naming = line.match(NAMING_LINE))
+            named = { name: naming[:name], indent: naming[:indent].size }
+            next line
+          end
+          next line if line.strip.empty?
+
+          named = nil if named && line[/\A[ \t]*/].size <= named[:indent]
+          value = named && line.match(VALUE_LINE)
+          next line unless value
+
+          scalar = value[:value].to_s
+          next line if scalar.empty? || scalar.start_with?(FILTERED) || scalar.match?(/\A(?:true|false|yes|no|null|~)\z/i)
+          next line unless keyed_secret?(named[:name], scalar, example)
+
+          "#{value[:head]}#{value[:quote]}#{FILTERED}#{value[:quote]}#{value[:tail]}"
+        end
       end
 
       # A matched flag and the word after it, with the word filtered when it is the flag's secret.

@@ -93,6 +93,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the same redaction, read as the file they come from, a hunk
   header's line and a removed validation's included, and a file on
   `sensitive_patterns` is listed with its line counts alone.
+- **Redaction reads a secret a YAML or JSON file names on another line,
+  and a YAML key written as a symbol.** Heroku's app.json gives a
+  variable's value under its name (`"STRIPE_SECRET_KEY": { "value": "..." }`),
+  render.yaml and a Kubernetes manifest under a sibling (`- key:
+  CLIENT_SECRET` over `value: ...`), and config/sidekiq.yml writes its keys
+  as symbols (`:password: ...`); every tool that shows a file kept each of
+  those values. In a YAML or JSON file read whole, a `value` under a
+  mapping a secret's name names is now filtered, a boolean and the next
+  entry's value kept, and a symbol key reads as its name.
 - **The gems section names a git source without its credentials.** A
   Gemfile's `git: "https://user:token@host/..."` went into the gems answer,
   the `rails://gems` resource and `.ai-context.json` as written. The URL now

@@ -234,6 +234,24 @@ RSpec.describe RailsAiContext::Redaction do
       ].each { |line| expect(redact(line)).to eq(line) }
     end
 
+    # Sidekiq's YAML writes its keys as Ruby symbols.
+    it "filters an unquoted scalar under a symbol key in YAML" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      expect(redact(":password: #{v}", path: "config/sidekiq.yml")).to eq(":password: [FILTERED]")
+      expect(redact(":concurrency: 5", path: "config/sidekiq.yml")).to eq(":concurrency: 5")
+    end
+
+    it "filters a one-line JSON object's value under a secret's name, as Heroku's app.json writes one" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      expect(redact(%(    "STRIPE_SECRET_KEY": { "description": "Stripe", "value": "#{v}" },), path: "app.json"))
+        .to eq(%(    "STRIPE_SECRET_KEY": { "description": "Stripe", "value": "[FILTERED]" },))
+      [
+        %(    "RAILS_ENV": { "value": "production" },),
+        %(    "SECRET_KEY_BASE": { "generator": "secret" },),
+        %(    "API_TOKEN": { "description": "Your token", "required": true })
+      ].each { |line| expect(redact(line, path: "app.json")).to eq(line) }
+    end
+
     it "leaves a query value, setter, lookbehind or interpolation that is not a secret byte for byte" do
       [
         %q~assert_equal "/government/foo?token=123&utm_source=heading", Edition.new.append_url_options("/government/foo", token: "123")~,
@@ -675,6 +693,47 @@ RSpec.describe RailsAiContext::Redaction do
       lines = [ "-----BEGIN CERTIFICATE-----", "MIIDdzCCAl+gAwIBAgIEAgAAuTANBgkqhkiG9w0BAQUFADBaMQswCQYDVQQGEwJJ", "-----END CERTIFICATE-----" ]
 
       expect(described_class.redact_source_lines(lines)).to eq(lines)
+    end
+
+    # The secret's name and its value sit on different lines: a mapping named by
+    # its key, or a list entry named by a sibling `key:` or `name:`.
+    describe "a value a secret's name names from another line" do
+      let(:v) { "Xk2mQ9pLw7Rt#{'Z4ab'}" }
+
+      def redact(text, path)
+        described_class.redact_source_lines(text.lines.map(&:chomp), path: path)
+      end
+
+      it "filters a render.yaml entry's and a Kubernetes manifest's value, and leaves the next entry's" do
+        render = "    envVars:\n      - key: CLIENT_SECRET\n        value: #{v}\n      - key: RAILS_ENV\n        value: production\n"
+        k8s = "        env:\n          - name: DATABASE_PASSWORD\n            value: \"#{v}\"\n          - name: RAILS_ENV\n            value: production\n"
+
+        expect(redact(render, "render.yaml")).to eq([ "    envVars:", "      - key: CLIENT_SECRET", "        value: [FILTERED]",
+                                                      "      - key: RAILS_ENV", "        value: production" ])
+        expect(redact(k8s, "k8s/web.yml")).to eq([ "        env:", "          - name: DATABASE_PASSWORD", %(            value: "[FILTERED]"),
+                                                   "          - name: RAILS_ENV", "            value: production" ])
+      end
+
+      it "filters a multi-line app.json entry's value and leaves its description and the next entry" do
+        json = %({\n  "env": {\n    "STRIPE_SECRET_KEY": {\n      "description": "Stripe key",\n      "value": "#{v}"\n    },\n) +
+               %(    "RAILS_ENV": {\n      "value": "production"\n    }\n  }\n}\n)
+
+        expect(redact(json, "app.json")).to eq(json.lines.map(&:chomp).map { |line| line.sub(v, "[FILTERED]") })
+      end
+
+      it "filters a YAML mapping's value under a secret's key, and leaves a boolean, a number and a sibling" do
+        yaml = "production:\n  api_token:\n    value: #{v}\n    enabled: true\n  password:\n    value: true\n  timeout:\n    value: 30\n"
+
+        expect(redact(yaml, "config/settings.yml")).to eq(yaml.lines.map(&:chomp).map { |line| line.sub(v, "[FILTERED]") })
+      end
+
+      it "names no entry from a sentence, and reads a locale file or Ruby source as it did" do
+        [
+          [ "      - name: Set API token\n        value: notasecret12345\n", ".github/workflows/ci.yml" ],
+          [ "en:\n  password:\n    value: \"Password value\"\n", "config/locales/en.yml" ],
+          [ "x = {\n  api_token:\n    value: 12\n}\n", "app/models/x.rb" ]
+        ].each { |text, path| expect(redact(text, path)).to eq(text.lines.map(&:chomp)) }
+      end
     end
   end
 
@@ -1118,7 +1177,8 @@ RSpec.describe RailsAiContext::Redaction do
     it "reads a 1 MB run of dashed words or header keys in seconds, not minutes, in a log and in source" do
       [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x"),
         %("Authorization"=>"x", ) * 50_000, "#{'a_' * 250_000}#{'a1' * 250_000}password=x",
-        "--password 1a " * 75_000, "#{'aToken' * 170_000}x" ].each do |line|
+        "--password 1a " * 75_000, "#{'aToken' * 170_000}x", %("api_token": { "value": "x" }, ) * 30_000,
+        %("api_token": { ) * 70_000 ].each do |line|
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         described_class.redact_log_line(line)
         described_class.redact_source_line(line, path: "app/models/x.rb")
