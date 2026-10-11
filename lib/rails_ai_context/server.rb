@@ -448,13 +448,14 @@ module RailsAiContext
     # true   - try to load `listen`, raise if missing
     # false  - skip entirely
     #
-    # Without a watch, each tool call checks the app's files itself
-    # (BaseTool.refresh_if_files_changed!), so answers still follow edits.
+    # Either way each tool call checks the app's files itself
+    # (BaseTool.refresh_if_files_changed!), so answers follow edits made
+    # before the call; the watch adds telling clients that files changed.
     def maybe_start_live_reload(mcp_server)
       mode = RailsAiContext.configuration.live_reload
       CodeReloader.track_loaded_code!
-
-      return Tools::BaseTool.check_files_per_call!(app) if mode == false
+      Tools::BaseTool.check_files_per_call!(app)
+      return if mode == false
 
       begin
         live_reload = LiveReload.new(app, mcp_server)
@@ -466,10 +467,9 @@ module RailsAiContext
         raise LoadError, "Live reload requires the `listen` gem. #{remedy}" if mode == true
 
         # :auto mode - skip with a tip. Answers still follow edits: each tool
-        # call checks the app's files instead.
-        $stderr.puts "[rails-ai-context] Live reload off: no `listen` gem, so each tool call checks for changed files instead. #{remedy}"
+        # call checks the app's files.
+        $stderr.puts "[rails-ai-context] Live reload off: no `listen` gem, so clients are not told when files change. #{remedy}"
       end
-      Tools::BaseTool.check_files_per_call!(app) unless @live_reload
     end
 
     def build_rack_app(transport)

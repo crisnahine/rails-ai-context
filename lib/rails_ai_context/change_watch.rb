@@ -7,9 +7,9 @@ module RailsAiContext
   # reaction, and the copies had grown apart where nobody chose - different
   # watch lists, and a fingerprint gate maintained twice.
   #
-  # The caller supplies the reaction (regenerate files, or refresh caches
-  # and notify clients) and its own policy for a missing `listen` gem -
-  # start raises LoadError so a CLI can exit and a server can downgrade.
+  # The caller supplies the reaction (regenerate files, or notify clients)
+  # and its own policy for a missing `listen` gem - start raises LoadError so
+  # a CLI can exit and a server can downgrade.
   class ChangeWatch
     def initialize(app)
       @app = app
@@ -50,9 +50,9 @@ module RailsAiContext
     # moved.
     #
     # It runs on Listen's thread, so neither it nor a reaction loads app
-    # code: the reaction asks for a reload, and the thread that answers the
-    # next call, or the watch's main thread, runs it - as a server without
-    # Listen always did.
+    # code: a server's calls reload it on their own threads, each after
+    # checking the files itself, and `watch` hands the change to its main
+    # thread.
     def gate(paths, &reaction)
       return unless Fingerprinter.stale?(@app, @mark)
 

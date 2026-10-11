@@ -31,19 +31,15 @@ RSpec.describe RailsAiContext::LiveReload do
         allow($stderr).to receive(:puts)
       end
 
-      it "invalidates all tool caches (which includes AstCache.clear)" do
-        expect(RailsAiContext::Tools::BaseTool).to receive(:reset_all_caches!)
-        live_reload.handle_change(changed_paths)
-      end
-
       it "sends notify_resources_list_changed to MCP server" do
         expect(mcp_server).to receive(:notify_resources_list_changed)
         live_reload.handle_change(changed_paths)
       end
 
-      it "sends notify_log_message with change details" do
+      it "tells the client what changed" do
+        allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
         expect(mcp_server).to receive(:notify_log_message).with(
-          data: a_string_matching(/Files changed:.*Tool caches invalidated/),
+          data: "Files changed: 1 model, 1 controller.",
           level: "info",
           logger: "rails-ai-context"
         )
@@ -51,22 +47,16 @@ RSpec.describe RailsAiContext::LiveReload do
       end
 
       it "logs to stderr" do
-        expect($stderr).to receive(:puts).with(a_string_matching(/Files changed:.*Tool caches invalidated/))
-        live_reload.handle_change(changed_paths)
-      end
-
-      # Listen calls this on its own thread, which loads no app code: the
-      # reaction only asks the next call to reload.
-      it "loads no app code itself, and has the next call reload it" do
-        expect(RailsAiContext::CodeReloader).not_to receive(:reload!)
-        live_reload.handle_change(changed_paths)
-
-        expect(RailsAiContext::Tools::BaseTool::FILE_CHECK[:reload]).to be(true)
-      end
-
-      it "says the next call reloads the code" do
         allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
-        expect($stderr).to receive(:puts).with(a_string_matching(/Tool caches invalidated; app code reloads at the next call\.\z/))
+        expect($stderr).to receive(:puts).with("[rails-ai-context] Files changed: 1 model, 1 controller.")
+        live_reload.handle_change(changed_paths)
+      end
+
+      # Listen calls this on its own thread, which loads no app code, and by
+      # then the call that followed the edit has already checked the files.
+      it "loads no app code and drops no cache itself" do
+        expect(RailsAiContext::CodeReloader).not_to receive(:reload!)
+        expect(RailsAiContext::Tools::BaseTool).not_to receive(:reset_all_caches!)
         live_reload.handle_change(changed_paths)
       end
 
@@ -75,7 +65,7 @@ RSpec.describe RailsAiContext::LiveReload do
       it "says the code stays as of boot when the app cannot reload" do
         allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
         expect(mcp_server).to receive(:notify_log_message).with(
-          data: "Files changed: 1 model, 1 controller. Tool caches invalidated; RAILS_ENV=test does not reload code, " \
+          data: "Files changed: 1 model, 1 controller. RAILS_ENV=test does not reload code, " \
                 "so what reflection reads stays as of boot.",
           level: "info",
           logger: "rails-ai-context"
@@ -83,22 +73,29 @@ RSpec.describe RailsAiContext::LiveReload do
         live_reload.handle_change(changed_paths)
       end
 
-      # Dropping the caches only rebuilds them from the constants Rails already
-      # had. Zeitwerk will not re-scan a directory it eager loaded, so without a
-      # reload the server keeps answering about the app as it was at boot.
-      it "reloads the app's code on the thread of the next call, not Listen's" do
+      # An agent edits and asks at once, a second and a half before the watch
+      # delivers the change. The call's own check reloads, on its own thread;
+      # when the watch catches up, the next call has nothing to reload, where
+      # the watch used to make it reload and re-introspect a second time.
+      it "leaves reloading to the calls, once per edit, on their own thread" do
+        root = Dir.mktmpdir
+        model = File.join(root, "app", "models", "post.rb")
+        FileUtils.mkdir_p(File.dirname(model))
+        File.write(model, "class Post\nend\n")
+        RailsAiContext::Tools::BaseTool.check_files_per_call!(RailsAiContext::StaticApp.new(root))
         reloaded_on = []
         allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
         allow(RailsAiContext::CodeReloader).to receive(:reload!) { reloaded_on << Thread.current }
         allow(RailsAiContext).to receive(:introspect).and_return({ app_name: "App" })
 
-        Thread.new { live_reload.handle_change(changed_paths) }.join
-        expect(reloaded_on).to be_empty
-
+        File.write(model, "class Post\n  has_many :comments\nend\n")
         RailsAiContext::Tools::GetConventions.call
+        Thread.new { live_reload.handle_change([ model ]) }.join
         RailsAiContext::Tools::GetConventions.call
 
         expect(reloaded_on).to eq([ Thread.current ])
+      ensure
+        FileUtils.remove_entry(root)
       end
     end
 
