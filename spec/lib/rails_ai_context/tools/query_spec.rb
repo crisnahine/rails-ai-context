@@ -2202,4 +2202,37 @@ it "still explains a database that does not exist" do
     end
   end
 
+  describe "CSV and table cell formatting (item 6)" do
+    it "renders a NULL CSV cell as an empty field" do
+      expect(described_class.send(:csv_cell, nil)).to eq("")
+    end
+
+    it "marks binary data as [BLOB] in a CSV cell" do
+      expect(described_class.send(:csv_cell, "\x00\x01".b)).to eq("[BLOB]")
+    end
+
+    it "does not truncate or markdown-escape a CSV cell" do
+      long = "z" * 150
+      expect(described_class.send(:csv_cell, long)).to eq(long)
+      expect(described_class.send(:csv_cell, "a|b")).to eq("a|b")
+    end
+
+    it "quotes a CSV field only when it holds a comma, quote or line break" do
+      expect(described_class.send(:csv_field, "plain")).to eq("plain")
+      expect(described_class.send(:csv_field, "x, y")).to eq('"x, y"')
+      expect(described_class.send(:csv_field, 'say "hi"')).to eq('"say ""hi"""')
+      expect(described_class.send(:csv_field, "line1\nline2")).to eq("\"line1\nline2\"")
+    end
+
+    it "renders a newline in a markdown table cell as the two characters backslash-n" do
+      expect(described_class.send(:format_cell, "line1\nline2")).to eq("line1\\nline2")
+    end
+
+    it "escapes a pipe even in a value shortened to the 100-char cap" do
+      val = ("a" * 50) + "|" + ("b" * 60)
+      formatted = described_class.send(:format_cell, val)
+      expect(formatted).to end_with("...")
+      expect(formatted).to include("\\|")
+    end
+  end
 end
