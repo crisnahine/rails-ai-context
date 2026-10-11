@@ -27,16 +27,17 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
 
   describe ".call" do
     # rails-i18n ships locales whose number separator is a comma, and the tool
-    # answers an agent, not the app's users.
+    # answers an agent, not the app's users. The size is the bytes written:
+    # Windows' text mode would add a \r to every line.
     it "reports the log size in English whatever the app's locale is" do
-      File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
+      File.binwrite(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
       with_comma_separator_locale do
         expect(described_class.call.content.first[:text]).to include("Size: 2.29 MB")
       end
     end
 
     it "still reports the log size when the app's locales leave out English" do
-      File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
+      File.binwrite(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
       with_german_only_locales do
         expect(described_class.call.content.first[:text]).to include("Size: 2.29 MB")
       end
@@ -245,13 +246,17 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).to include("empty")
     end
 
+    # An app with no log/ at all, rather than this one's removed: its booted
+    # logger holds log/test.log open for the whole run, and Windows deletes
+    # no file another handle has open, so rm_rf left the directory in place.
     it "handles missing log directory gracefully" do
-      FileUtils.rm_rf(log_dir)
-      result = described_class.call
-      text = result.content.first[:text]
-      expect(text).to include("No log files found")
-    ensure
-      FileUtils.mkdir_p(log_dir)
+      Dir.mktmpdir do |app|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(app)))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("No log files found")
+      end
     end
 
     # The name is reduced to its basename, so this used to be reported as the

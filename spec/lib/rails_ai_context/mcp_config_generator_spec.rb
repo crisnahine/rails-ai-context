@@ -988,15 +988,17 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
   # The sections are found by lines, so what sits around them must come
   # through byte for byte.
   describe "Codex TOML sections" do
+    # In bytes both ways: Windows' text mode would write the \r\n here as
+    # \r\r\n, and read every \r\n back as \n.
     it "writes its section in a Windows-line-ended file's own line ending, and skips it the next time" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, ".codex"))
-        File.write(File.join(dir, ".codex/config.toml"), %(model = "o3"\r\n))
+        File.binwrite(File.join(dir, ".codex/config.toml"), %(model = "o3"\r\n))
 
         first = described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
         second = described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
-        toml = File.read(File.join(dir, ".codex/config.toml"))
+        toml = File.binread(File.join(dir, ".codex/config.toml"))
         expect(toml.scan("\n").size).to eq(toml.scan("\r\n").size)
         expect([ first[:written].size, second[:skipped].size ]).to eq([ 1, 1 ])
       end
@@ -1176,10 +1178,12 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
   describe "a config that is not ASCII" do
     def codex(dir) = File.join(dir, ".codex/config.toml")
 
+    # Written in bytes, so the file has the \n line endings the expectation
+    # reads back on Windows too, where text mode writes \r\n.
     it "reads a UTF-8 file whatever the locale says" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, ".codex"))
-        File.write(codex(dir), %(# café\n[mcp_servers.rails-ai-context]\ncommand = "old"\n), encoding: "UTF-8")
+        File.binwrite(codex(dir), %(# café\n[mcp_servers.rails-ai-context]\ncommand = "old"\n))
         previous = Encoding.default_external
         begin
           silence_warnings { Encoding.default_external = Encoding::US_ASCII }
@@ -1440,15 +1444,17 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
     end
 
+    # In bytes both ways: Windows' text mode would write each \r\n here as
+    # \r\r\n, and read every \r\n back as \n.
     it "keeps a Codex config's Windows line endings" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, ".codex"))
         crlf =%(model = "o3"\r\n\r\n[mcp_servers.rails-ai-context]\r\ncommand = "rails-ai-context"\r\nargs = ["serve"]\r\n\r\n\r\n[mcp_servers.other]\r\ncommand = "node"\r\n)
-        File.write(File.join(dir, ".codex/config.toml"), crlf)
+        File.binwrite(File.join(dir, ".codex/config.toml"), crlf)
 
         described_class.remove(tools: [ :codex ], output_dir: dir)
 
-        expect(File.read(File.join(dir, ".codex/config.toml"))).to eq(%(model = "o3"\r\n\r\n[mcp_servers.other]\r\ncommand = "node"\r\n))
+        expect(File.binread(File.join(dir, ".codex/config.toml"))).to eq(%(model = "o3"\r\n\r\n[mcp_servers.other]\r\ncommand = "node"\r\n))
       end
     end
 

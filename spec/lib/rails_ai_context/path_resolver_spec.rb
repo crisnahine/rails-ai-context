@@ -427,13 +427,14 @@ RSpec.describe RailsAiContext::PathResolver do
   end
 
   describe ".path_gem_libs" do
-    # A lockfile written on Windows ends its lines with CRLF.
+    # A lockfile written on Windows ends its lines with CRLF. Written in
+    # bytes, as Windows' text mode would turn each \r\n into \r\r\n.
     it "reads the path gems of a lockfile whatever its line endings, and only those inside the repo" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "gems", "broadcast_policy", "lib"))
         File.write(File.join(dir, "gems", "broadcast_policy", "broadcast_policy.gemspec"), "")
         lock = "PATH\n  remote: gems\n  specs:\n    broadcast_policy (1.0)\n\nPATH\n  remote: ../outside\n  specs:\n"
-        File.write(File.join(dir, "Gemfile.lock"), lock.gsub("\n", "\r\n"))
+        File.binwrite(File.join(dir, "Gemfile.lock"), lock.gsub("\n", "\r\n"))
         described_class.clear_code_roots
 
         expect(described_class.path_gem_libs(dir)).to eq([ File.join(dir, "gems", "broadcast_policy", "lib") ])
