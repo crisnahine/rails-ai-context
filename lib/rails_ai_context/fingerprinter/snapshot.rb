@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "set"
 
 module RailsAiContext
   class Fingerprinter
@@ -12,7 +13,8 @@ module RailsAiContext
     # directories and the watched files, about 3 microseconds a file, and
     # lists only a directory that changed. The files are the ones compute
     # reads: the root manifests, and each watched directory as `**/*` walks
-    # it, a cassette counting by its presence alone.
+    # it, a cassette counting by its presence alone, and each directory
+    # linked in from the app's repository, which the readers walk too.
     #
     # A stat cannot show a second write in the same clock tick as the first,
     # so a file younger than AstCache::RACY_WINDOW at one look has its
@@ -20,9 +22,9 @@ module RailsAiContext
     # again.
     class Snapshot
       # What a look keeps of one directory: its stat, whether that stat was
-      # old enough to trust, its listing, and per watched file what look_at
-      # saw of it.
-      Listing = Struct.new(:mtime, :ino, :settled, :subdirs, :files, :seen, :cassettes)
+      # old enough to trust, its listing - the directory links in it apart -
+      # and per watched file what look_at saw of it.
+      Listing = Struct.new(:mtime, :ino, :settled, :subdirs, :links, :files, :seen, :cassettes)
 
       def initialize(root)
         @root = root.to_s
@@ -49,7 +51,11 @@ module RailsAiContext
         @manifests = manifests
 
         dirs = {}
-        Fingerprinter.watched_dirs(@root).each { |top| walk(top, horizon, dirs) }
+        entered = Set.new
+        # One run, so the link checks answer once per look.
+        RunCache.around do
+          Fingerprinter.watched_dirs(@root).each { |top| walk(top, horizon, dirs, entered) }
+        end
         # A directory the walk no longer reaches took its files with it.
         @changed = true if @dirs&.any? { |path, dir| !dirs.key?(path) && (dir.files.any? || dir.cassettes.any?) }
         @dirs = dirs
@@ -58,9 +64,13 @@ module RailsAiContext
 
       private
 
-      def walk(top, horizon, dirs)
+      # The real tree first, then each directory linked in from the app's
+      # repository, as the readers walk one (FileWalk).
+      def walk(top, horizon, dirs, entered)
+        start = real_dir(top) or return
         pending = [ top ]
-        while (path = pending.pop)
+        linked = []
+        while (path = pending.pop || linked.shift)
           next if dirs.key?(path)
 
           stat = dir_stat(path)
@@ -70,7 +80,32 @@ module RailsAiContext
           dirs[path] = dir
           look_at_all(dir.files, dir.seen, horizon)
           pending.concat(dir.subdirs)
+          dir.links.each { |link| linked << link if enter?(link, start, entered) }
         end
+      end
+
+      # Whether the walk enters a directory link, asked at every look, since
+      # where it leads can move without its directory's stat moving. As the
+      # readers do, only one into the app's repository, never one back up
+      # over the walk's start (PathResolver.enter_link?); and as compute
+      # does, by real path, never one into the tree walked here or into a
+      # directory a link has led to already, which also ends a circle of
+      # links.
+      def enter?(link, start, entered)
+        target = File.realpath(link)
+        return false if [ start, *entered ].any? { |dir| SafePath.contained?(target, dir) }
+        return false unless File.directory?(target) && PathResolver.enter_link?(target, start, @root)
+
+        entered << target
+        true
+      rescue SystemCallError
+        false
+      end
+
+      def real_dir(path)
+        File.realpath(path)
+      rescue SystemCallError
+        nil
       end
 
       # The hot loop, once per watched file per call: a stat, and a method
@@ -107,7 +142,7 @@ module RailsAiContext
         kept = @dirs && @dirs[path]
         return kept if kept&.settled && kept.mtime == stat.mtime && kept.ino == stat.ino
 
-        subdirs, files, cassettes = list(path)
+        subdirs, links, files, cassettes = list(path)
         before = kept ? kept.files.zip(kept.seen).to_h : {}
         seen = files.map { |file| before[file] }
         if kept
@@ -115,30 +150,36 @@ module RailsAiContext
         elsif !@first && (files.any? || cassettes.any?)
           @changed = true
         end
-        Listing.new(stat.mtime, stat.ino, stat.mtime < horizon, subdirs, files, seen, cassettes)
+        Listing.new(stat.mtime, stat.ino, stat.mtime < horizon, subdirs, links, files, seen, cassettes)
       end
 
-      # What glob's `**/*` walks: no dotfiles, and a symlinked directory is an
-      # entry, not a directory to descend into.
+      # What glob's `**/*` walks - no dotfiles - and apart from it each link
+      # that may lead to a directory: one that does, or that leads nowhere
+      # yet. walk decides at every look whether to enter it. In name order,
+      # so a directory two links lead to is spelled the same way each time.
       def list(path)
         subdirs = []
+        links = []
         files = []
         cassettes = []
-        Dir.children(path).each do |name|
+        Dir.children(path).sort.each do |name|
           next if name.start_with?(".")
 
           entry = File.join(path, name)
-          if File.lstat(entry).directory?
+          stat = File.lstat(entry)
+          if stat.directory?
             subdirs << entry
-          elsif WATCHED_EXTNAMES.include?(File.extname(name)) && !entry.include?(BUILD_OUTPUT)
-            (entry.delete_prefix(@prefix).match?(CASSETTES) ? cassettes : files) << entry
+          elsif WATCHED_EXTNAMES.include?(File.extname(name))
+            (entry.delete_prefix(@prefix).match?(CASSETTES) ? cassettes : files) << entry unless entry.include?(BUILD_OUTPUT)
+          elsif stat.symlink? && !File.file?(entry)
+            links << entry
           end
         rescue SystemCallError
           next
         end
-        [ subdirs, files, cassettes ]
+        [ subdirs, links, files, cassettes ]
       rescue SystemCallError
-        [ [], [], [] ]
+        [ [], [], [], [] ]
       end
 
       # [mtime, digest]: the digest only while the file is young. What was

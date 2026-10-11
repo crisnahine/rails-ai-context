@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 # The check every call makes before it answers, so it has to see every edit
 # Fingerprinter.compute would, at a fraction of the cost.
@@ -125,7 +126,8 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
       expect(snapshot.changed?).to be(true)
     end
 
-    it "does not descend into a symlinked directory, as `**/*` does not" do
+    # Outside a repository only the app's root bounds a link, as it does for the readers.
+    it "does not descend into a directory linked in from outside the app, as the readers do not" do
       outside = Dir.mktmpdir
       File.write(File.join(outside, "elsewhere.rb"), "class Elsewhere\nend\n")
       File.symlink(outside, File.join(root, "app/models/linked"))
@@ -135,6 +137,79 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
       expect(snapshot.changed?).to be(false)
     ensure
       FileUtils.remove_entry(outside)
+    end
+  end
+
+  # A monorepo's app links in a package from elsewhere in its repository, and
+  # every reader walks it (FileWalk): the look missed an edit there, so the
+  # call after it was answered from before the edit until cache_ttl ran out.
+  context "with a directory linked in from the app's repository" do
+    around do |example|
+      Dir.mktmpdir do |repo|
+        @repo = repo
+        FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(repo, "shared/controllers") ])
+        example.run
+      end
+    end
+
+    let(:root) { File.join(@repo, "apps/web").tap { |dir| FileUtils.mkdir_p(dir) } }
+    let(:linked) { File.join(@repo, "shared/controllers/fancy_controller.js") }
+
+    before do
+      write("app/javascript/controllers/hello_controller.js", %(import { Controller } from "@hotwired/stimulus"\n))
+      File.write(linked, %(export default class extends Controller {\n  static targets = ["alpha"]\n}\n))
+      File.symlink("../../../../../shared/controllers", File.join(root, "app/javascript/controllers/shared"))
+      snapshot.changed?
+    end
+
+    it "sees an edit inside it at the next look" do
+      File.write(linked, %(export default class extends Controller {\n  static targets = ["alpha", "beta"]\n}\n))
+
+      expect(snapshot.changed?).to be(true)
+      expect(snapshot.changed?).to be(false)
+    end
+
+    it "sees a file added there, and the link removed" do
+      File.write(File.join(@repo, "shared/controllers/other_controller.js"), "x\n")
+      expect(snapshot.changed?).to be(true)
+
+      File.delete(File.join(root, "app/javascript/controllers/shared"))
+      expect(snapshot.changed?).to be(true)
+    end
+
+    # A link that names a directory not there yet sits in a listing that
+    # nothing restamps when the directory appears.
+    it "enters a link once the directory it names appears" do
+      File.symlink("../../../../shared/later", File.join(root, "app/models/later"))
+      age("app/models")
+      snapshot.changed?
+
+      FileUtils.mkdir_p(File.join(@repo, "shared/later"))
+      File.write(File.join(@repo, "shared/later/report.rb"), "class Report\nend\n")
+      expect(snapshot.changed?).to be(true)
+    end
+
+    it "walks each directory once whatever spells it, a link back over the walk or round in a circle included" do
+      FileUtils.mkdir_p([ File.join(@repo, "shared/a"), File.join(@repo, "shared/b"), File.join(root, "app/helpers") ])
+      File.write(File.join(@repo, "shared/b/billing.rb"), "class Billing\nend\n")
+      File.symlink("../b", File.join(@repo, "shared/a/to_b"))
+      File.symlink("../a", File.join(@repo, "shared/b/to_a"))
+      File.symlink("../../../../shared/a", File.join(root, "app/models/a"))
+      File.symlink("../../../../shared/a", File.join(root, "app/helpers/also_a"))
+      File.symlink("..", File.join(root, "app/models/up"))
+      fresh = described_class.new(root)
+      listed = []
+      allow(fresh).to receive(:list).and_wrap_original do |list, path|
+        listed << File.realpath(path)
+        list.call(path)
+      end
+
+      Timeout.timeout(10) { fresh.changed? }
+      expect(listed).to eq(listed.uniq)
+      expect(listed).to include(File.realpath(File.join(@repo, "shared/a")), File.realpath(File.join(@repo, "shared/b")))
+
+      File.write(File.join(@repo, "shared/b/billing.rb"), "class Billing\n  X = 1\nend\n")
+      expect(fresh.changed?).to be(true)
     end
   end
 

@@ -242,7 +242,7 @@ SHA256-based change detection:
 - Watches: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the Gemfile and Gemfile.lock (or `gems.rb` and `gems.locked`), `package.json`, `tsconfig.json`, `config.ru`, the Rakefile
 - Computes a composite fingerprint from all watched files
 - Used by introspection cache and live reload to detect actual changes
-- `Fingerprinter::Snapshot` answers the same question before every call by stat alone, keeping each directory's listing while the directory's stat holds; a file young enough to have been written twice in one clock tick has its content compared too
+- `Fingerprinter::Snapshot` answers the same question before every call by stat alone, keeping each directory's listing while the directory's stat holds; a file young enough to have been written twice in one clock tick has its content compared too, and a directory linked in from the app's repository is followed as the readers follow it, its link asked where it leads at every look
 
 ## Key design decisions
 

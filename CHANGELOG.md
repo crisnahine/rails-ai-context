@@ -155,6 +155,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   find specified check" - where the scan outside the bundle told the caller
   to add brakeman to the Gemfile - and a `files` path that names nothing is
   answered before the scan, which on a large app takes minutes, not after it.
+- **A call sees an edit inside a directory the app links in from its
+  repository.** The check each call makes for edits stopped at the link, while
+  the readers walk through it, so with `app/javascript/controllers/shared`
+  linked to a monorepo's shared controllers, `rails_get_stimulus` answered
+  from before an edit there until `cache_ttl` ran out, 60 seconds by
+  default, and `rails_search_code` already read the edit. The check now
+  follows such a link as the readers do: only into the app's repository,
+  never back up over the tree it walks, each linked directory once, so a
+  link that leads round in a circle ends. Where a link leads is asked at
+  every check, so one whose directory appears later is followed too.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which
