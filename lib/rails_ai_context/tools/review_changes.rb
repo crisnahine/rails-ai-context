@@ -168,6 +168,11 @@ module RailsAiContext
           output, status = Open3.capture2("git", "rev-parse", "--verify", "--quiet", "#{ref}^{commit}", chdir: root, err: File::NULL)
           sha = output.strip
           sha if status.success? && sha.match?(/\A\h{40,64}\z/)
+        rescue SystemCallError
+          # A ref too long to hand git at all (Windows takes some 32,000
+          # characters on a command line, Linux 128 KB in one argument) names
+          # no commit; the error said so with the whole ref in it.
+          nil
         end
 
         # @return [String, nil] the full SHA of the commit `commit` and HEAD last shared

@@ -93,6 +93,16 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       expect(result.content.first[:text]).to include("Unknown ref")
     end
 
+    # Longer than one argument to git may be (128 KB on Linux, some 32,000
+    # characters for a whole Windows command line): starting git raised,
+    # and the answer was the error with the whole ref in it.
+    it "says a ref too long to hand git is unknown, and repeats it shortened" do
+      result = described_class.call(ref: "r" * 200_000)
+
+      expect(result.error?).to be(true)
+      expect(result.content.first[:text]).to start_with("Unknown ref: #{'r' * 80}... (200000 characters)")
+    end
+
     # The file list came from where the branch left main and each diff from
     # main's tip, so a validation main added later read as one the branch
     # removed; and an edited validates line read as a removed one.

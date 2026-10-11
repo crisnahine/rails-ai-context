@@ -1117,7 +1117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rails_get_context`; each now shows its first 80 characters and its
   length. `rails_migration_advisor`, which wrote the argument into the
   migration twice over, refuses a name longer than 256 characters and
-  options longer than 1,024.
+  options longer than 1,024. A `rails_review_changes` ref too long to hand
+  git at all (128 KB on Linux, some 32,000 characters on Windows) is an
+  unknown ref, where the answer was the error starting git raised.
 - **`rails_onboard` counts every database the app declares**, naming the
   framework's own databases in one line; it and
   `rails_get_frontend_stack` count every broadcast, and onboard includes

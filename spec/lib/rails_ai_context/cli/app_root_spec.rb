@@ -474,14 +474,16 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         expect(described_class.bundle_ready?({}, tmp, bundle: missing)).to be(false)
       end
 
-      # A Gemfile edited since its lock sends Bundler to the network.
+      # A Gemfile edited since its lock sends Bundler to the network. The
+      # limit leaves Ruby time to start and write its pid, which takes more
+      # than half a second on a Windows runner.
       it "gives up on a check that runs past its time, and leaves no process behind" do
         pid_file = File.join(tmp, "pid")
         slow = bundle_standing_in("slow", %(File.write(#{pid_file.inspect}, Process.pid.to_s); sleep 30\n))
 
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        expect(described_class.bundle_ready?({}, tmp, bundle: slow, seconds: 0.5)).to be(false)
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 5
+        expect(described_class.bundle_ready?({}, tmp, bundle: slow, seconds: 3)).to be(false)
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 10
         expect { Process.kill(0, File.read(pid_file).to_i) }.to raise_error(Errno::ESRCH)
       end
     end
