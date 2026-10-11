@@ -150,7 +150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and in the scope of a clean answer, and a long `checks` entry came back
   whole in brakeman's "Could not find specified check", from the scan in
   this process and the one outside the bundle alike. Each now shows its
-  first 80 characters and its length.
+  first 80 characters and its length. A check name brakeman does not know
+  is answered the same from either scan - "Brakeman scan failed: Could not
+  find specified check" - where the scan outside the bundle told the caller
+  to add brakeman to the Gemfile.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which

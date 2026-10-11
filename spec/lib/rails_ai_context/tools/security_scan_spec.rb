@@ -549,9 +549,21 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
         text = described_class.call(checks: [ "#{'R' * 50_000},#{'S' * 50_000}" ]).content.first[:text]
 
-        expect(text).to include("It said: `Could not find specified checks: " \
-                                "`Check#{'R' * 80}... (50000 characters)`, `Check#{'S' * 80}... (50000 characters)``")
-        expect(text.length).to be < 1_000
+        expect(text).to eq("Brakeman scan failed: Could not find specified checks: " \
+                           "`Check#{'R' * 80}... (50000 characters)`, `Check#{'S' * 80}... (50000 characters)`")
+      end
+
+      # The caller named a check brakeman does not have: the Gemfile advice an
+      # unavailable scan gets would send them to change nothing wrong.
+      it "answers a check the outside run cannot find as the in-process scan does" do
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.1.0")
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return([ nil, "Could not find specified check: `CheckNotAThing`" ])
+
+        text = described_class.call(checks: [ "NotAThing" ]).content.first[:text]
+
+        expect(text).to eq("Brakeman scan failed: Could not find specified check: `CheckNotAThing`")
       end
     end
 

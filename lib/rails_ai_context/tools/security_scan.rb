@@ -143,7 +143,13 @@ module RailsAiContext
         return nil unless version
 
         report, failure = run_brakeman_unbundled(min_confidence, resolved_checks)
-        return { unavailable: echo_checks(failure, resolved_checks) } unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
+        unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
+          failure = echo_checks(failure, resolved_checks)
+          # A check name brakeman does not know is the caller's to fix, and
+          # is answered as the in-process scan answers it: the Gemfile advice
+          # an unavailable scan gets would send them to change nothing wrong.
+          return failure.to_s.match?(UNKNOWN_CHECK) ? { error: failure } : { unavailable: failure }
+        end
 
         # The newest on disk is not always the one the binstub ran.
         version = report.dig("scan_info", "brakeman_version") || version
@@ -156,6 +162,9 @@ module RailsAiContext
           note: unbundled_note(version)
         }
       end
+
+      # How brakeman refuses a --test name it has no check for.
+      UNKNOWN_CHECK = /Could not find specified checks?:/
 
       # Brakeman names a check it does not know as it was handed it, so a
       # 100,000-character name came back whole. Each is shortened as every
