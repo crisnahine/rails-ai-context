@@ -678,7 +678,11 @@ it "still explains a database that does not exist" do
     end
   end
 
-  describe "SQLite timeout on a file-backed database" do
+  # The timeout runs the query in a forked child it can kill. Windows has no
+  # fork, so there the query runs in this process, unbounded: the example
+  # below this group says so on every platform.
+  describe "SQLite timeout on a file-backed database",
+           skip: (Process.respond_to?(:fork) ? false : "the SQLite timeout runs the query in a forked child, and this platform has no fork") do
     let(:dir) { Dir.mktmpdir }
     let(:conn) do
       stub_const("QueryTimeoutSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
@@ -905,6 +909,38 @@ it "still explains a database that does not exist" do
 
       expect(fast.value).to be < 1.5
       slow.join
+    end
+  end
+
+  # Where there is no fork (Windows), a file-backed database gets no
+  # timeout: the query runs in this process, and the answer says so.
+  describe "SQLite on a file-backed database where the platform has no fork" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryNoForkSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryNoForkSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QueryNoForkSpecRecord.connection.tap do |c|
+        c.execute("CREATE TABLE nums (n INTEGER)")
+        c.execute("INSERT INTO nums VALUES (1), (2), (3)")
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(Process).to receive(:respond_to?).and_call_original
+      allow(Process).to receive(:respond_to?).with(:fork).and_return(false)
+    end
+
+    after do
+      QueryNoForkSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    it "answers in this process and says the query ran without a time limit" do
+      text = described_class.call(sql: "SELECT n FROM nums ORDER BY n").content.first[:text]
+
+      expect(text).to include("| 3 |")
+      expect(text).to include("without a time limit")
     end
   end
 
