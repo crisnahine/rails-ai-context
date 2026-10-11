@@ -82,9 +82,19 @@ module RailsAiContext
 
         # Build action-specific data
         applicable = ActionFilters.for(context, key, action)
+        # The action's own lines, from the controller's file or, for one it
+        # mixes in or inherits, the file that defines it.
+        root = RailsAiContext.default_app.root.to_s
+        file = Payload.controller_file(context, key)
+        source = file && SafeFile.read(File.join(root, file))
+        body = source && Introspectors::ActionResolver.method_body(source, action.to_s, owner: key)&.merge(file: file)
+        body ||= Introspectors::ActionSource.find(root, key, action.to_s, file: file)
         action_data = {
           controller: key,
           action: action.to_s,
+          file: body ? body[:file] : file,
+          lines: body && "#{body[:start_line]}-#{body[:end_line]}",
+          source: body && body[:code],
           filters: applicable[:chain],
           # Every params method the controller declares, not only the ones
           # this action reaches, so the scope is stated rather than implied.
