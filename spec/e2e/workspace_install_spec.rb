@@ -176,6 +176,45 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
     expect(out).not_to include("Run inside a Rails app to execute tools")
   end
 
+  # The standalone binary, typed anywhere with the app's full path. The
+  # app's bundle carries its own copy of the gem, which the binary hands the
+  # command to; that copy boots the app, and the app's initializer adds the
+  # custom tool.
+  it "lists an app's custom tools from the standalone binary typed anywhere, through the app's own copy" do
+    out, err, status = Open3.capture3(shell_env, *@shop.cli_command, "tool", "--list", "--app-path", @admin.app_path,
+                                      chdir: E2E.root)
+
+    expect(status.success?).to be(true), err
+    expect(out).to match(/^\s+lab_probe\s+Lab probe custom tool\r?$/)
+    expect(err).to include("This app's bundle has rails-ai-context")
+  end
+
+  # Every command but init and the tool listing reads one app, and this
+  # folder holds two (#428).
+  describe "a command typed in the folder of apps" do
+    it "is refused with an --app-path command for each app, and the one for shop works" do
+      out, err, status = Open3.capture3(shell_env, *@shop.cli_command, "tool", "schema", chdir: @workspace)
+
+      expect(status.success?).to be(false)
+      expect(out).to be_empty
+      expect(err).to match(/^Error: .*workspace is no Rails app, and holds 2 below it\. Name one with --app-path:/)
+      expect(err).to include("  rails-ai-context --app-path admin tool schema")
+      expect(err).to include("  rails-ai-context --app-path shop tool schema")
+
+      suggested = err[/^  rails-ai-context (--app-path shop .*?)\r?$/, 1].split(" ")
+      out, err, status = Open3.capture3(shell_env, *@shop.cli_command, *suggested, chdir: @workspace)
+      expect(status.success?).to be(true), err
+      expect(out).to include("posts")
+    end
+
+    it "still lists the tools" do
+      out, err, status = Open3.capture3(shell_env, *@shop.cli_command, "tool", "--list", chdir: @workspace)
+
+      expect(status.success?).to be(true), err
+      expect(out).to match(/^\s+schema\s/)
+    end
+  end
+
   it "finds the workspace's MCP configs from doctor inside an app" do
     out, err, = Open3.capture3(@admin.env, "bundle", "exec", "rails-ai-context", "doctor", chdir: @admin.app_path)
 
