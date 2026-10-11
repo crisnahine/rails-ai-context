@@ -761,4 +761,32 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       end
     end
   end
+
+  # Rails' `nested` is the parent resource's nested scope (Mapper::Resources#nested).
+  describe "a resource's nested block, read statically" do
+    it "draws its routes under the parent's path, as bin/rails routes does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            resources :magazines, only: [] do
+              nested do
+                resources :ads
+              end
+            end
+          end
+        RUBY
+        routes = RailsAiContext::Introspectors::RouteIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(routes: routes)
+
+        text = described_class.call(controller: "ads").content.first[:text]
+
+        expect(text).to include("# Routes (7 routes)")
+        expect(text).to include("- `GET` `/magazines/:magazine_id/ads` → index `magazine_ads_path(:magazine_id)`")
+        expect(text).to include("- `GET` `/magazines/:magazine_id/ads/new` → new `new_magazine_ad_path(:magazine_id)`")
+        expect(text).to include("- `DELETE` `/magazines/:magazine_id/ads/:id` → destroy")
+        expect(text).not_to include("not expanded")
+      end
+    end
+  end
 end

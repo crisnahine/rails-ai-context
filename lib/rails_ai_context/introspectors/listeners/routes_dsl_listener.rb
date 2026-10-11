@@ -24,7 +24,7 @@ module RailsAiContext
         # `direct` and `resolve` define URL helpers and draw no route.
         URL_HELPER_MACROS = %i[direct resolve].freeze
         # Calls that draw routes; an unknown block that makes none of them configures a gem macro.
-        ROUTE_METHODS = (VERB_METHODS + %i[match namespace scope resources resource member collection new shallow
+        ROUTE_METHODS = (VERB_METHODS + %i[match namespace scope resources resource member collection new nested shallow
                                            concern concerns with_options controller mount root draw devise_for]).freeze
         # Blocks that draw their routes where they stand: Rails' constraints and defaults, and Devise's.
         # Any other method's block may scope its routes in a way the walk cannot see.
@@ -98,6 +98,8 @@ module RailsAiContext
           when :member then enter_member_collection(node, :member)
           when :collection then enter_member_collection(node, :collection)
           when :new then enter_member_collection(node, :new)
+          # A resource's frame already holds its nested scope, which a direct child draws under too.
+          when :nested then push_frame(node, suppress: current_resource.nil?) if node.block
           when :shallow then push_frame(node, shallow: true) if node.block
           when :concern then define_concern(node)
           when :concerns then apply_concerns(node)
