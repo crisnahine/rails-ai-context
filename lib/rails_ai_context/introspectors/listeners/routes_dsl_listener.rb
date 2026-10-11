@@ -26,6 +26,9 @@ module RailsAiContext
         # Calls that draw routes; an unknown block that makes none of them configures a gem macro.
         ROUTE_METHODS = (VERB_METHODS + %i[match namespace scope resources resource member collection new shallow
                                            concern concerns with_options controller mount root draw devise_for]).freeze
+        # Blocks that draw their routes where they stand: Rails' constraints and defaults, and Devise's.
+        # Any other method's block may scope its routes in a way the walk cannot see.
+        IN_PLACE_BLOCKS = %i[constraints defaults devise_scope as authenticate authenticated unauthenticated].freeze
         # Statement-level calls that draw nothing into the table.
         NON_ROUTING = %i[require require_relative puts p pp print warn raise default_url_options extend include].freeze
 
@@ -109,20 +112,25 @@ module RailsAiContext
           else
             if statement && node.block
               # An empty block (a commented-out `constraints do`) configures nothing.
-              push_frame(node, unknown_block: @routing_calls, pending: []) if node.block.body
+              push_frame(node, unknown_block: @routing_calls, pending: [], suppress: !IN_PLACE_BLOCKS.include?(node.name)) if node.block.body
             elsif statement && !NON_ROUTING.include?(node.name)
               call_method_or_count(node)
             end
           end
         end
 
-        # An unknown block that draws no route is a gem macro (`use_doorkeeper do`), counted once.
+        # An unknown block that draws no route is a gem macro (`use_doorkeeper do`), counted once,
+        # and so is one whose routes it does not draw in place.
         def on_call_node_leave(node)
           return unless @stack.last && @stack.last[:node].equal?(node)
 
           frame = @stack.pop
           return unless frame[:unknown_block]
-          return frame[:pending].each { |call| emit_dynamic(call) } if frame[:unknown_block] != @routing_calls
+          if frame[:unknown_block] != @routing_calls
+            return emit_dynamic(node) if frame[:suppress]
+
+            return frame[:pending].each { |call| emit_dynamic(call) }
+          end
 
           outer = open_unknown_block
           outer ? outer[:pending] << node : emit_dynamic(node)

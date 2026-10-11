@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetRoutes do
   before { described_class.reset_cache! }
@@ -728,6 +730,35 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
 
     it "reads the shared context the same number of times for 3 controllers as for 40" do
       expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
+
+  describe "a block from a routing method the app defines, read statically" do
+    it "draws none of its routes at the top level and counts it as not expanded" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            resources :posts, only: %i[index show]
+
+            api_v1 do
+              resources :posts
+            end
+          end
+        RUBY
+        routes = RailsAiContext::Introspectors::RouteIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(routes: routes)
+
+        filtered = described_class.call(controller: "posts").content.first[:text]
+        whole = described_class.call.content.first[:text]
+        versioned = described_class.call(controller: "api/v1/posts").content.first[:text]
+
+        expect(filtered).to include("# Routes (2 routes)")
+        expect(filtered).not_to include("→ create")
+        expect(whole).to include("# Routes (2 routes, 1 dynamic construct not expanded)")
+        expect(versioned).to eq("No routes for 'api/v1/posts'. Controllers: posts. " \
+                                "1 dynamic construct was not expanded, and a route it draws is not in this table.")
+      end
     end
   end
 end

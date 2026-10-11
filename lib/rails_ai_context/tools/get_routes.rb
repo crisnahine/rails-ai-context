@@ -183,8 +183,13 @@ module RailsAiContext
             if filtered.empty?
               # The whole controller list would bury the sentence saying the name matched none.
               known = by_controller.keys.reject { |k| framework_controller?(k) }.sort
+              # Booted, a dynamic route has no controller, so it cannot be the one asked for.
+              unexpanded = routes[:confidence] == RailsAiContext::Confidence::STATIC ? routes[:dynamic_routes].to_i : 0
+              unread = if unexpanded == 1 then ". 1 dynamic construct was not expanded, and a route it draws is not in this table."
+              elsif unexpanded > 1 then ". #{unexpanded} dynamic constructs were not expanded, and a route they draw is not in this table."
+              end
               return empty_response("No routes for '#{echo_input(controller)}'. Controllers: " \
-                                    "#{known.first(20).join(', ')}#{" ... and #{known.size - 20} more" if known.size > 20}")
+                                    "#{known.first(20).join(', ')}#{" ... and #{known.size - 20} more" if known.size > 20}#{unread}")
             end
             by_controller = filtered
           end
