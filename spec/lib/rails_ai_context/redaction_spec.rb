@@ -141,6 +141,99 @@ RSpec.describe RailsAiContext::Redaction do
       ].each { |line| expect(redact(line, path: "bin/setup")).to eq(line) }
     end
 
+    # Redis takes a setting's value as the next word, and so do most CLIs a flag's.
+    it "filters a secret flag's value given as the next word" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        "redis: redis-server --requirepass #{v} --port 6380" => "redis: redis-server --requirepass [FILTERED] --port 6380",
+        "    command: redis-server --masterauth #{v}" => "    command: redis-server --masterauth [FILTERED]",
+        "mongosh --username admin --password #{v}" => "mongosh --username admin --password [FILTERED]",
+        "gitlab-runner register --registration-token #{v}" => "gitlab-runner register --registration-token [FILTERED]",
+        "docker login --username ci --password #{v} registry.example.com" =>
+          "docker login --username ci --password [FILTERED] registry.example.com",
+        %(system("redis-server --requirepass #{v}")) => %(system("redis-server --requirepass [FILTERED]")),
+        "bin/setup --api-key #{'q7Wz9xKp' * 3}" => "bin/setup --api-key [FILTERED]"
+      }.each { |line, want| expect(redact(line, path: "bin/setup")).to eq(want) }
+    end
+
+    # Prose names a flag the same way, and a help line spells a flag's metavariable after it.
+    it "leaves a word, a metavariable, a variable or a flag after a secret flag byte for byte" do
+      [
+        "Pass the --password option to set it, or --token followed by yours.",
+        "the --secret argument is required; --password-length 12 sets the minimum",
+        "Run bin/deploy --token TOKEN --password PASS --api-key KEY123",
+        "bin/deploy --token <token> --password $DB_PASSWORD --secret %SECRET% --pin #{'{'}pin}",
+        %(opts.on("-p", "--password PASS", "Database password")),
+        %(system("redis-server", "--requirepass", password)),
+        %(cmd = "pg_dump --password \#{password}"),
+        %(redis-server --requirepass "$REDIS_PASSWORD" --masterauth '${MASTER_AUTH}'),
+        "docker login --username ci --password-stdin < token.txt",
+        "bin/rails runner x --token-ttl 3600 --password-min 8 --pin 1",
+        "kamal deploy --secret-file /run/secrets/app2 --password --verbose",
+        "redis-server --requirepass [FILTERED]"
+      ].each { |line| expect(redact(line, path: "bin/setup")).to eq(line) }
+    end
+
+    # Postgres reads PGPASSWORD, mysql MYSQL_PWD and redis-cli REDISCLI_AUTH, and a
+    # name may be joined to a long password word as Postgres's is.
+    it "filters a client's password variable and a password word with a name joined on" do
+      v = "Xk2mQ9pLw7Rt"
+      {
+        "      PGPASSWORD: #{v}" => "      PGPASSWORD: [FILTERED]",
+        "      MYSQL_PWD: #{v}" => "      MYSQL_PWD: [FILTERED]",
+        "      REDISCLI_AUTH: #{v}" => "      REDISCLI_AUTH: [FILTERED]"
+      }.each { |line, want| expect(redact(line, path: "docker-compose.yml")).to eq(want) }
+      {
+        "worker: PGPASSWORD=#{v} bundle exec sidekiq" => "worker: PGPASSWORD=[FILTERED] bundle exec sidekiq",
+        "export MYSQL_PWD=#{v}" => "export MYSQL_PWD=[FILTERED]",
+        %(ENV["PGPASSWORD"] = "#{v}") => %(ENV["PGPASSWORD"] = "[FILTERED]"),
+        %(config.x.dbpassword = "#{v}") => %(config.x.dbpassword = "[FILTERED]"),
+        %(const userPassword = "hunter22") => %(const userPassword = "[FILTERED]"),
+        %(  sshPassphrase: "open sesame") => %(  sshPassphrase: "[FILTERED]")
+      }.each { |line, want| expect(redact(line, path: "bin/setup")).to eq(want) }
+    end
+
+    # Only a long password word takes a name joined on: `bypass` and `spin` are words of their own.
+    it "leaves a word that only ends in a short password word, or names a file or a directory, byte for byte" do
+      [
+        %(bypass = "maintenance_mode_2"),
+        %(compass = "north-north-west1"),
+        %(spin = "fast12345"),
+        %(passwordless = "magiclink2024abc"),
+        %(resetPasswordPath: "/users/password/new"),
+        %(confirmPassword: ""),
+        "PGPASSFILE=/home/app/.pgpass",
+        "PWD=/app2",
+        "cd \"$(dirname \"$0\")\" && echo $PWD"
+      ].each { |line| expect(redact(line, path: "bin/setup")).to eq(line) }
+    end
+
+    # As KEYISH_NAME reads `apiKey`.
+    it "filters a literal under a camel-cased secret or token name" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        %(const accessToken = "#{v}") => %(const accessToken = "[FILTERED]"),
+        %(  clientSecret: "#{v}",) => %(  clientSecret: "[FILTERED]",),
+        %({"accessToken":"#{v}","refreshToken":"#{v}","tokenType":"bearer"}) =>
+          %({"accessToken":"[FILTERED]","refreshToken":"[FILTERED]","tokenType":"bearer"}),
+        "  webhookSecret: #{v}" => "  webhookSecret: [FILTERED]",
+        "curl https://api.example.com/cb?accessToken=#{v}" => "curl https://api.example.com/cb?accessToken=[FILTERED]"
+      }.each { |line, want| expect(redact(line, path: "config/x.yml")).to eq(want) }
+    end
+
+    it "leaves a camel-cased name that holds no secret, or a word that only ends in one, byte for byte" do
+      [
+        %(tokenizer = "whitespace_v2"),
+        %(isSecret: true),
+        %(showToken: "Show the token"),
+        %(nextPageToken: "CAoQAA"),
+        %(authenticityToken: "authenticity_token"),
+        %(csrfToken = document.querySelector("meta[name='csrf-token']").content),
+        %(headers: { "X-CSRF-Token": csrfToken }),
+        %(SecretToken = Struct.new(:value))
+      ].each { |line| expect(redact(line)).to eq(line) }
+    end
+
     it "leaves a query value, setter, lookbehind or interpolation that is not a secret byte for byte" do
       [
         %q~assert_equal "/government/foo?token=123&utm_source=heading", Edition.new.append_url_options("/government/foo", token: "123")~,
@@ -635,6 +728,18 @@ RSpec.describe RailsAiContext::Redaction do
       }.each { |line, expected| expect(described_class.redact_log_line(line)).to eq(expected) }
     end
 
+    it "filters a flag's next-word secret and a joined or camel-cased name in a log line" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        "exec redis-server --requirepass #{v} --port 6380" => "exec redis-server --requirepass [FILTERED] --port 6380",
+        "PGPASSWORD=#{v} psql -h db" => "PGPASSWORD=[FILTERED] psql -h db",
+        %(Started GET "/cb?accessToken=#{v}&state=x") => %(Started GET "/cb?accessToken=[FILTERED]&state=x")
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want) }
+      [ "Run with the --password option", "usage: deploy --token TOKEN" ].each do |line|
+        expect(described_class.redact_log_line(line)).to eq(line)
+      end
+    end
+
     it "filters a secret-named flag in a log line" do
       v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
       expect(described_class.redact_log_line("exec redis-server --requirepass=#{v} --port 6380"))
@@ -1012,7 +1117,8 @@ RSpec.describe RailsAiContext::Redaction do
     # slow CI runner (a macOS one took 2.1 seconds where Linux takes under one).
     it "reads a 1 MB run of dashed words or header keys in seconds, not minutes, in a log and in source" do
       [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x"),
-        %("Authorization"=>"x", ) * 50_000 ].each do |line|
+        %("Authorization"=>"x", ) * 50_000, "#{'a_' * 250_000}#{'a1' * 250_000}password=x",
+        "--password 1a " * 75_000, "#{'aToken' * 170_000}x" ].each do |line|
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         described_class.redact_log_line(line)
         described_class.redact_source_line(line, path: "app/models/x.rb")

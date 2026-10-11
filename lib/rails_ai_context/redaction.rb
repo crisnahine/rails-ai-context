@@ -148,10 +148,16 @@ module RailsAiContext
 
     # A key is a name, bare or quoted whole (`'api/verify_token'` is a route path). Password
     # words hold short literals (a PIN), so they stay out of SECRET_WORD, which logs share.
-    # `requirepass` and `masterauth` are Redis's two password settings.
-    PASSWORD_WORD = /passphrase|password|passwd|pass|pin|requirepass|masterauth/i
-    PASSWORD_NAME = /(?<!\w)(?:\w+_)?(?:#{PASSWORD_WORD})(?:_\w+)?(?!\w)/i
-    KEY_NAME = /#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}/
+    # `requirepass` and `masterauth` are Redis's two password settings, and `MYSQL_PWD` and
+    # `REDISCLI_AUTH` the variables the mysql and redis-cli clients read theirs from.
+    PASSWORD_WORD = /passphrase|password|passwd|pass|pin|requirepass|masterauth|mysql_pwd|rediscli_auth/i
+    # A long password word may have a name joined on before it: Postgres's `PGPASSWORD`,
+    # `dbpassword`, a camel-cased `userPassword`. The short words may not (`bypass`, `spin`).
+    PASSWORD_NAME = /(?<!\w)(?:\w+_)?(?:[a-z\d]+(?=pass(?:word|wd|phrase)))?(?:#{PASSWORD_WORD})(?:_\w+)?(?!\w)/i
+    # JSON and JavaScript write a key's words in camel case (`accessToken`, `clientSecret`), as
+    # KEYISH_NAME reads `apiKey`.
+    CAMEL_SECRET_NAME = /(?<!\w)[a-z][A-Za-z\d]*(?:Secret|Token)(?!\w)/
+    KEY_NAME = /#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}|#{CAMEL_SECRET_NAME}/
     # A header or an attribute joins its words with dashes (`"X-Api-Key"`, `"x-auth-token"`). Quoted,
     # one with a part a key name reads is taken whole and read with its dashes as underscores (see
     # key_name); one with none (`"Content-Type"`) is not matched, so its literal stays in reach of
@@ -188,6 +194,12 @@ module RailsAiContext
     # bracket or separator starts; a `:name=` setter symbol, a `(?<=name=`
     # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments.
     ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]+)/
+
+    # A flag may take its value as the next word (`redis-server --requirepass ...`,
+    # `--token ...`), its name read as a dashed name is (key_name). Prose names a flag that way
+    # too (`the --password option`), so there only a value with a digit is a secret (flag_secret?).
+    # A value that is another flag, a variable, ERB, a placeholder or quoted is no literal.
+    FLAG_ARGUMENT = /(?<![\w-])--(?<name>[A-Za-z][\w-]*+)[ \t]++(?<value>[^\s"'`$<>\\()\[\]{},;&|#%=-][^\s"'`$<>\\()\[\]{},;&|]*+)/
 
     # An HTTP auth scheme says the word after it is a credential (`Bearer <token>`, `Basic <base64>`,
     # `Token <token>`), under an Authorization key, in a curl line or a cassette alike. "Authorization"
@@ -236,6 +248,7 @@ module RailsAiContext
 
             "#{match[:name]}=#{FILTERED}"
           end
+          result = result.gsub(FLAG_ARGUMENT) { |m| filter_flag(m, Regexp.last_match, example) }
         end
         result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
         result = CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) }
@@ -317,6 +330,7 @@ module RailsAiContext
           name = Regexp.last_match(:name)
           log_secret?(name, Regexp.last_match(:value)) ? "#{name}=#{FILTERED}" : m
         end
+        result.gsub!(FLAG_ARGUMENT) { |m| filter_flag(m, Regexp.last_match, false) }
         result.gsub!(result.encoding == Encoding::UTF_8 ? EMAIL_PATTERN : ASCII_EMAIL_PATTERN, EMAIL)
 
         result.gsub!(LOG_SECRET_ASSIGNMENT) { filter_assignment(Regexp.last_match) }
@@ -385,6 +399,20 @@ module RailsAiContext
       def key_name(name)
         spelled = name.tr("-", "_")
         spelled if spelled.match?(WHOLE_KEY_NAME)
+      end
+
+      # A matched flag and the word after it, with the word filtered when it is the flag's secret.
+      def filter_flag(text, match, example)
+        name = key_name(match[:name])
+        return text unless name && flag_secret?(name, match[:value], example)
+
+        text.delete_suffix(match[:value]) + FILTERED
+      end
+
+      # A word after a flag is as often prose as the flag's value, so it needs a digit as well as
+      # what keyed_secret? asks of a value: a word is no secret, and a generated one has digits.
+      def flag_secret?(name, value, example)
+        value.match?(/\d/) && keyed_secret?(name, value, example)
       end
 
       # The credential after an auth scheme goes; the scheme stays, so the line still reads.

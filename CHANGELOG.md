@@ -31,6 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hash (`{"X-Api-Key"=>"..."}`); each is filtered now. A Stimulus target,
   action, controller, outlet or class is read as a descriptor, so
   `data: { password_visibility_target: "input" }` keeps its value.
+- **Redaction filters the password Postgres, mysql and redis-cli read from
+  the environment, a camel-cased secret name, and a flag's secret given as
+  the next word.** A password word counted only as a part of a name between
+  underscores, a secret word only in snake case, and a flag's value only
+  after `=`, so `PGPASSWORD: ...` in a compose file, `PGPASSWORD=... psql`
+  in a script, `ENV["PGPASSWORD"] = "..."`, `MYSQL_PWD` and
+  `REDISCLI_AUTH`, `const accessToken = "..."`, `{"clientSecret": "..."}`
+  and `redis-server --requirepass ...` in a Procfile kept their values. A
+  long password word now reads with a name joined on before it
+  (`PGPASSWORD`, `dbpassword`, `userPassword`), the two client variables as
+  password names, a camel-cased name ending in `Secret` or `Token` as a
+  secret's, as `apiKey` already was a key's, and the word after a
+  secret-named flag as its value when that word has a digit, so
+  `the --password option`, `--token TOKEN` and `--password $DB_PASSWORD`
+  stay as written.
 - **Redaction reads a long word in time that grows with its length, not its
   square.** A call's receiver was tried from every character of a run of
   letters, digits and dots, so filtering a line holding a 16 KB hex string
