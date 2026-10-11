@@ -284,6 +284,41 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
+      it "reads OpenCode's config as OpenCode does, trailing commas and comments included" do
+        skip "json #{JSON::VERSION} reads no trailing commas" if Gem::Version.new(JSON::VERSION) < Gem::Version.new("2.9")
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "opencode.json")
+          File.write(path, %({\n  // ours\n  "mcp": {\n    "rails-ai-context": { "type": "local", "command": ["rails-ai-context", "serve",], },\n  },\n}\n))
+
+          result = described_class.new(tools: [ :opencode ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:skipped]).to eq([ path ])
+        end
+      end
+
+      # Claude Code reads .mcp.json with JSON.parse: a trailing comma or a
+      # comment there leaves it no server, and every run called the file
+      # unchanged once its entry was there.
+      it "says a config its client reads as JSON cannot be read when it holds a trailing comma or comments" do
+        entry = %("rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] })
+        { claude: [ ".mcp.json", %({\n  "mcpServers": {\n    #{entry},\n  },\n}\n), "Claude Code", "a trailing comma" ],
+          cursor: [ ".cursor/mcp.json", %({\n  // ours\n  "mcpServers": { #{entry} }\n}\n), "Cursor", "comments" ] }.each do |tool, (file, text, client, what)|
+          Dir.mktmpdir do |dir|
+            path = File.join(dir, file)
+            FileUtils.mkdir_p(File.dirname(path))
+            File.write(path, text)
+
+            result = described_class.new(tools: [ tool ], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+            expect(result[:failed]).to eq([ path ]), tool.to_s
+            expect(File.read(path)).to eq(text)
+            expect(result[:reasons][path]).to eq("#{client} cannot read it: it holds #{what}, which JSON does not allow, so it " \
+                                                 "is left as it is. Make it plain JSON by hand, and the next run merges into it")
+          end
+        end
+      end
+
       # JSON.parse passes over comments; the file written back would have none.
       it "does not write back a config that holds comments, and skips it when it is current" do
         Dir.mktmpdir do |dir|
@@ -1336,15 +1371,33 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
     it "leaves a config that holds comments as it is, and names the entries to remove" do
       Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".vscode"))
+        commented = %({\n  // ours\n  "servers": { "rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] } }\n}\n)
+        File.write(File.join(dir, ".vscode/mcp.json"), commented)
+        said = []
+
+        cleaned = described_class.remove(tools: [ :copilot ], output_dir: dir, warn: ->(path, reason) { said << [ path, reason ] })
+
+        expect(cleaned).to be_empty
+        expect(File.read(File.join(dir, ".vscode/mcp.json"))).to eq(commented)
+        expect(said).to contain_exactly([ File.join(dir, ".vscode/mcp.json"), a_string_including("so it is left as it is", "Remove rails-ai-context from it by hand") ])
+      end
+    end
+
+    # Claude Code's JSON reader refuses comments, so its config holding one
+    # is no config of the client's to clean.
+    it "says a config its client reads as JSON cannot be read when it holds comments" do
+      Dir.mktmpdir do |dir|
         commented = %({\n  // ours\n  "mcpServers": { "rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] } }\n}\n)
         File.write(File.join(dir, ".mcp.json"), commented)
         said = []
 
-        cleaned = described_class.remove(tools: [ :claude ], output_dir: dir, warn: ->(path, reason) { said << [ path, reason ] })
+        described_class.remove(tools: [ :claude ], output_dir: dir, warn: ->(path, reason) { said << [ path, reason ] })
 
-        expect(cleaned).to be_empty
         expect(File.read(File.join(dir, ".mcp.json"))).to eq(commented)
-        expect(said).to contain_exactly([ File.join(dir, ".mcp.json"), a_string_including("so it is left as it is", "Remove rails-ai-context from it by hand") ])
+        expect(said).to contain_exactly([ File.join(dir, ".mcp.json"),
+                                          "Claude Code cannot read it: it holds comments, which JSON does not allow, so it is " \
+                                          "left as it is. Remove its rails-ai-context entries by hand" ])
       end
     end
 

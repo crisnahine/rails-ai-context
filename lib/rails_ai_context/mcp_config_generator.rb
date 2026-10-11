@@ -143,6 +143,10 @@ module RailsAiContext
     # under its servers key: replacing it would drop what it holds.
     class ShapeError < StandardError; end
 
+    # A JSON config its client cannot read: one that reads JSON refuses the
+    # comments and trailing commas a JSONC reader passes over.
+    class UnreadableError < StandardError; end
+
     # Codex's config read without a TOML parser, which the gem does not
     # depend on. The file is split into its statements - table headers and
     # key/value pairs, each with the full key path TOML gives it - so a
@@ -494,23 +498,40 @@ module RailsAiContext
       [ text, bom, text.encoding == Encoding::BINARY ? "it is not UTF-8, which JSON is" : nil ]
     end
 
-    # A JSON config as data. One that is not UTF-8 raises as one that does
-    # not parse.
-    def self.read_json(path)
+    # A JSON config as data, read as its client reads it (config, its
+    # TOOL_CONFIGS entry). One that is not UTF-8 raises as one that does not
+    # parse.
+    def self.read_json(path, config = nil)
       text, _, problem = json_text(path)
       raise JSON::ParserError, problem if problem
 
-      parse_json_text(text)
+      parse_json_text(text, config)
     end
 
-    # A config's JSON read as the editors that keep it read it (VS Code's and
-    # OpenCode's take JSONC): comments and trailing commas passed over.
+    # A config's JSON read the way its client reads it. A JSONC client - VS
+    # Code, OpenCode - passes over comments and trailing commas; a JSON one -
+    # Claude Code, Cursor - refuses the whole file, which raises
+    # UnreadableError: such a file is no config of the client's, however this
+    # parser reads it. Without a config it is read as JSONC.
+    #
     # json 2 passed over comments unasked (2.10 on with a deprecation
-    # warning); json 3 refuses one unless told, so without saying so the same
-    # file read differently by which json the process had. A json before 2.9
-    # knows no trailing commas and ignores the option, refusing them still.
-    def self.parse_json_text(text)
+    # warning) and json 3 refuses one unless told, so the same file read
+    # differently by which json the process had: comments are allowed
+    # outright, and looked for here. A json before 2.9 knows no trailing
+    # commas and ignores the option, refusing them still.
+    def self.parse_json_text(text, config = nil)
+      if config && config[:jsonc] == false && (refused = jsonc_only(text))
+        raise UnreadableError, "#{config[:client]} cannot read it: it holds #{refused}, which JSON does not allow"
+      end
+
       JSON.parse(text, allow_comments: true, allow_trailing_comma: true)
+    end
+
+    # What a JSONC reader passes over and a JSON one refuses, as the text
+    # holds it: comments, a trailing comma, or both. nil for neither.
+    def self.jsonc_only(text)
+      found = [ ("comments" if json_comments?(text)), ("a trailing comma" if json_trailing_comma?(text)) ].compact
+      found.join(" and ") unless found.empty?
     end
 
     COMMENTS_PROBLEM = "it holds comments, which writing it back as JSON would drop"
@@ -521,6 +542,7 @@ module RailsAiContext
     # comments json 2 passed over, so a file holding them is named for them
     # whichever parser read it.
     def self.parse_problem(error, text = nil)
+      return error.message if error.is_a?(UnreadableError)
       return COMMENTS_PROBLEM if text && json_comments?(text)
 
       where = error.message[/line \d+,? column \d+/]
@@ -613,7 +635,7 @@ module RailsAiContext
       raise ShapeError, problem if problem
 
       # An empty file holds nothing to lose.
-      data = text.nil? || text.strip.empty? ? {} : parse_json(text)
+      data = text.nil? || text.strip.empty? ? {} : parse_json(text, config)
       raise ShapeError, "it is JSON but not an object" unless data.is_a?(Hash)
 
       root_key = config[:root_key]
@@ -640,14 +662,17 @@ module RailsAiContext
       servers.merge!(entries)
       RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n")
       :written
+    rescue UnreadableError => e
+      # Adding the entry by hand would leave a file its client still cannot read.
+      raise ShapeError, "#{e.message}, so it is left as it is. Make it plain JSON by hand, and the next run merges into it"
     rescue ShapeError => e
       raise ShapeError, "#{e.message}, so it is left as it is. Add #{JSON.generate(config[:root_key] => entries)} to it by hand"
     end
 
     # A file JSON cannot parse is never replaced: a fresh file would drop
     # everything somebody wrote there.
-    def parse_json(text)
-      self.class.parse_json_text(text)
+    def parse_json(text, config)
+      self.class.parse_json_text(text, config)
     rescue JSON::ParserError => e
       raise ShapeError, self.class.parse_problem(e, text)
     end
@@ -844,8 +869,8 @@ module RailsAiContext
         next unless File.file?(path) && File.binread(path).include?(SERVER_NAME)
 
         begin
-          read_json(path)
-        rescue JSON::ParserError
+          read_json(path, config)
+        rescue JSON::ParserError, UnreadableError
           return path
         end
       end
@@ -868,7 +893,7 @@ module RailsAiContext
         end
       end
 
-      data = read_json(path)
+      data = read_json(path, config)
       servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
       return [] unless servers.is_a?(Hash)
 
@@ -887,7 +912,7 @@ module RailsAiContext
     def self.app_roots_in(path, tool, dir)
       folder = TOOL_CONFIGS.fetch(tool.to_sym)[:folder_variable]
       named_entries(path, tool).filter_map { |entry| entry_app_root(entry[:argv], folder, dir) if entry[:own] }
-    rescue SystemCallError, IOError, JSON::ParserError
+    rescue SystemCallError, IOError, JSON::ParserError, UnreadableError
       []
     end
     private_class_method :app_roots_in
@@ -914,7 +939,7 @@ module RailsAiContext
         next unless File.exist?(path)
 
         begin
-          left = config[:format] == :codex_toml ? remove_toml_entry(path) : remove_json_entry(path, config[:root_key])
+          left = config[:format] == :codex_toml ? remove_toml_entry(path) : remove_json_entry(path, config)
           if left == true then cleaned << path
           elsif left then warn.call(path, left)
           end
@@ -928,15 +953,16 @@ module RailsAiContext
     # @return [true, String, nil] true when the entries went, the reason they
     #   stay when the file cannot be written back faithfully, nil when it
     #   holds none of the gem's
-    def self.remove_json_entry(path, root_key)
+    def self.remove_json_entry(path, config)
+      root_key = config[:root_key]
       text, bom, problem = json_text(path)
       # A file that cannot be read says so only when it names the gem.
       unreadable = ->(why) { "#{why}, so it is left as it is. Remove its rails-ai-context entries by hand" if text.include?(SERVER_NAME) }
       return unreadable.call(problem) if problem
 
       data = begin
-        parse_json_text(text)
-      rescue JSON::ParserError => e
+        parse_json_text(text, config)
+      rescue JSON::ParserError, UnreadableError => e
         return unreadable.call(parse_problem(e, text))
       end
       servers = data.is_a?(Hash) ? data[root_key] : nil
