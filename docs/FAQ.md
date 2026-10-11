@@ -186,9 +186,9 @@ No, as long as the gem sits in the Gemfile's `:development` group, where `bundle
 
 ### How does live reload work?
 
-The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`. When files change, caches are invalidated, MCP clients are notified, and the next tool call reloads the app's code before it answers; the watching thread loads none of it. Debounce interval: 1.5s (configurable).
+The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, and when files change, MCP clients are notified. Debounce interval: 1.5s (configurable).
 
-Without `listen` (a new Rails 8 app does not bundle it), answers still follow edits: each tool call first checks those files and, when one changed, does the same reload and invalidation. The check costs a few milliseconds on a typical app and about 100 ms at 10,000 files, where calls close together share one check. With `listen` there is no per-call check, and clients are told when files change.
+Answers do not depend on it. Every tool call first checks those files, with `listen` or without it (a new Rails 8 app does not bundle it), and when one changed it reloads the app's code and drops the caches, so a call sees an edit made a moment before it. The check costs about a millisecond on a small app and about 30 ms at 10,000 files.
 
 Under `RAILS_ENV=test`, or in production with eager loading, the app does not reload code, so what reflection reads (associations, enums) stays as it was at boot; once app code changes, every answer ends with a note naming the files, and a restart brings it up to date.
 

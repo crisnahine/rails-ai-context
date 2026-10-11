@@ -1731,9 +1731,9 @@ Watches for changes in: `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `
 
 ## Live Reload (MCP)
 
-When running the MCP server via `rails ai:serve`, **live reload** automatically invalidates tool caches and notifies connected AI clients when files change - so the AI always has fresh context without manual re-querying.
+When running the MCP server via `rails ai:serve`, **live reload** notifies connected AI clients when files change, so they know to re-query.
 
-Without the `listen` gem, which a new Rails 8 app does not bundle, answers still follow edits: each tool call first checks the watched files (a few milliseconds on a typical app, about 100 ms at 10,000 files, where calls close together share one check) and, when one changed, reloads the app's code and drops the caches. What `listen` adds is the notification to the client, and no per-call check.
+Answers never wait on it. Every tool call and resource read first checks the watched files, with `listen` or without it (a new Rails 8 app does not bundle it), and when one changed it reloads the app's code and drops the caches - so an answer sees every edit made before the call began, one made a moment earlier included, which `listen` would deliver only after its debounce. The check stats each watched directory and file and reads a directory again only when it changed: about a millisecond on a small app, about 30 ms at 10,000 files. Calls made at the same time, over HTTP, wait for one check together; calls one after another each check.
 
 A server whose app cannot reload code - `RAILS_ENV=test`, or production with eager loading, where `config.enable_reloading` is off - keeps the code it booted with. What reflection reads, such as associations and enums, then stays as of boot (validations and callbacks are read off the source, so they still follow the edit), and once a file under the app's autoload paths changes, every answer ends with a note naming it: restart the server to see the edit.
 
@@ -1742,10 +1742,10 @@ A server whose app cannot reload code - `RAILS_ENV=test`, or production with eag
 1. A background thread watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/` and `spec/` (plus the app directories of packs, in-repo engines and `extra_app_paths`) for changes
 2. On change (debounced 1.5s), it checks the file fingerprint to avoid false positives
 3. If files truly changed, it:
-   - Clears all MCP tool caches
-   - Has the next tool call or resource read reload the app's code before it answers; the watching thread loads none of the app's code itself
    - Sends `notifications/resources/list_changed` to the AI client
    - Logs a summary of what changed (e.g., "Files changed: 2 models, 1 controller.")
+
+The code reload and the cache drop are the calls' own: the first call after an edit makes them, on its own thread, when it checks the files. The watching thread loads none of the app's code.
 
 ### Setup
 

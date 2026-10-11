@@ -216,11 +216,11 @@ RSpec.describe "MCP Tool Integration" do
     after { RailsAiContext.configuration.live_reload = :auto }
 
     def file_check_on?
-      !RailsAiContext::Tools::BaseTool::FILE_CHECK[:mark].nil?
+      !RailsAiContext::Tools::BaseTool::FILE_CHECK[:snapshot].nil?
     end
 
     context "when live_reload is false" do
-      it "starts no watch, and has each call check the files instead" do
+      it "starts no watch, and has each call check the files" do
         RailsAiContext.configuration.live_reload = false
 
         expect(RailsAiContext::LiveReload).not_to receive(:new)
@@ -230,7 +230,9 @@ RSpec.describe "MCP Tool Integration" do
     end
 
     context "when live_reload is :auto and listen is available" do
-      it "creates and starts LiveReload" do
+      # The watch delivers an edit after its debounce; a call made before
+      # then checks the files itself.
+      it "creates and starts LiveReload, and each call still checks the files" do
         RailsAiContext.configuration.live_reload = :auto
         live_reload = instance_double(RailsAiContext::LiveReload)
         allow(RailsAiContext::LiveReload).to receive(:new).and_return(live_reload)
@@ -239,7 +241,7 @@ RSpec.describe "MCP Tool Integration" do
         server_wrapper.send(:maybe_start_live_reload, mcp_server)
 
         expect(live_reload).to have_received(:start)
-        expect(file_check_on?).to be false
+        expect(file_check_on?).to be true
       end
     end
 
@@ -251,7 +253,7 @@ RSpec.describe "MCP Tool Integration" do
 
         expect { server_wrapper.send(:maybe_start_live_reload, mcp_server) }.not_to raise_error
         expect($stderr).to have_received(:puts).with(
-          "[rails-ai-context] Live reload off: no `listen` gem, so each tool call checks for changed files instead. " \
+          "[rails-ai-context] Live reload off: no `listen` gem, so clients are not told when files change. " \
           "Add to your Gemfile: gem 'listen', group: :development"
         )
         expect(file_check_on?).to be true

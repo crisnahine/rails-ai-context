@@ -70,20 +70,13 @@ module RailsAiContext
       # for thread safety in multi-threaded servers (e.g., Puma).
       SHARED_CACHE = { mutex: Mutex.new }
 
-      # What a server with no live reload watching last saw of its app's
-      # files, as a fingerprint mark, and when and for how long it looked.
-      # The mark is nil until such a server starts, so a process that is no
-      # server (the CLI, rake) never walks the tree. `reload` is live
-      # reload's half: its watch saw the files change and left the code
-      # reload to the next call. `stale_code` is what a server that cannot
-      # reload found changed since it loaded it (CodeReloader.changed_code).
-      FILE_CHECK = { mutex: Mutex.new, app: nil, mark: nil, started: nil, took: 0.0, reload: false, stale_code: nil }
-
-      # A call this many walks' durations after the last check began shares
-      # that check, so on a busy server the walk takes about a tenth of the
-      # time; never longer than FILE_CHECK_SHARED_MAX.
-      FILE_CHECK_SHARED_WALKS = 10
-      FILE_CHECK_SHARED_MAX = 1.0
+      # What a server last saw of its app's files (a Fingerprinter::Snapshot),
+      # when the check now running began, and when the last finished one
+      # did. The snapshot is nil until a server starts, so a process that is
+      # no server (the CLI, rake) never walks the tree. `stale_code` is what a
+      # server that cannot reload found changed since it loaded it
+      # (CodeReloader.changed_code).
+      FILE_CHECK = { mutex: Mutex.new, done: ConditionVariable.new, snapshot: nil, running: nil, finished: nil, stale_code: nil }
 
       # Session-level context tracking. Lets AI avoid redundant queries
       # by recording what tools have been called with what params.
@@ -175,8 +168,7 @@ module RailsAiContext
 
             # Fast path: within TTL window, trust the cache and skip the
             # fingerprint walk entirely. A server has already dropped it if a
-            # file changed: live reload does on the change, and a server
-            # without one asks the files at the start of each call
+            # file changed: each call asks the files at its start
             # (refresh_if_files_changed!).
             if SHARED_CACHE[:context] && (now - SHARED_CACHE[:timestamp]) < ttl
               return SHARED_CACHE[:context].deep_dup
@@ -209,7 +201,8 @@ module RailsAiContext
           end
         end
 
-        # Reset the shared cache. Used by LiveReload to invalidate on file change.
+        # Every cache that describes the app's files, dropped once a call's
+        # check finds them moved.
         def reset_all_caches!
           reset_cache!
           session_reset!
@@ -217,41 +210,33 @@ module RailsAiContext
           PathResolver.clear_code_roots
         end
 
-        # Called by a server that has no live reload watching: no `listen`
-        # in the bundle (a new Rails 8 app has none), live_reload false, or
-        # the endpoints inside the app. From here on each call checks the
-        # files against what they are now.
+        # Called by every server as it starts - stdio, HTTP, the endpoints
+        # inside the app - live reload or not. From here on each call checks
+        # the files against what they are now.
         #
         # A server that cannot read its files still serves; it only goes
         # without the check.
         def check_files_per_call!(app)
-          mark = Fingerprinter.mark(app)
-          FILE_CHECK[:mutex].synchronize { FILE_CHECK.merge!(app: app, mark: mark, started: nil, took: 0.0) }
+          snapshot = Fingerprinter::Snapshot.new(app.root)
+          snapshot.changed?
+          FILE_CHECK[:mutex].synchronize { FILE_CHECK.merge!(snapshot: snapshot, running: nil, finished: nil) }
         rescue StandardError => e
           RailsAiContext.debug_fail(e, nil, label: "check_files_per_call!")
         end
 
-        # Live reload's watch saw the files change. It runs on Listen's
-        # thread, which loads no app code (ChangeWatch#gate), so the reload
-        # waits for the next call.
-        def reload_at_next_call!
-          FILE_CHECK[:mutex].synchronize { FILE_CHECK[:reload] = true }
-        end
-
-        # Before a call reads anything: once live reload saw a change
-        # (reload_at_next_call!) or this call's own check finds one, reload
-        # the app's code on the calling thread, then drop the caches.
+        # Before a call reads anything, it sees every edit made before it
+        # began: when a file moved, the app's code is reloaded on the
+        # calling thread and the caches dropped. Live reload only tells
+        # clients: `listen` delivers a change after its debounce, a second
+        # and a half on, and an agent that edits a model and asks about it
+        # at once was answered from before the edit.
         #
-        # Without live reload nothing dropped the caches: inside cache_ttl
-        # every answer described the app as it was before the edit, and what
-        # the booted tier reads by reflection, such as an association, stayed
-        # that way until a restart. So a call first asks whether the files
-        # moved, a stat of each watched file: a few milliseconds on a typical
-        # app, about 100 at 10,000 files. A call close behind the last check
-        # shares it (FILE_CHECK_SHARED_WALKS): a burst of calls on a large
-        # app pays for one walk, and calls an agent makes, a model turn
-        # apart, each still check. A tool another tool calls is part of the
-        # first call and asks nothing.
+        # The check is a stat of each watched directory and file
+        # (Fingerprinter::Snapshot): about a millisecond on a small app, about
+        # 30 at 10,000 files. Only a check that began after a call did can
+        # stand in for that call's own, so two calls one after the other each
+        # check, and concurrent calls wait for one check together. A tool
+        # another tool calls is part of the first call and asks nothing.
         #
         # Outside SHARED_CACHE's mutex, unlike the TTL walk: a code reload
         # waits for running calls to finish, and they may be waiting on it.
@@ -262,9 +247,44 @@ module RailsAiContext
         def refresh_if_files_changed!
           return if RunCache.active?
 
-          requested = FILE_CHECK[:mutex].synchronize { FILE_CHECK[:reload].tap { FILE_CHECK[:reload] = false } }
-          return unless requested || files_moved?
+          snapshot = await_check(Process.clock_gettime(Process::CLOCK_MONOTONIC))
+          return unless snapshot
 
+          begin
+            changed = snapshot.changed?
+            react_to_change if changed
+            done = true
+          ensure
+            FILE_CHECK[:mutex].synchronize do
+              FILE_CHECK[:finished] = FILE_CHECK[:running] if done
+              FILE_CHECK[:running] = nil
+              FILE_CHECK[:done].broadcast
+            end
+          end
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
+        end
+
+        # Nil once a check that began after the call arrived has finished,
+        # since it saw every edit made before; otherwise the snapshot, for
+        # this call to check with. A call that finds a check running waits
+        # for it, and then for the next if that one began too early.
+        private def await_check(arrived)
+          FILE_CHECK[:mutex].synchronize do
+            loop do
+              return nil unless FILE_CHECK[:snapshot]
+              return nil if FILE_CHECK[:finished] && FILE_CHECK[:finished] >= arrived
+
+              unless FILE_CHECK[:running]
+                FILE_CHECK[:running] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                return FILE_CHECK[:snapshot]
+              end
+              FILE_CHECK[:done].wait(FILE_CHECK[:mutex])
+            end
+          end
+        end
+
+        private def react_to_change
           if CodeReloader.reloadable?
             # A request the app serves already ran Rails' own reloader.
             CodeReloader.reload! unless CodeReloader.inside_app_executor?
@@ -273,29 +293,6 @@ module RailsAiContext
             FILE_CHECK[:mutex].synchronize { FILE_CHECK[:stale_code] = changed }
           end
           reset_all_caches!
-        rescue StandardError => e
-          RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
-        end
-
-        # The check a server with no live reload watching makes per call.
-        private def files_moved?
-          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          app = FILE_CHECK[:mutex].synchronize do
-            shared = [ FILE_CHECK[:took] * FILE_CHECK_SHARED_WALKS, FILE_CHECK_SHARED_MAX ].min
-            next nil if FILE_CHECK[:mark].nil? || (FILE_CHECK[:started] && started - FILE_CHECK[:started] < shared)
-
-            FILE_CHECK[:started] = started
-            FILE_CHECK[:app]
-          end
-          return false unless app
-
-          current = Fingerprinter.mark(app)
-          FILE_CHECK[:mutex].synchronize do
-            FILE_CHECK[:took] = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-            changed = FILE_CHECK[:mark].digest != current.digest
-            FILE_CHECK[:mark] = current
-            changed
-          end
         end
 
         # ── Session context helpers ──────────────────────────────────────

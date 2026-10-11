@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Keeps a long-lived MCP server truthful: when the app changes, drop the
-  # tool caches, have the next call reload the app's code, and tell
-  # connected clients to re-query. The loop - watch list, fingerprint gate -
-  # is ChangeWatch's; this supplies the non-blocking background behavior,
-  # the debounce, and the cache-and-notify reaction. A missing `listen` gem
-  # raises out of start; Server#maybe_start_live_reload owns that policy.
+  # Tells connected clients when the app changed, so they re-query. Answers
+  # do not wait on it: each call checks the files itself before it reads
+  # anything (BaseTool.refresh_if_files_changed!). The loop - watch list,
+  # fingerprint gate - is ChangeWatch's; this supplies the non-blocking
+  # background behavior, the debounce, and the notification. A missing
+  # `listen` gem raises out of start; Server#maybe_start_live_reload owns
+  # that policy.
   class LiveReload
     include CountPhrase
 
@@ -83,21 +84,16 @@ module RailsAiContext
 
     private
 
-    # On Listen's thread, so it loads no app code (see ChangeWatch#gate):
-    # the next call reloads it on its own thread before it reads anything
-    # (BaseTool.refresh_if_files_changed!). Asked for before the caches
-    # drop, so a call that rebuilds them in between is followed by one that
-    # reloads.
+    # On Listen's thread, so it loads no app code (see ChangeWatch#gate), and
+    # it drops no cache either: the first call after the edit already did,
+    # when it checked the files, or the next one will. A reload or a drop
+    # here would only repeat that call's work, a full introspection a second
+    # and a half after every edit.
     def react(paths)
-      Tools::BaseTool.reload_at_next_call!
-      Tools::BaseTool.reset_all_caches!
-
-      code = if CodeReloader.reloadable?
-        "app code reloads at the next call"
-      else
-        "RAILS_ENV=#{RailsAiContext.environment_name} does not reload code, so what reflection reads stays as of boot"
+      message = format_change_message(categorize_changes(paths))
+      unless CodeReloader.reloadable?
+        message += " RAILS_ENV=#{RailsAiContext.environment_name} does not reload code, so what reflection reads stays as of boot."
       end
-      message = "#{format_change_message(categorize_changes(paths))} Tool caches invalidated; #{code}."
 
       mcp_server.notify_resources_list_changed
       mcp_server.notify_log_message(data: message, level: "info", logger: "rails-ai-context")
