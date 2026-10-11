@@ -49,6 +49,28 @@ RSpec.describe RailsAiContext::Introspectors::ActionSource do
     end
   end
 
+  # Ruby reads `include Exportable` in the class body's Module.nesting: a
+  # compact `class Admin::WidgetsController` does not see Admin::Exportable.
+  it "resolves an included name as Ruby does, by the class's lexical nesting" do
+    concerns = {
+      "app/controllers/concerns/exportable.rb" => "module Exportable\n  def export\n    head :ok\n  end\nend\n",
+      "app/controllers/concerns/admin/exportable.rb" => "module Admin\n  module Exportable\n    def export\n      head :no_content\n    end\n  end\nend\n",
+      "app/controllers/admin/base_controller.rb" => "module Admin\n  class BaseController < ApplicationController\n  end\nend\n"
+    }
+    compact = app_base.merge(concerns).merge(
+      "app/controllers/admin/widgets_controller.rb" => "class Admin::WidgetsController < Admin::BaseController\n  include Exportable\nend\n"
+    )
+    find_in(compact, "Admin::WidgetsController", "export") do |found|
+      expect(found[:file]).to eq("app/controllers/concerns/exportable.rb")
+    end
+    nested = app_base.merge(concerns).merge(
+      "app/controllers/admin/widgets_controller.rb" => "module Admin\n  class WidgetsController < BaseController\n    include Exportable\n  end\nend\n"
+    )
+    find_in(nested, "Admin::WidgetsController", "export") do |found|
+      expect(found[:file]).to eq("app/controllers/concerns/admin/exportable.rb")
+    end
+  end
+
   it "does not take another class's def of the same name from a parent's file" do
     files = app_base.merge(
       "app/controllers/posts_controller.rb" => "class PostsController < BaseController\nend\n",

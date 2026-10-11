@@ -34,7 +34,9 @@ module RailsAiContext
           declaration = DeclaredConstant.declarations(source, path_name: name).find { |d| d.name == name }
           break unless declaration
 
-          found = in_class(root, path, source, name, action)
+          # Module.nesting inside the class body, which is where its
+          # `include` reads a name: the class, then what encloses it.
+          found = in_class(root, path, source, name, action, [ name, *declaration.nesting ])
           return found if found
 
           parent = declaration.superclass
@@ -57,12 +59,12 @@ module RailsAiContext
         path if path && File.file?(path)
       end
 
-      def in_class(root, path, source, name, action)
+      def in_class(root, path, source, name, action, scopes)
         mixins = mixins_of(root, source, name)
         prepended, included = mixins.partition { |mixin| mixin[:macro] == :prepend }
-        in_modules(root, prepended, name, action, 0) ||
+        in_modules(root, prepended, scopes, action, 0) ||
           own_def(root, path, source, name, action) ||
-          in_modules(root, included, name, action, 0)
+          in_modules(root, included, scopes, action, 0)
       end
 
       # Only a def the owner itself carries: ActionResolver.method_body falls
@@ -75,24 +77,43 @@ module RailsAiContext
         body&.merge(file: PortablePath.relativize(path, root))
       end
 
-      def in_modules(root, mixins, owner, action, depth)
+      # @param scopes [Array<String>] Module.nesting where the mixins are
+      #   written, innermost first
+      def in_modules(root, mixins, scopes, action, depth)
         return nil if depth > ActionPresence::MODULE_DEPTH
 
         mixins.reverse_each do |mixin|
           next unless ConcernMembership.candidate?(mixin[:name])
 
-          # The name the reference resolves to, which is the owner its defs
-          # carry: `include Exportable` inside Admin can be Admin::Exportable.
-          mod, path = ConcernPaths.find_named(root, mixin[:name].to_s, within: owner) ||
-                      ConcernPaths.outer_named(root, mixin[:name].to_s, within: owner)
+          mod, path = resolve(root, mixin[:name].to_s, scopes)
           source = path && PathResolver.project_file?(path, root) && SafeFile.read(path)
           next unless source
 
           found = own_def(root, path, source, mod, action) ||
-                  in_modules(root, mixins_of(root, source, mod), mod, action, depth + 1)
+                  in_modules(root, mixins_of(root, source, mod), namespaces(mod), action, depth + 1)
           return found if found
         end
         nil
+      end
+
+      # [the constant a name written in those scopes resolves to, its file],
+      # the way Ruby looks it up: each enclosing scope, then the top level.
+      # `include Exportable` in `module Admin; class WidgetsController` can be
+      # Admin::Exportable, and in a compact `class Admin::WidgetsController`
+      # it cannot.
+      def resolve(root, name, scopes)
+        candidates = name.start_with?("::") ? [ name.delete_prefix("::") ] : [ *scopes.map { |scope| "#{scope}::#{name}" }, name ]
+        candidates.each do |candidate|
+          found = ConcernPaths.find_named(root, candidate, prefer: "controller") || ConcernPaths.outer_named(root, candidate)
+          return found if found && found.first == candidate
+        end
+        nil
+      end
+
+      # A module's own body: the module, then each namespace around its name.
+      def namespaces(name)
+        parts = name.to_s.split("::")
+        parts.size.downto(1).map { |n| parts.first(n).join("::") }
       end
 
       def mixins_of(root, source, owner)
