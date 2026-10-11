@@ -361,6 +361,33 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       end
     end
 
+    # The parent gem requires its engine, so devise runs inside the app; jwt stays oauth2's own detail.
+    it "keeps a Rails engine the app gets through another gem" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              devise (4.9.4)
+              devise_token_auth (1.2.5)
+                devise (> 3.5.2, < 5)
+              jwt (3.2.0)
+              oauth2 (2.0.10)
+                jwt (>= 1.0, < 4.0)
+
+          DEPENDENCIES
+            devise_token_auth
+            oauth2
+        LOCK
+        context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+        allow(described_class).to receive(:cached_context).and_return(context)
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("## Auth\n- **devise** `4.9.4`")
+        expect(text).not_to include("**jwt**")
+      end
+    end
+
     # Bundler resolves a gemspec's runtime dependencies as the Gemfile's own.
     it "keeps what a gemspec the Gemfile pulls in depends on" do
       Dir.mktmpdir do |dir|

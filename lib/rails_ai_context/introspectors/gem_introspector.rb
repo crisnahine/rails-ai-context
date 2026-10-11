@@ -179,6 +179,17 @@ module RailsAiContext
         "webauthn"        => { category: :auth, note: "WebAuthn/passkey registration and authentication." }
       }.freeze
 
+      # Notable gems that ship a Rails::Railtie or Rails::Engine: once a parent gem requires one, it runs inside the app.
+      ENGINE_GEMS = %w[
+        action_policy activeadmin administrate alba apipie-rails avo bullet carrierwave clearance cocoon cssbundling-rails
+        datadog delayed_job devise devise-jwt doorkeeper factory_bot_rails falcon figaro flipper good_job grape graphql
+        hotwire-native-rails importmap-rails inertia_rails jbuilder jsbundling-rails jsonapi-serializer kredis lockbox
+        lookbook madmin mission_control-jobs mongoid motor-admin neighbor newrelic_rpm noticed paper_trail pg_search
+        propshaft pundit rack-attack react-rails rodauth-rails rolify rspec-rails rswag-api rswag-ui sentry-rails sidekiq
+        simple_form skylight solid_cable solid_cache solid_errors solid_queue sorcery sprockets-rails stimulus-rails
+        stripe tailwindcss-rails trestle turbo-rails view_component will_paginate
+      ].to_set.freeze
+
       # @return [Hash] gem analysis
       def call
         lock = RailsAiContext::GemLock.for(root)
@@ -260,7 +271,7 @@ module RailsAiContext
       # its frameworks and loads only those config/application.rb asks for, and
       # every Rails app resolves minitest through activesupport.
       def app_uses?(gem_name, lock)
-        return true if lock.direct?(gem_name)
+        return true if lock.direct?(gem_name) || ENGINE_GEMS.include?(gem_name)
         return Dir.exist?(File.join(root, "test")) if gem_name == "minitest"
 
         AppKind::FRAMEWORK_RAILTIES.key?(gem_name) && lock.present?("rails") && AppKind.loads_framework?(root, gem_name)

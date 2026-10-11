@@ -396,6 +396,10 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
   end
 
   describe "NOTABLE_GEMS" do
+    it "flags as an engine only gems it lists" do
+      expect(described_class::ENGINE_GEMS - described_class::NOTABLE_GEMS.keys).to be_empty
+    end
+
     it "covers all expected categories" do
       categories = described_class::NOTABLE_GEMS.values.map { |v| v[:category] }.uniq
       expect(categories).to include(:auth, :jobs, :frontend, :api, :database, :testing, :deploy, :monitoring, :admin, :pagination, :search, :forms, :server)
