@@ -35,7 +35,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       # What the filters left, in one value: every formatter needs all five.
-      Found = Data.define(:model_broadcasts, :rb_broadcasts, :view_subscriptions, :view_frames, :warnings)
+      Found = Data.define(:model_broadcasts, :rb_broadcasts, :view_subscriptions, :view_frames, :wiring, :warnings)
 
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
         # An MCP client sends "" for an argument it leaves unset, which is no
@@ -49,6 +49,9 @@ module RailsAiContext
           rb_broadcasts = Payload.explicit_broadcasts(cached_context)
           view_subscriptions = Payload.stream_subscriptions(cached_context)
           view_frames = Payload.turbo_frames(cached_context)
+          # Whether a stream is wired is a fact about the whole app: a filter
+          # narrows what is shown, not who can reach whom.
+          wiring = build_stream_wiring(model_broadcasts, rb_broadcasts, view_subscriptions)
 
           if stream
             stream_lower = stream.downcase
@@ -85,12 +88,13 @@ module RailsAiContext
             }
           end
 
-          warnings = detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
+          wiring = wiring_touching(wiring, model_broadcasts + rb_broadcasts + view_subscriptions) if stream || controller
           filter_label = stream ? "stream:\"#{echo_input(stream)}\"" : controller ? "controller:\"#{echo_input(controller)}\"" : nil
 
           found = Found.new(
             model_broadcasts: model_broadcasts, rb_broadcasts: rb_broadcasts,
-            view_subscriptions: view_subscriptions, view_frames: view_frames, warnings: warnings
+            view_subscriptions: view_subscriptions, view_frames: view_frames,
+            wiring: wiring, warnings: detect_mismatches(wiring)
           )
 
           case detail
@@ -322,7 +326,7 @@ module RailsAiContext
         end
 
         # Wiring map: match broadcast streams to subscription streams
-        stream_wiring = build_stream_wiring(model_broadcasts, rb_broadcasts, view_subscriptions)
+        stream_wiring = found.wiring
         if stream_wiring.any?
           lines << "## Stream Wiring"
           stream_wiring.each do |stream_name, wiring|
@@ -369,11 +373,22 @@ module RailsAiContext
       # the model whose record it names. Nil parts compare by label alone.
       WiredStream = Data.define(:label, :where, :parts)
 
+      # The streams a filter's entries take part in, each with every
+      # broadcaster and subscriber the app has for it: a comments filter
+      # keeps Comment's broadcast, and the post view that hears it, rather
+      # than calling the stream unheard.
+      private_class_method def self.wiring_touching(wiring, entries)
+        places = entries.map { |entry| /#{Regexp.escape("#{entry[:file]}:#{entry[:line]}")}(?!\d)/ }
+        wiring.select do |_, streams|
+          (streams[:broadcasters] + streams[:subscribers] + streams[:unknown]).any? { |where| places.any? { |place| where.match?(place) } }
+        end
+      end
+
       # Warnings only where the wiring is sure: a stream whose parts this
       # reading could not resolve is "can't tell", not a mismatch.
-      private_class_method def self.detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
+      private_class_method def self.detect_mismatches(stream_wiring)
         warnings = []
-        build_stream_wiring(model_broadcasts, rb_broadcasts, view_subscriptions).each do |label, wiring|
+        stream_wiring.each do |label, wiring|
           next if wiring[:unknown].any? || wiring[:unsure]
 
           if wiring[:subscribers].any? && wiring[:broadcasters].empty?

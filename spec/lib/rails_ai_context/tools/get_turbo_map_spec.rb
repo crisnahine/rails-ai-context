@@ -492,6 +492,16 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       expect(text).not_to include("Subscription to `Current.user, notifications`")
     end
 
+    # The blog's comments filter kept the model broadcasts but none of the
+    # post views that hear them, and called three wired streams unheard.
+    it "judges a filtered stream against every subscriber the app has" do
+      text = described_class.call(detail: "full", controller: "reports").content.first[:text]
+
+      expect(wiring(text, "@product")).to include("**Subscribers:** `app/views/products/show.html.erb:2`")
+      expect(text).not_to include("Broadcast to `self` has no matching")
+      expect(text).to include("Broadcast to `products` has no matching `turbo_stream_from`")
+    end
+
     it "says it can't tell where a stream names nothing it resolves, and warns only where it is sure" do
       text = described_class.call(detail: "full").content.first[:text]
 
