@@ -205,7 +205,8 @@ root = File.realpath(Rails.root.to_s)
 raise unless real_path == root || real_path.start_with?(root + File::SEPARATOR)
 ```
 
-The VFS
+A path may also resolve into a directory the app links in from its own git repository, as
+described under "Links in and out of the app" below. The VFS
 (`rails-ai-context://views/{path}`) applies the same protection for view template reads.
 
 ### Links in and out of the app
@@ -233,7 +234,10 @@ A tool handed a path that leads out of the app refuses it, and so does a tool th
 name to one file - a log, a partial, a concern - when that file leads out; see "How a refusal
 is reported" below. A tool that answers from what the walks found, such as
 `rails_get_stimulus`, never lists a file a link carries out, and asked for that controller by
-name answers that it is not there.
+name answers that it is not there. A path into a linked-in directory is accepted wherever a
+path is (`packs/billing/app/models/invoice.rb`), and the sensitive patterns are matched
+against the file's name inside that directory as well as the app's. `rails_search_code`
+searches the linked-in directories too.
 
 Booted, a class Rails loaded through a link out of the app is still described from what
 reflection answers, such as a job's queue name; only its file goes unread.

@@ -30,13 +30,13 @@ Two senses, one per module, and neither is bare "path" in a name.
 
 ## Safe path
 
-A caller-supplied path resolved once, through `SafePath`, before anything reads it. Its refusal order is the contract, not an implementation detail: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. A caller that reorders those checks, or repeats one of them itself, gets a different answer on a symlink or a dotfile than every other tool does, which is the divergence the module exists to end. `BaseTool.safe_glob` is the globbed-path form: realpath, containment and the sensitive-realpath check on each path a pattern yields, with the size cap left to the read that follows.
+A caller-supplied path resolved once, through `SafePath`, before anything reads it. Its refusal order is the contract, not an implementation detail: traversal, sensitive name, realpath, containment (the directory asked about, or a **linked-in** directory on the way to it), sensitive realpath, file, size. A caller that reorders those checks, or repeats one of them itself, gets a different answer on a symlink or a dotfile than every other tool does, which is the divergence the module exists to end. `BaseTool.safe_glob` is the globbed-path form: realpath, containment and the sensitive-realpath check on each path a pattern yields, with the size cap left to the read that follows.
 
 Not the same as a path that merely looks harmless, and not a caller's own containment check - "the tool guards this parameter" means it hands the parameter to `SafePath` and renders whatever refusal comes back.
 
 ## Carried path
 
-A path the payload already holds because the gem's own walk found it - a controller's or a model's `file:`. A controller's is re-read with `SafeFile.read(File.join(root, relative))`, which checks that it is a regular file under the size cap and nothing else; a model's goes through `PortablePath.resolve` first, since it can be a `gem:` path. The reason is the walk: `SourceScan` deliberately keeps the spelling the app uses when the realpath falls outside the root, so a pack or an in-repo engine symlinked out of the root is spelled inside it, and `SafePath`'s realpath containment would refuse the very file the payload just named - the source comes back nil and a section silently empties.
+A path the payload already holds because the gem's own walk found it - a controller's or a model's `file:`. A controller's is re-read with `SafeFile.read(File.join(root, relative))`, which checks that it is a regular file under the size cap and nothing else; a model's goes through `PortablePath.resolve` first, since it can be a `gem:` path. The reason is the walk: it already decided the file is the app's (see **Linked out**), keeping the spelling the app uses when the realpath falls outside the root, and a model's file can be a gem's, which `SafePath` refuses as outside the root - the source would come back nil and a section silently empty.
 
 Not an exception to the **safe path** rule, the other side of it: a caller-supplied path is untrusted and goes through `SafePath`; a carried path was produced by this gem and only needs the cap.
 

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "open3"
+require "set"
 
 module RailsAiContext
   module Tools
@@ -361,6 +362,9 @@ module RailsAiContext
         cmd << "--" # Prevent pattern from being parsed as flags
         cmd << pattern
         cmd << search_path
+        # ripgrep enters no linked directory by itself but follows one it is handed.
+        trees = linked_trees(search_path, root, skip_rule(exclude_tests))
+        cmd.concat(trees.map(&:first).reject { |dir| dir == search_path })
 
         output, err, status = Open3.capture3(*cmd)
 
@@ -376,7 +380,7 @@ module RailsAiContext
 
         # SafePath, not an rg glob, drops sensitive files: a glob cannot exempt a placeholder.
         rows = parse_rg_output(output, root)
-          .reject { |r| sensitive_file?(r[:file]) }
+          .reject { |r| sensitive_file?(r[:file]) || sensitive_in_tree?(r[:file], trees, root) }
           .first(max_results)
         [ rows, failed ]
       rescue => e
@@ -406,8 +410,7 @@ module RailsAiContext
         end
         # ripgrep searches a file it is named whatever its type or ignore files say.
         if File.file?(search_path)
-          relative = File.realpath(search_path).delete_prefix("#{File.realpath(root)}/")
-          scan_file(File.realpath(search_path), relative, regex, ctx_lines, max_results, results)
+          scan_file(File.realpath(search_path), spelled_relative(search_path, root), regex, ctx_lines, max_results, results)
           return [ results, search_error ]
         end
         return [ results, search_error ] unless File.directory?(search_path)
@@ -415,30 +418,38 @@ module RailsAiContext
         # Every file ripgrep searches, unless the app narrowed the fallback
         # with search_extensions.
         extensions = file_type ? [ file_type ] : RailsAiContext.configuration.search_extensions&.map(&:to_s)
-        # Read as ripgrep reads its `--glob=!` globs: `docs` at any depth, and
-        # `log` never reaching `logo/`.
-        skipped = RailsAiContext.configuration.excluded_paths + (exclude_tests ? TEST_DIRS : [])
-        skip_rules = RailsAiContext::GitIgnore.parse(skipped.join("\n"))
-        skip = ->(relative, dir) { RailsAiContext::GitIgnore.verdict(skip_rules, relative, dir: dir) == :ignore }
+        skip = skip_rule(exclude_tests)
         ai_context = ai_context_paths
 
         # ripgrep's walk and ignore files, so both backends search the same
-        # files, gitignored secrets excluded.
-        RailsAiContext::GitIgnore.for_tree(root).each_file(File.realpath(search_path), skip: skip) do |file, relative|
-          next if extensions && extensions.none? { |ext| file.end_with?(".#{ext}") }
-          next if sensitive_file?(relative) || ai_context_file?(ai_context, relative)
-          return [ results, search_error ] if scan_file(file, relative, regex, ctx_lines, max_results, results)
-        rescue => _e
-          search_error = true
-          next # Skip a file this process cannot read or scan
+        # files, gitignored secrets excluded: the tree under the root, then each
+        # directory linked in from the app's repository, under the name the app
+        # gives it and read against the ignore files where it lives.
+        linked = linked_trees(search_path, root, skip)
+        real_search = File.realpath(search_path)
+        own = RailsAiContext::SafePath.contained?(real_search, File.realpath(root)) ? [ [ nil, real_search, nil ] ] : []
+        (own + linked).each do |spelled, start, base|
+          prefix = spelled && spelled_relative(spelled, root)
+          in_tree = prefix ? ->(relative, dir) { skip.call("#{prefix}/#{relative}", dir) } : skip
+          RailsAiContext::GitIgnore.for_tree(prefix ? start : root).each_file(start, skip: in_tree) do |file, walked|
+            relative = prefix ? "#{prefix}/#{walked}" : walked
+            next if extensions && extensions.none? { |ext| file.end_with?(".#{ext}") }
+            next if sensitive_file?(relative) || ai_context_file?(ai_context, relative)
+            next if base && sensitive_file?(base.empty? ? walked : "#{base}/#{walked}")
+            return [ results, search_error ] if scan_file(file, relative, regex, ctx_lines, max_results, results)
+          rescue => _e
+            search_error = true
+            next # Skip a file this process cannot read or scan
+          end
         end
 
         [ results, search_error ]
       end
 
       # Where a search runs: the root, or `path` under it when that resolves
-      # inside the root. [search_path, nil], or [nil, the answer that refuses
-      # the path or does not find it]. Trace mode asks it as every mode does.
+      # inside the root or through a directory linked in from the app's
+      # repository (SafePath.linked_in). [search_path, nil], or [nil, the
+      # answer that refuses the path or does not find it].
       private_class_method def self.resolve_search_path(path, root)
         return [ root, nil ] unless path
 
@@ -456,13 +467,96 @@ module RailsAiContext
 
         real_root = File.realpath(root)
         real_search = File.realpath(search_path)
-        return [ nil, error_response("Path not allowed: #{path}") ] unless RailsAiContext::SafePath.contained?(real_search, real_root)
-        # A file named as the path is read whatever it is linked to.
-        return [ nil, error_response("Path not allowed: #{path}") ] if File.file?(real_search) && sensitive_file?(real_search.delete_prefix("#{real_root}/"))
+        inside = RailsAiContext::SafePath.contained?(real_search, real_root)
+        linked = !inside && RailsAiContext::SafePath.linked_in(search_path, real_search, root, root)
+        return [ nil, error_response("Path not allowed: #{path}") ] unless inside || linked
+        # A file named as the path is read whatever it is linked to, so the
+        # name it has where it lives is asked too.
+        real_name = real_search.delete_prefix("#{linked || real_root}/")
+        return [ nil, error_response("Path not allowed: #{path}") ] if File.file?(real_search) && sensitive_file?(real_name)
 
         [ search_path, nil ]
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
         [ nil, text_response("Path not found: #{echo_input(path)}") ]
+      end
+
+      # Read as ripgrep reads its `--glob=!` globs: `docs` at any depth, and
+      # `log` never reaching `logo/`.
+      private_class_method def self.skip_rule(exclude_tests)
+        skipped = RailsAiContext.configuration.excluded_paths + (exclude_tests ? TEST_DIRS : [])
+        skip_rules = RailsAiContext::GitIgnore.parse(skipped.join("\n"))
+        ->(relative, dir) { RailsAiContext::GitIgnore.verdict(skip_rules, relative, dir: dir) == :ignore }
+      end
+
+      # The trees a search reads past the root's own, each as [path as spelled,
+      # real path, where that sits in its linked-in directory]: `search_path`
+      # when a directory linked in from the app's repository leads to it
+      # (SafePath.linked_in), then each such directory below it (linked_dirs).
+      private_class_method def self.linked_trees(search_path, root, skip)
+        real_search = File.realpath(search_path)
+        trees = []
+        unless RailsAiContext::SafePath.contained?(real_search, File.realpath(root))
+          linked = RailsAiContext::SafePath.linked_in(search_path, real_search, root, root)
+          trees << [ search_path, real_search, real_search == linked ? "" : real_search.delete_prefix("#{linked}/") ] if linked
+        end
+        trees + linked_dirs(search_path, root, skip).map { |name, target| [ name, target, "" ] }
+      rescue SystemCallError
+        []
+      end
+
+      # The directories linked in from the app's repository below `search_path`
+      # (SafePath.link_bound) that ripgrep's walk meets past the same ignore
+      # files and enters none of, a link inside one too, as [path as spelled,
+      # real path]. Each place is searched once: a link into the root or into
+      # another tree searched leads where the search goes already, and one up
+      # over the root or the search path would search them again.
+      private_class_method def self.linked_dirs(search_path, root, skip)
+        bound = RailsAiContext::SafePath.link_bound(root)
+        real_root = File.realpath(root)
+        # Outside a monorepo, nothing outside the root counts.
+        return [] if bound == real_root || !File.directory?(search_path)
+
+        real_search = File.realpath(search_path)
+        visited = Set.new([ real_root, real_search ])
+        pending = [ [ search_path, real_search ] ]
+        found = []
+        until pending.empty?
+          spelled, real = pending.shift
+          inside = RailsAiContext::SafePath.contained?(real, real_root)
+          prefix = spelled_relative(spelled, root)
+          rule = inside ? skip : ->(relative, dir) { skip.call("#{prefix}/#{relative}", dir) }
+          RailsAiContext::GitIgnore.for_tree(inside ? real_root : real).dir_links(real, skip: rule).each do |link|
+            target = RailsAiContext::SafePath.linked_dir(link, bound)
+            next unless target && visited.add?(target)
+            next if [ real_root, real_search ].any? { |dir| RailsAiContext::SafePath.contained?(target, dir) || RailsAiContext::SafePath.contained?(dir, target) }
+
+            name = File.join(spelled, link.delete_prefix("#{real}/"))
+            found << [ name, target ]
+            pending << [ name, target ]
+          end
+        end
+        targets = found.map(&:last)
+        found.reject { |_, target| targets.any? { |other| other != target && RailsAiContext::SafePath.contained?(target, other) } }
+      rescue SystemCallError
+        []
+      end
+
+      # A file in a linked-in tree is asked by the name it has there too, as
+      # SafePath.locate asks it: a pack's config/master.key is not the app's
+      # name for it, but it is the key.
+      private_class_method def self.sensitive_in_tree?(relative, trees, root)
+        trees.any? do |spelled, _real, base|
+          prefix = spelled_relative(spelled, root)
+          next false unless relative == prefix || relative.start_with?("#{prefix}/")
+
+          name = [ base, relative.delete_prefix(prefix).delete_prefix("/") ].reject(&:empty?).join("/")
+          sensitive_file?(name)
+        end
+      end
+
+      # A path under the root as the app spells it, whatever links lead there.
+      private_class_method def self.spelled_relative(path, root)
+        RailsAiContext::SafePath.spelled_relative(path, root)
       end
 
       # One file's rows, as ripgrep's -C and --max-count give them: at most

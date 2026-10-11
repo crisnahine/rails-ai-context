@@ -64,9 +64,11 @@ RSpec.describe RailsAiContext::SafePath do
     end
 
     it "refuses a symlink to a directory outside before deciding it is not a file" do
-      File.symlink(File.join(@root, "app/views_backup"), File.join(@root, "app/views/posts/escape_dir"))
+      Dir.mktmpdir do |outside|
+        File.symlink(outside, File.join(@root, "app/views/posts/escape_dir"))
 
-      expect(locate("posts/escape_dir").refusal).to eq(:outside)
+        expect(locate("posts/escape_dir").refusal).to eq(:outside)
+      end
     end
 
     it "refuses a benign name whose realpath is a sensitive file" do
@@ -102,6 +104,41 @@ RSpec.describe RailsAiContext::SafePath do
       result = described_class.locate("posts/index.html.erb", under: views, root: File::SEPARATOR)
 
       expect(result.relative).to eq(File.join(@root, "app/views/posts/index.html.erb").delete_prefix(File::SEPARATOR))
+    end
+  end
+
+  describe ".locate through a directory linked in from the app's repository" do
+    around do |example|
+      Dir.mktmpdir do |repo|
+        @repo = File.realpath(repo)
+        @app = File.join(@repo, "apps/web")
+        FileUtils.mkdir_p([ File.join(@repo, ".git"), File.join(@app, "packs"), File.join(@repo, "packages/billing/app/models"),
+                            File.join(@repo, "packages/billing/app/views/invoices"), File.join(@repo, "packages/billing/config") ])
+        File.write(File.join(@repo, "packages/billing/app/models/invoice.rb"), "class Invoice; end\n")
+        File.write(File.join(@repo, "packages/billing/app/views/invoices/_invoice.html.erb"), "<%= invoice.id %>\n")
+        File.write(File.join(@repo, "packages/billing/config/database.yml"), "password: x\n")
+        File.symlink("../../../packages/billing", File.join(@app, "packs/billing"))
+        example.run
+      end
+    end
+
+    it "reads a pack's file by the name the app gives it" do
+      result = described_class.locate("packs/billing/app/models/invoice.rb", under: @app)
+
+      expect(result.refusal).to be_nil
+      expect(result.realpath).to eq(File.join(@repo, "packages/billing/app/models/invoice.rb"))
+      expect(result.relative).to eq("packs/billing/app/models/invoice.rb")
+    end
+
+    it "refuses a file the pack holds under a sensitive name of its own" do
+      expect(described_class.locate("packs/billing/config/database.yml", under: @app).refusal).to eq(:sensitive)
+    end
+
+    it "refuses the pack outside a repository, and when the caller asks for the root alone" do
+      expect(described_class.locate("packs/billing/app/models/invoice.rb", under: @app, links: false).refusal).to eq(:outside)
+
+      FileUtils.rm_rf(File.join(@repo, ".git"))
+      expect(described_class.locate("packs/billing/app/models/invoice.rb", under: @app).refusal).to eq(:outside)
     end
   end
 
