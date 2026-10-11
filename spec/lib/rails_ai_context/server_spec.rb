@@ -768,6 +768,12 @@ RSpec.describe RailsAiContext::Server do
 
         messages = out.lines.map { |line| JSON.parse(line) }
         expect(messages.first["id"]).to eq(1)
+        # An SDK with no frame limit (mcp 0.13 has none) reads the frame whole
+        # and answers it as JSON it cannot parse: answered too, nothing silent.
+        unless defined?(MCP::Server::Transports::StdioTransport::MAX_LINE_BYTES)
+          expect(messages.last).to include("id" => nil, "error" => a_hash_including("code" => -32700))
+          next
+        end
         expect(messages.last).to include("id" => nil, "error" => a_hash_including("code" => -32600, "message" => /exceeds 4194304 bytes/))
         expect(err).to include("[rails-ai-context] unhandled exception: MCP::Server::RequestHandlerError: stdio frame exceeds 4194304 bytes")
         expect(err).to include("Error: MCP stdio connection closed: stdio frame exceeds 4194304 bytes")

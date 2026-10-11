@@ -182,7 +182,9 @@ RSpec.describe RailsAiContext::Resources do
     # "Resource not found" named only the guess; the read now names what a
     # client can read instead, as a model or view read does.
     it "fails the read for a completely unknown URI with the resources and templates there are" do
-      if defined?(MCP::Server::ResourceNotFoundError)
+      # An SDK whose handler errors carry data (mcp 0.13 included) gets the
+      # list; only one without falls back to the plain error.
+      if MCP::Server::RequestHandlerError.instance_method(:initialize).parameters.any? { |_, name| name == :error_data }
         expect { read_handler.call(uri: "rails://unknown_resource") }
           .to raise_error(MCP::Server::RequestHandlerError, "Resource not found: rails://unknown_resource") { |error|
             expect(error.error_code).to eq(-32602)
