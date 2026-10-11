@@ -53,6 +53,9 @@ module RailsAiContext
       # REPLACE is the MySQL statement; `replace(` is the string function every
       # database has, so a REPLACE followed by an opening parenthesis is let be.
       BLOCKED_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|SET|COPY|MERGE|REPLACE(?!\s*\())\b/i
+      # SHOW CREATE TABLE / VIEW print a definition; every other SHOW CREATE is
+      # refused by the CREATE keyword - SHOW CREATE USER prints credential hashes.
+      SHOW_CREATE_DEFINITION = /\A\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\b/i
       BLOCKED_CLAUSES  = /\bFOR\s+(UPDATE|SHARE|NO\s+KEY\s+UPDATE)\b/i
       BLOCKED_SHOWS    = /\bSHOW\s+(GRANTS|PROCESSLIST|BINLOG|SLAVE|MASTER|REPLICAS)\b/i
       SELECT_INTO      = /\bSELECT\b[^;]*\bINTO\b/i
@@ -310,7 +313,13 @@ module RailsAiContext
         # Skip for SHOW/DESCRIBE/EXPLAIN - see SCHEMA_METADATA_PREFIX.
         schema_metadata = sql.match?(SCHEMA_METADATA_PREFIX)
         provenance = schema_metadata ? [] : provenance_sensitive_indices(sql) | plan_output_sensitive_indices(sql, result)
-        redacted = schema_metadata ? result : redact_results(result, provenance)
+        redacted = if sql.match?(SHOW_CREATE_DEFINITION)
+          redact_definition(result)
+        elsif schema_metadata
+          result
+        else
+          redact_results(result, provenance)
+        end
 
         # ── Format output ───────────────────────────────────────────
         # The truncation note rides every format (for CSV, after a blank line so
@@ -564,8 +573,8 @@ module RailsAiContext
         # Check blocked keywords before the allowed-prefix fallback so that
         # INSERT/UPDATE/DELETE/DROP etc. get a specific "Blocked" error
         # rather than the generic "Only SELECT... allowed" message. Read on the
-        # quote-masked text, so a keyword inside a string literal is data.
-        if (m = masked.match(BLOCKED_KEYWORDS))
+        # quote-masked text; SHOW CREATE TABLE / VIEW drop their CREATE first.
+        if (m = masked.sub(SHOW_CREATE_DEFINITION, "SHOW").match(BLOCKED_KEYWORDS))
           return [ false, "Blocked: contains #{m[0]}" ]
         end
 
@@ -1557,6 +1566,17 @@ module RailsAiContext
         }
 
         ResultProxy.new(columns, redacted_rows)
+      end
+
+      # A SHOW CREATE TABLE / VIEW definition is schema text, so it skips column
+      # redaction, but a FEDERATED table's `CONNECTION='mysql://user:pass@...'`
+      # carries a credential inside it: the text goes through the shared
+      # redaction, which filters a URI's userinfo and secret-named settings.
+      private_class_method def self.redact_definition(result)
+        rows = result.rows.map do |row|
+          row.map { |value| value.is_a?(String) ? RailsAiContext::Redaction.call(value) : value }
+        end
+        ResultProxy.new(result.columns, rows)
       end
 
       # ── Output formatting ───────────────────────────────────────────

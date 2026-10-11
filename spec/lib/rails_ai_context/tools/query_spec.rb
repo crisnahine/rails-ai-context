@@ -2168,4 +2168,38 @@ it "still explains a database that does not exist" do
     end
   end
 
+  describe "SHOW CREATE TABLE / VIEW (item 4)" do
+    it "allows SHOW CREATE TABLE" do
+      valid, = described_class.validate_sql("SHOW CREATE TABLE orders", mysql: true)
+      expect(valid).to be true
+    end
+
+    it "allows SHOW CREATE VIEW" do
+      valid, = described_class.validate_sql("SHOW CREATE VIEW order_totals", mysql: true)
+      expect(valid).to be true
+    end
+
+    it "still refuses SHOW CREATE USER (credential hashes)" do
+      valid, error = described_class.validate_sql("SHOW CREATE USER 'rt'@'%'", mysql: true)
+      expect(valid).to be false
+      expect(error).to include("CREATE")
+    end
+
+    it "still refuses SHOW CREATE DATABASE" do
+      valid, error = described_class.validate_sql("SHOW CREATE DATABASE app", mysql: true)
+      expect(valid).to be false
+      expect(error).to include("CREATE")
+    end
+
+    it "redacts a credential embedded in a returned definition" do
+      ddl = "CREATE TABLE `l` (`id` int) COMMENT='mysql://svc_user:hunter2pass@db.internal:3306/app'"
+      result = ActiveRecord::Result.new([ "Table", "Create Table" ], [ [ "l", ddl ] ])
+      redacted = described_class.send(:redact_definition, result)
+      cell = redacted.rows.first.last
+      expect(cell).to include("mysql://#{RailsAiContext::Redaction::FILTERED}@db.internal:3306/app")
+      expect(cell).not_to include("svc_user")
+      expect(cell).not_to include("hunter2pass")
+    end
+  end
+
 end

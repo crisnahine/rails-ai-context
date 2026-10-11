@@ -50,7 +50,7 @@ flowchart LR
 Before any query reaches the database:
 
 - Strips comments: block (`/* */`), line (`--`), and on MySQL `#`. A comment marker inside a quoted string or identifier is data and stays. The query that runs is this stripped text, never the raw input, so nothing the checks did not read reaches the database
-- **Blocks write keywords**: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, SET, COPY, MERGE, REPLACE. The keyword check (and the `SELECT … INTO` table-creation check) reads **quote-masked text**, so a keyword inside a string literal is data: `… WHERE notes LIKE '%update%'` and `… = 'put into box'` are reads, not writes. `REPLACE` is matched only as the statement; the string function `replace(col, a, b)` every database has (a `REPLACE` immediately followed by `(`) is allowed
+- **Blocks write keywords**: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, SET, COPY, MERGE, REPLACE. The keyword check (and the `SELECT … INTO` table-creation check) reads **quote-masked text**, so a keyword inside a string literal is data: `… WHERE notes LIKE '%update%'` and `… = 'put into box'` are reads, not writes. `REPLACE` is matched only as the statement; the string function `replace(col, a, b)` every database has (a `REPLACE` immediately followed by `(`) is allowed. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed despite the `CREATE` (see below)
 - **Blocks lock clauses**: FOR UPDATE, FOR SHARE, FOR NO KEY UPDATE
 - **Blocks dangerous SHOW**: GRANTS, PROCESSLIST, BINLOG, SLAVE, MASTER, REPLICAS
 - **Blocks SELECT INTO**: prevents table creation via SELECT. `INTO OUTFILE` / `INTO DUMPFILE` disk writes, and the file/network functions above, stay matched on the **raw (unmasked) text** - no read-only transaction stops a server-side file write, so these are never read as data
@@ -61,7 +61,7 @@ Before any query reaches the database:
 - **Blocks injection patterns**: OR 1=1, OR true, OR ''=''
 - **Refuses any UNION**: a UNION takes its column names from its first SELECT, so another table's rows - a wildcard's columns included - would come out under those names, past the redaction that reads names. Every spelling is refused (`UNION`, `UNION ALL`, `UNION DISTINCT`, a parenthesised `UNION (SELECT ...)`), recursive CTEs with it; `INTERSECT` and `EXCEPT` return only their first SELECT's rows and stay. On PostgreSQL a "union" inside a string literal is data
 - **Blocks sensitive column references**: see Layer 4 - a query whose text names a sensitive column, directly or through an alias or expression, is refused before execution
-- **Allows only**: SELECT, WITH, SHOW, EXPLAIN, DESCRIBE, DESC
+- **Allows only**: SELECT, WITH, SHOW, EXPLAIN, DESCRIBE, DESC. `SHOW CREATE TABLE` and `SHOW CREATE VIEW` are allowed so schema can be inspected; every other `SHOW CREATE` (`USER`, whose output includes credential hashes, `DATABASE`, `FUNCTION`, …) keeps its `CREATE` and is refused. A returned definition is passed through secret redaction before it is shown, so a credential embedded in it - a FEDERATED table's `CONNECTION='mysql://user:pass@host/db'` - comes back as `mysql://[FILTERED]@host/db`
 
 ### Layer 1b - PostgreSQL semantic analysis (planning only)
 
@@ -135,7 +135,7 @@ If one of your own columns merely looks sensitive (an `oauth_applications.secret
 config.query_allowed_columns = %w[secret]
 ```
 
-Results are redacted as well: a returned column comes back as `[FILTERED]` when the sensitivity rule flags its **output name**, and on PostgreSQL when its origin is a sensitive base column - either by **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) or by the **plan's top-node `Output`**, whose i-th expression is result column i. The plan path catches a view (or inlined CTE/subquery/join) that renamed a sensitive column to a harmless name: `CREATE VIEW user_tokens AS SELECT id, api_token AS t FROM users; SELECT t FROM user_tokens` returns `t` as `[FILTERED]`. `SHOW`, `DESCRIBE` and `EXPLAIN` output is not redacted.
+Results are redacted as well: a returned column comes back as `[FILTERED]` when the sensitivity rule flags its **output name**, and on PostgreSQL when its origin is a sensitive base column - either by **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) or by the **plan's top-node `Output`**, whose i-th expression is result column i. The plan path catches a view (or inlined CTE/subquery/join) that renamed a sensitive column to a harmless name: `CREATE VIEW user_tokens AS SELECT id, api_token AS t FROM users; SELECT t FROM user_tokens` returns `t` as `[FILTERED]`. `SHOW`, `DESCRIBE` and `EXPLAIN` output skips column-name redaction; the one exception is `SHOW CREATE TABLE` / `SHOW CREATE VIEW`, whose definition text is run through the shared secret redaction so a credential embedded in it is filtered.
 
 The exemption covers the results too: an allowed name comes back unredacted. A
 column declared with `encrypts` stays `[FILTERED]` either way - an encrypted-at-rest
