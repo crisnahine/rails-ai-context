@@ -96,7 +96,7 @@ module RailsAiContext
           # Check if specified files exist
           missing = files.select { |f| !File.exist?(rails_app.root.join(f)) }
           if missing.any? && missing.size == files.size
-            return text_response("File(s) not found: #{missing.join(', ')}. Provide paths relative to Rails root.")
+            return text_response("File(s) not found: #{missing.map { |f| echo_input(f) }.join(', ')}. Provide paths relative to Rails root.")
           end
 
           warnings = warnings.select do |w|
@@ -131,7 +131,7 @@ module RailsAiContext
           checks_run: tracker.checks.checks_run.map(&:to_s)
         }
       rescue StandardError, ScriptError => e
-        { error: e.message }
+        { error: echo_checks(e.message, resolved_checks) }
       end
 
       # The scan the installed brakeman runs as its own process, outside the
@@ -143,7 +143,7 @@ module RailsAiContext
         return nil unless version
 
         report, failure = run_brakeman_unbundled(min_confidence, resolved_checks)
-        return { unavailable: failure } unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
+        return { unavailable: echo_checks(failure, resolved_checks) } unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
 
         # The newest on disk is not always the one the binstub ran.
         version = report.dig("scan_info", "brakeman_version") || version
@@ -155,6 +155,15 @@ module RailsAiContext
           checks_run: Array(report.dig("scan_info", "checks_performed")),
           note: unbundled_note(version)
         }
+      end
+
+      # Brakeman names a check it does not know as it was handed it, so a
+      # 100,000-character name came back whole. Each is shortened as every
+      # tool shortens what it repeats; the command line splits a name at its
+      # commas, so those parts are what brakeman names there.
+      private_class_method def self.echo_checks(message, checks)
+        names = Array(checks).map(&:to_s).flat_map { |check| [ check, *check.split(",") ] }.reject { |name| echo_input(name) == name }
+        names.sort_by { |name| -name.length }.reduce(message) { |text, name| text&.gsub(name) { echo_input(name) } }
       end
 
       # The app's Gemfile.lock, read because a static run never loads the
@@ -445,7 +454,7 @@ module RailsAiContext
         checks_run = checks.size
 
         if warnings.empty?
-          scope = files&.any? ? " in #{files.join(', ')}" : ""
+          scope = files&.any? ? " in #{files.map { |f| echo_input(f) }.join(', ')}" : ""
           # Summarize what categories were checked for transparency
           check_names = checks.map { |c| c.to_s.gsub(/([a-z])([A-Z])/, '\1 \2') }
           categories = check_names.first(6).join(", ")
