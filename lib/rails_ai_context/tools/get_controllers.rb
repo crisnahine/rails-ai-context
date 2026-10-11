@@ -292,7 +292,7 @@ module RailsAiContext
         # Case-insensitive action lookup for consistency with other tools
         action_name = actions.find { |a| a.to_s.downcase == action_name.to_s.downcase }&.to_s || action_name.to_s
         unless actions.map(&:to_s).include?(action_name)
-          return empty_response("Action '#{action_name}' not found in #{controller_name}. Available: #{actions.join(', ')}")
+          return empty_response("Action '#{echo_input(action_name)}' not found in #{controller_name}. Available: #{actions.join(', ')}")
         end
 
         carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)

@@ -132,7 +132,7 @@ module RailsAiContext
         # Validate match_type
         valid_match_types = %w[any definition class call trace]
         unless valid_match_types.include?(match_type)
-          return text_response("Unknown match_type: '#{match_type}'. Valid values: #{valid_match_types.join(', ')}")
+          return text_response("Unknown match_type: '#{echo_input(match_type)}'. Valid values: #{valid_match_types.join(', ')}")
         end
 
         # Apply match_type filter to pattern (exact_match word boundaries applied per-type)

@@ -132,7 +132,7 @@ module RailsAiContext
             lines << "- **Fallbacks:** #{Array(fallbacks[locale.to_sym] || fallbacks[locale]).join(', ')}"
           end
 
-          render_file_list(lines, page, "Files for #{locale}", "_No locale files found for '#{locale}'._")
+          render_file_list(lines, page, "Files for #{echo_input(locale)}", "_No locale files found for '#{echo_input(locale)}'._")
           text_response(lines.join("\n"))
         end
 

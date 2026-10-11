@@ -44,7 +44,7 @@ module RailsAiContext
             data = models[key]
             unless data
               reason = RailsAiContext::AppKind.without_active_record(rails_app.root)
-              return empty_response("No Active Record model named #{model}: #{reason}.") if reason && models.empty?
+              return empty_response("No Active Record model named #{echo_input(model)}: #{reason}.") if reason && models.empty?
 
               return not_found_response("Model", model, models.keys.sort,
                 recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")

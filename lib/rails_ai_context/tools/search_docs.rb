@@ -58,7 +58,7 @@ module RailsAiContext
         # Validate source
         source = source.to_s.downcase
         unless VALID_SOURCES.include?(source)
-          return text_response("Invalid source: '#{source}'. Valid values: #{VALID_SOURCES.join(', ')}")
+          return text_response("Invalid source: '#{echo_input(source)}'. Valid values: #{VALID_SOURCES.join(', ')}")
         end
 
         # Normalize limit
@@ -98,7 +98,7 @@ module RailsAiContext
         results = scored.first(limit)
 
         if results.empty?
-          return text_response("No documentation found for '#{query}'. Try broader terms like 'active record', 'routing', or 'testing'.")
+          return text_response("No documentation found for '#{echo_input(query)}'. Try broader terms like 'active record', 'routing', or 'testing'.")
         end
 
         format_results(results, query, source, branch, fetch: fetch)
@@ -178,7 +178,7 @@ module RailsAiContext
 
         def format_results(results, query, source, branch, fetch: false)
           lines = []
-          lines << "# Rails Documentation Search: \"#{query}\"#{" (fetched)" if fetch}"
+          lines << "# Rails Documentation Search: \"#{echo_input(query)}\"#{" (fetched)" if fetch}"
           lines << "Found #{count_phrase(results.size, "result")} (#{source})"
           lines << ""
 
