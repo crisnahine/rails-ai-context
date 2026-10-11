@@ -1031,7 +1031,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(err).not_to include("incompatible character encodings")
         expect(status.exitstatus).to eq(1)
-        expect(err).to include("No Rails app found in #{notes}")
+        # The folder it stands in, as the system names it: macOS's temp dir is under a symlink.
+        expect(err).to include("No Rails app found in #{File.realpath(notes)}")
       end
     end
 

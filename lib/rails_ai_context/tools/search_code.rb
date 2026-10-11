@@ -331,7 +331,10 @@ module RailsAiContext
       end
 
       private_class_method def self.search_with_ripgrep(pattern, search_path, file_type, max_results, root, ctx_lines = 0, exclude_tests: false)
-        cmd = [ "rg", "--no-heading", "--with-filename", "--line-number", "--sort=path", "--max-count", max_results.to_s ]
+        # On Windows ripgrep joins the paths it finds with backslashes, which
+        # neither strip the root nor meet the sensitive patterns' slashes.
+        cmd = [ "rg", "--no-heading", "--with-filename", "--line-number", "--sort=path", "--path-separator", "/",
+                "--max-count", max_results.to_s ]
         if ctx_lines > 0
           cmd.push("-C", ctx_lines.to_s)
           cmd.push("--field-context-separator", CONTEXT_FIELD_SEPARATOR)

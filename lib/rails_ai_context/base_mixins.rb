@@ -163,7 +163,7 @@ module RailsAiContext
         next unless node.is_a?(Prism::CallNode) && node.receiver.nil? && REQUIRES.include?(node.name)
 
         feature = feature_path(Array(node.arguments&.arguments).first, dir) or next
-        bases = feature.start_with?("/") ? [ feature ] : lookup.map { |base| File.join(base, feature) }
+        bases = SafePath.absolute?(feature) ? [ feature ] : lookup.map { |base| File.join(base, feature) }
         candidate = bases.map { |base| base.end_with?(".rb") ? base : "#{base}.rb" }.find { |path| File.file?(path) }
         File.expand_path(candidate) if candidate
       end

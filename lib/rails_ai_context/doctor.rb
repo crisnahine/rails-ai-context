@@ -824,7 +824,7 @@ module RailsAiContext
     # nil when it starts the right one. Fast on purpose: the command is
     # looked up, never run.
     def entry_trouble(entry, tool, config_path)
-      argv = entry[:argv]
+      argv = McpConfigGenerator.unwrapped_argv(entry[:argv])
       folder = mcp_config_folder(tool, config_path)
       line = "`#{argv.take_while { |arg| !arg.start_with?("--app-path") }.join(' ')}`"
       rerun = "Run #{install_command(config_path)} to fix"
@@ -832,6 +832,15 @@ module RailsAiContext
       path, where = entry_path_variable(entry, tool)
       found = path.nil? || executable_on?(argv.first.to_s, path, folder)
       missing = "#{line} cannot start - `#{argv.first}` is not on #{where}"
+      # A config is committed, and one written on the other platform starts
+      # the server the way that platform's clients need.
+      if Array(entry[:argv]).size != argv.size && !McpConfigGenerator.windows_shell?
+        return [ :fail, "#{line} cannot start - it runs through `cmd /c`, Windows' shell, which is not here", rerun ]
+      end
+      if bare_batch?(entry, argv, path, folder)
+        return [ :warn, "#{line} may not start - `#{argv.first}` is a batch file, which a client that starts its server " \
+                        "without a shell does not run", rerun ]
+      end
 
       if argv[0] == "bundle" && argv[1] == "exec"
         return [ :fail, missing, "Make `bundle` reachable from #{where}" ] unless found
@@ -878,6 +887,30 @@ module RailsAiContext
     def client_path
       env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
       env["PATH"].to_s
+    end
+
+    # Whether, on Windows, an entry runs a batch file without the `cmd /c`
+    # the install starts one through: a gem's executable there is a .bat
+    # file, which a client starting its server without a shell may not run
+    # at all. PATH is the one the server gets, a Codex snapshot's included.
+    def bare_batch?(entry, argv, path, folder)
+      return false unless McpConfigGenerator.windows_shell? && Array(entry[:argv]).size == argv.size
+
+      path ||= entry[:env]["PATH"]
+      !path.nil? && !path.include?("$") && batch_only?(argv.first.to_s, path, folder)
+    end
+
+    # Whether `command` is a batch file: one named so, or a bare name PATH
+    # finds only as a .bat or .cmd file. A spawn without a shell looks for
+    # the .exe and .com of a bare name, never its .bat.
+    def batch_only?(command, path, folder)
+      return false if command.empty?
+      return true if File.extname(command).match?(/\A\.(bat|cmd)\z/i)
+      return false if command.match?(%r{[/\\]}) || File.extname(command).match?(/\A\.(exe|com)\z/i)
+
+      dirs = path.split(File::PATH_SEPARATOR).reject(&:empty?).map { |dir| File.expand_path(dir, folder) }
+      on_path = ->(extensions) { dirs.product(extensions).any? { |dir, ext| File.file?(File.join(dir, "#{command}#{ext}")) } }
+      !on_path.(%w[.exe .com]) && on_path.(%w[.bat .cmd])
     end
 
     # Whether `command` would start: a path is read from the folder the server
@@ -1003,7 +1036,7 @@ module RailsAiContext
           message: "Codex MCP env snapshot is stale - GEM_PATH names #{gone}, which no longer exists", fix: fix)
       end
 
-      reached = snapshots.filter_map { |entry| entry[:argv].first if entry[:env]["PATH"] }.uniq
+      reached = snapshots.filter_map { |entry| McpConfigGenerator.unwrapped_argv(entry[:argv]).first if entry[:env]["PATH"] }.uniq
       found = []
       found << "its PATH reaches #{reached.map { |command| "`#{command}`" }.join(', ')}" if reached.any?
       found << "GEM_HOME (#{gem_homes.first}) exists" if gem_homes.any?
@@ -1026,7 +1059,7 @@ module RailsAiContext
     # is usually that Ruby's. [server name, command, gone directory] or nil.
     def unreached_command(entry, folder)
       path = entry[:env]["PATH"] or return nil
-      command = entry[:argv].first.to_s
+      command = McpConfigGenerator.unwrapped_argv(entry[:argv]).first.to_s
       return nil if executable_on?(command, path, folder)
 
       [ entry[:name], command, path.split(File::PATH_SEPARATOR).find { |dir| !dir.empty? && !Dir.exist?(File.expand_path(dir, folder)) } ]
@@ -1095,7 +1128,9 @@ module RailsAiContext
 
       mcp_tools_to_check.any? do |tool|
         path = McpConfigGenerator.serving_config(install_root, tool) or next false
-        serving_entries(tool, path).any? { |entry| entry[:own] && File.basename(entry[:argv].first.to_s) == "rails-ai-context" }
+        serving_entries(tool, path).any? do |entry|
+          entry[:own] && File.basename(McpConfigGenerator.unwrapped_argv(entry[:argv]).first.to_s) == "rails-ai-context"
+        end
       rescue SystemCallError, IOError, JSON::ParserError
         false
       end

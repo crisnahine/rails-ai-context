@@ -211,10 +211,13 @@ module RailsAiContext
         if env_vars.any?
           lines << "## Environment Variables by Category"
 
-          # Build a map: var_name -> { details from all files }
+          # Build a map: var_name -> { details from all files }. The scan
+          # keys each file by its realpath, which under a symlinked root (a
+          # macOS /tmp, /var) starts other than the root as the app names it.
+          real_root = File.realpath(root)
           var_details = {}
           env_vars.sort_by { |file, _| file }.each do |file, vars|
-            relative = file.sub("#{root}/", "")
+            relative = file.delete_prefix("#{real_root}/")
             vars.each do |v|
               var_details[v[:name]] ||= { files: [], defaults: [] }
               var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default],

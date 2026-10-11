@@ -97,7 +97,7 @@ module RailsAiContext
         return "." if path == app.root.to_s
 
         relative = PortablePath.relativize("#{path}/", app.root).chomp("/")
-        relative unless relative.start_with?(File::SEPARATOR)
+        relative unless SafePath.absolute?(relative)
       end
 
       def discover_rails_engines

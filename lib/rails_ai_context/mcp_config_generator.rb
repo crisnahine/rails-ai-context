@@ -43,6 +43,12 @@ module RailsAiContext
     # The byte order mark some editors put at the head of a JSON file.
     BOM = "\uFEFF"
 
+    # On Windows a gem's executables are .bat files (rails-ai-context.bat,
+    # bundle.bat), which a client that starts its server without a shell -
+    # Node's child_process.spawn in Claude Code, Codex's Rust Command - does
+    # not run. Claude Code's own docs start such a server through `cmd /c`.
+    WINDOWS_SHELL = %w[cmd /c].freeze
+
     # One server entry. app_path and gemfile are relative to the folder the
     # config sits in, because the file may be committed and an absolute path
     # holds only on the machine that wrote it. `folder` is how a tool's config
@@ -59,7 +65,8 @@ module RailsAiContext
       # rake task can only quarantine from the environment task onward.
       def argv(folder = nil)
         argv = standalone ? %w[rails-ai-context serve] : %w[bundle exec rails-ai-context serve]
-        app_path ? [ *argv, "--app-path", anchored(app_path, folder) ] : argv
+        argv = [ *argv, "--app-path", anchored(app_path, folder) ] if app_path
+        McpConfigGenerator.platform_argv(argv)
       end
 
       # bundle exec looks for a Gemfile from where it starts, upward, and a
@@ -468,6 +475,26 @@ module RailsAiContext
       return nil if path.include?("$")
 
       File.expand_path(path, dir)
+    end
+
+    # Whether this platform's clients start a gem's executable only through
+    # `cmd /c`: Windows', where it is a .bat file.
+    def self.windows_shell?
+      Gem.win_platform?
+    end
+
+    # The command line as the platform's clients can start it.
+    def self.platform_argv(argv)
+      windows_shell? ? [ *WINDOWS_SHELL, *argv ] : argv
+    end
+
+    # The command line an entry runs, inside a `cmd /c` it was given on
+    # Windows (`cmd`, `cmd.exe`, `C:\Windows\System32\cmd.exe`).
+    def self.unwrapped_argv(argv)
+      argv = Array(argv).map(&:to_s)
+      return argv unless argv.size > 2 && File.basename(argv[0].tr("\\", "/"), ".*").casecmp?("cmd") && argv[1].casecmp?("/c")
+
+      argv[2..]
     end
 
     # A JSON entry's command line: OpenCode's command array, or command plus args.

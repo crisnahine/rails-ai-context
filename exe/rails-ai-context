@@ -992,7 +992,7 @@ class RailsAiContextCLI < Thor
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
       entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                      allow_source_only: allow_source_only, command: command, doctor: doctor_command)
+                      allow_source_only: allow_source_only, command: command, doctor: doctor_command, shown: shown_root)
     end
 
     # Which app this command reads, decided once and before anything reads
@@ -1041,7 +1041,8 @@ class RailsAiContextCLI < Thor
       Dir.chdir(result.root) unless result.root == cwd
       # stderr only: stdout is the protocol channel for serve.
       $stderr.puts app_root.notice(result, cwd) if result.walked
-      warning = app_root.bundle_warning(result.root, cwd)
+      # Which bundle an app boots against matters only where there is one.
+      warning = app_root.bundle_warning(result.root, cwd) if entry_boot.app_present?(result.root, allow_source_only: true)
       $stderr.puts warning if warning
       hand_off_to_bundle!(result.root, cwd) if hand_off
       result
@@ -1133,8 +1134,16 @@ class RailsAiContextCLI < Thor
       own_command("doctor")
     end
 
+    # The root as an error names it: a typed --app-path as typed, the way the
+    # hint under it does, where Dir.pwd spells it through any symlink
+    # (/private/var on macOS).
+    def shown_root
+      result = @app_root_result
+      result&.explicit ? result.root : Dir.pwd
+    end
+
     def refuse_no_app!
-      $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
+      $stderr.puts "Error: No Rails app found in #{shown_root}"
       $stderr.puts entry_boot::NO_APP_HINT
       $stderr.puts "  #{@app_above_hint}" if @app_above_hint
       exit 1
