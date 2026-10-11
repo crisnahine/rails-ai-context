@@ -285,6 +285,37 @@ RSpec.describe RailsAiContext::Redaction do
       expect(redact(%(api_key_header: "X-Api-Key"))).to eq(%(api_key_header: "X-Api-Key"))
     end
 
+    # A header or an attribute joins its words with dashes; the name it spells
+    # with underscores says whether its literal is a secret.
+    it "filters a literal under a quoted dashed name that spells a secret's" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        %(headers = { "X-Api-Key" => "#{v}" }) => %(headers = { "X-Api-Key" => "[FILTERED]" }),
+        %(req["X-Api-Key"] = "#{v}") => %(req["X-Api-Key"] = "[FILTERED]"),
+        %(Faraday.new(headers: { "x-api-key": "#{v}" })) => %(Faraday.new(headers: { "x-api-key": "[FILTERED]" })),
+        %("api-key" => "#{v}",) => %("api-key" => "[FILTERED]",),
+        %({ 'X-Auth-Token' => '#{v}' }) => %({ 'X-Auth-Token' => '[FILTERED]' }),
+        %(attributes: { "password-confirmation": "s3cretPass" }) => %(attributes: { "password-confirmation": "[FILTERED]" }),
+        # A dashed name that names no secret leaves what its literal holds in reach.
+        %(%div{ "data-config" => '{"x-api-key": "#{v}", "apiKey": "#{v}"}' }) =>
+          %(%div{ "data-config" => '{"x-api-key": "[FILTERED]", "apiKey": "[FILTERED]"}' })
+      }.each { |line, want| expect(redact(line)).to eq(want) }
+    end
+
+    it "leaves a dashed name that spells no secret's, a descriptor or a Stimulus attribute byte for byte" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      [
+        %(headers = { "Content-Type" => "application/json", "Accept" => "application/json" }),
+        %("X-Request-Id" => SecureRandom.uuid, "X-Correlation-Id" => "req-1234567890abcdef"),
+        %("X-Key-Id" => "abcd1234efgh5678", "X-Token-Expiry" => "3600"),
+        %("Access-Control-Allow-Credentials" => "true", "X-CSRF-Token" => form_authenticity_token),
+        %("X-Auth-Token" => "invalid-token", "x-api-key": "", "X-Api-Key" => "\#{api_key}"),
+        %(header = admin ? "x-api-key" : "#{v}"),
+        %(data: { "password-visibility-target": "input", "password-toggle-action" => "click->password#toggle" }),
+        %(data: { password_visibility_target: "input", pin_input_target: "digit" })
+      ].each { |line| expect(redact(line)).to eq(line) }
+    end
+
     it "filters a secret literal passed through a call or block that names the secret" do
       v = "Xk2mQ9pLw7Rt5vB1"
       {
@@ -573,6 +604,18 @@ RSpec.describe RailsAiContext::Redaction do
       v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
       expect(described_class.redact_log_line("exec redis-server --requirepass=#{v} --port 6380"))
         .to eq("exec redis-server --requirepass=[FILTERED] --port 6380")
+    end
+
+    it "filters a value under a quoted dashed header name in a log line" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      {
+        %(headers {"X-Api-Key"=>"#{v}", "Content-Type"=>"application/json"}) =>
+          %(headers {"X-Api-Key"=>"[FILTERED]", "Content-Type"=>"application/json"}),
+        %({"x-auth-token":"#{v}","x-request-id":"req-1234567890abcdef"}) =>
+          %({"x-auth-token":"[FILTERED]","x-request-id":"req-1234567890abcdef"}),
+        %(headers {"X-Token-Expiry"=>"3600", "X-Key-Id"=>"abcd1234efgh5678"}) =>
+          %(headers {"X-Token-Expiry"=>"3600", "X-Key-Id"=>"abcd1234efgh5678"})
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want) }
     end
 
     # Under /i Unicode case folding gives `s` a two-byte form, so a
@@ -902,6 +945,17 @@ RSpec.describe RailsAiContext::Redaction do
       lines.each do |line|
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         described_class.redact_log_line(line)
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+      end
+    end
+
+    # A header name is read as a whole run of words and dashes; a pattern that
+    # tried each dash as the run's start, or its secret word's, took minutes.
+    it "takes a fraction of a second over a 1 MB run of dashed words, in a log and in source" do
+      [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x") ].each do |line|
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        described_class.redact_log_line(line)
+        described_class.redact_source_line(line, path: "app/models/x.rb")
         expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
       end
     end

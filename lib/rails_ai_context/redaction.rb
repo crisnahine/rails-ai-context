@@ -83,9 +83,12 @@ module RailsAiContext
     # covers every secret-ish name in all four; a per-name lookbehind list
     # covered four names in two shapes and shipped the rest verbatim.
     # Lookbehind is unavailable here because SECRET_NAME is variable width,
-    # so the key and the assignment are captured and written back.
+    # so the key and the assignment are captured and written back. A header
+    # name comes whole (`"X-Api-Key"=>`), its dashes read as underscores (see
+    # key_name): a run of words and dashes with a secret-ish part, taken from
+    # its start in one pass, as DASHED_KEY_NAME takes one in source.
     LOG_SECRET_ASSIGNMENT = /
-      (["']?)(#{SECRET_NAME}|#{KEYISH_NAME})\1
+      (["']?)((?<![\w-])(?=[\w-]*?(?:#{SECRET_NAME}|#{KEYISH_NAME}))[\w-]++)\1
       (\s*(?:=>|:|=(?!>))\s*)
       (?!["']?\[FILTERED\])(?:"([^"]*)"|'([^']*)'|([^\s,;&)\]}]+))
     /xi
@@ -143,8 +146,13 @@ module RailsAiContext
     PASSWORD_WORD = /passphrase|password|passwd|pass|pin|requirepass|masterauth/i
     PASSWORD_NAME = /(?<!\w)(?:\w+_)?(?:#{PASSWORD_WORD})(?:_\w+)?(?!\w)/i
     KEY_NAME = /#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}/
+    # A header or an attribute joins its words with dashes (`"X-Api-Key"`, `"x-auth-token"`). Quoted,
+    # one with a part a key name reads is taken whole and read with its dashes as underscores (see
+    # key_name); one with none (`"Content-Type"`) is not matched, so its literal stays in reach of
+    # every pattern. The run is taken in one pass, never given back, so a long one costs no more.
+    DASHED_KEY_NAME = /(?=[\w-]*?(?:#{KEY_NAME}))[\w-]++/
     # A quoted key may close an index (`ENV["API_TOKEN"] =`); the assignment may be `||=` or another op-assign.
-    SECRET_KEY = /"(?<name>#{KEY_NAME})"\]?|'(?<name>#{KEY_NAME})'\]?|(?<![\w"'\/\\-])(?<name>#{KEY_NAME})/
+    SECRET_KEY = /"(?<name>#{DASHED_KEY_NAME})"\]?|'(?<name>#{DASHED_KEY_NAME})'\]?|(?<![\w"'\/\\-])(?<name>#{KEY_NAME})/
     KEYED_LITERAL = /(?:#{SECRET_KEY})(?<assign>\s*(?::|=>|(?:\|\||&&|[-+*\/|&])?=(?![=~>]))\s*)(?<literal>#{STRING_LITERAL})/
 
     # A call or block whose first argument names the secret holds its value: a setter or a
@@ -343,10 +351,20 @@ module RailsAiContext
 
       # A matched name and literal, with the literal filtered when it holds a secret.
       def filter_literal(text, match, example)
-        return text unless keyed_secret?(match[:name], match[:literal][1..-2], example)
+        name = key_name(match[:name])
+        return text unless name && keyed_secret?(name, match[:literal][1..-2], example)
 
         quote = match[:literal][0]
         text.delete_suffix(match[:literal]) + "#{quote}#{FILTERED}#{quote}"
+      end
+
+      WHOLE_KEY_NAME = /\A(?:#{KEY_NAME})\z/
+
+      # The name a matched key reads as. A dashed one reads with underscores, so `X-Api-Key` is
+      # `X_Api_Key`, an API key's name; one that then spells no key name (`X-Key-Id`) is none.
+      def key_name(name)
+        spelled = name.tr("-", "_")
+        spelled if spelled.match?(WHOLE_KEY_NAME)
       end
 
       # The one verdict on a name and value in a log line, whichever pattern found the pair.
@@ -395,8 +413,11 @@ module RailsAiContext
       end
 
       # A secret-named key whose value describes the secret: `TOKEN_USE`,
-      # `DEAD_TOKEN_ERROR`, `token_url`, besides the config descriptors.
-      SOURCE_DESCRIPTOR = /_(?:use|scope|kind|label|prefix|suffix|errors?|message|url|uri|endpoint|path|header)\z/i
+      # `DEAD_TOKEN_ERROR`, `token_url`, besides the config descriptors. A
+      # Stimulus target, action, controller, outlet or class names an element
+      # or a method (`"password-visibility-target": "input"`); a value may be a token.
+      SOURCE_DESCRIPTOR = /_(?:use|scope|kind|label|prefix|suffix|errors?|message|url|uri|endpoint|path|header|
+                             target|action|controller|outlet|class(?:es)?)\z/xi
 
       def descriptor_name?(name)
         name.match?(DESCRIPTOR_SUFFIX) || name.match?(SOURCE_DESCRIPTOR)
@@ -547,7 +568,8 @@ module RailsAiContext
       # `password_length: 8` is policy, not a credential, so it survives.
       def filter_assignment(match)
         quote, key, assign = match[1], match[2], match[3]
-        return match[0] unless log_secret?(key, match[4] || match[5] || match[6])
+        name = key_name(key)
+        return match[0] unless name && log_secret?(name, match[4] || match[5] || match[6])
 
         value_quote = match[4] ? '"' : (match[5] ? "'" : "")
         "#{quote}#{key}#{quote}#{assign}#{value_quote}#{FILTERED}#{value_quote}"

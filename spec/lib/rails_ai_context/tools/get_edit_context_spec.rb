@@ -22,6 +22,27 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
         expect(text).to include("pool: 5")
       end
     end
+
+    # A header name is written with dashes, which hid the secret word in it.
+    it "filters the value under a header name that spells a secret's" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/services"))
+        File.write(File.join(root, "app/services/billing_client.rb"), <<~RUBY)
+          class BillingClient
+            def headers
+              { "X-Api-Key" => "#{v}", "Content-Type" => "application/json" }
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "app/services/billing_client.rb", near: "headers").content.first[:text]
+
+        expect(text).to include(%({ "X-Api-Key" => "[FILTERED]", "Content-Type" => "application/json" }))
+        expect(text).not_to include(v)
+      end
+    end
   end
   before { described_class.reset_cache! }
 
