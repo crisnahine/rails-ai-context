@@ -1779,12 +1779,66 @@ RSpec.describe RailsAiContext::Doctor do
         expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` in the engine at ../..")
       end
 
+      # Typed at the engine's root, where `bin/rails app:ai:doctor` and the
+      # binary run, ../.. sent the reader two folders up, and app/views named
+      # the engine's own views: every place is named from where it was typed.
+      context "typed at the engine's root" do
+        let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(dummy), from: engine) }
+
+        before do
+          write("app/views/blorgh/articles/index.html.erb", "")
+          write("test/dummy/app/views/layouts/application.html.erb", "")
+          write("test/dummy/db/schema.rb", "ActiveRecord::Schema[7.1].define(version: 1) do\nend\n")
+          write("test/dummy/config/routes.rb", "Rails.application.routes.draw do\nend\n")
+        end
+
+        it "names the engine's files from there, and the dummy app's under test/dummy" do
+          expect(doctor.send(:check_gems).message).to eq("Gemfile.lock found")
+          expect(doctor.send(:check_tests).message).to eq("minitest test suite found (the engine's)")
+          expect(doctor.send(:check_models).message).to eq("2 model files found (1 in the engine)")
+          expect(doctor.send(:check_migrations).message).to eq("1 migration file (1 in the engine)")
+          expect(doctor.send(:check_views).message).to eq("2 files under test/dummy/app/views, app/views")
+          expect(doctor.send(:check_schema).message).to start_with("test/dummy/db/schema.rb found")
+          expect(doctor.send(:check_routes).message).to eq("test/dummy/config/routes.rb found")
+        end
+
+        it "names the engine's root as where a pending migration is run" do
+          allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: nil, pending: [ { version: "1", name: "X" } ] } ])
+
+          expect(doctor.send(:check_pending_migrations).fix).to eq("Run `RAILS_ENV=#{Rails.env} bin/rails db:migrate` at the engine's root")
+        end
+
+        it "names a SQLite database the dummy app reads from its root under test/dummy" do
+          config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/development.sqlite3" })
+          allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
+
+          expect(doctor.send(:check_pending_migrations)).to have_attributes(
+            message: "the #{Rails.env} database test/dummy/storage/development.sqlite3 does not exist",
+            fix: "Run `RAILS_ENV=#{Rails.env} bin/rails app:db:prepare` at the engine's root"
+          )
+        end
+
+        # `git rm --cached` runs where it is typed.
+        it "names a secret file of the dummy app's as the git command there reads it" do
+          write("test/dummy/config/master.key", "x\n")
+          system("git", "-C", @top, "init", "-q", out: File::NULL, err: File::NULL) or raise "git init failed"
+          system("git", "-C", @top, "add", "-f", "test/dummy/config/master.key", out: File::NULL, err: File::NULL) or raise "git add failed"
+
+          expect(doctor.send(:check_security_gitignore)).to have_attributes(
+            message: "test/dummy/config/master.key is committed",
+            fix: "Run `git rm --cached test/dummy/config/master.key`, add `test/dummy/config/master.key` to .gitignore, " \
+                 "and rotate it: the history still holds it"
+          )
+        end
+      end
+
       # The installer run at an engine's root puts every file there, where its
       # rake tasks are app:ai:* and `rails ai:context` is no command; doctor
       # read the dummy app, sent the reader to commands that fail there, and
       # following them wrote a second install into the dummy app.
       context "with the install at the engine's root" do
-        let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(dummy)) }
+        # Typed there, as `bin/rails app:ai:doctor` and the binary are.
+        let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(dummy), from: engine) }
 
         before do
           write("Gemfile.lock", lockfile("rails", "rails-ai-context"))
@@ -1827,15 +1881,24 @@ RSpec.describe RailsAiContext::Doctor do
           it "passes the files it would leave as they are, and changes none of them" do
             context_command(%(dir = ARGV[ARGV.index("--output-dir") + 1]\nFile.write(File.join(dir, "CLAUDE.md"), "# blorgh\\n")\n))
 
-            expect(doctor.send(:check_context_freshness)).to have_attributes(status: :pass, message: "CLAUDE.md at the engine's root is up to date")
+            expect(doctor.send(:check_context_freshness)).to have_attributes(status: :pass, message: "CLAUDE.md is up to date")
           end
 
           it "names a file it would rewrite, and leaves it as it is" do
             context_command(%(dir = ARGV[ARGV.index("--output-dir") + 1]\nFile.write(File.join(dir, "CLAUDE.md"), "# blorgh, changed\\n")\n))
 
             check = doctor.send(:check_context_freshness)
-            expect(check.message).to start_with("CLAUDE.md at the engine's root is out of date")
+            expect(check.message).to start_with("CLAUDE.md is out of date")
             expect(File.read(File.join(@top, "CLAUDE.md"))).to eq("# blorgh\n")
+          end
+
+          it "names the files and the command from the dummy app when typed there" do
+            context_command(%(dir = ARGV[ARGV.index("--output-dir") + 1]\nFile.write(File.join(dir, "CLAUDE.md"), "# blorgh, changed\\n")\n))
+            in_dummy = described_class.new(RailsAiContext::StaticApp.new(dummy), from: dummy)
+
+            check = in_dummy.send(:check_context_freshness)
+            expect(check.message).to start_with("../../CLAUDE.md is out of date")
+            expect(check.fix).to end_with("in the engine at ../.. to regenerate")
           end
 
           it "says what stopped a run that failed, without claiming the files are up to date" do
