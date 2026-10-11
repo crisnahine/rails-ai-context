@@ -95,6 +95,9 @@ jobs:
   # macOS; the Linux matrix above covers the versions in between.
   os:
     runs-on: ${{ matrix.os }}
+    # A spec that waits on a process the platform starts differently would
+    # otherwise hold the runner for GitHub's six-hour default.
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
