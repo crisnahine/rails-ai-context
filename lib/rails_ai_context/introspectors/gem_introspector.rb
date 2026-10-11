@@ -243,14 +243,9 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "detect_gem_groups")
       end
 
-      # Every Rails app resolves minitest through activesupport, so presence
-      # in the lockfile said nothing about the app's own test suite.
-      INDIRECT_BY_DEFAULT = %w[minitest].freeze
-
       def detect_notable_gems(lock)
         NOTABLE_GEMS.filter_map do |gem_name, info|
-          next unless lock.present?(gem_name)
-          next if INDIRECT_BY_DEFAULT.include?(gem_name) && !app_uses_indirect?(gem_name, lock)
+          next unless lock.present?(gem_name) && app_uses?(gem_name, lock)
 
           {
             name: gem_name,
@@ -261,10 +256,14 @@ module RailsAiContext
         end
       end
 
-      def app_uses_indirect?(gem_name, lock)
+      # A lockfile also holds every gem's own dependencies. Rails resolves all
+      # its frameworks and loads only those config/application.rb asks for, and
+      # every Rails app resolves minitest through activesupport.
+      def app_uses?(gem_name, lock)
         return true if lock.direct?(gem_name)
+        return Dir.exist?(File.join(root, "test")) if gem_name == "minitest"
 
-        gem_name == "minitest" ? Dir.exist?(File.join(root, "test")) : false
+        AppKind::FRAMEWORK_RAILTIES.key?(gem_name) && lock.present?("rails") && AppKind.loads_framework?(root, gem_name)
       end
 
       # What the app does with Redis is a question the app answers. The fixed

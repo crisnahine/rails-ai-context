@@ -45,7 +45,15 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
             ruby
 
           DEPENDENCIES
+            devise
+            nokogiri
+            pagy
+            pg
+            pundit
             rails (~> 8.0)
+            rspec-rails
+            sidekiq
+            turbo-rails
         LOCK
       end
 
@@ -66,7 +74,9 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
               ruby
 
             DEPENDENCIES
+              rack-cors
               rails
+              sprockets-rails
           LOCK
         end
 
@@ -101,7 +111,13 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
                 ruby
 
               DEPENDENCIES
+                action_policy
+                mongoid
+                pundit
                 rails
+                rolify
+                rswag-api
+                stimulus-rails
             LOCK
           end
 
@@ -233,6 +249,10 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
 
           PLATFORMS
             ruby
+
+          DEPENDENCIES
+            puma
+            rails
         LOCK
         File.write(File.join(tmpdir, "Gemfile.lock"), content)
       end

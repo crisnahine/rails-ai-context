@@ -352,7 +352,8 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       def gems_section_for(specs)
         body = [ "GEM", "  remote: https://rubygems.org/", "  specs:" ]
         body += specs.map { |line| "    #{line}" }
-        body += [ "", "PLATFORMS", "  ruby", "", "DEPENDENCIES", "  rails (~> 8.0)", "" ]
+        body += [ "", "PLATFORMS", "  ruby", "", "DEPENDENCIES", "  rails (~> 8.0)" ]
+        body += specs.map { |line| "  #{line.split.first}" } << ""
         File.write(File.join(lock_tmpdir, "Gemfile.lock"), body.join("\n"))
         RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(lock_tmpdir)).call
       end

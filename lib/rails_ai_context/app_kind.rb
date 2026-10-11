@@ -22,19 +22,30 @@ module RailsAiContext
       RailsAiContext::Introspectors::GemfileGems.names(root.to_s).intersect?(names)
     end
 
-    ACTIVE_RECORD_REQUIRES = %w[rails/all active_record/railtie active_record].freeze
+    # The file config/application.rb requires to load each framework gem, the list rails/all requires.
+    FRAMEWORK_RAILTIES = {
+      "activerecord" => "active_record/railtie", "activestorage" => "active_storage/engine",
+      "actionmailer" => "action_mailer/railtie", "actionmailbox" => "action_mailbox/engine",
+      "actiontext" => "action_text/engine", "actioncable" => "action_cable/engine", "activejob" => "active_job/railtie"
+    }.freeze
+
+    def active_record?(root)
+      loads_framework?(root, "activerecord")
+    end
 
     # False only when config/application.rb picks its frameworks railtie by
-    # railtie and leaves Active Record's out (a require, or a list it requires
-    # in a loop) and never configures it; a file it cannot read is taken to load it.
-    def active_record?(root)
+    # railtie and leaves this one out (a require, or a list it requires in a
+    # loop) and never configures it; a file it cannot read is taken to load it.
+    def loads_framework?(root, gem_name)
+      railtie = FRAMEWORK_RAILTIES.fetch(gem_name)
+      framework = File.dirname(railtie)
       source = RailsAiContext::SafeFile.read(File.join(root.to_s, "config", "application.rb"))
       tree = source && RailsAiContext::AstCache.parse_string(source)
       return true unless tree && tree.errors.empty?
 
       nodes = Introspectors::AstWalk.each(tree.value).to_a
       strings = nodes.grep(Prism::StringNode).map(&:unescaped)
-      return true if strings.intersect?(ACTIVE_RECORD_REQUIRES) || nodes.grep(Prism::CallNode).any? { |n| n.name == :active_record }
+      return true if strings.intersect?([ "rails/all", railtie, framework ]) || nodes.grep(Prism::CallNode).any? { |n| n.name == framework.to_sym }
 
       strings.none? { |s| s.end_with?("/railtie", "/engine") }
     rescue StandardError, ScriptError

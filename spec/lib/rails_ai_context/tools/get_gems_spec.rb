@@ -316,6 +316,58 @@ RSpec.describe RailsAiContext::Tools::GetGems do
     end
   end
 
+  # A lockfile holds every gem's dependencies too: rails pulls in activestorage
+  # on an app that leaves the engine out, and oauth gems pull in jwt.
+  describe "a gem the app does not name" do
+    def gems_text(dir, application_rb)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "application.rb"), application_rb)
+      File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            activestorage (8.1.3)
+            jwt (3.2.0)
+            omniauth-google-oauth2 (1.2.1)
+              jwt (>= 2.9)
+            rails (8.1.3)
+              activestorage (= 8.1.3)
+            sprockets (4.2.2)
+            sprockets-rails (3.5.2)
+              sprockets (>= 3.0.0)
+
+        DEPENDENCIES
+          omniauth-google-oauth2
+          rails (~> 8.1)
+          sprockets-rails
+      LOCK
+      context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+      allow(described_class).to receive(:cached_context).and_return(context)
+      described_class.call.content.first[:text]
+    end
+
+    it "leaves out a transitive gem and a framework the app does not load" do
+      Dir.mktmpdir do |dir|
+        text = gems_text(dir, <<~RUBY)
+          require "rails"
+          require "action_controller/railtie"
+          # require "active_storage/engine"
+        RUBY
+
+        expect(text).to include("**sprockets-rails**")
+        expect(text).not_to include("**jwt**")
+        expect(text).not_to include("**sprockets**")
+        expect(text).not_to include("**activestorage**")
+      end
+    end
+
+    it "keeps a framework the app loads through rails/all" do
+      Dir.mktmpdir do |dir|
+        expect(gems_text(dir, "require \"rails/all\"\n")).to include("**activestorage** `8.1.3`")
+      end
+    end
+  end
+
   it "lets every category the gem list uses be asked for" do
     categories = RailsAiContext::Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq
     enum = described_class.input_schema.to_h[:properties][:category][:enum]
