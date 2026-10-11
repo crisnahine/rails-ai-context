@@ -271,7 +271,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
       generator.show_instructions
 
-      expect(said.join("\n")).to include("bundle exec rails-ai-context context", "bundle exec rails-ai-context serve")
+      expect(said.join("\n")).to include("bundle exec rails-ai-context context", "bundle exec rails-ai-context serve",
+                                         "bundle exec rails-ai-context doctor")
       expect(said.join("\n")).not_to include("rails ai:", "rails 'ai:")
     end
   end

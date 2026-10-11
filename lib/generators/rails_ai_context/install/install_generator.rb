@@ -782,8 +782,8 @@ module RailsAiContext
       # that works where the generator was run: the rake tasks in an app, and
       # the binary in the engine's bundle at an engine's root, where the rake
       # tasks are app:ai:* and run in the dummy app. An MCP-only install
-      # writes no context files, so there are none to regenerate; doctor
-      # needs a bootable app, which an engine's root is not.
+      # writes no context files, so there are none to regenerate; doctor at
+      # an engine's root diagnoses the dummy app and reads the install there.
       def summary_commands(tool_count)
         tools = CountPhrase.call(tool_count, "tool")
         if engine_root
@@ -794,6 +794,7 @@ module RailsAiContext
             ([ "#{cli} serve", "Start MCP server (#{CountPhrase.call(tool_count, 'live tool')})" ] if tool_mode == :mcp),
             [ "#{cli} facts", "Print concise schema facts summary" ],
             [ "#{cli} preset architecture", "Run a multi-tool preset (architecture, debugging, migration)" ],
+            [ "#{cli} doctor", "Check AI readiness" ],
             [ "#{cli} inspect", "Print the introspection as JSON" ]
           ].compact
         else

@@ -94,11 +94,58 @@ module RailsAiContext
       @standalone = InstallMode.standalone?(root: app.root)
     end
 
+    # A job on the install, as typed where it runs. At an engine's root,
+    # where the rake tasks run in the dummy app as app:ai:*, that is the
+    # binary - the engine's bundle's, or the standalone one - or the
+    # generator, and the fix says where.
+    def install_job(job)
+      return "`#{command(job)}`" unless engine_install?
+
+      "`#{InstallMode.command(job, form: InstallMode.form(root: install_root))}` at the engine's root"
+    end
+
+    # Where the install this app is served by lives: the app's root, or for
+    # an engine's dummy app the engine's, where the installer run there puts
+    # the MCP configs, .rails-ai-context.yml and the context files, and
+    # where an editor opened at the engine runs every command. A dummy app
+    # with an install of its own, and none at the engine's root, keeps its own.
+    def install_root
+      @install_root ||= begin
+        root = app.root.to_s
+        engine = PathResolver.enclosing_engine_roots(root).first
+        engine && (installed_at?(engine) || !installed_at?(root)) ? engine : root
+      end
+    end
+
+    def installed_at?(dir)
+      [ Configuration::CONFIG_FILENAME, "config/initializers/rails_ai_context.rb" ].any? { |file| File.exist?(File.join(dir, file)) }
+    end
+
+    def engine_install?
+      install_root != app.root.to_s
+    end
+
+    # The settings the install runs with: the app's, or at an engine's root
+    # the .rails-ai-context.yml there, which is all its commands read - the
+    # dummy app's configuration is not the engine's.
+    def install_config
+      @install_config ||= engine_install? ? config_at(install_root) : RailsAiContext.configuration
+    end
+
+    def config_at(dir)
+      booted = RailsAiContext.configuration
+      RailsAiContext.configuration = Configuration.new
+      Configuration.load_from_yaml(File.join(dir, Configuration::CONFIG_FILENAME))
+      RailsAiContext.configuration
+    ensure
+      RailsAiContext.configuration = booted
+    end
+
     # All configured AI tools; nil (unconfigured) means every tool in the table.
     ALL_AI_TOOLS = Install::AiTool.all.map(&:key).freeze
 
     def configured_ai_tools
-      RailsAiContext.configuration.ai_tools || ALL_AI_TOOLS
+      install_config.ai_tools || ALL_AI_TOOLS
     end
 
     # ── Existence checks ──────────────────────────────────────────────
@@ -345,35 +392,43 @@ module RailsAiContext
     def check_context_freshness
       # An MCP-only install asked for no context files, so their absence is
       # the configuration working, not something to fix.
-      return nil unless RailsAiContext.configuration.context_files
+      return nil unless install_config.context_files
 
-      # Where the files are written: config.output_dir, else the app root.
-      output_dir = RailsAiContext.configuration.output_dir_for(app)
+      # Where the files are written: config.output_dir, else the install's root.
+      output_dir = install_config.output_dir || install_root
+      where = engine_install? ? " at the engine's root" : ""
       present = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq
         .select { |relative| File.exist?(File.join(output_dir, relative)) }
       if present.empty?
         return Check.new(name: "Context files", status: :warn,
-          message: "No context files generated",
-          fix: "Run `#{command(:context)}`")
+          message: "No context files generated#{where}",
+          fix: "Run #{install_job(:context)}")
       end
 
       # A context file is stale when the run the fix names would rewrite it,
       # which is never true of a file that run leaves alone however old it
       # is, and always true of one an older version of the gem wrote.
       run = context_file_run(output_dir)
-      stale = run[:written]
-      # Named from the app root, or in full for an output_dir outside it.
-      first = ->(files) { File.join(output_dir, files.first).delete_prefix("#{app.root.to_s.chomp('/')}/") }
+      # Named from the install's root, or in full for an output_dir outside it.
+      first = ->(files) { File.join(output_dir, files.first).delete_prefix("#{install_root.chomp('/')}/") }
       shown = ->(files) { "#{first.(files)}#{" and #{count_phrase(files.size - 1, "more context file")}" if files.size > 1}" }
+      if run[:error]
+        return Check.new(name: "Context files", status: :warn,
+          message: "#{shown.(present)}#{where}: a dry run of #{install_job(:context).delete_suffix(where)} failed, so whether " \
+                   "#{present.one? ? "it is" : "they are"} up to date is not known (#{run[:error]})",
+          fix: "Run #{install_job(:context)} to see what it says")
+      end
+
+      stale = run[:written]
       if stale.empty?
         fresh = run[:skipped].presence || present
         return Check.new(name: "Context files", status: :pass,
-          message: "#{shown.(fresh)} #{fresh.one? ? "is" : "are"} up to date", fix: nil)
+          message: "#{shown.(fresh)}#{where} #{fresh.one? ? "is" : "are"} up to date", fix: nil)
       end
 
       Check.new(name: "Context files", status: :warn,
-        message: "#{shown.(stale)} #{stale.one? ? "is" : "are"} out of date: #{staleness_reason(output_dir, stale)}",
-        fix: "Run `#{command(:context)}` to regenerate")
+        message: "#{shown.(stale)}#{where} #{stale.one? ? "is" : "are"} out of date: #{staleness_reason(output_dir, stale)}",
+        fix: "Run #{install_job(:context)} to regenerate")
     end
 
     # The context files run through the writers the context command runs,
@@ -381,11 +436,13 @@ module RailsAiContext
     # rewrite and nothing in the app is touched. Paths relative to the
     # output directory; the JSON dump is no AI tool's file.
     #
-    # @return [Hash] { written: [paths a run rewrites], skipped: [paths it leaves] }
+    # @return [Hash] { written: [paths a run rewrites], skipped: [paths it leaves] }, or { error: why }
     def context_file_run(output_dir)
       config = RailsAiContext.configuration
       Dir.mktmpdir("rails-ai-context-doctor") do |scratch|
         copy_context_files(output_dir, scratch)
+        next context_command_run(output_dir, scratch) if engine_install?
+
         previous = config.output_dir
         result = begin
           config.output_dir = scratch
@@ -397,6 +454,66 @@ module RailsAiContext
           paths.map { |path| path.delete_prefix("#{scratch}/") } - [ ".ai-context.json" ]
         end
       end
+    end
+
+    # How long the context command gets at an engine's root, where it runs
+    # as its own process: it reads the engine's source and boots nothing.
+    CONTEXT_RUN_SECONDS = 120
+
+    # At an engine's root the context command is the binary run there, which
+    # reads the engine's source with no app booted - not what this process,
+    # the dummy app booted, would write. So that command itself runs, into
+    # the copy, and a file whose bytes it changed is one a run would rewrite.
+    def context_command_run(output_dir, scratch)
+      env = {}
+      form = InstallMode.form(root: install_root)
+      env["BUNDLE_GEMFILE"] = GemLock.bundle(install_root).gemfile.to_s if form == :bundled
+      argv = InstallMode.command(:context, form: form).split + [ "--no-mcp-refresh", "--output-dir", scratch ]
+      log = File.join(scratch, ".rails-ai-context-doctor.log")
+      run = -> { Process.spawn(env, *argv, chdir: install_root, in: File::NULL, out: log, err: log) }
+      pid = defined?(Bundler) && Bundler.respond_to?(:with_unbundled_env) ? Bundler.with_unbundled_env(&run) : run.call
+      status = wait_for(pid, CONTEXT_RUN_SECONDS)
+      unless status&.success?
+        said = File.exist?(log) ? File.readlines(log, chomp: true).map(&:strip).reject(&:empty?).last : nil
+        return { error: status ? first_error_line(said || "it exited #{status.exitstatus}") : "no answer in #{CONTEXT_RUN_SECONDS} seconds" }
+      end
+
+      files = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq.flat_map { |relative| files_under(scratch, relative) }.uniq
+      written, skipped = files.partition { |relative| !same_file?(File.join(scratch, relative), File.join(output_dir, relative)) }
+      { written: written, skipped: skipped }
+    rescue SystemCallError => e
+      { error: e.message }
+    end
+
+    # A process's status once it ends, or nil when it has not by then, when
+    # it is killed: a context run that hangs must not hold doctor open.
+    def wait_for(pid, seconds)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+      loop do
+        _, status = Process.waitpid2(pid, Process::WNOHANG)
+        return status if status
+        break if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+        sleep 0.1
+      end
+      Process.kill("KILL", pid)
+      Process.waitpid(pid)
+      nil
+    rescue Errno::ESRCH, Errno::ECHILD
+      nil
+    end
+
+    # A context path's files, relative to the directory it sits in: the file
+    # itself, or every file a rule directory holds.
+    def files_under(dir, relative)
+      path = File.join(dir, relative)
+      return [ relative ] if File.file?(path)
+
+      Dir.glob("**/*", File::FNM_DOTMATCH, base: path).select { |file| File.file?(File.join(path, file)) }.map { |file| File.join(relative, file) }
+    end
+
+    def same_file?(one, other)
+      File.file?(other) && FileUtils.compare_file(one, other)
     end
 
     # Every context file and rule directory there is, and each directory one
@@ -424,7 +541,7 @@ module RailsAiContext
       end
 
       oldest = paths.map { |path| File.mtime(path) }.min
-      changed = oldest ? Fingerprinter.changed_since(app.root, oldest).reject { |dir| only_our_initializer_newer?(dir, oldest) } : []
+      changed = oldest ? Fingerprinter.changed_since(install_root, oldest).reject { |dir| only_our_initializer_newer?(dir, oldest) } : []
       return "#{changed.join(', ')} changed since #{stale.one? ? "it was" : "they were"} written" if changed.any?
 
       "a regeneration would write #{stale.one? ? "it" : "them"}"
@@ -435,7 +552,7 @@ module RailsAiContext
     def only_our_initializer_newer?(dir, generated_at)
       return false unless dir == "config"
 
-      newer = Dir.glob(File.join(app.root, dir, Fingerprinter::WATCHED_EXTENSIONS))
+      newer = Dir.glob(File.join(install_root, dir, Fingerprinter::WATCHED_EXTENSIONS))
         .select { |path| File.mtime(path) > generated_at }
 
       newer.any? && newer.all? { |path| path.end_with?("initializers/rails_ai_context.rb") }
@@ -470,7 +587,7 @@ module RailsAiContext
     ConfigVerdict = Data.define(:label, :status, :problem, :fix, :unparseable)
 
     def check_mcp_json
-      if RailsAiContext.configuration.tool_mode == :cli
+      if install_config.tool_mode == :cli
         return Check.new(name: "MCP configs", status: :pass,
           message: "Skipped (CLI-only mode)", fix: nil)
       end
@@ -507,7 +624,7 @@ module RailsAiContext
     def mcp_config_verdict(tool)
       cfg = self.class.mcp_config_checks[tool]
       label = cfg[:label]
-      install_fix = "Run `#{command(:install)}` to fix"
+      install_fix = "Run #{install_job(:install)} to fix"
       # An app in a workspace is served from the folder above it, whose
       # config, if it cannot be read, is the one to fix.
       full_path = mcp_config_path(tool)
@@ -516,7 +633,7 @@ module RailsAiContext
       end
 
       # ../.mcp.json for a workspace's.
-      shown = Install::Program.relative_to(full_path, app.root)
+      shown = Install::Program.relative_to(full_path, install_root)
       unless cfg[:path].end_with?(".toml")
         text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
@@ -557,8 +674,8 @@ module RailsAiContext
     end
 
     def mcp_config_path(tool)
-      McpConfigGenerator.serving_config(app.root, tool) || McpConfigGenerator.unreadable_config_above(app.root, tool) ||
-        File.join(app.root, self.class.mcp_config_checks[tool][:path])
+      McpConfigGenerator.serving_config(install_root, tool) || McpConfigGenerator.unreadable_config_above(install_root, tool) ||
+        File.join(install_root, self.class.mcp_config_checks[tool][:path])
     end
 
     # The folder a config sits in, which its client starts the server from.
@@ -567,11 +684,12 @@ module RailsAiContext
     end
 
     # The entries under the gem's names in a config that serve this app: the
-    # app's own config's, or a workspace's that point --app-path at the app.
+    # app's own config's (at an engine's root, the engine's), or a
+    # workspace's that point --app-path at the app.
     def serving_entries(tool, path)
       folder = mcp_config_folder(tool, path)
       variable = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:folder_variable]
-      target = SafePath.canonical(app.root.to_s)
+      target = SafePath.canonical(install_root)
       McpConfigGenerator.named_entries(path, tool).select do |entry|
         SafePath.canonical(McpConfigGenerator.entry_app_root(entry[:argv], variable, folder) || folder) == target
       end
@@ -605,9 +723,9 @@ module RailsAiContext
                    "then run `bundle install`" ]
         end
       elsif File.basename(argv[0].to_s) == "rails-ai-context"
-        lock = GemLock.for(app.root)
+        lock = GemLock.for(install_root)
         if lock.present?("rails-ai-context")
-          bundled = "#{GemLock.bundle(app.root).lock_label} carries rails-ai-context #{lock.version("rails-ai-context")}"
+          bundled = "#{GemLock.bundle(install_root).lock_label} carries rails-ai-context #{lock.version("rails-ai-context")}"
           return [ :fail, "#{missing}, while #{bundled}", rerun ] unless found
 
           return [ :warn, "#{line} needs the gem installed outside the app's bundle, while #{bundled}", rerun ]
@@ -667,7 +785,7 @@ module RailsAiContext
         folder
       end
       bundle = GemLock.bundle(dir)
-      shown = SafePath.canonical(dir) == SafePath.canonical(app.root.to_s) ? bundle.lock_label : Install::Program.relative_to(File.join(bundle.dir, bundle.lock_label), app.root)
+      shown = SafePath.canonical(dir) == SafePath.canonical(install_root) ? bundle.lock_label : Install::Program.relative_to(File.join(bundle.dir, bundle.lock_label), install_root)
       [ GemLock.for(dir), bundle.gemfile, shown ]
     end
 
@@ -694,7 +812,7 @@ module RailsAiContext
     # A workspace's config above the app is written by `init` run in the
     # workspace, never by this app's install.
     def install_command(shown)
-      shown.start_with?("../") ? "`rails-ai-context init` in the folder that holds #{shown}" : "`#{command(:install)}`"
+      shown.start_with?("../") ? "`rails-ai-context init` in the folder that holds #{shown}" : install_job(:install)
     end
 
     # Install leaves a config it cannot parse, or merge into, as it is, so
@@ -704,20 +822,20 @@ module RailsAiContext
       run = if paths.any? { |path| path.start_with?("../") }
         "`rails-ai-context init` in the folder that holds #{paths.one? ? 'it' : 'them'}"
       else
-        "`#{command(:install)}`"
+        install_job(:install)
       end
       "Make #{paths.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
         "then run #{run}"
     end
 
     def check_codex_env_staleness
-      return nil if RailsAiContext.configuration.tool_mode == :cli
+      return nil if install_config.tool_mode == :cli
 
       ai_tools = configured_ai_tools
       return nil unless ai_tools.include?(:codex)
 
-      # The app's own config, or the workspace's above it.
-      toml_path = McpConfigGenerator.serving_config(app.root, :codex)
+      # The app's own config (an engine's, at its root), or the workspace's above it.
+      toml_path = McpConfigGenerator.serving_config(install_root, :codex)
       return nil unless toml_path && File.exist?(toml_path)
 
       # Every server the gem wrote carries a snapshot: the app's own, and each
@@ -728,7 +846,7 @@ module RailsAiContext
       end
       return nil if snapshots.empty?
 
-      shown = Install::Program.relative_to(toml_path, app.root)
+      shown = Install::Program.relative_to(toml_path, install_root)
       fix = "Run #{install_command(shown)}"
       unreached = snapshots.filter_map { |entry| unreached_command(entry, mcp_config_folder(:codex, toml_path)) }
       if unreached.any?
@@ -835,10 +953,10 @@ module RailsAiContext
     # Whether a config this app is served from starts the `rails-ai-context`
     # binary itself, which activates the gem through RubyGems.
     def serves_installed_binary?
-      return false if RailsAiContext.configuration.tool_mode == :cli
+      return false if install_config.tool_mode == :cli
 
       mcp_tools_to_check.any? do |tool|
-        path = McpConfigGenerator.serving_config(app.root, tool) or next false
+        path = McpConfigGenerator.serving_config(install_root, tool) or next false
         serving_entries(tool, path).any? { |entry| entry[:own] && File.basename(entry[:argv].first.to_s) == "rails-ai-context" }
       rescue SystemCallError, IOError, JSON::ParserError
         false

@@ -181,6 +181,42 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     end
   end
 
+  # doctor at an engine's root diagnoses the app the engine's bin/rails boots.
+  describe ".dummy_app" do
+    def bootable(path)
+      app(path).tap { |root| File.write(File.join(root, "config", "environment.rb"), "") }
+    end
+
+    def engine(bin_rails = nil)
+      dir("engine").tap do |root|
+        FileUtils.mkdir_p(File.join(root, "bin"))
+        File.write(File.join(root, "bin", "rails"), bin_rails) if bin_rails
+      end
+    end
+
+    it "finds the dummy app the engine's bin/rails names" do
+      root = engine(%(ENGINE_ROOT = File.expand_path("..", __dir__)\nAPP_PATH = File.expand_path("../spec/internal/config/application", __dir__)\n))
+      bootable("engine/test/dummy")
+      named = bootable("engine/spec/internal")
+
+      expect(described_class.dummy_app(root)).to eq(named)
+    end
+
+    it "finds test/dummy, then spec/dummy, when bin/rails names none" do
+      root = engine
+      spec_dummy = bootable("engine/spec/dummy")
+      expect(described_class.dummy_app(root)).to eq(spec_dummy)
+
+      test_dummy = bootable("engine/test/dummy")
+      expect(described_class.dummy_app(root)).to eq(test_dummy)
+    end
+
+    it "is nil for an app that boots itself, and for a root with no dummy app" do
+      expect(described_class.dummy_app(bootable("shop"))).to be_nil
+      expect(described_class.dummy_app(engine)).to be_nil
+    end
+  end
+
   describe "the lines the binary relays" do
     it "says which app a walk chose, relative when it is below" do
       root = app("work/a")

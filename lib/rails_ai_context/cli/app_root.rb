@@ -167,6 +167,23 @@ module RailsAiContext
       end
       private_class_method :app_root?
 
+      # The app an engine's root boots for it: the dummy app its bin/rails
+      # names as APP_PATH, else test/dummy or spec/dummy. nil for a root with
+      # a config/environment.rb of its own, and for one with no dummy app.
+      def self.dummy_app(root)
+        return nil if File.exist?(File.join(root, "config", "environment.rb"))
+
+        named = begin
+          File.binread(File.join(root, "bin", "rails"), 4096)[/^\s*APP_PATH\s*=\s*File\.expand_path\(\s*["']([^"'#]+)["']\s*,\s*__dir__\s*\)/, 1]
+            &.force_encoding(root.encoding)
+        rescue SystemCallError, IOError
+          nil
+        end
+        candidates = [ (File.dirname(File.expand_path(named, File.join(root, "bin")), 2) if named), File.join(root, "test", "dummy"),
+                       File.join(root, "spec", "dummy") ].compact
+        candidates.find { |dir| File.exist?(File.join(dir, "config", "environment.rb")) }
+      end
+
       # Under the caller's directory a path reads relative to it, the way it
       # is typed; anywhere else it stays absolute.
       def self.display(path, cwd)

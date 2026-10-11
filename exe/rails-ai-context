@@ -295,6 +295,10 @@ class RailsAiContextCLI < Thor
     # For the installer, which writes the MCP configs itself just before it
     # runs this at an engine's root.
     option :mcp_refresh, type: :boolean, default: true, hide: true
+    # For doctor, which runs this at an engine's root into a copy of the
+    # context files to see which a run would rewrite: the files go there,
+    # and nothing else is touched - no MCP config, no legacy file.
+    option :output_dir, type: :string, hide: true
     def context
       # A repo you have just cloned is the case an agent most needs these files
       # for, and it is the case least likely to boot. Every command that reads
@@ -311,7 +315,8 @@ class RailsAiContextCLI < Thor
       else
         cleanup_tools = ::RailsAiContext.configuration.ai_tools
       end
-      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(cleanup_tools, root: Dir.pwd, place: display_place)
+      output_dir = options[:output_dir]
+      ::RailsAiContext::LegacyCleanup.prompt_legacy_files(cleanup_tools, root: Dir.pwd, place: display_place) unless output_dir
 
       # An explicit --format names a file, so it is written either way. With
       # no format and an MCP-only install there is nothing to write, and the
@@ -327,7 +332,8 @@ class RailsAiContextCLI < Thor
       # on every run, in the form the install takes now. So does this, or an
       # app taken out of its bundle got context files naming the binary
       # beside configs that still start `bundle exec`.
-      refresh_mcp_configs if options[:format].nil? && options[:mcp_refresh]
+      refresh_mcp_configs if options[:format].nil? && options[:mcp_refresh] && !output_dir
+      ::RailsAiContext.configuration.output_dir = File.expand_path(output_dir) if output_dir
 
       $stderr.puts "Introspecting Rails app..."
 
@@ -373,6 +379,13 @@ class RailsAiContextCLI < Thor
 
       # The live reload check asks for `listen` as serve would find it.
       reach_installed_gem("listen")
+      # An engine's root boots no app of its own, so doctor diagnoses the
+      # dummy app its bin/rails boots, and reads the install at the root.
+      resolve_app_root!
+      if (dummy = app_root.dummy_app(Dir.pwd))
+        $stderr.puts "[rails-ai-context] an engine's root boots no app: diagnosing its dummy app at #{app_root.display(dummy, Dir.pwd)}/"
+        Dir.chdir(dummy)
+      end
       # Diagnosing a boot failure needs the app, so doctor never serves the
       # static tier; it does read a source-only tree, to name what is missing.
       boot_rails!(command: "doctor", allow_source_only: true,
