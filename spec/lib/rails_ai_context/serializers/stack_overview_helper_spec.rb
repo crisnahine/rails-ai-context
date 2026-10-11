@@ -213,6 +213,15 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(text).to include("Databases: 2")
     end
 
+    # The multidb app's five databases read "Databases: 5 (primary,
+    # analytics, cache)", as if the list were whole.
+    it "counts the databases the line leaves unnamed" do
+      names = %w[primary analytics cache queue cable]
+      helper = test_class.new({ multi_database: { databases: names.map { |name| { name: name } } } })
+
+      expect(helper.full_preset_stack_lines).to include("- Databases: 5 (primary, analytics, cache, ...2 more)")
+    end
+
     it "skips sections that have errors" do
       ctx = {
         auth: { error: "not available" },

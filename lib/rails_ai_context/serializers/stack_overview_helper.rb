@@ -13,6 +13,7 @@ module RailsAiContext
       RuleFile = Struct.new(:path, :content, :reason)
 
       IN_REPO_ENGINES_SHOWN = 5
+      DATABASES_SHOWN = 3
 
       # The models listings' line on reading, in the tools guide's terms: the
       # tools are the reference, and a file is read to edit it. "Read model
@@ -83,7 +84,10 @@ module RailsAiContext
         db_list = raw_databases.is_a?(Hash) ? raw_databases.keys : Array(raw_databases)
         if db_list.size > 1
           db_names = db_list.map { |d| d.is_a?(Hash) ? d[:name] : d }
-          lines << "- Databases: #{db_list.size} (#{db_names.first(3).join(', ')})"
+          # The names it leaves out are counted, as the mounted apps' are.
+          shown = db_names.first(DATABASES_SHOWN)
+          shown << "...#{db_names.size - DATABASES_SHOWN} more" if db_names.size > DATABASES_SHOWN
+          lines << "- Databases: #{db_list.size} (#{shown.join(', ')})"
         end
 
         components = Payload.section(ctx, :components)
