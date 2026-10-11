@@ -26,9 +26,9 @@ module RailsAiContext
         # Calls that draw routes; an unknown block that makes none of them configures a gem macro.
         ROUTE_METHODS = (VERB_METHODS + %i[match namespace scope resources resource member collection new nested shallow
                                            concern concerns with_options controller mount root draw devise_for]).freeze
-        # Blocks that draw their routes where they stand: Rails' constraints and defaults, and Devise's.
+        # Blocks that draw their routes where they stand: Rails' constraints and defaults, Devise's, and route_translator's.
         # Any other method's block may scope its routes in a way the walk cannot see.
-        IN_PLACE_BLOCKS = %i[constraints defaults devise_scope as authenticate authenticated unauthenticated].freeze
+        IN_PLACE_BLOCKS = %i[constraints defaults devise_scope as authenticate authenticated unauthenticated localized].freeze
         # Statement-level calls that draw nothing into the table.
         NON_ROUTING = %i[require require_relative puts p pp print warn raise default_url_options extend include].freeze
 

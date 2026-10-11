@@ -781,6 +781,29 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  # route_translator's `localized` only flags the routes it draws for translation; their scope is the block's.
+  describe "route_translator's localized block, read statically" do
+    it "draws its routes where they stand" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            localized do
+              resources :posts, only: %i[index]
+            end
+          end
+        RUBY
+        routes = RailsAiContext::Introspectors::RouteIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(routes: routes)
+
+        whole = described_class.call.content.first[:text]
+
+        expect(whole).to include("# Routes (1 route)")
+        expect(whole).to include("- `GET` `/posts` → index")
+      end
+    end
+  end
+
   # Rails' `nested` is the parent resource's nested scope (Mapper::Resources#nested).
   describe "a resource's nested block, read statically" do
     it "draws its routes under the parent's path, as bin/rails routes does" do
