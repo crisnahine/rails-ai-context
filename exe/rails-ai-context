@@ -512,14 +512,25 @@ class RailsAiContextCLI < Thor
     # in the directory they are in. A typed --app-path is used as typed, the
     # way the commands it prints repeat it. Nil when they stand in the root
     # or below.
+    #
+    # A folder of apps is the root of the run that sets it up, even when it
+    # holds one app, which the resolution names as its root: the folder's
+    # own files were named as that app's.
     def display_place
       result = @app_root_result or return nil
-      root = result.root || result.base
+      root = @workspace_dir || result.root || result.base
       cwd = result.cwd
       return nil if root.nil? || cwd.nil? || cwd == root || cwd.start_with?("#{root}/")
 
       typed = @app_path_override || options[:app_path]
       result.explicit && typed ? typed.delete_suffix("/") : app_root.display(root, cwd)
+    end
+
+    # How the person who typed the command names a root this run writes
+    # under: the run's own as display_place says, a workspace's app from
+    # where they stand.
+    def place_for(root)
+      root == (@workspace_dir || Dir.pwd) ? display_place : app_root.display(root, Dir.pwd)
     end
 
     def prompt_ai_tools(current: nil)
@@ -554,9 +565,10 @@ class RailsAiContextCLI < Thor
       )
     end
 
+    # A workspace's apps each have a .gitignore, and so may the folder.
     def add_to_gitignore(context_files = true, root: Dir.pwd)
-      ::RailsAiContext::Install::Program.mark_gitignore(program_surface, root: root,
-                                                       context_files: context_files)
+      surface = program_surface.dup.tap { |copy| copy.place = place_for(root) }
+      ::RailsAiContext::Install::Program.mark_gitignore(surface, root: root, context_files: context_files)
     end
 
     def record_selection(ai_tools, tool_mode, context_files = true, root: Dir.pwd)
@@ -565,8 +577,7 @@ class RailsAiContextCLI < Thor
         extra_yaml: { "tool_mode" => tool_mode.to_s, "context_files" => context_files }
       )
       record = ::RailsAiContext::Install::SelectionRecord
-      # A workspace's apps are named from the workspace, where the run started.
-      place = root == Dir.pwd ? program_surface.place : app_root.display(root, Dir.pwd)
+      place = place_for(root)
       lines = { context_files: record.write_context_files(context_files, root: root),
                 tool_mode: record.write_tool_mode(tool_mode, root: root) }
       conflicts = lines.filter_map { |key, status| record.conflict_message(key, status, place: place) }
@@ -621,6 +632,8 @@ class RailsAiContextCLI < Thor
     # one server per app, since a client reads them from the folder it opened
     # and from nowhere below it.
     def init_workspace(dir, roots)
+      # Before anything is said: the folder's own files are named from it.
+      @workspace_dir = dir
       require_install_files!
       apps = ::RailsAiContext::Install::Workspace.apps(dir, roots)
 

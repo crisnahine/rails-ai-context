@@ -598,6 +598,33 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # A folder holding one app is still a folder of apps: its own files were
+    # named as that app's (`a/.mcp.json`, which is no file), and with several
+    # apps every .gitignore was named alike.
+    it "names the folder's files from the folder and each app's from the app, with one app below or several" do
+      Dir.mktmpdir do |dir|
+        work = File.join(dir, "work")
+        rails_app(File.join(work, "a"))
+        FileUtils.mkdir_p(File.join(work, "web"))
+        File.write(File.join(work, ".gitignore"), "node_modules\n")
+        File.write(File.join(work, "a", ".gitignore"), "/tmp\n")
+
+        _out, err, status = init(work, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("Created/Updated .mcp.json\n", "Updated a/.gitignore\n", "Updated .gitignore\n")
+        expect(err).not_to include("a/.mcp.json")
+
+        rails_app(File.join(work, "b"))
+        File.write(File.join(work, "b", ".gitignore"), "/tmp\n")
+        File.write(File.join(work, ".gitignore"), "node_modules\n")
+
+        _out, err, = init(dir, "1\n3\n", "--app-path", "work")
+
+        expect(err).to include("Updated work/b/.gitignore\n", "Updated work/.gitignore\n", "Created/Updated work/.mcp.json\n")
+      end
+    end
+
     it "sets up the folder of apps --app-path names" do
       Dir.mktmpdir do |dir|
         rails_app(File.join(dir, "work", "a"))
