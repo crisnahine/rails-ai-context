@@ -17,13 +17,13 @@ RSpec.describe "ai:tool rake task" do
 
   after { Rake.application = @previous_application }
 
-  def run_task(*argv)
+  def run_task(*argv, tool: "conventions")
     previous = [ ARGV.dup, $stdout, $stderr, ENV["JSON"] ]
-    ARGV.replace([ "ai:tool[conventions]", *argv ])
+    ARGV.replace([ "ai:tool[#{tool}]", *argv ])
     ENV["JSON"] = "1"
     $stdout = StringIO.new
     $stderr = StringIO.new
-    Rake::Task["ai:tool"].invoke("conventions")
+    Rake::Task["ai:tool"].invoke(tool)
     [ $stdout.string, $stderr.string ]
   ensure
     ARGV.replace(previous[0])
@@ -36,5 +36,14 @@ RSpec.describe "ai:tool rake task" do
 
     expect(JSON.parse(stdout)).to include("tool" => "rails_get_conventions", "error" => false)
     expect(stderr).to include("hello from an initializer")
+  end
+
+  # `pattern=params[:id]` holds a bracket, and the task dropped every
+  # argument that did, answering "Pattern is required".
+  it "passes a value holding a bracket, and skips only the task itself" do
+    expect(RailsAiContext::CLI::ToolRunner).to receive(:new)
+      .with("search_code", { pattern: "params[:id]", path: "app/models" }, json_mode: true).and_call_original
+
+    run_task("pattern=params[:id]", "path=app/models", tool: "search_code")
   end
 end
