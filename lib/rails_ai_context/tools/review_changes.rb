@@ -35,6 +35,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: true)
 
       MAX_DIFF_LINES_PER_FILE = 30
+      VALIDATION_LINE = /\bvalidates?[\s(]/
 
       def self.call(ref: "HEAD", files: nil, server_context: nil)
         refused = refuse_unsafe_paths(files)
@@ -57,14 +58,20 @@ module RailsAiContext
         # file. Past this point git sees the commit the ref names, never the
         # caller's text.
         target = "HEAD"
+        base = "HEAD"
         unless ref == "HEAD"
           return error_response("Ref not allowed: #{ref} (git would read it as an option)") if ref.start_with?("-")
 
           target = resolve_commit(ref, root) or
             return error_response("Unknown ref: #{ref} names no commit in this repository. Pass a branch, a tag, `HEAD~3` or a commit SHA.")
+          # What the branch changed since it left the ref, as a pull request
+          # shows it: the file list and every diff are taken from the commit
+          # the two last shared, so a change made on the ref since then does
+          # not read as one the branch undid. Unrelated histories have none.
+          base = merge_base(target, root) || target
         end
 
-        changed = get_changed_files(target, root)
+        changed = get_changed_files(base, root)
         changed = changed.select { |f| files.any? { |filter| f.include?(filter) } } if files&.any?
 
         if changed.empty?
@@ -95,7 +102,7 @@ module RailsAiContext
         end
 
         # Detect warnings
-        warnings = detect_warnings(classified, root, target)
+        warnings = detect_warnings(classified, root, base)
         if warnings.any?
           lines << "## Warnings"
           warnings.each { |w| lines << "- #{w}" }
@@ -109,7 +116,7 @@ module RailsAiContext
         lines << ""
 
         show_files.each do |entry|
-          file_lines = gather_file_context(entry[:file], entry[:type], root, target)
+          file_lines = gather_file_context(entry[:file], entry[:type], root, base)
           lines.concat(file_lines)
         end
 
@@ -144,23 +151,23 @@ module RailsAiContext
           sha if status.success? && sha.match?(/\A\h{40,64}\z/)
         end
 
-        def get_changed_files(ref, root)
-          if ref == "HEAD"
+        # @return [String, nil] the full SHA of the commit `commit` and HEAD last shared
+        def merge_base(commit, root)
+          output, status = Open3.capture2("git", "merge-base", commit, "HEAD", chdir: root, err: File::NULL)
+          sha = output.strip
+          sha if status.success? && sha.match?(/\A\h{40,64}\z/)
+        end
+
+        # @param base [String] "HEAD" for the uncommitted changes, else the
+        #   commit the committed ones are taken from
+        def get_changed_files(base, root)
+          if base == "HEAD"
             staged, _ = Open3.capture2("git", "diff", "--cached", "--name-only", chdir: root, err: File::NULL)
             unstaged, _ = Open3.capture2("git", "diff", "--name-only", chdir: root, err: File::NULL)
             untracked, _ = Open3.capture2("git", "ls-files", "--others", "--exclude-standard", chdir: root, err: File::NULL)
             (staged.lines + unstaged.lines + untracked.lines).map(&:strip).reject(&:empty?).uniq
           else
-            # Try three-dot (since divergence from ref)
-            output, status = Open3.capture2("git", "diff", "--name-only", "#{ref}...HEAD", chdir: root, err: File::NULL)
-            unless status.success?
-              # Fall back to two-dot
-              output, status = Open3.capture2("git", "diff", "--name-only", "#{ref}..HEAD", chdir: root, err: File::NULL)
-              unless status.success?
-                # Fall back to single ref diff
-                output, _ = Open3.capture2("git", "diff", "--name-only", ref, chdir: root, err: File::NULL)
-              end
-            end
+            output, _ = Open3.capture2("git", "diff", "--name-only", base, "HEAD", chdir: root, err: File::NULL)
             output.lines.map(&:strip).reject(&:empty?).uniq
           end
         end
@@ -213,9 +220,9 @@ module RailsAiContext
             end
           else
             # In the HEAD flow a nil diff means the file is untracked -
-            # summarize it so the section isn't an empty heading. Against an
-            # arbitrary ref a nil diff can also mean a committed change that
-            # was later reverted in the working tree, so don't claim "new".
+            # summarize it so the section isn't an empty heading. Against a
+            # ref the diff is between commits, and a nil one means git gave
+            # no text for it, so don't claim "new".
             full_path = File.join(root, file)
             if ref == "HEAD" && File.file?(full_path)
               # A file a symlink carries out of the app is not opened to count it.
@@ -283,14 +290,16 @@ module RailsAiContext
           lines
         end
 
-        def get_file_diff(file, root, ref)
-          if ref == "HEAD"
+        # The same two commits the file list came from, so a file's diff is
+        # the change that put it on the list.
+        def get_file_diff(file, root, base)
+          if base == "HEAD"
             output, status = Open3.capture2("git", "diff", "--", file, chdir: root, err: File::NULL)
             if !status.success? || output.strip.empty?
               output, status = Open3.capture2("git", "diff", "--cached", "--", file, chdir: root, err: File::NULL)
             end
           else
-            output, status = Open3.capture2("git", "diff", ref, "--", file, chdir: root, err: File::NULL)
+            output, status = Open3.capture2("git", "diff", base, "HEAD", "--", file, chdir: root, err: File::NULL)
           end
           status.success? && !output.strip.empty? ? output : nil
         end
@@ -328,9 +337,8 @@ module RailsAiContext
           model_files.each do |entry|
             diff = get_file_diff(entry[:file], root, ref)
             next unless diff
-            removed_validations = diff.lines.select { |l| l.start_with?("-") && l.match?(/validates?\s/) }
-            removed_validations.each do |line|
-              warnings << "**Removed validation**: `#{entry[:file]}` - `#{line.strip[1..].strip}`"
+            removed_validations(diff).each do |line|
+              warnings << "**Removed validation**: `#{entry[:file]}` - `#{line}`"
             end
           end
 
@@ -348,6 +356,31 @@ module RailsAiContext
           end
 
           warnings
+        end
+
+        # The validation lines a diff takes out and puts nothing back for. An
+        # edited `validates :name, ...` line is one removed and one added, and
+        # :name is still validated; a line whose names are all validated by an
+        # added line is an edit, and a commented-out line was no validation.
+        def removed_validations(diff)
+          removed, added = %w[- +].map do |sign|
+            diff.lines.filter_map do |line|
+              next unless line.start_with?(sign) && !line.start_with?(sign * 3)
+
+              code = line[1..].strip
+              code if code.match?(VALIDATION_LINE) && !code.start_with?("#")
+            end
+          end
+          kept = added.flat_map { |code| validated_names(code) }.to_set
+          removed.reject do |code|
+            names = validated_names(code)
+            names.any? ? names.all? { |name| kept.include?(name) } : added.include?(code)
+          end
+        end
+
+        # The attributes `validates :a, :b, ...` names, or the method of `validate :check`.
+        def validated_names(code)
+          code[/\bvalidates?[\s(]+(.*)/, 1].to_s.scan(/\G\s*:(\w+[?!]?)\s*,?/).flatten
         end
       end
     end

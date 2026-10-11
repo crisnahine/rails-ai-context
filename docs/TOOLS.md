@@ -741,9 +741,11 @@ Log correlation reads the last megabyte of the current environment's log, the wi
 
 PR/commit review with per-file context and warnings.
 
+A removed validation is a `validates` line the diff takes out when no line it adds validates the same attribute; an edited `validates` line is not one.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `ref` | string | `HEAD` | Git ref to diff against: a branch, a tag, `HEAD~3` or a commit SHA. `HEAD` reviews uncommitted changes. A ref that names no commit is refused |
+| `ref` | string | `HEAD` | Git ref to diff against: a branch, a tag, `HEAD~3` or a commit SHA. `HEAD` reviews uncommitted changes. Any other ref reviews the commits since HEAD left it, as a pull request does: the file list and each file's diff run from the commit the two last shared to HEAD. A ref that names no commit is refused |
 | `files` | array | - | Review only these changed files (omit for all) |
 
 ### `rails_runtime_info`
