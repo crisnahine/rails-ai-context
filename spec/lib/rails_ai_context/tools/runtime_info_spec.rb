@@ -293,12 +293,19 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       1_048_575, 1_048_576, 1_500_000,
       1024**3 - 1, 1024**3, 5 * 1024**3 + 123_456_789,
       1024**4 - 1, 1024**4, 7 * 1024**4,
-      1024**7, 3 * 1024**8 + 12_345, 1024**9 * 3
+      1024**6, 5 * 1024**6 + 987_654_321
     ].each do |bytes|
       it "labels #{bytes} bytes as number_to_human_size does" do
         expect(described_class.send(:human_size, bytes))
           .to eq(ActiveSupport::NumberHelper.number_to_human_size(bytes, locale: :en))
       end
+    end
+
+    # Rails 7.0's converter stops at EB, so the ZB range is pinned to what 7.1 and later print.
+    it "labels a zettabyte and more in ZB" do
+      expect(described_class.send(:human_size, 1024**7)).to eq("1 ZB")
+      expect(described_class.send(:human_size, 3 * 1024**8 + 12_345)).to eq("3070 ZB")
+      expect(described_class.send(:human_size, 1024**9 * 3)).to eq("3150000 ZB")
     end
   end
 end
