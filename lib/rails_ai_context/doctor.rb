@@ -1189,12 +1189,12 @@ module RailsAiContext
     # ── Tool dependencies ─────────────────────────────────────────────
 
     def check_ripgrep
-      if system("which", "rg", out: File::NULL, err: File::NULL)
+      if Executable.on_path?("rg")
         Check.new(name: "ripgrep", status: :pass, message: "rg available for fast code search", fix: nil)
       else
         Check.new(name: "ripgrep", status: :warn,
           message: "ripgrep not installed (slower Ruby fallback)",
-          fix: "Install: `brew install ripgrep` or `apt install ripgrep`")
+          fix: "Install: `brew install ripgrep`, `apt install ripgrep` or `winget install BurntSushi.ripgrep.MSVC`")
       end
     end
 
