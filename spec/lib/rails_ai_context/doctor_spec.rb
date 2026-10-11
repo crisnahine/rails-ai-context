@@ -766,6 +766,29 @@ RSpec.describe RailsAiContext::Doctor do
     dir
   end
 
+  # Bundler's copy of the environment is a plain Hash, and Windows keeps its
+  # variable names in any case: PATH there is `Path`.
+  describe "#client_path" do
+    let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)) }
+
+    it "reads PATH from the environment as it was before Bundler, by Windows' name for it there" do
+      allow(Bundler).to receive(:original_env).and_return("Path" => "C:/Ruby34/bin", "Gem_Path" => "/gems")
+      allow(Gem).to receive(:win_platform?).and_return(true)
+
+      expect(doctor.send(:client_path)).to eq("C:/Ruby34/bin")
+      expect(doctor.send(:current_gem_path)).to eq([ "/gems" ])
+    end
+
+    it "takes a name only as it is spelled, where names are case-sensitive" do
+      allow(Bundler).to receive(:original_env).and_return("Path" => "/elsewhere", "PATH" => "/usr/bin")
+      allow(Gem).to receive(:win_platform?).and_return(false)
+
+      expect(doctor.send(:client_path)).to eq("/usr/bin")
+      allow(Bundler).to receive(:original_env).and_return("Path" => "/elsewhere")
+      expect(doctor.send(:client_path)).to eq("")
+    end
+  end
+
   describe "#check_mcp_json" do
     # Real files in a real app folder: the check reads them the way the
     # generator does.

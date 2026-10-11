@@ -147,6 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that Git for Windows runs a hook with read the CR as part of every
   command. The stdio server ends each JSON-RPC frame with a plain newline
   there too, rather than the CRLF a text-mode stdout writes.
+- **`doctor` reads PATH on Windows**, where the variable is named `Path`:
+  the copy of the environment it reads from before Bundler's changes is a
+  plain Hash, which asked for `PATH` found nothing, so every MCP config's
+  command read as not on PATH there.
 - **`doctor` and `search_code` find ripgrep on Windows**, which has no
   `which` to ask, so ripgrep read as missing there and every search took the
   slower Ruby path. PATH is searched in Ruby now, with Windows' `PATHEXT`
