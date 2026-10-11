@@ -304,7 +304,7 @@ module RailsAiContext
         return true if path.match?(SECRET_PATH)
 
         leaf = path.split(".").last.to_s
-        leaf.match?(/\A#{SECRET_NAME}\z/) && !leaf.match?(DESCRIPTOR_SUFFIX)
+        leaf.match?(WHOLE_SECRET_NAME) && !leaf.match?(DESCRIPTOR_SUFFIX)
       end
 
       # Redaction and shortening are one operation because their order is the
@@ -364,7 +364,7 @@ module RailsAiContext
         return FILTERED if credential?(stripped)
 
         name = name.to_s
-        return FILTERED if name.match?(/\A(?:#{KEY_NAME})\z/) && keyed_secret?(name, stripped, placeholder_ok)
+        return FILTERED if name.match?(WHOLE_KEY_NAME) && keyed_secret?(name, stripped, placeholder_ok)
 
         stripped.gsub(URI_USERINFO) { |m| placeholder?(m) ? m : "#{Regexp.last_match(1)}#{FILTERED}@" }
       end
@@ -392,7 +392,14 @@ module RailsAiContext
         text.delete_suffix(match[:literal]) + "#{quote}#{FILTERED}#{quote}"
       end
 
+      # Compiled once. A pattern built inside a method is compiled again on every call, 23
+      # microseconds each, which was most of what a line of many keys or flags cost to filter.
       WHOLE_KEY_NAME = /\A(?:#{KEY_NAME})\z/
+      WHOLE_SECRET_NAME = /\A#{SECRET_NAME}\z/
+      WHOLE_PASSWORD_NAME = /\A#{PASSWORD_NAME}\z/
+      WHOLE_KEYISH_NAME = /\A(?:#{KEYISH_NAME})\z/
+      WHOLE_SECRET_OR_PASSWORD_NAME = /\A(?:#{SECRET_NAME}|#{PASSWORD_NAME})\z/
+      WHOLE_SECRET_WORD = /\A(?:#{SECRET_WORD})\z/
 
       # The name a matched key reads as. A dashed one reads with underscores, so `X-Api-Key` is
       # `X_Api_Key`, an API key's name; one that then spells no key name (`X-Key-Id`) is none.
@@ -508,7 +515,7 @@ module RailsAiContext
       ENV_NAME = /\A_?[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\z/
 
       def secret_literal?(value, key)
-        password = key.match?(/\A#{PASSWORD_NAME}\z/)
+        password = key.match?(WHOLE_PASSWORD_NAME)
         return false if value.length < (password ? 4 : 8) || !value.ascii_only? || placeholder?(value)
         return false if value.downcase.tr("-", "_") == key.downcase.tr("-", "_")
         # Whitespace makes a message, except in a passphrase.
@@ -532,7 +539,7 @@ module RailsAiContext
       def secret_words?(value)
         words = value.gsub(/([A-Z]+)([A-Z][a-z])/, '\\1_\\2').gsub(/([a-z])([A-Z])/, '\\1_\\2')
                      .downcase.split(/[_.-]+/).reject(&:empty?)
-        (words + words.each_cons(2).map { |pair| pair.join("_") }).any? { |word| word.match?(/\A(?:#{SECRET_WORD})\z/) }
+        (words + words.each_cons(2).map { |pair| pair.join("_") }).any? { |word| word.match?(WHOLE_SECRET_WORD) }
       end
 
       def yaml_scalar(line, example)
@@ -553,7 +560,7 @@ module RailsAiContext
 
       # Named only by `_KEY`, and not by a secret word.
       def keyish_only?(name)
-        name.match?(/\A(?:#{KEYISH_NAME})\z/) && !name.match?(/\A(?:#{SECRET_NAME}|#{PASSWORD_NAME})\z/)
+        name.match?(WHOLE_KEYISH_NAME) && !name.match?(WHOLE_SECRET_OR_PASSWORD_NAME)
       end
 
       # A 16+ character run mixing letters and digits, or a known token format; a cache or i18n
