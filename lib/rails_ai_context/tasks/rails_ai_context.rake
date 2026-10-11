@@ -493,7 +493,10 @@ namespace :ai do
     puts "🩺 Running AI readiness diagnostics..."
     puts ""
 
-    result = RailsAiContext::Doctor.new.run
+    # Rake runs from the directory its Rakefile is in, which at an engine's
+    # root is the engine's while Rails.root is test/dummy: the report names
+    # its paths from there.
+    result = RailsAiContext::Doctor.new(from: Dir.pwd).run
 
     puts RailsAiContext::Doctor.report_lines(result, icons: RailsAiContext::Doctor::EMOJI_ICONS)
 

@@ -203,6 +203,8 @@ Checks include: schema existence, pending migrations in every database (and a da
 
 At a mountable engine's root, which boots no app of its own, `bundle exec rails-ai-context doctor` (or `rails-ai-context doctor` for a standalone install) diagnoses the dummy app the engine's `bin/rails` boots - `test/dummy` or `spec/dummy` - and reads the install at the engine's root: its `.rails-ai-context.yml`, MCP configs and context files, the ones an editor opened there uses. `bin/rails app:ai:doctor` reads them there too. Its fixes name the commands that run at the engine's root, such as `bundle exec rails-ai-context context`, and its context check runs that command into a copy of the files to see which it would rewrite.
 
+Every path the report names is named from where the command was typed, so a path or a `git rm --cached` it gives works there. Typed at an engine's root, the dummy app's files read `test/dummy/db/schema.rb` and the engine's own `Gemfile.lock` and `app/views`, and a fix runs "at the engine's root"; typed inside `test/dummy`, the engine's read `../../Gemfile.lock` and a fix runs "in the engine at ../..". The same holds for `--app-path`: run from an app's parent folder, the app's files are named `shop/...`.
+
 ### `watch`
 
 Watch for file changes and auto-regenerate context files.

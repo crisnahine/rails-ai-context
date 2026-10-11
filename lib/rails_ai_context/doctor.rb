@@ -61,8 +61,13 @@ module RailsAiContext
 
     attr_reader :app
 
-    def initialize(app = nil)
+    # `from` is the directory the command was typed in, which every path the
+    # report names is named from: an engine's root, above its test/dummy,
+    # names the dummy app's views test/dummy/app/views and the engine's
+    # lockfile Gemfile.lock. Unsaid, or inside the app, it is the app's root.
+    def initialize(app = nil, from: nil)
       @app = app || Rails.application
+      @from = from
     end
 
     # One run, as introspection has: the introspector health check and the
@@ -101,7 +106,33 @@ module RailsAiContext
     def install_job(job)
       return "`#{command(job)}`" unless engine_install?
 
-      "`#{InstallMode.command(job, form: InstallMode.form(root: install_root))}` at the engine's root"
+      "`#{InstallMode.command(job, form: InstallMode.form(root: install_root))}`#{at_engine}"
+    end
+
+    # Where the report's paths are named from: where the command was typed,
+    # unless that is the app's root or a directory inside it, where a reader
+    # names the app's files from its root.
+    def display_base
+      @display_base ||= begin
+        root = app.root.to_s
+        typed = @from&.to_s
+        typed && !SafePath.contained?(SafePath.canonical(typed), SafePath.canonical(root)) ? typed : root
+      end
+    end
+
+    # A path as the reader types it where the command was typed.
+    def typed_path(path)
+      Install::Program.relative_to(path.to_s, display_base)
+    end
+
+    # Where the engine an engine's test/dummy runs in is, as a place a
+    # command runs: " at the engine's root" typed there, " in the engine at
+    # ../.." typed in the dummy app.
+    def at_engine
+      at = engine_roots_shown
+      return "" if at.empty?
+
+      at == [ "." ] ? " at the engine's root" : " in the engine at #{at.join(', ')}"
     end
 
     # Where the install this app is served by lives: the app's root, or for
@@ -152,7 +183,7 @@ module RailsAiContext
 
     def check_schema
       format, path = RailsAiContext::Introspectors::SchemaDumpPath.present(app.root)
-      shown = path.to_s.delete_prefix("#{app.root.to_s.chomp('/')}/")
+      shown = typed_path(path) if path
       if format == :ruby
         lines = File.readlines(path).size
         Check.new(name: "Schema", status: :pass, message: "#{shown} found (#{count_phrase(lines, "line")})", fix: nil)
@@ -218,7 +249,7 @@ module RailsAiContext
     def unreachable_database_check(databases, pending)
       env = RailsAiContext.environment_name
       missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(ActiveRecord::NoDatabaseError) }
-      shown = ->(db) { databases.one? ? db[:config].database.to_s : "#{db[:name]} (#{db[:config].database})" }
+      shown = ->(db) { databases.one? ? database_named(db[:config]) : "#{db[:name]} (#{database_named(db[:config])})" }
       said = []
       if missing.any?
         said << "the #{env} #{missing.one? ? "database" : "databases"} #{missing.map(&shown).join(' and ')} " \
@@ -244,12 +275,22 @@ module RailsAiContext
     end
 
     def where_tasks_run
-      engine_roots_shown.empty? ? "" : " in the engine at #{engine_roots_shown.join(', ')}"
+      at_engine
     end
 
-    # The engines an engine's test/dummy runs in, as the app root reaches them (../..).
+    # The engines an engine's test/dummy runs in, named from where doctor was
+    # typed: ../.. from the dummy app, . at the engine's root.
     def engine_roots_shown
-      @engine_roots_shown ||= PathResolver.enclosing_engine_roots(app.root.to_s).map { |engine| Install::Program.relative_to(engine, app.root) }
+      @engine_roots_shown ||= PathResolver.enclosing_engine_roots(app.root.to_s).map { |engine| typed_path(engine) }
+    end
+
+    # A database as database.yml names it; a SQLite file given relative to
+    # the app's root, as the adapter reads it, named from where doctor was typed.
+    def database_named(db_config)
+      name = db_config.database.to_s
+      return name unless db_config.adapter.to_s == "sqlite3" && !name.empty? && name != ":memory:" && !name.start_with?("file:", "/")
+
+      typed_path(File.expand_path(name, app.root.to_s))
     end
 
     # The primary's migrations directories, and in an engine's test/dummy
@@ -271,9 +312,9 @@ module RailsAiContext
     def check_routes
       routes_path = File.join(app.root, "config/routes.rb")
       if File.exist?(routes_path)
-        Check.new(name: "Routes", status: :pass, message: "config/routes.rb found", fix: nil)
+        Check.new(name: "Routes", status: :pass, message: "#{typed_path(routes_path)} found", fix: nil)
       else
-        Check.new(name: "Routes", status: :fail, message: "config/routes.rb not found", fix: "Ensure you're in a Rails app root directory")
+        Check.new(name: "Routes", status: :fail, message: "#{typed_path(routes_path)} not found", fix: "Ensure you're in a Rails app root directory")
       end
     end
 
@@ -283,11 +324,11 @@ module RailsAiContext
     def check_gems
       bundle = GemLock.bundle(app.root)
       if bundle.lockfile && File.file?(bundle.lockfile)
-        Check.new(name: "Gems", status: :pass, message: "#{bundle.lock_label} found", fix: nil)
+        Check.new(name: "Gems", status: :pass, message: "#{typed_path(bundle.lockfile)} found", fix: nil)
       elsif bundle.outside
         Check.new(name: "Gems", status: :warn, message: GemLock.for(app.root).reason, fix: nil)
       else
-        Check.new(name: "Gems", status: :warn, message: "#{bundle.lock_label} not found", fix: "Run `bundle install`")
+        Check.new(name: "Gems", status: :warn, message: "#{typed_path(bundle.lockfile)} not found", fix: "Run `bundle install`")
       end
     end
 
@@ -303,11 +344,10 @@ module RailsAiContext
     # Every directory the tools read views from: app/views, a pack's, and in
     # an engine's test/dummy the engine's.
     def check_views
-      dirs = PathResolver.view_dirs(app.root)
+      dirs = PathResolver.view_dirs(app.root.to_s)
       if dirs.any?
         count = dirs.sum { |dir| Dir.glob(File.join(dir, "**/*")).count { |f| File.file?(f) } }
-        shown = dirs.map { |dir| dir.delete_prefix(SafePath.dir_prefix(app.root.to_s)) }
-        shown = dirs.map { |dir| Install::Program.relative_to(dir, app.root) } if shown.any? { |dir| dir.start_with?("/") }
+        shown = dirs.map { |dir| typed_path(dir) }
         Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "file")} under #{shown.join(', ')}", fix: nil)
       else
         Check.new(name: "Views", status: :warn, message: "No view files", fix: nil)
@@ -319,7 +359,11 @@ module RailsAiContext
       suite_root = PathResolver.test_root(app.root.to_s)
       suites = RailsAiContext::TestFramework.suites(suite_root)
       if suites.any?
-        where = suite_root == app.root.to_s ? "" : " (the engine's, at #{PathResolver.suite_relative(app.root.to_s, ".")})"
+        engine = typed_path(suite_root)
+        where = if suite_root == app.root.to_s then ""
+        elsif engine == "." then " (the engine's)"
+        else " (the engine's, at #{engine})"
+        end
         Check.new(name: "Tests", status: :pass, message: "#{suites.join(", ")} test suite found#{where}", fix: nil)
       elsif (unread = GemLock.for(app.root).unread_bundle) && TestFramework.unread_gemfile(app.root)
         Check.new(name: "Tests", status: :warn, message: "No test suite in the app, and #{unread}, so the suite there is not read", fix: nil)
@@ -339,7 +383,9 @@ module RailsAiContext
     end
 
     def engine_share(count)
-      count.positive? ? " (#{count} in the engine at #{engine_roots_shown.join(', ')})" : ""
+      return "" unless count.positive?
+
+      engine_roots_shown == [ "." ] ? " (#{count} in the engine)" : " (#{count} in the engine at #{engine_roots_shown.join(', ')})"
     end
 
     # Every database's migrations, a file two of them share counted once.
@@ -385,7 +431,7 @@ module RailsAiContext
     def self.mcp_config_checks
       Install::AiTool.all.to_h { |tool|
         path = tool.mcp_config[:path]
-        [ tool.key, { path: path, label: "#{path} (#{tool.name})" } ]
+        [ tool.key, { path: path, name: tool.name, label: "#{path} (#{tool.name})" } ]
       }
     end
 
@@ -396,12 +442,11 @@ module RailsAiContext
 
       # Where the files are written: config.output_dir, else the install's root.
       output_dir = install_config.output_dir || install_root
-      where = engine_install? ? " at the engine's root" : ""
       present = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq
         .select { |relative| File.exist?(File.join(output_dir, relative)) }
       if present.empty?
         return Check.new(name: "Context files", status: :warn,
-          message: "No context files generated#{where}",
+          message: "No context files generated#{at_engine if engine_install?}",
           fix: "Run #{install_job(:context)}")
       end
 
@@ -409,12 +454,13 @@ module RailsAiContext
       # which is never true of a file that run leaves alone however old it
       # is, and always true of one an older version of the gem wrote.
       run = context_file_run(output_dir)
-      # Named from the install's root, or in full for an output_dir outside it.
-      first = ->(files) { File.join(output_dir, files.first).delete_prefix("#{install_root.chomp('/')}/") }
+      # Named from where doctor was typed, or in full for an output_dir outside the install's root.
+      inside = SafePath.contained?(SafePath.canonical(output_dir.to_s), SafePath.canonical(install_root))
+      first = ->(files) { inside ? typed_path(File.join(output_dir, files.first)) : File.join(output_dir, files.first) }
       shown = ->(files) { "#{first.(files)}#{" and #{count_phrase(files.size - 1, "more context file")}" if files.size > 1}" }
       if run[:error]
         return Check.new(name: "Context files", status: :warn,
-          message: "#{shown.(present)}#{where}: a dry run of #{install_job(:context).delete_suffix(where)} failed, so whether " \
+          message: "#{shown.(present)}: a dry run of #{install_job(:context)} failed, so whether " \
                    "#{present.one? ? "it is" : "they are"} up to date is not known (#{run[:error]})",
           fix: "Run #{install_job(:context)} to see what it says")
       end
@@ -423,11 +469,11 @@ module RailsAiContext
       if stale.empty?
         fresh = run[:skipped].presence || present
         return Check.new(name: "Context files", status: :pass,
-          message: "#{shown.(fresh)}#{where} #{fresh.one? ? "is" : "are"} up to date", fix: nil)
+          message: "#{shown.(fresh)} #{fresh.one? ? "is" : "are"} up to date", fix: nil)
       end
 
       Check.new(name: "Context files", status: :warn,
-        message: "#{shown.(stale)}#{where} #{stale.one? ? "is" : "are"} out of date: #{staleness_reason(output_dir, stale)}",
+        message: "#{shown.(stale)} #{stale.one? ? "is" : "are"} out of date: #{staleness_reason(output_dir, stale)}",
         fix: "Run #{install_job(:context)} to regenerate")
     end
 
@@ -542,6 +588,7 @@ module RailsAiContext
 
       oldest = paths.map { |path| File.mtime(path) }.min
       changed = oldest ? Fingerprinter.changed_since(install_root, oldest).reject { |dir| only_our_initializer_newer?(dir, oldest) } : []
+      changed = changed.map { |dir| typed_path(File.join(install_root, dir)) }
       return "#{changed.join(', ')} changed since #{stale.one? ? "it was" : "they were"} written" if changed.any?
 
       "a regeneration would write #{stale.one? ? "it" : "them"}"
@@ -570,20 +617,20 @@ module RailsAiContext
       content = File.read(path)
       if Install::InitializerFile.configures?(content) && !Install::InitializerFile.any_guard_before_configure?(content)
         return Check.new(name: "Initializer guard", status: :warn,
-          message: "config/initializers/rails_ai_context.rb has no recognised guard around the `configure` block",
+          message: "#{typed_path(path)} has no recognised guard around the `configure` block",
           fix: "Wrap it in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)` - " \
                "without one it raises where the gem is not loaded, such as standalone mode or a group-scoped Gemfile entry")
       end
       return nil unless Install::InitializerFile.bare_guard?(content)
 
       Check.new(name: "Initializer guard", status: :warn,
-        message: "config/initializers/rails_ai_context.rb guards on `defined?(RailsAiContext)` alone",
+        message: "#{typed_path(path)} guards on `defined?(RailsAiContext)` alone",
         fix: "Re-run `#{command(:install)}`, or add `&& RailsAiContext.respond_to?(:configure)` to the guard")
     end
 
     # One MCP config's answer. A config with a `problem` is named beside it in
     # the summary, and configs that share one are named together;
-    # `unparseable` is the config as shown, when the install cannot merge into it.
+    # `unparseable` is the config's path, when the install cannot merge into it.
     ConfigVerdict = Data.define(:label, :status, :problem, :fix, :unparseable)
 
     def check_mcp_json
@@ -623,20 +670,18 @@ module RailsAiContext
     # into it and as its client would start the server it names.
     def mcp_config_verdict(tool)
       cfg = self.class.mcp_config_checks[tool]
-      label = cfg[:label]
       install_fix = "Run #{install_job(:install)} to fix"
       # An app in a workspace is served from the folder above it, whose
       # config, if it cannot be read, is the one to fix.
       full_path = mcp_config_path(tool)
+      label = "#{typed_path(full_path)} (#{cfg[:name]})"
       unless File.exist?(full_path)
         return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
       end
 
-      # ../.mcp.json for a workspace's.
-      shown = Install::Program.relative_to(full_path, install_root)
       shape = nil
       if cfg[:path].end_with?(".toml")
-        shape = toml_config_trouble(full_path, shown)
+        shape = toml_config_trouble(full_path)
         if shape&.first == :fail
           return ConfigVerdict.new(label: label, status: :fail, problem: shape[1], fix: shape[2], unparseable: nil)
         end
@@ -648,7 +693,7 @@ module RailsAiContext
         end
 
         problem ||= json_config_problem(text, tool)
-        return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: nil, unparseable: shown) if problem
+        return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: nil, unparseable: full_path) if problem
       end
 
       entries = serving_entries(tool, full_path)
@@ -659,7 +704,7 @@ module RailsAiContext
 
       # An entry under the gem's name that runs something else (an HTTP one)
       # is its owner's to judge.
-      troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, shown) }
+      troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path) }
       status, problem, fix = [ *troubles, shape ].compact.min_by { |trouble| trouble.first == :fail ? 0 : 1 }
       ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
     rescue SystemCallError, IOError => e
@@ -683,7 +728,7 @@ module RailsAiContext
     # [status, problem, fix], nil when it writes it. A server declared twice
     # fails, since Codex refuses to read the file at all; an entry the
     # install does not rewrite works, but stays as it is.
-    def toml_config_trouble(path, shown)
+    def toml_config_trouble(path)
       servers, closed = McpConfigGenerator.toml_servers(path)
       if closed && servers.any? { |server| server.sections.any? }
         return [ :fail, "#{closed}, yet it holds one, which Codex refuses to read", "Delete one of them by hand" ]
@@ -692,7 +737,7 @@ module RailsAiContext
       twice = servers.select(&:twice?)
       if twice.any?
         # Two tables and nothing else is what the install merges into one.
-        fix = twice.all?(&:rewritable?) ? "Run #{install_command(shown)} to fix" : "Delete all but one by hand"
+        fix = twice.all?(&:rewritable?) ? "Run #{install_command(path)} to fix" : "Delete all but one by hand"
         return [ :fail, "it declares #{twice.map(&:name).join(', ')} twice, which Codex refuses to read", fix ]
       end
       return [ :warn, closed, "Write it as [mcp_servers.<name>] tables by hand" ] if closed
@@ -702,7 +747,7 @@ module RailsAiContext
 
       [ :warn, McpConfigGenerator.unwritable_toml(held.map(&:name)),
         "Write #{held.one? ? "it as a [mcp_servers.#{held.first.name}] table" : 'them as [mcp_servers.<name>] tables'} by hand, " \
-        "or delete #{held.one? ? 'it' : 'them'} and run #{install_command(shown)}" ]
+        "or delete #{held.one? ? 'it' : 'them'} and run #{install_command(path)}" ]
     end
 
     def mcp_config_path(tool)
@@ -731,11 +776,11 @@ module RailsAiContext
     # starts a copy of the gem other than the app's: [status, problem, fix],
     # nil when it starts the right one. Fast on purpose: the command is
     # looked up, never run.
-    def entry_trouble(entry, tool, config_path, shown)
+    def entry_trouble(entry, tool, config_path)
       argv = entry[:argv]
       folder = mcp_config_folder(tool, config_path)
       line = "`#{argv.take_while { |arg| !arg.start_with?("--app-path") }.join(' ')}`"
-      rerun = "Run #{install_command(shown)} to fix"
+      rerun = "Run #{install_command(config_path)} to fix"
       # Codex sets the PATH its env snapshot holds, which the snapshot check reads.
       path, where = entry_path_variable(entry, tool)
       found = path.nil? || executable_on?(argv.first.to_s, path, folder)
@@ -757,7 +802,7 @@ module RailsAiContext
       elsif File.basename(argv[0].to_s) == "rails-ai-context"
         lock = GemLock.for(install_root)
         if lock.present?("rails-ai-context")
-          bundled = "#{GemLock.bundle(install_root).lock_label} carries rails-ai-context #{lock.version("rails-ai-context")}"
+          bundled = "#{typed_path(GemLock.bundle(install_root).lockfile)} carries rails-ai-context #{lock.version("rails-ai-context")}"
           return [ :fail, "#{missing}, while #{bundled}", rerun ] unless found
 
           return [ :warn, "#{line} needs the gem installed outside the app's bundle, while #{bundled}", rerun ]
@@ -817,8 +862,7 @@ module RailsAiContext
         folder
       end
       bundle = GemLock.bundle(dir)
-      shown = SafePath.canonical(dir) == SafePath.canonical(install_root) ? bundle.lock_label : Install::Program.relative_to(File.join(bundle.dir, bundle.lock_label), install_root)
-      [ GemLock.for(dir), bundle.gemfile, shown ]
+      [ GemLock.for(dir), bundle.gemfile, typed_path(bundle.lockfile) ]
     end
 
     # Known to lack the gem: a lockfile without it, or with none yet, a
@@ -843,20 +887,25 @@ module RailsAiContext
 
     # A workspace's config above the app is written by `init` run in the
     # workspace, never by this app's install.
-    def install_command(shown)
-      shown.start_with?("../") ? "`rails-ai-context init` in the folder that holds #{shown}" : install_job(:install)
+    def install_command(config_path)
+      workspace_config?(config_path) ? "`rails-ai-context init` in the folder that holds #{typed_path(config_path)}" : install_job(:install)
+    end
+
+    # A config above the install's root: a workspace's.
+    def workspace_config?(config_path)
+      Install::Program.relative_to(config_path, install_root).start_with?("../")
     end
 
     # Install leaves a config it cannot parse, or merge into, as it is, so
     # running it alone would change nothing there. A workspace's config above the app is
     # written by `init` run in the workspace, never by this app's install.
     def unparseable_fix(paths)
-      run = if paths.any? { |path| path.start_with?("../") }
+      run = if paths.any? { |path| workspace_config?(path) }
         "`rails-ai-context init` in the folder that holds #{paths.one? ? 'it' : 'them'}"
       else
         install_job(:install)
       end
-      "Make #{paths.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
+      "Make #{paths.map { |path| typed_path(path) }.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
         "then run #{run}"
     end
 
@@ -878,8 +927,8 @@ module RailsAiContext
       end
       return nil if snapshots.empty?
 
-      shown = Install::Program.relative_to(toml_path, install_root)
-      fix = "Run #{install_command(shown)}"
+      shown = typed_path(toml_path)
+      fix = "Run #{install_command(toml_path)}"
       unreached = snapshots.filter_map { |entry| unreached_command(entry, mcp_config_folder(:codex, toml_path)) }
       if unreached.any?
         said = unreached.group_by { |_, command, gone| [ command, gone ] }.map do |(command, gone), group|
@@ -1055,7 +1104,7 @@ module RailsAiContext
 
       views_dir = File.join(app.root, "app/views")
       if Dir.exist?(views_dir) && !config.introspectors.include?(:views)
-        suggestions << "views (app/views/ exists)"
+        suggestions << "views (#{typed_path(views_dir)}/ exists)"
       end
 
       i18n_dir = File.join(app.root, "config/locales")
@@ -1066,7 +1115,7 @@ module RailsAiContext
 
       graphql_dir = File.join(app.root, "app/graphql")
       if Dir.exist?(graphql_dir) && !config.introspectors.include?(:api)
-        suggestions << "api (app/graphql/ exists)"
+        suggestions << "api (#{typed_path(graphql_dir)}/ exists)"
       end
 
       if suggestions.empty?
@@ -1183,23 +1232,25 @@ module RailsAiContext
       never, others = exposed.partition { |file| matches_any?(NEVER_COMMIT, file) }
       configs, others = others.partition { |file| matches_any?(SECRET_HOLDING_CONFIGS, file) }
       literal = configs.filter_map { |file| (where = literal_secret(file)) && [ file, where ] }
-      shown_literal = literal.map { |file, where| "#{file} (#{where})" }.join(", ")
+      # Each file named from where doctor was typed, so the command a fix gives runs there.
+      see = ->(file) { typed_path(File.join(app.root.to_s, file)) }
+      shown_literal = literal.map { |file, where| "#{see.(file)} (#{where})" }.join(", ")
       # Outside git nothing says whether a file is tracked, and the old word stands.
       others_committed = git ? others & tracked : others
 
       if never.any?
         committed, unignored = never.partition { |file| tracked.include?(file) }
         said = []
-        said << "#{committed.join(', ')} #{committed.one? ? "is" : "are"} committed" if committed.any?
+        said << "#{committed.map(&see).join(', ')} #{committed.one? ? "is" : "are"} committed" if committed.any?
         if unignored.any?
-          said << (git || gitignore ? unignored.map { |file| "#{file} not in .gitignore" }.join("; ") : "No .gitignore found - #{unignored.join(', ')} would be committed")
+          said << (git || gitignore ? unignored.map { |file| "#{see.(file)} not in .gitignore" }.join("; ") : "No .gitignore found - #{unignored.map(&see).join(', ')} would be committed")
         end
         said << "a literal secret in #{shown_literal}" if literal.any?
-        said << "also committed: #{others_committed.join(', ')}" if others_committed.any?
-        said << "also not gitignored: #{(others - others_committed).join(', ')}" if (others - others_committed).any?
+        said << "also committed: #{others_committed.map(&see).join(', ')}" if others_committed.any?
+        said << "also not gitignored: #{(others - others_committed).map(&see).join(', ')}" if (others - others_committed).any?
         fixes = []
-        fixes << uncommit_fix(committed, committed - covered) if committed.any?
-        fixes << "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{unignored.map { |file| "`#{file}`" }.join(', ')}" if unignored.any?
+        fixes << uncommit_fix(committed.map(&see), (committed - covered).map(&see)) if committed.any?
+        fixes << "#{gitignore ? 'Add to .gitignore' : 'Create .gitignore with'}: #{unignored.map { |file| "`#{see.(file)}`" }.join(', ')}" if unignored.any?
         Check.new(name: "Secrets in .gitignore", status: :fail, message: said.join("; "), fix: fixes.join("; "))
       elsif literal.any?
         committed = literal.map(&:first) & tracked
@@ -1210,17 +1261,17 @@ module RailsAiContext
         Check.new(name: "Secrets in .gitignore", status: :warn,
           message: "A literal secret in #{shown_literal}, #{which}",
           fix: "Read it from the environment or credentials (`password: <%= ENV[\"DATABASE_PASSWORD\"] %>`), or gitignore the file" \
-               "#{" and run `git rm --cached #{committed.join(' ')}`" if committed.any?}")
+               "#{" and run `git rm --cached #{committed.map(&see).join(' ')}`" if committed.any?}")
       elsif others.any?
         said = []
-        said << "Committed, and never read by the tools: #{others_committed.join(', ')}" if others_committed.any?
-        said << "#{said.empty? ? "Not" : "not"} gitignored, and never read by the tools: #{(others - others_committed).join(', ')}" if (others - others_committed).any?
+        said << "Committed, and never read by the tools: #{others_committed.map(&see).join(', ')}" if others_committed.any?
+        said << "#{said.empty? ? "Not" : "not"} gitignored, and never read by the tools: #{(others - others_committed).map(&see).join(', ')}" if (others - others_committed).any?
         Check.new(name: "Secrets in .gitignore", status: :warn, message: said.join("; "),
           fix: "Make sure these hold no secrets, or gitignore them#{" and run `git rm --cached` on the committed ones" if git && others_committed.any?}")
       else
         secrets = files.select { |file| matches_any?(NEVER_COMMIT, file) }
         Check.new(name: "Secrets in .gitignore", status: :pass,
-          message: secrets.any? ? "Secret files gitignored: #{secrets.join(', ')}" : "No secret files found", fix: nil)
+          message: secrets.any? ? "Secret files gitignored: #{secrets.map(&see).join(', ')}" : "No secret files found", fix: nil)
       end
     end
 
