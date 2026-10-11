@@ -313,8 +313,10 @@ module RailsAiContext
           return nil if name.to_s.empty?
 
           unless RailsAiContext.static_tier?
-            # Resolved first: a constant still waiting on its autoload has no location yet.
-            path = name.safe_constantize && (Object.const_source_location(name) rescue nil)&.first
+            # Resolved first: a constant still waiting on its autoload has no
+            # location yet. An app file that does not compile is never
+            # required for it (see EagerLoad).
+            path = Introspectors::EagerLoad.constant(name) && (Object.const_source_location(name) rescue nil)&.first
             if path
               spec = Gem.loaded_specs.values.find { |s| path.start_with?("#{s.full_gem_path}/") }
               return "the #{spec.name} gem (#{spec.version}) defines" if spec
@@ -328,7 +330,7 @@ module RailsAiContext
           lock = RailsAiContext::GemLock.for(rails_app.root.to_s)
           gem = [ ACTIONPACK_NAMESPACES[top], top, top.delete("_"), top.dasherize ].compact.uniq.find { |candidate| lock.present?(candidate) }
           "is likely the #{gem} gem's (the app's bundle locks #{gem} #{lock.version(gem)})" if gem
-        rescue StandardError => e
+        rescue StandardError, ScriptError => e
           RailsAiContext.debug_fail(e, nil, label: "exception_origin")
         end
 
@@ -373,11 +375,12 @@ module RailsAiContext
 
         # Booted, the loaded class answers whether it has the method, and the
         # name it has that is closest to the one called. Statically there is
-        # no class to ask.
+        # no class to ask, and neither is there for a class whose file does
+        # not compile, which is never required to ask it (see EagerLoad).
         def receiver_methods(receiver, name, class_receiver:)
           return [ false, nil ] if receiver.nil? || RailsAiContext.static_tier?
 
-          klass = receiver.safe_constantize
+          klass = Introspectors::EagerLoad.constant(receiver)
           return [ false, nil ] unless klass.is_a?(Module)
 
           names = (class_receiver ? klass.public_methods : klass.public_instance_methods).map(&:to_s)

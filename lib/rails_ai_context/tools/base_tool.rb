@@ -1275,13 +1275,14 @@ module RailsAiContext
 
         # Whether the loaded model class defines the method: true, false, or
         # nil when there is no loaded class to ask (the static tier, a name
-        # that is not a model). A private method counts as defined, since the
-        # error for calling one says so rather than "undefined".
+        # that is not a model, a model whose file does not compile, which is
+        # never required to ask it). A private method counts as defined, since
+        # the error for calling one says so rather than "undefined".
         def live_method_defined?(receiver, method_name)
           return nil if RailsAiContext.static_tier?
           return nil unless defined?(ActiveRecord::Base)
 
-          klass = receiver.to_s.safe_constantize
+          klass = Introspectors::EagerLoad.constant(receiver)
           return nil unless klass.is_a?(Class) && klass < ActiveRecord::Base
 
           define_attribute_methods(klass)

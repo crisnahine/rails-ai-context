@@ -879,6 +879,44 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
       expect(text).to include("**Includes:** Bogus::Backend (only `if defined?(Bogus::Backend)`), Comparable (only `unless ENV[\"NO_COMPARE\"]`)")
     end
+
+    # Each lookup safe_constantized its name, so a module, or the concern,
+    # whose file does not compile was required, and Ruby raised a
+    # SyntaxError inside the server.
+    context "when a module it names, or the concern itself, does not compile" do
+      let(:backend) { File.join(tmpdir, "lib", "zz_broken_backend.rb") }
+      let(:concern) { File.join(controller_concerns_dir, "paginatable.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(backend))
+        File.write(backend, "module ZzBrokenBackend\n  def page(\nend\n")
+        File.write(concern, <<~RUBY)
+          module Paginatable
+            extend ActiveSupport::Concern
+            include ZzBrokenBackend if defined?(ZzBrokenBackend)
+            include Comparable unless ENV["NO_COMPARE"]
+
+            def per_page(
+          end
+        RUBY
+        Object.autoload(:ZzBrokenBackend, backend)
+        Object.autoload(:Paginatable, concern)
+        allow(RailsAiContext).to receive(:log_warn)
+      end
+
+      after do
+        %i[ZzBrokenBackend Paginatable].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+      end
+
+      it "requires neither, and names the conditions alone" do
+        raised = []
+        trace = TracePoint.new(:raise) { |tp| raised << tp.raised_exception if tp.raised_exception.is_a?(SyntaxError) }
+        text = trace.enable { described_class.call(name: "Paginatable").content.first[:text] }
+
+        expect(raised).to be_empty
+        expect(text).to include("**Includes:** ZzBrokenBackend (only `if defined?(ZzBrokenBackend)`), Comparable (only `unless ENV[\"NO_COMPARE\"]`)")
+      end
+    end
   end
 
   context "on a concern whose nested classes carry the methods and includes" do

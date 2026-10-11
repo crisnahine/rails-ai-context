@@ -301,14 +301,15 @@ module RailsAiContext
       # Booted, the loaded constants say what the condition did: a module that
       # does not exist was never mixed in, and one the concern carries was.
       # Anything else stays the condition alone - an `included do` include
-      # lands on the includer, not on the concern.
+      # lands on the includer, not on the concern - and so does a module or
+      # concern whose file does not compile, which is never required to ask.
       private_class_method def self.mixin_verdict(mixin, concern_name)
         return "" if RailsAiContext.static_tier?
 
-        mod = mixin[:name].safe_constantize
+        mod = Introspectors::EagerLoad.constant(mixin[:name]) { return "" }
         return "; not mixed in here: `#{mixin[:name]}` is not defined" unless mod.is_a?(Module)
 
-        concern = concern_name.to_s.safe_constantize
+        concern = Introspectors::EagerLoad.constant(concern_name)
         target = mixin[:macro] == :extend ? concern&.singleton_class : concern
         target.is_a?(Module) && target.include?(mod) ? "; mixed in here" : ""
       rescue StandardError, ScriptError => e

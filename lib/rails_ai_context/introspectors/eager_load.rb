@@ -48,6 +48,38 @@ module RailsAiContext
           (syntax_error(file) unless $LOADED_FEATURES.include?(file))
       end
 
+      # The constant a name resolves to, loading what it must as constantize
+      # does, or nil for a name nothing defines. A tool that looks an app class
+      # up by name keeps the rule the walks keep: a file this module leaves
+      # out is never required, and the answer is then the block's, given why,
+      # or nil.
+      def constant(name)
+        name.to_s.delete_prefix("::").split("::").reduce(Object) do |scope, segment|
+          return nil unless scope.is_a?(Module) && scope.const_defined?(segment, false)
+
+          file = scope.autoload?(segment, false)
+          reason = file && left_out(file)
+          return (yield reason if block_given?) if reason
+
+          scope.const_get(segment, false)
+        end
+      rescue NameError
+        nil
+      end
+
+      # Why requiring a file now would raise out of Ruby's compiler, or nil:
+      # what a walk this run found, the file's own syntax error, else what a
+      # walk of the autoload root holding it finds - a file its class body
+      # needs that does not compile, however far down.
+      def left_out(file)
+        found = skipped(file)
+        return found if found || $LOADED_FEATURES.include?(file)
+
+        loader = Rails.autoloaders.main
+        root = loader.dirs.select { |dir| file.start_with?("#{dir}/") }.max_by(&:length) if loader.respond_to?(:dirs)
+        root && unloadable(root, Dir.glob(File.join(root, "**/*.rb")).sort)[file]
+      end
+
       # Prism's first error in a file, worded as Ruby words a SyntaxError
       # ("app/models/post.rb:4: syntax error, unexpected 'end'; ..."), or nil
       # when the running Ruby's grammar takes it - or when Prism cannot read
@@ -233,7 +265,7 @@ module RailsAiContext
       rescue Zeitwerk::Error
         nil
       end
-      private_class_method :load_dir, :load_whole, :load_individually, :unloadable, :add_dependents,
+      private_class_method :load_dir, :load_whole, :load_individually, :left_out, :unloadable, :add_dependents,
                            :load_time_constants, :per_file, :blocker, :note, :relative, :real,
                            :cpath_for, :inflect, :expected_cpath
     end

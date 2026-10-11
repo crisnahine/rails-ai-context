@@ -606,4 +606,54 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(described_class.send(:known_model_methods, { table_name: "page_views" })).to include("path")
     end
   end
+
+  # The class an error names was safe_constantized, so a model file the
+  # walks leave unloaded because it does not compile was required anyway,
+  # and Ruby raised a SyntaxError inside the server: under web-console the
+  # crash a file saved mid-edit caused. One raised for an exception class's
+  # namespace left the call altogether, past its rescue.
+  describe "a class whose file does not compile" do
+    let(:broken) { Rails.root.join("app", "models", "zz_broken_gadget.rb") }
+    let(:child) { Rails.root.join("app", "models", "zz_special_gadget.rb") }
+
+    around do |example|
+      File.write(broken, "class ZzBrokenGadget < ApplicationRecord\n  class Declined < StandardError; end\n\n" \
+                         "  def teaser\n    title.truncate(40 :omission)\n  end\nend\n")
+      File.write(child, "class ZzSpecialGadget < ZzBrokenGadget\nend\n")
+      Object.autoload(:ZzBrokenGadget, broken.to_s)
+      Object.autoload(:ZzSpecialGadget, child.to_s)
+      example.run
+    ensure
+      %i[ZzBrokenGadget ZzSpecialGadget].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+      FileUtils.rm_f([ broken, child ])
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({})
+      allow(RailsAiContext).to receive(:log_warn)
+    end
+
+    def answer_raising_no_syntax_error(error)
+      raised = []
+      trace = TracePoint.new(:raise) { |tp| raised << tp.raised_exception if tp.raised_exception.is_a?(SyntaxError) }
+      text = trace.enable { described_class.call(error: error).content.first[:text] }
+      expect(raised).to be_empty
+      text
+    end
+
+    it "is never required to ask the receiver of a NoMethodError, nor is a subclass of it" do
+      own = answer_raising_no_syntax_error("NoMethodError: undefined method 'publish!' for an instance of ZzBrokenGadget")
+      inherited = answer_raising_no_syntax_error("NoMethodError: undefined method 'publish!' for an instance of ZzSpecialGadget")
+
+      expect(own).to include("`ZzBrokenGadget` has no method `publish!`")
+      expect(inherited).to include("`ZzSpecialGadget` has no method `publish!`")
+    end
+
+    it "is never required to say where an exception class comes from" do
+      text = answer_raising_no_syntax_error("ZzBrokenGadget::Declined: card declined")
+
+      expect(text).to include("**Error:** `ZzBrokenGadget::Declined`")
+      expect(text).to include("**Classification:** unknown")
+    end
+  end
 end

@@ -498,4 +498,35 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
         .to raise_error(RailsAiContext::Error, "Path not allowed: #{shortened}")
     end
   end
+
+  # rails_validate asks the loaded model whether a callback's method exists,
+  # and safe_constantizing a model whose concern does not compile required
+  # that concern: Ruby raised a SyntaxError inside the server.
+  describe ".live_method_defined? for a model whose file needs one that does not compile" do
+    let(:concern) { Rails.root.join("app", "models", "zz_broken_signable.rb") }
+    let(:model) { Rails.root.join("app", "models", "zz_signed_gadget.rb") }
+
+    around do |example|
+      File.write(concern, "module ZzBrokenSignable\n  def sign(\nend\n")
+      File.write(model, "class ZzSignedGadget < ApplicationRecord\n  include ZzBrokenSignable\n  before_save :sign\nend\n")
+      Object.autoload(:ZzBrokenSignable, concern.to_s)
+      Object.autoload(:ZzSignedGadget, model.to_s)
+      example.run
+    ensure
+      %i[ZzBrokenSignable ZzSignedGadget].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+      FileUtils.rm_f([ concern, model ])
+    end
+
+    before { allow(RailsAiContext).to receive(:log_warn) }
+
+    it "requires neither, and has no class to ask" do
+      raised = []
+      trace = TracePoint.new(:raise) { |tp| raised << tp.raised_exception if tp.raised_exception.is_a?(SyntaxError) }
+      answer = trace.enable { described_class.send(:live_method_defined?, "ZzSignedGadget", "sign") }
+
+      expect(raised).to be_empty
+      expect(answer).to be_nil
+      expect(Object.autoload?(:ZzSignedGadget)).to eq(model.to_s)
+    end
+  end
 end

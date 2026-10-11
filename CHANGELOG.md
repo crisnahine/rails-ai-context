@@ -318,10 +318,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the bundle, saving two files that did not compile made the next
   `rails_get_model_details` segfault in about half the runs: Ruby crashed
   compiling them under web-console's raise hook. A file Prism finds a
-  syntax error in is no longer required while introspecting, nor is one
-  whose class body names its constant (a subclass of a broken
-  `ApplicationRecord`). The answer gives the error, and the log names each
-  file once.
+  syntax error in is no longer required while introspecting, nor when a
+  tool looks a class up by name - the receiver or the exception class
+  `rails_diagnose` is given, a mixin `rails_get_concern` checks, a model
+  `rails_validate` asks about a callback - nor is one whose class body
+  names its constant (a subclass of a broken `ApplicationRecord`). The
+  answer gives the error, and the log names each file once.
 - **`rails_get_controllers` names a controller whose file does not
   compile.** A controller left unloaded by a syntax error in its file, or in
   a file its class body needs (its parent controller), was listed with the

@@ -157,6 +157,35 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       expect([ Object.autoload?(:ZzParent), Object.autoload?(:ZzChild), Object.autoload?(:ZzGrandchild) ]).to all(be_nil)
       expect(ZzGrandchild.superclass.superclass.name).to eq("ZzParent")
     end
+
+    # A tool that looks a class up by name - rails_diagnose's receiver, a
+    # concern's mixin - safe_constantized it, outside any walk, and Ruby
+    # compiled the file that does not compile, or the one a subclass needs.
+    describe ".constant" do
+      it "requires neither, says why to a block, and answers nil" do
+        reasons = []
+        answers = nil
+        raised = syntax_errors_raised do
+          parent = described_class.constant("ZzParent") do |why|
+            reasons << why
+            :left_out
+          end
+          answers = [ parent, described_class.constant("ZzGrandchild") ]
+        end
+
+        expect(raised).to be_empty
+        expect(answers).to eq([ :left_out, nil ])
+        expect(reasons).to contain_exactly(a_string_matching(/zz_parent\.rb:3: syntax error, /))
+        expect([ Object.autoload?(:ZzParent), Object.autoload?(:ZzGrandchild) ]).to all(be_a(String))
+      end
+
+      it "loads a file that compiles as constantize does, and answers nil for a name nothing defines" do
+        expect(described_class.constant("ZzBystander")&.name).to eq("ZzBystander")
+        expect(Object.autoload?(:ZzBystander)).to be_nil
+        expect(described_class.constant("ZzNobody")).to be_nil
+        expect(described_class.constant("not a constant")).to be_nil
+      end
+    end
   end
 
   # Camelizing the path gives ZzHtmlParser, a constant nothing defines, so
