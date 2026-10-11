@@ -1117,11 +1117,13 @@ class RailsAiContextCLI < Thor
     # Another command for this app as this one was typed: from where it was
     # typed, with the --app-path it named, under bundle exec when it ran so.
     # A run the binary handed to the app's bundle was typed without it, and
-    # typed again it is handed over again.
+    # typed again it is handed over again. Read from the environment the
+    # binary was started in: the app's boot runs bundler/setup, which sets
+    # BUNDLE_BIN_PATH in a standalone run too.
     def own_command(*args)
       result = @app_root_result
       typed = @app_path_override || options[:app_path]
-      typed_bundled = ENV["BUNDLE_BIN_PATH"] && !ENV[app_root::HANDOFF_ENV]
+      typed_bundled = STARTING_ENV["BUNDLE_BIN_PATH"] && !STARTING_ENV[app_root::HANDOFF_ENV]
       words = typed_bundled ? %w[bundle exec rails-ai-context] : %w[rails-ai-context]
       words += [ "--app-path", app_root.option_path(typed) ] if result&.explicit && typed && result.root != result.cwd
       app_root.command_line([ *words, *args ])
