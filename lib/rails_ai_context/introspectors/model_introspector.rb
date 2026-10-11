@@ -109,8 +109,9 @@ module RailsAiContext
           # Resolved before the details, so the rescue below states it rather
           # than calling again: a second raise from the same call would escape
           # the rescue meant to contain the first.
-          table = resolve_table_name(class_name, candidates)
-          table_set_by = outside_parent(class_name, candidates) unless table
+          outside = outside_parent(class_name, candidates)
+          table = resolve_table_name(class_name, candidates, outside: outside)
+          table_set_by = outside unless table
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
                                                     table_name: table, table_set_by: table_set_by,
                                                     primary_key: resolve_primary_key(class_name, candidates),
@@ -331,7 +332,7 @@ module RailsAiContext
       # Rails' own order: what the class assigns itself wins, an STI child
       # reads its parent's table, and otherwise the namespace's prefix and
       # suffix wrap the stem the file name already carries.
-      def resolve_table_name(class_name, candidates, seen = [])
+      def resolve_table_name(class_name, candidates, seen = [], outside: outside_parent(class_name, candidates))
         candidate = candidates[class_name]
         # An entry the walk recorded as an error carries no path, and a table
         # derived from no path is the empty string, which is truthy.
@@ -346,16 +347,15 @@ module RailsAiContext
                 contained_prefix(class_name, candidates, seen),
                 TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
                 namespace_affix(class_name, candidates, :table_name_suffix) ].join
-        found = outside_parent_tables(class_name, candidates, own)
-        return own unless found
+        return own unless outside
 
+        found = outside_parent_tables(class_name, candidates, own, outside)
         found.first if found.one?
       end
 
       # A concrete parent the app does not define sets the table, unread here; the
       # schema picks among its names, plus the class's own for a parent that is abstract.
-      def outside_parent_tables(class_name, candidates, own)
-        parent = outside_parent(class_name, candidates) or return nil
+      def outside_parent_tables(class_name, candidates, own, parent)
         names = [ TableName.derive(parent), parent.underscore.tr("/", "_").pluralize ]
         names = names.map(&:singularize) unless pluralize_tables?(class_name, candidates)
         reader = SchemaReader.for(app.root)
