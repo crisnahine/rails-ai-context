@@ -115,7 +115,7 @@ Five modules answer questions every introspector used to answer for itself:
 
 - **PathResolver** - where a kind of app code lives: `app/<kind>`, packs, and the in-repo code roots read from the tree (a directory holding its own `app/` plus a gemspec, `plugin.rb` or `lib/**/engine.rb`), memoized per root
 - **SourceScan** - one walk over a kind of app source, across every directory `PathResolver` resolves: `paths` stats, `each` reads, `classes` names by the declared constant
-- **EagerLoad** - loads a directory's constants for a booted-tier walk, one file at a time, so an unloadable file costs only itself
+- **EagerLoad** - loads a directory's constants for a booted-tier walk, one file at a time, so an unloadable file costs only itself. A file Prism finds a syntax error in is never required, nor is one whose class body names its constant (a subclass, an includer); each is left out with the reason, which a model's answer gives in its place
 - **GemLock** - which gems the app resolved and at what version, read once per lockfile and matched by exact name across GEM, GIT and PATH
 - **PackageJson** - which npm packages the app depends on, read once per `package.json`: present means named in `dependencies` or `devDependencies`, so an `overrides` pin is not a dependency, and `@tailwindcss/vite` counts as tailwindcss
 

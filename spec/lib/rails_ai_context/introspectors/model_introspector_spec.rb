@@ -2567,6 +2567,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(error).not_to include(File.realpath(Rails.root.to_s))
       expect(error).to include("app/models/broken_widget.rb")
     end
+
+    # With an autoload in place, constantizing the class required the file,
+    # and the SyntaxError Ruby's compiler raised crashed the server when
+    # web-console was in the bundle. So did loading a model whose class body
+    # names it.
+    context "when an autoload would require it" do
+      let(:child) { Rails.root.join("app", "models", "zz_special_widget.rb") }
+
+      around do |example|
+        File.write(child, "class ZzSpecialWidget < BrokenWidget\nend\n")
+        Object.autoload(:BrokenWidget, broken.to_s)
+        Object.autoload(:ZzSpecialWidget, child.to_s)
+        example.run
+      ensure
+        %i[BrokenWidget ZzSpecialWidget].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+        FileUtils.rm_f(child)
+      end
+
+      it "names both with the reason, and requires neither" do
+        raised = []
+        trace = TracePoint.new(:raise) { |tp| raised << tp.raised_exception if tp.raised_exception.is_a?(SyntaxError) }
+        result = trace.enable { described_class.new(Rails.application).call }
+
+        expect(raised).to be_empty
+        expect(result["BrokenWidget"][:error])
+          .to eq("app/models/broken_widget.rb:4: syntax error, unexpected end-of-input, assuming it is closing the parent top level context")
+        expect(result["ZzSpecialWidget"][:error])
+          .to eq("app/models/zz_special_widget.rb needs BrokenWidget, which does not compile: #{result["BrokenWidget"][:error]}")
+      end
+    end
   end
 
   # A root outside app/models holds generators and gem subclasses too; one of

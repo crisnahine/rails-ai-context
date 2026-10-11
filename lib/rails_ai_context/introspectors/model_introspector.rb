@@ -26,7 +26,7 @@ module RailsAiContext
 
       # @return [Hash] model metadata keyed by model name
       def call
-        EagerLoad.dir(app.root, kind: "app/models")
+        @left_out = EagerLoad.dir(app.root, kind: "app/models")
         @unloadable = {}
         models = discover_models
 
@@ -548,6 +548,15 @@ module RailsAiContext
           class_name = DeclaredConstant.named(model_source(record.path).to_s, record.path_name)
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
+
+          # Never required here either: a file that does not compile, or
+          # whose class body needs one that does not (see EagerLoad). Why is
+          # the answer for that model.
+          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path))
+            @unloadable[class_name] = reason
+            @outside_model_dirs << class_name unless model_dir_file?(record.path)
+            next
+          end
 
           begin
             klass = class_name.constantize

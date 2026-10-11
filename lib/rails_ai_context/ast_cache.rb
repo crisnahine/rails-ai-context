@@ -83,6 +83,13 @@ module RailsAiContext
       Prism.parse(source)
     end
 
+    # Whether a file parses under `ruby:`'s grammar, with no tree built or
+    # kept: the check before a loader requires each file it walks.
+    def self.parse_success?(path, ruby: nil)
+      version = prism_version(ruby)
+      version ? Prism.parse_file_success?(path, version: version) : Prism.parse_file_success?(path)
+    end
+
     # Parse a Ruby source string, cached by content digest, so every extractor
     # handed the same text shares one parse.
     def self.parse_string(source, ruby: nil)
