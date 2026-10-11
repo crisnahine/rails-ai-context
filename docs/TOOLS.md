@@ -254,10 +254,12 @@ defined, so was never mixed in.
 
 Controller actions with inherited filters, render map, strong params. Includes schema hints for referenced models.
 
+Rails counts every public method that a concern or a parent controller gives among a controller's actions. A `page_info` in a concern that `ApplicationController` includes is an action of each controller. An app keeps the helpers its controllers share in such places, so the action lists take one of these methods only where a route names it for that controller, booted or not. An `action` lookup also finds one that no route names, under the rules the lists apply: no callback, no name that starts with `_` or ends in `?` or `!`, and no required argument. The answer reads the method from the file that defines it. It names the parent controller under **Inherited** when the method comes from one, and says under **Not listed** why the lists leave the method out. A private `def` of the same name lower down hides the method, as it does from Rails.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `controller` | string | - | Controller name (e.g., `UsersController`) |
-| `action` | string | - | Specific action; requires `controller` |
+| `action` | string | - | Specific action; requires `controller`. Also finds one a concern or a parent controller gives that no route names (see above) |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 | `limit` | integer | `50` | Max controllers when listing |
 | `offset` | integer | `0` | Skip this many controllers |
@@ -793,6 +795,8 @@ In addition to tools, AI clients can read structured data through **resource tem
 | `rails-ai-context://models/{name}` | Model details: associations, validations, schema |
 
 The legacy `rails://models/{name}` form is still accepted.
+
+`controllers/{name}/{action}` also reads an action that a concern or a parent controller gives and no route names, as the `rails_get_controllers` `action` lookup does. `inherited_from` names the parent controller an action comes from. `note` says why the controller's `actions` leave out one that no route names.
 
 A read for a name the app does not have - a model, a controller, an action, a view - fails with a JSON-RPC `-32602` error whose message gives the reason and whose `data.available` lists the names there are: for a view, the ones in its directory, else the app's first twenty. So does a view over the size cap, and a URI the server does not serve, whose `data.available` lists the resources and templates it does. A path refused on policy fails as `Resource not found`, without saying why.
 

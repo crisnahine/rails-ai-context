@@ -2069,5 +2069,31 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(things[:inherited_actions]).to eq(%w[product_name])
       end
     end
+
+    # The booted tier lists a routed public method of an ApplicationController
+    # concern, read off the class's ancestors; a file read alone never saw
+    # what its parent includes, so the static tier left the routed action out.
+    it "lists a routed method a parent's concern defines, and leaves the unrouted helper out" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  include Pageable\nend\n")
+        File.write(File.join(dir, "app", "controllers", "concerns", "pageable.rb"),
+                   "module Pageable\n  def page_info; end\n\n  def page_links; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"),
+                   "class PostsController < ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "comments_controller.rb"),
+                   "class CommentsController < ApplicationController\n  def index; end\nend\n")
+
+        section = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        described_class.apply_routes(section, { by_controller: {
+          "posts" => [ { action: "index" }, { action: "page_info" }, { action: "Page_Links" } ],
+          "comments" => [ { action: "index" } ]
+        } }, dir)
+
+        expect(section[:controllers]["PostsController"][:actions]).to eq(%w[index page_info])
+        expect(section[:controllers]["CommentsController"][:actions]).to eq(%w[index])
+      end
+    end
   end
 end

@@ -92,20 +92,29 @@ module RailsAiContext
         info = controllers[key]
         actions = info[:actions] || []
         action = actions.find { |a| a.to_s.casecmp?(action_name) }
+        root = RailsAiContext.default_app.root.to_s
+        file = Payload.controller_file(context, key)
+        # Rails counts a public method a concern or a parent controller gives
+        # among this controller's actions, though the listing takes one only
+        # where a route names it.
+        unlisted = action ? nil : Introspectors::ActionSource.unlisted_action(root, key, action_name, file: file, controllers: controllers)
+        action ||= unlisted && unlisted[:name]
         raise ResourceUnavailable.new("Action '#{echo(action_name)}' not found in #{key}", available: actions.map(&:to_s)) unless action
 
         # Build action-specific data
         applicable = ActionFilters.for(context, key, action)
         # The action's own lines, from the controller's file or, for one it
         # mixes in or inherits, the file that defines it.
-        root = RailsAiContext.default_app.root.to_s
-        file = Payload.controller_file(context, key)
         source = file && SafeFile.read(File.join(root, file))
-        body = source && Introspectors::ActionResolver.method_body(source, action.to_s, owner: key)&.merge(file: file)
+        body = unlisted || (source && Introspectors::ActionResolver.method_body(source, action.to_s, owner: key)&.merge(file: file))
         body ||= Introspectors::ActionSource.find(root, key, action.to_s, file: file, controllers: controllers)
+        owner = body && body[:owner]
         action_data = {
           controller: key,
           action: action.to_s,
+          # The parent controller the def comes from, its own or a concern's.
+          inherited_from: owner == key ? nil : owner,
+          note: unlisted && Introspectors::ActionSource::UNLISTED_NOTE,
           file: body ? body[:file] : file,
           lines: body && "#{body[:start_line]}-#{body[:end_line]}",
           source: body && Redaction.redact_source(body[:code], path: body[:file]),

@@ -219,6 +219,41 @@ RSpec.describe RailsAiContext::VFS do
       ensure
         RailsAiContext.tier = previous
       end
+
+      # Rails counts a public method of an ApplicationController concern among
+      # the actions of every controller below it, and the listing leaves it
+      # out, so the read answered "not found" for an action Rails routes.
+      it "reads an action a parent's concern defines, naming the parent" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app/controllers/concerns"))
+          File.write(File.join(root, "app/controllers/application_controller.rb"),
+                     "class ApplicationController < ActionController::Base\n  include Pageable\nend\n")
+          File.write(File.join(root, "app/controllers/concerns/pageable.rb"),
+                     "module Pageable\n  def page_info\n    head :ok\n  end\n\n  def page_for(scope)\n    scope\n  end\nend\n")
+          File.write(File.join(root, "app/controllers/posts_controller.rb"),
+                     "class PostsController < ApplicationController\n  def index; end\nend\n")
+          allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(root))
+          controllers = context[:controllers][:controllers]
+          controllers["ApplicationController"][:file] = "app/controllers/application_controller.rb"
+          controllers["PostsController"][:file] = "app/controllers/posts_controller.rb"
+
+          data = JSON.parse(described_class.resolve("rails-ai-context://controllers/posts/page_info").first[:text])
+
+          expect(data).to include("controller" => "PostsController", "action" => "page_info", "inherited_from" => "ApplicationController",
+                                  "file" => "app/controllers/concerns/pageable.rb", "lines" => "2-4")
+          expect(data["source"]).to include("head :ok")
+          expect(data["note"]).to start_with("The action list takes a method a concern or a parent controller gives only where a route")
+          # A method that takes an argument is no action, as the listing has it.
+          expect { described_class.resolve("rails-ai-context://controllers/posts/page_for") }
+            .to raise_error(RailsAiContext::ResourceUnavailable, /Action 'page_for' not found/)
+
+          # Listed, as a route naming it makes it, it still names the parent.
+          controllers["PostsController"][:actions] << "page_info"
+          listed = JSON.parse(described_class.resolve("rails-ai-context://controllers/posts/page_info").first[:text])
+          expect(listed).to include("inherited_from" => "ApplicationController", "file" => "app/controllers/concerns/pageable.rb")
+          expect(listed).not_to have_key("note")
+        end
+      end
     end
 
     context "routes" do

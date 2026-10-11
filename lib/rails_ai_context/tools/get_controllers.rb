@@ -291,11 +291,21 @@ module RailsAiContext
         actions = info[:actions] || []
         # Case-insensitive action lookup for consistency with other tools
         action_name = actions.find { |a| a.to_s.downcase == action_name.to_s.downcase }&.to_s || action_name.to_s
+        carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
+        # Rails counts a public method a concern or a parent controller gives
+        # among this controller's actions, though the listing takes one only
+        # where a route names it.
+        unlisted = nil
         unless actions.map(&:to_s).include?(action_name)
-          return empty_response("Action '#{echo_input(action_name)}' not found in #{controller_name}. Available: #{actions.join(', ')}")
+          unlisted = RailsAiContext::Introspectors::ActionSource.unlisted_action(rails_app.root, controller_name, action_name,
+            file: carried, controllers: RailsAiContext::Payload.controllers(cached_context))
+          unless unlisted
+            return empty_response("Action '#{echo_input(action_name)}' not found in #{controller_name}. Available: #{actions.join(', ')}")
+          end
+
+          action_name = unlisted[:name]
         end
 
-        carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
         source_path = carried ? rails_app.root.join(carried) : nil
         source = source_path && safe_read(source_path.to_s)
 
@@ -303,8 +313,8 @@ module RailsAiContext
           root: rails_app.root.to_s)
 
         # Extract source code with line numbers
-        source_with_lines = source && extract_method_with_lines(source_path, action_name, source: source,
-          owner: controller_name)
+        source_with_lines = unlisted || (source && extract_method_with_lines(source_path, action_name, source: source,
+          owner: controller_name))
         # An action from a concern or a parent controller has no def in this file.
         source_with_lines ||= RailsAiContext::Introspectors::ActionSource.find(rails_app.root, controller_name,
           action_name, file: carried, controllers: RailsAiContext::Payload.controllers(cached_context))
@@ -313,6 +323,9 @@ module RailsAiContext
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
         lines << "**File:** `#{carried}`" if carried
+        parent = source_with_lines&.dig(:owner)
+        lines << "**Inherited:** from #{parent}, defined in `#{source_with_lines[:file]}`." if parent && parent != controller_name
+        lines << "**Not listed:** #{RailsAiContext::Introspectors::ActionSource::UNLISTED_NOTE}" if unlisted
 
         if applicable.values.any?(&:any?)
           lines << "" << "## Applicable Filters"

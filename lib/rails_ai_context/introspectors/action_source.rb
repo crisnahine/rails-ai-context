@@ -9,6 +9,10 @@ module RailsAiContext
     # is not in the controller's own file, and reading only that file
     # answered as if its source could not be found.
     module ActionSource
+      # Why an action #unlisted_action finds is missing from the listing.
+      UNLISTED_NOTE = "The action list takes a method a concern or a parent controller gives only where a route " \
+                      "names it for this controller. Rails counts it among this controller's actions all the same."
+
       module_function
 
       # The walk starts at the file the controller listing recorded and never
@@ -19,8 +23,40 @@ module RailsAiContext
       # @param file [String, nil] the controller's own file, relative to root
       # @param controllers [Hash] the controller listing, name => details
       # @return [Hash, nil] the body from ActionResolver.method_body, plus
-      #   :file, the file it was read from, relative to root
+      #   :file, the file it was read from, relative to root, and :owner, the
+      #   class in the controller's chain whose body, or a module it
+      #   includes, holds the def
       def find(root, controller_name, action, file:, controllers: {})
+        body, _method, owner = walk(root, controller_name, action, file: file, controllers: controllers)
+        body&.merge(owner: owner)
+      end
+
+      # An action the listing leaves out: a public method a concern or a
+      # parent controller gives, which the listing takes only where a route
+      # names it for the controller. Rails counts every one among the
+      # controller's actions (an ApplicationController concern's page_info is
+      # an action of every controller), so a lookup by name reads it here,
+      # under the rules the listing applies: no callback, no `_`, `?` or `!`
+      # name, no required argument. The nearest def decides, whatever its
+      # visibility, as in Ruby's lookup: a private def below a public one
+      # hides it from Rails too.
+      #
+      # @return [Hash, nil] as #find gives it, plus :name, the action as the
+      #   def spells it
+      def unlisted_action(root, controller_name, action, file:, controllers: {})
+        name = action.to_s
+        return nil if name.start_with?("_") || name.end_with?("?", "!")
+
+        body, method, owner = walk(root, controller_name, name, file: file, controllers: controllers, visibility: :any)
+        return nil unless method && method[:visibility] == :public && !ActionResolver.requires_argument?(method)
+
+        name = method[:name].to_s
+        body.merge(name: name, owner: owner) unless callback_names(controllers, controller_name.to_s).include?(name)
+      end
+
+      # The walk behind both: the body, the walked method, and the class in
+      # the chain it was found under.
+      def walk(root, controller_name, action, file:, controllers:, visibility: :public)
         return nil unless file
 
         root = root.to_s
@@ -36,8 +72,8 @@ module RailsAiContext
 
           # Module.nesting inside the class body, which is where its
           # `include` reads a name: the class, then what encloses it.
-          found = in_class(root, path, source, name, action, [ name, *declaration.nesting ])
-          return found if found
+          found = in_class(root, path, source, name, action, [ name, *declaration.nesting ], visibility)
+          return [ *found, name ] if found
 
           parent = declaration.superclass
           break if parent.nil? || ActionPresence::BASES.include?(parent)
@@ -49,7 +85,22 @@ module RailsAiContext
         end
         nil
       rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "ActionSource.find")
+        RailsAiContext.debug_fail(e, nil, label: "ActionSource.walk")
+      end
+
+      # Every callback the listing records on the controller and on each
+      # parent it holds: a statically read entry carries only its own.
+      def callback_names(controllers, name)
+        return [] unless controllers.is_a?(Hash)
+
+        names = []
+        seen = []
+        while (info = controllers[name]).is_a?(Hash) && !seen.include?(name)
+          seen << name
+          names.concat(Array(info[:filters]).filter_map { |filter| filter[:name].to_s if filter.is_a?(Hash) })
+          name = ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
+        end
+        names
       end
 
       def listed_path(root, name, controllers)
@@ -59,27 +110,31 @@ module RailsAiContext
         path if path && File.file?(path)
       end
 
-      def in_class(root, path, source, name, action, scopes)
+      def in_class(root, path, source, name, action, scopes, visibility)
         mixins = mixins_of(root, source, name)
         prepended, included = mixins.partition { |mixin| mixin[:macro] == :prepend }
-        in_modules(root, prepended, scopes, action, 0) ||
-          own_def(root, path, source, name, action) ||
-          in_modules(root, included, scopes, action, 0)
+        in_modules(root, prepended, scopes, action, 0, visibility) ||
+          own_def(root, path, source, name, action, visibility) ||
+          in_modules(root, included, scopes, action, 0, visibility)
       end
 
       # Only a def the owner itself carries: ActionResolver.method_body falls
       # back to the first `def` of that name anywhere in the file, which in a
-      # parent's file can be another class's.
-      def own_def(root, path, source, owner, action)
-        method = ActionResolver.public_methods_in(source, owner: owner, skip_underscored: false)
-                               .find { |m| m[:name].to_s.casecmp?(action.to_s) }
+      # parent's file can be another class's. A public def unless
+      # `visibility` is :any.
+      #
+      # @return [Array(Hash, Hash), nil] the body with its :file, and the walked method
+      def own_def(root, path, source, owner, action, visibility)
+        method = ActionResolver.own_methods_in(source, owner).find do |m|
+          m[:scope] == :instance && (visibility == :any || m[:visibility] == :public) && m[:name].to_s.casecmp?(action.to_s)
+        end
         body = method && ActionResolver.body_of(source, method)
-        body&.merge(file: PortablePath.relativize(path, root))
+        body && [ body.merge(file: PortablePath.relativize(path, root)), method ]
       end
 
       # @param scopes [Array<String>] Module.nesting where the mixins are
       #   written, innermost first
-      def in_modules(root, mixins, scopes, action, depth)
+      def in_modules(root, mixins, scopes, action, depth, visibility)
         return nil if depth > ActionPresence::MODULE_DEPTH
 
         mixins.reverse_each do |mixin|
@@ -89,8 +144,8 @@ module RailsAiContext
           source = path && PathResolver.project_file?(path, root) && SafeFile.read(path)
           next unless source
 
-          found = own_def(root, path, source, mod, action) ||
-                  in_modules(root, mixins_of(root, source, mod), namespaces(mod), action, depth + 1)
+          found = own_def(root, path, source, mod, action, visibility) ||
+                  in_modules(root, mixins_of(root, source, mod), namespaces(mod), action, depth + 1, visibility)
           return found if found
         end
         nil

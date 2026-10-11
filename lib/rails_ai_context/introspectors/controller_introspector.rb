@@ -100,11 +100,26 @@ module RailsAiContext
           end
 
           info[:actions] -= inherited - routed
+          dispatched = routed_from_parents(controllers, name, info, routed, root)
+          info[:actions] = (info[:actions] + dispatched).sort if dispatched.any?
           dir = File.join(root.to_s, "app", "views", path)
           next unless Dir.exist?(dir)
 
           extra = (routed & Dir.children(dir).map { |f| f.split(".").first }) - info[:actions]
           info[:actions] = (info[:actions] + extra).sort if extra.any?
+        end
+      end
+
+      # A routed name that a parent controller, or a concern a parent
+      # includes, defines as a public method: Rails dispatches it here. A
+      # file read alone never sees what its parent mixes in, so the static
+      # tier missed what the booted one lists. Only the names a route gives
+      # this controller are asked about, so a shared helper stays out.
+      def self.routed_from_parents(controllers, name, info, routed, root)
+        (routed.uniq - info[:actions]).select do |action|
+          found = ActionSource.unlisted_action(root.to_s, name, action, file: info[:file], controllers: controllers)
+          # Rails dispatches by the exact name; the lookup by hand ignores case.
+          found && found[:name] == action
         end
       end
 
