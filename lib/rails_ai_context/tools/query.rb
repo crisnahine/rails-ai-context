@@ -331,7 +331,8 @@ module RailsAiContext
         when "csv"
           format_csv(redacted) + truncation
         else
-          format_table(redacted) + truncation + unbounded_note(result)
+          body = sql.match?(SHOW_CREATE_DEFINITION) ? format_definition(redacted) : format_table(redacted)
+          body + truncation + unbounded_note(result)
         end
 
         text_response(output)
@@ -1606,6 +1607,31 @@ module RailsAiContext
         lines << "_#{count_phrase(rows.size, "row")} returned._"
 
         lines.join("\n")
+      end
+
+      # SHOW CREATE TABLE / VIEW in the default format. A definition is DDL to
+      # read, so each one is shown whole, its line breaks kept, in a fenced code
+      # block: as a table cell it would be cut at 100 characters and its lines
+      # folded into `\n`. The text is already redacted (redact_definition), and
+      # the response size cap in text_response still bounds the answer. Any
+      # other column (a view's character set and collation) follows as a
+      # `name: value` line.
+      private_class_method def self.format_definition(result)
+        columns = result.columns
+        definition = columns.index { |col| col.to_s.match?(/\ACreate\b/i) }
+        return format_table(result) if definition.nil? || result.rows.empty?
+
+        result.rows.map { |row|
+          text = csv_cell(row[definition])
+          # Longer than any backtick run inside, so a backtick-quoted
+          # identifier cannot close the fence.
+          fence = "`" * [ 3, text.scan(/`+/).map(&:length).max.to_i + 1 ].max
+          lines = [ "#{columns[0]}: #{csv_cell(row[0])}", "", "#{fence}sql", text, fence ]
+          others = columns.each_index.reject { |i| i.zero? || i == definition }
+          lines << "" if others.any?
+          others.each { |i| lines << "#{columns[i]}: #{csv_cell(row[i])}" }
+          lines.join("\n")
+        }.join("\n\n")
       end
 
       private_class_method def self.format_csv(result)

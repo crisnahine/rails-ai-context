@@ -2235,4 +2235,74 @@ it "still explains a database that does not exist" do
       expect(formatted).to include("\\|")
     end
   end
+
+  # R7: in the default format a SHOW CREATE definition was one table cell, cut
+  # at 100 characters with its lines folded into `\n`, and nothing said that
+  # format: "csv" had all of it.
+  describe "SHOW CREATE definition rendering" do
+    let!(:original_cap) { RailsAiContext.configuration.max_tool_response_chars }
+    after { RailsAiContext.configuration.max_tool_response_chars = original_cap }
+
+    let(:ddl) do
+      "CREATE TABLE `posts` (\n" \
+        "  `id` bigint(20) NOT NULL AUTO_INCREMENT,\n" \
+        "  `title` varchar(255) NOT NULL,\n" \
+        "  `body` text DEFAULT NULL,\n" \
+        "  PRIMARY KEY (`id`)\n" \
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    end
+
+    def answer(sql, rows:, columns: [ "Table", "Create Table" ], **opts)
+      allow(described_class).to receive(:run_guarded).and_return(ActiveRecord::Result.new(columns, rows))
+      described_class.call(sql: sql, **opts).content.first[:text]
+    end
+
+    it "shows the whole definition, its line breaks kept, in a fenced code block" do
+      text = answer("SHOW CREATE TABLE posts", rows: [ [ "posts", ddl ] ])
+      expect(ddl.length).to be > 100
+      expect(text).to include("Table: posts")
+      expect(text).to include("```sql\n#{ddl}\n```")
+      expect(text).not_to include("...")
+      expect(text).not_to include("\\n")
+    end
+
+    it "lists a view's other columns after its definition" do
+      text = answer("SHOW CREATE VIEW totals",
+        columns: [ "View", "Create View", "character_set_client", "collation_connection" ],
+        rows: [ [ "totals", "CREATE VIEW `totals` AS select 1 AS `n`", "utf8mb4", "utf8mb4_general_ci" ] ])
+      expect(text).to include("View: totals")
+      expect(text).to include("```sql\nCREATE VIEW `totals` AS select 1 AS `n`\n```")
+      expect(text).to include("character_set_client: utf8mb4\ncollation_connection: utf8mb4_general_ci")
+    end
+
+    it "fences the definition past its longest backtick run" do
+      # The identifier a` is written `a```, a run of three backticks.
+      tricky = "CREATE TABLE `a``` (`id` int)"
+      text = answer("SHOW CREATE TABLE x", rows: [ [ "a`", tricky ] ])
+      expect(text).to include("````sql\n#{tricky}\n````")
+    end
+
+    it "still redacts a credential inside the definition" do
+      secret = "p#{'w' * 14}"
+      linked = "CREATE TABLE `l` (`id` int) COMMENT='mysql://svc_user:#{secret}@db.internal:3306/app'"
+      text = answer("SHOW CREATE TABLE l", rows: [ [ "l", linked ] ])
+      expect(text).to include("```sql\n")
+      expect(text).to include("mysql://#{RailsAiContext::Redaction::FILTERED}@db.internal:3306/app")
+      expect(text).not_to include(secret)
+    end
+
+    it "leaves the CSV format a plain comma block" do
+      text = answer("SHOW CREATE TABLE posts", rows: [ [ "posts", ddl ] ], format: "csv")
+      expect(text).to start_with("Table,Create Table\nposts,\"CREATE TABLE")
+      expect(text).not_to include("```")
+    end
+
+    it "is still bounded by the response size cap" do
+      RailsAiContext.configuration.max_tool_response_chars = 200
+      wide = "CREATE TABLE `t` (\n#{(1..60).map { |i| "  `c#{i}` int DEFAULT NULL" }.join(",\n")}\n)"
+      text = answer("SHOW CREATE TABLE t", rows: [ [ "t", wide ] ])
+      expect(text).to include("Response truncated")
+      expect(text.length).to be < wide.length
+    end
+  end
 end
