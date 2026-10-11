@@ -625,6 +625,25 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # Each app's files come from a child run at the app, which named them
+    # from there: its rm line for legacy files, pasted where init ran,
+    # removed nothing.
+    it "names an app's legacy files, and the rm line for them, from the folder init ran in" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        FileUtils.mkdir_p(File.join(dir, "a", ".claude", "rules"))
+        File.write(File.join(dir, "a", ".claude", "rules", "rails-ui-patterns.md"), "old\n")
+
+        _out, err, status = init(dir, "1\n1\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("  rm -f a/.claude/rules/rails-ui-patterns.md\n", "Written: a/CLAUDE.md")
+        system("rm -f a/.claude/rules/rails-ui-patterns.md", chdir: dir)
+        expect(File.exist?(File.join(dir, "a", ".claude", "rules", "rails-ui-patterns.md"))).to be(false)
+      end
+    end
+
     it "sets up the folder of apps --app-path names" do
       Dir.mktmpdir do |dir|
         rails_app(File.join(dir, "work", "a"))
