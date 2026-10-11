@@ -10,7 +10,8 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     Dir.mktmpdir do |dir|
       files.each do |rel, body|
         FileUtils.mkdir_p(File.join(dir, File.dirname(rel)))
-        File.write(File.join(dir, rel), body)
+        # Byte for byte: Windows writes text mode with CRLF line endings.
+        File.binwrite(File.join(dir, rel), body)
       end
       RailsAiContext.configuration.app_root = dir
       yield dir
@@ -755,13 +756,25 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           end
         end
 
-        # Ripgrep matches a line without its terminator, so `\s$` means trailing whitespace.
+        # A line is matched without its terminator, LF or CRLF, so `\s$`
+        # means trailing whitespace and not the CR of a CRLF.
         it "matches a line without its newline" do
           with_search_app("app/models/a.rb" => "alpha\nbeta \ngamma\r\ndelta\n") do
             text = text_for(pattern: "\\s$", context_lines: 0)
 
-            expect(text).to include("2 matches")
-            expect(text).to include("a.rb:2", "a.rb:3")
+            expect(text).to include("**1 match**")
+            expect(text).to include("a.rb:2")
+            expect(text).not_to include("a.rb:3")
+          end
+        end
+
+        # A Windows checkout ends every line in CRLF, and `$` matched none of them.
+        it "anchors at the end of a line that ends in CRLF" do
+          with_search_app("app/models/a.rb" => "def alpha\r\n  1\r\nend\r\n") do
+            text = text_for(pattern: "^end$", context_lines: 0)
+
+            expect(text).to include("**1 match**")
+            expect(text).to include("a.rb:3: end")
           end
         end
 
@@ -1175,6 +1188,25 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
         expect(text).to include("def reblog?")
         expect(text).not_to include("No results found")
+      end
+    end
+  end
+
+  # Windows refuses a command line past 32K characters, and the error it
+  # raised repeated that line, so a long pattern came back whole.
+  describe "when ripgrep cannot be started" do
+    before do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      allow(described_class).to receive(:ripgrep_available?).and_return(true)
+      allow(Open3).to receive(:capture3) { |*cmd, **| raise Errno::E2BIG, cmd.join(" ") }
+    end
+
+    it "answers from the Ruby backend, without the command line" do
+      with_search_app("app/models/status.rb" => "class Status\n  def reblog?\n  end\nend\n") do
+        text = described_class.call(pattern: "def reblog?", context_lines: 0).content.first[:text]
+
+        expect(text).to include("status.rb:2")
+        expect(text).not_to include("--no-heading")
       end
     end
   end

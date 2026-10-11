@@ -215,20 +215,18 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
       after { FileUtils.remove_entry(bin_dir) }
 
-      it "reads the report even when the executable prints before it" do
+      # Run by this Ruby, as the gem's own script is.
+      def fake_brakeman(body)
         script = File.join(bin_dir, "brakeman")
-        File.write(script, <<~SH)
-          #!/bin/sh
-          echo "Resolving dependencies..."
-          out=""
-          while [ $# -gt 0 ]; do
-            if [ "$1" = "--output" ]; then out="$2"; fi
-            shift
-          done
-          printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
-        SH
-        File.chmod(0o755, script)
-        allow(described_class).to receive(:brakeman_command).and_return([ script ])
+        File.write(script, body)
+        allow(described_class).to receive(:brakeman_command).and_return([ RbConfig.ruby, script ])
+      end
+
+      it "reads the report even when the executable prints before it" do
+        fake_brakeman(<<~RUBY)
+          puts "Resolving dependencies..."
+          File.write(ARGV[ARGV.index("--output") + 1], '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}')
+        RUBY
 
         report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
 
@@ -241,16 +239,12 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       # Ruby prints an uncaught error, then its backtrace; the last line is a
       # frame, which says where brakeman stopped, not why.
       it "reports brakeman's message rather than the last backtrace frame" do
-        script = File.join(bin_dir, "brakeman")
-        File.write(script, <<~SH)
-          #!/bin/sh
-          echo "/gems/brakeman-8.0.6/lib/brakeman.rb:412:in 'scan': Please supply the path to a Rails application (Brakeman::NoApplication)" >&2
-          echo "	from /gems/brakeman-8.0.6/lib/brakeman.rb:77:in 'run'" >&2
-          echo "	from /gems/brakeman-8.0.6/bin/brakeman:9:in '<main>'" >&2
+        fake_brakeman(<<~RUBY)
+          warn "/gems/brakeman-8.0.6/lib/brakeman.rb:412:in 'scan': Please supply the path to a Rails application (Brakeman::NoApplication)"
+          warn "\tfrom /gems/brakeman-8.0.6/lib/brakeman.rb:77:in 'run'"
+          warn "\tfrom /gems/brakeman-8.0.6/bin/brakeman:9:in '<main>'"
           exit 1
-        SH
-        File.chmod(0o755, script)
-        allow(described_class).to receive(:brakeman_command).and_return([ script ])
+        RUBY
 
         _report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
 
@@ -258,15 +252,11 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
 
       it "reports the line brakeman printed when it is not an exception" do
-        script = File.join(bin_dir, "brakeman")
-        File.write(script, <<~SH)
-          #!/bin/sh
-          echo "Loading scanner..." >&2
-          echo "No Rails application found in /tmp/app" >&2
+        fake_brakeman(<<~RUBY)
+          warn "Loading scanner..."
+          warn "No Rails application found in /tmp/app"
           exit 1
-        SH
-        File.chmod(0o755, script)
-        allow(described_class).to receive(:brakeman_command).and_return([ script ])
+        RUBY
 
         _report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
 
@@ -282,27 +272,22 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
       after { FileUtils.remove_entry(bin_dir) }
 
+      # Run by this Ruby, as the gem's own script is.
       def fake_brakeman(body)
         script = File.join(bin_dir, "brakeman")
-        File.write(script, "#!/bin/sh\n#{body}\n")
-        File.chmod(0o755, script)
+        File.write(script, body)
         described_class.instance_variable_set(:@brakeman_available, nil)
         allow(described_class).to receive(:load_brakeman).and_return(false)
         allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
-        allow(described_class).to receive(:brakeman_command).and_return([ script ])
+        allow(described_class).to receive(:brakeman_command).and_return([ RbConfig.ruby, script ])
       end
 
       it "passes the CLI's confidence level and the resolved checks" do
         args_file = File.join(bin_dir, "args")
-        fake_brakeman(<<~SH)
-          printf '%s\n' "$@" > "#{args_file}"
-          out=""
-          while [ $# -gt 0 ]; do
-            if [ "$1" = "--output" ]; then out="$2"; fi
-            shift
-          done
-          printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
-        SH
+        fake_brakeman(<<~RUBY)
+          File.write(#{args_file.inspect}, ARGV.join("\n"))
+          File.write(ARGV[ARGV.index("--output") + 1], '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}')
+        RUBY
 
         described_class.call(confidence: "high", checks: [ "sql" ])
         args = File.read(args_file).split("\n")
@@ -314,7 +299,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       # Every way the outside run can fail used to read the same, so the one
       # line brakeman printed about why is the line the answer carries.
       it "carries what brakeman said when it wrote no report" do
-        fake_brakeman(%(echo "noise" >&2\necho "invalid argument: --confidence-level 0" >&2\nexit 1))
+        fake_brakeman(%(warn "noise"\nwarn "invalid argument: --confidence-level 0"\nexit 1\n))
 
         text = described_class.call.content.first[:text]
 
@@ -388,11 +373,22 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         stub_const("#{described_class}::KILL_GRACE", 1)
 
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        output = described_class.send(:capture_with_timeout, [ "sh", "-c", "trap '' TERM; sleep 30" ])
+        output = described_class.send(:capture_with_timeout, [ RbConfig.ruby, "-e", "trap('TERM') {}; sleep 30" ])
         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
 
         expect(output).to be_nil
         expect(elapsed).to be < 10
+      end
+
+      # Windows sends no TERM to another process: Process.kill raises EINVAL.
+      it "stops the child with KILL alone on Windows" do
+        allow(Gem).to receive(:win_platform?).and_return(true)
+        allow(Process).to receive(:kill)
+
+        described_class.send(:stop, instance_double(Process::Waiter, pid: 4242))
+
+        expect(Process).to have_received(:kill).with("KILL", 4242)
+        expect(Process).not_to have_received(:kill).with("TERM", anything)
       end
     end
 

@@ -37,14 +37,19 @@ module RailsAiContext
         # Bundler re-execs exactly here: `require "bundler/setup"` runs
         # inside this block, and auto_switch re-execs when the lockfile
         # names a different Bundler than the one running.
-        saved_stdout.close_on_exec = false
-        ENV[STDOUT_FD_ENV] = saved_stdout.fileno.to_s
+        if Gem.win_platform?
+          arm_exec(saved_stdout)
+        else
+          saved_stdout.close_on_exec = false
+          ENV[STDOUT_FD_ENV] = saved_stdout.fileno.to_s
+        end
       end
       STDOUT.reopen($stderr) if saved_stdout
       $stdout = $stderr
       yield(saved_stdout || original)
     ensure
       if saved_stdout
+        @exec_stdout = nil
         STDOUT.reopen(saved_stdout)
         # Closed for real, and the pointer goes with it: the descriptor
         # exists to survive one exec, and leaving it open with close-on-exec
@@ -54,6 +59,47 @@ module RailsAiContext
         ENV.delete(STDOUT_FD_ENV)
       end
       $stdout = original
+    end
+
+    # Windows has no exec: Ruby starts the new image as a child that takes
+    # the standard handles as they stand and no other descriptor, so a
+    # descriptor named in the environment means nothing there. An exec
+    # inside the quarantine puts fd 1 back on the real stdout first, for the
+    # new image to start with.
+    module ExecWithRealStdout
+      def exec(...)
+        OutputGuard.restore_for_exec
+        super(...)
+      end
+    end
+
+    # The same for a bare `exec`, which is Kernel's private instance method;
+    # Kernel.exec and Process.exec are public.
+    module PrivateExecWithRealStdout
+      private
+
+      def exec(...)
+        OutputGuard.restore_for_exec
+        super(...)
+      end
+    end
+
+    def self.arm_exec(saved_stdout)
+      @exec_stdout = saved_stdout
+      return if @exec_patched
+
+      Kernel.prepend(PrivateExecWithRealStdout)
+      Kernel.singleton_class.prepend(ExecWithRealStdout)
+      Process.singleton_class.prepend(ExecWithRealStdout)
+      @exec_patched = true
+    end
+    private_class_method :arm_exec
+
+    def self.restore_for_exec
+      io = @exec_stdout
+      STDOUT.reopen(io) if io && !io.closed?
+    rescue IOError, SystemCallError
+      nil
     end
 
     # The descriptor an earlier image of this process saved, when there is

@@ -499,6 +499,42 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
         Object.send(:remove_const, :InstanceEvalProbe) if defined?(InstanceEvalProbe)
       end
     end
+
+    # A Windows frame has a colon after its drive letter, and splitting the
+    # frame on its first colon took "D" for the file: the whole path went out.
+    context "with a frame from a Windows path" do
+      before { stub_const("File::ALT_SEPARATOR", "\\") }
+
+      let(:tool) do
+        build_tool do
+          def self.rails_app
+            nil
+          end
+        end
+      end
+
+      it "names the file past the drive letter" do
+        origin = tool.send(:portable_origin, "D:/a/_temp/d1/outside_probe.rb:3:in 'OutsideProbe.fail!'")
+
+        expect(origin).to eq("outside_probe.rb:3:in 'OutsideProbe.fail!'")
+      end
+
+      it "names the file inside an eval frame past the drive letter" do
+        origin = tool.send(:portable_origin, "(eval at D:/a/_temp/d1/instance_eval_probe.rb:1):1:in 'InstanceEvalProbe.fail!'")
+
+        expect(origin).to eq("(eval at instance_eval_probe.rb:1):1:in 'InstanceEvalProbe.fail!'")
+      end
+    end
+
+    it "splits a frame at its line number when the path holds a colon" do
+      tool = build_tool do
+        def self.rails_app
+          nil
+        end
+      end
+
+      expect(tool.send(:portable_origin, "/srv/build:2/app/outside_probe.rb:7:in 'x'")).to eq("outside_probe.rb:7:in 'x'")
+    end
   end
 
   # An unknown parameter reached the tool as an unknown keyword, so the answer

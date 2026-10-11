@@ -21,7 +21,7 @@ module RailsAiContext
       # nothing new still put a diff in a repo that commits its context files.
       GENERATED_LINE = /^> Generated: .*\n/
 
-      BLOCK = /#{Regexp.escape(BEGIN_MARKER)}.*?#{Regexp.escape(END_MARKER)}\n?/m
+      BLOCK = /#{Regexp.escape(BEGIN_MARKER)}.*?#{Regexp.escape(END_MARKER)}(?:\r?\n)?/m
 
       # Why a run left a file alone: with a marker lost, or a second block
       # pasted in, nothing says where the gem's block ends.
@@ -56,7 +56,11 @@ module RailsAiContext
       # end-of-file fixers rewrote every rule file and git flagged each.
       def write_whole(filepath, content)
         content = "#{content}\n" unless content.end_with?("\n")
-        return :skipped if File.exist?(filepath) && RailsAiContext::SafeFile.read_text(filepath) == content
+        if File.exist?(filepath)
+          existing = RailsAiContext::SafeFile.read_text(filepath)
+          content = in_line_endings_of(existing, content)
+          return :skipped if existing == content
+        end
 
         atomic_write(filepath, content)
         :written
@@ -81,12 +85,13 @@ module RailsAiContext
           # and the first non-ASCII character stopped the rewrite. A file that
           # is no UTF-8 keeps its bytes, and the block joins them as bytes.
           existing = RailsAiContext::SafeFile.read_text(filepath)
+          marked_content = in_line_endings_of(existing, marked_content)
           marked_content = marked_content.b if existing.encoding == Encoding::BINARY
 
           new_content = case markers(existing)
           # A block, so a backslash in the content is not read as a backreference.
           when :pair then existing.sub(BLOCK) { marked_content }
-          when :none then "#{marked_content}\n#{existing}"
+          when :none then "#{marked_content}#{crlf?(existing) ? "\r\n" : "\n"}#{existing}"
           else return :unpaired
           end
 
@@ -119,6 +124,17 @@ module RailsAiContext
         when :unpaired then result[:not_applicable][filepath] = UNPAIRED
         end
         result
+      end
+
+      # Text in the line endings of the file it goes into. A file checked out
+      # on Windows ends its lines in CRLF, and a block in LF beside them
+      # mixed the two and left a blank line under END on every run.
+      def in_line_endings_of(existing, text)
+        crlf?(existing) ? text.gsub(/\r?\n/, "\r\n") : text
+      end
+
+      def crlf?(text)
+        text.include?("\r\n")
       end
 
       def same_but_for_timestamp?(existing, candidate)

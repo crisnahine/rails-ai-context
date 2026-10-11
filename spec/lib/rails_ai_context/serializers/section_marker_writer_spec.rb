@@ -24,7 +24,7 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
   it "rewrites a file holding text outside ASCII in a C locale" do
     Dir.mktmpdir do |dir|
       path = File.join(dir, "CLAUDE.md")
-      File.write(path, "# Café — notes\n\n#{begin_marker}\nold ✓\n#{end_marker}\n")
+      File.binwrite(path, "# Café — notes\n\n#{begin_marker}\nold ✓\n#{end_marker}\n")
       lib = File.expand_path("../../../../lib", __dir__)
       script = <<~RUBY
         require "rails_ai_context/safe_file"
@@ -37,6 +37,44 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
       expect(status.success?).to be(true), err
       expect(out).to eq("written")
       expect(File.binread(path).force_encoding("UTF-8")).to eq("# Café — notes\n\n#{begin_marker}\nnew ✓\n#{end_marker}\n")
+    end
+  end
+
+  # A file checked out on Windows ends its lines in CRLF. The block went in
+  # with LF, and the CRLF after the old END marker stayed behind as a blank
+  # line under the new one.
+  context "in a file whose lines end in CRLF" do
+    it "writes the block in CRLF, with nothing added around it, and leaves it alone the next time" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "CLAUDE.md")
+        File.binwrite(path, "# Mine\r\n\r\n#{begin_marker}\r\nold\r\n#{end_marker}\r\n\r\nmore of mine\r\n")
+
+        expect(described_class.write_with_markers(path, "new\nlines")).to eq(:written)
+        expect(File.binread(path)).to eq("# Mine\r\n\r\n#{begin_marker}\r\nnew\r\nlines\r\n#{end_marker}\r\n\r\nmore of mine\r\n")
+        expect(described_class.write_with_markers(path, "new\nlines")).to eq(:skipped)
+      end
+    end
+
+    it "puts a first block above the file's own text in CRLF" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "CLAUDE.md")
+        File.binwrite(path, "# Mine\r\n")
+
+        described_class.write_with_markers(path, "new")
+
+        expect(File.binread(path)).to eq("#{begin_marker}\r\nnew\r\n#{end_marker}\r\n\r\n# Mine\r\n")
+      end
+    end
+
+    it "leaves a file it owns whole alone when only the line endings differ, and keeps them when it rewrites it" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "rails-context.md")
+        File.binwrite(path, "# Rules\r\none\r\n")
+
+        expect(described_class.write_whole(path, "# Rules\none")).to eq(:skipped)
+        expect(described_class.write_whole(path, "# Rules\ntwo")).to eq(:written)
+        expect(File.binread(path)).to eq("# Rules\r\ntwo\r\n")
+      end
     end
   end
 

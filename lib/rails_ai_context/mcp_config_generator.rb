@@ -46,7 +46,7 @@ module RailsAiContext
     # On Windows a gem's executables are .bat files (rails-ai-context.bat,
     # bundle.bat), which a client that starts its server without a shell -
     # Node's child_process.spawn in Claude Code, Codex's Rust Command - does
-    # not run. Claude Code's own docs start such a server through `cmd /c`.
+    # not run. cmd.exe is a program every client starts, and it runs them.
     WINDOWS_SHELL = %w[cmd /c].freeze
 
     # One server entry. app_path and gemfile are relative to the folder the

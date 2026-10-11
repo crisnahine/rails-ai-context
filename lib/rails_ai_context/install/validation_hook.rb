@@ -246,6 +246,10 @@ module RailsAiContext
       # @return [Coverage, nil] nil for a hook changed by hand since it was
       #   written, or one this gem never wrote
       def coverage(content)
+        # A version that wrote the hook in text mode ended its lines in CRLF
+        # on Windows: the same hook, which sh cannot run, so it is one to
+        # bring up to date whatever version wrote it.
+        crlf = content.b.include?("\r\n".b)
         content = text(content)
         LEGACY.each do |legacy, standalone|
           return Coverage.new(apps: [ "." ], standalone: standalone, legacy: true) if content == legacy
@@ -253,7 +257,7 @@ module RailsAiContext
 
         apps = listed(content) or return nil
         standalone = [ false, true ].find { |mode| content == script(apps, standalone: mode) }
-        return Coverage.new(apps: apps, standalone: standalone, legacy: false) unless standalone.nil?
+        return Coverage.new(apps: apps, standalone: standalone, legacy: crlf) unless standalone.nil?
 
         standalone = [ false, true ].find { |mode| content == earlier_script(apps, standalone: mode) }
         standalone.nil? ? nil : Coverage.new(apps: apps, standalone: standalone, legacy: true)
@@ -269,9 +273,9 @@ module RailsAiContext
       end
 
       # The hook as UTF-8 whatever the locale: it names app paths, which may
-      # hold any character.
+      # hold any character. Its lines end in LF, as every version meant them to.
       def text(content)
-        content.dup.force_encoding(Encoding::UTF_8)
+        content.b.gsub("\r\n".b, "\n".b).force_encoding(Encoding::UTF_8)
       end
     end
   end

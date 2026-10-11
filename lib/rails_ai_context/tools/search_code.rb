@@ -333,8 +333,10 @@ module RailsAiContext
       private_class_method def self.search_with_ripgrep(pattern, search_path, file_type, max_results, root, ctx_lines = 0, exclude_tests: false)
         # On Windows ripgrep joins the paths it finds with backslashes, which
         # neither strip the root nor meet the sensitive patterns' slashes.
+        # --crlf ends a line before its CRLF, which is every line of a Windows
+        # checkout: without it `end$` matched none of them and `\s$` all.
         cmd = [ "rg", "--no-heading", "--with-filename", "--line-number", "--sort=path", "--path-separator", "/",
-                "--max-count", max_results.to_s ]
+                "--crlf", "--max-count", max_results.to_s ]
         if ctx_lines > 0
           cmd.push("-C", ctx_lines.to_s)
           cmd.push("--field-context-separator", CONTEXT_FIELD_SEPARATOR)
@@ -369,7 +371,14 @@ module RailsAiContext
         trees = linked_trees(search_path, root, skip_rule(exclude_tests))
         cmd.concat(trees.map(&:first).reject { |dir| dir == search_path })
 
-        output, err, status = Open3.capture3(*cmd)
+        output, err, status = begin
+          Open3.capture3(*cmd)
+        rescue SystemCallError
+          # Windows refuses a command line past 32K characters, and the error
+          # repeated the whole line, pattern and all. The Ruby search takes a
+          # pattern of any length.
+          return search_with_ruby(pattern, search_path, file_type, max_results, root, ctx_lines, exclude_tests: exclude_tests)
+        end
 
         # rg exits 1 for "no matches" and 2 for any error, including one it
         # recovered from - an unreadable file in the tree - and it still
@@ -571,7 +580,8 @@ module RailsAiContext
         return false if File.open(file, "rb") { |io| io.read(BINARY_PROBE_BYTES) }.to_s.include?("\0")
 
         lines = (RailsAiContext::SafeFile.read(file) || "").lines
-        hits = lines.each_index.select { |i| lines[i].delete_suffix("\n").match?(regex) }.first(max_results)
+        # A line without its terminator, LF or CRLF, as ripgrep --crlf reads it.
+        hits = lines.each_index.select { |i| lines[i].delete_suffix("\n").delete_suffix("\r").match?(regex) }.first(max_results)
         hit = hits.to_h { |i| [ i, true ] }
         shown = hits.flat_map { |i| ([ i - ctx_lines, 0 ].max..[ i + ctx_lines, lines.size - 1 ].min).to_a }.uniq.sort
         shown.each do |i|

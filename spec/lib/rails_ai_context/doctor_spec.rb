@@ -2253,6 +2253,18 @@ RSpec.describe RailsAiContext::Doctor do
       expect(File.exist?(File.join(@root, "db/analytics.sqlite3"))).to be(false)
     end
 
+    # A Windows path is absolute from its drive letter on, and read as
+    # relative it was named from where doctor was typed.
+    it "names a SQLite file given by a Windows path as database.yml gives it" do
+      stub_const("File::ALT_SEPARATOR", "\\")
+      allow(app_doctor).to receive(:typed_path) { |path| "typed from here: #{path}" }
+
+      expect(app_doctor.send(:database_named, database_named("analytics", "D:/shop/db/analytics.sqlite3")))
+        .to eq("D:/shop/db/analytics.sqlite3")
+      expect(app_doctor.send(:database_named, database_named("analytics", "db/analytics.sqlite3")))
+        .to eq("typed from here: #{File.join(@root, 'db/analytics.sqlite3')}")
+    end
+
     def unreachable(error)
       allow(app_doctor).to receive(:database_states).and_return([
         { name: "primary", config: database_named("primary", "shop_development"), error: error }

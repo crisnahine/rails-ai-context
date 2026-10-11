@@ -323,7 +323,8 @@ module RailsAiContext
     # the app's root, as the adapter reads it, named from where doctor was typed.
     def database_named(db_config)
       name = db_config.database.to_s
-      return name unless db_config.adapter.to_s == "sqlite3" && !name.empty? && name != ":memory:" && !name.start_with?("file:", "/")
+      return name unless db_config.adapter.to_s == "sqlite3" && !name.empty? && name != ":memory:" &&
+        !name.start_with?("file:") && !SafePath.absolute?(name)
 
       typed_path(File.expand_path(name, app.root.to_s))
     end

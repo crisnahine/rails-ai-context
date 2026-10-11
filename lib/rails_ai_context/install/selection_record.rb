@@ -39,17 +39,19 @@ module RailsAiContext
       CONTEXT_FILES_LINE = /^[ \t]*config\.context_files\s*=\s*(true|false)\b/
 
       # Where a line goes when the initializer has none for its key yet: the
-      # head of the configure block, one step in from it.
-      CONFIGURE_BLOCK = /^([ \t]*)RailsAiContext\.configure do \|config\|\n/
+      # head of the configure block, one step in from it. A file checked out
+      # on Windows ends its lines in CRLF.
+      CONFIGURE_BLOCK = /^([ \t]*)RailsAiContext\.configure do \|config\|(\r?\n)/
 
       # The three keys the record writes into the initializer, each as the
       # assignment it rewrites. The value is captured apart from what stands
       # before and after it, so a rewrite keeps the line's indentation and
-      # whatever follows the value.
+      # whatever follows the value. The line ends short of a CRLF's CR, which
+      # stays with the line ending.
       ASSIGNMENT = {
-        ai_tools: /^(?<lead>[ \t]*config\.ai_tools[ \t]*=[ \t]*)(?<value>%i\[[^\]\n]*\])(?<rest>[^\n]*)$/,
-        tool_mode: /^(?<lead>[ \t]*config\.tool_mode[ \t]*=[ \t]*)(?<value>:\w+)(?<rest>[^\n]*)$/,
-        context_files: /^(?<lead>[ \t]*config\.context_files[ \t]*=[ \t]*)(?<value>true|false)\b(?<rest>[^\n]*)$/
+        ai_tools: /^(?<lead>[ \t]*config\.ai_tools[ \t]*=[ \t]*)(?<value>%i\[[^\]\r\n]*\])(?<rest>[^\r\n]*)(?=\r?$)/,
+        tool_mode: /^(?<lead>[ \t]*config\.tool_mode[ \t]*=[ \t]*)(?<value>:\w+)(?<rest>[^\r\n]*)(?=\r?$)/,
+        context_files: /^(?<lead>[ \t]*config\.context_files[ \t]*=[ \t]*)(?<value>true|false)\b(?<rest>[^\r\n]*)(?=\r?$)/
       }.freeze
 
       # The note the generator writes after a value. It describes the value,
@@ -195,11 +197,13 @@ module RailsAiContext
         return [ content, :conflict ] if content.match?(/^[ \t]*config\.#{key}\s*=/)
         return [ content, :absent ] unless insert
 
+        # An inserted line ends the way the file's lines do.
+        newline = content.include?("\r\n") ? "\r\n" : "\n"
         if key != :ai_tools && (beside = content.match(ASSIGNMENT[:ai_tools]))
           indent = beside[:lead][/\A[ \t]*/]
-          [ "#{beside.pre_match}#{beside[0]}\n#{indent}#{config_line(key, value)}#{beside.post_match}", :inserted ]
+          [ "#{beside.pre_match}#{beside[0]}#{newline}#{indent}#{config_line(key, value)}#{beside.post_match}", :inserted ]
         elsif (block = content.match(CONFIGURE_BLOCK))
-          [ "#{block.pre_match}#{block[0]}#{block[1]}  #{config_line(key, value)}\n#{block.post_match}", :inserted ]
+          [ "#{block.pre_match}#{block[0]}#{block[1]}  #{config_line(key, value)}#{block[2]}#{block.post_match}", :inserted ]
         else
           [ content, :absent ]
         end

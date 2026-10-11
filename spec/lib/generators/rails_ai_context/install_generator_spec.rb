@@ -597,7 +597,10 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
           out, status = Open3.capture2e(env, "git", "-C", mono, "commit", "-q", "-m", "x")
 
           expect(status.success?).to be(true), out
-          expect(File.realpath(File.read(File.join(bin, "pwd.log")).strip)).to eq(File.realpath(File.join(mono, "apps/web")))
+          # The sh Git for Windows runs the hook with names /d/a/... for D:/a/...
+          logged = File.read(File.join(bin, "pwd.log")).strip
+          logged = logged.sub(%r{\A/([a-z])/}i) { "#{Regexp.last_match(1).upcase}:/" } if Gem.win_platform?
+          expect(File.realpath(logged)).to eq(File.realpath(File.join(mono, "apps/web")))
         end
       end
 
@@ -655,9 +658,27 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
         expect(generator).not_to have_received(:ask)
         expect(File.read(hook_path)).to eq(RailsAiContext::Install::ValidationHook.script([ "." ], standalone: true))
-        expect(File.executable?(hook_path)).to be(true)
+        # Windows keeps no exec bit; git runs a hook there whatever its mode.
+        expect(File.executable?(hook_path)).to be(true) unless Gem.win_platform?
         expect(generator).to have_received(:say).with(a_string_including("Updated the pre-commit validation hook"), :green)
       end
+    end
+
+    # A version that wrote the hook in text mode ended its lines in CRLF on
+    # Windows, which the sh Git for Windows runs hooks with cannot read: the
+    # same hook, which the install did not know and so never put right.
+    it "brings a hook whose lines end in CRLF up to date, in LF" do
+      current = RailsAiContext::Install::ValidationHook.script([ "." ], standalone: true)
+      FileUtils.mkdir_p(File.dirname(hook_path))
+      File.binwrite(hook_path, current.gsub("\n", "\r\n"))
+      allow(generator).to receive(:say)
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      generator.install_validation_hook
+
+      expect(generator).not_to have_received(:ask)
+      expect(File.binread(hook_path)).to eq(current)
+      expect(generator).to have_received(:say).with(a_string_including("Updated the pre-commit validation hook"), :green)
     end
 
     # What the update is for: a commit that deletes a file.
@@ -676,7 +697,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         env = { "PATH" => [ bin, ENV.fetch("PATH") ].join(File::PATH_SEPARATOR), "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t",
                 "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
         git("-C", tmpdir, "rm", "-q", "app/models/old.rb")
-        blocked, = Open3.capture2e(env, hook_path, chdir: tmpdir)
+        # Through bash, as git runs it: Windows starts no script by itself.
+        blocked, = Open3.capture2e(env, "bash", hook_path, chdir: tmpdir)
 
         generator.install_validation_hook
         out, status = Open3.capture2e(env, "git", "-C", tmpdir, "commit", "-q", "-m", "x")
