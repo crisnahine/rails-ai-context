@@ -118,12 +118,32 @@ module RailsAiContext
         master_pos_wait | source_pos_wait
       )\s*\(/ix
 
-      # VOLATILE functions that are harmless to allow: the statement timeout
-      # bounds pg_sleep, and the rest only produce a value. Everything else the
-      # plan reports as VOLATILE (pg_proc.provolatile = 'v') is refused.
+      # VOLATILE functions known to only read. pg_proc marks a function VOLATILE
+      # when its answer may change within one statement, which is as true of a
+      # reader of live server state as of a writer, so VOLATILE alone does not
+      # mean "changes state". Each one here is a built-in C function that writes
+      # nothing (every one is also proparallel 's', parallel safe):
+      #   * values: random, clock_timestamp, gen_random_uuid, timeofday,
+      #     uuid_generate_v4; pg_sleep* only waits, and the statement timeout
+      #     bounds it.
+      #   * sizes (dbsize.c): stat() the relation, database or tablespace files;
+      #     the most they take is a transaction-scoped AccessShareLock, released
+      #     when the read-only transaction rolls back.
+      #   * lock status (lockfuncs.c): a snapshot of the shared lock table -
+      #     pg_lock_status is what the pg_locks view reads.
+      #   * recovery and WAL position (xlogfuncs.c): read shared-memory
+      #     positions and flags; pg_current_wal_* only reports where WAL is.
+      # pg_stat_activity is not here: pg_stat_get_activity is STABLE, so it was
+      # never refused. Everything else the plan reports as VOLATILE is refused.
       PG_VOLATILE_ALLOWLIST = %w[
-        random clock_timestamp gen_random_uuid timeofday pg_sleep
-        pg_sleep_for pg_sleep_until uuid_generate_v4
+        random clock_timestamp gen_random_uuid timeofday uuid_generate_v4
+        pg_sleep pg_sleep_for pg_sleep_until
+        pg_total_relation_size pg_relation_size pg_table_size pg_indexes_size
+        pg_database_size pg_tablespace_size
+        pg_lock_status pg_blocking_pids pg_safe_snapshot_blocking_pids
+        pg_is_in_recovery pg_is_wal_replay_paused pg_get_wal_replay_pause_state
+        pg_current_wal_lsn pg_current_wal_insert_lsn pg_current_wal_flush_lsn
+        pg_last_wal_receive_lsn pg_last_wal_replay_lsn pg_last_xact_replay_timestamp
       ].freeze
 
       # A column-alias list renames the columns a wildcard produced, so the
@@ -903,8 +923,11 @@ module RailsAiContext
             "unredacted. Name the non-sensitive columns you need; `#{col}` is never returned."
         end
         if (fn = volatile_function_in_plan(exprs))
-          return "Blocked: function #{fn} is VOLATILE - it can change server or session state, " \
-            "which a read-only transaction does not prevent. rails_query runs inspection reads only."
+          return "Blocked: function #{fn} is VOLATILE (pg_proc.provolatile = 'v') and not on " \
+            "rails_query's list of read-only VOLATILE functions, so it is not run. Some VOLATILE " \
+            "functions change server or session state in ways a read-only transaction does not " \
+            "stop; only those known to just read state (sizes, lock status, recovery and WAL " \
+            "position, random values) are allowed."
         end
         nil
       rescue StandardError
