@@ -216,10 +216,11 @@ namespace :ai do
       next
     end
 
-    # Parse key=value pairs from ARGV (skip rake-internal args)
+    # Parse key=value pairs from ARGV, skipping the task itself: a value
+    # holds a bracket as often as the task does (`pattern=params\[:id\]`).
     params = {}
     ARGV.each do |arg|
-      next if arg.start_with?("-") || arg.include?("[") || arg == "ai:tool"
+      next if arg.start_with?("-") || arg.match?(/\Aai:tool(?:\[|\z)/)
       if arg.include?("=")
         key, value = arg.split("=", 2)
         params[key.to_sym] = value
