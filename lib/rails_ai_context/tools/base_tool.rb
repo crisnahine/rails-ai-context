@@ -963,6 +963,7 @@ module RailsAiContext
         def text_response(text, suffix: nil)
           suffix = [ suffix, static_tier_banner ].compact.join
           suffix = nil if suffix.empty?
+          text = served_hints(text)
 
           record_call(text)
 
@@ -984,6 +985,54 @@ module RailsAiContext
         # context files do; a lone `detail:"summary"` hint becomes `detail=summary`.
         MCP_CALL = /\b(rails_\w+)\(([^()]*)\)/
         PARAM_HINT = /`((?:\w+:(?:"[^"`]*"|[\w.]+)(?:,\s*)?)+)`/
+
+        # A `_Next:` hint points at other tools, one pointer per tool, joined
+        # by ` | ` on one line or onto lines of their own. A tool skip_tools
+        # turned off is no next step, so its pointer goes, and a hint left
+        # with none goes whole. Every answer passes here, so no tool has to
+        # check the served set itself.
+        def served_hints(text)
+          return text unless text.is_a?(String) && text.include?("_Next: ")
+
+          skipped = RailsAiContext::Server.skipped_tools
+          return text if skipped.empty?
+
+          lines = text.split("\n", -1)
+          kept = []
+          index = 0
+          while index < lines.size
+            block = [ lines[index] ]
+            if block.first.start_with?("_Next: ")
+              block << lines[index += 1] while lines[index + 1]&.start_with?(" | ")
+              hint = served_hint(block, skipped)
+              if hint
+                kept.concat(hint)
+              elsif kept.last == "" && lines[index + 1].to_s.empty?
+                kept.pop
+              end
+            else
+              kept << block.first
+            end
+            index += 1
+          end
+          kept.join("\n")
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, text, label: "served_hints")
+        end
+
+        # The hint's lines with the pointers to skipped tools taken out; nil
+        # when none is left.
+        def served_hint(block, skipped)
+          body = block.join("\n").delete_prefix("_Next: ")
+          closing = body[/\.?_\z/].to_s
+          pointers = body.delete_suffix(closing).split(/\n? \| /)
+          served = pointers.reject { |pointer| skipped.include?(pointer[/\brails_\w+/]) }
+          return block if served.size == pointers.size
+          return nil if served.empty?
+
+          "_Next: #{served.join(block.size > 1 ? "\n | " : " | ")}#{closing}".split("\n")
+        end
+        private :served_hint
 
         def cli_form(text)
           return text unless RailsAiContext.configuration.tool_mode == :cli && text.is_a?(String)
