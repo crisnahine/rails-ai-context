@@ -78,6 +78,7 @@ You catch it, fix it, re-prompt, and something next to it breaks. The tokens are
 
 - Ruby 3.1 or newer
 - Rails 7.0 or newer
+- Linux, macOS or Windows (see [Operating systems](docs/COMPATIBILITY.md#operating-systems))
 - Optional: `brakeman` for `security_scan`, `listen` for `watch`, `ripgrep` for faster `search_code`
 
 ### Install in the Gemfile
@@ -129,7 +130,7 @@ bundle exec rails-ai-context serve   # in-Gemfile
 rails-ai-context serve               # standalone
 ```
 
-`rails ai:serve` starts the same server from rake.
+On Windows each config starts it through `cmd /c`, since a gem's executables there are batch files. `rails ai:serve` starts the same server from rake.
 
 ### MCP over HTTP
 
