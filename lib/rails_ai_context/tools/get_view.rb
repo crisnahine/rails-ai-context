@@ -208,13 +208,11 @@ module RailsAiContext
         when "full"
           if controller
             lines = [ "# Views: #{controller}/", "", *layout_lines(controller) ]
-            # Combine all content first for cross-template Tailwind compression
-            all_content = []
-            templates.sort.each do |name, _meta|
-              all_content << [ name, strip_svg(read_view_content(name)) ]
-            end
-            partials.sort.each do |name, _meta|
-              all_content << [ name, strip_svg(read_view_content(name)) ]
+            # Combine all content first for cross-template Tailwind compression.
+            # Each file is the app's source, so its secrets are filtered as
+            # they are when one template is read by path.
+            all_content = (templates.sort + partials.sort).map do |name, _meta|
+              [ name, RailsAiContext::Redaction.redact_source(strip_svg(read_view_content(name)), path: name) ]
             end
             # Compress repeated Tailwind classes across all templates
             combined = all_content.map { |name, c| "## #{name}\n```#{RailsAiContext::ViewFile.fence(name)}\n#{c}\n```\n" }.join("\n")

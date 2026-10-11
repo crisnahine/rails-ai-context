@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`rails_get_view` filters the secrets in a controller's full listing.**
+  `controller:"posts", detail:"full"` printed each template and partial as
+  written, `<% api_key = "..." %>` and a `render` call's `token: "..."`
+  among them, while the same template read by `path:` and every layout had
+  them filtered. Each file in the listing is now filtered as one read by
+  path is, a mailer's views (`controller:"user_mailer"`) included.
 - **`rails_search_code` in trace mode checks its `path` like every other
   mode.** `match_type: "trace"` joined the path to the root unchecked, so
   `path: "../../elsewhere"` searched outside the app and printed the source

@@ -301,6 +301,44 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    # The controller's full listing printed each template as written, while
+    # the same template read by path, and every layout, had its secrets
+    # filtered.
+    context "with a template and a partial that hold a literal secret" do
+      around do |example|
+        Dir.mktmpdir("view-secrets") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+          File.write(File.join(root, "app/views/posts/show.html.erb"), <<~ERB)
+            <% api_key = "FAKE-VIEW-KEY-0009" %>
+            <%= render "posts/post", post: @post, token: "FAKE-RENDER-SITE-TOKEN-0010" %>
+          ERB
+          File.write(File.join(root, "app/views/posts/_post.html.erb"), <<~ERB)
+            <% secret = "FAKE-PARTIAL-SECRET-0011" %>
+            <%= post.title %>
+          ERB
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: { templates: { "posts/show.html.erb" => { lines: 2 } }, partials: { "posts/_post.html.erb" => { lines: 2 } } }
+        )
+      end
+
+      it "filters them in the controller's full listing, as a read by path does" do
+        text = described_class.call(controller: "posts", detail: "full").content.first[:text]
+        by_path = described_class.call(path: "posts/show.html.erb").content.first[:text]
+
+        expect(text).not_to include("FAKE-")
+        expect(text).to include(%(<% api_key = "[FILTERED]" %>), %(token: "[FILTERED]" %>), %(<% secret = "[FILTERED]" %>))
+        expect(text).to include("<%= post.title %>")
+        expect(by_path).to include(%(<% api_key = "[FILTERED]" %>))
+      end
+    end
+
     # A template at the root of app/views has no directory. Splitting its key
     # on "/" made its own filename the group, so the group was empty, the row
     # never printed, and the header counted a file the body never listed.
