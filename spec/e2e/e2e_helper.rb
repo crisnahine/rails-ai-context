@@ -55,8 +55,11 @@ module E2E
   # Single shared tmpdir across the e2e suite. Each describe block creates
   # its own subdirectory (per install path). Cleaned up via `at_exit` so
   # a partial run still leaves forensics available until the next run.
+  # Spelled as the system spells it: macOS's temp dir is under a symlink
+  # (/var -> /private/var), and a server the harness starts names the
+  # folder it runs in by its real path, as Dir.pwd does.
   def self.root
-    @root ||= Dir.mktmpdir(TMPDIR_PREFIX).tap do |path|
+    @root ||= File.realpath(Dir.mktmpdir(TMPDIR_PREFIX)).tap do |path|
       at_exit { FileUtils.remove_entry(path) if File.exist?(path) }
     end
   end

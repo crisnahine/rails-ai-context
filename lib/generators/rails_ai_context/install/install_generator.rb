@@ -569,9 +569,12 @@ module RailsAiContext
         false
       end
 
+      # In binary mode: text mode on Windows writes each newline as CRLF, and
+      # the sh that Git for Windows runs a hook with reads the CR as part of
+      # every command.
       def write_validation_hook(path, dir, script)
         FileUtils.mkdir_p(dir)
-        File.write(path, script)
+        File.binwrite(path, script)
         FileUtils.chmod(0o755, path)
       end
 
