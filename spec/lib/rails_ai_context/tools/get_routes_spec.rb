@@ -126,15 +126,34 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(described_class.call.content.first[:text]).to include("**Spree::Core::Engine** at `/shop` (also `/shop2`): 1 route")
     end
 
+    # OFN mounts its DFC engine at three paths inside `namespace :api`.
     it "names the other paths an engine is mounted at in a filtered answer" do
-      groups = engine_routes.map { |g| g.merge(also_mounted_at: [ "/shop2" ]) }
-      allow(described_class).to receive(:cached_context).and_return({
-        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: groups }
-      })
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            namespace :api do
+              mount DfcProvider::Engine, at: '/dfc-v1.6/', as: :legacy_dfc_provider_engine
+              mount DfcProvider::Engine, at: '/dfc-v1.7/', as: :v1_7_dfc_provider_engine
+              # Latest implemented version:
+              mount DfcProvider::Engine, at: '/dfc/'
+            end
+          end
 
-      text = described_class.call(controller: "spree/admin/orders").content.first[:text]
+          DfcProvider::Engine.routes.draw do
+            resources :enterprises, only: [] do
+              resources :catalog_items, only: [:index]
+            end
+          end
+        RUBY
+        routes = RailsAiContext::Introspectors::RouteIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(routes: routes)
 
-      expect(text).to include("## spree/admin/orders (in Spree::Core::Engine's table, also mounted at `/shop2`)")
+        text = described_class.call(controller: "dfc_provider/catalog_items").content.first[:text]
+
+        expect(text).to include("(in DfcProvider::Engine's table, also mounted at `/api/dfc-v1.7`, `/api/dfc`)")
+        expect(text).to include("`GET` `/api/dfc-v1.6/enterprises/:enterprise_id/catalog_items` → index")
+      end
     end
 
     it "says how many constructs an engine group did not expand" do
