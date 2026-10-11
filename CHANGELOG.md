@@ -157,6 +157,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle.** It runs the gem's own `bin/brakeman` with the app's Ruby, where
   the scan produced no report while `doctor` passed it. `doctor` runs that
   script's `--version` the same way and warns when it does not answer.
+- **A generated length test sets a value the validation rejects.** A length
+  validation with no maximum was tested with `""`, so
+  `length: { minimum: 10 }, allow_blank: true` got the one value it allows
+  and the test failed on a valid record. The value is now one past the
+  maximum (or the `is:` or range end), else one short of the minimum; `""`
+  is used only for a minimum of 1 that does not allow blanks.
+- **Generated tests call `FactoryBot.create` where the suite does not
+  include FactoryBot's methods.** A bare `create(:article)` works only where
+  rails_helper, a support file or test_helper includes
+  `FactoryBot::Syntax::Methods`; without it every generated example failed
+  with "undefined method `create'".
+- **A controller whose base class inherits `ActionController::API` is an
+  API controller with the app unbooted too.**
+  `Api::V1::PostsController < BaseController < ActionController::API` read
+  as an ordinary controller under `--no-boot`.
+- **`rails_get_partial_interface` reads `render "comments/form"` as the
+  comments form.** `posts/_form` took the comment form's call in
+  `posts/show`, and its `comment` local.
+- **`rails 'ai:tool[...]'` keeps an argument that contains a bracket.**
+  `pattern=params\[:id\]` was dropped, and the answer was "Pattern is
+  required".
+- **The stack overview counts the databases it does not name.**
+  "Databases: 5 (primary, analytics, cache)" read as the whole list; it now
+  ends "...2 more".
+- **A filtered `rails_get_turbo_map` judges each stream against the whole
+  app.** A `controller:` filter called a stream unheard, and warned about
+  it, when its subscribers were in another controller's views.
+- **`rails_session_context` keeps a conversation's latest 200 queries, each
+  long param shortened, and says how many it dropped.** One client could
+  grow the server's memory without limit, and an answer echoed a 100 KB
+  argument back in full.
 - **An action a concern or a parent controller defines shows its source.**
   `rails_get_controllers(controller:, action:)` read only the controller's
   own file, so an action from an included concern (namespaced ones too) or
