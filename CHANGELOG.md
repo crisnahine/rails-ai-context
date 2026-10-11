@@ -187,6 +187,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tells the bundle's copy it hands the run to where it was typed, and
   `rails ai:doctor` reads it from the shell's `PWD`, since Rails' `rails`
   command and rake move up to the root before the task runs.
+- **`doctor` gives the edit by hand the install gives for a config the
+  install leaves as it is.** For a `.vscode/mcp.json` holding comments it
+  said to run the install, which left the file as it was and said to add
+  the entry by hand, and `doctor` then said to run the install again. It
+  now names the entry to add, as the install writes it (`Add
+  {"servers":{...}} to .vscode/mcp.json by hand`), for VS Code's and
+  OpenCode's configs, a workspace's included. For a Codex entry kept as an
+  inline table or with dotted keys, a stale env snapshot in one included,
+  it names the table to write by hand, where an entry the install had to
+  rewrite sent the reader back to the install too; and it asks for a JSON
+  config that is not UTF-8 to be saved as UTF-8 before the install runs.
 - **On Windows the MCP configs start the server through `cmd /c`, and
   `doctor` reads a config for the platform it runs on.** A gem's executables
   on Windows are batch files (`bundle.bat`, `rails-ai-context.bat`), which

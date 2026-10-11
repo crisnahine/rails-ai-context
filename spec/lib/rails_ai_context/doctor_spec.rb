@@ -1260,6 +1260,85 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:pass)
       end
     end
+
+    # Doctor said to run the install, the install left the file as it is and
+    # said to add the entry by hand, and doctor said to run the install
+    # again. Each fix here is the one the install gives for the same file.
+    context "when the install would leave the config as it is" do
+      def install_reason(tool)
+        result = RailsAiContext::McpConfigGenerator.new(tools: [ tool ], output_dir: @root, tool_mode: :mcp, standalone: true).call
+        result[:reasons].values.first.to_s
+      end
+
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+      end
+
+      # VS Code and OpenCode read comments; the install would drop them.
+      it "names the entry to add by hand to a commented config that holds none of the gem's, as the install does" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot opencode])
+        write(".vscode/mcp.json", %({\n  // GitHub's server\n  "servers": { "github": { "url": "https://api.example/mcp" } }\n}\n))
+        write("opencode.json", %({\n  /* the team's model */\n  "model": "x"\n}\n))
+
+        vscode = %({"servers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]}}})
+        opencode = %({"mcp":{"rails-ai-context":{"type":"local","command":["rails-ai-context","serve"]}}})
+        expect(check).to have_attributes(status: :warn, message: "2 of 2 MCP configs need attention: .vscode/mcp.json (GitHub Copilot), " \
+                                                                 "opencode.json (OpenCode): holds no rails-ai-context server")
+        expect(check.fix).to eq("Add #{vscode} to .vscode/mcp.json by hand: #{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}, " \
+                                "so the install leaves it as it is; Add #{opencode} to opencode.json by hand: " \
+                                "#{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}, so the install leaves it as it is")
+        expect(install_reason(:copilot)).to end_with("Add #{vscode} to it by hand")
+        expect(install_reason(:opencode)).to end_with("Add #{opencode} to it by hand")
+      end
+
+      it "names the entry to replace by hand where the commented config's entry needs rewriting" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+        write("Gemfile", %(gem "rails"\n))
+        write("Gemfile.lock", lockfile("rails"))
+        write(".vscode/mcp.json", %({\n  // ours\n  "servers": { "rails-ai-context": { "command": "bundle", "args": ["exec", "rails-ai-context", "serve"] } }\n}\n))
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to end_with("`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
+        expect(check.fix).to start_with(%(Add {"servers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]}}} to .vscode/mcp.json by hand))
+        expect(install_reason(:copilot)).to include("holds comments")
+
+        write(".vscode/mcp.json", %({\n  // ours\n  "servers": { "rails-ai-context": { "command": "rails-ai-context", "args": ["serve"] } }\n}\n))
+        expect(app_doctor.send(:check_mcp_json).status).to eq(:pass)
+      end
+
+      # Added by hand, the entry sits in a file its client cannot read either.
+      it "asks for a config that is not UTF-8 to be saved as UTF-8 before the install runs" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write(".mcp.json", %({"mcpServers": {"x": {"command": "caf\xE9"}}}\n).b)
+
+        expect(check).to have_attributes(status: :fail, message: end_with(".mcp.json (Claude Code): it is not UTF-8, which JSON is"),
+                                         fix: "Save .mcp.json as UTF-8, then run `rails-ai-context init`")
+      end
+
+      it "names the Codex table to write by hand for an entry the install does not rewrite that cannot start" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+        write("Gemfile", %(gem "rails"\n))
+        write("Gemfile.lock", lockfile("rails"))
+        write(".codex/config.toml", %([mcp_servers]\nrails-ai-context = { command = "bundle", args = ["exec", "rails-ai-context", "serve"] }\n))
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to end_with("`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
+        expect(check.fix).to eq("Write it as a [mcp_servers.rails-ai-context] table by hand, or delete it and run `rails-ai-context init`: " \
+                                "it sets rails-ai-context as an inline table or with dotted keys, which the install does not rewrite")
+        expect(install_reason(:codex)).to include("Write it as a [mcp_servers.rails-ai-context] table by hand")
+      end
+
+      it "names the same edit for a stale snapshot in such an entry" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+        write(".codex/config.toml", %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context", args = ["serve"], ) +
+                                    %(env = { PATH = "/nonexistent/ruby/9.9.9/bin" } }\n))
+
+        staleness = app_doctor.send(:check_codex_env_staleness)
+        expect(staleness.status).to eq(:fail)
+        expect(staleness.fix).to start_with("Write it as a [mcp_servers.rails-ai-context] table by hand, or delete it and run `rails-ai-context init`")
+      end
+    end
   end
 
   describe "#check_stdio_activation_hygiene" do
@@ -1349,6 +1428,26 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check.status).to eq(:fail)
       expect(check.message).to include("`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
       expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.cursor/mcp.json to fix")
+    end
+
+    # init in the folder leaves a commented config of the folder's as it is
+    # too, and names the entries to add by hand: this app's is one of them.
+    it "names this app's entry as init writes it, for a commented config of the folder's that needs it rewritten" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+      write("a/Gemfile", %(gem "rails"\n))
+      write("a/Gemfile.lock", lockfile("rails"))
+      write(".vscode/mcp.json", %({\n  // the folder's servers\n  "servers": {\n    "rails-ai-context-a": { "command": "bundle", ) +
+                                %("args": ["exec", "rails-ai-context", "serve", "--app-path", "${workspaceFolder}/a"], ) +
+                                %("env": { "BUNDLE_GEMFILE": "${workspaceFolder}/a/Gemfile" } }\n  }\n}\n))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      servers = RailsAiContext::Install::Workspace.apps(@work, [ app_root ]).map(&:server)
+      init = RailsAiContext::McpConfigGenerator.new(tools: [ :copilot ], output_dir: @work, tool_mode: :mcp, servers: servers).call
+      entry = init[:reasons].values.first[/Add (\{.*\}) to it by hand\z/, 1]
+      expect(entry).to include(%("rails-ai-context-a":{"command":"rails-ai-context"))
+      expect(check.fix).to eq("Add #{entry} to ../.vscode/mcp.json by hand: #{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}, " \
+                              "so the install leaves it as it is")
     end
 
     it "finds its MCP configs in the workspace and names where they are" do

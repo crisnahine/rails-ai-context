@@ -85,7 +85,7 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
 
 ### "Could not write .vscode/mcp.json - that tool will not auto-discover the MCP server"
 
-The install never replaces a config it cannot write back faithfully: one that does not parse as JSON, one holding comments that writing it back would drop, or one that is not UTF-8. Trailing commas, which VS Code and OpenCode accept, are read the way they read them under json 2.9 or later; an older json refuses them, as JSON does. The line after the warning says which, and ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the comments (and, under an older json, the trailing commas) and run the install again.
+The install never replaces a config it cannot write back faithfully: one that does not parse as JSON, one holding comments that writing it back would drop, or one that is not UTF-8. Trailing commas, which VS Code and OpenCode accept, are read the way they read them under json 2.9 or later; an older json refuses them, as JSON does. The line after the warning says which, and ends with the exact entry to add, as `Add {"servers":{...}} to it by hand`. Add that entry yourself, or remove the comments (and, under an older json, the trailing commas) and run the install again. `doctor` names the same entry for a file whose comments keep the install out, rather than sending you back to the install, and asks for one that is not UTF-8 to be saved as UTF-8 first.
 
 Claude Code reads `.mcp.json` with a plain JSON parser, and loads no server from a file holding a comment or a trailing comma ("MCP config is not a valid JSON"); Cursor's `.cursor/mcp.json` is held to plain JSON too. Either one is reported as `Claude Code cannot read it: it holds a trailing comma, which JSON does not allow`, by the install and by `doctor`, however current the entry in it. Make the file plain JSON and run the install again. `doctor` reports one that does not parse, or holds no object to merge into, a workspace's above the app included. Dropping an AI tool leaves such a file alone the same way and names the entries to remove.
 
@@ -93,7 +93,7 @@ Claude Code reads `.mcp.json` with a plain JSON parser, and loads no server from
 
 Codex refuses a `config.toml` that declares a server twice. An earlier install could write a second `[mcp_servers.rails-ai-context]` table beside the server spelled another way: a quoted name (`[mcp_servers."rails-ai-context"]`), an inline table under `[mcp_servers]`, or dotted keys. `doctor` names such a file. Two tables are merged into one when the install runs again; for an inline table or dotted keys, delete one of the two by hand.
 
-The install now finds the server however its name is quoted and replaces its table where it stands. An entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, as is a file whose `mcp_servers` is one inline table: write it as a `[mcp_servers.rails-ai-context]` table, or delete it, and the next run keeps it current.
+The install now finds the server however its name is quoted and replaces its table where it stands. An entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, as is a file whose `mcp_servers` is one inline table: write it as a `[mcp_servers.rails-ai-context]` table, or delete it, and the next run keeps it current. `doctor` gives that same edit for any problem in such an entry that only a rewrite fixes, a stale env snapshot included.
 
 ### Codex: "stream did not contain valid UTF-8"
 

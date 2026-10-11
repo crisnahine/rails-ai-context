@@ -746,32 +746,46 @@ module RailsAiContext
         return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
       end
 
+      # Where the install would leave the file, or the gem's entry in it, as
+      # it is, the edit by hand it names instead is the fix: sent to run the
+      # install, the reader was told the same thing again.
       shape = nil
+      by_hand = nil
       if cfg[:path].end_with?(".toml")
         shape = toml_config_trouble(full_path)
         if shape&.first == :fail
           return ConfigVerdict.new(label: label, status: :fail, problem: shape[1], fix: shape[2], unparseable: nil)
         end
+
+        by_hand = "#{shape[2]}: #{shape[1]}" if shape&.[](3)
       else
         text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
         if problem.nil? && text.strip.empty?
           return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
         end
+        # The entry added by hand would sit in a file JSON still cannot read;
+        # saved as UTF-8, the next install merges into it.
+        if problem
+          return ConfigVerdict.new(label: label, status: :fail, problem: problem,
+                                   fix: "Save #{fix_path(full_path)} as UTF-8, then run #{run_after(full_path)}", unparseable: nil)
+        end
 
-        problem ||= json_config_problem(text, tool)
+        problem = json_config_problem(text, tool)
         return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: nil, unparseable: full_path) if problem
+
+        by_hand = json_by_hand(tool, full_path) if McpConfigGenerator.json_comments?(text)
       end
 
       entries = serving_entries(tool, full_path)
       if entries.empty?
         return ConfigVerdict.new(label: label, status: :warn, problem: shape&.[](1) || "holds no rails-ai-context server",
-                                 fix: shape&.[](2) || install_fix, unparseable: nil)
+                                 fix: shape&.[](2) || by_hand || install_fix, unparseable: nil)
       end
 
       # An entry under the gem's name that runs something else (an HTTP one)
       # is its owner's to judge.
-      troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path) }
+      troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, by_hand) }
       status, problem, fix = [ *troubles, shape ].compact.min_by { |trouble| trouble.first == :fail ? 0 : 1 }
       ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
     rescue SystemCallError, IOError => e
@@ -795,31 +809,61 @@ module RailsAiContext
     end
 
     # What the install makes of a Codex config, read the way it reads one:
-    # [status, problem, fix], nil when it writes it. A server declared twice
-    # fails, since Codex refuses to read the file at all; an entry the
-    # install does not rewrite works, but stays as it is.
+    # [status, problem, fix, by hand], nil when it writes it. A server
+    # declared twice fails, since Codex refuses to read the file at all; an
+    # entry the install does not rewrite works, but stays as it is. By hand
+    # where the install leaves the file, or the gem's entry in it, as it is,
+    # so that the fix is the one any run of it waits on.
     def toml_config_trouble(path)
       return [ :fail, McpConfigGenerator::TOML_NOT_UTF8, "Save it as UTF-8" ] if SafeFile.read_text(path).encoding == Encoding::BINARY
 
       servers, closed = McpConfigGenerator.toml_servers(path)
       if closed && servers.any? { |server| server.sections.any? }
-        return [ :fail, "#{closed}, yet it holds one, which Codex refuses to read", "Delete one of them by hand" ]
+        return [ :fail, "#{closed}, yet it holds one, which Codex refuses to read", "Delete one of them by hand", true ]
       end
 
       twice = servers.select(&:twice?)
       if twice.any?
         # Two tables and nothing else is what the install merges into one.
-        fix = twice.all?(&:rewritable?) ? "Run #{install_command(path)} to fix" : "Delete all but one by hand"
-        return [ :fail, "it declares #{twice.map(&:name).join(', ')} twice, which Codex refuses to read", fix ]
+        merged = twice.all?(&:rewritable?)
+        return [ :fail, "it declares #{twice.map(&:name).join(', ')} twice, which Codex refuses to read",
+                 merged ? "Run #{install_command(path)} to fix" : "Delete all but one by hand", !merged ]
       end
-      return [ :warn, closed, "Write it as [mcp_servers.<name>] tables by hand" ] if closed
+      return [ :warn, closed, "Write it as [mcp_servers.<name>] tables by hand", true ] if closed
 
       held = servers.select { |server| !server.rewritable? && McpConfigGenerator.own_entry?(server.name, server.argv) }
       return nil if held.empty?
 
       [ :warn, McpConfigGenerator.unwritable_toml(held.map(&:name)),
         "Write #{held.one? ? "it as a [mcp_servers.#{held.first.name}] table" : 'them as [mcp_servers.<name>] tables'} by hand, " \
-        "or delete #{held.one? ? 'it' : 'them'} and run #{install_command(path)}" ]
+        "or delete #{held.one? ? 'it' : 'them'} and run #{install_command(path)}", true ]
+    end
+
+    # What the install says to add by hand to a JSON config whose comments
+    # it would drop writing it back, and so leaves as it is: the gem's entry
+    # for this app, exactly as it would write it.
+    def json_by_hand(tool, path)
+      config = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)
+      generator = McpConfigGenerator.new(tools: [ tool ], output_dir: mcp_config_folder(tool, path), servers: [ install_server(tool, path) ])
+      "Add #{JSON.generate(config[:root_key] => generator.json_entries(config))} to #{fix_path(path)} by hand: " \
+        "#{McpConfigGenerator::COMMENTS_PROBLEM}, so the install leaves it as it is"
+    end
+
+    # The server the install writes for this app into a config: the app's
+    # own, in the form its bundle calls for, or in a workspace's config the
+    # app's entry there, under the name it has.
+    def install_server(tool, path)
+      standalone = InstallMode.standalone?(root: install_root)
+      return McpConfigGenerator::Server.new(name: McpConfigGenerator::SERVER_NAME, standalone: standalone) unless workspace_config?(path)
+
+      app = Install::Workspace.apps(mcp_config_folder(tool, path), [ install_root ]).first
+      app.server_name = serving_entries(tool, path).first&.dig(:name) || app.server_name
+      app.server
+    end
+
+    # The install run that follows a fix to the config itself.
+    def run_after(config_path)
+      workspace_config?(config_path) ? "`rails-ai-context init` in the folder that holds it" : install_job(:install)
     end
 
     def mcp_config_path(tool)
@@ -847,12 +891,13 @@ module RailsAiContext
     # Why one of the gem's entries cannot start the server for this app, or
     # starts a copy of the gem other than the app's: [status, problem, fix],
     # nil when it starts the right one. Fast on purpose: the command is
-    # looked up, never run.
-    def entry_trouble(entry, tool, config_path)
+    # looked up, never run. A fix that rewrites the entry is the install,
+    # or, where the install leaves the file as it is, the edit `by_hand`.
+    def entry_trouble(entry, tool, config_path, by_hand = nil)
       argv = McpConfigGenerator.unwrapped_argv(entry[:argv])
       folder = mcp_config_folder(tool, config_path)
       line = "`#{argv.take_while { |arg| !arg.start_with?("--app-path") }.join(' ')}`"
-      rerun = "Run #{install_command(config_path)} to fix"
+      rerun = by_hand || "Run #{install_command(config_path)} to fix"
       # Codex sets the PATH its env snapshot holds, which the snapshot check reads.
       path, where = entry_path_variable(entry, tool)
       found = path.nil? || executable_on?(argv.first.to_s, path, folder)
@@ -1042,7 +1087,10 @@ module RailsAiContext
       return nil if snapshots.empty?
 
       shown = typed_path(toml_path)
-      fix = "Run #{install_command(toml_path)}"
+      # The install writes a fresh snapshot, unless it leaves the file, or
+      # the gem's entry in it, as it is: then the edit by hand comes first.
+      _, why, edit, by_hand = toml_config_trouble(toml_path)
+      fix = by_hand ? "#{edit}: #{why}" : "Run #{install_command(toml_path)}"
       unreached = snapshots.filter_map { |entry| unreached_command(entry, mcp_config_folder(:codex, toml_path)) }
       if unreached.any?
         said = unreached.group_by { |_, command, gone| [ command, gone ] }.map do |(command, gone), group|

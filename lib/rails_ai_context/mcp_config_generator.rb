@@ -146,6 +146,12 @@ module RailsAiContext
       { written: written, skipped: skipped, failed: failed, reasons: reasons, notes: @notes }
     end
 
+    # The entries a write puts under a JSON config's servers key, by name,
+    # as it writes them: what a config it leaves as it is needs by hand.
+    def json_entries(config)
+      @servers.to_h { |server| [ server.name, json_entry(server, config) ] }
+    end
+
     # A config that parses but holds no object to merge into, at the top or
     # under its servers key: replacing it would drop what it holds.
     class ShapeError < StandardError; end
@@ -648,8 +654,7 @@ module RailsAiContext
     def generate_for(path, config)
       return merge_toml(path) if config[:format] == :codex_toml
 
-      entries = @servers.to_h { |server| [ server.name, json_entry(server, config) ] }
-      merge_json(path, config, entries)
+      merge_json(path, config, json_entries(config))
     end
 
     def json_entry(server, config)
