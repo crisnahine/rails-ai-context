@@ -42,16 +42,24 @@ module RailsAiContext
           after_create_commit after_update_commit after_destroy_commit after_save_commit
         ].to_set.freeze
 
+        # `before_<event>` on a chain `define_model_callbacks` makes; outside the file that defines it
+        # (Paperclip's has_attached_file), only the booted model's chains say it is one.
+        MODEL_CALLBACK = /\A(?:before|after|around)_(\w+)\z/
+
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
           return record_broadcasts(node) if BROADCASTS.key?(node.name) && in_scope?(node)
-          return unless CALLBACK_METHODS.include?(node.name) && in_scope?(node)
+          return record_defined(node) if node.name == :define_model_callbacks && in_scope?(node)
+
+          chain = MODEL_CALLBACK.match(node.name.to_s)&.[](1) unless CALLBACK_METHODS.include?(node.name)
+          return unless (CALLBACK_METHODS.include?(node.name) || chain) && in_scope?(node)
 
           # Sources, not literals: a lambda condition reads as the line the
           # file holds rather than as a marker.
           hash = options_hash(node)
           options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node)).merge(hash_sources(hash))
-          emit(node, resolve_callback_types(node.name, options), callback_targets(node, hash), options)
+          needs_chain = chain unless defined_here.include?(node.name)
+          emit(node, resolve_callback_types(node.name, options), callback_targets(node, hash), options, needs_chain: needs_chain)
         end
 
         ON_EVENT = "after_commit_on_"
@@ -138,7 +146,18 @@ module RailsAiContext
           end
         end
 
-        def emit(node, callback_types, targets, options)
+        def defined_here
+          @defined_here ||= Set.new
+        end
+
+        # ActiveModel::Callbacks' kinds, `only:` narrowing them.
+        def record_defined(node)
+          only = Array(extract_keyword_options(node)[:only]).map(&:to_s)
+          kinds = only.empty? ? KINDS : KINDS & only
+          extract_symbol_args(node).each { |event| kinds.each { |kind| defined_here << :"#{kind}_#{event}" } }
+        end
+
+        def emit(node, callback_types, targets, options, needs_chain: nil)
           targets.each do |method_name, confidence|
             callback_types.each do |callback_type|
               record = {
@@ -154,6 +173,7 @@ module RailsAiContext
               }
               # A block has no method whose body could be read; its declaration is its source.
               record.merge!(declaration(node)) if method_name == INLINE_BLOCK
+              record[:needs_chain] = needs_chain if needs_chain
               @results << record
             end
           end

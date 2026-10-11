@@ -3188,6 +3188,56 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Paperclip's has_attached_file defines its chains with define_model_callbacks.
+  describe "callbacks on chains a library defines" do
+    def write_model(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "media_attachment.rb"), <<~RUBY)
+        class MediaAttachment < ApplicationRecord
+          has_attached_file :file
+          before_file_validate :set_type_and_extension
+          before_file_validate :check_video_dimensions
+          after_post_process :set_meta
+          define_model_callbacks :publish, only: :after
+          after_publish :notify
+          before_create :set_processing
+        end
+      RUBY
+    end
+
+    it "lists them booted, from the chains the model holds" do
+      Dir.mktmpdir do |dir|
+        write_model(dir)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          define_model_callbacks :file_validate, only: :before
+          define_model_callbacks :post_process, only: :after
+          define_model_callbacks :publish, only: :after
+        end
+        model.define_singleton_method(:name) { "MediaAttachment" }
+
+        callbacks = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)[:callbacks]
+
+        expect(callbacks).to eq(
+          "before_file_validate" => %w[set_type_and_extension check_video_dimensions],
+          "after_post_process" => %w[set_meta],
+          "after_publish" => %w[notify],
+          "before_create" => %w[set_processing]
+        )
+      end
+    end
+
+    it "lists statically only the ones the file defines the chain for" do
+      Dir.mktmpdir do |dir|
+        write_model(dir)
+
+        callbacks = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["MediaAttachment"][:callbacks]
+
+        expect(callbacks).to eq("after_publish" => %w[notify], "before_create" => %w[set_processing])
+      end
+    end
+  end
+
   # A booted count carried PaperTrail::Version, which static never sees.
   # A gem that puts a module into every model (an APM agent's base
   # extensions) is no concern of the model; one a gem macro includes into

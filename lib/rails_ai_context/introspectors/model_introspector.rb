@@ -593,7 +593,7 @@ module RailsAiContext
         calls = singleton_lookup([ [ model.name, model_source_path(model) ], *bases ])
         source_data, unread, bases_unread, hidden =
           merge_class_and_bases(own_source, model.name, calls, bases, file: model_source_path(model),
-                                commits_in_order: booted_commits_in_order)
+                                commits_in_order: booted_commits_in_order, chains: model.__callbacks.keys.map(&:to_s))
 
         class_methods = extract_class_methods_from_ast(model, source_data)
         instance_methods = extract_instance_methods_from_ast(model, source_data)
@@ -1813,7 +1813,8 @@ module RailsAiContext
       #
       # Each side is walked again only when the other has since learned a call
       # that releases something it held back.
-      def merge_class_and_bases(own, class_name, calls, bases, file:, commits_in_order:)
+      # `chains` are the callback chains the booted model holds; nil keeps only the callbacks the source shows a chain for.
+      def merge_class_and_bases(own, class_name, calls, bases, file:, commits_in_order:, chains: nil)
         extra = BaseMixins.models(app.root.to_s)
         mine = walk_class(own, class_name, calls, extra: extra, file: file)
         walked = walk_bases(bases, calls)
@@ -1832,7 +1833,15 @@ module RailsAiContext
         data = merge_inherited(data, declared)
         settled = walked.map { |name, walk| walk ? [ name, walk.own, *settle(walk, calls, expanded[walk.rank]) ] : [ name, nil ] }
         data, *rest = merge_inherited_macros(data, unread, hidden, settled)
-        [ data.merge(callbacks: chain_order(data[:callbacks], commits_in_order)), *rest ]
+        [ data.merge(callbacks: chain_order(on_known_chains(data[:callbacks], chains), commits_in_order)), *rest ]
+      end
+
+      def on_known_chains(callbacks, chains)
+        Array(callbacks).filter_map do |cb|
+          next cb unless cb.is_a?(Hash) && cb[:needs_chain]
+
+          cb.except(:needs_chain) if chains&.include?(cb[:needs_chain])
+        end
       end
 
       CHAIN_KEYS = %i[rank chain_at hook owner].freeze
@@ -2267,7 +2276,7 @@ module RailsAiContext
         # A parent's callbacks join the chain as a base's do, one rank above the subclass's.
         settled = Array(inherited&.dig(:settled_callbacks)).map { |cb| cb.merge(rank: cb[:rank].to_i + 1) } + settled
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
-        callbacks = chain_order(settled, false)
+        callbacks = chain_order(on_known_chains(settled, nil), false)
         declared = macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) }
         mixins = ConcernMembership.owned_by(data[:mixins], class_name, root: app.root)
         details = {

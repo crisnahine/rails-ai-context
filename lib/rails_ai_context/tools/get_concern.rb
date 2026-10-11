@@ -559,6 +559,7 @@ module RailsAiContext
       private_class_method def self.parse_concern_callbacks(source)
         Introspectors::SourceIntrospector
           .walk_source(source, { callbacks: Introspectors::Listeners::CallbacksListener })[:callbacks]
+          .reject { |cb| cb[:needs_chain] }
           .map { |cb| callback_declaration(cb) }
           .uniq
       rescue => e
