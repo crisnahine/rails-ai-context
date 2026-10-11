@@ -52,9 +52,16 @@ Gem::Specification.new do |spec|
   # There git lists nothing, and an empty list leaves the gem without its
   # executable, so `bundle exec rails-ai-context` finds none: the tree on
   # disk is the list instead.
+  #
+  # A git hook exports the committing repository to every command it runs -
+  # GIT_DIR and GIT_INDEX_FILE, absolute in a submodule or a linked worktree,
+  # and the index relative to that repository's top otherwise - so the
+  # pre-commit hook's `bundle exec` listed the app's files here, or none:
+  # git is asked about this directory alone.
   spec.files = Dir.chdir(__dir__) do
     listed = begin
-      IO.popen([ "git", "ls-files", "-z" ], err: IO::NULL, &:read).split("\x0")
+      own_repository = { "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_INDEX_FILE" => nil }
+      IO.popen(own_repository, [ "git", "ls-files", "-z" ], err: IO::NULL, &:read).split("\x0")
     rescue SystemCallError
       []
     end
