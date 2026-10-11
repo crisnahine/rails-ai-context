@@ -21,7 +21,7 @@ RSpec.describe "rake boot failure reporting" do
     previous = $stderr
     begin
       $stderr = err
-      abort_boot_failure(result, 60)
+      RailsAiContext::RakeTasks.abort_boot_failure(result, 60)
     rescue SystemExit
       nil
     ensure

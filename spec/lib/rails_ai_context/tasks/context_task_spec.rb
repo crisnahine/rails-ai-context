@@ -44,6 +44,19 @@ RSpec.describe "rails ai:context:<tool>" do
     expect(@root.join(".cursor/mcp.json")).not_to exist
   end
 
+  it "prints its report when the app's own rake file defines a top-level print_result" do
+    allow(RailsAiContext).to receive(:generate_context)
+      .and_return(written: [ @root.join("CLAUDE.md").to_s ], skipped: [], not_applicable: {})
+    Object.class_eval { private def print_result(object) = puts("#{object.class.name},#{object.id}") }
+
+    out = with_tool_mode(:cli) { invoke_rake_task("ai:context:claude") }
+
+    expect(out).to include("CLAUDE.md")
+    expect(out).not_to include("Hash,")
+  ensure
+    Object.send(:remove_method, :print_result) if Object.private_method_defined?(:print_result, false)
+  end
+
   it "writes none for the JSON export, which is no AI tool" do
     with_tool_mode(:mcp) { invoke_rake_task("ai:context:json") }
 
