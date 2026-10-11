@@ -42,23 +42,20 @@ module E2E
     private
 
     def cli_prefix
-      if @app.isolated_gem_home?
-        [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
-      else
-        [ "bundle", "exec", "rails-ai-context" ]
-      end
+      @app.cli_command
     end
 
     public
 
     # Run a raw command inside the app with the merged env.
-    # Pass `stdin_input:` to feed data to the subprocess's stdin.
+    # Pass `stdin_input:` to feed data to the subprocess's stdin. A bin/
+    # script runs through this Ruby (TestAppBuilder.script_command).
     def run(cmd, extra_env: {}, timeout: 60, stdin_input: nil)
       env = @app.env.merge(extra_env.compact)
       stdout = ""
       stderr = ""
       status = nil
-      Open3.popen3(env, *cmd, chdir: @app.app_path) do |stdin_io, stdout_io, stderr_io, wait_thr|
+      Open3.popen3(env, *TestAppBuilder.script_command(cmd), chdir: @app.app_path) do |stdin_io, stdout_io, stderr_io, wait_thr|
         begin
           if stdin_input
             stdin_io.write(stdin_input)

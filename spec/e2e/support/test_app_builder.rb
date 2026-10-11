@@ -95,15 +95,39 @@ module E2E
       # For standalone + zero_config: also make the isolated CLI binary
       # resolvable. PATH prepend puts gem_home/bin ahead of system bin;
       # GEM_PATH append lets RubyGems find the installed gem at run time.
+      # Joined the way the OS separates them (`;` on Windows). An empty
+      # ENV["GEM_PATH"] leaves a trailing separator, which RubyGems reads as
+      # "and the default path".
       base.merge(
-        "PATH"     => "#{File.join(gem_home, 'bin')}:#{ENV['PATH']}",
-        "GEM_PATH" => "#{gem_home}:#{ENV['GEM_PATH']}"
+        "PATH"     => [ File.join(gem_home, "bin"), ENV["PATH"] ].join(File::PATH_SEPARATOR),
+        "GEM_PATH" => [ gem_home, ENV["GEM_PATH"] ].join(File::PATH_SEPARATOR)
       )
     end
 
     # Does the gem need a dedicated GEM_HOME (not from Bundler)?
     def isolated_gem_home?
       install_path == :standalone || install_path == :zero_config
+    end
+
+    # The command that starts the gem's binary for this app: the copy in the
+    # isolated GEM_HOME, or the one the app's bundle holds. A RubyGems
+    # binstub is a Ruby script, which Windows cannot exec (it runs the .bat
+    # written beside it), so the script runs through this Ruby: one command
+    # on every OS.
+    def cli_command
+      if isolated_gem_home?
+        [ RbConfig.ruby, File.join(gem_home, "bin", "rails-ai-context") ]
+      else
+        [ "bundle", "exec", "rails-ai-context" ]
+      end
+    end
+
+    # A command line with an app's bin/ script (bin/rails) run through this
+    # Ruby, for the same reason: Windows answers a shebang script with
+    # Errno::ENOEXEC. Anything else is left as it is; a bare `bundle` or
+    # `rails` resolves to its .bat through PATHEXT.
+    def self.script_command(cmd)
+      cmd.first.to_s.start_with?("bin/") ? [ RbConfig.ruby, *cmd ] : cmd
     end
 
     # Build the gem artefact once per rspec process and memoize the path.
@@ -114,6 +138,11 @@ module E2E
     # Thread-safety: rspec runs specs serially by default, so a plain @@
     # memo is fine. parallel_tests forks workers before specs load, so
     # each worker would rebuild once - still net positive.
+    #
+    # The artefact goes into the run's tmpdir, not the checkout: an earlier
+    # run's could be picked up as this one's, and wherever the gemspec lists
+    # the tree on disk (no git), a .gem at the root fails it as "contains
+    # itself" for every `path:` bundle of a test app.
     @shared_gem_mutex = Mutex.new
     def self.shared_gem_artifact_path
       @shared_gem_mutex.synchronize do
@@ -124,11 +153,10 @@ module E2E
           "BUNDLER_SETUP" => nil, "BUNDLER_VERSION" => nil,
           "RUBYOPT" => nil, "RUBYLIB" => nil
         }
-        build_out, status = Open3.capture2e(unbundled, "gem", "build", "rails-ai-context.gemspec", chdir: GEM_ROOT)
+        gem_path = File.join(E2E.root, "rails-ai-context.gem")
+        build_out, status = Open3.capture2e(unbundled, "gem", "build", "rails-ai-context.gemspec", "--output", gem_path,
+                                            chdir: GEM_ROOT)
         raise "gem build failed:\n#{build_out}" unless status.success?
-
-        gemfile_name = build_out[/File:\s*(\S+)/, 1] || Dir.glob(File.join(GEM_ROOT, "rails-ai-context-*.gem")).max_by { |f| File.mtime(f) }
-        gem_path = File.absolute_path(gemfile_name, GEM_ROOT)
         raise "could not find built .gem artefact (looked for #{gem_path})" unless File.exist?(gem_path)
 
         @shared_gem_artifact_path = gem_path
@@ -214,8 +242,7 @@ module E2E
     # Run `rails-ai-context init` from inside the app - pre-loads the gem
     # without needing a Gemfile entry (CLAUDE.md #33).
     def run_cli_init!
-      cli_bin = File.join(gem_home, "bin", "rails-ai-context")
-      in_app(cli_bin, "init", stdin_input: generator_stdin_input)
+      in_app(*cli_command, "init", stdin_input: generator_stdin_input)
     end
 
     # The install generator asks three interactive questions via Thor's
@@ -288,7 +315,7 @@ module E2E
       merged = env.merge(env_extra.compact)
       opts = { chdir: app_path }
       opts[:stdin_data] = stdin_input if stdin_input
-      out, status = Open3.capture2e(merged, *cmd, **opts)
+      out, status = Open3.capture2e(merged, *self.class.script_command(cmd), **opts)
       unless status.success?
         raise "command failed: #{cmd.inspect}\n#{out}"
       end
