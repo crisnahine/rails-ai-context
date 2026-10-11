@@ -438,6 +438,33 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
       expect(described_class.send(:definition_missing?, traced)).to be false
     end
+
+    # The guide's trace example names a scope when the model defines no
+    # method, and the trace looked for a `def` alone: "No definition found".
+    it "reads a model's scope as the definition of the method it defines" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      source = <<~RB
+        class Post < ApplicationRecord
+          scope :published, -> { where(published: true) }
+          scope :recent, lambda {
+            order(created_at: :desc).limit(10)
+          }
+        end
+      RB
+      controller = "class PostsController < ApplicationController\n  def index\n    @posts = Post.published.recent\n  end\nend\n"
+
+      with_search_app("app/models/post.rb" => source, "app/controllers/posts_controller.rb" => controller) do
+        published = described_class.call(pattern: "published", match_type: "trace")
+        recent = described_class.call(pattern: "recent", match_type: "trace").content.first[:text]
+
+        expect(described_class.send(:definition_missing?, published)).to be false
+        expect(published.content.first[:text]).to include("**app/models/post.rb:2** in `class Post`\n```ruby\nscope :published, -> { where(published: true) }\n```")
+        expect(published.content.first[:text]).not_to include("  2: scope :published")
+        expect(recent).to include("scope :recent, lambda {\n    order(created_at: :desc).limit(10)\n  }")
+        expect(recent).to include("## Calls internally\n- `order`\n")
+        expect(recent).not_to include("- `lambda`")
+      end
+    end
   end
 
   # `\b` is a word/non-word transition, so a pattern edge that is already

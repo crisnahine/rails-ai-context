@@ -615,9 +615,12 @@ module RailsAiContext
         search_path = path ? File.join(root, path) : root
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
-        # 1. Find the definition
+        # 1. Find the definition: a `def`, else the `scope :name` that
+        # defines the class method a model's scope is.
         def_pattern = "#{DEF_HEAD}#{literal(cleaned)}#{RailsAiContext::MethodName.definition_end(cleaned)}"
         def_results, = quick_search(def_pattern, search_path, root, 10, exclude_tests)
+        scope = def_results.empty?
+        def_results, = quick_search(scope_pattern(cleaned), search_path, root, 10, exclude_tests) if scope
 
         if def_results.any?
           lines << "## Definition"
@@ -626,8 +629,12 @@ module RailsAiContext
             class_context = extract_class_context(File.join(root, r[:file]), r[:line_number])
             lines << "**#{r[:file]}:#{r[:line_number]}**#{class_context ? " in `#{class_context}`" : ""}"
 
-            # Full method body
-            body = extract_method_body(File.join(root, r[:file]), r[:line_number])
+            # Full method body, or the whole scope declaration
+            body = if scope
+              extract_scope_source(File.join(root, r[:file]), r[:line_number], cleaned)
+            else
+              extract_method_body(File.join(root, r[:file]), r[:line_number])
+            end
             if body
               lines << "```ruby"
               lines << RailsAiContext::Redaction.redact_source_lines(body.lines.map(&:chomp), path: r[:file]).join("\n")
@@ -642,6 +649,8 @@ module RailsAiContext
               internal_calls += Introspectors::SourceCalls.calls(def_source)
               internal_calls.uniq!
               internal_calls.reject! { |c| c == cleaned }
+              # The scope macro and the lambda holding its body are no calls the scope makes.
+              internal_calls -= SCOPE_WRAPPERS if scope
 
               if internal_calls.any?
                 lines << "" << "## Calls internally"
@@ -659,7 +668,7 @@ module RailsAiContext
             lines << ""
           end
         else
-          lines << "_No definition found for `def #{cleaned}`_"
+          lines << "_No definition found for `def #{cleaned}` or `scope :#{cleaned}`_"
           lines << ""
         end
 
@@ -739,6 +748,36 @@ module RailsAiContext
         text_response(lines.join("\n"))
       rescue => e
         text_response("Trace error: #{e.message}")
+      end
+
+      SCOPE_WRAPPERS = %w[scope lambda proc].freeze
+
+      # `scope :published, -> { ... }` or `scope("published", ...)`: the
+      # line that defines a model's scope method of that name.
+      private_class_method def self.scope_pattern(name)
+        "^\\s*scope\\s*\\(?\\s*(?::#{literal(name)}\\b|[\"']#{literal(name)}[\"'])"
+      end
+
+      # The whole `scope` call that starts on the line, however many lines
+      # its lambda runs to; the line alone when it cannot be parsed.
+      private_class_method def self.extract_scope_source(file_path, line, name)
+        source = RailsAiContext::SafeFile.read(file_path) || ""
+        found = nil
+        visit = lambda do |node|
+          return if found || !node.is_a?(Prism::Node)
+
+          first = node.arguments&.arguments&.first if node.is_a?(Prism::CallNode)
+          if node.is_a?(Prism::CallNode) && node.name == :scope && node.location.start_line == line &&
+             (first.is_a?(Prism::SymbolNode) || first.is_a?(Prism::StringNode)) && first.unescaped == name
+            found = node.slice
+          else
+            node.compact_child_nodes.each(&visit)
+          end
+        end
+        visit.call(RailsAiContext::AstCache.parse_string(source).value)
+        found || source.lines[line - 1]&.rstrip
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "extract_scope_source")
       end
 
       # Fast ripgrep search for trace mode (no formatting, just results)
