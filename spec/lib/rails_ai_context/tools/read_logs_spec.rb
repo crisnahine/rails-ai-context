@@ -218,6 +218,24 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).not_to include("abc123secret")
     end
 
+    # The header's pattern took the scheme for the value, so a Basic credential
+    # came back after it, and it missed the header quoted or written as a key.
+    it "redacts an Authorization header's credential however the log spells it" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      basic = [ "deploy:#{v}" ].pack("m0")
+      File.write(File.join(log_dir, "test.log"), <<~LOG)
+        I, [2026-03-29T10:00:00 #1] INFO -- : Authorization: Basic #{basic}
+        I, [2026-03-29T10:00:00 #1] INFO -- request: Authorization: "Bearer #{v}"
+        I, [2026-03-29T10:00:00 #1] INFO -- : webhook headers {"Authorization"=>"Bearer #{v}", "Accept"=>"*/*"}
+      LOG
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include(v)
+      expect(text).not_to include(basic)
+      expect(text).to include("INFO -- : Authorization: [FILTERED]", %(request: Authorization: "[FILTERED]"),
+                              %({"Authorization"=>"[FILTERED]", "Accept"=>"*/*"}))
+    end
+
     it "redacts email addresses to [EMAIL]" do
       result = described_class.call
       text = result.content.first[:text]

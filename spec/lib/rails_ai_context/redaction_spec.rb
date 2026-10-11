@@ -316,6 +316,41 @@ RSpec.describe RailsAiContext::Redaction do
       ].each { |line| expect(redact(line)).to eq(line) }
     end
 
+    # "Authorization" is no secret word and its value holds a space, so only the
+    # scheme says a credential follows; the credential goes and the scheme stays.
+    it "filters the credential after an auth scheme" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      basic = [ "deploy:#{v}" ].pack("m0")
+      uuid = "123e4567-e89b-12d3-#{'a456'}-426614174000"
+      split = "#{v[0, 10]}+#{v[10, 6]}/#{v[0, 6]}=="
+      {
+        %(conn.headers["Authorization"] = "Bearer #{v}") => %(conn.headers["Authorization"] = "Bearer [FILTERED]"),
+        %({ "Authorization" => "Basic #{basic}" }) => %({ "Authorization" => "Basic [FILTERED]" }),
+        %(get "/notes", headers: { "HTTP_AUTHORIZATION" => "Token #{v}" }) =>
+          %(get "/notes", headers: { "HTTP_AUTHORIZATION" => "Token [FILTERED]" }),
+        %(HTTP.auth("bearer #{uuid}").get(url)) => %(HTTP.auth("bearer [FILTERED]").get(url)),
+        %(req["Authorization"] = "Basic #{split}") => %(req["Authorization"] = "Basic [FILTERED]")
+      }.each { |line, want| expect(redact(line)).to eq(want) }
+      expect(redact(%(curl -H "Authorization: Bearer #{v}" https://api.example.com/v1/me), path: "bin/setup"))
+        .to eq(%(curl -H "Authorization: Bearer [FILTERED]" https://api.example.com/v1/me))
+      expect(redact("      - Bearer #{v}", path: "spec/fixtures/vcr_cassettes/billing.yml")).to eq("      - Bearer [FILTERED]")
+    end
+
+    it "leaves a scheme with no credential after it byte for byte" do
+      [
+        %(headers["Authorization"] = "Bearer \#{token}"),
+        %("Authorization" => "Bearer "),
+        %("Authorization" => "Bearer YOUR_TOKEN", "X-Other" => "Bearer xxxxxxxxxxxxxxxxxxxx"),
+        %(response.headers["WWW-Authenticate"] = %(Basic realm="Application")),
+        %("Authorization" => "Basic realm=Application"),
+        %("Authorization" => "Bearer abc123", "X-Test" => "Bearer test-token-123"),
+        %(header "Authorization", "Bearer " + token),
+        %(token_type: "Bearer", expires_in: 3600),
+        "# Use Basic authentication for the API, and send a Bearer token with each call.",
+        "    Authorization: Bearer <your-token>"
+      ].each { |line| expect(redact(line)).to eq(line) }
+    end
+
     it "filters a secret literal passed through a call or block that names the secret" do
       v = "Xk2mQ9pLw7Rt5vB1"
       {
@@ -616,6 +651,27 @@ RSpec.describe RailsAiContext::Redaction do
         %(headers {"X-Token-Expiry"=>"3600", "X-Key-Id"=>"abcd1234efgh5678"}) =>
           %(headers {"X-Token-Expiry"=>"3600", "X-Key-Id"=>"abcd1234efgh5678"})
       }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want) }
+    end
+
+    # The pattern took the scheme for the value, so a Basic credential came
+    # back after it, and it missed the header quoted, or written as a key.
+    it "filters an Authorization header's credential in each spelling a log writes" do
+      v = "Xk2mQ9pLw7Rt#{'Z4ab'}"
+      basic = [ "deploy:#{v}" ].pack("m0")
+      {
+        "Authorization: Basic #{basic}" => "Authorization: [FILTERED]",
+        %(request: Authorization: "Bearer #{v}") => %(request: Authorization: "[FILTERED]"),
+        %(headers {"Authorization"=>"Bearer #{v}", "Accept"=>"*/*"}) => %(headers {"Authorization"=>"[FILTERED]", "Accept"=>"*/*"}),
+        %(env {"HTTP_AUTHORIZATION"=>"Basic #{basic}"}) => %(env {"HTTP_AUTHORIZATION"=>"[FILTERED]"}),
+        %({"authorization":"Token #{v}","path":"/notes"}) => %({"authorization":"[FILTERED]","path":"/notes"}),
+        "retry with Bearer #{v} after a 401" => "retry with Bearer [FILTERED] after a 401"
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want) }
+      [
+        "ActionCable::Connection::Authorization::UnauthorizedError (An unauthorized connection attempt was rejected)",
+        %(WWW-Authenticate: Basic realm="Application"),
+        "Processing by Admin::AuthorizationsController#index as HTML",
+        "Bearer token expired for user 5; Completed 401 Unauthorized in 3ms"
+      ].each { |line| expect(described_class.redact_log_line(line)).to eq(line) }
     end
 
     # Under /i Unicode case folding gives `s` a two-byte form, so a
@@ -951,8 +1007,10 @@ RSpec.describe RailsAiContext::Redaction do
 
     # A header name is read as a whole run of words and dashes; a pattern that
     # tried each dash as the run's start, or its secret word's, took minutes.
-    it "takes a fraction of a second over a 1 MB run of dashed words, in a log and in source" do
-      [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x") ].each do |line|
+    # A filtered value's offset was counted from the line's start, once per match.
+    it "takes a fraction of a second over a 1 MB run of dashed words or header keys, in a log and in source" do
+      [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x"),
+        %("Authorization"=>"x", ) * 50_000 ].each do |line|
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         described_class.redact_log_line(line)
         described_class.redact_source_line(line, path: "app/models/x.rb")

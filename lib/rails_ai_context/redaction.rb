@@ -129,8 +129,14 @@ module RailsAiContext
     # development log's `↳` query-source line does. read_logs then failed
     # outright, and diagnose lost its log section.
     LOG_PATTERNS = ([
-      # A `value` group is filtered in place, keeping the name and the quotes.
-      [ /authorization:\s(?<value>(?:Bearer\s)?[^\s"',;)\]}]+)/i, :value ],
+      # A `value` group, which ends the match, is filtered in place, keeping
+      # the name and the quotes. The Authorization header goes whole, its
+      # scheme with it, however the line spells it: `Authorization: Basic ...`,
+      # a quoted value, a hash or JSON key, Rack's `HTTP_AUTHORIZATION`.
+      # Unquoted, the name needs the space a header has after its colon, so
+      # `Authorization::UnauthorizedError` is a class.
+      [ /(?:(?<quote>["'])(?:HTTP_(?:PROXY_)?|Proxy-|X-)?authorization\k<quote>\s*(?:=>|:|=(?!>))\s*|authorization:\s+)
+         (?<value>(?!["']?\[FILTERED\])(?:"[^"]*"|'[^']*'|(?:(?:Bearer|Basic|Token)\s+)?[^\s"',;)\]}]+))/xi, :value ],
       [ /cookie:\s(?<value>#{LOG_VALUE})/i, :value ],
       [ /session_id=(?<value>#{LOG_VALUE})/i, :value ],
       [ /_session=(?<value>#{LOG_VALUE})/i, :value ],
@@ -179,6 +185,13 @@ module RailsAiContext
     # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments.
     ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]+)/
 
+    # An HTTP auth scheme says the word after it is a credential (`Bearer <token>`, `Basic <base64>`,
+    # `Token <token>`), under an Authorization key, in a curl line or a cassette alike. "Authorization"
+    # is no secret word and the value has a space, so no key rule reads it; the credential alone goes,
+    # wherever it sits, when it is shaped like one (scheme_credential?). `Bearer #{token}`,
+    # `Basic realm=...` and `Bearer YOUR_TOKEN` hold none.
+    AUTH_CREDENTIALS = %r{\b(?:Bearer|Basic|Token)[ \t]++(?<credentials>[\w.~+/-]++=*+)(?![\w.~+/=-])}i
+
     # YAML writes a string unquoted, so there a secret-named key's plain
     # scalar is a literal too.
     YAML_SCALAR = /\A(?<head>\s*["']?(?<name>#{KEY_NAME})["']?:[ \t]+)(?<value>[^\s#][^#]*?)(?<tail>\s+#.*)?\z/
@@ -222,6 +235,7 @@ module RailsAiContext
         end
         result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
         result = CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) }
+        result = scheme_credentials(result)
         path.to_s.match?(YAML_FILE) && !locale ? yaml_scalar(result, example) : result
       end
 
@@ -306,14 +320,16 @@ module RailsAiContext
         LOG_PATTERNS.each do |pattern, replacement|
           next result.gsub!(pattern, replacement) unless replacement == :value
 
+          # A value pattern ends with its value. A group's offset is counted
+          # from the line's start, so reading one per match made a line of
+          # many matches cost the square of its length.
           result.gsub!(pattern) do
             match = Regexp.last_match
-            from = match.begin(:value) - match.begin(0)
-            match[0][0, from] + filtered_like(match[:value]) + match[0][(from + match[:value].length)..]
+            match[0].delete_suffix(match[:value]) + filtered_like(match[:value])
           end
         end
 
-        result
+        scheme_credentials(result)
       end
 
       # The one place a name and value pair leaves the process. Normally the
@@ -365,6 +381,25 @@ module RailsAiContext
       def key_name(name)
         spelled = name.tr("-", "_")
         spelled if spelled.match?(WHOLE_KEY_NAME)
+      end
+
+      # The credential after an auth scheme goes; the scheme stays, so the line still reads.
+      def scheme_credentials(text)
+        text.gsub(AUTH_CREDENTIALS) do |m|
+          credentials = Regexp.last_match(:credentials)
+          scheme_credential?(credentials) ? m.delete_suffix(credentials) + FILTERED : m
+        end
+      end
+
+      # After a scheme, key_credential?'s 16+ letters and digits, both, read past the separators a
+      # credential is written with: a UUID's dashes, base64's `+`, `/` and `=`. A word or a
+      # placeholder has no digits to count.
+      def scheme_credential?(value)
+        return true if CREDENTIAL_TOKENS.any? { |pattern| value.match?(pattern) }
+        return false if placeholder?(value)
+
+        alnum = value.delete("^A-Za-z0-9")
+        alnum.length >= 16 && alnum.match?(/[A-Za-z]/) && alnum.match?(/\d/)
       end
 
       # The one verdict on a name and value in a log line, whichever pattern found the pair.
