@@ -267,9 +267,8 @@ module RailsAiContext
         end
       end
 
-      # A lockfile also holds every gem's own dependencies. Rails resolves all
-      # its frameworks and loads only those config/application.rb asks for, and
-      # every Rails app resolves minitest through activesupport.
+      # A lockfile also holds what other gems depend on: Rails resolves every framework and
+      # loads only those it is asked for, and activesupport pulls in minitest.
       def app_uses?(gem_name, lock)
         return true if lock.direct?(gem_name) || ENGINE_GEMS.include?(gem_name)
         return Dir.exist?(File.join(root, "test")) if gem_name == "minitest"
