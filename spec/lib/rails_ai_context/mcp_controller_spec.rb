@@ -217,6 +217,51 @@ RSpec.describe RailsAiContext::McpController do
       expect(captured["mcp-session-id"]).to eq("abc")
     end
 
+    # Live runs the action on a thread of its own, and nothing handed back
+    # the database connection a tool's query checked out to it: from Rails
+    # 8.0 that thread lives on in a pool, and in development every code
+    # reload waited ten seconds for the connection before unloading.
+    context "when the call queries the database" do
+      let(:leased) { [] }
+
+      before do
+        allow(transport).to receive(:handle_request) do
+          leased << ActiveRecord::Base.connection.tap { |connection| connection.select_value("SELECT 1") }
+          rack_response
+        end
+      end
+
+      it "hands the connection back before its thread moves on" do
+        Thread.new { controller.handle }.join
+
+        expect(leased.first).not_to be_in_use
+      end
+
+      it "hands it back from a streamed answer too" do
+        allow(transport).to receive(:handle_request) do
+          leased << ActiveRecord::Base.connection.tap { |connection| connection.select_value("SELECT 1") }
+          [ 200, { "Content-Type" => "text/event-stream" }, proc { |stream| stream.write("data: {}\n\n") } ]
+        end
+
+        Thread.new { controller.handle }.join
+
+        expect(leased.first).not_to be_in_use
+      end
+
+      it "hands it back when the transport fails" do
+        allow(RailsAiContext).to receive(:log_warn)
+        allow(transport).to receive(:handle_request) do
+          leased << ActiveRecord::Base.connection.tap { |connection| connection.select_value("SELECT 1") }
+          raise "transport exploded"
+        end
+
+        Thread.new { controller.handle }.join
+
+        expect(controller.response.status).to eq(500)
+        expect(leased.first).not_to be_in_use
+      end
+    end
+
     it "keeps an SSE content type from a lowercase transport header" do
       allow(transport).to receive(:handle_request)
         .and_return([ 200, { "content-type" => "text/event-stream" }, [ "" ] ])

@@ -467,6 +467,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The mounted engine keeps its MCP sessions across a code reload.** Every
   edit in development dropped them (404 "Session not found") and left one
   more session-reaper thread running.
+- **A call to the mounted engine after an edit no longer waits ten
+  seconds.** The engine answers on the thread `ActionController::Live`
+  starts, which kept the database connection the call had used, and a code
+  reload waits for every connection to come back before it unloads anything.
+  From Rails 8.0 that thread lives on in a pool, so in development each call
+  after an edit sat out the reload's ten-second wait: 10.3 seconds a call,
+  where it now takes 0.4. The connection goes back as the call ends.
 - **The engine and `auto_mount` answer the hosts the app's `config.hosts`
   allows.** The MCP SDK answered only loopback names, so
   `allow_http_in_production` could not serve an app by its own name, and

@@ -85,6 +85,28 @@ module RailsAiContext
       else
         self.response_body = body
       end
+    ensure
+      release_connections
+    end
+
+    # Live runs this action on a thread of its own, and a tool's queries
+    # check a database connection out to that thread. Rails hands a
+    # request's connections back as the request completes, on the request's
+    # thread, so this one kept its own, and from Rails 8.0 the thread is a
+    # pooled one that lives on. A code reload waits for every connection to
+    # come back before it unloads anything, so in development each call
+    # after an edit first sat out the ten seconds that reload waits before
+    # it takes the connections anyway.
+    def release_connections
+      return unless defined?(ActiveRecord::Base)
+
+      handler = ActiveRecord::Base.connection_handler
+      # Every role's pools. Rails 7.1 names them :all; 7.0 reads :all as a
+      # role of that name and releases nothing, and with no argument releases
+      # the current role's, the one the tools query in.
+      handler.respond_to?(:each_connection_pool) ? handler.clear_active_connections!(:all) : handler.clear_active_connections!
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, nil, label: "release_connections")
     end
 
     # Rack 3 transports name their headers in lowercase, and the MCP SDK
