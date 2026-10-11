@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hash (`{"X-Api-Key"=>"..."}`); each is filtered now. A Stimulus target,
   action, controller, outlet or class is read as a descriptor, so
   `data: { password_visibility_target: "input" }` keeps its value.
+- **Redaction reads a long word in time that grows with its length, not its
+  square.** A call's receiver was tried from every character of a run of
+  letters, digits and dots, so filtering a line holding a 16 KB hex string
+  took 2 seconds on Ruby 3.1 and an 80 KB one a minute; on Ruby 3.2 and
+  later a 1 MB one took 2.5 seconds, past the one second a Rails 8 app
+  gives a regular expression, and the tool answered with that error. The
+  receiver is now read from where its run starts, and the same lines take
+  a fraction of a second.
 - **`rails_get_view` filters the secrets in a controller's full listing.**
   `controller:"posts", detail:"full"` printed each template and partial as
   written, `<% api_key = "..." %>` and a `render` call's `token: "..."`

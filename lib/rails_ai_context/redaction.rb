@@ -166,13 +166,17 @@ module RailsAiContext
     # a `default:` (`option :client_secret, :string, default: "..."`), a `credentials.fetch` default.
     # Any other call's second argument is just another argument (`include("password", "email")`).
     SECRET_ARG = /:(?<name>#{KEY_NAME})|"(?<name>#{KEY_NAME})"|'(?<name>#{KEY_NAME})'/
+    # A call's receiver and name are read from where their run of characters starts, and taken
+    # whole: tried from each character, a long word or hex blob cost the square of its length,
+    # a minute for 80 KB on Ruby 3.1, and on 3.2 and later passed the second Rails 8 allows a match.
+    CALL_RECEIVER = /(?<![\w.!?])[.!?]*+\w[\w.!?]*+/
     CALL_KEYED = /
       \b(?:fetch|store|stub_const|update_column|update_attribute|write_attribute|set|put|append|setenv)
       \(\s*(?:#{SECRET_ARG})\s*,\s*(?<literal>#{STRING_LITERAL})
     |
-      \w[\w.!?]*\(\s*(?:#{SECRET_ARG})\s*\)\s*\{\s*(?<literal>#{STRING_LITERAL})
+      #{CALL_RECEIVER}\(\s*(?:#{SECRET_ARG})\s*\)\s*\{\s*(?<literal>#{STRING_LITERAL})
     |
-      \w[\w.!?]*[(\ ]\s*:(?<name>#{KEY_NAME})(?:\s*,\s*:\w+)*\s*,\s*default:\s*(?<literal>#{STRING_LITERAL})
+      #{CALL_RECEIVER}[(\ ]\s*:(?<name>#{KEY_NAME})(?:\s*,\s*:\w+)*\s*,\s*default:\s*(?<literal>#{STRING_LITERAL})
     |
       (?<name>credentials)\.(?:fetch|dig)\([^()]*?,\s*(?<literal>#{STRING_LITERAL})
     /x

@@ -1020,6 +1020,21 @@ RSpec.describe RailsAiContext::Redaction do
       end
     end
 
+    # A call's receiver was tried from each character of a run of letters, digits and dots:
+    # on Ruby 3.1 an 80 KB one took a minute, and on 3.2 and later a 1 MB one took 2.5
+    # seconds in one match, past the second a Rails 8 app sets as Regexp.timeout.
+    it "reads a 1 MB word or dotted run in source, each match well inside a Rails 8 Regexp.timeout" do
+      [ %(blob = "#{'0123456789abcdef' * 62_500}"), "a." * 500_000, "f" * 1_000_000 ].each do |line|
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        described_class.redact_source_line(line, path: "spec/support/blob.rb")
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 15
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        line.gsub(described_class::CALL_KEYED) { |match| match }
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
+      end
+    end
+
     it "uses the filtered marker for everything else" do
       expect(described_class.redact_log_line('{"password":"hunter2"}'))
         .to include("[FILTERED]")
