@@ -157,6 +157,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle.** It runs the gem's own `bin/brakeman` with the app's Ruby, where
   the scan produced no report while `doctor` passed it. `doctor` runs that
   script's `--version` the same way and warns when it does not answer.
+- **`rails_validate` reads ERB trim tags as Rails does.** `<%-` and `-%>`
+  were compiled as a unary minus, so every template using them failed, and
+  the installed pre-commit hook blocked the commit. An `if` left open and an
+  extra `end` still fail.
+- **An ERB syntax error names the template line it is on.** Errors were
+  reported a line low, two with a `frozen_string_literal` comment. A keyword
+  left unpaired was blamed on a line past the template's end; it is now
+  reported on its own line, and a bracket left open at the end of the
+  template.
+- **`rails_validate` says why a path is refused.** `app/models/../models/x.rb`
+  and absolute paths were refused as "outside Rails root"; the message now
+  names the `..` or the absolute path. A directory is called a directory,
+  and only a file other than the input is suggested.
+- **`level:"rails"` stops reporting columns that macros declare.**
+  `has_secure_password`, its confirmation and challenge, `has_one_attached`,
+  `has_many_attached` and `has_rich_text` were each reported as a missing
+  column with a migration to add it, in `validates` and in `permit` lists.
+- **`level:"rails"` knows route helpers that are not rows of the route
+  table.** Helpers in app/helpers, `helper_method` names, `direct` routes
+  and Rails' own routes such as `rails_blob_url` are no longer reported as
+  missing.
+- **An ivar set by an ancestor's or a concern's `before_action` is not
+  reported as unset.** The view check now reads the controller, its
+  ancestors and the modules they include.
+- **No warning asks for a `.turbo_stream.erb` beside a `turbo_stream_from`
+  view.** Nothing renders such a template.
+- **`rails_review_changes` with a ref diffs from the merge base.** A
+  validation the ref added after the branch left it no longer reads as one
+  the branch removed, and an edited `validates` line is not reported as
+  removed.
+- **`rails_review_changes` reviews an app in a subfolder of its repository
+  on its own.** Files are named from the app root, with their diffs and the
+  right type; another app's files and commits are left out.
+- **`rails_review_changes` reads a migration's table however the call is
+  written.** `change_table "orders"` and
+  `add_column("orders", :coupon_id, :integer)` now get the "Affects tables"
+  line and the missing-index warning.
+- **The pre-commit hook no longer blocks every commit when the app cannot
+  boot, and shows why validation failed.** It validates through
+  `bundle exec rails-ai-context tool validate`, which checks from source
+  when the boot fails, and its stderr is shown. Re-running the generator
+  upgrades an unchanged earlier hook.
+- **The pre-commit hook checks staged `.js`, `.mjs` and `.cjs` files.** A
+  broken Stimulus controller is now blocked.
 - **A file saved mid-edit no longer crashes the server.** With web-console
   in the bundle, saving two files that did not compile made the next
   `rails_get_model_details` segfault in about half the runs: Ruby crashed
@@ -425,7 +469,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holding a comma is named and left unchecked rather than passed in two
   halves. With several apps in one hook each app's lines are headed by its
   name, and the second app's question asks to add it. The question and the
-  hook say what it checks - that the staged Ruby and ERB files parse - where
+  hook say what it checks - that the staged Ruby, ERB and JavaScript files
+  parse - where
   they promised hallucinated columns and missing models, which a commit
   never checked.
 - **The binary runs an app's own copy of the gem when its bundle has one.**
