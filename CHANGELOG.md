@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (BREAKING)
+
+Ten tools that each answered one section of the app's configuration leave
+`tools/list`, and `rails_get_config` answers all of them through a new
+`section` parameter (ADR-0010). The tool count is now **35** (was 45).
+
+- **Retired tools, now sections:** `rails_get_gems` (`section:"gems"`),
+  `rails_get_frontend_stack` (`"frontend"`), `rails_get_api` (`"api"`),
+  `rails_get_engines` (`"engines"`), `rails_get_conventions`
+  (`"conventions"`), `rails_get_autoload` (`"autoload"`),
+  `rails_get_active_support` (`"active_support"`), `rails_get_env`
+  (`"env"`), `rails_get_env_config` (`"env_config"`) and `rails_get_i18n`
+  (`"i18n"`). `rails_get_config()` with no `section` answers `app`, what it
+  answered before.
+- **Parameters ride on `rails_get_config`:** `detail` (read by `frontend`,
+  `api` and `env`), `category` (`gems`), `environment` (`env_config`),
+  `locale` (`i18n`), and `offset` and `limit` (`gems`, `env_config`,
+  `i18n`). A parameter the asked section does not read is named in the
+  answer as ignored.
+- **`tools/list` is smaller:** measured as the JSON of every tool's
+  definition, 47,795 characters (about 11,950 tokens at four characters per
+  token) before and 40,931 characters (about 10,230 tokens) after.
+
+### Migration notes
+
+- **Old names keep working where a name is typed.** The CLI resolves
+  `gems`, `rails_get_gems`, `frontend_stack` and every other old short and
+  full name to its section. An MCP call to a retired name is answered from
+  its section, with a line naming the call to make instead. Update saved
+  prompts to the new call: `rails_get_gems(category:"auth")` becomes
+  `rails_get_config(section:"gems", category:"auth")`.
+- **`skip_tools` keeps its meaning.** An old tool name turns its section
+  off, so an app that skipped `rails_get_env` still keeps the `env` section
+  off. `rails_get_config` turns off the `app` section only. The tool leaves
+  `tools/list` only when all eleven names are listed.
+- **Ruby callers are unchanged.** `RailsAiContext::Tools::GetGems.call` and
+  the other nine classes still answer; they are out of the MCP registry, so
+  `Tools::BaseTool.registered_tools` no longer lists them. The test helper's
+  `execute_tool("rails_get_gems")` still finds the class.
+- **`rails_get_context(include:)`** takes the same keys; `config`, `gems`,
+  `env` and `conventions` now run as `rails_get_config` sections.
+- **CLI `--environment`:** after `config --section env_config` it is the
+  section's filter, as it is after `env_config`; after any other section it
+  sets `RAILS_ENV`.
+- **Regenerate the context files** (`rails ai:context` or
+  `rails-ai-context context`) so the tool guide and tables name the new call.
+
 ### Fixed
 
 - **A booted MySQL app reads "MySQL".** A connection on mysql2 or Trilogy

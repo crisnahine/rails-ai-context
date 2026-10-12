@@ -6,9 +6,9 @@ Terms this project uses in a narrower sense than everyday English. One entry per
 
 Overloaded. Always qualify it; never use "environment" bare in a tool name, an introspector name, or a config key.
 
-**Process environment** - the environment variables a running app sees, plus the places they are declared (`ENV[]` call sites, `.env.example`, Dockerfile, credentials keys). Served by `rails_get_env`: `EnvIntrospector` reads the variables and the `ENV[]` call sites, and the tool reads the other places itself.
+**Process environment** - the environment variables a running app sees, plus the places they are declared (`ENV[]` call sites, `.env.example`, Dockerfile, credentials keys). Served by `rails_get_config(section:"env")`: `EnvIntrospector` reads the variables and the `ENV[]` call sites, and the tool reads the other places itself.
 
-**Environment config** - what `config/environments/*.rb` declares per environment: the assigned `config.*` keys and the values of the notable toggles. Served by `rails_get_env_config`, read by `EnvConfigIntrospector`.
+**Environment config** - what `config/environments/*.rb` declares per environment: the assigned `config.*` keys and the values of the notable toggles. Served by `rails_get_config(section:"env_config")`, read by `EnvConfigIntrospector`.
 
 **Environment** (unqualified, as data) - a single named Rails environment: development, production, staging. This is the only sense in which the bare word is allowed, and only as a value, never as a name. The `:environments` payload key means "the list of these", which is why it kept its name when the introspector was renamed.
 
@@ -110,7 +110,7 @@ counted. The engines section, and the static routes section, hold the mounts
 parsed from the route files.
 
 Distinct from a **Rails engine**, which is a `Rails::Engine` subclass whether
-or not anything mounts it, and which `rails_get_engines` lists separately under
+or not anything mounts it, and which `rails_get_config(section:"engines")` lists separately under
 its loaded classes. The record key is `engine:` for the same reason the section
 key is `mounted_engines:` - it predates the widening, and what it holds is the
 mounted app's constant, engine or not.

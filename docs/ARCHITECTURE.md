@@ -40,7 +40,7 @@ graph TD
     subgraph outputs["Output"]
         direction LR
         MCP["MCP Server\nstdio / HTTP\nResources\nVFS URIs"]
-        CLI["CLI Runner\nRake / Thor\nSame 45 tools\nNo server needed"]
+        CLI["CLI Runner\nRake / Thor\nSame 35 tools\nNo server needed"]
         S["Serializers\n18 modules\nStatic files\nPer-AI-tool"]
     end
 
@@ -217,7 +217,7 @@ Thor-based CLI that works standalone (no Gemfile entry):
 - `EntryBoot` - Boots the app `AppRoot` chose for the standalone binary, or says which tier it fell back to
 - `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output
 - Supports `--json` mode for machine-readable output
-- Same 45 tools available as MCP and CLI
+- Same 35 tools available as MCP and CLI
 
 ### Path safety (`lib/rails_ai_context/safe_path.rb`, `lib/rails_ai_context/view_file.rb`)
 
@@ -247,7 +247,7 @@ SHA256-based change detection:
 ## Key design decisions
 
 1. **Official MCP SDK** - Not a custom protocol. Uses `mcp` gem's `MCP::Tool`, `MCP::Server`, transports.
-2. **Read-only tools** - All 45 tools annotated as non-destructive. Defense-in-depth for query tool.
+2. **Read-only tools** - All 35 tools annotated as non-destructive. Defense-in-depth for query tool.
 3. **Graceful degradation** - Works without database (parses `schema.rb` or `structure.sql`, or replays the migrations), without Brakeman, without ripgrep, without listen gem.
 4. **Zeitwerk autoloading** - Files loaded on-demand. `require_relative` is kept for the few files that load before or outside the loader.
 5. **Diff-aware generation** - Context file regeneration skips a file whose content is unchanged, the timestamp line aside.

@@ -25,7 +25,7 @@
 
 </div>
 
-**rails-ai-context** makes your Rails app the source of truth for your AI coding assistant. The assistant stops guessing your schema, associations, routes and conventions from training data and asks your app instead: **45 read-only tools** over [MCP](https://modelcontextprotocol.io) or the command line, plus context files written for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI.
+**rails-ai-context** makes your Rails app the source of truth for your AI coding assistant. The assistant stops guessing your schema, associations, routes and conventions from training data and asks your app instead: **35 read-only tools** over [MCP](https://modelcontextprotocol.io) or the command line, plus context files written for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI.
 
 ## Install in one paste
 
@@ -129,7 +129,7 @@ You catch it, fix it, re-prompt, and something next to it breaks. The tokens are
 
 | | |
 |:---|:---|
-| **45 read-only tools** | Schema, models, controllers, routes, views, Stimulus, Turbo, jobs, services, mailers, i18n, gems, config, tests, security, performance and more. Every answer comes from your app. |
+| **35 read-only tools** | Schema, models, controllers, routes, views, Stimulus, Turbo, jobs, services, mailers, i18n, gems, config, tests, security, performance and more. Every answer comes from your app. |
 | **Answers it can trust** | Models are read with the Prism parser. A model and each scope carry `[VERIFIED]` or `[INFERRED]` (`[STATIC]` without a boot), so the assistant knows what still needs a runtime check. |
 | **Three ways in** | MCP over stdio, MCP mounted in your app over HTTP, or plain CLI in any terminal. |
 | **Context files per AI tool** | `CLAUDE.md`, Cursor rules, Copilot instructions, `AGENTS.md`, each with the MCP config its tool picks up, and six anti-hallucination rules up top. |
@@ -155,7 +155,7 @@ graph TD
     A["Your Rails app\nmodels + schema + routes + controllers + views + jobs"] -->|"40 introspectors"| B
     B["rails-ai-context\nPrism AST · cached · confidence-tagged\nstatic tier when the app can't boot"]
     B --> C["MCP server\nstdio / HTTP\n45 tools · 5 templates · 9 resources"]
-    B --> D["CLI\nrake / Thor\nsame 45 tools"]
+    B --> D["CLI\nrake / Thor\nsame 35 tools"]
     B --> E["Context files\nCLAUDE.md · .cursor/rules/ · .github/instructions/ · AGENTS.md"]
 
     style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
@@ -189,7 +189,7 @@ Four worth knowing on day one:
 - **`get_model_details`** returns associations, validations, scopes, enums and macros from the AST, tagged `[VERIFIED]` or `[INFERRED]`.
 - **`query`** runs read-only SQL with a timeout, a row limit and column redaction.
 
-Over MCP each name gets a `rails_` prefix (`rails_get_schema`). From the CLI the short name works: `schema`, `get_schema` and `rails_get_schema` all resolve. Parameters for all 45 are in the [tools reference](docs/TOOLS.md); worked examples in [recipes](docs/RECIPES.md).
+Over MCP each name gets a `rails_` prefix (`rails_get_schema`). From the CLI the short name works: `schema`, `get_schema` and `rails_get_schema` all resolve. Parameters for all 35 are in the [tools reference](docs/TOOLS.md); worked examples in [recipes](docs/RECIPES.md).
 
 <details>
 <summary><b>Live resources</b></summary>
@@ -241,7 +241,7 @@ mount RailsAiContext::Engine, at: "/mcp" if defined?(RailsAiContext::Engine)
 
 The `if` keeps the routes file loading where the gem is not installed, as in production, where Bundler skips the development group. Outside development and test the endpoint refuses every request with a 403 unless you set `config.allow_http_in_production = true`, since it has no authentication of its own ([Security](docs/SECURITY.md#mcp-http-transport)). There is also a standalone HTTP process: `rails-ai-context serve --transport http --port 6029`.
 
-**CLI** runs the same 45 tools with no server, in any terminal:
+**CLI** runs the same 35 tools with no server, in any terminal:
 
 ```bash
 bin/rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
@@ -361,7 +361,7 @@ It removes the context files, the MCP entries, its config, its `.gitignore` line
 | [Quickstart](docs/QUICKSTART.md) | Up and running in 5 minutes |
 | [AI tool setup](docs/SETUP.md) | Claude Code, Cursor, Copilot, OpenCode, Codex CLI, HTTP transport |
 | [Guide](docs/GUIDE.md) | Every command, parameter and option |
-| [Tools reference](docs/TOOLS.md) | All 45 tools with every parameter |
+| [Tools reference](docs/TOOLS.md) | All 35 tools with every parameter |
 | [Recipes](docs/RECIPES.md) | Real workflows, end to end |
 | [CLI reference](docs/CLI.md) | Commands, flags and argument syntax |
 | [Standalone](docs/STANDALONE.md) | Use without a Gemfile entry |

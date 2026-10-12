@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Eleven tools each read one payload section and take no target: `rails_get_config`, `_autoload`, `_engines`, `_active_support`, `_conventions`, `_gems`, `_frontend_stack`, `_api`, `_env`, `_env_config` and `_i18n`. Every one costs a full definition in `tools/list` on every turn: together about 8,800 characters, or a fifth of what the 45 tools cost. A client reads that list whether or not the app's configuration is asked about.
+Eleven tools each read one payload section and take no target: `rails_get_config`, `_autoload`, `_engines`, `_active_support`, `_conventions`, `_gems`, `_frontend_stack`, `_api`, `_env`, `_env_config` and `_i18n`. Every one costs a full definition in `tools/list` on every turn: together about 8,800 characters, or a fifth of what all 45 cost before this decision. A client reads that list whether or not the app's configuration is asked about.
 
 ## Decision
 

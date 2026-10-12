@@ -138,9 +138,9 @@ AI sees the full picture: the parent controller's `authenticate_user!` filter, t
 AI sees what already exists before building anything. Then:
 
 ```
-→ rails_get_conventions()   # Your app's patterns, not generic Rails
-→ rails_get_gems()          # Sees ActionMailer, Sidekiq, etc.
-→ rails_get_schema()        # Picks the right foreign keys and types
+→ rails_get_config(section: "conventions")   # Your app's patterns, not generic Rails
+→ rails_get_config(section: "gems")          # Sees ActionMailer, Sidekiq, etc.
+→ rails_get_schema()                          # Picks the right foreign keys and types
 ```
 
 AI scaffolds the feature matching your app's actual patterns - not generic Rails conventions from training data.
@@ -206,7 +206,7 @@ rails_onboard(detail: "full")
 rails_dependency_graph(format: "mermaid")
 # → Visual model relationship graph
 
-rails_get_gems()
+rails_get_config(section: "gems")
 # → Every notable gem with version, category, and config location
 ```
 
@@ -306,7 +306,7 @@ rails_search_code(pattern: "include Searchable", match_type: "any")
 rails_get_component_catalog(detail: "standard")
 # → ViewComponent/Phlex: props, slots, previews, sidecar assets, usage examples
 
-rails_get_frontend_stack()
+rails_get_config(section: "frontend")
 # → React/Vue/Svelte, Hotwire, TypeScript, Vite/Webpacker
 ```
 
