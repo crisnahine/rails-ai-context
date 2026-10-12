@@ -96,8 +96,9 @@ module RailsAiContext
                 next
               end
               assocs = Serializers::SectionFacts.associations_list(data).join(", ")
+              note = Serializers::SectionFacts.table_note(Payload.section(cached_context, :schema), data)
               line = "- **#{name}**"
-              line += " (table: #{data[:table_name]})" if data[:table_name]
+              line += note ? " (table #{note})" : (" (table: #{data[:table_name]})" if data[:table_name]).to_s
               line += " - #{assocs}" unless assocs.empty?
               lines << line
             end
@@ -155,16 +156,16 @@ module RailsAiContext
       private_class_method def self.format_model(name, data)
         # Static-tier entries already carry [STATIC]; a runtime entry with a
         # resolved table is reflection-confirmed, hence [VERIFIED].
-        missing_table = Payload.missing_table?(Payload.section(cached_context, :schema), data)
+        note = Serializers::SectionFacts.table_note(Payload.section(cached_context, :schema), data)
         header_tag = if data[:confidence]
           " #{data[:confidence]}"
-        elsif data[:table_name] && !missing_table && !RailsAiContext.static_tier?
+        elsif data[:table_name] && !note && !RailsAiContext.static_tier?
           " #{Confidence::VERIFIED}"
         else
           ""
         end
         lines = [ "# #{name}#{header_tag}", "" ]
-        if (note = Serializers::SectionFacts.table_note(Payload.section(cached_context, :schema), data))
+        if note
           lines << "**Table:** #{note}"
         elsif data[:table_name]
           lines << "**Table:** `#{data[:table_name]}`"
