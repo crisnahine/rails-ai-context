@@ -55,9 +55,12 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
                        "cache" => config(Rails.env, "cache", sqlite_file("cache")))
       before = global_pools
 
-      answers = %w[queue cache queue cache].map do |name|
+      threads = %w[queue cache queue cache].map do |name|
         Thread.new { Array.new(10) { list.fetch(name).with_connection { |conn| conn.select_value("SELECT name FROM marker") } }.uniq }
-      end.map(&:value)
+      end
+      # Bounded, so leases that block each other fail here rather than hang the suite.
+      answers = threads.map { |thread| thread.join(30)&.value }
+      threads.each(&:kill)
 
       expect(answers).to eq([ [ "queue" ], [ "cache" ], [ "queue" ], [ "cache" ] ])
       expect(global_pools).to eq(before)
