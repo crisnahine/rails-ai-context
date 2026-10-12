@@ -1248,9 +1248,14 @@ RSpec.describe RailsAiContext::Redaction do
 
     # The work a pattern does, which backtracking multiplies; other processes taking the CPU add nothing to it.
     let(:cpu_clock) { Process::CLOCK_PROCESS_CPUTIME_ID }
-    # One match's CPU seconds: the Regexp.timeout a Rails 8 app sets, where the Ruby has one. A Ruby with
-    # none (3.1, which also keeps no match memo) is held to the bound a quadratic match could never meet.
-    let(:match_bound) { Regexp.respond_to?(:timeout=) ? 1 : 15 }
+
+    # One match's CPU seconds: the second a Rails 8 Regexp.timeout allows, or on a slower machine 50 scans
+    # of the line by a pattern that cannot backtrack. A quadratic match costs thousands of such scans.
+    def match_bound(line)
+      started = Process.clock_gettime(cpu_clock)
+      line.gsub(/[^\x00-\u{10FFFF}]/) { |match| match }
+      [ 1, 50 * (Process.clock_gettime(cpu_clock) - started) ].max
+    end
 
     # Regexp.timeout counts wall time, so on a loaded machine it ends a match that did little work.
     around(:each, :cpu_timed) do |example|
@@ -1293,7 +1298,7 @@ RSpec.describe RailsAiContext::Redaction do
     # A call's receiver was tried from each character of a run of letters, digits and dots:
     # on Ruby 3.1 and 3.2 a 64 KB one took over 20 seconds, and on 3.3 and later a 1 MB one
     # took 2.5 seconds in one match, past the second a Rails 8 app sets as Regexp.timeout.
-    it "reads a 1 MB word or dotted run in source, each match inside a Rails 8 Regexp.timeout where the Ruby has one", :cpu_timed do
+    it "reads a 1 MB word or dotted run in source, each match inside a Rails 8 Regexp.timeout on a quiet machine", :cpu_timed do
       [ %(blob = "#{'0123456789abcdef' * 62_500}"), "a." * 500_000, "f" * 1_000_000 ].each do |line|
         started = Process.clock_gettime(cpu_clock)
         described_class.redact_source_line(line, path: "spec/support/blob.rb")
@@ -1301,14 +1306,14 @@ RSpec.describe RailsAiContext::Redaction do
 
         started = Process.clock_gettime(cpu_clock)
         line.gsub(described_class::CALL_KEYED) { |match| match }
-        expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound
+        expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
       end
     end
 
     # A name was split at every underscore when what followed it failed, so a
     # long word with a secret's word in many of its parts cost its square; and
     # the path check retried from every slash of a value ending in `=`.
-    it "reads a 1 MB word with a secret's word in many of its parts, each match inside a Rails 8 Regexp.timeout where the Ruby has one", :cpu_timed do
+    it "reads a 1 MB word with a secret's word in many of its parts, each match inside a Rails 8 Regexp.timeout on a quiet machine", :cpu_timed do
       lines = [ "#{'dbpassword_' * 90_000}x = 1", "fetch(:#{'apassword_' * 100_000}x", "#{'userPassword_' * 75_000}x: 1",
                 "#{'token_' * 160_000}x =", "#{'aSecretB' * 120_000}x = 1", "--token #{'/a1' * 300_000}/=" ]
       lines.each do |line|
@@ -1320,7 +1325,7 @@ RSpec.describe RailsAiContext::Redaction do
         [ described_class::KEYED_LITERAL, described_class::ENV_ASSIGNMENT, described_class::LOG_SECRET_ASSIGNMENT ].each do |pattern|
           started = Process.clock_gettime(cpu_clock)
           line.gsub(pattern) { |match| match }
-          expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound
+          expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
         end
       end
     end
