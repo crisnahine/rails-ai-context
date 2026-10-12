@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "prism"
+
 module RailsAiContext
   module Introspectors
     # A node's source with its heredoc bodies: Prism's `slice` stops at the node's end, so

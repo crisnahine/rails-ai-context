@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "find"
 require "fileutils"
 require "open3"

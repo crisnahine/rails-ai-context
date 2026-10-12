@@ -189,6 +189,7 @@ Ten tools that each answered one section of the app's configuration leave
 
 ### Fixed
 
+- **Every file requires the standard library it names.** Twelve files used `JSON`, `YAML`, `URI`, `Pathname`, `FileUtils`, `RbConfig`, `DidYouMean`, `Prism` or `Time.parse` and `iso8601` and worked only when another library had loaded it first. On a Ruby that does not load the library by itself that showed as "uninitialized constant" or "undefined method".
 - **`context` and `rails_onboard` run with `--no-boot` on an app whose
   database two other environments configure.** `context --no-boot` exited 1
   with "undefined method 'to_sentence'", and `tool onboard --no-boot` gave

@@ -96,6 +96,7 @@ MCP_REFRESH_FLAG_SINCE = "5.33.0"
 # Decided before boot, when no tool schema can load; cli_smoke_spec holds the list to the schemas.
 ENVIRONMENT_FILTER_OWNERS = %w[env_config].freeze
 
+require "rbconfig"
 require "shellwords"
 require "thor"
 

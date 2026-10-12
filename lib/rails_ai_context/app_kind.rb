@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "yaml"
+
 module RailsAiContext
   # Detects app-level facts that change which introspection applies, from
   # artifacts that exist without booting (config files, Gemfile.lock).

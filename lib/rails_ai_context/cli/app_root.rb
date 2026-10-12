@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "rbconfig"
 require "shellwords"
 require_relative "entry_boot"
 require_relative "../safe_path"

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "time"
 require "did_you_mean"
 
 require "mcp"

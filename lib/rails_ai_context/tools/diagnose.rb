@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "did_you_mean"
 require "open3"
 
 module RailsAiContext
