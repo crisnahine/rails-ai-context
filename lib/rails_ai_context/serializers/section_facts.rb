@@ -112,6 +112,15 @@ module RailsAiContext
         buckets
       end
 
+      # The table a model reads when it is not plainly named: missing from a live listing, or set by
+      # a parent the static tier did not read. Nil when the model names its table, or names none.
+      def table_note(schema, model_data)
+        return "`#{model_data[:table_name]}` not found" if Payload.missing_table?(schema, model_data)
+        return nil if model_data[:table_name] || !model_data[:table_set_by]
+
+        "set by `#{model_data[:table_set_by]}`, which the static tier did not read"
+      end
+
       def associations_list(model_data)
         (model_data[:associations] || [])
           .select { |a| a.is_a?(Hash) }

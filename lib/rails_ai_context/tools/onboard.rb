@@ -213,12 +213,10 @@ module RailsAiContext
             assocs = Serializers::SectionFacts.associations_list(data)
             validations = data[:validations] || []
             desc = "**#{name}**"
-            if Payload.missing_table?(Payload.section(ctx, :schema), data)
-              desc += " (table `#{data[:table_name]}` not found)"
+            if (note = Serializers::SectionFacts.table_note(Payload.section(ctx, :schema), data))
+              desc += " (table #{note})"
             elsif data[:table_name]
               desc += " (table: `#{data[:table_name]}`)"
-            elsif data[:table_set_by]
-              desc += " (table set by `#{data[:table_set_by]}`, which the static tier did not read)"
             end
             desc += " - #{assocs.first(4).join(', ')}" if assocs.any?
             desc += ", +#{assocs.size - 4} more" if assocs.size > 4

@@ -207,8 +207,8 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       text = described_class.call(model: "Tag").content.first[:text]
 
-      expect(text).to include("Table 'tags' not found.")
-      expect(text).not_to include("[VERIFIED]", "**Table:** `tags`")
+      expect(text).to include("**Table:** `tags` not found")
+      expect(text).not_to include("[VERIFIED]", "**Table:** `tags`\n")
     end
   end
 

@@ -164,12 +164,11 @@ module RailsAiContext
           ""
         end
         lines = [ "# #{name}#{header_tag}", "" ]
-        if missing_table
-          lines << "Table '#{data[:table_name]}' not found."
+        if (note = Serializers::SectionFacts.table_note(Payload.section(cached_context, :schema), data))
+          lines << "**Table:** #{note}"
         elsif data[:table_name]
           lines << "**Table:** `#{data[:table_name]}`"
         end
-        lines << "**Table:** set by `#{data[:table_set_by]}`, which the static tier did not read" if data[:table_set_by]
         if (database = data[:database])
           lines << "**Database:** `#{database[:connects_to]}`#{" (only #{database[:condition]})" if database[:condition]}" \
                    "#{", inherited from `#{database[:declared_in]}`" if database[:declared_in]}"
