@@ -245,7 +245,8 @@ module RailsAiContext
           "keeping the first. Give one of them a different tool_name."
         end
         $stderr.puts "[rails-ai-context] WARNING: #{tools.size} tools claim the name #{name.inspect}; #{advice}" if warn
-        [ tools.first ]
+        # The registry sorts by name, so the gem's own class is not always the first of two.
+        [ tools.find { |tool| tool == Tools::BaseTool.tool_class(name) } || tools.first ]
       end
     end
 

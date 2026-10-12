@@ -50,6 +50,8 @@ module RailsAiContext
       return unless File.exist?(path)
 
       data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES) || {}
+      return $stderr.puts("[rails-ai-context] WARNING: #{path}: the file holds no `key: value` settings. Ignored.") unless data.is_a?(Hash)
+
       config = RailsAiContext.configuration
 
       data.each do |key, value|

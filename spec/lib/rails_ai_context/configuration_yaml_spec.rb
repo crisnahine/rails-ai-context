@@ -30,6 +30,19 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
   end
 
   describe ".load_from_yaml" do
+    it "reports a file that holds no mapping, and applies nothing" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, ".rails-ai-context.yml")
+
+        [ "just a string\n", "- a\n- list\n", "42\n" ].each do |content|
+          File.write(path, content)
+
+          expect(capture_stderr { described_class.load_from_yaml(path) })
+            .to eq("[rails-ai-context] WARNING: #{path}: the file holds no `key: value` settings. Ignored.\n")
+        end
+      end
+    end
+
     it "loads ai_tools and tool_mode from YAML" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")

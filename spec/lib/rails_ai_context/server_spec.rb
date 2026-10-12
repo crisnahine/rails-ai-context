@@ -146,6 +146,24 @@ RSpec.describe RailsAiContext::Server do
       end
     end
 
+    # The registry lists tools by name, and two of one name sort either way round.
+    context "with a BaseTool subclass the app gives a built-in's name, and no skip_tools" do
+      let!(:app_tool) do
+        Class.new(RailsAiContext::Tools::BaseTool) do
+          tool_name "rails_get_schema"
+          description "The app's own schema tool"
+        end
+      end
+
+      after { app_tool.abstract! }
+
+      it "serves the built-in, as the warning says and as the CLI runs" do
+        expect(described_class.exposed_tools(config)).to include(RailsAiContext::Tools::GetSchema)
+        expect(described_class.exposed_tools(config)).not_to include(app_tool)
+        expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
+      end
+    end
+
     it "agrees with exposed_tools on every built-in" do
       config.skip_tools = %w[rails_query rails_get_view]
       exposed = described_class.exposed_tools(config)
