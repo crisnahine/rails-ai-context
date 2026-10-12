@@ -1018,11 +1018,28 @@ RSpec.describe RailsAiContext::Tools::Query do
   describe "result redaction by provenance" do
     it "redacts a result column whose source is a secret column, whatever its name" do
       allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[a b c], [ [ 1, "secret-value", 3 ] ]))
-      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:column_sources).and_return([ [ 0, "id" ], [ 1, "password_digest" ] ])
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:column_sources).and_return([ [ 0, "id", "users" ], [ 1, "password_digest", "users" ] ])
 
       text = described_class.call(sql: "SELECT a, b, c FROM t").content.first[:text]
       expect(text).to include("[FILTERED]")
       expect(text).not_to include("secret-value")
+    end
+
+    # A source whose column name could not be read: filtered when its relation
+    # holds a secret column, returned otherwise.
+    it "filters a column of a secret-holding relation whose column names could not be read" do
+      conn = ActiveRecord::Base.connection
+      conn.create_table(:rac_vaults, force: true) { |t| t.string :api_token }
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+        .and_return(ActiveRecord::Result.new(%w[a b c], [ [ "vault-value", "plain-value", "other-value" ] ]))
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:column_sources)
+        .and_return([ [ 0, nil, "rac_vaults" ], [ 1, nil, "tags" ], [ 2, "title", "posts" ] ])
+
+      text = described_class.call(sql: "SELECT a, b, c FROM t").content.first[:text]
+      expect(text).not_to include("vault-value")
+      expect(text).to include("plain-value").and include("other-value")
+    ensure
+      conn.drop_table(:rac_vaults, if_exists: true)
     end
   end
 

@@ -60,14 +60,16 @@ module RailsAiContext
           raw.exec("DEALLOCATE #{stmt}") rescue nil
         end
 
-        names = {}
+        relations = {}
         desc.nfields.times.filter_map do |i|
           oid = desc.ftable(i).to_i
           col = desc.ftablecol(i).to_i
           next if oid.zero? || col.zero?
 
-          name = (names[oid] ||= attribute_names(conn, oid))[col]
-          [ i, name ] if name
+          relation, names = relations[oid] ||= [ relation_name(conn, oid), attribute_names(conn, oid) ]
+          # A relation whose columns could not be read still names itself, for the caller to fail closed on.
+          next [ i, nil, relation ] unless names
+          [ i, names[col], relation ] if names[col]
         end
       rescue StandardError
         []
@@ -78,16 +80,24 @@ module RailsAiContext
 
         read = PostgresqlPlan.new(plan)
         read.output.each_with_index.filter_map do |expr, i|
-          _, col = read.base_column(expr)
-          [ i, col ] if col
+          rel, col = read.base_column(expr)
+          [ i, col, rel ] if col
         end
       end
 
-      # attnum => column name for one relation oid.
+      def relation_name(conn, oid)
+        conn.select_value("SELECT relname FROM pg_class WHERE oid = #{oid.to_i}")&.to_s
+      rescue StandardError
+        nil
+      end
+
+      # attnum => column name for one relation oid, or nil when they cannot be read.
       def attribute_names(conn, oid)
         conn.select_rows(
           "SELECT attnum, attname FROM pg_attribute WHERE attrelid = #{oid.to_i} AND attnum > 0 AND NOT attisdropped"
         ).to_h { |num, name| [ num.to_i, name.to_s ] }
+      rescue StandardError
+        nil
       end
 
       def table_sizes(conn)

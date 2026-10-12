@@ -197,7 +197,28 @@ RSpec.describe RailsAiContext::DatabaseFamily do
                "Plans" => [ { "Relation Name" => "posts", "Alias" => "p" }, { "Relation Name" => "users", "Alias" => "u" } ] }
 
       expect(described_class::POSTGRESQL.column_sources(untouchable, "SELECT ...", plan: plan))
-        .to eq([ [ 0, "title" ], [ 1, "api_token" ] ])
+        .to eq([ [ 0, "title", "posts" ], [ 1, "api_token", "users" ] ])
+    end
+
+    # Result columns from oid 10 (accounts) and oid 20 (tokens); reading accounts' columns fails.
+    let(:described_pg) do
+      desc = double("description", nfields: 2)
+      allow(desc).to receive(:ftable) { |i| [ 10, 20 ][i] }
+      allow(desc).to receive(:ftablecol) { |i| [ 3, 2 ][i] }
+      raw = double("raw", prepare: nil, describe_prepared: desc, exec: nil)
+      conn = double("connection", raw_connection: raw)
+      allow(conn).to receive(:select_value) { |sql| sql.include?("= 10") ? "accounts" : "tokens" }
+      allow(conn).to receive(:select_rows) do |sql|
+        raise ActiveRecord::StatementInvalid, "permission denied" if sql.include?("= 10")
+
+        [ [ 1, "id" ], [ 2, "api_token" ] ]
+      end
+      conn
+    end
+
+    it "keeps one relation's described columns when another relation's column names cannot be read" do
+      expect(described_class::POSTGRESQL.column_sources(described_pg, "SELECT ...", plan: nil))
+        .to eq([ [ 0, nil, "accounts" ], [ 1, "api_token", "tokens" ] ])
     end
   end
 

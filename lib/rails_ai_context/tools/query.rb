@@ -249,13 +249,18 @@ module RailsAiContext
       # ── Column redaction (Layer 4) ──────────────────────────────────
       # Redact a column by the secret column rule applied to its output name,
       # and to the table column it reads where the family can say, so a secret
-      # column reaches [FILTERED] whatever name it was given. An `encrypts` column is filtered even when the app
-      # allows its name: an encrypted-at-rest attribute is never read back raw.
+      # column reaches [FILTERED] whatever name it was given. An `encrypts`
+      # column is filtered even when the app allows its name. A source whose
+      # column name could not be read is filtered when its relation holds a
+      # secret column, or, with the relation unknown too, any does.
       private_class_method def self.redact_results(result, secrets, sources)
         columns = result.columns
         rows = result.rows
         hidden = ->(name) { secrets.secret?(name) || secrets.encrypted?(name) }
-        provenance = sources.filter_map { |i, column| i if hidden.call(column) }
+        provenance = sources.filter_map do |i, column, relation|
+          unread = column.nil? && (relation ? secrets.relation_secret?(relation) : secrets.in_schema.any?)
+          i if unread || hidden.call(column)
+        end
 
         redacted_indices = columns.each_index.select { |i| provenance.include?(i) || hidden.call(columns[i]) }
 

@@ -40,7 +40,9 @@ module RailsAiContext
       end
 
       # @param plan [Hash, nil] the statement's plan, when one was read already
-      # @return [Array<Array(Integer, String)>] [result column index, the table column it reads]; [] where the engine cannot say
+      # @return [Array<Array(Integer, String, String)>] [result column index, the table column it reads, its relation];
+      #   the column is nil when the relation's columns could not be read, the relation nil when it is unknown too;
+      #   [] where the engine cannot say
       def column_sources(connection, sql, plan:)
         runtime.column_sources(connection, sql, plan)
       end
