@@ -56,6 +56,17 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(text).to include("- Eager load candidates: 1")
     end
 
+    it "names the database a finding is in, and each database it did not check" do
+      performance_data[:missing_fk_indexes] << { table: "page_views", column: "user_id", database: "analytics", suggestion: "add_index :page_views, :user_id" }
+      performance_data[:unchecked_databases] = [ { name: "reporting", reason: "db/reporting_schema.rb is not on disk" } ]
+
+      %w[summary standard].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("**Not checked:** reporting (db/reporting_schema.rb is not on disk)")
+      end
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("- **page_views** (analytics database)\n  add_index :page_views, :user_id")
+    end
+
     it "heads every detail section" do
       text = described_class.call(detail: "standard").content.first[:text]
 

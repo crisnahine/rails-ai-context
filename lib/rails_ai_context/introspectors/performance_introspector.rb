@@ -18,27 +18,57 @@ module RailsAiContext
       attr_writer :context
 
       def call
-        schema_data = load_schema_data
         model_data = load_model_data
+        schemas, unchecked = database_schemas
+        counter_cache = []
+        fk_indexes = []
+        schemas.each do |name, tables, foreign_keys|
+          tag = ->(finding) { name ? finding.merge(database: name) : finding }
+          counter_cache.concat(detect_missing_counter_cache(model_data, tables).map(&tag))
+          fk_indexes.concat(detect_missing_fk_indexes(tables, model_data, foreign_keys).map(&tag))
+        end
 
         {
           n_plus_one_risks: detect_n_plus_one,
-          missing_counter_cache: detect_missing_counter_cache(model_data, schema_data),
-          missing_fk_indexes: detect_missing_fk_indexes(schema_data, model_data, load_foreign_keys),
+          missing_counter_cache: counter_cache.uniq { |f| f.except(:database) },
+          missing_fk_indexes: fk_indexes,
           model_all_in_controllers: detect_model_all_in_controllers(model_data),
           eager_load_candidates: detect_eager_load_candidates(model_data),
           summary: nil # populated below
-        }.tap { |result| result[:summary] = build_summary(result) }
+        }.tap do |result|
+          result[:unchecked_databases] = unchecked if unchecked.any?
+          result[:summary] = build_summary(result)
+        end
       end
 
       private
 
-      def load_schema_data
-        SchemaReader.for(root).tables
+      # [[database name (nil for the primary), tables, foreign keys]], and { name:, reason: } for each database not read.
+      def database_schemas
+        reader = SchemaReader.for(root)
+        schemas = [ [ nil, reader.tables, reader.foreign_keys ] ]
+        unchecked = []
+        AppDatabases.for(root).reject { |db| db.primary || db.replica }.each do |db|
+          read = read_dump(db)
+          read.is_a?(String) ? unchecked << { name: db.name, reason: read } : schemas << [ db.name, *read ]
+        end
+        [ schemas, unchecked ]
       end
 
-      def load_foreign_keys
-        SchemaReader.for(root).foreign_keys
+      # [tables, foreign keys] from the database's dump, or why there is none to read.
+      def read_dump(db)
+        return "#{db.tasks ? "schema_dump" : "database_tasks"}: false, so it has no dump to read" unless db.dump
+
+        format, path = db.dump
+        shown = path.delete_prefix("#{root.to_s.chomp('/')}/")
+        return "#{shown} is not on disk" unless File.exist?(path)
+
+        content = SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+        return "#{shown} is over max_schema_file_size" unless content
+        return SchemaReader.new(path).then { |schema| [ schema.tables, schema.foreign_keys ] } if format == :ruby
+
+        tables = StructureSqlReader.parse(content)[:tables]
+        [ tables, tables.values.flat_map { |table| Array(table[:foreign_keys]).map { |fk| { from: fk[:from_table], to: fk[:to_table], column: fk[:column] } } } ]
       end
 
       # The models section when the run has one; otherwise the model tier is

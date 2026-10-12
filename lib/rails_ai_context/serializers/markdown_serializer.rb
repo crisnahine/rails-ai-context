@@ -496,7 +496,8 @@ module RailsAiContext
         lines << "- Total: #{data[:total]}#{primary}"
         lines << "- Schema version: #{data[:schema_version]}#{primary}" if data[:schema_version]
         secondary.each do |name, db|
-          lines << "- #{name}: #{SectionFacts.migration_counts(db[:total], db[:pending])} in #{Array(db[:migrations_paths]).join(', ')}"
+          paths = Array(db[:migrations_paths])
+          lines << "- #{name}: #{SectionFacts.migration_counts(db[:total], db[:pending])}#{" in #{paths.join(', ')}" if paths.any?}"
         end
 
         pending = { "primary" => Payload.pending_migrations(context) }.merge(secondary.transform_values { |db| Array(db[:pending]) })
@@ -623,7 +624,7 @@ module RailsAiContext
         if data[:databases]&.any?
           data[:databases].each do |db|
             replica = db[:replica] ? " (replica)" : ""
-            lines << "- `#{db[:name]}` - #{SchemaAdapter.database_label(db) || "unknown"}#{replica}"
+            lines << "- `#{db[:name]}` - #{SchemaAdapter.database_label(db) || "unknown"}#{replica}#{Payload.database_scope(db)}"
           end
         end
 

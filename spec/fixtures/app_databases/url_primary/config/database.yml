@@ -1,0 +1,7 @@
+test:
+  primary:
+    url: postgres://app@localhost/app_test
+
+production:
+  primary:
+    url: postgres://app@db.internal/app

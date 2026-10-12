@@ -1414,4 +1414,49 @@ end
       expect(introspector.send(:association_model, models, assoc, "Shop::Order")).to eq(name: "Shop::Payment")
     end
   end
+
+  # Each database's dump holds its own tables; a database whose tables were not read is named.
+  describe "an app with more than one database" do
+    let(:database_yml) do
+      <<~YAML
+        #{RailsAiContext.environment_name}:
+          primary:
+            adapter: postgresql
+          analytics:
+            adapter: postgresql
+          archive:
+            adapter: postgresql
+            schema_dump: false
+          legacy:
+            adapter: mysql2
+            database_tasks: false
+          reporting:
+            adapter: postgresql
+      YAML
+    end
+
+    it "checks each database's tables and names the ones it did not read" do
+      Dir.mktmpdir do |dir|
+        { "config/database.yml" => database_yml,
+          "app/models/user.rb" => "class User < ApplicationRecord\n  has_many :page_views\nend\n",
+          "app/models/page_view.rb" => "class PageView < ApplicationRecord\nend\n",
+          "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n",
+          "db/analytics_schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"page_views\" do |t|\n    t.bigint \"user_id\"\n  end\nend\n" }
+          .each do |path, content|
+            FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+            File.write(File.join(dir, path), content)
+          end
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:missing_fk_indexes]).to eq([ { table: "page_views", column: "user_id", database: "analytics",
+                                                      suggestion: "add_index :page_views, :user_id" } ])
+        expect(result[:unchecked_databases]).to eq([
+          { name: "archive", reason: "schema_dump: false, so it has no dump to read" },
+          { name: "legacy", reason: "database_tasks: false, so it has no dump to read" },
+          { name: "reporting", reason: "db/reporting_schema.rb is not on disk" }
+        ])
+      end
+    end
+  end
 end

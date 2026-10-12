@@ -162,6 +162,12 @@ a table `db/schema.rb` declares and the connected database does not have is
 named as a migration that has not run, and the listing header says when the
 two table counts disagree.
 
+The other databases are listed after the primary's tables: every database any
+environment in `config/database.yml` configures, so a Rails 8 app's queue,
+cache and cable dumps are read even where only production configures them,
+then any committed dump no environment names. A dump too large to read, or
+holding no tables, is named with the reason.
+
 Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
 with the column, so a lookup on it alone can use one; `[unique]` means a unique
 index covers the column alone; `[unique with x]` names the partners of a
@@ -447,6 +453,11 @@ not a risk. The inverse Rails sets on each record of
 the render passes as a literal (`show_seller: false`) is not read. ERB and
 jbuilder are read; Haml and Slim templates are not, and neither are serializers.
 
+Missing indexes and counter caches are checked in every database's dump, and a
+finding outside the primary names its database. A database whose tables could
+not be read (`schema_dump: false`, `database_tasks: false`, a dump not on disk
+or over `max_schema_file_size`) is listed under **Not checked** with the reason.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `model` | string | - | Filter results to one model |
@@ -660,7 +671,8 @@ the column or creates the table when it runs (a `def down`, a `dir.down` or a
 `revert` block only undoes, so what it adds does not count). It also warns
 about a `create_table` for a
 table that exists and a `null: false` column with no default on a table with
-rows (the row count is the database's estimate), and refuses a column type no
+rows (the row count is the primary database's estimate, so a table on another
+database has no count and the warning says "if it holds any rows"), and refuses a column type no
 adapter knows. For `remove_column`, `rename_column` and `change_type` it lists
 the lines in `app/`, `lib/` and `config/` that name the column, the code the
 change breaks.
@@ -693,6 +705,8 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 ### `rails_query`
 
 Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
+
+It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other engine it answers with the adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout; any other database error is an SQL error.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -753,6 +767,8 @@ Each diff passes through the redaction every tool's source does, read as the fil
 ### `rails_runtime_info`
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
+
+Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On an engine with no database family the database section says table sizes and index usage are not available for that adapter.
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there.
 

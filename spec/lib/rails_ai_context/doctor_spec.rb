@@ -2396,10 +2396,13 @@ RSpec.describe RailsAiContext::Doctor do
       write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n    " \
                                    "database: db/analytics.sqlite3\n    migrations_paths: db/analytics_migrate\n")
       write("db/analytics_migrate/20240101000000_create_events.rb", "class CreateEvents < ActiveRecord::Migration[7.1]\nend\n")
-      analytics = database_named("analytics", File.join(@root, "db/analytics.sqlite3"))
-      allow(ActiveRecord::Base.configurations).to receive(:configs_for).and_call_original
-      allow(ActiveRecord::Base.configurations).to receive(:configs_for).with(env_name: Rails.env)
-        .and_return([ ActiveRecord::Base.connection_db_config, analytics ])
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                       "analytics" => { adapter: "sqlite3", database: File.join(@root, "db/analytics.sqlite3"),
+                                        migrations_paths: "db/analytics_migrate" } }
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+      allow(Rails).to receive(:root).and_return(Pathname.new(@root))
     end
 
     it "reads a pending migration in a secondary database, and writes nothing to it" do

@@ -327,9 +327,12 @@ module RailsAiContext
         def database_option(table, databases)
           return [ [], nil ] if databases.empty? || databases.include?("primary")
 
-          yml = RailsAiContext::DatabaseYml
           root = rails_app.root
-          found = databases.to_h { |db| [ db, (entry = yml.entry(root, db)) ? [ nil, entry ] : yml.elsewhere(root, db) ] }.compact
+          listed = RailsAiContext::AppDatabases.for(root)
+          found = databases.filter_map do |name|
+            db = listed[name]
+            [ name, [ (db.environment unless db.here), RailsAiContext::AppDatabases.settings_of(db.config) ] ] if db&.config
+          end.to_h
           if found.empty?
             note = "**Database:** `#{table}` is in the #{databases.join(", ")} dump, which no environment in config/database.yml configures: " \
                    "no `--database` reaches it, and a migration generated here runs on the primary."
@@ -399,9 +402,11 @@ module RailsAiContext
 
         # NOT NULL with no default has no value for the rows already there, so
         # the migration fails on a table that holds any. The row count is the
-        # database's own estimate when the app is booted.
+        # primary database's own estimate when the app is booted, so a table only another database holds has none.
         def not_null_warning(table, column)
-          stats = Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table }
+          held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
+          on_primary = held_in.empty? || held_in.include?("primary")
+          stats = (Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table } if on_primary)
           rows = stats&.dig(:approximate_rows)
           held = if rows.nil? then "if `#{table}` holds any rows"
           elsif stats[:at_least] then "as `#{table}` holds at least #{count_phrase(rows, "row")}"

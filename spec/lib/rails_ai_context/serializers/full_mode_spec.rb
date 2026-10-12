@@ -120,13 +120,14 @@ RSpec.describe "full mode's root files" do
       context[:migrations] = {
         total: 3, schema_version: "20261009140925", pending: [], recent: [],
         secondary_databases: { "analytics" => { total: 4, migrations_paths: [ "db/analytics_migrate" ],
-                                                pending: [ { version: "20261009141117", name: "AddBrowserToPageViews" } ] } }
+                                                pending: [ { version: "20261009141117", name: "AddBrowserToPageViews" } ] },
+                               "cache" => { total: 0, pending: [] } }
       }
 
       expect(output).to include("## Database Schema: primary (1 table)", "## Database Schema: analytics (1 table)",
                                 "_Parsed from db/analytics_schema.rb (from committed dump, not a live connection)._",
                                 "### page\\_views\n\n`id` (integer), `path` (string)")
-      expect(output).to include("- Total: 3 (primary)", "- analytics: 4 total, 1 pending in db/analytics_migrate",
+      expect(output).to include("- Total: 3 (primary)", "- analytics: 4 total, 1 pending in db/analytics_migrate", "- cache: 0 total, 0 pending\n",
                                 "### Pending Migrations: analytics (1)\n- `20261009141117` AddBrowserToPageViews")
       # Solid Queue's database is named, its tables left to the tools.
       expect(output).to include("Framework databases, their tables not listed: queue: Solid Queue (1 table)")

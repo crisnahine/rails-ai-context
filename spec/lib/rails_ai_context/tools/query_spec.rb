@@ -372,7 +372,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       # database the same way, so "does not exist" answered a real SQL error
       # with `bin/rails db:create` advice and exit 0.
       it "flags a Postgres missing column as an error, not a missing database" do
-        allow(described_class).to receive(:execute_sqlite)
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
           .and_raise(ActiveRecord::StatementInvalid,
                      %(PG::UndefinedColumn: ERROR:  column "key_digest" does not exist))
 
@@ -383,18 +383,40 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.content.first[:text]).not_to include("Database not found")
       end
 
-it "reads MySQL's MAX_EXECUTION_TIME interruption as the timeout" do
-  allow(described_class).to receive(:execute_sqlite)
-    .and_raise(ActiveRecord::StatementInvalid,
-               "Mysql2::Error: Query execution was interrupted, maximum statement execution time exceeded")
+      it "answers the family's timeout as the timeout" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
 
-  result = described_class.call(sql: "SELECT SLEEP(60) FROM tags")
+        result = described_class.call(sql: "SELECT SLEEP(60) FROM tags")
 
-  expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
-end
+        expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
+        expect(result.error?).to be false
+      end
 
-it "still explains a database that does not exist" do
-        allow(described_class).to receive(:execute_sqlite)
+      it "flags an SQL error that mentions a timeout as an error, not a timeout" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+          .and_raise(ActiveRecord::StatementInvalid, "Mysql2::Error: Unknown column 'timeout' (maximum statement execution time exceeded)")
+
+        result = described_class.call(sql: "SELECT timeout FROM tags")
+
+        expect(result.content.first[:text]).to start_with("SQL error:")
+        expect(result.error?).to be true
+      end
+
+      it "refuses an engine with no family by its adapter's name and sends no statement" do
+        conn = ActiveRecord::Base.connection
+        allow(conn).to receive(:adapter_name).and_return("SQLServer")
+        %i[execute select_all select_value select_rows exec_query columns tables transaction].each do |sent|
+          allow(conn).to receive(sent).and_raise("#{sent} reached the database")
+        end
+
+        result = described_class.call(sql: "SELECT 1 AS x")
+
+        expect(result.error?).to be true
+        expect(result.content.first[:text]).to include("refuses the SQLServer adapter")
+      end
+
+      it "still explains a database that does not exist" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
           .and_raise(ActiveRecord::StatementInvalid,
                      %(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist))
 
@@ -716,7 +738,7 @@ it "still explains a database that does not exist" do
 
     it "returns the same rows as the in-process connection" do
       sql = "SELECT n, n * 2 AS twice FROM nums ORDER BY n"
-      result = described_class.send(:execute_sqlite, conn, sql, 5)
+      result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, sql, timeout: 5)
 
       expect(result.columns).to eq(conn.select_all(sql).columns)
       expect(result.rows).to eq(conn.select_all(sql).rows)
@@ -725,7 +747,7 @@ it "still explains a database that does not exist" do
     it "returns rows under the UTF-8 default_internal a Rails app sets" do
       internal = Encoding.default_internal
       Encoding.default_internal = Encoding::UTF_8
-      result = described_class.send(:execute_sqlite, conn, "SELECT count(*) AS n FROM big", 5)
+      result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM big", timeout: 5)
       expect(result.rows).to eq([ [ 2000 ] ])
     ensure
       Encoding.default_internal = internal
@@ -733,14 +755,14 @@ it "still explains a database that does not exist" do
 
     it "refuses a write" do
       expect {
-        described_class.send(:execute_sqlite, conn, "INSERT INTO nums VALUES (4)", 5)
+        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "INSERT INTO nums VALUES (4)", timeout: 5)
       }.to raise_error(ActiveRecord::StatementInvalid, /readonly/)
       expect(conn.select_value("SELECT count(*) FROM nums")).to eq(3)
     end
 
     it "reports a SQL error the way the in-process path does" do
       expect {
-        described_class.send(:execute_sqlite, conn, "SELECT nope FROM nums", 5)
+        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT nope FROM nums", timeout: 5)
       }.to raise_error(ActiveRecord::StatementInvalid, /\ASQLite3::SQLException: no such column: nope/)
     end
 
@@ -761,7 +783,7 @@ it "still explains a database that does not exist" do
       allow(IO).to receive(:select).and_raise(IOError, "stream closed")
 
       took = elapsed do
-        expect { described_class.send(:execute_sqlite, conn, slow_sql, 5) }.to raise_error(IOError)
+        expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 5) }.to raise_error(IOError)
       end
 
       expect(took).to be < 3
@@ -770,20 +792,20 @@ it "still explains a database that does not exist" do
 
     it "reads an impossible length prefix as a missing result" do
       calls = 0
-      allow(described_class).to receive(:read_before).and_wrap_original do |m, *args|
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_before).and_wrap_original do |m, *args|
         calls += 1
         calls == 1 ? [ 1 << 62 ].pack("Q>") : m.call(*args)
       end
 
       expect {
-        described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 5)
       }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
     end
 
     it "reads a garbled result as a missing result" do
       allow(Marshal).to receive(:load).and_raise(ArgumentError, "marshal data too short")
       expect {
-        described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 5)
       }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
     end
 
@@ -802,7 +824,7 @@ it "still explains a database that does not exist" do
       RUBY
       expect(writer.gets).to eq("locked\n")
 
-      result = described_class.send(:execute_sqlite, conn, "SELECT count(*) AS n FROM nums", 5)
+      result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 5)
       expect(result.rows).to eq([ [ 4 ] ])
     ensure
       writer&.close
@@ -826,7 +848,7 @@ it "still explains a database that does not exist" do
         .and_return(conn.pool.db_config.configuration_hash.merge(extensions: [ missing ]))
 
       expect {
-        described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 5)
       }.to raise_error(ActiveRecord::StatementInvalid, /rac_missing_ext/)
     end
 
@@ -837,7 +859,7 @@ it "still explains a database that does not exist" do
       hook = ActiveSupport::ForkTracker.after_fork { raise "fork hook failed" }
       begin
         expect {
-          described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 5)
+          RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 5)
         }.to raise_error(ActiveRecord::StatementInvalid, /exited without a result/)
       ensure
         if Process.pid != spec_pid
@@ -872,7 +894,7 @@ it "still explains a database that does not exist" do
 
       it "returns a fast result without waiting for that process" do
         result = nil
-        took = elapsed { result = described_class.send(:execute_sqlite, conn, "SELECT n FROM nums ORDER BY n", 5) }
+        took = elapsed { result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums ORDER BY n", timeout: 5) }
 
         expect(result.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
         expect(took).to be < 2
@@ -880,8 +902,8 @@ it "still explains a database that does not exist" do
 
       it "still stops a slow query at the deadline" do
         took = elapsed do
-          expect { described_class.send(:execute_sqlite, conn, slow_sql, 1) }
-            .to raise_error(ActiveRecord::StatementInvalid, /timeout/)
+          expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
+            .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
         end
         expect(took).to be < 2
       end
@@ -899,11 +921,11 @@ it "still explains a database that does not exist" do
         pipe
       end
 
-      fast = Thread.new { elapsed { described_class.send(:execute_sqlite, conn, "SELECT n FROM nums", 2) } }
+      fast = Thread.new { elapsed { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 2) } }
       sleep 0.1
       slow = Thread.new do
-        described_class.send(:execute_sqlite, conn, slow_sql, 2)
-      rescue ActiveRecord::StatementInvalid
+        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 2)
+      rescue RailsAiContext::DatabaseFamily::TimedOut
         nil
       end
 
@@ -1033,7 +1055,7 @@ it "still explains a database that does not exist" do
 
     def sent_to_the_database(sql)
       sent = nil
-      allow(described_class).to receive(:run_guarded) { |_conn, _adapter, text, _timeout|
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only) { |_conn, text, _timeout|
         sent = text
         ActiveRecord::Result.new(%w[n], [ [ 1 ] ])
       }
@@ -1205,7 +1227,7 @@ it "still explains a database that does not exist" do
 
     # Whatever the text says, the answer never carries more rows than asked for.
     it "drops rows the database returned past the limit" do
-      allow(described_class).to receive(:run_guarded).and_return(ActiveRecord::Result.new(%w[n], [ [ 1 ], [ 2 ], [ 3 ] ]))
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[n], [ [ 1 ], [ 2 ], [ 3 ] ]))
 
       expect(rows("SELECT n FROM t", limit: 2)).to eq(2)
     end
@@ -1291,14 +1313,9 @@ it "still explains a database that does not exist" do
       expect(text).not_to include("EXPLAIN Analysis")
     end
 
-    it "routes through the adapter safety wrapper (READ ONLY + timeout)" do
-      # Load-bearing: PostgreSQL `EXPLAIN (FORMAT JSON, ANALYZE) ...` actually
-      # executes the query plan. Without routing through execute_postgresql /
-      # execute_mysql / execute_sqlite, EXPLAIN bypasses SET TRANSACTION READ
-      # ONLY + statement_timeout / PRAGMA query_only. This spy confirms the
-      # adapter wrapper is called on the SQLite test connection - for PG/MySQL
-      # the same routing logic applies via the `case adapter` branch.
-      expect(described_class).to receive(:execute_sqlite).once.and_call_original
+    # EXPLAIN ANALYZE runs the plan, so it must get the read-only transaction and the timeout.
+    it "runs EXPLAIN through the family's guarded read" do
+      expect(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).once.and_call_original
       described_class.call(sql: "SELECT 1 AS test", explain: true)
     end
 
@@ -1322,57 +1339,49 @@ it "still explains a database that does not exist" do
   end
 
   describe "Trilogy adapter dispatch" do
-    # Rails 8's default MySQL adapter reports adapter_name "Trilogy", not
-    # "Mysql2". Every place that dispatches on adapter name must match both,
-    # or Trilogy apps silently skip the READ ONLY transaction + statement
-    # timeout and fall through to the unsafe "unknown adapter" path.
     before do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
     end
 
-    it "routes regular queries through the MySQL safety wrapper, not the unknown-adapter fallback" do
-      fake_result = ActiveRecord::Result.new(%w[x], [ [ 1 ] ])
-      expect(described_class).to receive(:execute_mysql).and_return(fake_result)
+    it "runs regular queries through the MySQL family" do
+      expect(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
 
-      result = described_class.call(sql: "SELECT 1 AS x")
-      expect(result.content.first[:text]).to include("1")
+      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to include("1")
     end
 
     it "issues EXPLAIN FORMAT=TRADITIONAL (not the bare EXPLAIN MySQL 8.3+/9.x would render as TREE)" do
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:mariadb?).and_return(false)
       explain_result = ActiveRecord::Result.new(
         %w[id select_type table type possible_keys key key_len ref rows filtered Extra],
         [ [ 1, "SIMPLE", "products", "ALL", nil, nil, nil, nil, 5, 100.0, "" ] ]
       )
-      expect(described_class).to receive(:execute_mysql)
+      expect(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:read_only)
         .with(anything, a_string_matching(/\AEXPLAIN FORMAT=TRADITIONAL SELECT/), anything)
         .and_return(explain_result)
 
-      result = described_class.call(sql: "SELECT * FROM products WHERE sku = 'x'", explain: true)
-      text = result.content.first[:text]
+      text = described_class.call(sql: "SELECT * FROM products WHERE sku = 'x'", explain: true).content.first[:text]
       expect(text).to include("EXPLAIN Analysis")
       expect(text).to include("full table scan")
     end
   end
 
   describe "PostGIS adapter dispatch" do
-    # activerecord-postgis-adapter reports adapter_name "PostGIS" for a PostgreSQL
-    # connection, which gets the same READ ONLY transaction and statement timeout.
+    let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
+
     before do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
+      allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ "[]" ] ]))
     end
 
-    it "routes regular queries through the PostgreSQL safety wrapper" do
-      expect(described_class).to receive(:execute_postgresql).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
-
-      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to include("1")
+    it "runs regular queries through the PostgreSQL family" do
+      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to include("[]")
+      expect(runtime).to have_received(:read_only).with(anything, a_string_matching(/\ASELECT 1 AS x/), anything)
     end
 
     it "asks PostgreSQL for its JSON plan" do
-      expect(described_class).to receive(:execute_postgresql)
-        .with(anything, a_string_matching(/\AEXPLAIN \(FORMAT JSON, ANALYZE\) SELECT/), anything)
-        .and_return(ActiveRecord::Result.new(%w[QUERY\ PLAN], [ [ "[]" ] ]))
-
       described_class.call(sql: "SELECT 1 AS x", explain: true)
+
+      expect(runtime).to have_received(:read_only).with(anything, a_string_matching(/\AEXPLAIN \(FORMAT JSON, ANALYZE\) SELECT/), anything)
     end
   end
 
@@ -1387,7 +1396,7 @@ it "still explains a database that does not exist" do
         %w[Field Type Null Key Default Extra],
         [ [ "id", "bigint", "NO", "PRI", nil, "auto_increment" ] ]
       )
-      expect(described_class).to receive(:execute_sqlite).and_return(fake_result)
+      expect(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_return(fake_result)
 
       result = described_class.call(sql: "DESCRIBE products")
       text = result.content.first[:text]
@@ -1401,144 +1410,12 @@ it "still explains a database that does not exist" do
       # redaction rather than being rejected outright - unlike DESCRIBE's
       # "Key" column, this one really is a data column and must be redacted.
       fake_result = ActiveRecord::Result.new(%w[id cache_key], [ [ 1, "sekret" ] ])
-      expect(described_class).to receive(:execute_sqlite).and_return(fake_result)
+      expect(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_return(fake_result)
 
       result = described_class.call(sql: "SELECT id, cache_key FROM users")
       text = result.content.first[:text]
       expect(text).to include("[FILTERED]")
       expect(text).not_to include("sekret")
-    end
-  end
-
-  describe "MySQL execution (execute_mysql)" do
-    # The Combustion test app runs on SQLite, so execute_mysql is exercised
-    # against a fake connection that enforces MySQL's rule: transaction
-    # characteristics cannot change once a transaction is in progress
-    # (error 1568, ER_CANT_CHANGE_TX_CHARACTERISTICS). Rails materializes
-    # the lazy BEGIN before the first in-block statement reaches the server,
-    # so a SET TRANSACTION issued inside `conn.transaction` always arrives
-    # mid-transaction and fails. Regression coverage for #89.
-    let(:query_result) { ActiveRecord::Result.new(%w[x], [ [ 1 ] ]) }
-
-    let(:fake_mysql_conn_class) do
-      Class.new do
-        attr_reader :statements
-
-        def initialize(result)
-          @result = result
-          @statements = []
-          @in_transaction = false
-        end
-
-        def execute(sql)
-          if @in_transaction && sql.match?(/\ASET\s+TRANSACTION/i)
-            raise ActiveRecord::StatementInvalid,
-              "Mysql2::Error: Transaction characteristics can't be changed " \
-              "while a transaction is in progress"
-          end
-          @statements << sql
-        end
-
-        def transaction
-          @statements << "BEGIN"
-          @in_transaction = true
-          yield
-          @statements << "COMMIT"
-        rescue ActiveRecord::Rollback
-          @statements << "ROLLBACK"
-        ensure
-          @in_transaction = false
-        end
-
-        def select_all(sql)
-          @statements << sql
-          @result
-        end
-      end
-    end
-
-    let(:conn) { fake_mysql_conn_class.new(query_result) }
-
-    it "issues SET TRANSACTION READ ONLY before the transaction opens" do
-      result = described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
-
-      expect(result).to eq(query_result)
-      set_index = conn.statements.index { |s| s.match?(/\ASET\s+TRANSACTION READ ONLY/i) }
-      begin_index = conn.statements.index("BEGIN")
-      expect(set_index).not_to be_nil
-      expect(begin_index).not_to be_nil
-      expect(set_index).to be < begin_index
-    end
-
-    it "injects the MAX_EXECUTION_TIME hint for the per-query timeout" do
-      described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
-
-      select = conn.statements.find { |s| s.match?(/\ASELECT/i) }
-      expect(select).to include("MAX_EXECUTION_TIME(5000)")
-    end
-
-    it "rolls the transaction back instead of committing" do
-      described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
-
-      expect(conn.statements).to include("ROLLBACK")
-      expect(conn.statements).not_to include("COMMIT")
-    end
-  end
-
-  describe "MariaDB statement timeout (execute_mysql)" do
-    # MariaDB ignores MySQL's MAX_EXECUTION_TIME hint, so a long query would run
-    # unbounded and hold the connection. It is bounded with MariaDB's own
-    # `SET STATEMENT max_statement_time = <seconds> FOR <query>`, which scopes the
-    # limit to the one statement (no session setting to restore on the pool).
-    let(:query_result) { ActiveRecord::Result.new(%w[x], [ [ 1 ] ]) }
-    let(:conn) do
-      Class.new do
-        attr_reader :statements
-        def initialize(result)
-          @result = result
-          @statements = []
-        end
-
-        def mariadb? = true
-        def execute(sql) = @statements << sql
-
-        def transaction
-          @statements << "BEGIN"
-          yield
-        rescue ActiveRecord::Rollback
-          @statements << "ROLLBACK"
-        end
-
-        def select_all(sql)
-          @statements << sql
-          @result
-        end
-      end.new(query_result)
-    end
-
-    it "bounds the query with SET STATEMENT max_statement_time, not the MySQL hint" do
-      described_class.send(:execute_mysql, conn, "SELECT 1 AS x\nLIMIT 100", 5)
-
-      select = conn.statements.find { |s| s.include?("SELECT 1 AS x") }
-      expect(select).to start_with("SET STATEMENT max_statement_time=5.0 FOR ")
-      expect(select).not_to include("MAX_EXECUTION_TIME")
-    end
-
-    it "still issues SET TRANSACTION READ ONLY before the transaction and rolls back" do
-      described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
-
-      set_index = conn.statements.index { |s| s.match?(/\ASET TRANSACTION READ ONLY/i) }
-      expect(set_index).to be < conn.statements.index("BEGIN")
-      expect(conn.statements).to include("ROLLBACK")
-    end
-
-    it "reads MariaDB's max_statement_time interruption as the timeout" do
-      allow(described_class).to receive(:execute_sqlite)
-        .and_raise(ActiveRecord::StatementInvalid,
-                   "Mysql2::Error: Query execution was interrupted (max_statement_time exceeded)")
-
-      text = described_class.call(sql: "SELECT SLEEP(8)").content.first[:text]
-      expect(text).to start_with("Query exceeded 5 second timeout")
     end
   end
 
@@ -1985,7 +1862,7 @@ it "still explains a database that does not exist" do
     end
 
     before do
-      allow(described_class).to receive(:run_guarded)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
         .and_return(ActiveRecord::Result.new(%w[n], (1..150).map { |i| [ i ] }))
     end
 
@@ -2002,13 +1879,13 @@ it "still explains a database that does not exist" do
 
     it "names the hard cap when the cap is 1000" do
       # The text fetches one row past the cap; 1001 back means the cap cut it.
-      allow(described_class).to receive(:run_guarded)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
         .and_return(ActiveRecord::Result.new(%w[n], (1..1001).map { |i| [ i ] }))
       expect(answer("SELECT n FROM big", limit: 5000)).to include("the 1000-row hard cap")
     end
 
     it "does not add the note when the result is under the limit" do
-      allow(described_class).to receive(:run_guarded)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
         .and_return(ActiveRecord::Result.new(%w[n], [ [ 1 ], [ 2 ] ]))
       expect(answer("SELECT n FROM big", limit: 100)).not_to include("rows shown; the query returned")
     end
@@ -2017,7 +1894,7 @@ it "still explains a database that does not exist" do
     # note that rows were held back. Exactly the cap is everything; only a row
     # past it means the cap cut the answer.
     it "does not add the note when exactly the cap came back" do
-      allow(described_class).to receive(:run_guarded)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
         .and_return(ActiveRecord::Result.new(%w[n], (1..7).map { |i| [ i ] }))
       text = answer("SELECT DISTINCT n FROM big", limit: 7)
       expect(text).to include("7 rows returned")
@@ -2025,7 +1902,7 @@ it "still explains a database that does not exist" do
     end
 
     it "adds the note and drops the extra row when one past the cap came back" do
-      allow(described_class).to receive(:run_guarded)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
         .and_return(ActiveRecord::Result.new(%w[n], (1..8).map { |i| [ i ] }))
       text = answer("SELECT n FROM big", limit: 7)
       expect(text).to include("7 rows returned")
@@ -2289,7 +2166,7 @@ it "still explains a database that does not exist" do
     end
 
     def answer(sql, rows:, columns: [ "Table", "Create Table" ], **opts)
-      allow(described_class).to receive(:run_guarded).and_return(ActiveRecord::Result.new(columns, rows))
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(columns, rows))
       described_class.call(sql: sql, **opts).content.first[:text]
     end
 

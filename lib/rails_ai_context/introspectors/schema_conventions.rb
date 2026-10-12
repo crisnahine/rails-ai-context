@@ -199,13 +199,12 @@ module RailsAiContext
         RailsAiContext::DatabaseFamily.of(database_adapter_for(root, database)).implicit_pk_type
       end
 
-      # The running environment's adapter for one database, as database.yml and a merged URL name it.
-      # A database it does not configure (Rails 8's queue outside production) takes the adapter of the
-      # environment that does, else the running primary's.
+      # One app database's adapter. A database only another environment configures (Rails 8's queue
+      # outside production) takes that environment's; one only a dump names, the primary's.
       def database_adapter_for(root, db_name)
-        yml = RailsAiContext::DatabaseYml
-        entry = yml.entry(root, db_name) || yml.elsewhere(root, db_name)&.last
-        yml.adapter(db_name, entry).first || (yml.adapter("primary", yml.primary(root)).first unless entry)
+        databases = RailsAiContext::AppDatabases.for(root)
+        found = db_name == "primary" ? databases.primary : databases[db_name]
+        found&.config ? found.adapter : databases.primary&.adapter
       end
 
       # A primary key as connection.primary_key gives it: the column's name, or

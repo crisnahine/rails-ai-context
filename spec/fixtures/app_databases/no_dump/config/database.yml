@@ -1,0 +1,9 @@
+test:
+  primary:
+    adapter: postgresql
+    database: app_test
+  analytics:
+    adapter: postgresql
+    database: analytics_test
+    schema_dump: false
+    migrations_paths: db/analytics_migrate

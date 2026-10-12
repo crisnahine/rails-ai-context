@@ -339,6 +339,15 @@ Proof sources:
     (plus `context`, `onboard`, `analyze_feature`, `get_turbo_map`, `get_env`)
     sampled against 500 generated models/tables under a 180-second cap.
 
+`rails_query`, `rails_runtime_info` and the row estimates run on three
+database families: PostgreSQL (with PostGIS), MySQL (mysql2 and Trilogy, with
+MariaDB) and SQLite. `rails_query` refuses any other engine (SQL Server, Oracle,
+CockroachDB) by its adapter's name before sending it a statement, and the table
+sizes, row estimates and index usage say they are not available there. CI's
+`engines` job runs the families against PostgreSQL 16, MySQL 8.0 and 8.4
+(mysql2 and Trilogy) and MariaDB 10.6 and 11.4 (mysql2 and Trilogy); see
+[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-engines).
+
 Postgres itself - live query safety (read-only transactions, the
 `BLOCKED_FUNCTIONS` guard against `pg_read_file`/`dblink`/`COPY ... PROGRAM`,
 DDL rejection) alongside schema/routes - is proven end-to-end against a real

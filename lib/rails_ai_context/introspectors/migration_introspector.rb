@@ -74,22 +74,19 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "current_schema_version")
       end
 
-      # The other databases `db:migrate` runs here, each from its own
+      # The other databases `db:migrate` runs, each from its own
       # migrations_paths, keyed by database.yml name. Pending is what the
       # database's dump records, as the schema section reads that database;
       # one that shares the primary's directories adds no files of its own.
       def secondary_databases
-        dumps = SchemaDumpPath.secondaries(root)
-        RailsAiContext::DatabaseYml.task_secondaries(root).each_with_object({}) do |(name, entry), found|
-          dirs = MigrationReplay.configured_dirs(root, entry)
-          next if dirs.nil? || dirs == migrate_dir
+        RailsAiContext::AppDatabases.for(root).secondaries.each_with_object({}) do |db, found|
+          dirs = db.migrate_dirs
+          next if dirs == migrate_dir
 
           files = RailsAiContext::PendingMigrations.migration_files(dirs, root: root)
-          next if files.empty?
-
-          format, dump = dumps[name]
+          format, dump = db.dump
           pending = RailsAiContext::PendingMigrations.for(migrate_dir: dirs, applied: RailsAiContext::SchemaVersion.recorded(format, dump), root: root)
-          found[name] = {
+          found[db.name] = {
             total: files.size,
             migrations_paths: dirs.select { |dir| Dir.exist?(dir) }.map { |dir| dir.delete_prefix("#{root.chomp('/')}/") },
             pending: pending

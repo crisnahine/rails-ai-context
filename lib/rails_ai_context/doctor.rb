@@ -292,11 +292,9 @@ module RailsAiContext
       return @database_states if defined?(@database_states)
 
       @database_states = begin
-        primary = ActiveRecord::Base.connection_db_config.name
-        ActiveRecord::Base.configurations.configs_for(env_name: RailsAiContext.environment_name).map do |db_config|
-          own = db_config.name == primary
-          dirs = own ? primary_migrate_dirs : PendingMigrations.migrate_dirs_of(app.root, db_config.name)
-          { name: db_config.name, config: db_config, **MigrationStatus.of_database(db_config, dirs, primary: own) }
+        AppDatabases.for(app.root).here.select(&:tasks).map do |db|
+          dirs = db.primary ? primary_migrate_dirs : db.migrate_dirs
+          { name: db.name, config: db.config, **MigrationStatus.of_database(db.config, dirs, primary: db.primary) }
         end
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "database_states")
@@ -484,9 +482,8 @@ module RailsAiContext
 
     # Each database's migrations directories, by the name database.yml gives it.
     def migration_dirs_by_database
-      primary = DatabaseYml.primary_name(app.root) || "primary"
-      secondaries = DatabaseYml.task_secondaries(app.root).keys.to_h { |name| [ name, PendingMigrations.migrate_dirs_of(app.root, name) ] }
-      { primary => primary_migrate_dirs }.merge(secondaries)
+      databases = AppDatabases.for(app.root)
+      { databases.primary&.name || "primary" => primary_migrate_dirs }.merge(databases.secondaries.to_h { |db| [ db.name, db.migrate_dirs ] })
     end
 
     # ── Context file checks ───────────────────────────────────────────

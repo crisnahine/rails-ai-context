@@ -67,6 +67,23 @@ Ten tools that each answered one section of the app's configuration leave
 - **Migration advice for an undecided database names no engine.** When the
   app's database is one of two candidates, `rails_migration_advisor` no
   longer gives PostgreSQL and MySQL advice at once.
+- **Every surface names the same databases.** On a default Rails 8 app,
+  where the running environment configures only the primary and production
+  configures queue, cache and cable, the schema section, the multi-database
+  section, the stack overview, the model listing and the migrations section
+  now all name the four databases. A database only another environment
+  configures is marked "(production only)", and one only a committed dump
+  names "(committed dump only)".
+- **A secondary dump too large to read is named.** It keeps an entry in the
+  schema section that gives the reason, and a database whose migrations are
+  replayed instead no longer has its existing dump called missing.
+- **The performance check covers every database.** Missing indexes and
+  counter caches are checked in each database's dump, a finding outside the
+  primary names its database, and a database it could not read is listed
+  under "Not checked" with the reason.
+- **Migration advice counts rows only on the primary.** The row estimate
+  comes from the primary database, so a table on another database is no
+  longer given the primary's count.
 - **One served tool set.** `tool --list` shows exactly what the MCP
   server's `tools/list` shows, so a custom tool sharing a built-in's name
   is listed once, and the CLI's single-tool lookup picks the same tool the
@@ -83,13 +100,39 @@ Ten tools that each answered one section of the app's configuration leave
   tool only when the app serves it. A section whose tool `skip_tools`
   turned off is left out, and the answer names those tools in one line.
 
+- **MySQL bounds every `rails_query` statement.** The `MAX_EXECUTION_TIME`
+  hint bound only a statement that starts with SELECT; one that starts with
+  WITH or EXPLAIN ANALYZE ran with no time limit. The session's
+  `max_execution_time` now bounds every statement and is put back after it,
+  also when the statement fails.
+- **A timeout is a timeout, and nothing else is.** `rails_query` read any
+  SQL error that mentioned "timeout" as a timeout, so an unknown column named
+  `timeout` came back as one. A timeout is now read from the error's class or
+  the engine's native code, and MariaDB's 1969 counts.
+- **MySQL table sizes count base tables only**, as the row estimates do.
+
 ### Changed
 
+- **`rails_query` refuses an engine it cannot guard.** On an adapter with no
+  database family (SQL Server, Oracle, CockroachDB) it answers with the
+  adapter's name and sends no statement, where before it ran the query with
+  the text checks alone. `rails_runtime_info` and the row estimates say table
+  sizes, row estimates and index usage are not available for that adapter.
+- **Each database family owns its engine's reads.** The read-only
+  transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
+  plan, table sizes, row estimates and index usage live in one place per
+  family, which `rails_query`, `rails_runtime_info` and the database stats
+  ask.
 - **One answer to which database an app runs.** The connection, a
   database.yml adapter, a URL scheme, a display label and a dump's dialect
   all go through one database family (PostgreSQL, MySQL or SQLite). An
   adapter the gem does not know, such as SQL Server, Oracle or CockroachDB,
   is no family.
+- **One list of the app's databases.** Both tiers build it through one
+  builder, the primary first, then the rest of the running environment's,
+  then those only another environment configures, then dumps no environment
+  names. The schema, multi-database, connection pool and migrations
+  sections, doctor, migration advice and the performance check all read it.
 
 ## [5.35.0] - 2026-10-12
 
