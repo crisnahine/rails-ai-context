@@ -753,6 +753,26 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
                                                                         { name: "update_attrs", requires: "user", permits: [ "name" ] } ])
     end
 
+    it "reads params an ivar holds, params handed on as a keyword, and Devise's sanitizer" do
+      source = <<~RUBY
+        def a_params
+          @raw = params.require(:a)
+          @raw.permit(:x)
+        end
+
+        def clean_params
+          Sanitizer.new(params: params).call
+        end
+
+        def account_update_params
+          devise_parameter_sanitizer.sanitize(:account_update)
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "a_params", requires: "a", permits: [ "x" ] },
+                                                                        { name: "clean_params" }, { name: "account_update_params" } ])
+    end
+
     it "leaves out a permit on something that is not params" do
       source = <<~RUBY
         def plug_params(app)

@@ -1381,5 +1381,34 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       expect(text).to include("## Strong Params\n- `edition_params` _(from Admin::EditionsController)_")
     end
+
+    # The child's own method is the one that runs, whatever its parent's permits.
+    it "lists no parent's strong params method the child overrides with one that permits nothing" do
+      files = {
+        "app/controllers/application_controller.rb" => <<~RUBY,
+          class ApplicationController < ActionController::Base
+            private
+
+            def page_params
+              params.permit(:page)
+            end
+          end
+        RUBY
+        "app/controllers/posts_controller.rb" => <<~RUBY
+          class PostsController < ApplicationController
+            def index; end
+
+            private
+
+            def page_params
+              { page: 1 }
+            end
+          end
+        RUBY
+      }
+      text = answer_for(files, controller: "PostsController")
+
+      expect(text).not_to include("page_params` _(from ApplicationController)_")
+    end
   end
 end
