@@ -512,6 +512,18 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("**Alias of:** `Login::OAuth2Controller`, the same class under a second name")
     end
 
+    it "answers an alias's action from the controller it names" do
+      stub_controllers({ "Login::GoogleController" => { actions: %w[new], filters: [], alias_of: "Login::OAuth2Controller",
+                                                         file: "app/controllers/login/google_controller.rb" },
+                         "Login::OAuth2Controller" => { actions: %w[new], filters: [], parent_class: "ApplicationController",
+                                                         file: "app/controllers/login/oauth2_controller.rb" } })
+
+      text = described_class.call(controller: "Login::GoogleController", action: "new").content.first[:text]
+
+      expect(text).to include("Login::OAuth2Controller")
+      expect(text).not_to include("not found")
+    end
+
     it "prints a computed nested filter as the source writes it" do
       params = [ { name: "user_params", requires: "user", permits: [ "locale" ], computed: { "settings_attributes" => "UserSettings.keys" } } ]
       stub_controllers({ "UsersController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })

@@ -270,7 +270,7 @@ module RailsAiContext
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
         if (targets = alias_targets(source, path_name))
-          return [ path_name, { alias_of: targets, file: record.file } ]
+          return [ path_name, unloaded ? { error: unloaded, file: record.file } : { alias_of: targets, file: record.file } ]
         end
         # A *_controller.rb that declares only a module is a mixin controllers extend.
         return nil if !DeclaredConstant.declares_class?(source, path_name: path_name) && DeclaredConstant.declared_module_names(source).any?
@@ -298,16 +298,29 @@ module RailsAiContext
         nil
       end
 
-      # An alias reads as the controller it names, so a route to it finds that controller's actions.
+      # An alias reads as the controller it names, so a route to it finds that controller's actions;
+      # it keeps its own file, which its routes are keyed by.
       def resolve_aliases(result)
-        result.each do |name, entry|
+        result.each_key.to_a.each do |name|
+          entry = result[name]
           next unless entry.is_a?(Hash) && entry[:alias_of].is_a?(Array)
 
-          target = entry[:alias_of].find { |candidate| result.key?(candidate) } || entry[:alias_of].last
+          target = alias_target(result, name)
           details = result[target]
-          own = details.is_a?(Hash) && !details[:alias_of] ? details : { file: entry[:file] }
-          result[name] = own.merge(alias_of: target)
+          own = details.is_a?(Hash) && !details[:alias_of] ? details : {}
+          result[name] = own.merge(alias_of: target, file: entry[:file])
         end
+        result
+      end
+
+      # The controller an alias names, through any alias that names another.
+      def alias_target(result, name, seen = Set.new)
+        entry = result[name]
+        return nil unless entry.is_a?(Hash) && entry[:alias_of] && seen.add?(name)
+        return entry[:alias_of] if entry[:alias_of].is_a?(String)
+
+        target = entry[:alias_of].find { |candidate| result.key?(candidate) } || entry[:alias_of].last
+        alias_target(result, target, seen) || target
       end
 
       # A file not named *_controller.rb is a controller only if it subclasses one: a mixin,

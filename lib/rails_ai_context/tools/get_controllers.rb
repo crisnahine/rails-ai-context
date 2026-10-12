@@ -288,6 +288,10 @@ module RailsAiContext
       end
 
       private_class_method def self.format_action_source(controller_name, info, action_name)
+        # An alias is the same class: its actions are read from the controller it names.
+        target = info[:alias_of] && RailsAiContext::Payload.controllers(cached_context)[info[:alias_of]]
+        return format_action_source(info[:alias_of], target, action_name) if target.is_a?(Hash) && !target[:alias_of]
+
         actions = info[:actions] || []
         # Case-insensitive action lookup for consistency with other tools
         action_name = actions.find { |a| a.to_s.downcase == action_name.to_s.downcase }&.to_s || action_name.to_s

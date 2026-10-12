@@ -65,6 +65,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         FileUtils.mkdir_p(dir)
         File.write(File.join(dir, "oauth2_controller.rb"), "module AliasLogin\n  class OAuth2Controller < ApplicationController\n    def new; end\n  end\nend\n")
         File.write(File.join(dir, "google_controller.rb"), "module AliasLogin\n  GoogleController = OAuth2Controller\nend\n")
+        File.write(File.join(dir, "gmail_controller.rb"), "module AliasLogin\n  GmailController = GoogleController\nend\n")
       end
 
       after do
@@ -72,11 +73,13 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         Object.send(:remove_const, :AliasLogin) if defined?(AliasLogin)
       end
 
-      it "is listed as an alias of that controller, with its actions, booted and static" do
+      it "is listed as an alias of that controller, with its actions and its own file, booted and static" do
         [ result, introspector.static_call ].each do |answer|
           google = answer[:controllers]["AliasLogin::GoogleController"]
-          expect(google).to include(alias_of: "AliasLogin::OAuth2Controller")
+          expect(google).to include(alias_of: "AliasLogin::OAuth2Controller", file: "app/controllers/alias_login/google_controller.rb")
           expect(google[:actions]).to eq([ "new" ])
+          expect(answer[:controllers]["AliasLogin::GmailController"]).to include(alias_of: "AliasLogin::OAuth2Controller", actions: [ "new" ])
+          expect(answer[:controllers]["AliasLogin::OAuth2Controller"][:file]).to eq("app/controllers/alias_login/oauth2_controller.rb")
         end
       end
     end
