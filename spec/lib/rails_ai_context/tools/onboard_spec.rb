@@ -409,6 +409,18 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(order.call(onboard).first).to eq("Alpha")
     end
 
+    it "names as Key Flows the first controllers in route order when route counts tie" do
+      actions = %w[index show new create edit update destroy]
+      by_controller = (1..24).to_h do |i|
+        name = format("c%02d", i)
+        [ name, (i.odd? ? actions.first(1) : actions).map { |a| { verb: "GET", path: "/#{name}/#{a}", action: a, controller: name } } ]
+      end
+      ctx = { routes: { by_controller: by_controller, total_routes: by_controller.values.sum(&:size) } }
+
+      flows = described_class.send(:section_key_flows, ctx).grep(/^- /).map { |line| line[/\*\*(\w+)\*\*/, 1] }
+      expect(flows).to eq(%w[c02 c04 c06 c08 c10])
+    end
+
     # A payload entry is not always a Hash: a section the introspector could
     # not build leaves a marker string. Counted as central it took one of the
     # seven slots and printed nothing, so a real model fell off the list.

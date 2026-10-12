@@ -301,7 +301,7 @@ module RailsAiContext
 
           # Controllers with the most actions carry the app's key flows.
           app_ctrls = RouteCoverage.app_controllers(routes)
-          top_ctrls = app_ctrls.sort_by { |_, routes_list| -routes_list.size }.first(5)
+          top_ctrls = app_ctrls.sort_by.with_index { |(_, routes_list), i| [ -routes_list.size, i ] }.first(5)
 
           top_ctrls.each do |ctrl, ctrl_routes|
             actions = ctrl_routes.map { |r| r[:action] }.compact.uniq
