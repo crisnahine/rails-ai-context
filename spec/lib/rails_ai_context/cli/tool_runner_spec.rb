@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  # Loading every tool to find one was a tenth of a one-tool CLI call.
+  # Loading every tool to find one is a tenth of a one-tool CLI call.
   describe "resolving a name the tool classes spell" do
     it "loads no tool list for a short, medium or full name" do
       allow(described_class).to receive(:available_tools).and_call_original

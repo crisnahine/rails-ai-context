@@ -200,10 +200,10 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
 
   describe "CLI tool invocations" do
     # Representative sample of the tools - covers the main output
-    # channels (schema, routes, models, components, etc.). Running ALL 35
+    # channels (schema, routes, models, components, etc.). Running every tool
     # via subprocess per describe block would push wall-clock past 5
-    # minutes; the in-process ToolRunner smoke spec covers complete
-    # coverage (spec/cli_smoke_spec.rb, 35 tools in 0.15s).
+    # minutes; the in-process ToolRunner smoke spec (spec/cli_smoke_spec.rb)
+    # covers them all.
     # `context` answers about one thing, so it is asked about one: called bare
     # it refuses, which is the documented exit 1 and not what this block is
     # for. The scaffolded Post is the app's own model.

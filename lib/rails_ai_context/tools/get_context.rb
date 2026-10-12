@@ -72,8 +72,7 @@ module RailsAiContext
           return error_response("Provide at least one of: controller, model, or feature.")
         end
 
-        # Append additional context sections if include: is specified
-        base_text += append_includes(include) if include.is_a?(Array) && include.any?
+        base_text = sections(base_text, *include_sections(include)) if include.is_a?(Array) && include.any?
 
         ctx = begin
           cached_context
@@ -84,31 +83,26 @@ module RailsAiContext
         text_response(base_text, suffix: introspection_warnings_note(ctx))
       end
 
-      private_class_method def self.controller_action_context(controller_name, action_name)
-        lines = []
+      # The sections that have text, with a rule between them.
+      private_class_method def self.sections(*texts)
+        texts.compact.reject(&:empty?).join("\n\n---\n\n")
+      end
 
+      private_class_method def self.section_text(response)
+        response_text(response) unless empty?(response)
+      end
+
+      private_class_method def self.controller_action_context(controller_name, action_name)
         # Controller + action source + private methods + instance vars
         ctrl_result = compose(GetControllers, controller: controller_name, action: action_name)
-        lines << response_text(ctrl_result)
 
         # Infer model from controller
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
         model_name = snake.split("/").last.singularize.camelize
 
-        # Model details
-        model_result = compose(GetModelDetails, model: model_name)
-        unless empty?(model_result)
-          lines << "" << "---" << "" << response_text(model_result)
-        end
-
-        # Routes for this controller
-        route_result = compose(GetRoutes, controller: snake)
-        unless empty?(route_result)
-          lines << "" << "---" << ""
-          lines << response_text(route_result)
-        end
-
-        lines.concat(view_section_lines(snake))
+        text = sections(response_text(ctrl_result), section_text(compose(GetModelDetails, model: model_name)),
+                        section_text(compose(GetRoutes, controller: snake)), view_section(snake))
+        extras = []
 
         # Cross-reference: controller ivars vs view ivars. The action's own
         # source, the methods it calls and the before filters that run for it
@@ -133,7 +127,7 @@ module RailsAiContext
         if Payload.section(cached_context, :view_templates)
           ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only_app?,
                                                                      origins: origins.except(*(action_body ? resolver.assigned_ivars(action_body) : [])))
-          lines << "" << ivar_check if ivar_check
+          extras << ivar_check if ivar_check
         end
 
         # Hydrate: inject schema hints for models referenced in controller + view ivars
@@ -142,12 +136,10 @@ module RailsAiContext
           hydration = Hydrators::ViewHydrator.call(all_ivars, context: cached_context)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           # Skip if get_controllers already injected schema hints
-          unless hydration_text.empty? || lines.any? { |l| l.include?("## Schema Hints") }
-            lines << "" << hydration_text
-          end
+          extras << hydration_text unless hydration_text.empty? || text.include?("## Schema Hints")
         end
 
-        lines.join("\n")
+        [ text, *extras ].reject(&:empty?).join("\n\n")
       rescue => e
         "Error assembling context: #{e.message}"
       end
@@ -159,11 +151,11 @@ module RailsAiContext
       # convention - on a namespaced app they belong to another component
       # entirely.
       #
-      private_class_method def self.view_section_lines(snake)
+      private_class_method def self.view_section(snake)
         view_result, view_note = controller_views(snake)
-        return [] if empty?(view_result)
+        return nil if empty?(view_result)
 
-        [ "", "---", "", view_note, response_text(view_result) ].compact
+        [ view_note, response_text(view_result) ].compact.join("\n")
       end
 
       # @return [Array(MCP::Tool::Response, String, nil)] the view section and
@@ -280,29 +272,15 @@ module RailsAiContext
       end
 
       private_class_method def self.controller_context(controller_name)
-        lines = []
-
         ctrl_result = compose(GetControllers, controller: controller_name)
-        lines << response_text(ctrl_result)
-
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
 
-        # Routes for this controller
-        route_result = compose(GetRoutes, controller: snake)
-        unless empty?(route_result)
-          lines << "" << "---" << "" << response_text(route_result)
-        end
-
-        lines.concat(view_section_lines(snake))
-
-        lines.join("\n")
+        sections(response_text(ctrl_result), section_text(compose(GetRoutes, controller: snake)), view_section(snake))
       rescue => e
         "Error assembling context: #{e.message}"
       end
 
       private_class_method def self.model_context(model_name)
-        lines = []
-
         # Normalize: try as-is, then singularized, then classified
         ctx = cached_context
         models = Payload.models(ctx)
@@ -314,56 +292,44 @@ module RailsAiContext
 
         # If model not found, fail fast - don't leak partial results from sub-tools.
         # A model the app has still gets its schema and tests when model details is turned off.
-        return response_text(model_result) if empty?(model_result) && (key.nil? || RailsAiContext::Server.served?("rails_get_model_details"))
+        return response_text(model_result) if empty?(model_result) && (key.nil? || own_served?(GetModelDetails))
 
-        lines << response_text(model_result)
-
-        if key && models[key][:table_name]
-          schema_result = compose(GetSchema, table: models[key][:table_name])
-          unless empty?(schema_result)
-            lines << "" << "---" << "" << response_text(schema_result)
-          end
-        end
-
-        # Tests for this model
-        test_result = compose(GetTestInfo, model: resolved_name, detail: "standard")
-        unless empty?(test_result)
-          lines << "" << "---" << "" << response_text(test_result)
-        end
-
-        lines.join("\n")
+        table = key && models[key][:table_name]
+        sections(response_text(model_result), (section_text(compose(GetSchema, table: table)) if table),
+                 section_text(compose(GetTestInfo, model: resolved_name, detail: "standard")))
       rescue => e
         "Error assembling context: #{e.message}"
       end
 
-      private_class_method def self.append_includes(includes)
-        extra = +""
-        includes.each do |key|
+      private_class_method def self.include_sections(includes)
+        includes.map do |key|
           name, args = INCLUDE_MAP[key.to_s.downcase]
-          unless name
-            extra << "\n\n---\n\n_`include` does not take '#{echo_input(key)}'. It takes: #{INCLUDE_MAP.keys.join(', ')}._"
-            next
-          end
+          next "_`include` does not take '#{echo_input(key)}'. It takes: #{INCLUDE_MAP.keys.join(', ')}._" unless name
 
-          tool = tool_class(name)
-          unless own_served?(tool)
-            extra << "\n\n---\n\n_#{RailsAiContext::Server.skipped_tool_message(name)}_"
-            next
-          end
+          off = include_off_message(name, args)
+          next "_#{off}_" if off
 
           begin
-            extra << "\n\n---\n\n" << response_text(tool.call(**args))
+            response_text(tool_class(name).call(**args))
           rescue => e
-            extra << "\n\n---\n\n_Error loading #{key}: #{e.message}_"
+            "_Error loading #{key}: #{e.message}_"
           end
         end
-        extra
+      end
+
+      # Why the app does not serve an include's tool or config section, or nil when it does.
+      private_class_method def self.include_off_message(name, args)
+        section = GetConfig.section_named(args[:section]) if name == "rails_get_config"
+        return section.off_message if section && !section.on?
+
+        RailsAiContext::Server.skipped_tool_message(name) unless section ? section.served? : own_served?(tool_class(name))
       end
 
       private_class_method def self.feature_context(feature_name)
         # Start with full-stack feature analysis
         analyze_result = compose(AnalyzeFeature, feature: feature_name)
-        lines = [ response_text(analyze_result) ]
+        parts = [ response_text(analyze_result) ]
+        related = []
 
         # Enrich with schema columns for matching models
         ctx = begin; cached_context; rescue; nil; end
@@ -376,10 +342,7 @@ module RailsAiContext
             table_name = models[model_name][:table_name]
             next unless table_name
             matched_tables << table_name
-            schema_result = compose(GetSchema, table: table_name)
-            unless empty?(schema_result)
-              lines << "" << "---" << "" << response_text(schema_result)
-            end
+            parts << section_text(compose(GetSchema, table: table_name))
           end
 
           # Also include schema for related models (associated tables) if the
@@ -394,17 +357,16 @@ module RailsAiContext
                 c_name.downcase.include?(feature_name.pluralize.downcase)
             end
             if related_ctrls.any?
-              lines << "" << "## Related Controllers (by name)"
+              related << "## Related Controllers (by name)"
               related_ctrls.each do |c_name, c|
                 actions = (c[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
-                lines << "- **#{c_name}** - #{actions.join(', ')}"
+                related << "- **#{c_name}** - #{actions.join(', ')}"
               end
             end
-
           end
         end
 
-        lines.join("\n")
+        [ sections(*parts), related.join("\n") ].reject(&:empty?).join("\n\n")
       rescue => e
         # Fall back to plain analyze_feature on error
         RailsAiContext.debug_fail(e, label: "feature_context")

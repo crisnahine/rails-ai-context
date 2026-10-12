@@ -110,6 +110,25 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
   end
 
+  describe "a custom tool in a built-in's place" do
+    let(:custom) do
+      Class.new(MCP::Tool) do
+        tool_name "rails_get_schema"
+        description "The app's own schema tool."
+      end
+    end
+
+    before { allow(helper).to receive(:exposed_tools).and_return([ custom, RailsAiContext::Tools::GetModelDetails ]) }
+
+    it "is listed, and no step or rule gives it the built-in's arguments" do
+      expect(helper.tools_name_list.join("\n")).to include("`rails_get_schema`")
+      expect(helper.served?("rails_get_schema")).to be(false)
+      expect(helper.served?("rails_get_model_details")).to be(true)
+      expect(helper.tools_antipatterns_section.join("\n")).to include("use `rails_get_model_details`")
+      expect(helper.tools_antipatterns_section.join("\n")).not_to include("rails_get_schema")
+    end
+  end
+
   describe "the tools #tools_detail_guidance names" do
     let(:taking_detail) { "Tools that take `detail`: " }
     let(:named_line) { helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) } }
@@ -123,6 +142,20 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
       expect(named_line).to include("`rails_onboard`")
       expect(named_line).not_to include("rails_get_schema")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
+
+    it "names rails_get_config with the sections that read detail" do
+      expect(named_line).to include("`rails_get_config` (sections: frontend, api, env)")
+
+      RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_env]
+      line = helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      expect(line).to include("`rails_get_config` (section: api)")
+
+      RailsAiContext.configuration.tool_mode = :cli
+      line = test_class.new.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      expect(line).to include("`config` (section: api)")
     ensure
       RailsAiContext.configuration.skip_tools = []
     end

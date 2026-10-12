@@ -36,6 +36,14 @@ RSpec.describe "Composite tools in an app whose skip_tools turns tools off" do
     expect(answer).to include(left_out("rails_get_model_details"))
     expect(answer.scan("turned off in this app").size).to eq(1)
     expect(answer).to include("posts")
+    expect(answer).to start_with("## Table: posts")
+  end
+
+  it "rails_get_context opens with the first section it has, for a controller and for a feature too" do
+    skip("rails_get_controllers", "rails_analyze_feature")
+
+    expect(text(RailsAiContext::Tools::GetContext.call(controller: "PostsController"))).to start_with("# Routes")
+    expect(text(RailsAiContext::Tools::GetContext.call(feature: "post"))).to start_with("## Table: posts")
   end
 
   it "rails_get_context answers with the line alone when every section is turned off" do
@@ -75,6 +83,25 @@ RSpec.describe "Composite tools in an app whose skip_tools turns tools off" do
       skip("rails_security_scan")
       expect(text(RailsAiContext::Tools::GetContext.call(model: "Post", include: %w[security])))
         .to include(RailsAiContext::Server.skipped_tool_message("rails_security_scan"))
+    end
+
+    it "still gets the model's schema and tests from rails_get_context" do
+      allow(custom).to receive(:tool_name).and_return("rails_get_model_details")
+      skip("rails_get_model_details")
+
+      answer = text(RailsAiContext::Tools::GetContext.call(model: "Post"))
+
+      expect(answer).to start_with("## Table: posts")
+      expect(answer).to include(left_out("rails_get_model_details"))
+    end
+
+    it "is pointed at by no answer, since the custom tool takes other arguments" do
+      allow(custom).to receive(:tool_name).and_return("rails_get_schema")
+      expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_schema", 'table:"posts"')).to eq('`rails_get_schema(table:"posts")`')
+
+      skip("rails_get_schema")
+      expect(RailsAiContext::Server.served?("rails_get_schema")).to be(true)
+      expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_schema", 'table:"posts"')).to be_nil
     end
   end
 

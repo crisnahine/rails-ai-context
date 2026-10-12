@@ -176,8 +176,8 @@ RSpec.describe "rails_get_config sections" do
     it "renders a section call when only the app section is off" do
       RailsAiContext.configuration.skip_tools = %w[rails_get_config]
 
-      expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_config", 'section:"gems"')).to eq('`rails_get_config(section:"gems")`')
-      expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_config", 'section:"app"')).to be_nil
+      expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_gems")).to eq('`rails_get_config(section:"gems")`')
+      expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_config")).to be_nil
     end
   end
 
