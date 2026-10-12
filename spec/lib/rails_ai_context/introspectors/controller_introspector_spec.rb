@@ -519,6 +519,52 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(introspector.send(:extract_strong_params, computed)).to eq([ { name: "search_params" } ])
     end
 
+    # OFN's enterprise_params hands params to PermittedAttributes::Enterprise, which permits them.
+    it "keeps a *_params method that hands params to another class, or returns another strong-params method" do
+      source = <<~RUBY
+        def enterprise_params
+          @enterprise_params ||= PermittedAttributes::Enterprise.new(params).call.to_h
+        end
+
+        def permitted_resource_params
+          enterprise_params
+        end
+
+        def manage_published_at_params
+          params["article"]["published_at"] = Time.find_zone("UTC").parse(params["article"].delete("date"))
+        end
+
+        def search_params
+          SearchForm.new(params[:q])
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "enterprise_params" }, { name: "permitted_resource_params" } ])
+    end
+
+    # Canvas's render_unauthorized_action and OpenProject's login_back_url permit only to build a URL.
+    it "keeps a method of another name only when it returns what it permits" do
+      source = <<~RUBY
+        def article_params_json
+          params.require(:article).permit(:title)
+        end
+
+        def login_back_url
+          url_for(params.permit(:back_url).merge(only_path: true))
+        end
+
+        def render_unauthorized_action
+          redirect_to login_url(params.permit(:authentication_provider))
+        end
+
+        def cached_attributes
+          @cached_attributes ||= params.require(:post).permit(:body).to_h
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] }).to eq(%w[article_params_json cached_attributes])
+    end
+
     it "leaves out a permit on something that is not params" do
       source = <<~RUBY
         def plug_params(app)

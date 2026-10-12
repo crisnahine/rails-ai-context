@@ -705,6 +705,7 @@ module RailsAiContext
         parse_result = AstCache.parse_string(source)
         param_methods = []
         find_param_methods(parse_result.value, param_methods)
+        add_delegating_params(parse_result.value, param_methods)
         nested = nested_ranges(walked)
         param_methods.reject do |entry|
           offset = entry.delete(:offset)
@@ -712,6 +713,32 @@ module RailsAiContext
         end
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
+      end
+
+      # A *_params method that hands the whole params to another class (`PermittedAttributes::Enterprise.new(params)`),
+      # or returns another strong-params method, permits through it; in source order with the rest.
+      def add_delegating_params(tree, param_methods)
+        found = param_methods.to_set { |entry| entry[:name] }
+        candidates = AstWalk.each(tree).grep(Prism::DefNode).select { |d| d.name.end_with?("_params") && !found.include?(d.name.to_s) }
+        loop do
+          delegating = candidates.select { |d| !found.include?(d.name.to_s) && delegates_params?(d.body, found) }
+          break if delegating.empty?
+
+          delegating.each do |d|
+            found << d.name.to_s
+            param_methods << { name: d.name.to_s, offset: d.location.start_offset }
+          end
+        end
+        param_methods.sort_by! { |entry| entry[:offset] }
+      end
+
+      def delegates_params?(body, found)
+        return false unless body
+
+        AstWalk.each(body).grep(Prism::CallNode).any? do |call|
+          (call.arguments&.arguments || []).any? { |arg| arg.is_a?(Prism::CallNode) && arg.name == :params && arg.receiver.nil? && arg.arguments.nil? } ||
+            (call.receiver.nil? && call.arguments.nil? && found.include?(call.name.to_s))
+        end
       end
 
       # A strong-params method is one that filters params, whatever it is named.
@@ -723,30 +750,43 @@ module RailsAiContext
         node.child_nodes.compact.each { |child| find_param_methods(child, results) }
       end
 
+      # Any *_params method that permits on params; under another name only one that returns what it
+      # permits, so a helper that permits to build a URL (`url_for(params.permit(:page))`) is not one.
       def extract_permit_from_def(def_node)
         result = { name: def_node.name.to_s }
         locals = params_locals(def_node.body)
+        call = %i[permit! permit expect].lazy.filter_map { |name| find_call_in_tree(def_node.body, name, locals) }.first
+        return nil unless call && (def_node.name.end_with?("_params") || returned?(def_node.body, call))
 
-        if (permit_all = find_call_in_tree(def_node.body, :permit!, locals))
-          sliced = sliced_keys(permit_all, locals)
+        case call.name
+        when :permit!
+          sliced = sliced_keys(call, locals)
           return result.merge(unrestricted: true) unless sliced
 
-          return sliced.any? ? result.merge(permits: sliced) : result
-        end
-
-        permit_call = find_call_in_tree(def_node.body, :permit, locals)
-        if permit_call
-          require_call = find_require_in_chain(permit_call, locals)
+          sliced.any? ? result.merge(permits: sliced) : result
+        when :permit
+          require_call = find_require_in_chain(call, locals)
           if require_call
             req_arg = require_call.arguments&.arguments&.first
             result[:requires] = extract_ast_value(req_arg).to_s if req_arg
           end
 
-          return result.merge(parse_permit_args_ast(permit_call))
+          result.merge(parse_permit_args_ast(call))
+        else result.merge(parse_expect_args_ast(call))
         end
+      end
 
-        expect_call = find_call_in_tree(def_node.body, :expect, locals)
-        result.merge(parse_expect_args_ast(expect_call)) if expect_call
+      # Whether the method's last expression, or the value it assigns, is a chain through `call`.
+      def returned?(body, call)
+        body = body.statements if body.is_a?(Prism::BeginNode)
+        node = body.is_a?(Prism::StatementsNode) ? body.body.last : body
+        node = node.value while node.respond_to?(:value) && node.class.name.end_with?("WriteNode")
+        while node.is_a?(Prism::CallNode)
+          return true if node.equal?(call)
+
+          node = node.receiver
+        end
+        false
       end
 
       # Locals a method assigns from params (`attrs = params.require(:user)`), by name, to the value assigned.
