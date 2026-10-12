@@ -141,7 +141,7 @@ module RailsAiContext
             end
             coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat([ "" ] + coverage) if coverage.any?
-            lines.concat(secondary_databases_lines(schema))
+            lines.concat(secondary_databases_lines(schema, ctx))
             if page[:offset] + page[:limit] < total
               lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more, or `table:\"name\"` for full detail._"
               lines << "_cache_key: #{cache_key}_"
@@ -253,7 +253,7 @@ module RailsAiContext
 
             coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat(coverage + [ "" ]) if coverage.any?
-            lines.concat(secondary_databases_lines(schema))
+            lines.concat(secondary_databases_lines(schema, ctx))
             if page[:offset] + page[:limit] < total
               lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
             end
@@ -277,7 +277,7 @@ module RailsAiContext
             end
             coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat(coverage + [ "" ]) if coverage.any?
-            lines.concat(secondary_databases_lines(schema))
+            lines.concat(secondary_databases_lines(schema, ctx))
             if page[:offset] + page[:limit] < total
               lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
               lines << "_cache_key: #{cache_key}_"
@@ -438,17 +438,19 @@ module RailsAiContext
       # cache, cable) to its own schema/structure file. This tool targets the
       # primary database's tables in detail, so secondaries get a compact
       # one-line-per-database summary rather than full column detail.
-      private_class_method def self.secondary_databases_lines(schema)
+      private_class_method def self.secondary_databases_lines(schema, ctx)
         secondary = schema[:secondary_databases]
         return [] unless secondary
 
+        configured = Payload.list(ctx, :multi_database, :databases).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          next lines << "- **#{name}**: #{db[:note]}" if db[:tables].blank?
+          label = "**#{name}**#{Payload.database_scope(configured[name.to_s])}"
+          next lines << "- #{label}: #{db[:note]}" if db[:tables].blank?
 
           pending = Array(db[:pending_migrations])
           pending_text = pending.any? ? "; pending migrations: #{pending_phrase(pending)}" : ""
-          lines << "- **#{name}**: #{Introspectors::SchemaConventions.relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
+          lines << "- #{label}: #{Introspectors::SchemaConventions.relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
         end
         lines
       end

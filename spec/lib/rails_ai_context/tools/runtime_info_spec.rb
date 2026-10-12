@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 require "active_support/number_helper"
 
 RSpec.describe RailsAiContext::Tools::RuntimeInfo do
@@ -188,6 +189,46 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
 
         expect(text).to include("curr_items: 12")
         expect(text).not_to include("=>")
+      end
+    end
+
+    # Solid Cache answers #stats from its database, and SQLite makes the file
+    # a connection asks for. Under production on a fresh clone that left an
+    # empty storage/production_cache.sqlite3 behind a read.
+    describe "a Solid Cache store whose SQLite file is missing" do
+      around do |example|
+        Dir.mktmpdir do |dir|
+          @file = File.join(dir, "production_cache.sqlite3")
+          example.run
+        end
+      end
+
+      before do
+        record = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+        stub_const("SolidCache::Record", record)
+        record.establish_connection(ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "cache", adapter: "sqlite3", database: @file))
+        store = Class.new do
+          def with_each_connection = yield
+          def stats = { entries: SolidCache::Record.connection_pool.with_connection { |c| c.select_value("SELECT 1") } }
+        end
+        stub_const("SolidCache::Store", store)
+        allow(Rails).to receive(:cache).and_return(store.new)
+      end
+
+      after { ActiveRecord::Base.connection_handler.remove_connection_pool("SolidCache::Record") }
+
+      it "says the database does not exist yet and creates nothing" do
+        text = described_class.call(section: "cache").content.first[:text]
+
+        expect(File.exist?(@file)).to be(false)
+        expect(text).to include("**Store:** SolidCache::Store, this MCP server process's `Rails.cache`")
+        expect(text).to include("The cache database does not exist yet: its SQLite file #{@file} is not there, and nothing was created.")
+      end
+
+      it "reads the stats once the file is there" do
+        File.write(@file, "")
+
+        expect(described_class.call(section: "cache").content.first[:text]).to include("entries: 1")
       end
     end
   end

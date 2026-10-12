@@ -63,8 +63,6 @@ module RailsAiContext
         text_response(lines.join("\n"))
       rescue AppDatabases::Error => e
         error_response(e.message)
-      rescue => e
-        text_response("Runtime info error: #{e.message}")
       end
 
       class << self
@@ -273,12 +271,28 @@ module RailsAiContext
           end
         end
 
+        # Solid Cache answers #stats from its databases, one per shard, and
+        # connecting to a SQLite file that is not there creates it.
+        def cache_database_missing(cache)
+          return unless defined?(::SolidCache::Store) && cache.is_a?(::SolidCache::Store)
+
+          cache.with_each_connection do
+            config = ::SolidCache::Record.connection_db_config
+            AppDatabases.present!(config.name, config)
+          end
+          nil
+        rescue AppDatabases::Missing => e
+          e.message
+        end
+
         def gather_cache
           cache = Rails.cache
           lines = [ "## Cache", "" ]
-          lines << "**Store:** #{cache.class.name.demodulize}, this MCP server process's `Rails.cache` (#{rails_env_name})"
+          lines << "**Store:** #{cache.class.name.delete_prefix("ActiveSupport::Cache::")}, this MCP server process's `Rails.cache` (#{rails_env_name})"
 
-          if cache.respond_to?(:stats)
+          if (missing = cache_database_missing(cache))
+            lines << "_#{missing}_"
+          elsif cache.respond_to?(:stats)
             cache_stat_lines(cache.stats).each { |line| lines << line }
           elsif cache.respond_to?(:redis)
             begin

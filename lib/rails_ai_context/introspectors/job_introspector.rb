@@ -390,7 +390,7 @@ module RailsAiContext
       def merge_with_source(reflected, from_source)
         return from_source if reflected.empty?
 
-        sourced = from_source.index_by { |job| job[:name] }
+        sourced = from_source.to_h { |job| [ job[:name], job ] }
         merged = reflected.map { |job| (sourced.delete(job[:name]) || {}).except(:unknown_base).merge(job) }
         bases = reflected_bases.map { |base| base[:name] }
         (merged + sourced.values.reject { |job| bases.include?(job[:name]) }).sort_by { |job| job[:name] }
