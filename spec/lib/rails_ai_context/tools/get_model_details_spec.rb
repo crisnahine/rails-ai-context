@@ -1255,6 +1255,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
         class Post < ApplicationRecord
           translation_class.class_eval do
             belongs_to :locale_owner, optional: true; has_many :notes, -> { order(:id) }
+            validates :title, presence: true unless Rails.env.test?
           end
         end
       RUBY
@@ -1267,6 +1268,8 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(foreign).to include("- `belongs_to :locale_owner, optional: true` on `translation_class`")
       expect(foreign).to include("- `has_many :notes, -> { order(:id) }` on `translation_class`")
       expect(foreign).not_to include("`order(:id)` on")
+      expect(foreign).to include("- `validates :title, presence: true` on `translation_class`")
+      expect(foreign).not_to include("Rails.env.test?` on")
     end
   end
 

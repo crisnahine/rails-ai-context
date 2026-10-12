@@ -12,6 +12,16 @@ module RailsAiContext
           super
           @def_depth = 0
           @open = []
+          @conditions = []
+        end
+
+        # A modifier's condition (`validates :x unless Rails.env.test?`) is not a declaration.
+        def on_if_node_enter(node)
+          @conditions << node.predicate.location
+        end
+
+        def on_unless_node_enter(node)
+          @conditions << node.predicate.location
         end
 
         def on_def_node_enter(_node)
@@ -40,6 +50,8 @@ module RailsAiContext
 
         # A call inside one already recorded on its line (`-> { order(:id) }`) is part of that one.
         def record(block, node)
+          return if @conditions.any? { |condition| node.location.start_offset.between?(condition.start_offset, condition.end_offset - 1) }
+
           calls = (block.calls[node.location.start_line] ||= [])
           return if calls.any? { |call| call[:range].cover?(node.location.start_offset) }
 
