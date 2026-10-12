@@ -19,7 +19,11 @@ Eleven tools each read one payload section and take no target: `rails_get_config
 
 ## Consequences
 
-The change ships in 5.35.1, with migration notes. A retired name still answers on the CLI and over MCP, with a line naming the new call, so a prompt that names one keeps working. Only a client that checks names against `tools/list` sees the removal. The section names are public interface from here on, like the tool names before them: renaming one keeps the old name as an alias.
+The change ships in 5.35.1, with migration notes. That number was the maintainer's choice, made outside the rule in `docs/RELEASING.md` step 1, which rules out a patch number for a release with an Added entry or a Changed entry a consumer can observe. What makes it tenable is that every retired name still answers on the CLI and over MCP, with a line naming the new call, so a prompt or a script that names one keeps working.
+
+The removal shows wherever tool names are listed or reported. `tools/list` and `tool --list` hold 35 names. The CLI's `--json` output reports `rails_get_config` for a retired name. `Tools::BaseTool.registered_tools` no longer lists the ten classes. The session context records a section call under the new name.
+
+The section names are public interface from here on, like the tool names before them: renaming one keeps the old name as an alias.
 
 ## Alternatives not taken
 

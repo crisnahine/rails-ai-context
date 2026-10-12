@@ -205,7 +205,17 @@ fits neither that shape nor the conventional one.
 | `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in secret column names and from `query_redacted_columns`. It does not release an `encrypts` column |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
-`rails_query` treats a column as secret when its name is in `query_redacted_columns` or the built-in list, an `encrypts` declaration covers it, it ends in `password`, `secret`, `token`, `key`, `digest` or `hash` (or contains `password`, `secret` or `token`), or it is a secret name to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the like). A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret, except an `encrypts` column: a statement that names it is still refused, and its values stay filtered. See [SECURITY.md](SECURITY.md) for how each check reads the rule.
+`rails_query` treats a column as a secret column when one of these holds:
+
+- its name is in `query_redacted_columns` or in the built-in list (`password_reset_token`, `remember_token`, `secret`, `private_key`, `authentication_string`);
+- an `encrypts` declaration covers it;
+- its name ends in `password`, `secret`, `token`, `key`, `digest` or `hash`;
+- its name contains `password`, `secret`, `token` or `nonce`;
+- its name is `iv` or ends in `_iv`;
+- its name is secret to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the rest of its secret words);
+- it is a generated column whose expression reads a secret column.
+
+A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret. An `encrypts` column, and a generated column that reads one, is the exception: a statement that names it is still refused, and its values stay filtered. On MySQL, MariaDB and SQLite a statement is also refused when it names a view whose definition reads a secret column, or holds a `*` inside a subquery while it names a table with a secret column. [SECURITY.md](SECURITY.md#layer-4---secret-column-rejection) is the full statement of the rule, with how each check reads it and its stated limits.
 
 ### Logs
 
@@ -227,7 +237,18 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML). A custom tool takes a built-in's name only when `skip_tools` lists that built-in. One that reuses the old name of a `rails_get_config` section (`rails_get_gems`) is served as its own tool, and the gem's own hints still mean the built-in section: they print `rails_get_config(section:"gems")` |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files, and no other tool's answer points at it: the hint that would name it is left out. A custom tool with the same name takes its place: it is listed with the app's tools, and the gem's own hints, guide steps and composite answers leave it out, since those carry the built-in's arguments. A call that names a skipped tool anyway - from the CLI, rake, an MCP client or `rails_get_context(include:)` - says it is turned off here. The ten tools that became `rails_get_config` sections still go here by their old names: `rails_get_env` turns the `env` section off, `rails_get_config` turns off only `app`, and the tool leaves `tools/list` once all eleven are listed. With `app` off, `section` is required. Listing `rails_get_config` while a custom tool has that name gives the custom tool the built-in's place: the ten sections go with the built-in, and a call to an old name such as `rails_get_gems` is then an unknown tool |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). The notes below this table say what a skipped tool leaves and how the `rails_get_config` sections are skipped |
+
+What `skip_tools` does:
+
+- A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files.
+- No other tool's answer points at it: the hint that would name it is left out.
+- A custom tool with the same name takes its place and is listed with the app's tools. The gem's own hints, guide steps and composite answers leave it out, since those carry the built-in's arguments.
+- A call that names a skipped tool anyway says it is turned off here. That holds from the CLI, rake, an MCP client and `rails_get_context(include:)`.
+- The ten tools that became `rails_get_config` sections still go here by their old names: `rails_get_env` turns the `env` section off.
+- `rails_get_config` turns off only `app`. With `app` off, `section` is required.
+- The tool leaves `tools/list` once all eleven names are listed.
+- Listing `rails_get_config` while a custom tool has that name gives the custom tool the built-in's place. The ten sections go with the built-in, and a call to an old name such as `rails_get_gems` is then an unknown tool.
 
 ### Output
 

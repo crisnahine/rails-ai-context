@@ -595,7 +595,7 @@ Returns the app's configuration, one section per call. `section` picks it: `app`
 
 A parameter the asked section does not read is named in the answer as ignored.
 
-**Returns:** for `app`, cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes with the attributes they declare, their defaults and reset hooks. `gems` groups notable gems by category; `conventions` lists architecture patterns, directory structure and config files; `env` lists environment variables grouped by purpose, external services and credentials keys (never values).
+**Returns:** for `app`, cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes with the attributes they declare, their defaults and reset hooks. `gems` groups notable gems by category; `conventions` lists architecture patterns, directory structure and config files; `env` lists environment variables grouped by purpose, external services and credentials keys, with no values.
 
 ```
 rails_get_config()

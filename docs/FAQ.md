@@ -120,7 +120,7 @@ Confidence tags from Prism AST parsing:
 
 ### Does the query tool support all databases?
 
-PostgreSQL, MySQL, and SQLite. Each gets database-specific safety mechanisms (read-only transactions, timeouts). See [Security](SECURITY.md).
+PostgreSQL, MySQL (with MariaDB) and SQLite. Each gets database-specific safety mechanisms (read-only transactions, timeouts). On any other adapter the tool answers with the adapter's name and runs nothing. See [Security](SECURITY.md).
 
 ---
 

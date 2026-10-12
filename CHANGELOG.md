@@ -7,114 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-Ten tools that each answered one section of the app's configuration leave
-`tools/list`, and `rails_get_config` answers all of them through a new
-`section` parameter (ADR-0010). The tool count is now **35** (was 45).
-
-- **Retired tools, now sections:** `rails_get_gems` (`section:"gems"`),
-  `rails_get_frontend_stack` (`"frontend"`), `rails_get_api` (`"api"`),
-  `rails_get_engines` (`"engines"`), `rails_get_conventions`
-  (`"conventions"`), `rails_get_autoload` (`"autoload"`),
-  `rails_get_active_support` (`"active_support"`), `rails_get_env`
-  (`"env"`), `rails_get_env_config` (`"env_config"`) and `rails_get_i18n`
-  (`"i18n"`). `rails_get_config()` with no `section` answers `app`, what it
-  answered before.
-- **Parameters ride on `rails_get_config`:** `detail` (read by `frontend`,
-  `api` and `env`), `category` (`gems`), `environment` (`env_config`),
-  `locale` (`i18n`), and `offset` and `limit` (`gems`, `env_config`,
-  `i18n`). A parameter the asked section does not read is named in the
-  answer as ignored.
-- **`rails_onboard` drops `quick`.** It takes `summary`, `standard` and
-  `full`, the levels every other tool with `detail` takes, and `summary` is
-  the one-paragraph overview `quick` gave.
-- **`tools/list` is smaller:** measured as the JSON of every tool's
-  definition, 47,802 characters (about 11,950 tokens at four characters per
-  token) before and 41,280 characters (about 10,320 tokens) after.
-
-### Migration notes
-
-- **Old names keep working where a name is typed.** The CLI resolves
-  `gems`, `rails_get_gems`, `frontend_stack` and every other old short and
-  full name to its section, and `--json` reports `rails_get_config`. A call
-  to a retired name, from the CLI or over MCP, is answered from its section
-  and ends with a line naming the call to make instead. That line is the
-  command under `tool_mode: :cli` and the MCP call under `:mcp`, and it
-  carries only the arguments the section reads. Update saved prompts to the
-  new call: `rails_get_gems(category:"auth")` becomes
-  `rails_get_config(section:"gems", category:"auth")`.
-- **`skip_tools` keeps its meaning.** An old tool name turns its section
-  off, so an app that skipped `rails_get_env` still keeps the `env` section
-  off. `rails_get_config` turns off the `app` section only. A section that
-  is off leaves the published `section` list, the tool description, the
-  parameters only it reads and the guide row; a call that names it anyway is
-  told it is turned off. The tool leaves `tools/list` only when all eleven
-  names are listed.
-- **With the `app` section off, `section` is required.** `app` is the
-  default, so once `skip_tools` lists `rails_get_config` the published
-  schema marks `section` required and the description says so. A call with
-  no `section` is answered with the sections that are on, and the guide row
-  shows a call to the first of them.
-- **A custom `rails_get_config` still replaces the built-in.** An app that
-  lists `rails_get_config` in `skip_tools` and registers a custom tool with
-  that name gets the custom tool in the built-in's place. The ten sections
-  go with the built-in, so a retired name such as `rails_get_gems` is then
-  an unknown tool, and no answer points at a section.
-- **A custom tool that reuses a retired name is served as its own tool.** A
-  custom `rails_get_gems` answers a call to that name. The gem's own hints
-  still mean the built-in section, and they print it as
-  `rails_get_config(section:"gems")`.
-- **Ruby callers are unchanged.** `RailsAiContext::Tools::GetGems.call` and
-  the other nine classes still answer; they are out of the MCP registry, so
-  `Tools::BaseTool.registered_tools` no longer lists them. The test helper's
-  `execute_tool("rails_get_gems")` still finds the class.
-- **`rails_get_context(include:)`** takes the same keys; `config`, `gems`,
-  `env` and `conventions` now run as `rails_get_config` sections.
-- **The session context names `rails_get_config`.** A section call is
-  recorded as `rails_get_config` with its section, also when a retired name
-  made the call.
-- **CLI `--environment`:** after `config --section env_config` it is the
-  section's filter, as it is after `env_config`; after any other section it
-  sets `RAILS_ENV`.
-- **`rails_onboard(detail:"quick")` becomes `detail:"summary"`.** Over MCP
-  a `quick` call is refused with the three valid levels; the CLI's
-  `--detail quick` warns with them and answers at `standard`.
-- **Apps on SQL Server, Oracle or CockroachDB lose `rails_query`.** It
-  answers with the adapter's name and runs nothing (ADR-0008). It ran there
-  with no read-only transaction and no timeout. On SQL Server and Oracle the
-  `LIMIT` its row cap appended is a syntax error, so a query without its own
-  row limit failed. Add `rails_query` to `skip_tools` to take it out of
-  `tools/list`. `rails_runtime_info` still answers, and says table sizes
-  and index usage are not available for the adapter.
-- **`query_allowed_columns` no longer releases an `encrypts` column.** A
-  query that names one is refused, and the refusal says the allowed list
-  does not release it. Its values come back `[FILTERED]` under `SELECT *`.
-  Take the column out of the query.
-- **`rails_query` refuses more column names.** A column named `salt`,
-  `passwd`, `credentials` or `pepper`, one whose name holds `nonce`, and one
-  named `iv` or ending in `_iv` is refused by name and comes back
-  `[FILTERED]` under `SELECT *`. To read one that holds no secret, list its
-  name in `query_allowed_columns`.
-- **`query_timeout` takes a positive number only.** Zero, a negative value
-  or a value that is no number raises `ArgumentError` in an initializer, as
-  `query_row_limit` does, and in `rails_ai_context.yml` it is reported and
-  the default of 5 seconds is kept. In 5.35.0 zero turned the timeout off on
-  PostgreSQL and MySQL; set a larger number for a slow query. A fraction of
-  a second is allowed.
-- **Regenerate the context files** (`rails ai:context` or
-  `rails-ai-context context`) so the tool guide and tables name the new call.
-
 ### Security
 
-- **`rails_query` sends no statement to an adapter with no database
-  family.** On SQL Server, Oracle, CockroachDB and any other adapter outside
-  PostgreSQL, MySQL and SQLite it ran the statement with the text checks
-  alone, with no read-only transaction and no timeout. It now answers with
-  the adapter's name and runs nothing.
+- **`rails_query` sends no statement to an adapter with no database family.**
+  On SQL Server, Oracle, CockroachDB and any other adapter outside PostgreSQL,
+  MySQL and SQLite it ran the statement with the text checks alone, with no
+  read-only transaction and no timeout. It now answers with the adapter's
+  name, and it opens no connection to do so.
 - **MySQL bounds every `rails_query` statement.** The `MAX_EXECUTION_TIME`
-  hint bound only a statement that starts with SELECT, so one that starts
-  with WITH or EXPLAIN ANALYZE ran with no time limit. The session's
+  hint bound only a statement that starts with SELECT, so one that starts with
+  WITH or EXPLAIN ANALYZE ran with no time limit. The session's
   `max_execution_time` now bounds every statement and is put back after it,
   also when the statement fails.
 - **`rails_query` keeps a column secret when `Redaction`'s secret words name
@@ -122,268 +24,536 @@ Ten tools that each answered one section of the app's configuration leave
   returned by `rails_query` while log and config redaction filtered those
   words. They are now refused by name and filtered in results, so a column
   name is secret in every tool or in none.
-- **An `encrypts` column stays secret when `query_allowed_columns` lists
-  it.** The statement check let an allowed name through, and on MySQL and
-  SQLite a query that gave the column an alias returned the stored value.
-  The check now refuses the name on every database family, and the refusal
-  says the allowed list does not release it.
+- **An `encrypts` column stays secret when `query_allowed_columns` lists it.**
+  The statement check let an allowed name through, and on MySQL and SQLite a
+  query that gave the column an alias returned the stored value. The check now
+  refuses the name on every database family, and the refusal says the allowed
+  list does not release it.
 - **On PostgreSQL a statement whose plan cannot be read does not run.** The
-  checks that keep a secret column out of a result read the statement's
-  plan, and a statement ran without them when planning timed out or failed.
-  Every statement except `SHOW` now runs only with a plan, an `EXPLAIN` by
-  the statement it explains: planning's timeout is answered as the timeout
-  and planning's error as the SQL error.
+  checks that keep a secret column out of a result read the statement's plan,
+  and a statement ran without them when planning timed out or failed. Every
+  statement except `SHOW` now runs only with a plan. An `EXPLAIN` is planned
+  as the statement it explains. A planning timeout is answered as the timeout,
+  and a planning error as the SQL error.
 - **`rails_query` refuses `LOCK IN SHARE MODE` and `FOR KEY SHARE`.** MySQL
-  and MariaDB ran `LOCK IN SHARE MODE` inside the read-only transaction,
-  where it locks the rows it reads. The gate now refuses it wherever it
-  refuses `FOR SHARE`, with `NOWAIT`, `SKIP LOCKED`, `OF` or `WAIT` after it
-  too.
+  and MariaDB ran `LOCK IN SHARE MODE` inside the read-only transaction, where
+  it locks the rows it reads. The gate now refuses it wherever it refuses
+  `FOR SHARE`, with `NOWAIT`, `SKIP LOCKED`, `OF` or `WAIT` after it too.
 - **A view cannot rename a secret column past `rails_query`.** On MySQL,
   MariaDB and SQLite a view that selects a secret column under another name
-  returned its values. A statement that names such a view is now refused
-  with the view and the column, and so is a view built on it, a view that
-  lists every column of a table holding a secret column, and a view whose
-  definition cannot be read on a database that holds secret columns.
-  `query_allowed_columns` releases a column by name as before, and an
-  `encrypts` column stays secret. PostgreSQL keeps filtering the one column.
+  returned its values. A statement that names such a view is now refused with
+  the view and the column. So is a view built on it, a view that lists every
+  column of a table holding a secret column, and a view whose definition
+  cannot be read on a database that holds secret columns. A definition is read
+  with its comments taken out, and a view's name is matched whatever
+  characters it holds. `query_allowed_columns` releases a column by name as
+  before, and an `encrypts` column stays secret. PostgreSQL keeps filtering
+  the one column.
 - **A generated column that reads a secret column is secret.** On every
   database family its values were returned under its own name. A statement
   that names it is now refused and its values come back `[FILTERED]`.
-- **`rails_query` also keeps nonce and initialization vector columns
-  secret.** A column whose name holds `nonce`, or is `iv` or ends in `_iv`,
-  is refused by name and filtered in results. `query_allowed_columns`
-  releases one by name, as for any name the heuristic flags.
-- **Every statement a `rails_query` call sends is bounded by
-  `query_timeout`.** The reads a call makes beside the query, such as the
+- **`rails_query` also keeps nonce and initialization vector columns secret.**
+  A column whose name holds `nonce`, or is `iv` or ends in `_iv`, is refused
+  by name and filtered in results. `query_allowed_columns` releases one by
+  name, as for any name the heuristic flags.
+- **`authentication_string` is a built-in secret name.** MySQL keeps password
+  hashes in a column of that name, and `rails_query` returned it. A statement
+  that names it is now refused, and its values come back `[FILTERED]`.
+- **A column's name is compared the way the database compares it.** MySQL
+  folds a letter that Ruby's `downcase` leaves as it is, so a secret column's
+  name written with that letter passed the name check. Names in a statement
+  and in the schema are now folded the same way before they are compared.
+- **A column-alias list is refused in every spelling.** `rails_query` refuses
+  a list such as `t(a, b, c)`, since it renames the columns a wildcard
+  returns. The check read bare ASCII names with `AS (` right after them. A
+  list of quoted, bracketed or non-ASCII names, one before `AS MATERIALIZED`
+  or `AS NOT MATERIALIZED`, and one on a derived table with no `AS` passed it
+  and returned secret columns under other names. The gate now reads the list
+  by its shape on every family. One name after a function call, such as
+  `generate_series(1, 5) AS g(n)`, still runs, and so does a list over
+  `VALUES` rows.
+- **On MySQL, MariaDB and SQLite a `*` inside a subquery is refused when the
+  statement names a table that holds a secret column.** Such a statement names
+  no secret column, so it ran, and a comparison with the subquery or a new
+  name around it could tell or return a secret value. It is now refused with
+  the table and the column, and the refusal says to name the columns in the
+  subquery. `EXISTS (SELECT * ...)` and `count(*)` still run, and MySQL's
+  `(TABLE t)` counts as a `*`. PostgreSQL keeps its plan checks.
+- **On SQLite a result column named `name:1` is filtered.** SQLite gives a
+  second result column of the same name the name `name:1`. The result filter
+  read that whole name, so a secret column that came back twice was returned
+  once in clear. The filter now reads the name without the suffix.
+- **On SQLite a dollar-quoted span is read as code.** SQLite has no dollar
+  quoting, and the checks skipped the text between two `$tag$` marks as if it
+  were a string. They now read it.
+- **`SHOW` with a `WHERE` clause is refused.** MySQL's statement timeout holds
+  `SELECT` only, so a `SHOW ... WHERE` filter ran past `query_timeout`. It is
+  now refused on every family and `SHOW ... LIKE` still runs. The refusal
+  names the `information_schema` query to use.
+- **More `SHOW` forms are refused.** `SHOW FULL PROCESSLIST`,
+  `SHOW REPLICA STATUS`, `SHOW ALL SLAVES STATUS`, `SHOW ALL REPLICAS STATUS`,
+  `SHOW BINARY LOGS`, `SHOW BINARY LOG STATUS`, `SHOW RELAYLOG EVENTS`,
+  `SHOW ENGINE ... STATUS`, `SHOW PROFILE`, `SHOW PROFILES`,
+  `SHOW OPEN TABLES`, `SHOW EXPLAIN FOR`, `SHOW ANALYZE FOR`,
+  `SHOW USER_STATISTICS`, `SHOW CLIENT_STATISTICS` and the `SHOW WSREP_` forms
+  ran. Most of them tell of other sessions' statements, of replication hosts
+  and users, or of the rows a log holds. They now get the refusal
+  `SHOW PROCESSLIST` gets.
+- **A function that returns a whole table as one value is refused.**
+  PostgreSQL's `table_to_xml`, `schema_to_xml`, `database_to_xml` and the rest
+  of the `_to_xml` family returned a table, its secret columns included, as
+  one XML value. A call to one is now refused by name.
+- **Relations that hold sampled values, other sessions' statements or stored
+  credentials are not read.** No check on a column's name applies to them, so
+  they ran: `pg_stats` and `pg_statistic` hold values sampled from every
+  table, `pg_stat_activity` and `information_schema.processlist` hold other
+  sessions' statements, and MariaDB's `global_priv` holds credentials. A
+  statement that names one of those is now refused. So is one that names
+  `pg_stats_ext`, `pg_statistic_ext`, `pg_largeobject`, the functions
+  `pg_stat_activity` reads through, `pg_stat_statements`,
+  `pg_prepared_statements`, `pg_cursors`, `performance_schema`, `sys`,
+  `general_log`, `slow_log`, MySQL's `column_statistics`, MariaDB's
+  `column_stats`, or SQLite's `sqlite_stat1`, `sqlite_stat3` and
+  `sqlite_stat4`. On PostgreSQL the plan is checked for them too, so a view
+  over one is refused.
+- **A database whose columns cannot be read is not queried.** When the schema
+  read failed, `rails_query` ran the statement with no column of the schema to
+  check its text against. It now answers "The columns of the <name> database
+  could not be read, so its secret columns cannot be told and no query runs on
+  it." The primary alone falls back to the schema in the cached context.
+- **On PostgreSQL a result column is filtered when its table's columns cannot
+  be read and that table holds a secret column.** The trace from a result
+  column to its table column skipped a table whose column names it could not
+  read, so a secret column of that table could come back under another name.
+  Such a column is now filtered when its table holds a secret column. When the
+  table cannot be told either, it is filtered when any table does.
+- **Every statement a `rails_query` call sends has a time limit on PostgreSQL,
+  MySQL and MariaDB.** The reads a call makes beside the query, such as the
   schema read behind the secret column rule, had no time limit, so a call
-  against a table another session had locked waited until the lock went.
-  Each family now bounds those reads the way it bounds the query, a wait on
-  a lock included, and a read that runs out of time is the call's timeout
-  answer. A call answers within about twice `query_timeout`. On MySQL and
-  MariaDB `explain: true` is bounded while it waits on a lock too.
-  `rails_runtime_info` reads table sizes, index usage and pending migrations
-  under the same limit, and a database leased by name has `query_timeout`
-  to connect in unless its entry sets `connect_timeout`.
+  against a table another session had locked waited until the lock went. Each
+  family now bounds those reads the way it bounds the query, a wait on a lock
+  included. The query has `query_timeout` to itself. The schema read, the
+  PostgreSQL plan with its function lookup, and the column trace share a
+  second `query_timeout`, and each is charged the time it ran. A read that
+  runs out of time is the call's timeout answer, so the statements of a call
+  take about twice `query_timeout` at most. On MySQL and MariaDB a wait on a
+  lock ends at `query_timeout` rounded up to a whole second, and
+  `explain: true` is bounded while it waits on a lock too. On SQLite those
+  reads run on the app's own connection with no statement limit, and a wait on
+  another writer ends at that connection's busy timeout.
+- **`rails_runtime_info` reads table sizes, index usage and pending migrations
+  under `query_timeout` on PostgreSQL, MySQL and MariaDB.** They had no time
+  limit, so a locked table held the answer until the lock went. Each read now
+  ends at `query_timeout`, a wait on a lock included.
+- **A `query_timeout` under a millisecond still bounds the statement.** On
+  PostgreSQL and MySQL it rounded to zero, which turns the statement limit
+  off. PostgreSQL, MySQL and MariaDB now bound the statement at one
+  millisecond.
+- **SQLite runs a statement on the app's own connection only when the query
+  process could not prepare it.** `rails_query` runs a SQLite statement in a
+  child process that it ends at `query_timeout`. It ran the statement again on
+  the app's own connection, with no time limit, when the child's error message
+  read like a missing function, module or collation, and text from the
+  statement could reach that message. The choice is now made from which step
+  failed in the child. A statement that fails while it runs is answered with
+  its SQL error and is not run again. On the app's own connection a statement
+  that returns rows slowly now ends at `query_timeout`. One long step still
+  cannot be ended there, so the answer keeps its "without a time limit" note.
+- **`rails_query` holds `LIMIT ALL`, `LIMIT NULL` and a negative limit to the
+  row cap.** The three mean no limit, and the query fetched every row before
+  the cap cut the answer. They now read as no limit of the query's own and
+  fetch one row past the cap, with the note that rows were held back.
+- **A SQLite database whose file is not there is refused by name, and no file
+  is created.** In 5.35.0 the connection created an empty database file.
+  `rails_query` now answers with an error that names the database and
+  `bin/rails db:prepare`, with or without `database`. `rails_runtime_info`
+  does the same for a named database. With none, its Database section says the
+  primary does not exist yet and the other sections still answer. A database
+  written as a `file:` URI is checked at the path inside the URI, or at the
+  whole name on a SQLite build that reads no URIs.
+- **`rails_runtime_info` creates no Solid Cache database.** Under an
+  environment whose Solid Cache SQLite file was not there, the cache section's
+  read created an empty one. The section now says the database does not exist
+  yet.
 - **`skip_tools` holds inside composite answers.**
-  `rails_get_context(include:)` ran `rails_security_scan` and
-  `rails_get_env` when `skip_tools` listed them. An include whose tool
-  is turned off is now answered by saying so, and that tool does not run.
-  `rails_get_context`, `rails_diagnose` and `rails_review_changes` build
-  every other section the same way: from a built-in tool only when the app
-  serves it. A section left out is named in one line at the end of the
-  answer.
+  `rails_get_context(include:)` ran `rails_security_scan` and `rails_get_env`
+  when `skip_tools` listed them. An include whose tool is turned off is now
+  answered by saying so, and that tool does not run. `rails_get_context`,
+  `rails_diagnose` and `rails_review_changes` build every other section the
+  same way: from a built-in tool only when the app serves it. A section left
+  out is named in one line at the end of the answer.
+
+### Removed
+
+Ten tools that each answered one section of the app's configuration leave
+`tools/list`, and `rails_get_config` answers all of them through a new
+`section` parameter (ADR-0010). The tool count is now **35** (was 45).
+
+- **Ten tools are now sections of `rails_get_config`.** They are
+  `rails_get_gems` (`section:"gems"`), `rails_get_frontend_stack`
+  (`"frontend"`), `rails_get_api` (`"api"`), `rails_get_engines`
+  (`"engines"`), `rails_get_conventions` (`"conventions"`),
+  `rails_get_autoload` (`"autoload"`), `rails_get_active_support`
+  (`"active_support"`), `rails_get_env` (`"env"`), `rails_get_env_config`
+  (`"env_config"`) and `rails_get_i18n` (`"i18n"`). `rails_get_config()` with
+  no `section` answers `app`, what it answered before.
+- **The sections' parameters ride on `rails_get_config`.** They are `detail`
+  (read by `frontend`, `api` and `env`), `category` (`gems`), `environment`
+  (`env_config`), `locale` (`i18n`), and `offset` and `limit` (`gems`,
+  `env_config`, `i18n`). A parameter the asked section does not read is named
+  in the answer as ignored.
+- **`rails_onboard` drops `quick`.** It takes `summary`, `standard` and
+  `full`, the levels every other tool with `detail` takes, and `summary` is
+  the one-paragraph overview `quick` gave.
+- **`tools/list` is smaller.** Measured as the JSON of every tool's
+  definition, it was 47,802 characters (about 11,950 tokens at four characters
+  per token) and is now 41,280 characters (about 10,320 tokens).
+
+### Migration notes
+
+- **Old names keep working where a name is typed.** The CLI resolves `gems`,
+  `rails_get_gems`, `frontend_stack` and every other old short and full name
+  to its section, and `--json` reports `rails_get_config`. A call to a retired
+  name, from the CLI or over MCP, is answered from its section and ends with a
+  line naming the call to make instead. That line is the command under
+  `tool_mode: :cli` and the MCP call under `:mcp`, and it carries only the
+  arguments the section reads. An argument value over 80 characters, or one
+  that holds a backtick, is left out of the call and named after it. Update
+  saved prompts to the new call: `rails_get_gems(category:"auth")` becomes
+  `rails_get_config(section:"gems", category:"auth")`.
+- **An old name has its own help, and a mistyped one is suggested.**
+  `rails-ai-context tool gems --help` prints "rails_get_gems - runs the `gems`
+  section of rails_get_config (notable gems by category)." and that section's
+  parameters alone. `tool gemz` answers "Unknown tool 'gemz'. Did you mean
+  'gems'?", and over MCP a call to `rails_get_gemz` is answered with
+  `rails_get_gems` among the names it suggests.
+- **`skip_tools` keeps its meaning.** An old tool name turns its section off,
+  so an app that skipped `rails_get_env` still keeps the `env` section off.
+  `rails_get_config` turns off the `app` section only. A section that is off
+  leaves the published `section` list, the tool description, the parameters
+  only it reads and the guide row. A call that names it anyway is told it is
+  turned off. The tool leaves `tools/list` only when all eleven names are
+  listed.
+- **With the `app` section off, `section` is required.** `app` is the default,
+  so once `skip_tools` lists `rails_get_config` the published schema marks
+  `section` required and the description says so. A call with no `section` is
+  answered with the sections that are on, and the guide row shows a call to
+  the first of them.
+- **A custom `rails_get_config` still replaces the built-in.** An app that
+  lists `rails_get_config` in `skip_tools` and registers a custom tool with
+  that name gets the custom tool in the built-in's place. The ten sections go
+  with the built-in, so a retired name such as `rails_get_gems` is then an
+  unknown tool, and no answer points at a section.
+- **A custom tool that reuses a retired name is served as its own tool.** A
+  custom `rails_get_gems` answers a call to that name. The gem's own hints
+  still mean the built-in section, and they print it as
+  `rails_get_config(section:"gems")`.
+- **Ruby callers are unchanged.** `RailsAiContext::Tools::GetGems.call` and
+  the other nine classes still answer. They are out of the MCP registry, so
+  `Tools::BaseTool.registered_tools` no longer lists them. The test helper's
+  `execute_tool("rails_get_gems")` still finds the class.
+- **`rails_get_context(include:)` takes the same keys.** `config`, `gems`,
+  `env` and `conventions` now run as `rails_get_config` sections.
+- **The session context names `rails_get_config`.** A section call is recorded
+  as `rails_get_config` with its section, also when a retired name made the
+  call. A section call answered with an error is not recorded.
+- **The CLI's `--environment` is a section's filter only after `env_config`.**
+  After `config --section env_config`, in any capitalisation, it is the
+  section's filter and leaves `RAILS_ENV` alone, as it does after
+  `env_config`. After any other section it sets `RAILS_ENV`.
+- **`rails_onboard(detail:"quick")` becomes `detail:"summary"`.** Over MCP a
+  `quick` call is refused with the three valid levels. The CLI's
+  `--detail quick` warns with them and answers at `standard`.
+- **Apps on SQL Server, Oracle or CockroachDB lose `rails_query`.** It answers
+  with the adapter's name and runs nothing (ADR-0008). It ran there with no
+  read-only transaction and no timeout. On SQL Server and Oracle the `LIMIT`
+  its row cap appended is a syntax error, so a query without its own row limit
+  failed. Add `rails_query` to `skip_tools` to take it out of `tools/list`.
+  `rails_runtime_info` still answers, and says table sizes and index usage are
+  not available for the adapter.
+- **`query_allowed_columns` no longer releases an `encrypts` column.** A query
+  that names one is refused, and the refusal says the allowed list does not
+  release it. Its values come back `[FILTERED]` under `SELECT *`. Take the
+  column out of the query.
+- **`rails_query` refuses more column names.** A column named `salt`,
+  `passwd`, `credentials`, `pepper` or `authentication_string`, one whose name
+  holds `nonce`, and one named `iv` or ending in `_iv` is refused by name and
+  comes back `[FILTERED]` under `SELECT *`. To read one that holds no secret,
+  list its name in `query_allowed_columns`.
+- **On MySQL, MariaDB and SQLite a query over a view that reads a secret
+  column is refused.** It ran on 5.35.0 and returned what the view selected.
+  The refusal names the view and the column. Query the tables the view reads,
+  or list the column in `query_allowed_columns` when it holds no secret. An
+  `encrypts` column is not released that way.
+- **A generated column that reads a secret column is refused by name.** A
+  query that names it ran on 5.35.0. Take it out of the query, or list its
+  name in `query_allowed_columns` when it holds no secret.
+- **On MySQL, MariaDB and SQLite `SELECT *` inside a subquery is refused over
+  a table with a secret column.**
+  `WITH x AS (SELECT * FROM users) SELECT * FROM x` ran on 5.35.0, and is
+  refused now when `users` holds a secret column. Name the columns in the
+  subquery.
+- **`SHOW ... WHERE` is refused.** Use `SHOW ... LIKE`, or select from
+  `information_schema`: `SELECT table_name FROM information_schema.tables
+  WHERE table_schema = DATABASE()`.
+- **`rails_query` no longer reads statistics, session and credential
+  relations.** A query on `pg_stat_activity`, `pg_stats`,
+  `information_schema.processlist`, `performance_schema` or `sys` ran on
+  5.35.0 and is refused now, and so is an app table that carries one of the
+  refused names, such as `slow_log`. Read those with the database's own
+  client.
+- **The refusals say "secret column".** A script that matches on "sensitive
+  column" in a `rails_query` refusal has to match on "secret column".
+- **`query_timeout` takes a positive number only.** Zero, a negative value or
+  a value that is no number raises `ArgumentError` in an initializer, as
+  `query_row_limit` does. In `.rails-ai-context.yml` it is reported and the
+  default of 5 seconds is kept. In 5.35.0 zero turned the timeout off on
+  PostgreSQL and MySQL. Set a larger number for a slow query. A fraction of a
+  second is allowed.
+- **The CLI refuses a value a parameter cannot take.** `--format xml` on
+  `schema` and `--limit abc` answered in 5.35.0 with a warning on stderr and
+  the parameter's default. Each now exits 1 and names what the parameter
+  takes. `--detail` alone still warns and falls back.
+- **Some CLI calls that exited 0 now exit 1.** They are a value outside a
+  parameter's list or of the wrong type, a `rails_query` timeout, a database
+  that cannot be reached, a failing `explain: true`, a failed Brakeman scan,
+  and an unexpected failure in `rails_onboard`, `rails_diagnose`,
+  `rails_generate_test`, `rails_review_changes`, `rails_runtime_info`,
+  `rails_session_context`, `rails_get_context` or `rails_search_code`. Over
+  MCP the same answers carry `isError`.
+- **Regenerate the context files.** Run `rails ai:context` or
+  `rails-ai-context context` so the tool guide and tables name the new call.
 
 ### Added
 
-- **`rails_query(database:)` and `rails_runtime_info(database:)`.** Both
-  take an app database's name from `config/database.yml`, checked when the
-  tool runs; with none they read the primary as before. Another database is
-  reached through a connection handler of its own for the call, so the app's
-  pools are untouched and two calls at once never share a pool. Its secret
-  columns are read from its own schema. A misspelled name is answered with
-  the closest one. A database only other environments configure, a replica
-  and one with `database_tasks: false` included, is answered with the
-  environments that configure it. One only a dump names is refused with the
-  reason. On the static tier both tools are unavailable as a whole, with or
-  without `database`. A query that misses a table another database holds
-  names that database.
-  `rails_runtime_info` checks the name whatever the `section`: a name it
-  cannot reach is an error for every section, and a section that does not
-  read `database` says so.
-  A database no connection reaches is named, with what stopped the
-  connection and what to do: create it when its server does not hold it,
-  start the server or fix its settings otherwise. For a named database that
-  is an error for the call; with none, the Database section says so about
-  the primary and the other sections still answer. Under a named
-  database the Database section shows that database's own pending
-  migrations, and for a replica or a database with `database_tasks: false`
-  it says Rails runs none on it.
-  A SQLite database other than the primary that lives in memory (`:memory:`,
-  or a `file:` URI with `mode=memory`) is refused by name: it exists only
-  inside the process that created it, and a new connection would open an
-  empty one. `rails ai:doctor` leaves such a database out of its pending
-  migrations check.
+- **`rails_query` and `rails_runtime_info` take `database`.** It is an app
+  database's name from `config/database.yml`, checked when the tool runs. With
+  none they read the primary, the database `ActiveRecord::Base` is connected
+  to. A misspelled name is answered with the closest one. A database only
+  other environments configure, a replica and one with `database_tasks` off
+  included, is answered with the environments that configure it. One only a
+  dump names is refused with the reason. On the static tier both tools are
+  unavailable as a whole, with or without `database`.
+- **Another database is reached through a connection handler of its own.** The
+  handler lasts for the call, so the app's pools are untouched and two calls
+  at once never share a pool. The database's secret columns are read from its
+  own schema. It has `query_timeout`, rounded up to whole seconds, to connect
+  in unless its entry sets `connect_timeout`. On MySQL and MariaDB a read on
+  it ends after twice `query_timeout` plus 5 seconds unless its entry sets
+  `read_timeout`, so a server that goes silent ends the call. PostgreSQL's
+  driver has no read timeout, so a PostgreSQL server that goes silent after it
+  connects is not ended by the client.
+- **A query that misses a table another database holds names that database.**
+  The SQL error ends with the database that holds the table and the `database`
+  value to use. A failing `explain: true` carries the same pointer.
+- **`rails_runtime_info` checks `database` whatever the `section`.** A name it
+  cannot reach is an error for every section, and a section that does not read
+  `database` says so.
+- **A database no connection reaches is named, with what stopped the
+  connection and what to do.** The advice is to create it when its server does
+  not hold it, and to start the server or fix its settings otherwise. For a
+  named database that is an error for the call. With none, the Database
+  section says so about the primary and the other sections still answer.
+- **A database whose adapter gem is not in the bundle is named with the gem to
+  add.** The answer reads "The <name> database cannot be reached: its
+  <adapter> adapter did not load. Add the <gem> gem to the Gemfile and run
+  `bundle install`." `rails ai:doctor` gives the same reason and fix, and
+  `rails_runtime_info` with no `database` still answers its other sections.
+- **Under a named database `rails_runtime_info` shows that database's own
+  pending migrations.** For a replica it says Rails runs no migrations on it.
+  For a database whose entry turns `database_tasks` off it says "_Rails runs
+  no migrations on <name>: its database.yml entry turns `database_tasks`
+  off._"
+- **A SQLite database other than the primary that lives in memory is refused
+  by name.** That is `:memory:`, or a `file:` URI with `mode=memory`. It
+  exists only inside the process that created it, and a new connection would
+  open an empty one. `rails ai:doctor` and `rails_runtime_info` leave such a
+  database out of their pending migrations check.
 
 ### Changed
 
-- **The SQL gate decides what `rails_query` runs.** It reads the
-  comment-free statement once and answers the text to run or a refusal with
-  the reason: every text check, and on PostgreSQL the plan checks.
-  `rails_query` is a short handler over the gate, the database family and the
-  secret column rule.
-- **One rule decides which columns `rails_query` keeps secret.** The text
-  check, the PostgreSQL plan checks, provenance redaction and result
-  redaction ask the same rule, which reads the schema once per connection and
-  call. `query_redacted_columns` and `query_allowed_columns` keep their
-  meaning.
-- **Statistics say when an adapter has none.** On an adapter with no
-  database family, `rails_runtime_info` says table sizes and index usage are
-  not available for that adapter, and the database stats say the same of row
+- **Every `rails_query` refusal says "secret column".** The refusals said
+  "sensitive column" where the glossary and the docs say "secret column". They
+  now use the one word, as in "Blocked: query references secret column `x`."
+  The config keys keep their names.
+- **Statistics say when an adapter has none.** On an adapter with no database
+  family, `rails_runtime_info` says table sizes and index usage are not
+  available for that adapter, and the database stats say the same of row
   estimates.
-- **`rails_query` reads the schema in three statements at most.** The
-  secret column rule read each table's columns with a statement of its own
-  on every call, about 1.5 seconds on a 300-table PostgreSQL schema and 2
-  seconds on MySQL. One catalogue read per family now lists every table's
-  columns, and one each reads the view definitions and the generated columns.
+- **`rails_query` reads the schema in three statements at most.** The secret
+  column rule read each table's columns with a statement of its own on every
+  call, about 1.5 seconds on a 300-table PostgreSQL schema and 2 seconds on
+  MySQL. One catalogue read per family now lists every table's columns, and
+  one each reads the view definitions and the generated columns.
 - **`rails_get_service_pattern` says which files its count leaves out.** A
   listing that counts fewer services than the service directories hold Ruby
   files adds one line with the number left out and the kinds: base classes,
-  concerns, modules with no entry point that other code mixes in, mailers
-  and files too large to read. It names up to five of each kind, and the
-  base classes are named above the listing as before.
-- **Each database family owns its database's reads.** The read-only
-  transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
-  plan, table sizes, row estimates and index usage live in one place per
-  family, which `rails_query`, `rails_runtime_info` and the database stats
-  ask.
-- **One answer to which database an app runs.** The connection, a
-  database.yml adapter, a URL scheme, a display label and a dump's dialect
-  all go through one database family (PostgreSQL, MySQL or SQLite). An
-  adapter the gem does not know, such as SQL Server, Oracle or CockroachDB,
-  is no family.
-- **One list of the app's databases.** Both tiers build it through one
-  builder, the primary first, then the rest of the running environment's,
-  then those only another environment configures, then dumps no environment
-  names. The schema, multi-database, connection pool and migrations
-  sections, doctor, migration advice and the performance check all read it.
+  concerns, modules with no entry point that other code mixes in, mailers and
+  files too large to read. It names up to five of each kind, and the base
+  classes are named above the listing as before.
 
 ### Fixed
 
 - **Every file requires the standard library it names.** Twelve files used
   `JSON`, `YAML`, `URI`, `Pathname`, `FileUtils`, `RbConfig`, `DidYouMean`,
-  `Prism`, `Time.parse` or `iso8601` and worked only when another library
-  had loaded it first. On a Ruby that does not load the library by itself
-  that showed as "uninitialized constant" or "undefined method".
+  `Prism`, `Time.parse` or `iso8601` and worked only when another library had
+  loaded it first. On a Ruby that does not load the library by itself that
+  showed as "uninitialized constant" or "undefined method".
 - **`rails_onboard` answers on the static tier for an app with Solid
   databases.** On a default Rails 8 app `tool onboard --no-boot` answered
   "Onboard error: undefined method 'to_sentence'". The gem called an
-  ActiveSupport extension that only a booted app had loaded. It now loads
-  the extension itself.
+  ActiveSupport extension that only a booted app had loaded. It now loads the
+  extension itself.
 - **A tool that fails unexpectedly is an error result.** `rails_onboard`,
   `rails_diagnose`, `rails_generate_test`, `rails_review_changes`,
-  `rails_runtime_info` and `rails_session_context` answered an exception
-  they did not plan for as ordinary text, so the CLI exited 0. They now
-  answer as every other tool does: `isError: true` over MCP, exit 1 from the
-  CLI, and a text that starts "Tool <name> failed:".
+  `rails_runtime_info`, `rails_session_context`, `rails_get_context` and
+  `rails_search_code` answered an exception they did not plan for as ordinary
+  text, so the CLI exited 0. They now answer as every other tool does:
+  `isError: true` over MCP, exit 1 from the CLI, and a text that starts "Tool
+  <name> failed:".
+- **A failed Brakeman scan is an error result.** `rails_security_scan`
+  answered "Brakeman scan failed: ..." as an ordinary answer, an unknown check
+  name included. The text is the same, and it now carries `isError` over MCP
+  and exits 1 from the CLI.
 - **`serve --transport http` starts on rack 2 with rackup 1.x.** It stopped
-  with "uninitialized constant Rackup::Handler" on an app that pins rack
-  below 3 and bundles the rackup gem.
-- **`rails_runtime_info` creates no Solid Cache database.** Under an
-  environment whose Solid Cache SQLite file was not there, the cache
-  section's read created an empty one. The section now says the database
-  does not exist yet.
+  with "uninitialized constant Rackup::Handler" on an app that pins rack below
+  3 and bundles the rackup gem.
 - **The `rails_get_config` app section names the database family.** Its
-  Database line showed `mysql2` where every other surface says "MySQL". It
-  now reads "MySQL", "PostgreSQL" or "SQLite", and an adapter with no family
-  as database.yml writes it. The JSON keeps adapter names as written.
-- **`rails_onboard` words one Solid database in the singular.** "Solid Cache
-  keeps its tables in a database of its own: cache."
-- **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".**
-  The cache section's Store line read "Store".
-- **`rails_runtime_info` reads pending migrations in every database
-  configured here.** It said "all up to date" while another database had
-  pending migrations.
+  Database line showed `mysql2` where every other surface says "MySQL". It now
+  reads "MySQL", "PostgreSQL" or "SQLite", and an adapter with no family as
+  database.yml writes it. The JSON keeps adapter names as written.
+- **`rails_onboard` words one Solid database in the singular.** For one
+  framework with one database it said "keeps their tables in databases of
+  their own". It now says "Solid Cache keeps its tables in a database of its
+  own: cache."
+- **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".** The
+  cache section's Store line read "Store".
+- **`rails_runtime_info` reads pending migrations in every database configured
+  here.** It said "all up to date" while another database had pending
+  migrations. The line now names the databases it read, as in "**Migrations:**
+  all up to date in primary, queue". A database it could not read gets a line
+  of its own with the reason, and the databases it did read are still
+  reported.
 - **A booted MySQL app reads "MySQL".** A connection on mysql2 or Trilogy
-  showed its driver name in the generated context and in `rails_runtime_info`;
-  it now reads "MySQL" there, as the static tier already said. PostGIS reads
+  showed its driver name in the generated context and in `rails_runtime_info`.
+  It now reads "MySQL" there, as the static tier already said. PostGIS reads
   "PostgreSQL".
-- **Migration advice for an undecided database names no database.** When
-  the app's database is one of two candidates, `rails_migration_advisor` no
-  longer gives PostgreSQL and MySQL advice at once.
-- **Every surface names the same databases.** On a default Rails 8 app,
-  where the running environment configures only the primary and production
+- **Migration advice for an undecided database names no database.** When the
+  app's database is one of two candidates, `rails_migration_advisor` no longer
+  gives PostgreSQL and MySQL advice at once.
+- **Migration advice follows the database that holds the table.** Index and
+  lock advice took the primary's database family for a table another database
+  holds. It now takes the family of the database that holds the table.
+- **Every surface names the same databases.** On a default Rails 8 app, where
+  the running environment configures only the primary and production
   configures queue, cache and cable, the schema section, the multi-database
   section, the stack overview and the model listing now all name the four
   databases. The migrations section names each one whose migrations
   directories hold files. A database only other environments configure is
   marked with every one of them, "(production only)" or "(staging and
-  production)", and one only a committed dump names is marked "(committed
-  dump only)". The `rails_get_schema` Secondary databases line carries the
-  same mark as the generated files, and so does each database
-  `rails_onboard` names.
+  production)", and one only a committed dump names is marked "(committed dump
+  only)". The `rails_get_schema` Secondary databases line carries the same
+  mark as the generated files, and so does each database `rails_onboard`
+  names.
+- **The static tier reads an environment whose whole value is a URL.** A
+  `config/database.yml` environment written as one URL string was left out. It
+  is now read as that environment's one database.
 - **A secondary dump too large to read is named.** It keeps an entry in the
   schema section that gives the reason, and a database whose migrations are
   replayed instead no longer has its existing dump called missing.
-- **The performance check covers every database.** Missing indexes and
-  counter caches are checked in each database's dump, a finding outside the
-  primary names its database, and a database it could not read is listed
-  under "Not checked" with the reason.
-- **Migration advice counts rows only on the primary.** The row estimate
-  comes from the primary database, so a table on another database is no
-  longer given the primary's count.
-- **One served tool set.** `tool --list` shows exactly what the MCP
-  server's `tools/list` shows, so a custom tool sharing a built-in's name
-  is listed once, and the CLI's single-tool lookup picks the same tool the
-  server serves while still loading only that tool's class.
-- **No answer points at a tool the app turned off.** Every pointer to
-  another tool, in `_Next:` hints, fix steps, recovery lines and lists,
-  goes through one helper, and a tool `skip_tools` names is left out with
-  its hint. A custom tool in a built-in's place is left out the same way,
-  since a hint carries the built-in's arguments.
+- **The performance check covers every database.** Missing indexes and counter
+  caches are checked in each database's dump, a finding outside the primary
+  names its database, and a database it could not read is listed under "Not
+  checked" with the reason.
+- **Migration advice counts rows only on the primary.** The row estimate comes
+  from the primary database, so a table on another database is no longer given
+  the primary's count.
+- **`tool --list` shows the tools the MCP server serves.** A custom tool that
+  shares a built-in's name is listed once, and the CLI's single-tool lookup
+  picks the tool the server serves while still loading only that tool's class.
+- **No answer points at a tool the app turned off.** Every pointer to another
+  tool, in `_Next:` hints, fix steps, recovery lines and lists, goes through
+  one helper, and a tool `skip_tools` names is left out with its hint. A
+  custom tool in a built-in's place is left out the same way, since a hint
+  carries the built-in's arguments.
 - **The CLI refuses a value a parameter does not take.**
-  `rails-ai-context tool schema --format xml` warned on stderr and answered
-  in the default format with exit 0. It now exits 1 and names the values the
-  parameter takes, as a required parameter already did. A `--detail` level
-  a tool does not have still falls back to the default with a warning, since
-  every level answers the same question.
-- **A model class in `app/models/concerns` is listed.** A class with a model
-  superclass in a file directly under `app/models/concerns/` was missing
-  from the static tier's models, and from the booted listing until
-  something loaded it. It is now listed under its bare constant, the mixins
-  beside it stay out, and `rails_validate` gives its file the model checks.
-- **`rails_get_context(include:)`** lists all twelve keys it takes and
-  names a key it does not take.
-- **A SQLite database whose file is not there is refused by name.**
-  `rails_query` answers with an error that names the database and
-  `bin/rails db:prepare`, with or without `database`. `rails_runtime_info`
-  does the same for a named database. With none, its Database section says
-  the primary does not exist yet and the other sections still answer. In
-  5.35.0 the connection created an empty database file. Now no file is
-  created. A database written as a `file:` URI is checked at the path inside the URI,
-  or at the whole name on a SQLite build that reads no URIs.
-- **The performance check finds a `has_paper_trail` model's unindexed
-  versions table on the static tier.** paper_trail adds
-  `has_many :versions, as: :item` when the app boots, so only the booted
-  tier reported `add_index :versions, [:item_type, :item_id]`. The static
-  tier now reads the macro, and the versions class its options name
-  (`versions: { class_name: ... }`), so both tiers give the same finding.
-- **A `query_timeout` under a millisecond still bounds the statement.** On
-  PostgreSQL it turned the statement timeout off. PostgreSQL, MySQL and
-  MariaDB now bound the statement at one millisecond.
+  `rails-ai-context tool schema --format xml` warned on stderr and answered in
+  the default format with exit 0, and so did `--limit abc` on a parameter that
+  takes an integer. Each now exits 1 and names what the parameter takes: the
+  listed values, "an integer", or "true or false" for a boolean. An empty
+  `--limit=` is refused too. A `--detail` level a tool does not have still
+  falls back to the default with a warning, since every level answers the same
+  question.
+- **A call to a skipped tool shows in instrumentation.** Over MCP it left the
+  `rails_ai_context.tools.call` payload with no tool name and no error. The
+  payload now carries `tool_name` and `error: :tool_skipped`.
+- **A model class in a `concerns` directory is listed.** A class with a model
+  superclass in a `concerns` directory of a model root was missing from the
+  static tier's models, and from the booted listing until something loaded it.
+  It is now listed under the constant its file declares, the mixins beside it
+  stay out, and `rails_validate` gives its file the model checks.
+- **`rails_get_context(include:)` lists all twelve keys it takes.** It also
+  names a key it does not take, and a key given twice, in any capitalisation,
+  runs once.
+- **The performance check finds a `has_paper_trail` model's unindexed versions
+  table on the static tier.** paper_trail adds `has_many :versions, as: :item`
+  when the app boots, so only the booted tier reported
+  `add_index :versions, [:item_type, :item_id]`. The static tier now reads the
+  macro, and the versions class its options name (`versions: { class_name: ...
+  }`), so both tiers give the same finding.
 - **A database `rails_query` cannot reach is an error that names it.** A
-  server that was down, or a database its server does not hold, came back
-  as an ordinary answer headed "Database unavailable" or "Database not
-  found", with no database named and advice to try `RAILS_ENV=test`. With
-  or without `database`, the answer is now an error that names the database
-  and says what to do: start its server or fix its `config/database.yml`
-  entry, or run `bin/rails db:create`. A connection lost while the
-  statement runs is an error that names the database too.
+  server that was down, or a database its server does not hold, came back as
+  an ordinary answer headed "Database unavailable" or "Database not found",
+  with no database named and advice to try `RAILS_ENV=test`. With or without
+  `database`, the answer is now an error that names the database and says what
+  to do: start its server or fix its `config/database.yml` entry, or run
+  `bin/rails db:create`.
+- **A connection lost while a statement runs is answered as one.** On Rails
+  7.1 and later the answer is an error that starts "The <name> database
+  stopped answering during the query:".
 - **A `rails_query` timeout is an error.** A query that ran past
   `query_timeout` came back as an ordinary answer. With the same text it is
   now an error response, for a query and for `explain: true`: the CLI exits
   non-zero and an MCP client sees `isError`.
+- **A guarded read leaves an open transaction as it found it.** On a
+  connection already inside a transaction, as in a transactional test,
+  PostgreSQL's `SET TRANSACTION READ ONLY` left the caller's transaction
+  read-only. PostgreSQL now guards inside a savepoint, and the outer
+  transaction stays writable. MySQL and MariaDB cannot make an open
+  transaction read-only, so there the statement is not sent: "Query failed:
+  MySQL cannot make a transaction that is already open read-only, so the
+  statement was not sent. Run it outside the transaction."
+- **`rails_query` runs `JOIN ... USING (x, y)` and a row comparison.** The
+  column-alias check read `JOIN b USING (x, y)` and `WHERE (a, b) IN (...)` as
+  an alias list and refused them.
+- **On PostgreSQL a quoted mixed-case secret column is filtered in place.**
+  `SELECT *` over a table with a secret column such as `"Salt"` was refused
+  whole, where a lowercase one is filtered.
+- **CSV output with no rows is the header row.** `format: "csv"` answered a
+  query that returned no rows with the sentence the table format prints.
 - **EXPLAIN on MySQL leaves a row with no table out of the scan summary.**
   `explain: true` on a statement that reads no table, such as `SELECT 1`,
   listed a scan of `?`.
+- **EXPLAIN on SQLite reads a constant row and an alias for what they are.**
+  `explain: true` on `SELECT 1` listed a full table scan of `CONSTANT` with a
+  warning, and now shows no scan summary. A table the statement gives another
+  name was listed as a table named by its alias, and now reads
+  `u (a name the statement gives)`.
 - **Only a timeout is reported as a timeout.** `rails_query` read any SQL
   error that mentioned "timeout" as a timeout, so an unknown column named
-  `timeout` came back as one. A timeout is now read from the error's class
-  or the database's native code, and MariaDB's 1969 counts.
-- **MySQL table sizes count base tables only**, as the row estimates do.
-- **`rails_query` holds `LIMIT ALL`, `LIMIT NULL` and a negative limit to
-  the row cap.** The three mean no limit, and the query fetched every row
-  before the cap cut the answer. They now read as no limit of the query's own
-  and fetch one row past the cap, with the note that rows were held back.
+  `timeout` came back as one. A timeout is now read from the error's class or
+  the database's native code, and MariaDB's 1969 counts.
+- **MySQL table sizes count base tables only.** The row estimates already did.
 - **An `explain: true` failure is an error.** A failing EXPLAIN, or one asked
-  of a statement other than SELECT or WITH, came back as an ordinary answer;
-  the CLI now exits non-zero and an MCP client sees `isError`.
+  of a statement other than SELECT or WITH, came back as an ordinary answer.
+  The CLI now exits non-zero and an MCP client sees `isError`.
 - **`rails_query` runs a string literal that only reads like a refused
-  phrase.** The `OR 1=1` check is gone: the caller writes the whole
-  statement, so it protected nothing and refused `LIKE '%OR 1=1%'`. On
-  PostgreSQL a locking clause is read with literals masked, since its
-  read-only transaction refuses a locking read, so `'%ready for update%'`
-  runs there. MySQL's read-only transaction allows `FOR SHARE`, so there and
-  on SQLite the raw text still decides.
+  phrase.** The `OR 1=1` check is gone: the caller writes the whole statement,
+  so it protected nothing and refused `LIKE '%OR 1=1%'`. On PostgreSQL a
+  locking clause is read with literals masked, since its read-only transaction
+  refuses a locking read, so `'%ready for update%'` runs there. MySQL's
+  read-only transaction allows `FOR SHARE`, so there and on SQLite the raw
+  text still decides.
 
 ## [5.35.0] - 2026-10-12
 

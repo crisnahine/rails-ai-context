@@ -279,14 +279,33 @@ The SQL gate refuses write statements, file and admin functions and secret colum
 What a string literal holds decides some of these:
 - A write keyword or a semicolon inside a string (`WHERE note = 'please insert coin'`, `'a; b'`) is data on every database, and the query runs
 - A secret column's name, `FOR UPDATE` / `FOR SHARE` or `UNION` inside a string is data on PostgreSQL only. On MySQL and SQLite the raw text decides and the query is refused, since no later check there would catch a quote the masking misread
-- A file or network function (`pg_read_file`, `LOAD_FILE`), `INTO OUTFILE` / `INTO DUMPFILE` and a refused `SHOW` form (`SHOW GRANTS`) are refused wherever they stand, inside a string too
+- A file or network function (`pg_read_file`, `LOAD_FILE`), `INTO OUTFILE` / `INTO DUMPFILE`, a refused `SHOW` form (`SHOW GRANTS`) and a relation that is not read (`pg_stats`, `slow_log`) are refused wherever they stand, inside a string too
 - A session or administrative function (`pg_terminate_backend`, `GET_LOCK`) is refused wherever its call stands, so `'pg_terminate_backend(1)'` inside a string is refused too. Its bare name inside a string is data
 - A `#` starts a comment on MySQL only, and only outside a quoted string
 - A JSONB operator (`#>>`) runs as written (since v5.6.0)
 
+### "Blocked: a `*` inside a subquery" and "Blocked: the view ... is not queried"
+
+MySQL, MariaDB and SQLite trace no result column back to its table column, so two shapes are refused there when a secret column is in reach:
+
+- A `*` inside a subquery, a CTE body included, when the statement names a table that holds a secret column. Name the columns in the subquery: `WITH x AS (SELECT id, email FROM users) SELECT * FROM x`. `EXISTS (SELECT * ...)` and `count(*)` run
+- A view whose definition names a secret column, or lists every column of a table that holds one. Query the tables the view reads. When the column holds no secret, list its name in `config.query_allowed_columns`
+
+### "Blocked: SHOW with a WHERE clause is not run"
+
+MySQL's statement timeout does not hold a `SHOW` filter, so it is refused on every database. `SHOW ... LIKE` runs. For any other filter select from `information_schema`: `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()`.
+
+### "Blocked: `pg_stat_activity` is not read"
+
+`rails_query` reads no relation that holds values sampled from other tables, other sessions' statements or stored credentials: `pg_stats`, `pg_stat_activity`, `information_schema.processlist`, `performance_schema`, `sys` and the others [SECURITY.md](SECURITY.md) lists. Use the database's own client for those. An app table with one of those names, such as `slow_log`, is refused too.
+
+### "The columns of the <name> database could not be read"
+
+The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is one catalogue query per database family, so an account that cannot read the catalogue cannot use `rails_query`.
+
 ### "Column values show [FILTERED]"
 
-Columns whose names look sensitive are redacted, and a query that names one is rejected with "Blocked: query references sensitive column". Shortening `config.query_redacted_columns` does not lift either, because a built-in list applies as well. Exempt a column of your own by name:
+Columns whose names look secret are redacted, and a query that names one is rejected with "Blocked: query references secret column `x`." followed by what to do. Shortening `config.query_redacted_columns` does not lift either, because a built-in list applies as well. Exempt a column of your own by name:
 
 ```ruby
 config.query_allowed_columns = %w[secret]

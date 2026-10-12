@@ -17,7 +17,7 @@ bytebase/dbhub is a database MCP server: one connector per kind of database, nam
 
 ## Consequences
 
-A user who needs write access, or a database the Rails app does not own, can run dbhub beside this gem. The two promise different things.
+A user who needs write access, or a database the Rails app does not own, can run dbhub beside this gem. `rails_query` keeps its read-only guards and its secret column rule for the app's own databases either way.
 
 ## Alternatives not taken
 

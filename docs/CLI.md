@@ -92,13 +92,24 @@ than one environment, because the environment decides which database
 configuration the booted tier reads.
 
 After the name of a tool that declares an `environment` parameter of its own
-(`env_config`, or `config --section env_config`), `--environment` is that tool's filter and does not set
-`RAILS_ENV`: `tool config --section env_config --environment production` lists production and
-boots the app in its usual environment. Set `RAILS_ENV` through the
-environment variable, or put `--environment` before the command name, to boot
-in another one. Every other tool reads the flag as `RAILS_ENV`. A custom tool
-that declares the parameter gets the value both ways, since its schema cannot
-be read before the app boots.
+(`env_config`, or `config --section env_config`), `--environment` is that
+tool's filter and does not set `RAILS_ENV`:
+`tool config --section env_config --environment production` lists production
+and boots the app in its usual environment. The section's name is read in any
+capitalisation. Set `RAILS_ENV` through the environment variable, or put
+`--environment` before the command name, to boot in another one. Every other
+tool reads the flag as `RAILS_ENV`, and so does `config` with any other
+section: `tool config --section gems --environment production` boots the app
+in production. A custom tool that declares the parameter gets the value both
+ways, since its schema cannot be read before the app boots.
+
+The ten tools that became `rails_get_config` sections still answer by their
+old names: `tool gems` runs `config --section gems`. `tool gems --help` prints
+"rails_get_gems - runs the `gems` section of rails_get_config (notable gems by
+category)." and that section's parameters alone. A mistyped old name is
+suggested: `tool gemz` answers "Unknown tool 'gemz'. Did you mean 'gems'?". A
+bare word after an old name gets that section's flag: `tool gems auth` answers
+"'auth' is not a flag - did you mean '--category auth'?".
 
 #### Exit status
 
@@ -120,10 +131,12 @@ A value outside a parameter's list (`--format xml` on `schema`,
 `--action bogus` on `migration_advisor`) exits 1 and names the values the
 parameter takes. The tool is not run, since any other value would answer a
 question you did not ask. `config --section bogus` exits 1 the same way, and
-its answer names the sections that are on in this app. Two values fall back
-to the tool's own default with a warning on stderr: a `--detail` level the
-tool does not have, since every level answers the same question, and
-`--limit abc` where the parameter takes an integer.
+its answer names the sections that are on in this app. A value of the wrong
+type is refused too: `--limit abc` on `search_code` answers
+"**Error:** `abc` is not a valid `limit`. Valid: an integer", a boolean takes
+`true` or `false`, and an empty `--limit=` is refused. One value falls back to
+the tool's own default with a warning on stderr: a `--detail` level the tool
+does not have, since every level answers the same question.
 
 ### The static tier and `--no-boot`
 

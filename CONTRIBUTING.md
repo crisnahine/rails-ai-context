@@ -87,7 +87,9 @@ bundle exec rubocop --parallel # Lint check
 The suite runs on SQLite. `spec/lib/rails_ai_context/database_family/database_servers_spec.rb`
 runs the PostgreSQL, MySQL and MariaDB families against real database servers, one group
 per URL that is set. `spec/lib/rails_ai_context/tools/query_postgresql_spec.rb` and
-`query_mysql_spec.rb` beside it run `rails_query` end to end on the same URLs:
+`query_mysql_spec.rb` beside it run `rails_query` end to end on the same URLs.
+`spec/lib/rails_ai_context/app_databases_servers_spec.rb` leases a MySQL and a MariaDB
+database by name, and runs with `RAC_TEST_MYSQL_URL` and `RAC_TEST_MARIADB_URL`:
 
 | Variable | Database server | Example |
 |---|---|---|
@@ -107,6 +109,7 @@ RAC_TEST_MYSQL_URL=trilogy://root:secret@127.0.0.1:3306/rac \
 The specs create and drop tables and views whose names start with `rac_`, so point them at a scratch database.
 CI's `database_servers` job runs them on PostgreSQL 16 in every leg. Rails 8.0 runs two legs: MySQL 8.0 with MariaDB 10.6, and MySQL 8.4 with MariaDB 11.4. Rails 7.0 runs MySQL 8.0 with MariaDB 10.6, and Rails 8.1 runs MySQL 8.4 with MariaDB 11.4.
 Rails 7.0 has no Trilogy adapter, so its leg runs PostgreSQL and mysql2 only.
+The job builds mysql2 against MariaDB's client library (`libmariadb-dev`, through `BUNDLE_BUILD__MYSQL2`), which signs in to MySQL and to MariaDB. A MySQL client from 9.0 on cannot sign in to MariaDB.
 
 ### Static fixture
 

@@ -131,7 +131,9 @@ Composite context: schema + model + controller + routes + views for a resource. 
 | `action` | string | - | Specific controller action; requires `controller` |
 | `model` | string | - | Model name (e.g., `Post`) |
 | `feature` | string | - | Feature keyword (e.g., `post`) |
-| `include` | array | - | Extra context to add: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks` |
+| `include` | array | - | Extra context to add: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks`, `tests`, `config`, `gems`, `security`. A key is read in any capitalisation, and a key given twice runs once |
+
+A model, controller or feature keyword the app does not have is answered as not found, with the closest name where there is one. An include whose tool `skip_tools` turns off is answered by saying so, and that tool does not run. An unexpected failure is an error response that starts "Tool rails_get_context failed:".
 
 ### `rails_onboard`
 
@@ -413,7 +415,7 @@ JavaScript (`.js`, `.mjs`, `.cjs`) is parsed by `node --check` as the module sys
 
 ### `rails_security_scan`
 
-Brakeman static analysis: SQL injection, XSS, mass assignment, command injection.
+Brakeman static analysis: SQL injection, XSS, mass assignment, command injection. A scan that fails, on an unknown check name for one, answers "Brakeman scan failed: ..." as an error response: `isError` over MCP and exit 1 on the CLI.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -472,7 +474,7 @@ or over `max_schema_file_size`) is listed under **Not checked** with the reason.
 
 ### `rails_get_config`
 
-The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and a call to an old name is answered from its section with a note naming the new call and the arguments the section reads. Under `tool_mode: :cli` the note is the command. A parameter the asked section does not read is named in the answer as ignored.
+The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and a call to an old name is answered from its section with a note naming the new call and the arguments the section reads. Under `tool_mode: :cli` the note is the command. An argument value over 80 characters, or one that holds a backtick, is left out of the note's call and named after it. A parameter the asked section does not read is named in the answer as ignored.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -679,12 +681,14 @@ file already named what the generator would name this one (`rails generate
 migration` refuses that name), and a migration not yet run that already adds
 the column or creates the table when it runs (a `def down`, a `dir.down` or a
 `revert` block only undoes, so what it adds does not count). It also warns
-about a `create_table` for a
-table that exists and a `null: false` column with no default on a table with
-rows (the row count is the primary database's estimate, so a table on another
-database has no count and the warning says "if it holds any rows"), and refuses a column type no
-adapter knows. For `remove_column`, `rename_column` and `change_type` it lists
-the lines in `app/`, `lib/` and `config/` that name the column, the code the
+about a `create_table` for a table that exists and a `null: false` column with
+no default on a table with rows. The row count is the primary database's
+estimate, so a table on another database has no count and the warning says
+"if `<table>` holds any rows". It refuses a column type no adapter knows. For
+`remove_column`, `rename_column` and `change_type` it lists the lines in
+`app/`, `lib/` and `config/` that name the column, the code the change breaks.
+Index and lock advice follows the database family of the database that holds
+the table.
 change breaks.
 
 It refuses a `table`, `type` or `new_name` longer than 256 characters, a
@@ -714,9 +718,13 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 ### `rails_query`
 
-Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
+Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded secret columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
 
-It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. So is a database no connection reaches, which the answer names with what to do about it. Every statement a call sends is bounded, so a call answers within about twice `query_timeout`. On MySQL, MariaDB and SQLite a statement that names a view whose definition names a secret column is refused; see the security model.
+It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. So is a database no connection reaches, which the answer names with what to do about it.
+
+On PostgreSQL, MySQL and MariaDB every statement a call sends has a time limit. The query has `query_timeout` to itself and the reads beside it share a second one, so the statements of a call take about twice `query_timeout` at most. On SQLite the query has `query_timeout`, and the reads beside it run on the app's own connection with no statement limit. The [security model](SECURITY.md#layer-2---database-level-read-only) says what bounds each statement and lists the stated limits.
+
+On MySQL, MariaDB and SQLite a statement that names a view whose definition names a secret column is refused. So is a `*` inside a subquery when the statement names a table that holds a secret column.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -726,13 +734,22 @@ It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-o
 | `explain` | boolean | `false` | Show query plan instead of results |
 | `database` | string | the primary | The app database to query, by its `config/database.yml` name (`queue`, `cache`). The secret column rule and the database family are that database's |
 
-`database` is checked when the tool runs, against the databases the app has then. A name the app does not have is answered with the closest one and every name it has. A database only another environment configures, a replica and one with `database_tasks: false` included, is answered with the environments that do, and one that only a committed dump names is answered as such. On the static tier the whole tool is unavailable, with or without `database`. A SQLite database whose file is not there is an error, with or without `database`: the message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created; a `file:` URI is checked at the path inside it. A SQLite database other than the primary that lives in memory (`:memory:`, or a `file:` URI with `mode=memory`) is refused by name, since it exists only inside the process that created it and a new connection would open an empty one. When a statement fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
+`database` is checked when the tool runs, against the databases the app has then:
+
+- A name the app does not have is answered with the closest one and every name it has.
+- A database only another environment configures, a replica and one with `database_tasks` off included, is answered with the environments that do.
+- One that only a committed dump names is answered as such.
+- On the static tier the whole tool is unavailable, with or without `database`.
+- A SQLite database whose file is not there is an error, with or without `database`. The message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.
+- A SQLite database other than the primary that lives in memory (`:memory:`, or a `file:` URI with `mode=memory`) is refused by name. It exists only inside the process that created it, and a new connection would open an empty one.
+- A database whose columns cannot be read is not queried. The answer is "The columns of the <name> database could not be read, so its secret columns cannot be told and no query runs on it."
+- When a statement or an `explain: true` fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
 
 Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.
 
 > Disabled in production by default.
 
-> Name the columns you need. A query that references a secret column (directly, or through an alias or expression; an `encrypts` column also when `query_allowed_columns` lists it), serialises a whole row, carries a column-alias list that renames a wildcard (a `VALUES`-body list such as `(VALUES (1,'a')) AS v(id, name)` is allowed - it renames no table column), uses UNION, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its secret columns come back `[FILTERED]`. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed and their definition text is secret-redacted; other `SHOW CREATE` forms are refused. In the default format a definition is shown whole, as the DDL in a fenced code block with its line breaks kept (a view's character set and collation follow as `name: value` lines); `csv` returns it as one quoted field. When the row limit holds rows back - only when the query really returned more than the cap - the answer says so in every format.
+> Name the columns you need. A query is refused, with a message that says why, when it does one of these: it references a secret column (directly, or through an alias or expression; an `encrypts` column also when `query_allowed_columns` lists it); it serialises a whole row; it carries a column-alias list that renames a wildcard (a `VALUES`-body list such as `(VALUES (1,'a')) AS v(id, name)` is allowed, since it renames no table column); it uses UNION; it calls a session-effecting function, or a function that returns a whole table as one value (`table_to_xml`); it reads a statistics, session or credential relation (`pg_stats`, `pg_stat_activity`, `performance_schema`); or it is a `SHOW` with a `WHERE` clause. `SELECT *` is allowed and its secret columns come back `[FILTERED]`. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed and their definition text is secret-redacted; other `SHOW CREATE` forms are refused. In the default format a definition is shown whole, as the DDL in a fenced code block with its line breaks kept (a view's character set and collation follow as `name: value` lines); `csv` returns it as one quoted field. When the row limit holds rows back - only when the query really returned more than the cap - the answer says so in every format. With `csv`, a query that returns no rows answers the header row alone.
 
 > **Cell rendering by format.** A `markdown` table cell shows `NULL` as `_NULL_`, escapes a pipe (`a\|b`) so it cannot end the cell, renders a line break as the two characters `\n` so it cannot end the row, and shortens a value over 100 characters to `…` (a `SHOW CREATE` definition is not a table cell, so it is never shortened). A `csv` cell is the value itself: `NULL` is an empty field, nothing is escaped beyond RFC 4180 quoting (a field holding a comma, a quote or a line break is wrapped in quotes with its quotes doubled), and nothing is truncated - so a line break stays a real line break inside the quoted field. Binary (non-text) data shows as `[BLOB]` in both.
 
@@ -793,7 +810,9 @@ The pool and the cache are read inside the MCP server process, and the answer sa
 | `section` | enum | - | One section only: `database`, `cache`, `jobs`, `connections` |
 | `database` | string | the primary | The app database whose adapter, table sizes, index usage and pending migrations the database section shows, named and checked as `rails_query`'s `database` is, whatever the `section`. A name that cannot be reached is an error for every section, and a section that does not read `database` says so |
 
-With no `database`, pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`, so "all up to date" means all of them. Under a named database the section shows that database's own, and for a replica or a database with `database_tasks: false` it says Rails runs no migrations on it. The connections section is always about the app's own pools. A named database that is not configured here, that lives in memory outside the primary, whose SQLite file is not there, or whose server does not answer is an error whatever the `section`; the last names the database and says what stopped the connection. With no `database`, a primary whose SQLite file is not there or whose server does not answer is a note in the Database section, and the other sections still answer. Nothing is created either way. On the static tier the whole tool is unavailable, with or without `database`.
+With no `database`, pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`. With more than one, the line names the databases that were read (`**Migrations:** all up to date in primary, queue`). A database that could not be read gets a line of its own with the reason, `_Pending migrations could not be read for <name>: <reason>_`, and the others are still reported. An in-memory database is left out. Under a named database the section shows that database's own. For a replica, or a database whose `config/database.yml` entry turns `database_tasks` off, it says Rails runs no migrations on it. The connections section is always about the app's own pools.
+
+A named database is an error whatever the `section` when it is not configured here, lives in memory outside the primary, has a SQLite file that is not there, has an adapter whose gem did not load, or has a server that does not answer. The last two answers name the database, say what stopped the connection and say what to do. With no `database`, a primary whose SQLite file is not there or that cannot be reached is a note in the Database section, and the other sections still answer. Nothing is created either way. On the static tier the whole tool is unavailable, with or without `database`.
 
 ### `rails_session_context`
 
