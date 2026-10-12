@@ -376,6 +376,69 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
                               [ "projects", "owner_id" ])
       end
 
+      # paper_trail's has_paper_trail adds `has_many :versions, as: :item` when the app boots,
+      # so only the booted models section carries the association.
+      describe "a has_paper_trail model's versions table" do
+        let(:post) { { "post.rb" => "class Post < ApplicationRecord\n  has_paper_trail\nend\n" } }
+        let(:versions) { "create_table \"versions\" do |t|\n  t.string \"item_type\"\n  t.bigint \"item_id\"\nend\n" }
+        let(:reflected) do
+          { "Post" => { table_name: "posts",
+                        associations: [ { name: "versions", type: "has_many", class_name: "PaperTrail::Version", options: { as: :item } } ] } }
+        end
+
+        def booted_missing_for(schema_source, models, section)
+          Dir.mktmpdir do |dir|
+            FileUtils.mkdir_p(File.join(dir, "db"))
+            File.write(File.join(dir, "db", "schema.rb"), schema_source)
+            FileUtils.mkdir_p(File.join(dir, "app", "models"))
+            models.each { |file, source| File.write(File.join(dir, "app", "models", file), source) }
+            introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+            introspector.context = { models: section }
+            introspector.call[:missing_fk_indexes]
+          end
+        end
+
+        it "is reported without its index, the same on both tiers" do
+          finding = { table: "versions", column: "item_type, item_id", polymorphic: true, suggestion: "add_index :versions, [:item_type, :item_id]" }
+
+          expect(missing_for(versions, post)).to contain_exactly(a_hash_including(finding))
+          expect(booted_missing_for(versions, post, reflected)).to contain_exactly(a_hash_including(finding))
+        end
+
+        it "is left alone with its index, on both tiers" do
+          indexed = versions.sub("end\n", "  t.index [\"item_type\", \"item_id\"], name: \"index_versions_on_item\"\nend\n")
+
+          expect(missing_for(indexed, post)).to be_empty
+          expect(booted_missing_for(indexed, post, reflected)).to be_empty
+        end
+
+        it "is the table of the versions class the macro names" do
+          models = {
+            "post.rb" => "class Post < ApplicationRecord\n  has_paper_trail versions: { class_name: \"PostVersion\" }\nend\n",
+            "comment.rb" => "class Comment < ApplicationRecord\n  has_paper_trail class_name: \"Audit::Entry\"\nend\n",
+            "audit/entry.rb" => "module Audit\n  class Entry < ApplicationRecord\n    self.table_name = \"audit_log\"\n  end\nend\n"
+          }
+          missing = missing_for(<<~RUBY, models)
+            create_table "post_versions" do |t|
+              t.string "item_type"
+              t.bigint "item_id"
+            end
+
+            create_table "audit_log" do |t|
+              t.string "item_type"
+              t.bigint "item_id"
+            end
+
+            create_table "versions" do |t|
+              t.string "item_type"
+              t.bigint "item_id"
+            end
+          RUBY
+
+          expect(missing.map { |m| m[:table] }).to contain_exactly("post_versions", "audit_log")
+        end
+      end
+
       # Rails strips the shared prefix: spree_roles and spree_users join
       # through spree_roles_users, not spree_roles_spree_users.
       it "names a habtm join table the way Rails does" do
