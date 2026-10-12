@@ -207,7 +207,7 @@ fits neither that shape nor the conventional one.
 
 `rails_query` treats a column as a secret column when one of these holds:
 
-- its name is in `query_redacted_columns` or in the built-in list (`password_reset_token`, `remember_token`, `secret`, `private_key`, `authentication_string`);
+- its name is in `query_redacted_columns` or in the built-in list (`password_reset_token`, `remember_token`, `secret`, `private_key`, `authentication_string`, `rolpassword`, `setconfig`);
 - an `encrypts` declaration covers it;
 - its name ends in `password`, `secret`, `token`, `key`, `digest` or `hash`;
 - its name contains `password`, `secret`, `token` or `nonce`;

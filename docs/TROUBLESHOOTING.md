@@ -297,7 +297,23 @@ MySQL's statement timeout does not hold a `SHOW` filter, so it is refused on eve
 
 ### "Blocked: `pg_stat_activity` is not read"
 
-`rails_query` reads no relation that holds values sampled from other tables, other sessions' statements or stored credentials: `pg_stats`, `pg_stat_activity`, `information_schema.processlist`, `performance_schema`, `sys` and the others [SECURITY.md](SECURITY.md) lists. Use the database's own client for those. An app table with one of those names, such as `slow_log`, is refused too.
+`rails_query` reads no relation that holds values sampled from other tables, other sessions' statements or stored credentials: `pg_stats`, `pg_stat_activity`, `pg_authid`, `pg_settings`, `information_schema.processlist`, `performance_schema`, `sys`, the whole `mysql` schema and the others [SECURITY.md](SECURITY.md#relations-and-settings-that-are-never-read) lists. Use the database's own client for those. An app table with one of those names, such as `slow_log`, is refused too. For `pg_settings` the message ends "To read one setting, run SHOW with its name."
+
+### "Blocked: the setting ... is not read", "Blocked: SHOW ALL is not run" and "Blocked: SHOW takes a setting's plain name on PostgreSQL"
+
+On PostgreSQL `rails_query` reads one setting at a time, by its plain name: `SHOW work_mem`. `SHOW ALL` and a quoted name (`SHOW "work_mem"`) are refused. Six settings can hold a password or a command line that carries one and are refused: `primary_conninfo`, `ssl_passphrase_command`, `archive_command`, `restore_command`, `archive_cleanup_command` and `recovery_end_command`. So is a setting whose own name reads as a secret, such as `app.jwt_secret`.
+
+### "Blocked: current_setting runs only with the setting's name written as one plain string"
+
+Write the name as one string: `current_setting('work_mem')`. A name built by an expression, read from a column or written as an `E''` or dollar-quoted string is refused, since the gate could not read which setting comes back.
+
+### "Blocked: a quoted name is followed by a parenthesis"
+
+A function called by a quoted name (`"upper"('x')`, `` `sleep`(0) ``) is refused on every database, since the checks read a function's name to decide whether it runs. Write the name without quotes. A function whose name needs quotes, such as a mixed-case one on PostgreSQL, cannot be called through `rails_query`.
+
+### "Blocked: sensitive SHOW command" on `EXPLAIN FOR CONNECTION`
+
+`EXPLAIN FOR CONNECTION` shows the plan of the statement another session is running, so it gets the refusal `SHOW PROCESSLIST` gets. `EXPLAIN` of a statement of your own runs.
 
 ### "The columns of the <name> database could not be read"
 

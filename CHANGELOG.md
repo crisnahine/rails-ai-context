@@ -65,11 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and in the schema are now folded the same way before they are compared.
 - **A column-alias list is refused in every spelling.** `rails_query` refuses
   a list such as `t(a, b, c)`, since it renames the columns a wildcard
-  returns. The check read bare ASCII names with `AS (` right after them. A
-  list of quoted, bracketed or non-ASCII names, one before `AS MATERIALIZED`
-  or `AS NOT MATERIALIZED`, and one on a derived table with no `AS` passed it
-  and returned secret columns under other names. The gate now reads the list
-  by its shape on every family. One name after a function call, such as
+  returns. The check read one spelling of the list, so a list written another
+  way passed it and returned secret columns under other names. The gate now
+  reads the list by its shape on every family, whatever the quoting of its
+  names, with or without `AS`, and with `MATERIALIZED` or `NOT MATERIALIZED`
+  before its body. One name after a function call, such as
   `generate_series(1, 5) AS g(n)`, still runs, and so does a list over
   `VALUES` rows.
 - **On MySQL, MariaDB and SQLite a `*` inside a subquery is refused when the
@@ -104,18 +104,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the `_to_xml` family returned a table, its secret columns included, as
   one XML value. A call to one is now refused by name.
 - **Relations that hold sampled values, other sessions' statements or stored
-  credentials are not read.** No check on a column's name applies to them, so
-  they ran: `pg_stats` and `pg_statistic` hold values sampled from every
-  table, `pg_stat_activity` and `information_schema.processlist` hold other
-  sessions' statements, and MariaDB's `global_priv` holds credentials. A
-  statement that names one of those is now refused. So is one that names
-  `pg_stats_ext`, `pg_statistic_ext`, `pg_largeobject`, the functions
-  `pg_stat_activity` reads through, `pg_stat_statements`,
-  `pg_prepared_statements`, `pg_cursors`, `performance_schema`, `sys`,
-  `general_log`, `slow_log`, MySQL's `column_statistics`, MariaDB's
-  `column_stats`, or SQLite's `sqlite_stat1`, `sqlite_stat3` and
-  `sqlite_stat4`. On PostgreSQL the plan is checked for them too, so a view
-  over one is refused.
+  credentials are not read.** No check on a column's name applies to what they
+  hold, so a query on one ran and returned it. A statement that names one is
+  now refused. On PostgreSQL they are `pg_stats`, `pg_stats_ext`,
+  `pg_statistic`, `pg_statistic_ext`, `pg_largeobject`, `pg_stat_activity` and
+  the functions it reads through, `pg_stat_statements`,
+  `pg_prepared_statements`, `pg_cursors`, `pg_authid`, `pg_shadow`,
+  `pg_db_role_setting`, `pg_user_mapping`, `pg_user_mappings`,
+  `pg_subscription`, `pg_foreign_server`, `pg_foreign_data_wrapper`,
+  `pg_foreign_table`, `pg_settings`, `pg_show_all_settings()`,
+  `pg_show_all_file_settings()`, `pg_hba_file_rules` and
+  `pg_ident_file_mappings`. There the plan is checked too, so a view over one
+  of them is refused, the `information_schema` views of user mappings and
+  foreign servers among them. On MySQL and MariaDB they are the whole `mysql`
+  schema, `performance_schema`, `sys`, `general_log`, `slow_log`,
+  `column_statistics`, `column_stats`, `global_priv`, and in
+  `information_schema` `PROCESSLIST`, `INNODB_TRX`, `INNODB_LOCKS`,
+  `INNODB_LOCK_WAITS`, the `INNODB_FT_` tables, `USER_STATISTICS`,
+  `CLIENT_STATISTICS`, `PROFILING` and `OPTIMIZER_TRACE`. On SQLite they are
+  `sqlite_stat1`, `sqlite_stat3` and `sqlite_stat4`.
+- **On PostgreSQL a role's password hash and its stored settings are secret
+  columns.** `pg_authid.rolpassword` and `pg_db_role_setting.setconfig` were
+  returned, also through the views PostgreSQL builds on them. Both names are
+  now built-in secret names. A view that reads neither column still runs, so
+  `pg_roles` and `pg_user` answer, and `pg_roles.rolconfig` comes back
+  `[FILTERED]`.
+- **PostgreSQL settings that can hold a password are not read.**
+  `SHOW primary_conninfo` and `current_setting('primary_conninfo')` returned a
+  connection string with its password, and `SHOW ALL` listed it.
+  `primary_conninfo`, `ssl_passphrase_command`, `archive_command`,
+  `restore_command`, `archive_cleanup_command` and `recovery_end_command` are
+  now refused, and so is a setting whose own name reads as a secret, such as
+  `app.jwt_secret`. On PostgreSQL `SHOW ALL` is refused and `SHOW` takes a
+  setting's plain name. `current_setting` runs only with the name written as
+  one plain string, so the gate can read which setting it returns.
+- **`EXPLAIN FOR CONNECTION` is refused.** On MySQL and MariaDB it showed the
+  plan of the statement another session was running. It now gets the refusal
+  `SHOW PROCESSLIST` gets, also when it is written with `DESCRIBE` or `DESC`.
+- **A function called by a quoted name is refused.** The checks that read a
+  function's name read it bare, so a function whose name was written in
+  quotes, backticks or brackets passed them. A quoted name followed by a
+  parenthesis is now refused on every family. On PostgreSQL the functions a
+  statement's text names are checked beside those its plan prints, since a
+  plan prints no row of a `VALUES` list and no `LIMIT` expression.
 - **A database whose columns cannot be read is not queried.** When the schema
   read failed, `rails_query` ran the statement with no column of the schema to
   check its text against. It now answers "The columns of the <name> database
@@ -221,12 +252,6 @@ Ten tools that each answered one section of the app's configuration leave
   that holds a backtick, is left out of the call and named after it. Update
   saved prompts to the new call: `rails_get_gems(category:"auth")` becomes
   `rails_get_config(section:"gems", category:"auth")`.
-- **An old name has its own help, and a mistyped one is suggested.**
-  `rails-ai-context tool gems --help` prints "rails_get_gems - runs the `gems`
-  section of rails_get_config (notable gems by category)." and that section's
-  parameters alone. `tool gemz` answers "Unknown tool 'gemz'. Did you mean
-  'gems'?", and over MCP a call to `rails_get_gemz` is answered with
-  `rails_get_gems` among the names it suggests.
 - **`skip_tools` keeps its meaning.** An old tool name turns its section off,
   so an app that skipped `rails_get_env` still keeps the `env` section off.
   `rails_get_config` turns off the `app` section only. A section that is off
@@ -276,10 +301,10 @@ Ten tools that each answered one section of the app's configuration leave
   release it. Its values come back `[FILTERED]` under `SELECT *`. Take the
   column out of the query.
 - **`rails_query` refuses more column names.** A column named `salt`,
-  `passwd`, `credentials`, `pepper` or `authentication_string`, one whose name
-  holds `nonce`, and one named `iv` or ending in `_iv` is refused by name and
-  comes back `[FILTERED]` under `SELECT *`. To read one that holds no secret,
-  list its name in `query_allowed_columns`.
+  `passwd`, `credentials`, `pepper`, `authentication_string`, `rolpassword` or
+  `setconfig`, one whose name holds `nonce`, and one named `iv` or ending in
+  `_iv` is refused by name and comes back `[FILTERED]` under `SELECT *`. To
+  read one that holds no secret, list its name in `query_allowed_columns`.
 - **On MySQL, MariaDB and SQLite a query over a view that reads a secret
   column is refused.** It ran on 5.35.0 and returned what the view selected.
   The refusal names the view and the column. Query the tables the view reads,
@@ -297,13 +322,26 @@ Ten tools that each answered one section of the app's configuration leave
   `information_schema`: `SELECT table_name FROM information_schema.tables
   WHERE table_schema = DATABASE()`.
 - **`rails_query` no longer reads statistics, session and credential
-  relations.** A query on `pg_stat_activity`, `pg_stats`,
-  `information_schema.processlist`, `performance_schema` or `sys` ran on
-  5.35.0 and is refused now, and so is an app table that carries one of the
-  refused names, such as `slow_log`. Read those with the database's own
-  client.
-- **The refusals say "secret column".** A script that matches on "sensitive
-  column" in a `rails_query` refusal has to match on "secret column".
+  relations.** A query on `pg_stat_activity`, `pg_stats`, `pg_settings`,
+  `information_schema.processlist`, `performance_schema`, `sys` or anything in
+  the `mysql` schema ran on 5.35.0 and is refused now. So is an app table that
+  carries one of the refused names, such as `slow_log`. Read those with the
+  database's own client.
+- **On PostgreSQL `SHOW ALL` and six settings are refused.** `SHOW ALL`,
+  `SHOW "work_mem"` with quotes, and `SHOW` or `current_setting` of
+  `primary_conninfo`, `ssl_passphrase_command`, `archive_command`,
+  `restore_command`, `archive_cleanup_command` or `recovery_end_command` ran
+  on 5.35.0. Show one setting by its plain name: `SHOW work_mem`, or
+  `current_setting('work_mem')`. A statement that holds one of the six names
+  anywhere is refused on every family.
+- **A function whose name is written in quotes cannot be called.**
+  `SELECT "upper"('x')` ran on 5.35.0 and is refused now. Write the name
+  without quotes. A function whose name needs quotes, such as a mixed-case one
+  on PostgreSQL, cannot be called through `rails_query`.
+- **The `rails_query` refusals say "secret column".** They said "sensitive
+  column", and now use the glossary's word. A script that matches on the old
+  words in a refusal has to match on the new ones. The config keys keep their
+  names.
 - **`query_timeout` takes a positive number only.** Zero, a negative value or
   a value that is no number raises `ArgumentError` in an initializer, as
   `query_row_limit` does. In `.rails-ai-context.yml` it is reported and the
@@ -314,13 +352,13 @@ Ten tools that each answered one section of the app's configuration leave
   `schema` and `--limit abc` answered in 5.35.0 with a warning on stderr and
   the parameter's default. Each now exits 1 and names what the parameter
   takes. `--detail` alone still warns and falls back.
-- **Some CLI calls that exited 0 now exit 1.** They are a value outside a
-  parameter's list or of the wrong type, a `rails_query` timeout, a database
-  that cannot be reached, a failing `explain: true`, a failed Brakeman scan,
-  and an unexpected failure in `rails_onboard`, `rails_diagnose`,
-  `rails_generate_test`, `rails_review_changes`, `rails_runtime_info`,
-  `rails_session_context`, `rails_get_context` or `rails_search_code`. Over
-  MCP the same answers carry `isError`.
+- **Some CLI calls that exited 0 now exit 1.** Beside the refused values
+  above, they are a `rails_query` timeout, a database that cannot be reached,
+  a failing `explain: true`, a failed Brakeman scan, and an unexpected failure
+  in `rails_onboard`, `rails_diagnose`, `rails_generate_test`,
+  `rails_review_changes`, `rails_runtime_info`, `rails_session_context`,
+  `rails_get_context` or `rails_search_code`. Over MCP the same answers carry
+  `isError`.
 - **Regenerate the context files.** Run `rails ai:context` or
   `rails-ai-context context` so the tool guide and tables name the new call.
 
@@ -372,10 +410,6 @@ Ten tools that each answered one section of the app's configuration leave
 
 ### Changed
 
-- **Every `rails_query` refusal says "secret column".** The refusals said
-  "sensitive column" where the glossary and the docs say "secret column". They
-  now use the one word, as in "Blocked: query references secret column `x`."
-  The config keys keep their names.
 - **Statistics say when an adapter has none.** On an adapter with no database
   family, `rails_runtime_info` says table sizes and index usage are not
   available for that adapter, and the database stats say the same of row
@@ -526,6 +560,11 @@ Ten tools that each answered one section of the app's configuration leave
 - **`rails_query` runs `JOIN ... USING (x, y)` and a row comparison.** The
   column-alias check read `JOIN b USING (x, y)` and `WHERE (a, b) IN (...)` as
   an alias list and refused them.
+- **On PostgreSQL a subquery or join that reads no secret column runs.**
+  `SELECT (SELECT count(*) FROM users) AS n` was refused when `users` holds a
+  secret column, although `count(*)` reads none. It runs now, and so do
+  `count(id)`, `max(id)` and `EXISTS (SELECT 1 ...)` in its place. An
+  aggregate over a secret column, a whole row and `count(users)` stay refused.
 - **On PostgreSQL a quoted mixed-case secret column is filtered in place.**
   `SELECT *` over a table with a secret column such as `"Salt"` was refused
   whole, where a lowercase one is filtered.
