@@ -506,6 +506,19 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(names).to eq([ "order_params" ])
     end
 
+    # permit! on a slice lets through only the sliced keys (whitehall's params_filters).
+    it "reads permit! on a slice of params as the keys it slices" do
+      source = <<~RUBY
+        def filter_params
+          params.slice(:type, :state, :page).permit!
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "filter_params", permits: %w[type state page] } ])
+      computed = "def search_params = params.slice(*SEARCH_KEYS).permit!\n"
+      expect(introspector.send(:extract_strong_params, computed)).to eq([ { name: "search_params" } ])
+    end
+
     it "leaves out a permit on something that is not params" do
       source = <<~RUBY
         def plug_params(app)

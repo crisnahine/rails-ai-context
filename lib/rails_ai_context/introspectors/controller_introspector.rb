@@ -727,7 +727,12 @@ module RailsAiContext
         result = { name: def_node.name.to_s }
         locals = params_locals(def_node.body)
 
-        return result.merge(unrestricted: true) if find_call_in_tree(def_node.body, :permit!, locals)
+        if (permit_all = find_call_in_tree(def_node.body, :permit!, locals))
+          sliced = sliced_keys(permit_all, locals)
+          return result.merge(unrestricted: true) unless sliced
+
+          return sliced.any? ? result.merge(permits: sliced) : result
+        end
 
         permit_call = find_call_in_tree(def_node.body, :permit, locals)
         if permit_call
@@ -776,6 +781,19 @@ module RailsAiContext
           params_value?(node.receiver, locals)
         else false
         end
+      end
+
+      # `params.slice(:a, :b).permit!` lets through only the keys it slices (none read when they are
+      # computed); nil when nothing in the chain slices.
+      def sliced_keys(call, locals)
+        receiver = call.receiver
+        receiver = locals[receiver.name] if receiver.is_a?(Prism::LocalVariableReadNode)
+        return nil unless receiver.is_a?(Prism::CallNode)
+        return sliced_keys(receiver, locals) unless receiver.name == :slice
+
+        args = receiver.arguments&.arguments || []
+        keys = args.filter_map { |arg| arg.unescaped if arg.is_a?(Prism::SymbolNode) || arg.is_a?(Prism::StringNode) }
+        keys.size == args.size ? keys : []
       end
 
       def find_require_in_chain(node, locals = {})
