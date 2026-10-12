@@ -72,7 +72,7 @@ module RailsAiContext
                 rescues.none? { |r| r.cover?(call.location.start_line) }
             end
             items = own.map { |e| [ e[:location], 0, e ] } + called.map { |c| [ c.location.start_line, 1, c ] }
-            items.sort_by { |line, kind, _| [ line, kind ] }.each do |_, kind, item|
+            items.sort_by.with_index { |(line, kind, _), i| [ line, kind, i ] }.each do |_, kind, item|
               if kind.zero?
                 expanded << item.merge(location: anchor || item[:location], order: (order += 1))
               else

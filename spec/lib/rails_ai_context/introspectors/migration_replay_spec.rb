@@ -1646,6 +1646,21 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     it "adds a t.column" do
       expect(posts["score"]).to include(type: "decimal")
     end
+
+    # Ruby's sort is not stable, so a block's statement on its opener's line once ran before the block opened.
+    it "applies a one-line block's statement after the block opens, among many statements" do
+      columns = (1..12).map { |i| "c#{i}" }
+      ups = columns.first(3).map { |c| "    change_column :posts, :#{c}, :string, default: \"x\"\n" } +
+            [ "    change_table(:posts) { |t| t.change :seen_at, :datetime, default: -> { \"CURRENT_TIMESTAMP\" } }\n" ] +
+            columns.drop(3).map { |c| "    change_column :posts, :#{c}, :string, default: \"y\"\n" }
+      tables = replay([
+        "create_table :posts do |t|\n#{columns.map { |c| "  t.string :#{c}\n" }.join}  t.datetime :seen_at\nend\n",
+        "class Relax < ActiveRecord::Migration[8.1]\n  def up\n#{ups.join}  end\nend\n"
+      ])
+
+      seen_at = tables["posts"][:columns].find { |c| c[:name] == "seen_at" }
+      expect(seen_at[:default]).to eq(%q(-> { "CURRENT_TIMESTAMP" }))
+    end
   end
   # change_column_default takes the new default positionally or as
   # from:/to: (extract_new_default_value, 7.0 and 8.1); only from:/to: was read.
