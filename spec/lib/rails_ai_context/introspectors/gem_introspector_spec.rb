@@ -397,7 +397,7 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
 
   describe "NOTABLE_GEMS" do
     it "flags as an engine only gems it lists" do
-      expect(described_class::ENGINE_GEMS - described_class::NOTABLE_GEMS.keys).to be_empty
+      expect(described_class::IN_APP_GEMS - described_class::NOTABLE_GEMS.keys).to be_empty
     end
 
     it "covers all expected categories" do

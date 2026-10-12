@@ -415,6 +415,31 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       expect(texts.last).to include("**sprockets-rails**")
     end
 
+    # Rails 7 left Sprockets out of rails/all and the rails gem: a gem that pulls it in since loads it.
+    it "lists sprockets-rails another gem pulls into a Rails 7 app, whatever config/application.rb requires" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "require \"rails\"\nrequire \"action_controller/railtie\"\n")
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (7.1.3)
+              sassc-rails (2.1.2)
+                sprockets-rails
+              sprockets-rails (3.4.2)
+
+          DEPENDENCIES
+            rails (~> 7.1)
+            sassc-rails
+        LOCK
+        context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+        allow(described_class).to receive(:cached_context).and_return(context)
+
+        expect(described_class.call.content.first[:text]).to include("**sprockets-rails**")
+      end
+    end
+
     # OmniAuth is Rack middleware: only a gem that mounts it in the app pulls it in (gds-sso, a strategy gem).
     it "keeps OmniAuth a wrapper gem brings in" do
       Dir.mktmpdir do |dir|

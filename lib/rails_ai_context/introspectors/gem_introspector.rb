@@ -181,7 +181,7 @@ module RailsAiContext
 
       # Notable gems that run inside the app whichever gem brings them in: one that ships a Rails::Railtie or
       # Rails::Engine, and OmniAuth, the Rack middleware a gem pulls in only to mount it in the app.
-      ENGINE_GEMS = %w[
+      IN_APP_GEMS = %w[
         action_policy activeadmin administrate alba apipie-rails avo bullet carrierwave clearance cocoon cssbundling-rails
         datadog delayed_job devise devise-jwt doorkeeper factory_bot_rails falcon figaro flipper good_job grape graphql
         hotwire-native-rails importmap-rails inertia_rails jbuilder jsbundling-rails jsonapi-serializer kredis lockbox
@@ -271,8 +271,10 @@ module RailsAiContext
       # A lockfile also holds what other gems depend on: Rails resolves every framework and
       # loads only those it is asked for, and activesupport pulls in minitest.
       def app_uses?(gem_name, lock)
-        return true if lock.direct?(gem_name) || ENGINE_GEMS.include?(gem_name)
+        return true if lock.direct?(gem_name) || IN_APP_GEMS.include?(gem_name)
         return Dir.exist?(File.join(root, "test")) if gem_name == "minitest"
+        # Rails 7 left Sprockets out of rails/all and the rails gem: a gem that pulls it in since loads it.
+        return true if gem_name == "sprockets-rails" && lock.version("rails") && Gem::Version.new(lock.version("rails")) >= Gem::Version.new("7.0")
 
         lock.present?("rails") && AppKind.loads_framework?(root, gem_name)
       end

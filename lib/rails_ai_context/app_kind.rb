@@ -22,7 +22,8 @@ module RailsAiContext
       RailsAiContext::Introspectors::GemfileGems.names(root.to_s).intersect?(names)
     end
 
-    # The file config/application.rb requires to load each framework gem, the list rails/all requires.
+    # The file config/application.rb requires to load each framework gem, the list rails/all requires
+    # (Sprockets until 7.0).
     FRAMEWORK_RAILTIES = {
       "activerecord" => "active_record/railtie", "activestorage" => "active_storage/engine",
       "actionmailer" => "action_mailer/railtie", "actionmailbox" => "action_mailbox/engine",
