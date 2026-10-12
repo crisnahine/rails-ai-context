@@ -79,7 +79,7 @@ module RailsAiContext
           return nil if name.to_s.empty?
 
           tools = RailsAiContext::Server.exposed_tools.map(&:tool_name)
-          [ name, "rails_#{name}", "rails_get_#{name}" ].find { |candidate| tools.include?(candidate) }
+          RailsAiContext::CLI::ToolRunner.candidate_names(name).find { |candidate| tools.include?(candidate) }
         end
 
         def unknown_mark_message(name)
