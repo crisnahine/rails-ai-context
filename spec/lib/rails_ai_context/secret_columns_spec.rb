@@ -37,10 +37,27 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
+    it "is true for a nonce or an initialization vector column" do
+      %w[nonce otp_nonce nonce_value iv encrypted_ssn_iv Content_IV].each do |name|
+        expect(secrets.secret?(name)).to be(true), name
+      end
+    end
+
     it "is false for ordinary columns" do
-      %w[id email name status created_at user_id lock_version salt_length].each do |name|
+      %w[id email name status created_at user_id lock_version salt_length archive active private_ivy].each do |name|
         expect(secrets.secret?(name)).to be(false), name
       end
+    end
+
+    it "is false for a nonce or iv column the app allows by name" do
+      config.query_allowed_columns = %w[otp_nonce content_iv]
+      %w[otp_nonce content_iv].each { |name| expect(secrets.secret?(name)).to be(false), name }
+      expect(secrets.secret?("session_nonce")).to be(true)
+    end
+
+    it "does not teach the shared redaction words nonce or iv" do
+      expect(RailsAiContext::Redaction.secret_name?("content_security_policy_nonce_generator")).to be(false)
+      expect(RailsAiContext::Redaction.secret_name?("iv")).to be(false)
     end
 
     it "is false for a name the app allows, whatever rule flags it" do
