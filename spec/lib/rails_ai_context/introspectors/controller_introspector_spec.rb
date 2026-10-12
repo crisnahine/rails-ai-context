@@ -753,11 +753,16 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
                                                                         { name: "update_attrs", requires: "user", permits: [ "name" ] } ])
     end
 
-    it "reads params an ivar holds, params handed on as a keyword, and Devise's sanitizer" do
+    it "reads params an ivar or a ||= local holds, params handed on as a keyword, and Devise's sanitizer" do
       source = <<~RUBY
         def a_params
           @raw = params.require(:a)
           @raw.permit(:x)
+        end
+
+        def b_params
+          raw ||= params.require(:b)
+          raw.permit(:y)
         end
 
         def clean_params
@@ -770,6 +775,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       RUBY
 
       expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "a_params", requires: "a", permits: [ "x" ] },
+                                                                        { name: "b_params", requires: "b", permits: [ "y" ] },
                                                                         { name: "clean_params" }, { name: "account_update_params" } ])
     end
 

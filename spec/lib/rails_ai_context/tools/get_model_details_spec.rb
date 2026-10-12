@@ -1403,19 +1403,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
   end
 
   # The primary's dump cannot say a table in another database's dump is missing.
-  it "keeps a gem-parent model whose table another database holds" do
+  it "keeps a gem-parent model whose table another database holds, and takes the primary's table first" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(%w[app/models db config].map { |d| File.join(dir, d) })
       dbs = "  primary:\n    adapter: postgresql\n    database: app\n  analytics:\n    adapter: postgresql\n    database: analytics\n"
       File.write(File.join(dir, "config", "database.yml"), "development:\n#{dbs}test:\n#{dbs}")
-      File.write(File.join(dir, "db", "schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "users" do |t|\n    t.string "name"\n  end\nend\n))
-      File.write(File.join(dir, "db", "analytics_schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "page_views" do |t|\n    t.bigint "user_id"\n  end\nend\n))
+      File.write(File.join(dir, "db", "schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "users" do |t|\n    t.string "name"\n  end\n  create_table "ahoy_messages" do |t|\n    t.string "to"\n  end\nend\n))
+      File.write(File.join(dir, "db", "analytics_schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "page_views" do |t|\n    t.bigint "user_id"\n  end\n  create_table "email_messages" do |t|\n    t.string "to"\n  end\nend\n))
+      File.write(File.join(dir, "app", "models", "email_message.rb"), "class EmailMessage < Ahoy::Message\nend\n")
       File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < Ahoy::Event\n  connects_to database: { writing: :analytics }\nend\n")
       File.write(File.join(dir, "app", "models", "country.rb"), "class Country < ActiveHash::Base\n  has_many :people\nend\n")
       models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
 
       expect(models.keys).to include("PageView")
       expect(models["PageView"][:table_name]).to eq("page_views")
+      expect(models["EmailMessage"][:table_name]).to eq("ahoy_messages")
       expect(models.keys).not_to include("Country")
     end
   end

@@ -97,7 +97,8 @@ module RailsAiContext
       primary + secondary
     end
 
-    # The last few schemas' indexes; a process answers from one context at a time.
+    # A process answers from one context at a time, so a few schemas' indexes are enough.
+    TABLE_INDEXES_KEPT = 4
     TABLE_INDEXES = {}.compare_by_identity
     TABLE_INDEXES_LOCK = Mutex.new
 
@@ -110,7 +111,7 @@ module RailsAiContext
         stamped, index = TABLE_INDEXES[schema]
         return index if stamped == stamp
 
-        TABLE_INDEXES.shift while TABLE_INDEXES.size >= 4
+        TABLE_INDEXES.shift while TABLE_INDEXES.size >= TABLE_INDEXES_KEPT
         index = schema_tables(schema).group_by { |_, table, _| table.to_s }
         TABLE_INDEXES[schema] = [ stamp, index ]
         index

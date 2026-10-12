@@ -221,18 +221,17 @@ module RailsAiContext
         result
       end
 
-      # A private method is inherited like any other, so a parent's strong-params method is the
-      # child's too unless a nearer class defines that name, strong params or not.
+      # A parent's strong-params method is the child's too unless a nearer class defines that name.
       def inherited_strong_params(result, links)
-        overridden = Set.new
+        nearer_defs = Set.new
         links.each_with_object({}) do |(link, entry, source), by_name|
           params = entry ? Array(entry[:strong_params]) : base_class_declarations(source, link)[:strong_params]
           params.each do |sp|
-            next unless sp.is_a?(Hash) && !overridden.include?(sp[:name])
+            next unless sp.is_a?(Hash) && !nearer_defs.include?(sp[:name])
 
             by_name[sp[:name]] ||= link == links.first.first ? sp : sp.merge(from: link)
           end
-          overridden.merge(defined_methods(entry ? controller_source(entry) : source))
+          nearer_defs.merge(defined_methods(entry ? controller_source(entry) : source))
         end.values
       end
 
@@ -240,9 +239,17 @@ module RailsAiContext
         entry[:file] && SafeFile.read(File.join(app.root.to_s, entry[:file]))
       end
 
+      # The instance methods the class body defines, not a nested class's or a class method.
       def defined_methods(source)
         tree = source && AstCache.parse_string(source)&.value
-        tree ? AstWalk.each(tree).grep(Prism::DefNode).map { |def_node| def_node.name.to_s } : []
+        return [] unless tree
+
+        nodes = AstWalk.each(tree).to_a
+        elsewhere = nested_ranges(class_body_walk(source)) +
+                    nodes.grep(Prism::SingletonClassNode).map { |node| node.location.start_offset...node.location.end_offset }
+        nodes.grep(Prism::DefNode).filter_map do |def_node|
+          def_node.name.to_s if def_node.receiver.nil? && elsewhere.none? { |range| range.cover?(def_node.location.start_offset) }
+        end
       end
 
       # `clear_respond_to` empties the class attribute; each `respond_to` adds to it.
@@ -774,9 +781,11 @@ module RailsAiContext
       PERMITS = %i[permit! permit expect].freeze
       # What these return is still the permitted params; `[]`, `fetch` or `dig` returns one value.
       PARAMS_PRESERVING = %i[merge reverse_merge tap to_h to_hash slice except with_indifferent_access compact compact_blank].freeze
-      # A nested key of a strong-params method's answer (`permitted_params[:post]`) is params too, and so is
-      # what Devise's sanitizer gives.
+      # A nested key of a strong-params answer (`permitted_params[:post]`) is params too, as is Devise's `sanitize`.
       NESTED_PARAMS = %i[[] fetch require sanitize].freeze
+      VARIABLE_READS = [ Prism::LocalVariableReadNode, Prism::InstanceVariableReadNode ].freeze
+      # `x += 1` makes a new value, so only `=` and `||=` give a variable the one it holds.
+      VARIABLE_WRITES = [ Prism::LocalVariableWriteNode, Prism::LocalVariableOrWriteNode, Prism::InstanceVariableWriteNode, Prism::InstanceVariableOrWriteNode ].freeze
 
       # A method that permits: one named *_params anywhere in it, one of another name only when it returns
       # the permitted params themselves, so a helper that permits to build a URL, or reads one value, is not one.
@@ -875,7 +884,7 @@ module RailsAiContext
         return [] unless body
 
         nodes = AstWalk.each(body).to_a
-        writes = nodes.select { |n| n.class.name.match?(/\APrism::(?:LocalVariable|InstanceVariable)\w*WriteNode\z/) }
+        writes = nodes.select { |n| VARIABLE_WRITES.any? { |type| n.is_a?(type) } }
                       .group_by(&:name).transform_values { |found| found.max_by { |n| n.location.start_offset } }
         explicit = nodes.grep(Prism::ReturnNode).flat_map { |node| Array(node.arguments&.arguments) }
         [ body, *explicit ].flat_map { |node| tail_expressions(node) }.flat_map { |node| call_chains(node, writes, Set.new) }
@@ -904,7 +913,7 @@ module RailsAiContext
         case node
         when Prism::CallNode then call_chains(node.receiver, writes, seen).map { |chain| [ node, *chain ] }
         when Prism::SuperNode, Prism::ForwardingSuperNode then [ [ node ] ]
-        when Prism::LocalVariableReadNode, Prism::InstanceVariableReadNode
+        when *VARIABLE_READS
           return [ [] ] unless seen.add?(node.name)
 
           write = writes[node.name]
@@ -919,7 +928,7 @@ module RailsAiContext
         return {} unless body
 
         AstWalk.each(body).each_with_object({}) do |node, locals|
-          if node.is_a?(Prism::LocalVariableWriteNode) || node.is_a?(Prism::InstanceVariableWriteNode) || node.is_a?(Prism::InstanceVariableOrWriteNode)
+          if VARIABLE_WRITES.any? { |type| node.is_a?(type) }
             locals[node.name] = node.value if params_value?(node.value, locals)
           elsif node.is_a?(Prism::CallNode) && node.block.is_a?(Prism::BlockNode) && params_value?(node.receiver, locals)
             block_params = node.block.parameters
@@ -944,7 +953,7 @@ module RailsAiContext
       # A chain that starts at `params`, at `ActionController::Parameters.new`, or at a local holding one.
       def params_value?(node, locals)
         case node
-        when Prism::LocalVariableReadNode, Prism::InstanceVariableReadNode then locals.key?(node.name)
+        when *VARIABLE_READS then locals.key?(node.name)
         when Prism::CallNode
           return true if node.name == :params && own_receiver?(node)
           return node.receiver.slice.delete_prefix("::") == "ActionController::Parameters" if node.name == :new && node.receiver
@@ -968,7 +977,7 @@ module RailsAiContext
 
       # A local the method assigned from params reads as the value it holds.
       def through_local(node, locals)
-        node.is_a?(Prism::LocalVariableReadNode) || node.is_a?(Prism::InstanceVariableReadNode) ? locals[node.name] : node
+        VARIABLE_READS.any? { |type| node.is_a?(type) } ? locals[node.name] : node
       end
 
       def find_require_in_chain(node, locals = {})

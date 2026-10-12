@@ -373,12 +373,13 @@ module RailsAiContext
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
       end
 
-      # A concrete parent the app does not define sets the table, unread here; the
-      # schema picks among its names, plus the class's own for a parent that is abstract.
+      # A concrete parent the app does not define sets the table, unread here; the primary's schema picks
+      # among its names, plus the class's own for a parent that is abstract, then another database's dump.
       def outside_parent_tables(class_name, candidates, own, parent)
+        names = outside_parent_names(class_name, candidates, own, parent)
         reader = SchemaReader.for(app.root)
-        secondary = secondary_dump_tables || Set.new
-        outside_parent_names(class_name, candidates, own, parent).select { |table| reader.table?(table) || secondary.include?(table) }
+        primary = names.select { |table| reader.table?(table) }
+        primary.any? ? primary : names.select { |table| secondary_dump_tables&.include?(table) }
       end
 
       def outside_parent_names(class_name, candidates, own, parent)
