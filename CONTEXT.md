@@ -210,3 +210,33 @@ An install with every question answered on the command line, the way an AI tool 
 ## Install prompt
 
 A message a user pastes into their AI tool so the AI tool installs, changes, removes or starts using the gem in their app. `docs/PROMPTS.md` holds them. Each names its commands outright and runs an **unattended install**, since an AI tool's shell has no one at the keyboard to answer a question.
+
+## Database family
+
+The kind of engine a database is, as far as running a statement on it goes: PostgreSQL (PostGIS too), MySQL (Trilogy and MariaDB too) or SQLite. Each family knows how its engine opens a read-only transaction, bounds a statement in time, explains a plan and reports table sizes; anything else is no family, and a tool that needs one refuses or says the answer is not available, naming the adapter. `DatabaseFamily` is the one answer, from a connection, a database.yml adapter or a dump's dialect. ADR-0008 records why a family is claimed by name.
+
+Not "engine", which this glossary keeps for Rails engines and **mounted apps**, and not "adapter", which is ActiveRecord's class for one driver.
+
+## App database
+
+A database the app has in any environment: one database.yml configures for the running environment, one only another environment configures (Rails 8's queue, cache and cable outside production), or one only a committed dump names. `AppDatabases` lists them once per run, the primary first, and each knows the environment its entry came from, its **database family**, its dump and its migrations. Every surface that asks "which databases" reads this list, so the schema section, the models and the migrations cannot disagree about one app.
+
+A tool that needs a connection reaches an App database configured here and nothing else: asked for one that only production configures, it says so. Not the **environment** (one named Rails environment), and not a shard, which is one database's copy under another name.
+
+## Secret column
+
+A column whose values `rails_query` never returns, and whose name a statement may not mention: one the app lists in `query_redacted_columns`, an `encrypts` column, a built-in secret name, a name the result heuristic flags, or a name `Redaction`'s secret words cover, unless the app allows it by name in `query_allowed_columns` (an `encrypts` column stays secret even then). `SecretColumns` decides for every check in the tool, from one read of the schema.
+
+Not redaction itself: `Redaction` scrubs secret values out of text (logs, config, source). The two share the vocabulary, so a word added to one is secret in both.
+
+## SQL gate
+
+What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. `SqlGate`. The read-only transaction behind it is the second guard, never the only one (ADR-0008).
+
+## Served tool
+
+A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at.
+
+## Config section
+
+One part of the app's configuration that `rails_get_config` answers by `section`: `app` (the default: database, auth, assets, cache, queue, Action Cable, initializers, middleware), `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env` (the **process environment**), `env_config` (the **environment config**) and `i18n`. Ten of them were tools of their own; their names still reach their section from the CLI and the MCP server, and `skip_tools` lists them to turn a section off. ADR-0010.
