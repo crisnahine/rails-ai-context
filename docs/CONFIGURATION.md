@@ -205,6 +205,8 @@ fits neither that shape nor the conventional one.
 | `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list and from `query_redacted_columns` |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
+`rails_query` treats a column as secret when its name is in `query_redacted_columns` or the built-in list, an `encrypts` declaration covers it, it ends in `password`, `secret`, `token`, `key`, `digest` or `hash` (or contains `password`, `secret` or `token`), or it is a secret name to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the like). A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret, except an `encrypts` column, whose values stay filtered. See [SECURITY.md](SECURITY.md) for how each check reads the rule.
+
 ### Logs
 
 | Option | Type | Default | Description |

@@ -459,12 +459,7 @@ module RailsAiContext
       @extra_app_paths          = []
       @query_timeout            = 5
       @query_row_limit          = 100
-      @query_redacted_columns   = %w[
-        password_digest encrypted_password password_hash
-        reset_password_token confirmation_token unlock_token
-        otp_secret session_data secret_key
-        api_key api_secret access_token refresh_token jti
-      ]
+      @query_redacted_columns   = SecretColumns::DEFAULT_REDACTED_COLUMNS.dup
       @query_allowed_columns    = []
       @allow_query_in_production = false
       @log_lines                = 50
