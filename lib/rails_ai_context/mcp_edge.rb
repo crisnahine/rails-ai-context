@@ -87,11 +87,8 @@ module RailsAiContext
           "authentication and set config.allow_http_in_production = true."
       end
 
-      # The engine's transport, one per process. Not the controller's to keep:
-      # the engine's app/controllers is reloaded with the app's code, and a
-      # transport memoized on the controller class went with every edit in
-      # development, so the next call in each session answered 404 "Session
-      # not found", and the old transport's session reaper ran on.
+      # The engine's transport, one per process, so every session it opens is
+      # found again on the next request, whatever the app reloads in between.
       def engine_transport
         ENGINE_TRANSPORT_LOCK.synchronize { @engine_transport ||= build_transport(answered_whole: true) }
       end

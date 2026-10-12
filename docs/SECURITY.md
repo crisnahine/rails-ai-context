@@ -406,7 +406,7 @@ Both answer the hosts the app's `config.hosts` allows, judged by Rails' own Host
 
 `auto_mount` is `false` by default, and the engine exists only where you mount it. Mount it guarded, `if defined?(RailsAiContext::Engine)`, so the routes file still loads where the gem is not installed.
 
-The engine builds one transport per process, under a mutex, and keeps it outside the controller class, which the app's reloader replaces on every edit in development; a session lasts across edits.
+The engine builds one transport per process, under a mutex, outside the controller class, and the app's code reloader never replaces that class, so a session lasts across edits in development.
 
 ---
 

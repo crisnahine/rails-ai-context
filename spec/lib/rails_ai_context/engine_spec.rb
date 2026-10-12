@@ -63,8 +63,8 @@ RSpec.describe RailsAiContext::Engine do
   end
 
   describe "an app whose inflections make acronyms" do
-    # The app's loader and router camelize with the app's inflections, so "AI" or "MCP"
-    # named constants the gem does not define: eager loading raised and the mount 404'd.
+    # The app's loader and router camelize with the app's inflections; an acronym must not
+    # change the constant either one reaches.
     %w[AI MCP].each do |acronym|
       it "eager loads and answers at the mount with #{acronym} an acronym" do
         skip "eager_load_dir needs zeitwerk 2.6" unless Zeitwerk::Loader.method_defined?(:eager_load_dir)

@@ -3,7 +3,7 @@
 module RailsAiContext
   class Engine < ::Rails::Engine
     # The app's loader would camelize the controller's path with the app's inflections, and an
-    # acronym ("AI", "MCP") names a constant the file does not define, so it is required instead.
+    # acronym ("AI", "MCP") names a constant the file does not define, so Ruby autoloads it instead.
     initializer "rails_ai_context.controller" do
       Rails.autoloaders.main.ignore(root.join("app/controllers").to_s)
       RailsAiContext.autoload(:McpController, root.join("app/controllers/rails_ai_context/mcp_controller").to_s)

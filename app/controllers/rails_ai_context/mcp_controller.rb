@@ -169,8 +169,7 @@ module RailsAiContext
     end
 
     class << self
-      # The transport outlives this class, which the app's reloader replaces
-      # on every edit in development (McpEdge.engine_transport).
+      # One transport per process, kept by McpEdge.engine_transport.
       def mcp_transport
         McpEdge.engine_transport
       end
