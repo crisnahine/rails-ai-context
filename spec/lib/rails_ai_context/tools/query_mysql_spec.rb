@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "uri"
 
 # rails_query against a real MySQL and a real MariaDB, where no result column is traced to its table
 # column. Each group runs only when its URL is set.
@@ -111,10 +112,10 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       it "answers a timeout as an error, inside the timeout" do
         RailsAiContext.configuration.query_timeout = 0.5
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        response = answer("SELECT id FROM rac_my_accounts WHERE SLEEP(2) = 0")
+        response = nil
+        took = seconds { response = answer("SELECT id FROM rac_my_accounts WHERE SLEEP(2) = 0") }
 
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        expect(took).to be < 2
         expect(response.error?).to be(true)
         expect(response.content.first[:text]).to start_with("Query exceeded 0.5 second timeout")
       end
@@ -123,24 +124,20 @@ RSpec.describe RailsAiContext::Tools::Query do
         RailsAiContext.configuration.query_timeout = 1
         limits = "SELECT @@SESSION.lock_wait_timeout, @@SESSION.#{conn.mariadb? ? "max_statement_time" : "max_execution_time"}"
         before = conn.select_rows(limits)
-        stub_const("RacMysqlLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
-        RacMysqlLockRecord.establish_connection(ENV.fetch(env))
-        locker = RacMysqlLockRecord.connection_pool.checkout
-        locker.execute("LOCK TABLES rac_my_accounts WRITE")
 
-        [ false, true ].each do |explain|
-          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          response = answer("SELECT id FROM rac_my_accounts", explain: explain)
-          took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+        second_session(ENV.fetch(env)) do |locker|
+          locker.execute("LOCK TABLES rac_my_accounts WRITE")
 
-          expect(response.error?).to be(true), "explain: #{explain}"
-          expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
-          expect(took).to be_between(0.9, 2.5)
+          [ false, true ].each do |explain|
+            response = nil
+            took = seconds { response = answer("SELECT id FROM rac_my_accounts", explain: explain) }
+
+            expect(response.error?).to be(true), "explain: #{explain}"
+            expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+            expect(took).to be_between(0.9, 2.5)
+          end
         end
         expect(conn.select_rows(limits)).to eq(before)
-      ensure
-        locker&.execute("UNLOCK TABLES")
-        RacMysqlLockRecord.remove_connection if defined?(RacMysqlLockRecord)
       end
 
       it "names a database at a port nothing listens on, and says to start its server" do
@@ -151,10 +148,10 @@ RSpec.describe RailsAiContext::Tools::Query do
                          "closed" => { "url" => "#{uri}?connect_timeout=2" } }
         )
         allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        response = answer("SELECT 1", database: "closed")
+        response = nil
+        took = seconds { response = answer("SELECT 1", database: "closed") }
 
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 4
+        expect(took).to be < 4
         expect(response.error?).to be(true)
         expect(response.content.first[:text]).to start_with("The closed database cannot be reached: ")
           .and end_with("Start its server, or fix its settings in config/database.yml.")

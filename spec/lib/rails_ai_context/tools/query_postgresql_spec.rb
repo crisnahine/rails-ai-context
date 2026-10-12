@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "socket"
+require "uri"
 
 # rails_query's secret column checks against a real PostgreSQL, where the plan
 # checks and provenance redaction run. Runs only when RAC_TEST_PG_URL is set.
@@ -93,50 +95,44 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   # The lock holds planning past the timeout and is gone before the statement's own timeout would end.
-  # It is taken after the schema read, which Rails runs with no timeout.
+  # It is taken after the schema read, so the read that waits on it is planning.
   it "runs nothing when another connection holds a lock on the table past the timeout" do
     RailsAiContext.configuration.query_timeout = 1
-    stub_const("RacPgLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
-    RacPgLockRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
-    locker = RacPgLockRecord.connection_pool.checkout
 
-    [ "SELECT row_to_json(a) FROM rac_pg_accounts a", "WITH a AS (SELECT * FROM rac_pg_accounts) SELECT row_to_json(a) FROM a",
-      "EXPLAIN ANALYZE SELECT row_to_json(a) FROM rac_pg_accounts a" ].each do |sql|
-      response = RailsAiContext::RunCache.around do
-        RailsAiContext::SecretColumns.for(conn, context: {})
-        locker.execute("BEGIN")
-        locker.execute("LOCK TABLE rac_pg_accounts IN ACCESS EXCLUSIVE MODE")
-        release = Thread.new { sleep 1.5 and locker.execute("ROLLBACK") }
-        described_class.call(sql: sql).tap { release.join }
+    second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+      [ "SELECT row_to_json(a) FROM rac_pg_accounts a", "WITH a AS (SELECT * FROM rac_pg_accounts) SELECT row_to_json(a) FROM a",
+        "EXPLAIN ANALYZE SELECT row_to_json(a) FROM rac_pg_accounts a" ].each do |sql|
+        response = RailsAiContext::RunCache.around do
+          RailsAiContext::SecretColumns.for(conn, context: {})
+          locker.execute("BEGIN")
+          locker.execute("LOCK TABLE rac_pg_accounts IN ACCESS EXCLUSIVE MODE")
+          release = Thread.new { sleep 1.5 and locker.execute("ROLLBACK") }
+          described_class.call(sql: sql).tap { release.join }
+        end
+
+        expect(response.error?).to be(true), sql
+        expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+        expect(response.content.first[:text]).not_to include("salt-value", "token-value")
       end
-
-      expect(response.error?).to be(true), sql
-      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
-      expect(response.content.first[:text]).not_to include("salt-value", "token-value")
     end
-  ensure
-    RacPgLockRecord.remove_connection if defined?(RacPgLockRecord)
   end
 
   it "answers the timeout inside twice query_timeout when the lock is held before the call starts and never let go" do
     RailsAiContext.configuration.query_timeout = 1
-    stub_const("RacPgLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
-    RacPgLockRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
-    locker = RacPgLockRecord.connection_pool.checkout
-    locker.execute("BEGIN")
-    locker.execute("LOCK TABLE rac_pg_accounts IN ACCESS EXCLUSIVE MODE")
 
-    [ "SELECT id FROM rac_pg_accounts", "SELECT 1 AS one" ].each do |sql|
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      response = run(sql)
-      took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+      locker.execute("BEGIN")
+      locker.execute("LOCK TABLE rac_pg_accounts IN ACCESS EXCLUSIVE MODE")
 
-      expect(response.error?).to be(true), sql
-      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
-      expect(took).to be_between(0.9, 2.5), sql
+      [ "SELECT id FROM rac_pg_accounts", "SELECT 1 AS one" ].each do |sql|
+        response = nil
+        took = seconds { response = run(sql) }
+
+        expect(response.error?).to be(true), sql
+        expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+        expect(took).to be_between(0.9, 2.5), sql
+      end
     end
-  ensure
-    RacPgLockRecord.remove_connection if defined?(RacPgLockRecord)
   end
 
   describe "a database no connection reaches" do
@@ -154,9 +150,8 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
 
     def answer(name)
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      response = RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1", database: name) }
-      @took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      response = nil
+      @took = seconds { response = RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1", database: name) } }
       expect(response.error?).to be(true)
       response.content.first[:text]
     end

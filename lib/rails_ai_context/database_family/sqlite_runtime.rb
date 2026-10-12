@@ -14,6 +14,13 @@ module RailsAiContext
       # A row-capped result is far below this; a larger prefix is a corrupt one.
       MAX_RESULT_BYTES = 1 << 30
 
+      # A plan row that reads a table: the step, then the table's name or, for a table the statement
+      # renames, the alias alone ("SEARCH u USING INDEX i"). SQLite before 3.36 wrote "SCAN TABLE users AS u".
+      PLAN_STEP = /\A(SCAN|SEARCH)\s+(?:TABLE\s+)?(.+?)(?:\s+AS\s+\S+)?(?=\s+USING\b|\s+VIRTUAL TABLE\b|\z)/
+
+      # pragma_table_xinfo's hidden flag: 2 is a virtual generated column, 3 a stored one.
+      GENERATED = [ 2, 3 ].freeze
+
       # COUNT(*) walks the whole table; a count that stops here reads at most this many rows.
       COUNT_CAP = 100_000
 
@@ -60,17 +67,20 @@ module RailsAiContext
         result = read_only(conn, "EXPLAIN QUERY PLAN #{sql}", timeout)
         scans = []
         warnings = []
+        tables = conn.data_sources.map(&:downcase)
         raw_lines = result.rows.map do |row|
           # Columns: id, parent, notused, detail.
           detail = row.last.to_s
-          index = detail.match(/USING.*INDEX\s+(\w+)/i)&.captures&.first
-          if detail.match?(/SCAN\b/i)
-            table = detail.match(/SCAN\s+(?:TABLE\s+)?(\w+)/i)&.captures&.first
-            scan_type = detail.match?(/USING.*INDEX/i) ? "index scan" : "full table scan"
-            scans << { table: table, type: scan_type, index: index }
-            warnings << "Full table scan on #{table}" if scan_type == "full table scan" && table
-          elsif detail.match?(/SEARCH\b/i)
-            scans << { table: detail.match(/SEARCH\s+(?:TABLE\s+)?(\w+)/i)&.captures&.first, type: "index search", index: index }
+          step, name = detail.match(PLAN_STEP)&.captures
+          # "SCAN CONSTANT ROW" reads no table.
+          if step && name != "CONSTANT ROW"
+            table = tables.include?(name.downcase) ? name : "#{name} (a name the statement gives)"
+            type = if step == "SEARCH" then "index search"
+            elsif detail.match?(/USING.*INDEX/) then "index scan"
+            else "full table scan"
+            end
+            scans << { table: table, type: type, index: detail[/USING.*INDEX\s+(\w+)/, 1] }
+            warnings << "Full table scan on #{table}" if type == "full table scan"
           end
           detail
         end
@@ -86,10 +96,10 @@ module RailsAiContext
       end
 
       def relation_columns(conn)
-        conn.select_rows(
+        DatabaseFamily.by_table(conn.select_rows(
           "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
           "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, p.cid"
-        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
+        )).transform_values(&:flatten)
       end
 
       # The body only: the header names the view itself. A temporary view lives in its own catalogue.
@@ -103,15 +113,16 @@ module RailsAiContext
       # mention of every column taken out: a column name still in it is one some expression reads.
       def generated_columns(conn)
         rows = conn.select_rows(
-          "SELECT m.name, m.sql, p.name, p.hidden FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
+          "SELECT m.name, p.name, p.hidden, m.sql FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
           "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
         )
-        rows.group_by(&:first).each_with_object({}) do |(table, columns), found|
-          generated = columns.select { |column| column[3].to_i >= 2 }
+        DatabaseFamily.by_table(rows).each_with_object({}) do |(table, columns), found|
+          generated = columns.filter_map { |name, hidden, _| name if GENERATED.include?(hidden.to_i) }
           next if generated.empty?
 
-          read = columns.reduce(columns.first[1].to_s) { |text, column| text.sub(/\b#{Regexp.escape(column[2])}\b/i, " ") }
-          found[table] = generated.to_h { |column| [ column[2], read ] }
+          definition = columns.first.last.to_s
+          read = columns.reduce(definition) { |text, (name, _)| text.sub(/\b#{Regexp.escape(name)}\b/i, " ") }
+          found[table] = generated.to_h { |name| [ name, read ] }
         end
       end
 

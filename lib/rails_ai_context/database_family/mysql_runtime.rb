@@ -7,7 +7,13 @@ module RailsAiContext
     module MysqlRuntime
       module_function
 
+      # MySQL has no way to make a transaction read-only once it is open, or to scope that to a savepoint.
+      IN_TRANSACTION = "MySQL cannot make a transaction that is already open read-only, so the statement " \
+        "was not sent. Run it outside the transaction."
+
       def read_only(conn, sql, timeout)
+        raise Unsupported, IN_TRANSACTION if conn.transaction_open?
+
         result = bounded(conn, timeout) { in_read_only_transaction(conn, sql) }
         Rows.new(result.columns, result.rows, false)
       end
@@ -41,14 +47,7 @@ module RailsAiContext
         result
       end
 
-      # Rails 7.1+ answers mariadb?; the server version is the fallback.
-      def mariadb?(conn)
-        return conn.mariadb? if conn.respond_to?(:mariadb?)
-
-        conn.select_value("SELECT VERSION()").to_s.include?("MariaDB")
-      rescue StandardError
-        false
-      end
+      def mariadb?(conn) = conn.mariadb?
 
       def explain(conn, sql, timeout)
         # MySQL 8.3+ defaults to TREE output, which has no table/type/key columns. MariaDB has no FORMAT=TRADITIONAL.
@@ -93,11 +92,11 @@ module RailsAiContext
       end
 
       def relation_columns(conn)
-        conn.select_rows(
+        DatabaseFamily.by_table(conn.select_rows(
           "SELECT c.TABLE_NAME, c.COLUMN_NAME FROM information_schema.COLUMNS c JOIN information_schema.TABLES t " \
           "ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME " \
           "WHERE c.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE' ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION"
-        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
+        )).transform_values(&:flatten)
       end
 
       # The definition is empty for a view the account may not SHOW.
@@ -106,10 +105,10 @@ module RailsAiContext
       end
 
       def generated_columns(conn)
-        conn.select_rows(
+        DatabaseFamily.by_table(conn.select_rows(
           "SELECT TABLE_NAME, COLUMN_NAME, GENERATION_EXPRESSION FROM information_schema.COLUMNS " \
           "WHERE TABLE_SCHEMA = DATABASE() AND GENERATION_EXPRESSION <> ''"
-        ).each_with_object({}) { |(table, column, expression), found| (found[table] ||= {})[column] = expression }
+        )).transform_values(&:to_h)
       end
 
       # Base tables only: a view has no rows or bytes of its own.

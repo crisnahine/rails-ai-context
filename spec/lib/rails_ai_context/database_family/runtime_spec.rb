@@ -33,6 +33,8 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       def mariadb? = @mariadb
 
+      def transaction_open? = @in_transaction || false
+
       def execute(sql)
         raise ActiveRecord::StatementInvalid, "1568" if @in_transaction && sql.start_with?("SET TRANSACTION")
 
@@ -156,6 +158,14 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "refuses a guarded read inside a transaction that is already open, and sends nothing" do
+      conn.transaction do
+        expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }
+          .to raise_error(described_class::Unsupported, /already open/)
+      end
+      expect(conn.statements).to eq([ "BEGIN" ])
+    end
+
     it "reads a 3024 or 1317 as a timeout" do
       [ 3024, 1317 ].each do |code|
         conn.failure = driver_error(ActiveRecord::StatementInvalid, code)
@@ -166,6 +176,17 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     it "reads ActiveRecord's own timeout classes as a timeout" do
       conn.failure = ActiveRecord::StatementTimeout.new("stopped")
       expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }.to raise_error(described_class::TimedOut)
+    end
+
+    it "reads a lock wait the database's own lock timeout ended as a timeout" do
+      conn.failure = ActiveRecord::LockWaitTimeout.new("canceling statement due to lock timeout")
+      expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }.to raise_error(described_class::TimedOut)
+    end
+
+    it "raises a connection the server dropped as itself", if: defined?(ActiveRecord::ConnectionFailed) do
+      conn.failure = ActiveRecord::ConnectionFailed.new("server closed the connection")
+      expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }
+        .to raise_error(ActiveRecord::ConnectionFailed) { |e| expect(e).not_to be_a(described_class::TimedOut) }
     end
 
     it "reads an error that mentions a timeout column as an SQL error" do
@@ -236,7 +257,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
           def select_all(_sql) = ActiveRecord::Result.new(%w[x], [ [ 1 ] ])
 
-          def transaction
+          def transaction(**)
             yield
           rescue ActiveRecord::Rollback
             nil
@@ -280,7 +301,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
         def execute(sql) = @statements << sql
 
-        def transaction
+        def transaction(requires_new:)
           @statements << "BEGIN"
           yield
         rescue ActiveRecord::Rollback
@@ -351,6 +372,22 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       sent
     ensure
       ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "explains a statement by the tables it reads, says which names the statement gave, and reads no table for a constant row" do
+      joined = described_class::SQLITE.explain(@conn, "SELECT a.id FROM accounts a JOIN notes ON notes.id = a.id", timeout: 5)
+      constant = described_class::SQLITE.explain(@conn, "SELECT 1", timeout: 5)
+
+      expect(joined[:scan_types].map { |scan| scan[:table] }).to contain_exactly("a (a name the statement gives)", "notes")
+      expect(joined[:warnings]).to all(start_with("Full table scan on "))
+      expect(constant).to include(scan_types: [], warnings: [], raw: "SCAN CONSTANT ROW")
+    end
+
+    it "explains a search of a table the statement names scan as a search" do
+      @conn.execute("CREATE INDEX notes_id ON notes (id)")
+
+      expect(described_class::SQLITE.explain(@conn, "SELECT scan.body FROM notes scan WHERE scan.id = 1", timeout: 5)[:scan_types])
+        .to eq([ { table: "scan (a name the statement gives)", type: "index search", index: "notes_id" } ])
     end
 
     it "lists every table's columns, generated ones too, in one statement" do
@@ -447,6 +484,18 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         expect { described_class::SQLITE.read_only(conn, "SELECT nope", timeout: 5) }
           .to raise_error(ActiveRecord::StatementInvalid, /no such column: nope/)
         expect(conn).to have_received(:throw_away!)
+      end
+
+      it "leaves a transaction that is already open as it found it" do
+        conn.transaction do
+          conn.execute("INSERT INTO big VALUES (2001)")
+          expect { described_class::SQLITE.read_only(conn, "INSERT INTO big VALUES (9)", timeout: 5) }
+            .to raise_error(ActiveRecord::StatementInvalid, /readonly/)
+          expect(described_class::SQLITE.read_only(conn, "SELECT count(*) FROM big", timeout: 5).rows).to eq([ [ 2001 ] ])
+          conn.execute("INSERT INTO big VALUES (2002)")
+        end
+
+        expect(conn.select_value("SELECT count(*) FROM big")).to eq(2002)
       end
 
       it "times a statement out at once when the timeout is zero" do

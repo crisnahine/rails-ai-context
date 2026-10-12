@@ -11,7 +11,7 @@ module RailsAiContext
 
       attr_reader :nodes, :aliases
 
-      # @param top [Hash] the plan's top node, as DatabaseFamily#plan returns it
+      # @param top [Hash] the plan's top node, as Family#plan returns it
       def initialize(top)
         @top = top
         @nodes = []

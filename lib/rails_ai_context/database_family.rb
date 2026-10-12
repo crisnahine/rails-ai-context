@@ -7,7 +7,7 @@ module RailsAiContext
     # A statement ran past the timeout it was given.
     class TimedOut < RailsAiContext::Error; end
 
-    # The adapter has no family, so nothing was sent to its database.
+    # The read cannot be guarded (an adapter with no family, a MySQL transaction already open), so nothing was sent.
     class Unsupported < RailsAiContext::Error; end
 
     # Rows from a guarded read; unbounded when no timeout could hold it.
@@ -58,10 +58,8 @@ module RailsAiContext
         runtime.plan(connection, sql, timeout)
       end
 
-      # @param plan [Hash, nil] the statement's plan, when one was read already
-      # @return [Array<Array(Integer, String, String)>] [result column index, the table column it reads, its relation];
-      #   the column is nil when the relation's columns could not be read, the relation nil when it is unknown too;
-      #   [] where the family cannot say
+      # @return [Array<Array(Integer, String, String)>] [result column index, table column, relation] from the
+      #   plan; the column is nil where the relation's columns could not be read; [] where the family cannot say
       def column_sources(connection, sql, plan:)
         runtime.column_sources(connection, sql, plan)
       end
@@ -144,6 +142,11 @@ module RailsAiContext
       ""
     end
 
+    # @return [Hash{String => Array<Array>}] catalogue rows grouped by their first field, the table, without it
+    def by_table(rows)
+      rows.group_by(&:first).transform_values { |found| found.map { |row| row.drop(1) } }
+    end
+
     # Runs the block and raises TimedOut for a database's timeout. Message text is never read.
     def bounding
       yield
@@ -166,7 +169,11 @@ module RailsAiContext
     end
 
     def timed_out?(error)
+      # A connection the server dropped is a QueryAborted on Rails 7.1 and later, and it is no timeout.
+      return false if defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed)
       return true if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
+      # A wait on a lock that the database's own lock timeout ended.
+      return true if error.is_a?(ActiveRecord::LockWaitTimeout)
 
       cause = error.cause
       # A SQLite read that waited out the connection's busy timeout. Rails 7.0 gives it no class of its own.

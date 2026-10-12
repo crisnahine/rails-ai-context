@@ -14,10 +14,11 @@ module RailsAiContext
       end
 
       # statement_timeout ends each statement in the block, a wait on a lock included. Read-only, rolled back.
+      # Inside a transaction that is already open it is a savepoint, whose rollback puts both settings back.
       def bounded(conn, timeout)
         result = nil
         DatabaseFamily.bounding do
-          conn.transaction do
+          conn.transaction(requires_new: true) do
             conn.execute("SET TRANSACTION READ ONLY")
             conn.execute("SET LOCAL statement_timeout = '#{[ (timeout * 1000).to_i, 1 ].max}'")
             result = yield
@@ -94,11 +95,11 @@ module RailsAiContext
 
       # The tables Rails lists, in one read that takes no lock on any of them.
       def relation_columns(conn)
-        conn.select_rows(
+        DatabaseFamily.by_table(conn.select_rows(
           "SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
           "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND a.attnum > 0 " \
           "AND NOT a.attisdropped AND n.nspname = ANY (current_schemas(false)) ORDER BY c.relname, a.attnum"
-        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
+        )).transform_values(&:flatten)
       end
 
       def view_definitions(_conn)
@@ -109,11 +110,11 @@ module RailsAiContext
       def generated_columns(conn)
         return {} if conn.database_version < 12_00_00
 
-        conn.select_rows(
+        DatabaseFamily.by_table(conn.select_rows(
           "SELECT c.relname, a.attname, pg_get_expr(d.adbin, d.adrelid) FROM pg_attribute a " \
           "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " \
           "WHERE a.attgenerated <> '' AND NOT a.attisdropped"
-        ).each_with_object({}) { |(table, column, expression), found| (found[table] ||= {})[column] = expression }
+        )).transform_values(&:to_h)
       end
 
       def relation_name(conn, oid)

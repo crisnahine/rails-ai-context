@@ -9,12 +9,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     ENV[env] ? false : "set #{env} to run this family against a real database server"
   end
 
-  def elapsed
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    yield
-  ensure
-    @took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-  end
 
   let(:conn) { RacServerSpecRecord.connection }
   let(:family) { described_class.of(conn) }
@@ -31,15 +25,21 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
   end
 
-  # A second session on the same server, to hold a lock the first one waits on.
-  def other_session(env)
-    stub_const("RacServerLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
-    RacServerLockRecord.establish_connection(ENV.fetch(env))
-    RacServerLockRecord.connection_pool.checkout
+  # Ends the first session from a second one while the block's statement runs. The dead
+  # connection leaves the pool, so the cleanup after the example gets a new one.
+  def dropping_the_connection(env, find_id, drop)
+    id = conn.select_value(find_id)
+    second_session(ENV.fetch(env)) do |other|
+      dropper = Thread.new { sleep 0.5 and other.execute(format(drop, id)) }
+      yield
+    ensure
+      dropper&.join
+    end
+  ensure
+    RacServerSpecRecord.connection_pool.disconnect!
   end
 
   after do
-    RacServerLockRecord.remove_connection if defined?(RacServerLockRecord)
     if defined?(RacServerSpecRecord)
       RacServerSpecRecord.connection.execute("DROP VIEW IF EXISTS rac_server_view")
       RacServerSpecRecord.connection.execute("DROP TABLE IF EXISTS rac_server_rows")
@@ -89,11 +89,11 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     it_behaves_like "a guarded database server"
 
     it "bounds a WITH statement" do
-      elapsed do
+      took = seconds do
         expect { family.read_only(conn, "WITH t AS (SELECT id FROM rac_server_rows) SELECT id FROM t WHERE SLEEP(1) = 0", timeout: 0.5) }
           .to raise_error(described_class::TimedOut)
       end
-      expect(@took).to be < 2
+      expect(took).to be < 2
     end
 
     it "bounds a statement when the timeout is zero or under a millisecond" do
@@ -106,19 +106,39 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     it "ends a read that waits on another session's table lock, and puts the session's own limits back" do
       limits = "SELECT @@SESSION.lock_wait_timeout, @@SESSION.#{conn.mariadb? ? "max_statement_time" : "max_execution_time"}"
       before = conn.select_rows(limits)
-      locker = other_session(env)
-      locker.execute("LOCK TABLES rac_server_rows WRITE")
 
-      # EXPLAIN is outside what MySQL's max_execution_time covers, so lock_wait_timeout ends its wait.
-      [ "SELECT id FROM rac_server_rows", "EXPLAIN SELECT id FROM rac_server_rows" ].each do |sql|
-        elapsed { expect { family.bounded(conn, timeout: 0.5) { conn.select_all(sql) } }.to raise_error(described_class::TimedOut), sql }
-        expect(@took).to be < 3
-        elapsed { expect { family.explain(conn, "SELECT id FROM rac_server_rows", timeout: 0.5) }.to raise_error(described_class::TimedOut) }
-        expect(@took).to be < 3
+      second_session(ENV.fetch(env)) do |locker|
+        locker.execute("LOCK TABLES rac_server_rows WRITE")
+        # EXPLAIN is outside what MySQL's max_execution_time covers, so lock_wait_timeout ends its wait.
+        waits = {
+          "a read" => -> { family.bounded(conn, timeout: 0.5) { conn.select_all("SELECT id FROM rac_server_rows") } },
+          "a bare EXPLAIN" => -> { family.bounded(conn, timeout: 0.5) { conn.select_all("EXPLAIN SELECT id FROM rac_server_rows") } },
+          "the family's explain" => -> { family.explain(conn, "SELECT id FROM rac_server_rows", timeout: 0.5) }
+        }
+        waits.each do |name, wait|
+          expect(seconds { expect(&wait).to raise_error(described_class::TimedOut), name }).to be < 3, name
+        end
       end
       expect(conn.select_rows(limits)).to eq(before)
-    ensure
-      locker&.execute("UNLOCK TABLES")
+    end
+
+    it "raises a connection the server dropped while the statement ran as itself" do
+      dropping_the_connection(env, "SELECT CONNECTION_ID()", "KILL CONNECTION %d") do
+        expect { family.read_only(conn, "SELECT id FROM rac_server_rows WHERE SLEEP(5) = 0", timeout: 5) }
+          .to raise_error(ActiveRecord::ActiveRecordError) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+      end
+    end
+
+    it "refuses a guarded read inside a transaction that is already open, bounds a block of reads there, and leaves it open" do
+      conn.transaction do
+        conn.execute("INSERT INTO rac_server_rows VALUES (4)")
+        expect { family.read_only(conn, "SELECT id FROM rac_server_rows", timeout: 5) }
+          .to raise_error(described_class::Unsupported, /already open/)
+        expect(family.bounded(conn, timeout: 5) { conn.select_value("SELECT COUNT(*) FROM rac_server_rows") }.to_i).to eq(4)
+        conn.execute("INSERT INTO rac_server_rows VALUES (5)")
+      end
+
+      expect(conn.select_value("SELECT COUNT(*) FROM rac_server_rows").to_i).to eq(5)
     end
 
     it "reads the view definitions and generated column expressions the rule checks" do
@@ -136,13 +156,13 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     it_behaves_like "a guarded database server"
 
     it "bounds a statement" do
-      elapsed { expect { family.read_only(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut) }
-      expect(@took).to be < 2
+      took = seconds { expect { family.read_only(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut) }
+      expect(took).to be < 2
     end
 
     it "bounds EXPLAIN ANALYZE" do
-      elapsed { expect { family.explain(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut) }
-      expect(@took).to be < 2
+      took = seconds { expect { family.explain(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut) }
+      expect(took).to be < 2
     end
 
     it "bounds a statement when the timeout is zero or under a millisecond" do
@@ -152,15 +172,51 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
 
     it "ends a block of reads that waits on another session's lock, at the timeout" do
-      locker = other_session("RAC_TEST_PG_URL")
-      locker.execute("BEGIN")
-      locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
 
-      elapsed { expect { family.bounded(conn, timeout: 0.5) { conn.select_all("SELECT id FROM rac_server_rows") } }.to raise_error(described_class::TimedOut) }
-      expect(@took).to be < 3
-      expect(family.bounded(conn, timeout: 0.5) { family.relation_columns(conn).fetch("rac_server_rows") }).to eq(%w[id])
-    ensure
-      locker&.execute("ROLLBACK")
+        took = seconds do
+          expect { family.bounded(conn, timeout: 0.5) { conn.select_all("SELECT id FROM rac_server_rows") } }.to raise_error(described_class::TimedOut)
+        end
+        expect(took).to be < 3
+        expect(family.bounded(conn, timeout: 0.5) { family.relation_columns(conn).fetch("rac_server_rows") }).to eq(%w[id])
+      end
+    end
+
+    it "reads a lock wait the session's own lock_timeout ended as the timeout" do
+      conn.execute("SET lock_timeout = '200ms'")
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
+
+        expect { family.read_only(conn, "SELECT id FROM rac_server_rows", timeout: 5) }.to raise_error(described_class::TimedOut)
+      end
+    end
+
+    it "raises a connection the server dropped while the statement ran as itself" do
+      dropping_the_connection("RAC_TEST_PG_URL", "SELECT pg_backend_pid()", "SELECT pg_terminate_backend(%d)") do
+        expect { family.read_only(conn, "SELECT pg_sleep(5)", timeout: 5) }
+          .to raise_error(ActiveRecord::ActiveRecordError) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+      end
+    end
+
+    it "guards a read inside a transaction that is already open, and leaves the transaction as it found it" do
+      settings = "SELECT current_setting('transaction_read_only'), current_setting('statement_timeout')"
+      conn.transaction do
+        conn.execute("INSERT INTO rac_server_rows VALUES (4)")
+        before = conn.select_rows(settings)
+
+        expect { family.read_only(conn, "INSERT INTO rac_server_rows VALUES (9)", timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid)
+        expect { family.read_only(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut)
+        expect(family.read_only(conn, "SELECT count(*) FROM rac_server_rows", timeout: 5).rows.flatten.map(&:to_i)).to eq([ 4 ])
+        expect(family.bounded(conn, timeout: 5) { conn.select_value("SELECT current_setting('transaction_read_only')") }).to eq("on")
+
+        expect(conn.select_rows(settings)).to eq(before)
+        conn.execute("INSERT INTO rac_server_rows VALUES (5)")
+      end
+
+      expect(conn.select_value("SELECT count(*) FROM rac_server_rows").to_i).to eq(5)
     end
 
     it "raises planning's SQL error" do
@@ -196,8 +252,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     it_behaves_like "a MySQL-family database server", "RAC_TEST_MYSQL_URL"
 
     it "bounds EXPLAIN ANALYZE" do
-      elapsed { family.read_only(conn, "EXPLAIN ANALYZE SELECT id FROM rac_server_rows WHERE SLEEP(1) = 0", timeout: 0.5) }
-      expect(@took).to be < 2
+      expect(seconds { family.read_only(conn, "EXPLAIN ANALYZE SELECT id FROM rac_server_rows WHERE SLEEP(1) = 0", timeout: 0.5) }).to be < 2
     end
 
     it "restores the session's own max_execution_time, also after a timeout" do
