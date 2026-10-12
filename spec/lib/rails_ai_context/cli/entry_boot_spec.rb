@@ -211,6 +211,52 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
   end
 
+  # Bundler.setup marks each gem loaded and adds the load paths only after the loop, so a
+  # version clash mid-loop (Consul's sassc-embedded activating json before bundler/setup)
+  # left activesupport registered with no path, and the static fallback could not load it.
+  describe "splicing the binstub's gems back for the static tier" do
+    around do |example|
+      stash = described_class.preboot_gem_specs
+      paths = $LOAD_PATH.dup
+      example.run
+    ensure
+      described_class.preboot_gem_specs = stash
+      $LOAD_PATH.replace(paths)
+    end
+
+    def splice(loaded)
+      described_class.preboot_gem_specs = {
+        "activesupport" => instance_double(Gem::Specification, name: "activesupport", full_require_paths: [ "/fake/as-binstub/lib" ])
+      }
+      allow(Gem).to receive(:loaded_specs).and_return(loaded)
+      allow(described_class).to receive(:require).with("rails_ai_context").and_return(true)
+      described_class.require_gem_without_app!
+    end
+
+    def app_spec(default: false)
+      instance_double(Gem::Specification, name: "activesupport", default_gem?: default, full_require_paths: [ "/fake/as-app/lib" ])
+    end
+
+    it "puts a gem back that a raised Bundler.setup marked loaded without its path" do
+      splice({ "activesupport" => app_spec })
+
+      expect($LOAD_PATH).to include("/fake/as-binstub/lib")
+    end
+
+    it "leaves a gem a completed Bundler.setup pinned" do
+      $LOAD_PATH.unshift("/fake/as-app/lib")
+      splice({ "activesupport" => app_spec })
+
+      expect($LOAD_PATH).not_to include("/fake/as-binstub/lib")
+    end
+
+    it "leaves a default gem the app's lock pins, whose path is never on $LOAD_PATH" do
+      splice({ "activesupport" => app_spec(default: true) })
+
+      expect($LOAD_PATH).not_to include("/fake/as-binstub/lib")
+    end
+  end
+
   # A restored gem path appended to the end of $LOAD_PATH sits behind Ruby's
   # own lib dirs, so a gem with a default-gem twin loads half from each: prism
   # answered `require "prism"` from Ruby 3.4's copy and `require "prism/prism"`
