@@ -126,7 +126,7 @@ module RailsAiContext
       # Unquoted, the name needs the space a header has after its colon, so
       # `Authorization::UnauthorizedError` is a class.
       [ /(?:(?<quote>["'])(?:HTTP_(?:PROXY_)?|Proxy-|X-)?authorization\k<quote>\s*(?:=>|:|=(?!>))\s*|authorization:\s+)
-         (?<value>(?!["']?\[FILTERED\])(?:"[^"]*"|'[^']*'
+         (?<value>(?!["']?\[FILTERED\])(?:"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'
            |(?:Token|Digest)\s+[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+)(?:,\s*[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+))*
            |(?:(?:Bearer|Basic|Token)\s+)?(?:\[FILTERED\]|="[^"]*"|[^\s"',;)\]}])+))/xi, :value ],
       [ /cookie:\s(?<value>#{LOG_VALUE})/i, :value ],

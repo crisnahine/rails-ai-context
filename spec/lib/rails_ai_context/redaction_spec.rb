@@ -786,6 +786,8 @@ RSpec.describe RailsAiContext::Redaction do
         .to eq("Authorization: [FILTERED]")
       expect(described_class.redact_log_line(%(Authorization: Digest username="bob", realm="api", nonce="n1", uri="/x", response="6629fae49393a05397450978507c4ef1")))
         .to eq("Authorization: [FILTERED]")
+      expect(described_class.redact_log_line(%({"Authorization"=>"Digest username=\\"bob\\", response=\\"deadbeef12\\""})))
+        .to eq(%({"Authorization"=>"[FILTERED]"}))
     end
 
     it "filters a password confirmation in request parameters" do
