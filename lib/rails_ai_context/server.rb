@@ -186,8 +186,8 @@ module RailsAiContext
       RunCache.around { merge_tools(active_tools(config), resolve_custom_tools(config), warn: false) }
     end
 
-    # The tool served under this name, or nil, loading only that class: a built-in, then
-    # a custom tool, then the renderer of the config section a retired name stands for.
+    # The tool served under this name, or nil, loading only that class: a registered tool,
+    # then a custom tool, then the renderer of the config section a retired name stands for.
     def self.served_tool(name, config = RailsAiContext.configuration)
       name = name.to_s
       RunCache.around do
@@ -203,13 +203,13 @@ module RailsAiContext
     end
     private_class_method :retired_renderer
 
-    def self.served?(name, config = RailsAiContext.configuration)
-      !served_tool(name, config).nil?
-    end
-
     def self.builtin_tool(name)
       tool = Tools::BaseTool.tool_class(name)
-      tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
+      return tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
+
+      # An app's BaseTool subclass registers itself wherever it is defined.
+      loaded = Tools::BaseTool.registry_mutex.synchronize { Tools::BaseTool.descendants.dup }
+      loaded.find { |registered| !registered.abstract? && registered.tool_name.to_s == name }
     end
     private_class_method :builtin_tool
 
@@ -402,7 +402,11 @@ module RailsAiContext
 
       # A tool that became a config section, answered from it with the call to make instead; a refusal ends as it is.
       def retired_call(request, section, ...)
-        arguments = (request[:arguments] || {}).transform_keys(&:to_sym).except(:section)
+        given = request[:arguments] || {}
+        # Arguments that are no object go on as they are, for the SDK to refuse.
+        return call_tool(request.merge(name: "rails_get_config"), ...) unless given.is_a?(Hash)
+
+        arguments = given.transform_keys(&:to_sym).except(:section)
         refusal = Tools::GetConfig.retired_refusal(section, arguments)
         return refusal.to_h if refusal
 

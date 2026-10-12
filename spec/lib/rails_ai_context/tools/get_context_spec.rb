@@ -33,13 +33,15 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       "a controller" => [ RailsAiContext::Tools::GetRoutes, { controller: "PostsController" } ],
       "a model" => [ RailsAiContext::Tools::GetSchema, { model: "Post" } ]
     }.each do |mode, (tool, params)|
-      it "is an error result for #{mode}" do
-        allow(tool).to receive(:call).and_raise(NoMethodError, "undefined method 'to_sentence' for an instance of Array")
+      it "in a section is an error result that keeps the other sections, for #{mode}" do
+        allow(tool).to receive(:cached_context).and_raise(NoMethodError, "undefined method 'to_sentence' for an instance of Array")
 
         response = described_class.call(**params)
+        text = response.content.first[:text]
 
-        expect(response.error?).to be(true), response.content.first[:text]
-        expect(response.content.first[:text]).to start_with("Tool rails_get_context failed: NoMethodError: undefined method 'to_sentence'")
+        expect(response.error?).to be(true), text
+        expect(text).to start_with("# Post")
+        expect(text).to include("Tool #{tool.tool_name} failed: NoMethodError: undefined method 'to_sentence'")
       end
     end
   end

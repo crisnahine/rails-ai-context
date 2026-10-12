@@ -97,7 +97,6 @@ RSpec.describe RailsAiContext::Server do
     it "answers the built-in, and nil for a name nothing serves" do
       expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
       expect(described_class.served_tool("rails_not_a_tool", config)).to be_nil
-      expect(described_class.served?("rails_get_schema", config)).to be(true)
     end
 
     it "keeps the built-in over a custom tool of the same name, as tools/list does" do
@@ -108,10 +107,43 @@ RSpec.describe RailsAiContext::Server do
 
     it "answers nil for a skipped built-in, and the custom tool that takes its name" do
       config.skip_tools = %w[rails_get_schema]
-      expect(described_class.served?("rails_get_schema", config)).to be(false)
+      expect(described_class.served_tool("rails_get_schema", config)).to be_nil
 
       allow(described_class).to receive(:resolve_custom_tools).and_return([ custom ])
       expect(described_class.served_tool("rails_get_schema", config)).to eq(custom)
+    end
+
+    context "with a BaseTool subclass the app defines outside Tools and leaves out of custom_tools" do
+      let!(:app_tool) do
+        Class.new(RailsAiContext::Tools::BaseTool) do
+          tool_name "rails_get_deploy_status"
+          description "The deploy the app runs"
+
+          def self.call(server_context: nil)
+            text_response("deployed")
+          end
+        end
+      end
+
+      after { app_tool.abstract! }
+
+      it "answers it, as tools/list does" do
+        expect(described_class.exposed_tools(config)).to include(app_tool)
+        expect(described_class.served_tool("rails_get_deploy_status", config)).to eq(app_tool)
+      end
+
+      it "answers nil once skip_tools lists it" do
+        config.skip_tools = %w[rails_get_deploy_status]
+
+        expect(described_class.exposed_tools(config)).not_to include(app_tool)
+        expect(described_class.served_tool("rails_get_deploy_status", config)).to be_nil
+      end
+
+      it "runs from the CLI by its full, medium and short name" do
+        %w[rails_get_deploy_status get_deploy_status deploy_status].each do |typed|
+          expect(RailsAiContext::CLI::ToolRunner.new(typed, []).run).to eq("deployed")
+        end
+      end
     end
 
     it "agrees with exposed_tools on every built-in" do
@@ -385,6 +417,32 @@ RSpec.describe RailsAiContext::Server do
         quick = call.call("quick")
         expect(quick.dig(:result, :isError)).to be(true) if quick[:result]
         expect(quick.dig(:result, :content, 0, :text) || quick.dig(:error, :data)).to match(/summary\W+standard\W+full/)
+      end
+
+      it "refuses a retired name whose arguments are no object as it refuses a served tool's" do
+        mcp_server = server.build
+        call = ->(name, arguments) { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }) }
+
+        [ [ 1 ], "x" ].each do |arguments|
+          retired = nil
+          expect { retired = call.call("rails_get_gems", arguments) }.not_to output(/unhandled exception/).to_stderr
+          expect(retired).to eq(call.call("rails_get_config", arguments))
+        end
+      end
+
+      [ SystemStackError, SecurityError ].each do |error|
+        it "answers a #{error} in a tool as a tool error, and the next call as usual" do
+          mcp_server = server.build
+          call = -> { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } }) }
+          allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_raise(error, "stack level too deep")
+
+          failed = call.call[:result]
+          expect(failed[:isError]).to be(true)
+          expect(failed[:content].first[:text]).to start_with("Tool rails_get_schema failed: #{error}: stack level too deep")
+
+          RSpec::Mocks.space.proxy_for(RailsAiContext::Tools::GetSchema).reset
+          expect(call.call[:result][:isError]).to be_falsey
+        end
       end
 
       # The SDK named only the guess.
