@@ -331,7 +331,7 @@ module RailsAiContext
           listed = RailsAiContext::AppDatabases.for(root)
           found = databases.filter_map do |name|
             db = listed[name]
-            [ name, [ (db.environment unless db.here), RailsAiContext::AppDatabases.settings_of(db.config) ] ] if db&.config
+            [ name, [ (db.environments.first unless db.here), RailsAiContext::AppDatabases.settings_of(db.config) ] ] if db&.config
           end.to_h
           if found.empty?
             note = "**Database:** `#{table}` is in the #{databases.join(", ")} dump, which no environment in config/database.yml configures: " \

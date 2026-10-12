@@ -142,6 +142,19 @@ Ten tools that each answered one section of the app's configuration leave
   `rails_runtime_info` checks the name whatever the `section`: a name it
   cannot reach is an error for every section, and a section that does not
   read `database` says so.
+  A database no connection reaches is named, with what stopped the
+  connection and what to do: create it when its server does not hold it,
+  start the server or fix its settings otherwise. For a named database that
+  is an error for the call; with none, the Database section says so about
+  the primary and the other sections still answer. Under a named
+  database the Database section shows that database's own pending
+  migrations, and for a replica or a database with `database_tasks: false`
+  it says Rails runs none on it.
+  A SQLite database other than the primary that lives in memory (`:memory:`,
+  or a `file:` URI with `mode=memory`) is refused by name: it exists only
+  inside the process that created it, and a new connection would open an
+  empty one. `rails ai:doctor` leaves such a database out of its pending
+  migrations check.
 
 ### Changed
 
@@ -268,7 +281,15 @@ Ten tools that each answered one section of the app's configuration leave
   `bin/rails db:prepare`, with or without `database`. `rails_runtime_info`
   does the same for a named database. With none, its Database section says
   the primary does not exist yet and the other sections still answer.
-  Nothing is created. Connecting to it created the database file.
+  Nothing is created. Connecting to it created the database file. A
+  database written as a `file:` URI is checked at the path inside the URI,
+  or at the whole name on a SQLite build that reads no URIs.
+- **The performance check finds a `has_paper_trail` model's unindexed
+  versions table on the static tier.** paper_trail adds
+  `has_many :versions, as: :item` when the app boots, so only the booted
+  tier reported `add_index :versions, [:item_type, :item_id]`. The static
+  tier now reads the macro, and the versions class its options name
+  (`versions: { class_name: ... }`), so both tiers give the same finding.
 - **PostgreSQL bounds a statement when `query_timeout` is zero.** Zero, or
   a value under a millisecond, turned the statement timeout off. The
   statement is now bounded at one millisecond.

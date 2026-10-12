@@ -52,7 +52,10 @@ module RailsAiContext
     # A connection's adapter_name as the other surfaces name it (PostGIS is PostgreSQL, Trilogy is MySQL).
     def display(adapter_name)
       family = DatabaseFamily.of(adapter_name)
-      family.known? ? family.name : adapter_name
+      return adapter_name unless family.known?
+
+      # A label read back from the payload carries the mark, and the family reads past it.
+      adapter_name.to_s.end_with?(DatabaseFamily::DEFAULT_SUFFIX) ? family.name + DatabaseFamily::DEFAULT_SUFFIX : family.name
     end
 
     def label_with_reason(context)
@@ -107,7 +110,7 @@ module RailsAiContext
       return nil if placeholder?(adapter)
 
       name = display(adapter.to_s)
-      database[:adapter_default] ? "#{name} by database.yml default" : name
+      database[:adapter_default] ? name + DatabaseFamily::DEFAULT_SUFFIX : name
     end
 
     def from_examples(context)

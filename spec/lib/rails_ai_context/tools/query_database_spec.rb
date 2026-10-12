@@ -69,7 +69,7 @@ RSpec.describe "the database argument" do
       response = query(sql: "SELECT 1", database: "cache")
 
       expect(response.error?).to be(true)
-      expect(text(response)).to include("The cache database is configured in production, not in #{Rails.env}")
+      expect(text(response)).to include("The cache database is configured in production. This process runs in #{Rails.env}")
     end
 
     it "refuses a named SQLite database whose file is not there, by name, and creates nothing" do
@@ -158,8 +158,76 @@ RSpec.describe "the database argument" do
         response = runtime(section: section, database: "cache")
 
         expect(response.error?).to be(true), section
-        expect(text(response)).to include("The cache database is configured in production, not in #{Rails.env}")
+        expect(text(response)).to include("The cache database is configured in production. This process runs in #{Rails.env}")
       end
+    end
+
+    def pending_queue_migration
+      FileUtils.mkdir_p(@migrate)
+      File.write(File.join(@migrate, "20240101000000_create_jobs.rb"), "class CreateJobs < ActiveRecord::Migration[7.1]\nend\n")
+    end
+
+    def with_database(name, settings)
+      hashes = ActiveRecord::Base.configurations.configurations.group_by(&:env_name)
+                                 .transform_values { |configs| configs.to_h { |config| [ config.name, config.configuration_hash ] } }
+      hashes[Rails.env][name] = settings
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(ActiveRecord::DatabaseConfigurations.new(hashes))
+    end
+
+    it "shows a named database its own pending migrations and no other database's" do
+      pending_queue_migration
+
+      expect(text(runtime(section: "database", database: "queue"))).to include("**Pending migrations:** 1\n- 20240101000000 CreateJobs\n")
+      primary = text(runtime(section: "database", database: "primary"))
+      expect(primary).to include("## Database: primary", "**Migrations:** all up to date\n")
+      expect(primary).not_to include("CreateJobs")
+    end
+
+    it "says why a named database Rails runs no migrations on has none to show" do
+      pending_queue_migration
+      legacy = File.join(@dir, "legacy.sqlite3")
+      FileUtils.cp(@path, legacy)
+      with_database("legacy", { adapter: "sqlite3", database: legacy, database_tasks: false })
+
+      answer = text(runtime(section: "database", database: "legacy"))
+
+      expect(answer).to include("## Database: legacy", "_Rails runs no migrations on legacy: its database.yml entry sets `database_tasks: false`._")
+      expect(answer).not_to include("CreateJobs", "Pending migrations", "up to date")
+    end
+
+    it "refuses a named database no connection reaches, by name, whatever the section" do
+      with_database("queue", { adapter: "sqlite3", database: @dir })
+
+      [ nil, "database", "cache" ].each do |section|
+        response = runtime(section: section, database: "queue")
+
+        expect(response.error?).to be(true), section.inspect
+        expect(text(response)).to include("The queue database cannot be reached:", "config/database.yml")
+        expect(text(response)).not_to include("# Runtime Info")
+      end
+    end
+
+    it "says the primary cannot be reached in the database section, and still answers the other sections" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished.new("Connection refused"))
+
+      response = runtime
+      answer = text(response)
+
+      expect(response.error?).to be(false)
+      expect(answer).to include("## Database\n\n_Not available: The primary database cannot be reached: Connection refused. ", "## Cache")
+    end
+
+    it "refuses a named database that lives in memory" do
+      with_database("queue", { adapter: "sqlite3", database: ":memory:" })
+
+      response = runtime(section: "database", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The queue database lives in memory")
+    end
+
+    it "says no section had anything to show when none did" do
+      expect(text(runtime(section: "none"))).to end_with("_No runtime data available: no section had anything to show._")
     end
 
     it "says a section that does not read the database argument left it unused" do

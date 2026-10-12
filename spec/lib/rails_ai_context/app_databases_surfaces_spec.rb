@@ -18,7 +18,7 @@ RSpec.describe "the app databases on a Rails 8 app" do
     ENV["RAILS_ENV"] = previous.last
   end
 
-  it "names the same four databases in the schema, multi-database and model sections, and none in migrations while they have no migration files" do
+  it "names the same four databases in the schema, multi-database and model sections, and in migrations the one that has migration files" do
     schema = RailsAiContext::Introspectors::SchemaIntrospector.new(app).static_call
     multi = RailsAiContext::Introspectors::MultiDatabaseIntrospector.new(app).call
     models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
@@ -29,6 +29,28 @@ RSpec.describe "the app databases on a Rails 8 app" do
       .to eq([ [ "primary", nil ], [ "cache", %w[production] ], [ "queue", %w[production] ], [ "cable", %w[production] ] ])
     expect(multi[:multi_db]).to be(true)
     expect(models["QueuedJob"]&.dig(:table_name)).to eq("solid_queue_jobs")
-    expect(migrations).not_to have_key(:secondary_databases)
+    expect(migrations[:secondary_databases]).to eq(
+      "queue" => { total: 1, migrations_paths: %w[db/queue_migrate], pending: [] }
+    )
+  end
+
+  it "says an adapter database.yml computes with a literal fallback is the default, in the schema answer too" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      FileUtils.mkdir_p(File.join(dir, "db"))
+      File.write(File.join(dir, "config/database.yml"), <<~YAML)
+        test:
+          adapter: <%= ENV["DB_ADAPTER"].presence || "postgresql" %>
+          database: app_test
+      YAML
+      File.write(File.join(dir, "db/schema.rb"), "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"users\" do |t|\n  end\nend\n")
+      static_app = RailsAiContext::StaticApp.new(dir)
+      context = RailsAiContext::RunCache.around { RailsAiContext::Introspector.new(static_app).call }
+      allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: context, rails_app: static_app)
+
+      text = RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("**Adapter:** PostgreSQL by database.yml default\n")
+    end
   end
 end

@@ -5785,6 +5785,45 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    def other_roots_app(dir)
+      {
+        "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.eager_load_paths << Rails.root.join(\"enterprise/app/models\")\n  end\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/domain/concerns/ledger_entry.rb" => "class LedgerEntry < ApplicationRecord\n  self.table_name = \"posts\"\nend\n",
+        "app/domain/concerns/billable.rb" => "module Billable\nend\n",
+        "enterprise/app/models/concerns/audit_row.rb" => "module Concerns\n  class AuditRow < ApplicationRecord\n    self.table_name = \"posts\"\n  end\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+    end
+
+    it "is listed from a concerns directory of another root, by the constant its file declares, on the static tier" do
+      Dir.mktmpdir do |dir|
+        other_roots_app(dir)
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("LedgerEntry", "Concerns::AuditRow")
+        expect(models["LedgerEntry"][:file]).to eq("app/domain/concerns/ledger_entry.rb")
+      end
+    end
+
+    it "is listed from a concerns directory of another root on the booted tier" do
+      Dir.mktmpdir do |dir|
+        other_roots_app(dir)
+        build = ->(name) { Class.new(ApplicationRecord) { self.table_name = "posts" }.tap { |model| model.define_singleton_method(:name) { name } } }
+        stub_const("LedgerEntry", build.call("LedgerEntry"))
+        stub_const("Billable", Module.new)
+        stub_const("Concerns", Module.new)
+        stub_const("Concerns::AuditRow", build.call("Concerns::AuditRow"))
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to contain_exactly("LedgerEntry", "Concerns::AuditRow")
+      end
+    end
+
     it "is listed on the booted tier when nothing loaded it yet" do
       Dir.mktmpdir do |dir|
         concerns_app(dir)

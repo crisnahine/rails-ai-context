@@ -168,12 +168,14 @@ module RailsAiContext
         declared = Set.new
         ignored = PathResolver.ignored_dirs(root).map { |dir| PathResolver.root_key(dir) }
         found = PathResolver.extra_model_roots(root).each_with_object([]) do |dir, records|
-          scan_dir(dir, root, real_root, true) do |record|
+          scan_dir(dir, root, real_root, false) do |record|
             next unless seen.add?(record.path)
             next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
+            source = SafeFile.read(record.path).to_s
+            record = record.with(path_name: concerns_name(record.path_name, source))
             declared << record.path_name
-            pairs = class_declarations(SafeFile.read(record.path).to_s)
+            pairs = class_declarations(source)
             next if pairs.empty?
 
             records << [ record, pairs ]
@@ -181,6 +183,14 @@ module RailsAiContext
           end
         end
         [ found, declared ]
+      end
+
+      # A concerns/ under an app/ root is an autoload root of its own, so its files carry no
+      # `Concerns::`; under a root the app adds it is a namespace, which the file then declares.
+      def concerns_name(path_name, source)
+        return path_name unless path_name.start_with?("Concerns::") && !source.match?(/\b(?:module|class)\s+(?:::)?Concerns\b/)
+
+        path_name.delete_prefix("Concerns::")
       end
 
       # [name, superclass] of each `class X < Y` that starts its line. A `^` anchor
@@ -195,7 +205,7 @@ module RailsAiContext
         pairs
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup, :qualified
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :concerns_name, :class_declarations, :lookup, :qualified
 
       # `kind: :models` reads model_paths: what model_details lists, not only app/models.
       def each(root, kind:, skip_concerns: true, base_model: nil, &block)
@@ -211,9 +221,9 @@ module RailsAiContext
           next read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::")
 
           # The concerns root does not namespace its files, and one that declares a class may be a model.
-          bare = record.path_name.delete_prefix("Concerns::")
-          source = SafeFile.read(record.path)
-          block.call(record.with(source: source, path_name: bare)) if source && DeclaredConstant.declares_class?(source, path_name: bare)
+          source = SafeFile.read(record.path) or next
+          name = concerns_name(record.path_name, source)
+          block.call(record.with(source: source, path_name: name)) if DeclaredConstant.declares_class?(source, path_name: name)
         end
       end
 

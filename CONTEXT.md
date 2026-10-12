@@ -219,9 +219,9 @@ Not "engine", which this glossary keeps for Rails engines and **mounted apps**, 
 
 ## App database
 
-A database the app has in any environment: one database.yml configures for the running environment, one only another environment configures (Rails 8's queue, cache and cable outside production, and a replica or a database with `database_tasks: false` too), or one only a committed dump names. `AppDatabases` lists them once per run, the primary first, and each knows the environment its entry came from, its **database family**, its dump and its migrations. Every surface that asks "which databases" reads this list, so the schema section, the models and the migrations cannot disagree about one app.
+A database the app has in any environment: one database.yml configures for the running environment, one only another environment configures (Rails 8's queue, cache and cable outside production, and a replica or a database with `database_tasks: false` too), or one only a committed dump names. `AppDatabases` lists them once per run, the primary first, and each knows the environments that configure it, its **database family**, its dump and its migrations. Every surface that asks "which databases" reads this list, so the schema section, the models and the migrations cannot disagree about one app.
 
-A tool that needs a connection reaches an App database configured here and nothing else: asked for one that only production configures, it says so. A SQLite database whose file is not there is never connected to, since connecting would create the file: the answer names it and says it does not exist yet. Not the **environment** (one named Rails environment), and not a shard, which is one database's copy under another name.
+A tool that needs a connection reaches an App database configured here and nothing else: asked for one that only production configures, it says so. A SQLite database whose file is not there is never connected to, since connecting would create the file: the answer names it and says it does not exist yet. A SQLite database other than the primary that lives in memory is refused by name too: it exists only inside the process that created it, and a new connection would open an empty one. Not the **environment** (one named Rails environment), and not a shard, which is one database's copy under another name.
 
 ## Secret column
 
