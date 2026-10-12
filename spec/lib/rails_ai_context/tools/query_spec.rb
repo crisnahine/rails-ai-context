@@ -1091,7 +1091,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "issues EXPLAIN FORMAT=TRADITIONAL (not the bare EXPLAIN MySQL 8.3+/9.x would render as TREE)" do
-      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:mariadb?).and_return(false)
+      without_partial_double_verification { allow(ActiveRecord::Base.connection).to receive(:mariadb?).and_return(false) }
       explain_result = ActiveRecord::Result.new(
         %w[id select_type table type possible_keys key key_len ref rows filtered Extra],
         [ [ 1, "SIMPLE", "products", "ALL", nil, nil, nil, nil, 5, 100.0, "" ] ]

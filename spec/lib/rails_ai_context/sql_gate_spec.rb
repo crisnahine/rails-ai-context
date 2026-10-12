@@ -200,7 +200,8 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT sql_text FROM performance_schema.events_statements_history" => [ :mysql, "performance_schema" ],
         "SELECT histogram FROM information_schema.column_statistics" => [ :mysql, "column_statistics" ],
         "SELECT priv FROM global_priv" => [ :mysql, "global_priv" ],
-        "SELECT sample FROM sqlite_stat4" => [ :sqlite, "sqlite_stat4" ]
+        "SELECT sample FROM sqlite_stat4" => [ :sqlite, "sqlite_stat4" ],
+        "SELECT sql FROM sqlite_stmt" => [ :sqlite, "sqlite_stmt" ]
       }.each { |sql, (family, name)| expect(refusal(sql, family)).to eq(unread(name)), sql }
       expect(runs?("SELECT sys_id, processlists FROM systems sys_log", :mysql)).to be(true)
     end
@@ -759,17 +760,25 @@ RSpec.describe RailsAiContext::SqlGate do
   end
 
   describe RailsAiContext::SqlGate::Budget do
+    let(:clock) { [ 100.0 ] }
+
+    before do
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC) { clock.first }
+    end
+
     it "charges each read the time it took itself, and nothing for the time between reads" do
       budget = described_class.new(1)
       expect(budget.spend { |left| left }).to eq(1)
-      budget.spend { sleep 0.2 }
-      sleep 0.3
-      expect(budget.spend { |left| left }).to be_between(0.6, 0.8)
+      budget.spend { clock[0] += 0.25 }
+      clock[0] += 0.5
+      expect(budget.spend { |left| left }).to eq(0.75)
     end
 
     it "charges a read that raised, and raises the timeout once nothing is left" do
-      budget = described_class.new(0.05)
-      expect { budget.spend { sleep(0.06) && raise("boom") } }.to raise_error("boom")
+      budget = described_class.new(0.5)
+      expect { budget.spend { (clock[0] += 0.5) && raise("boom") } }.to raise_error("boom")
+      expect(budget.spent?).to be(true)
       expect { budget.spend { :never } }.to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
     end
   end

@@ -74,8 +74,7 @@ module RailsAiContext
         runtime.read_only(connection, sql, timeout)
       end
 
-      # Runs a block of reads beside the statement (the schema, a plan check) under the family's limit,
-      # so each statement in it ends at timeout seconds, a wait on a lock included.
+      # Runs reads beside the statement so that each one ends at timeout seconds, a wait on a lock included.
       # @raise [TimedOut, Unsupported]
       def bounded(connection, timeout:, &reads)
         runtime.bounded(connection, timeout, &reads)

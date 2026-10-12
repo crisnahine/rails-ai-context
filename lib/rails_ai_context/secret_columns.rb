@@ -137,11 +137,8 @@ module RailsAiContext
     end
     private_class_method :encrypted_from
 
-    # relations: relation => its column names. generated: relation => { generated column => its expression }.
-    # views: view => its definition, nil for one that cannot be read; nil when the database's views are not known.
-    # traced_views: the views that are queried whatever their definition names.
-    # index_tables: table => [kind, the virtual table it belongs to], as DatabaseFamily::Family#index_tables answers.
-    # connection: where the relations of more schemas are read from; with none the rule knows what it was given.
+    # Each argument is what the DatabaseFamily::Family read of the same name answers. views is nil when the
+    # database's views are not known. connection: where more schemas are read from; with none the rule keeps what it was given.
     def initialize(relations: {}, encrypted: [], views: nil, traced_views: [], generated: {}, index_tables: {}, connection: nil,
                    config: RailsAiContext.configuration)
       fold = self.class.method(:fold)

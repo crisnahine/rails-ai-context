@@ -212,10 +212,11 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       it "refuses a WHERE clause on SHOW and sends nothing, and runs SHOW with a LIKE" do
         RailsAiContext.configuration.query_timeout = 1
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        refused([ "SHOW TABLES WHERE SLEEP(4) = 0", "SHOW COLUMNS FROM rac_my_accounts WHERE SLEEP(4) = 0", "SHOW STATUS WHERE SLEEP(4) = 0" ],
-                "Blocked: SHOW with a WHERE clause is not run")
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        took = seconds do
+          refused([ "SHOW TABLES WHERE SLEEP(4) = 0", "SHOW COLUMNS FROM rac_my_accounts WHERE SLEEP(4) = 0", "SHOW STATUS WHERE SLEEP(4) = 0" ],
+                  "Blocked: SHOW with a WHERE clause is not run")
+        end
+        expect(took).to be < 2
         expect(text("SHOW TABLES LIKE 'rac_my_acc%'")).to include("rac_my_accounts")
         expect(text("SHOW COLUMNS FROM rac_my_accounts LIKE 'ema%'")).to include("email")
       end

@@ -91,7 +91,7 @@ module RailsAiContext
       mysql: /\b(?:(column_statistics | column_stats | global_priv | processlist | performance_schema | general_log | slow_log)\b|
         information_schema[`"]?\s*\.\s*[`"]?(innodb_trx | innodb_lock\w* | innodb_ft_\w+ |
           user_statistics | client_statistics | profiling | optimizer_trace)\b)/ix,
-      sqlite: /\b(sqlite_stat[134])\b/i
+      sqlite: /\b(sqlite_stat[134] | sqlite_stmt)\b/ix
     }.freeze
 
     # MySQL's own schemas, read with string literals masked. An alias cannot be told from a schema without a
@@ -280,9 +280,8 @@ module RailsAiContext
       out.strip
     end
 
-    # The quoted span that opens where the scanner stands, as the family reads it: a string, a quoted name, a
-    # dollar quote, and a bracketed name where brackets says the text can hold one.
-    # @return [Array(Symbol, String), nil] [:string or :quoted, the span]
+    # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
+    # brackets: whether [name] quotes a name in this text.
     def self.quoted(scanner, family, brackets: family.sqlite?)
       case scanner.peek(1)
       when "'" then [ :string, scanner.scan(family.backslash_escapes? || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
@@ -811,9 +810,8 @@ module RailsAiContext
       nil
     end
 
-    # A secret base column some node passes through and the top node leaves unnamed (a MATERIALIZED
-    # CTE, a subquery scan, a set operation), where redaction by position cannot pin it. A column
-    # handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
+    # A secret base column some node passes through and the top node leaves unnamed, so redaction by position cannot
+    # pin it. A column handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
     def laundered_secret_column(plan)
       top = secret_base_columns(plan, plan.output)
       plan.nodes.each do |node|

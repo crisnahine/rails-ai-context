@@ -71,6 +71,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
   end
 
+  def statements
+    sent = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+    yield
+    sent
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
   # An adapter error whose cause carries the driver's native code, as Rails raises it.
   def driver_error(error_class, code, reader: :error_number)
     native = Class.new(StandardError) { attr_accessor reader }.new("native").tap { |e| e.public_send("#{reader}=", code) }
@@ -380,15 +389,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       FileUtils.rm_rf(dir)
     end
 
-    def statements
-      sent = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-      yield
-      sent
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
-
     it "explains a statement by the tables it reads, says which names the statement gave, and reads no table for a constant row" do
       joined = described_class::SQLITE.explain(@conn, "SELECT a.id FROM accounts a JOIN notes ON notes.id = a.id", timeout: 5)
       constant = described_class::SQLITE.explain(@conn, "SELECT 1", timeout: 5)
@@ -433,15 +433,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         conn.execute("CREATE TABLE big (n INTEGER)")
         conn.execute("INSERT INTO big WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2000) SELECT x FROM r")
       end
-    end
-
-    def statements
-      sent = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-      yield
-      sent
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
     end
 
     after do

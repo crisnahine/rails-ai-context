@@ -7,7 +7,6 @@ module RailsAiContext
     module MysqlRuntime
       module_function
 
-      # MySQL has no way to make a transaction read-only once it is open, or to scope that to a savepoint.
       IN_TRANSACTION = "MySQL cannot make a transaction that is already open read-only, so the statement " \
         "was not sent. Run it outside the transaction."
 
@@ -25,7 +24,7 @@ module RailsAiContext
       # metadata lock. Both session values are read first and put back after the block.
       # Yields the id of the session that holds them.
       def bounded(conn, timeout)
-        limit, value = if mariadb?(conn) then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
+        limit, value = if conn.mariadb? then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
         else [ "max_execution_time", [ (timeout * 1000).to_i, 1 ].max ]
         end
         DatabaseFamily.bounding do
@@ -54,11 +53,9 @@ module RailsAiContext
         result
       end
 
-      def mariadb?(conn) = conn.mariadb?
-
       def explain(conn, sql, timeout)
         # MySQL 8.3+ defaults to TREE output, which has no table/type/key columns. MariaDB has no FORMAT=TRADITIONAL.
-        prefix = mariadb?(conn) ? "EXPLAIN" : "EXPLAIN FORMAT=TRADITIONAL"
+        prefix = conn.mariadb? ? "EXPLAIN" : "EXPLAIN FORMAT=TRADITIONAL"
         result = read_only(conn, "#{prefix} #{sql}", timeout)
         scans = []
         warnings = []

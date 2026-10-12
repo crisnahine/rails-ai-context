@@ -82,9 +82,8 @@ module RailsAiContext
 
       private
 
-      # An Append over the partitions of a table, or over a parent and its children, prints no Output: its rows
-      # are its members', which hand up the same columns in the same places under the aliases `name_1`, `name_2`.
-      # The members are then read as one relation, the first, under each of their aliases and under `name`.
+      # An Append over partitions, or over a parent and its children, prints no Output: its members `name_1`, `name_2`
+      # hand up the same columns in the same places. They are read as one relation, the first, also under `name`.
       def read_members(node)
         return if node.key?("Output") || ![ "Append", "Merge Append" ].include?(node["Node Type"])
 

@@ -9,7 +9,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     ENV[env] ? false : "set #{env} to run this family against a real database server"
   end
 
-
   let(:conn) { RacServerSpecRecord.connection }
   let(:family) { described_class.of(conn) }
 
