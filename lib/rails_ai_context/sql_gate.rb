@@ -80,6 +80,15 @@ module RailsAiContext
       information_schema[`"]?\s*\.\s*[`"]?(innodb_trx | innodb_lock\w* | innodb_ft_\w+ |
         user_statistics | client_statistics | profiling | optimizer_trace)\b)/ix
 
+    # The SQLite pragma functions that describe the schema or the database file. Every other one, and the
+    # counters under it, answer for the connection that runs the statement, which is rails_query's own.
+    SQLITE_FILE_PRAGMAS = %w[
+      table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check
+      integrity_check quick_check user_version application_id schema_version page_size page_count freelist_count
+      encoding auto_vacuum journal_mode compile_options pragma_list
+    ].to_set.freeze
+    SQLITE_CONNECTION_STATE = /\bpragma_(\w+)|\b(changes|total_changes|last_insert_rowid)\s*\(/i
+
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
     BLOCKED_CATALOGS = /\b(pg_authid|pg_shadow|pg_db_role_setting)\b/i
@@ -289,6 +298,11 @@ module RailsAiContext
       end
       table, why = @secrets.unread_table_in(cleaned)
       return "Blocked: `#{table}` is not read: #{why}." if table
+      if (state = connection_state(cleaned))
+        return "Blocked: `#{state}` tells of the connection that runs it. rails_query runs a statement on a connection of its own and " \
+          "sets some of that connection's values itself, so the answer would not be the app's. A pragma function that describes the " \
+          "schema or the database file runs, for example `pragma_table_info`."
+      end
 
       if (refusal = setting_refusal(cleaned))
         return refusal
@@ -369,6 +383,16 @@ module RailsAiContext
       "Blocked: `#{name}` is not read. It holds values sampled from other tables, other sessions' statements " \
         "or stored credentials, and rails_query cannot tell which of them are secret." \
         "#{" To read one setting, run SHOW with its name." if name.match?(/settings/i)}"
+    end
+
+    def connection_state(cleaned)
+      return nil unless @family.sqlite?
+
+      cleaned.to_enum(:scan, SQLITE_CONNECTION_STATE).filter_map do
+        pragma, counter = Regexp.last_match.captures
+        name = counter&.downcase || ("pragma_#{pragma.downcase}" unless SQLITE_FILE_PRAGMAS.include?(pragma.downcase))
+        name unless name.nil? || @secrets.knows?(name)
+      end.first
     end
 
     def dump_refusal(function)

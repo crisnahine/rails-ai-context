@@ -1452,6 +1452,31 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "SQLite pragma functions and counters of the connection" do
+    def answer(sql)
+      response = described_class.call(sql: sql)
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "runs a pragma function that describes the schema or the database file" do
+      ActiveRecord::Base.connection.create_table(:rac_pragma_rows, force: true) { |t| t.string :label }
+      expect(answer("SELECT name FROM pragma_table_info('rac_pragma_rows') ORDER BY cid")).to match([ false, a_string_including("| label") ])
+      expect(answer("SELECT page_size FROM pragma_page_size")).to match([ false, a_string_matching(/\| \d+/) ])
+    ensure
+      ActiveRecord::Base.connection.drop_table(:rac_pragma_rows, if_exists: true)
+    end
+
+    it "refuses a pragma function and a counter that tell of the connection, which is the tool's own" do
+      { "SELECT * FROM pragma_foreign_keys" => "pragma_foreign_keys", "SELECT timeout FROM PRAGMA_BUSY_TIMEOUT" => "pragma_busy_timeout",
+        %(SELECT * FROM "pragma_cache_size") => "pragma_cache_size", "SELECT changes() AS n" => "changes",
+        "SELECT total_changes () AS n" => "total_changes", "SELECT last_insert_rowid() AS id" => "last_insert_rowid" }.each do |sql, name|
+        expect(answer(sql)).to eq([ true, "Blocked: `#{name}` tells of the connection that runs it. rails_query runs a statement on a connection of its " \
+          "own and sets some of that connection's values itself, so the answer would not be the app's. A pragma function that describes the schema or " \
+          "the database file runs, for example `pragma_table_info`." ]), sql
+      end
+    end
+  end
+
   describe "a literal that reads like an injection or a locking clause" do
     it "runs a literal holding OR 1=1" do
       response = described_class.call(sql: "SELECT 'a' AS v WHERE 'x' LIKE '%OR 1=1%' OR 1 = 1")

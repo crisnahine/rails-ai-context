@@ -371,6 +371,24 @@ RSpec.describe RailsAiContext::SqlGate do
     end
   end
 
+  describe "SQLite pragma functions" do
+    let(:relations) { { "pragma_notes" => %w[id body] } }
+
+    it "runs every one that describes the schema or the database file, and refuses the rest on SQLite alone" do
+      %w[table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check integrity_check quick_check
+         user_version application_id schema_version page_size page_count freelist_count encoding auto_vacuum journal_mode compile_options
+         pragma_list].each { |name| expect(runs?("SELECT * FROM pragma_#{name}")).to be(true), name }
+      %w[foreign_keys busy_timeout cache_size query_only synchronous database_list function_list collation_list data_version].each do |name|
+        expect(refusal("SELECT * FROM pragma_#{name}")).to start_with("Blocked: `pragma_#{name}` tells of the connection that runs it."), name
+      end
+      %i[mysql postgresql].each do |family|
+        expect(runs?("SELECT changes() AS n, id FROM pragma_foreign_keys", family)).to be(true), family.to_s
+      end
+      expect(runs?("SELECT changes, total_changes FROM counters")).to be(true)
+      expect(runs?("SELECT id, body FROM pragma_notes")).to be(true)
+    end
+  end
+
   describe "locking clauses" do
     %w[UPDATE SHARE].push("NO KEY UPDATE").each do |lock|
       it "refuses FOR #{lock} on every family" do
