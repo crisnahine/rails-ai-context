@@ -26,6 +26,21 @@ This runs every check that applies to the app ([the list](GUIDE.md#diagnostics))
 
 ## Installation issues
 
+### The install hangs in my AI tool's terminal
+
+It is waiting for an answer nobody can type. Cursor and VS Code run an agent's commands in a terminal, where a question waits forever. Give every answer as a flag:
+
+```bash
+bundle exec rails generate rails_ai_context:install --tools claude --defaults   # in-Gemfile
+rails-ai-context init --tools claude --defaults                         # standalone
+```
+
+Add `--mcp`, `--cli` or `--mcp-only` to pick the setup, and `--prune` to remove a dropped tool's files. The [copy-paste prompts](PROMPTS.md) already do this.
+
+### "--tools ... is not an AI tool"
+
+`--tools` takes names, never menu numbers: `claude`, `cursor`, `copilot`, `opencode`, `codex`, comma-separated, or `all`. Nothing was written; run it again with the names.
+
 ### "Could not find gem 'rails-ai-context'"
 
 ```bash
@@ -63,14 +78,16 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
 
 ### AI tool doesn't detect the MCP server
 
-1. Check the config file exists:
+1. Take the tool's own step. Each AI tool holds a project's MCP server back until you do, and the install's summary names it under "Next step". [AI tool setup](SETUP.md#verify-mcp-is-connected) has the step and the check for every tool.
+
+2. Check the config file exists:
    - Claude Code: `.mcp.json`
    - Cursor: `.cursor/mcp.json`
    - Copilot: `.vscode/mcp.json`
    - OpenCode: `opencode.json`
    - Codex: `.codex/config.toml`
 
-2. Verify the command the config holds works:
+3. Verify the command the config holds works:
    ```bash
    bundle exec rails-ai-context serve   # in-Gemfile
    rails-ai-context serve               # standalone
@@ -78,10 +95,12 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
    # Ctrl+C to stop
    ```
 
-3. Re-run the install generator:
+4. Re-run the install with your current choices (the ones in `.rails-ai-context.yml`); it keeps what exists and adds what is missing:
    ```bash
-   rails generate rails_ai_context:install
+   bundle exec rails generate rails_ai_context:install --defaults   # in-Gemfile
+   rails-ai-context init --defaults                                 # standalone
    ```
+   Or paste the [Fix it](PROMPTS.md#fix-it) prompt and let your AI tool do it.
 
 ### "Could not write .vscode/mcp.json - that tool will not auto-discover the MCP server"
 

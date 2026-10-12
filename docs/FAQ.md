@@ -18,7 +18,7 @@ It gives AI coding assistants verified, real-time access to your Rails app's str
 
 ### Which AI tools are supported?
 
-Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI. Each gets tailored context files and MCP auto-discovery config.
+Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI. Each gets tailored context files and an MCP config it finds when it opens the project; you approve the server once in the tool.
 
 ### Do I need MCP support in my AI tool?
 
@@ -39,6 +39,14 @@ Yes. The gem gracefully degrades - it parses `db/schema.rb` as text when no data
 
 ## Installation
 
+### Can my AI tool install it for me?
+
+Yes. [Copy-paste prompts](PROMPTS.md) has one prompt per setup: the usual install, no Gemfile change, CLI only, MCP only, every AI tool for a team, a folder of apps, a private setup with nothing committed, and a try-out that writes nothing. More cover changing the setup, upgrading, fixing and uninstalling. Each runs the install with every answer given as a flag, so it never waits on a question.
+
+### How do I uninstall it?
+
+`bundle exec rails-ai-context uninstall` (or `rails-ai-context uninstall` standalone), then `bundle remove rails-ai-context` if the Gemfile lists it. It removes what the gem wrote and keeps what you wrote, such as your own lines in `CLAUDE.md`. See [Uninstalling](GUIDE.md#uninstalling).
+
 ### Gemfile or standalone - which should I use?
 
 **In-Gemfile** is recommended if you own the project. Gives you the install generator, rake tasks, and initializer config.
@@ -56,7 +64,7 @@ Yes. Run `rails-ai-context init` in that folder. It asks once, gives each app it
 ### Do I need to commit the generated files?
 
 **Yes, commit these:**
-- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json` - so teammates get MCP auto-discovery
+- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json` - so teammates get the MCP server after approving it once in their AI tool
 - `CLAUDE.md`, `.claude/rules/`, `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`, `.github/instructions/`, `AGENTS.md` - so AI has context
 - `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` - so config is shared
 
@@ -70,6 +78,7 @@ Yes:
 
 ```bash
 rails generate rails_ai_context:install --mcp-only   # or: rails-ai-context init --mcp-only
+rails generate rails_ai_context:install --tools claude --mcp-only --defaults   # asks nothing
 ```
 
 The MCP config is written, `config.context_files = false` is recorded, and no
@@ -238,7 +247,7 @@ Those are AI coding interfaces. This gem is a data layer that makes *any* of the
 
 ### My AI tool doesn't see the MCP server
 
-Run `rails ai:doctor` - it checks each configured tool's MCP config file, and whether the command it holds can start. See [Troubleshooting](TROUBLESHOOTING.md) for detailed steps.
+Each AI tool holds a project's MCP server back until you take a step in the tool itself: approve it in Claude Code, turn it on in Cursor, trust the folder in VS Code and Codex CLI, restart OpenCode. The install's summary names the step for each tool you picked. If it is done and the tools still don't appear, run `rails ai:doctor` - it checks each configured tool's MCP config file, and whether the command it holds can start. See [Troubleshooting](TROUBLESHOOTING.md#ai-tool-doesnt-detect-the-mcp-server) for detailed steps.
 
 ### Tools return empty results
 

@@ -18,6 +18,7 @@
 | Guide | Description |
 |:------|:------------|
 | [Quickstart](QUICKSTART.md) | Get running in 5 minutes |
+| [Copy-paste prompts](PROMPTS.md) | Let your AI tool install, change, remove or use the gem |
 | [Tools Reference](TOOLS.md) | All 45 MCP tools with parameters |
 | [Recipes](RECIPES.md) | Real-world workflows and examples |
 | [Custom Tools](CUSTOM_TOOLS.md) | Build your own MCP tools |
@@ -36,6 +37,7 @@
 ## Table of Contents
 
 - [Installation](#installation)
+- [Uninstalling](#uninstalling)
 - [Context Modes](#context-modes)
 - [Generated Files](#generated-files)
 - [All Commands](#all-commands)
@@ -69,7 +71,7 @@ rails ai:context
 This creates:
 1. `config/initializers/rails_ai_context.rb` - configuration file
 2. `.rails-ai-context.yml` - standalone config (enables switching later)
-3. Per-tool MCP config files - auto-discovery for Claude Code, Cursor, Copilot, OpenCode, and Codex
+3. Per-tool MCP config files - each AI tool finds its own when it opens the project, then asks you to approve the server once
 4. Context files - tailored for each AI assistant
 
 ### Option B: Standalone (no Gemfile entry needed)
@@ -82,16 +84,16 @@ rails-ai-context init
 
 This creates:
 1. `.rails-ai-context.yml` - configuration file
-2. Per-tool MCP config files - auto-discovery (if MCP mode selected)
+2. Per-tool MCP config files - in the MCP and MCP-only setups
 3. Context files - tailored for each AI assistant
 
 No Gemfile entry, no initializer, no files in your project besides config and context.
 
 ### What the install generator does
 
-`rails generate rails_ai_context:install` runs these steps in this order. Steps 1, 2, 3, 8 and 9 can ask a question.
+`rails generate rails_ai_context:install` runs these steps in this order. Steps 1, 2, 3, 4, 8 and 9 can ask a question.
 
-1. **Asks which AI tools you use.** It prints this menu, then `Enter numbers separated by commas (e.g. 1,2) or 'a' for all:`
+1. **Asks which AI tools you use.** It prints this menu, then `Enter numbers separated by commas (e.g. 1,2) or 'a' for all (default: all):`, or `(default: keep the current selection):` on a re-run
 
    ```
    1. Claude Code      -> CLAUDE.md + .claude/rules/
@@ -102,29 +104,34 @@ No Gemfile entry, no initializer, no files in your project besides config and co
    a. All of the above
    ```
 
-   On a re-run the menu is followed by the selection recorded last time, as `Currently selected: 1,2 (Claude Code, Cursor)`. There is no "none" choice. An empty answer selects all five, and so does one with no valid number in it, which says so (`"9" names no tool - selecting all.`).
+   On a re-run the menu is followed by the selection recorded last time, as `Currently selected: 1,2 (Claude Code, Cursor)`. There is no "none" choice. An empty answer takes the default: the recorded selection on a re-run, all five on a first install. So does an answer with no valid number in it, which says so (`"9" names no tool - keeping the current selection.`).
 2. **Offers to clean up tools you dropped.** Only on a re-run, and only when the last recorded selection (the `config.ai_tools` line in the initializer, else `.rails-ai-context.yml`) has a tool you did not pick this time. It lists them and asks `Remove their generated files?` with `y` (all), `n` (keep, the default) or numbers like `1,2`. A yes removes only what the gem generated: the rule files it names inside the tool's rules directory (the directory goes too when nothing else is left in it), and the block between the `rails-ai-context` markers in a root file such as `CLAUDE.md`. A rule file you wrote by hand, your own lines around the markers, a root file with no markers and a symlink are left alone. It keeps any file shared with a tool whose files stay (`AGENTS.md`) - one still selected, or one dropped whose files you kept by leaving its number out - and says so, and takes only the `rails-ai-context` entry out of the tool's MCP config - a config left with no other entry is deleted, and named as removed. A tool's dot-directory the cleanup emptied (`.cursor/`, `.github/`, `.codex/`, `.vscode/`) goes too; one that still holds a file of yours stays.
-3. **Asks what to write**, then `Enter number (default: 1):`
+3. **Asks what to write**, then `Enter number (default: 1):`. On a re-run it first prints the recorded setup (`Currently: Context files only (CLI mode, no MCP server)`), and that is the default
 
    ```
    1. MCP config + context files   (default)
    2. Context files only           (CLI mode, no MCP server)
-   3. MCP config only              (leaves CLAUDE.md, AGENTS.md and rules untouched)
+   3. MCP config only              (writes no CLAUDE.md, AGENTS.md or rules files)
    ```
 
-   Choices 1 and 3 set `tool_mode` to `:mcp`, choice 2 sets it to `:cli`. Choice 3 also sets `context_files` to `false`. Any other answer counts as 1.
-4. **Writes the MCP config for each selected tool** (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`). Skipped for choice 2, which instead lists any config that still starts `rails-ai-context` and asks `Remove rails-ai-context from them? (y/N)`: CLI mode starts no MCP server. A yes takes out only the gem's entries, as step 2 does. An existing file is merged: only the `rails-ai-context` entry is added or replaced. One that does not parse as JSON, or holds comments a rewrite would drop, is left as it is, with a warning that names the entry to add by hand. Each file is read as its client reads it. VS Code's and OpenCode's take JSONC, comments and trailing commas (read under json 2.9 or later); Claude Code reads `.mcp.json` as plain JSON, and Cursor's `.cursor/mcp.json` is held to plain JSON too, so a comment or a trailing comma in either is reported as one the client cannot read, and the file left as it is. In `.codex/config.toml` the server's table is found however its name is quoted, and replaced where it stands; an entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, since a table added beside it would declare the server twice, which Codex refuses.
+   Choices 1 and 3 set `tool_mode` to `:mcp`, choice 2 sets it to `:cli`. Choice 3 also sets `context_files` to `false`. Any other answer takes the default.
+4. **Writes the MCP config for each selected tool** (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`). Skipped for choice 2, which instead lists any config that still starts `rails-ai-context` and asks `Remove rails-ai-context from them? (y/N)`: CLI mode starts no MCP server. A yes takes out only the gem's entries, as step 2 does. With choice 3 it lists instead the context files an earlier setup generated, which nothing refreshes once the install writes no context files, and asks `Remove the generated parts? Lines you wrote stay. (y/N)`; a yes removes them the way step 2 does, and `.ai-context.json` with them. An existing file is merged: only the `rails-ai-context` entry is added or replaced. One that does not parse as JSON, or holds comments a rewrite would drop, is left as it is, with a warning that names the entry to add by hand. Each file is read as its client reads it. VS Code's and OpenCode's take JSONC, comments and trailing commas (read under json 2.9 or later); Claude Code reads `.mcp.json` as plain JSON, and Cursor's `.cursor/mcp.json` is held to plain JSON too, so a comment or a trailing comma in either is reported as one the client cannot read, and the file left as it is. In `.codex/config.toml` the server's table is found however its name is quoted, and replaced where it stands; an entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, since a table added beside it would declare the server twice, which Codex refuses.
 5. **Creates or updates `config/initializers/rails_ai_context.rb`.** A new file gets your three answers as live lines (`config.ai_tools`, `config.tool_mode`, `config.context_files`) and every other option commented out at its default, wrapped in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`; it passes the omakase Rubocop a new Rails app runs. In an existing file it rewrites those three lines where the value changed - keeping the line's indentation and any note of your own after it - appends any config section the file lacks, adds the guard if it is missing, and leaves the rest alone.
 6. **Writes `.rails-ai-context.yml`** with `ai_tools`, `tool_mode` and `context_files`. Only a key whose value changed is rewritten, where it stands; your comments and other keys are kept, and a run that changes no value leaves the file as it was.
 7. **Adds lines to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3) and `.codex/config.toml` (always, because it holds this machine's Ruby paths). A line that is already there is not added again.
 8. **Asks about a pre-commit hook:** `Install a pre-commit hook that checks staged Ruby, ERB and JavaScript files for syntax errors? (y/N)`. Only `y` installs it. The hook runs `bundle exec rails-ai-context tool validate` (`rails-ai-context tool validate` in a standalone install) on the staged `.rb`, `.erb`, `.js`, `.mjs` and `.cjs` files and stops a commit whose files do not parse (JavaScript is parsed by `node`, as [`rails_validate`](TOOLS.md#rails_validate) describes); the Rails-reference checks (`level=rails`) are left to the tool, as Brakeman would slow every commit. An app that cannot boot (an initializer that needs a variable the shell lacks, say) is still checked, from its source, and the hook shows why it did not boot; it shows whatever else the check prints to stderr too, so a check that cannot run says why. Every staged name is read whole, one with characters outside ASCII included; a name holding a comma, which the files list cannot carry, is named and left unchecked. It goes where git runs hooks (`git rev-parse --git-path hooks`), so an app checked out as a submodule, an app inside a monorepo and a repo with `core.hooksPath` set all get it where git will run it. The hook names the apps it covers and validates each one's staged files (deleted ones aside) from inside that app; installing in a second app of the same monorepo adds it to the hook, unless the hook was changed by hand, which it says, and for an app below the top of the repository the question names the repository. A hook an earlier version wrote, and nobody changed since, is brought up to date without asking again: the oldest handed validate the files a commit deletes too, and the commit failed on them, and later ones ran `rails 'ai:tool[validate]'`, which has to boot the app, with its errors thrown away, so an app that could not boot failed every commit with no reason given. Any other hook that runs `rails-ai-context` - one changed by hand, or a team's own that calls it among other checks - is left as it is, with a message. No hook is offered for an app the repository does not track yet (an app under a dotfiles repository at `$HOME`, say), nor into a `core.hooksPath` outside the repository, which every repository using it shares; both say why. No question is asked outside a git repository or when the hook already covers the app. When another `pre-commit` hook exists there it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
-9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask.
-10. **Prints a summary:** the files each selected tool got and the commands to run next.
+9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask; under `--prune` it deletes them without asking.
+10. **Prints a summary:** the files each selected tool got, the commands to run next, and, in the MCP setup, each tool's next step: the approval or trust step that tool asks for before it starts a project's MCP server (approve the server in Claude Code, turn it on in Cursor, trust the folder in VS Code and Codex CLI, restart OpenCode).
 
-Two flags change the prompts:
+Every question has a flag, so an AI tool or a script can run the install to the end with nobody at the keyboard (the [copy-paste prompts](PROMPTS.md) are built on them):
 
-- `--defaults` answers every prompt with its default: all five tools, keep dropped tools' files, choice 1, no hook, keep legacy files. Piping an empty stdin does the same.
-- `--mcp-only` skips the step 3 question and acts as choice 3. Steps 1, 2 and 8 still ask.
+- `--tools claude,cursor` answers step 1. It takes the tool names `claude`, `cursor`, `copilot`, `opencode` and `codex`, comma-separated, or `all`; never the menu numbers, which would pick another tool once one is added.
+- `--mcp` answers step 3 with choice 1, `--cli` with choice 2, `--mcp-only` with choice 3. Only one of them can be given.
+- `--prune` answers yes to every removal question: step 2 (dropped tools' generated files), step 4's in the CLI setup (the gem's MCP entries) and in the MCP-only setup (the context files an earlier setup generated), and step 9's (legacy files).
+- `--hook` answers yes to step 8.
+- `--defaults` answers every question no flag answered with its default. On a first install that is all five tools and choice 1; on a re-run it is the recorded tools and setup, so running the install again with `--defaults` repairs it without switching anything. Every removal question defaults to keep, and the hook to no. Piping an empty stdin does the same. A default never removes a file; only `--prune` does.
+
+A flag the install cannot read (a name that is no tool, two setup flags at once, or a flag it does not have, such as a mistyped one) stops it with exit status 1 before anything is asked or written. [ADR-0007](adr/0007-every-install-question-has-a-flag.md) records the design.
 
 Run from a mountable engine's root, where `bin/rails` boots `test/dummy`, the install goes into the engine's root - the folder an editor is opened at, and the one every `rails-ai-context` command run there reads: the MCP configs, `.rails-ai-context.yml`, the `.gitignore` lines and the context files, which are generated from the engine's source the way its MCP server reads it there. No initializer is written, since Rails runs an engine's `config/initializers` in every app that mounts it and the gemspec ships them; one an earlier install left there is named, with a note to delete it. Step 8 offers no hook at the engine's root (its rake tasks run in the dummy app, as `app:ai:*`), and the summary lists the commands that work at the engine's root, `bundle exec rails-ai-context ...`. The context files written there name the same commands for their CLI fallback and the server, as do the tools' own hints. `bundle exec rails-ai-context doctor` at the engine's root diagnoses the dummy app and reads this install, as `bin/rails app:ai:doctor` does.
 
@@ -132,8 +139,27 @@ A team that wants no AI tool files in the repo can skip the generator. The gem n
 
 Two other entry points ask the same step 1 and step 3 questions:
 
-- `rails-ai-context init` (standalone) asks both, then the step 2 cleanup question, step 4's question about MCP configs when the answer was CLI mode, and the step 9 question. Only then does it boot the app, so that every gem the app locks loads at the app's pin, and write: the cleanup, `.rails-ai-context.yml`, the MCP configs, the `.gitignore` lines and the context files. An MCP-only run skips the step 9 question, as the generator does, and boots nothing. It never creates the initializer (in one that exists it updates `config.ai_tools`, `config.tool_mode` and `config.context_files`), never offers the pre-commit hook, and has `--mcp-only` but no `--defaults`. Typed outside the app (`init --app-path ../shop`), it names the files it wrote from there, as `../shop/.mcp.json`. Run in a folder that holds several apps, it asks once and sets them all up: each app's own `.rails-ai-context.yml` and context files, and one MCP server per app in the folder's configs ([`init`](CLI.md#init-standalone-only)).
+- `rails-ai-context init` (standalone) asks both, then the step 2 cleanup question, step 4's question about MCP configs when the answer was the CLI setup or about generated context files when it was MCP only, and the step 9 question. Only then does it boot the app, so that every gem the app locks loads at the app's pin, and write: the cleanup, `.rails-ai-context.yml`, the MCP configs, the `.gitignore` lines and the context files. An MCP-only run skips the step 9 question, as the generator does, and boots nothing. It never creates the initializer (in one that exists it updates `config.ai_tools`, `config.tool_mode` and `config.context_files`), never offers the pre-commit hook, and takes the same flags as the generator but `--hook`: `--tools`, `--mcp`, `--cli`, `--mcp-only`, `--prune` and `--defaults`. Typed outside the app (`init --app-path ../shop`), it names the files it wrote from there, as `../shop/.mcp.json`. Run in a folder that holds several apps, it asks once and sets them all up: each app's own `.rails-ai-context.yml` and context files, and one MCP server per app in the folder's configs ([`init`](CLI.md#init-standalone-only)).
 - `rails ai:context` asks step 1 only when no tool selection is recorded, and step 3 only when no `tool_mode` is recorded. It then writes `.rails-ai-context.yml`, the MCP configs and the `.gitignore` lines before generating. It does not create the initializer or offer the hook. `rails-ai-context context` brings the MCP configs of a recorded selection up to date the same way, and `rails ai:context:<tool>` writes that tool's MCP config along with its files.
+
+---
+
+## Uninstalling
+
+```bash
+bundle exec rails-ai-context uninstall   # in the Gemfile; then: bundle remove rails-ai-context
+rails-ai-context uninstall               # standalone; then, once no app uses it: gem uninstall rails-ai-context
+```
+
+`uninstall` takes out what the gem wrote and nothing you wrote:
+
+- Each AI tool's context files. A rules file you wrote stays, and in a root file such as `CLAUDE.md` only the block between the `rails-ai-context` markers goes, so your own lines stay. A file left empty is deleted, and so is a tool's dot-directory (`.cursor/`, `.claude/`) once nothing of yours is in it.
+- The `rails-ai-context` entry in every MCP config, an HTTP one under that name included. Other servers in the file stay; a config left with none is deleted.
+- `.rails-ai-context.yml`, `.ai-context.json` and `config/initializers/rails_ai_context.rb`, edited or not: they configure nothing once the gem is gone.
+- The lines the install added to `.gitignore`, with their comments.
+- The pre-commit hook, when it is the one the install wrote and covers only this app. A hook that covers other apps of the repository loses this one; a hook changed by hand is named and left for you.
+
+A `mount RailsAiContext::Engine` line in `config/routes.rb` is your code, so it is named with its line number, not edited. Run in a folder of apps, it does the same for every app below and for the folder's MCP configs. It needs no boot, so it works on an app that cannot start, and the binary of any install can run it: in an app whose bundle pins a version from before `uninstall` existed, `gem install rails-ai-context` and run `rails-ai-context uninstall`.
 
 ---
 
@@ -310,7 +336,8 @@ Each `rails ai:context:<tool>` adds its tool to the recorded selection and, in M
 The gem ships a `rails-ai-context` executable that works **without adding the gem to your Gemfile**. Install globally with `gem install rails-ai-context`, then run from any Rails app directory.
 
 ```bash
-rails-ai-context init                      # Interactive setup (creates .rails-ai-context.yml + MCP configs)
+rails-ai-context init                      # Setup: asks, or takes every answer as a flag (creates .rails-ai-context.yml + MCP configs)
+rails-ai-context init --tools claude --defaults  # The same, every answer given as a flag
 rails-ai-context serve                     # Start MCP server (stdio)
 rails-ai-context serve --transport http    # Start MCP server (HTTP, port 6029)
 rails-ai-context serve --transport http --port 8080  # Custom port
@@ -325,6 +352,8 @@ rails-ai-context watch                     # Watch for changes
 rails-ai-context inspect                   # Print introspection JSON
 rails-ai-context facts                     # Print schema facts summary
 rails-ai-context preset architecture       # Run a multi-tool preset
+rails-ai-context uninstall                 # Remove what the gem wrote, keep what you wrote
+rails-ai-context mcp-entry                 # Print an MCP entry for Claude Desktop, Windsurf, Zed and other clients
 rails-ai-context version                   # Print version
 rails-ai-context help                      # Show all commands
 ```
@@ -1142,7 +1171,7 @@ This server is listed on the [official MCP Registry](https://registry.modelconte
 curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=rails-ai-context"
 ```
 
-### Auto-discovery (recommended)
+### Per-tool MCP config files (recommended)
 
 The install generator (or `rails-ai-context init`) creates per-tool MCP config files based on your selected AI tools:
 
@@ -1185,11 +1214,11 @@ GEM_HOME = "/home/user/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0"
 
 > **Why the `[env]` section?** Codex CLI `env_clear()`s the process before spawning MCP servers, stripping Ruby version manager paths. The install generator snapshots your current Ruby environment (PATH, GEM\_HOME, GEM\_PATH, GEM\_ROOT, RUBY\_VERSION, BUNDLE\_PATH) so the MCP server can find gems regardless of version manager (rbenv, rvm, asdf, mise, chruby, or system Ruby).
 
-Each AI tool auto-detects its own config file. No manual config needed - just open your project.
+Each AI tool finds its own config file when it opens the project, then holds the server back until you approve it once: approve it in Claude Code, turn it on in Cursor, trust the folder in VS Code and Codex CLI, restart OpenCode. The install's summary names the step for each tool you picked ([AI tool setup](SETUP.md#verify-mcp-is-connected)).
 
 ### Claude Code
 
-Auto-discovered via `.mcp.json`. Or add manually:
+Read from `.mcp.json` once you approve the server. Or add manually:
 
 ```bash
 # In-Gemfile
@@ -1222,7 +1251,7 @@ Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails-ai-c
 
 ### Cursor
 
-Auto-discovered via `.cursor/mcp.json`. Or add manually in **Cursor Settings > MCP**:
+Read from `.cursor/mcp.json` once you turn the server on. Or add manually:
 
 ```json
 {
@@ -1562,17 +1591,17 @@ config.introspectors = %i[schema models routes gems auth api]
 
 ### Claude Code
 
-**Auto-discovery:** Opens `.mcp.json` automatically. No setup needed.
+**Auto-discovery:** Reads `.mcp.json` when a session starts in the folder, and asks you to approve the `rails-ai-context` server once (`claude mcp reset-project-choices` asks again).
 
 **Context files loaded:**
 - `CLAUDE.md` - read at conversation start
 - `.claude/rules/*.md` - auto-loaded alongside CLAUDE.md (schema, models, and components rules use `paths:` frontmatter for conditional loading)
 
-**MCP tools:** Available immediately via `.mcp.json`.
+**MCP tools:** Available once the server is approved. `/mcp` lists it.
 
 ### Cursor
 
-**Auto-discovery:** Opens `.cursor/mcp.json` automatically. No setup needed.
+**Auto-discovery:** Reads `.cursor/mcp.json`. Restart Cursor after the install, and turn `rails-ai-context` on under MCP in Customize if it is off.
 
 **Context files loaded:**
 - `.cursor/rules/*.mdc` - loaded based on `alwaysApply` and `globs` settings

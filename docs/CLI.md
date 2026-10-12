@@ -218,14 +218,28 @@ Requires the `listen` gem. `rails ai:watch` needs it in the app's Gemfile; the s
 
 ### `init` (standalone only)
 
-Interactive setup for standalone mode.
+Setup for a standalone install, interactive or answered by flags.
 
 ```bash
-rails-ai-context init
-rails-ai-context init --mcp-only   # MCP config only, no context files
+rails-ai-context init                                   # asks
+rails-ai-context init --tools claude --defaults         # asks nothing: Claude Code, MCP config + context files
+rails-ai-context init --tools claude,cursor --cli       # context files only (CLI mode)
+rails-ai-context init --tools all --mcp-only            # MCP config only, no context files
+rails-ai-context init --tools claude --prune --defaults # remove the files of tools dropped since the last run
 ```
 
-Asks which AI tools to configure and what to write: MCP config and context files, context files only (CLI mode), or MCP config only. Creates `.rails-ai-context.yml`, the MCP config files (except in CLI mode) and the context files (except with MCP config only). `--mcp-only` skips the second question. Every question - including a re-run's cleanup of dropped tools, and in CLI mode whether to take the gem's entries out of existing MCP configs - is asked before the app boots and anything is written; with MCP config only, the app is not booted at all.
+Asks which AI tools to configure and what to write: MCP config and context files, context files only (CLI mode), or MCP config only. Creates `.rails-ai-context.yml`, the MCP config files (except in CLI mode) and the context files (except with MCP config only).
+
+| Flag | Answers |
+|:-----|:--------|
+| `--tools LIST` | Which AI tools: `claude`, `cursor`, `copilot`, `opencode`, `codex`, comma-separated, or `all`. Names only, never menu numbers |
+| `--mcp` | What to write: MCP config + context files (the first install's default) |
+| `--cli` | What to write: context files only (CLI mode) |
+| `--mcp-only` | What to write: MCP config only |
+| `--prune` | Yes to every removal question: the generated files of tools dropped since the last run, the gem's MCP entries on a switch to the CLI setup, the generated context files on a switch to the MCP-only setup, and legacy files |
+| `--defaults` | Every question no flag answered, with its default: all five tools and MCP config + context files on a first run, the recorded tools and setup on a re-run; files are kept |
+
+A flag `init` cannot read (`--tools vim`, or two of `--mcp`, `--cli` and `--mcp-only`) exits 1 before anything is asked or written. A default never removes a file; only `--prune` does. The install generator takes the same flags, plus `--hook` for its pre-commit hook question. The [copy-paste prompts](PROMPTS.md) use them so an AI tool can run the setup in its own shell, and in the MCP setup the closing summary names each tool's next step: the approval or trust step that tool needs before it starts the server. Every question - including a re-run's cleanup of dropped tools, and in CLI mode whether to take the gem's entries out of existing MCP configs - is asked before the app boots and anything is written; with MCP config only, the app is not booted at all.
 
 Run inside an app, `init` sets up that app (found the way every command finds it: the [app root](#tool) above a subdirectory, or the one `--app-path` names).
 
@@ -239,7 +253,7 @@ work/                      <- run `rails-ai-context init` here
   web/  .rails-ai-context.yml, CLAUDE.md, ...
 ```
 
-The AI tools and the setup are asked once. Each app gets its own `.rails-ai-context.yml` and context files, because its server reads them from its own root; a child process generates them with the install that app's server will run. The folder's MCP configs get one server per app, because a client reads its project config from the folder it opened. Each entry is named `rails-ai-context-<app folder>` (the whole path where two apps share a folder name; a short hash where the name would pass 30 characters, since Cursor drops a tool whose server and tool names together pass 60) and points `--app-path` at its app:
+The AI tools and the setup are asked once. On a re-run whose apps recorded different setups there is no one setup to keep, so `--defaults` without `--mcp`, `--cli` or `--mcp-only` stops with exit status 1 and asks for one. Each app gets its own `.rails-ai-context.yml` and context files, because its server reads them from its own root; a child process generates them with the install that app's server will run. The folder's MCP configs get one server per app, because a client reads its project config from the folder it opened. Each entry is named `rails-ai-context-<app folder>` (the whole path where two apps share a folder name; a short hash where the name would pass 30 characters, since Cursor drops a tool whose server and tool names together pass 60) and points `--app-path` at its app:
 
 ```json
 {
@@ -267,6 +281,40 @@ The AI tools and the setup are asked once. Each app gets its own `.rails-ai-cont
 - An app whose bundle is not installed yet (a Gemfile and no lockfile) is served by this binary unless its Gemfile names the gem, or pulls gems in from other files (`eval_gemfile`, `gemspec`) that could.
 
 Start the client in the workspace folder. A client started inside one of the apps (Claude Code, Codex and OpenCode still read a config above it) runs each workspace server from there, where the relative path misses; the server says which folder the path was written for. To open an app on its own, run `init` inside it as well. `init` warns when an app declares a Ruby other than the one the workspace runs, since every server it starts runs under that one. `doctor` inside one of the apps finds the workspace's config one or two levels up.
+
+### `uninstall`
+
+Removes what the gem wrote: each AI tool's context files and MCP entries, `.rails-ai-context.yml`, `.ai-context.json`, the initializer, the `.gitignore` lines and the pre-commit hook it installed.
+
+```bash
+rails-ai-context uninstall
+bundle exec rails-ai-context uninstall   # in-Gemfile; then bundle remove rails-ai-context
+```
+
+What you wrote stays: your lines around the markers in a shared `CLAUDE.md` or `AGENTS.md`, your rule files, other servers in an MCP config, and a pre-commit hook you changed by hand (named, not touched). Its own config files go even when you edited them: `.rails-ai-context.yml` and the initializer configure nothing once the gem is gone. An HTTP entry under the gem's name goes too, since only the gem's endpoint answers it. A `mount RailsAiContext::Engine` line in `config/routes.rb` is named with its line number for you to delete. In a folder of apps it uninstalls every app below and the folder's MCP configs. It needs no boot. An entry you added by hand to another client's own config from `mcp-entry` (Claude Desktop and the like) lives outside the app, so remove it there. Its last lines say how to remove the gem itself: `bundle remove rails-ai-context` when the Gemfile lists it, `gem uninstall rails-ai-context` once no other app uses the installed copy. Details in the [Guide](GUIDE.md#uninstalling).
+
+### `mcp-entry`
+
+Prints an MCP server entry for a client the install writes no config for: Claude Desktop, Windsurf, Zed, a JetBrains IDE.
+
+```bash
+rails-ai-context mcp-entry
+bundle exec rails-ai-context mcp-entry   # in-Gemfile
+```
+
+```json
+{
+  "mcpServers": {
+    "rails-ai-context": {
+      "command": "/Users/you/.rbenv/versions/3.4.1/bin/ruby",
+      "args": ["/Users/you/.rbenv/versions/3.4.1/bin/rails-ai-context", "serve", "--app-path", "/Users/you/work/shop"],
+      "env": { "PATH": "...", "GEM_HOME": "..." }
+    }
+  }
+}
+```
+
+Such a client starts its servers from its own folder with its own `PATH`, so every path is absolute. The command is the Ruby the binary runs under, by its full path, which no version manager's shim can swap for the Ruby of the client's folder; `--app-path` names the app; `env` carries the gem variables the shell had (`PATH`, `GEM_HOME`, `GEM_PATH`, `GEM_ROOT`, `RUBY_VERSION`, `BUNDLE_PATH`). For an in-Gemfile app the entry runs `bundle exec` with `BUNDLE_GEMFILE` naming the app's Gemfile. Merge it into the client's config under the key that client uses for servers, and print it again after the app moves or its Ruby changes. See [Other MCP clients](SETUP.md#other-mcp-clients).
 
 ### `version`
 

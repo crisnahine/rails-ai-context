@@ -878,6 +878,14 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(summary).not_to include(".codex/config.toml", "MCP configs")
     end
 
+    it "closes with each tool's next step in the MCP setup, and none in the CLI setup" do
+      expect(summary).to include("Next step", "Claude Code: start a new Claude Code session", "GitHub Copilot: open this folder")
+      expect(summary).not_to include("No manual config needed")
+
+      generator.instance_variable_set(:@tool_mode, :cli)
+      expect(summary).not_to include("Next step")
+    end
+
     it "offers no regeneration when the install writes no context files" do
       generator.instance_variable_set(:@context_files, false)
 
@@ -999,6 +1007,94 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       silence_output { generator.add_to_gitignore }
 
       expect(File.read(File.join(tmpdir, ".gitignore"))).not_to include(".ai-context.json")
+    end
+  end
+
+  # Every question answered on the command line, so an agent or a script
+  # runs the install to the end with no terminal to type into.
+  describe "answers given as flags" do
+    def generator_with(options)
+      described_class.new([], options, destination_root: tmpdir)
+    end
+
+    it "takes --tools without asking" do
+      generator = generator_with(tools: "cursor,claude")
+      expect(generator).not_to receive(:ask)
+
+      silence_output { generator.select_ai_tools }
+
+      expect(generator.instance_variable_get(:@selected_formats)).to eq(%i[claude cursor])
+    end
+
+    it "stops on a --tools value that names no tool, before anything is written" do
+      generator = generator_with(tools: "vim")
+
+      expect { silence_output { generator.select_ai_tools } }.to raise_error(SystemExit) { |e| expect(e.status).to eq(1) }
+      expect(Dir.children(tmpdir)).to eq([ "config" ])
+    end
+
+    it "stops on a flag it does not have, before anything is written" do
+      expect do
+        expect { described_class.start(%w[--toolz claude --defaults], destination_root: tmpdir) }
+          .to raise_error(SystemExit) { |e| expect(e.status).to eq(1) }
+      end.to output(/Unknown switches "--toolz"/).to_stderr
+      expect(Dir.children(tmpdir)).to eq([ "config" ])
+    end
+
+    it "stops on --cli with --mcp-only" do
+      generator = generator_with(tools: "claude", cli: true, mcp_only: true)
+
+      expect { silence_output { generator.select_ai_tools } }.to raise_error(SystemExit)
+    end
+
+    it "takes --cli as context files only, without asking" do
+      generator = generator_with(cli: true)
+      expect(generator).not_to receive(:ask)
+
+      silence_output { generator.select_setup }
+
+      expect(generator.instance_variable_get(:@tool_mode)).to eq(:cli)
+      expect(generator.instance_variable_get(:@context_files)).to be(true)
+    end
+
+    it "removes a dropped tool's files without asking under --prune" do
+      File.write(File.join(tmpdir, ".rails-ai-context.yml"), "ai_tools:\n- claude\n- cursor\n")
+      FileUtils.mkdir_p(File.join(tmpdir, ".cursor/rules"))
+      File.write(File.join(tmpdir, ".cursor/rules/rails-project.mdc"), "x")
+      generator = generator_with(tools: "claude", prune: true)
+      expect(generator).not_to receive(:ask)
+
+      silence_output do
+        generator.select_ai_tools
+        generator.cleanup_removed_tools
+      end
+
+      expect(File.exist?(File.join(tmpdir, ".cursor/rules/rails-project.mdc"))).to be(false)
+    end
+
+    it "takes the generated context files out on a switch to MCP only under --prune" do
+      File.write(File.join(tmpdir, "CLAUDE.md"), "<!-- BEGIN rails-ai-context -->\ngen\n<!-- END rails-ai-context -->\n")
+      generator = generator_with(tools: "claude", mcp_only: true, prune: true)
+      expect(generator).not_to receive(:ask)
+
+      silence_output do
+        generator.select_ai_tools
+        generator.select_setup
+        generator.create_mcp_config
+      end
+
+      expect(File.exist?(File.join(tmpdir, "CLAUDE.md"))).to be(false)
+      expect(File.read(File.join(tmpdir, ".mcp.json"))).to include("rails-ai-context")
+    end
+
+    it "installs the pre-commit hook without asking under --hook" do
+      system("git", "init", "-q", tmpdir, out: File::NULL, err: File::NULL)
+      generator = generator_with(hook: true)
+      expect(generator).not_to receive(:ask)
+
+      silence_output { generator.install_validation_hook }
+
+      expect(File.read(File.join(tmpdir, ".git/hooks/pre-commit"))).to include("rails-ai-context apps: .")
     end
   end
 

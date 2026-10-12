@@ -526,6 +526,12 @@ module RailsAiContext
       !at.nil? && argv[at + 1] == "serve"
     end
 
+    # An HTTP entry under one of the gem's names: only the gem's mounted
+    # endpoint answers it.
+    def self.http_entry?(name, entry)
+      name.match?(OWN_SERVER_NAME) && entry.is_a?(Hash) && entry.key?("url") && !entry.key?("command")
+    end
+
     # A config's text past an editor's byte order mark, and the mark, which
     # is the file's and goes back at its head when it is written.
     def self.split_bom(text)
@@ -976,8 +982,10 @@ module RailsAiContext
     # @param output_dir [String] project root path
     # @param warn [#call, nil] called with a config's path and why it was left
     #   as it is, for the caller to say in its own voice; nil logs it
+    # @param http_entries [Boolean] also take an HTTP entry under one of the
+    #   gem's names (http_entry?), which only uninstall wants
     # @return [Array<String>] paths that were modified or deleted
-    def self.remove(tools:, output_dir:, warn: nil)
+    def self.remove(tools:, output_dir:, warn: nil, http_entries: false)
       warn ||= ->(path, reason) { RailsAiContext.log_warn("[rails-ai-context] could not update #{path}: #{reason}") }
       cleaned = []
       Array(tools).map(&:to_sym).each do |tool|
@@ -988,7 +996,7 @@ module RailsAiContext
         next unless File.exist?(path)
 
         begin
-          left = config[:format] == :codex_toml ? remove_toml_entry(path) : remove_json_entry(path, config)
+          left = config[:format] == :codex_toml ? remove_toml_entry(path) : remove_json_entry(path, config, http_entries: http_entries)
           if left == true then cleaned << path
           elsif left then warn.call(path, left)
           end
@@ -999,10 +1007,12 @@ module RailsAiContext
       cleaned
     end
 
+    # `http_entries: true` takes an HTTP entry under one of the gem's names too.
+    #
     # @return [true, String, nil] true when the entries went, the reason they
     #   stay when the file cannot be written back faithfully, nil when it
     #   holds none of the gem's
-    def self.remove_json_entry(path, config)
+    def self.remove_json_entry(path, config, http_entries: false)
       root_key = config[:root_key]
       text, bom, problem = json_text(path)
       # A file that cannot be read says so only when it names the gem.
@@ -1017,7 +1027,7 @@ module RailsAiContext
       servers = data.is_a?(Hash) ? data[root_key] : nil
       return nil unless servers.is_a?(Hash)
 
-      own = servers.select { |name, entry| own_entry?(name, json_argv(entry)) }.keys
+      own = servers.select { |name, entry| own_entry?(name, json_argv(entry)) || (http_entries && http_entry?(name, entry)) }.keys
       return nil if own.empty?
       if json_comments?(text)
         return "#{COMMENTS_PROBLEM}, so it is left as it is. " \

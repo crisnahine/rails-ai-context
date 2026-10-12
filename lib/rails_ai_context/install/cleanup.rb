@@ -53,6 +53,32 @@ module RailsAiContext
         outcome
       end
 
+      # What remove would take out for each of these tools: each rule file it
+      # names that is there, and each root file holding a managed block or
+      # generated whole. Nothing is changed.
+      #
+      # @return [Hash{Symbol => Array<String>}] paths relative to root, for
+      #   the tools that have any
+      def generated(tools:, root:)
+        Array(tools).filter_map { |key| AiTool.find(key) }.to_h do |tool|
+          paths = tool.context_paths.flat_map do |relative|
+            full = File.join(root.to_s, relative)
+            next [] if File.symlink?(full)
+
+            if File.directory?(full)
+              rule_file_names(tool, relative).map { |name| File.join(relative, name) }
+                                             .select { |path| File.file?(File.join(root.to_s, path)) }
+            elsif File.file?(full)
+              content = File.binread(full)
+              content.match?(MANAGED_BLOCK) || content.match?(GENERATED_LINE) ? [ relative ] : []
+            else
+              []
+            end
+          end
+          [ tool.key, paths ]
+        end.reject { |_, paths| paths.empty? }
+      end
+
       # A tool's dot-directory (.cursor/, .github/) that the removal emptied
       # goes too, and is reported like any other path. One that holds
       # anything else stays, and a directory outside the dot-directories -
@@ -79,8 +105,7 @@ module RailsAiContext
         full = File.join(root.to_s, dir)
         return if File.symlink?(full)
 
-        names = Array(tool.rule_files) + tool.legacy_paths.select { |path| File.dirname(path) == dir }.map { |path| File.basename(path) }
-        names.each { |name| delete(File.join(dir, name), root, outcome) }
+        rule_file_names(tool, dir).each { |name| delete(File.join(dir, name), root, outcome) }
         return unless Dir.empty?(full)
 
         Dir.rmdir(full)
@@ -89,6 +114,13 @@ module RailsAiContext
         outcome[:failed] << "#{dir}/"
       end
       private_class_method :remove_rule_files
+
+      # The files the gem writes in a tool's rules directory, now or in a
+      # release it no longer matches.
+      def rule_file_names(tool, dir)
+        Array(tool.rule_files) + tool.legacy_paths.select { |path| File.dirname(path) == dir }.map { |path| File.basename(path) }
+      end
+      private_class_method :rule_file_names
 
       # Bytes in, bytes out: the markers are ASCII, and the user's lines may not be valid UTF-8.
       def remove_generated(relative, root, outcome)

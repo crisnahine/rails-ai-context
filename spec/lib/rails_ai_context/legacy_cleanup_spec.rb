@@ -23,6 +23,19 @@ RSpec.describe RailsAiContext::LegacyCleanup do
       end
     end
 
+    it "deletes without asking under delete (--prune), even when warn_only is set" do
+      Dir.mktmpdir do |dir|
+        create(dir, UI_CLAUDE, A11Y)
+        expect($stdin).not_to receive(:gets)
+
+        described_class.prompt_legacy_files([ :claude ], root: dir, io: io, warn_only: true, delete: true)
+
+        expect(File.exist?(File.join(dir, UI_CLAUDE))).to be(false)
+        expect(File.exist?(File.join(dir, A11Y))).to be(false)
+        expect(io.string).to include("Removed #{UI_CLAUDE}")
+      end
+    end
+
     it "no-ops silently when no legacy files exist" do
       Dir.mktmpdir do |dir|
         described_class.prompt_legacy_files(nil, root: dir, io: io)

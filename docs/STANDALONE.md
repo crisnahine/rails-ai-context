@@ -20,14 +20,15 @@ gem install rails-ai-context
 
 ```bash
 cd your-rails-app
-rails-ai-context init
+rails-ai-context init                            # asks
+rails-ai-context init --tools claude --defaults  # asks nothing
 ```
 
 Interactive setup asks:
-1. Which AI tools? (Claude, Cursor, Copilot, OpenCode, Codex, or all; an empty answer selects all five)
+1. Which AI tools? (Claude, Cursor, Copilot, OpenCode, Codex, or all; an empty answer selects all five on a first run and keeps the recorded ones on a re-run)
 2. What should it write? (MCP config + context files, context files only for CLI mode, or MCP config only)
 
-On a re-run it shows the tools selected last time. A re-run that drops a tool also asks whether to remove that tool's files, and one that switches to CLI mode whether to take the gem's entries out of the MCP configs, since CLI mode starts no MCP server. Every question comes before the app boots and anything is written; an MCP-only setup does not boot the app at all. Unlike the install generator, `init` has no pre-commit hook prompt and no `--defaults` flag. The steps are listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).
+On a re-run it shows the tools selected last time. A re-run that drops a tool also asks whether to remove that tool's files, one that switches to the CLI setup whether to take the gem's entries out of the MCP configs, since the CLI setup starts no MCP server, and one that switches to the MCP-only setup whether to remove the context files it generated before, which nothing would refresh. Every question comes before the app boots and anything is written; an MCP-only setup does not boot the app at all. Each question has a flag: `--tools claude,cursor` (or `all`), `--mcp`, `--cli` or `--mcp-only`, `--prune` to answer yes to every removal question, and `--defaults` for the rest. Unlike the install generator, `init` has no pre-commit hook prompt. The steps are listed in [What the install generator does](GUIDE.md#what-the-install-generator-does).
 
 Creates:
 - `.rails-ai-context.yml` - YAML configuration
@@ -48,6 +49,7 @@ rails-ai-context tool --list        # List all tools
 rails-ai-context context            # Generate context files
 rails-ai-context doctor             # Run diagnostics
 rails-ai-context watch              # Auto-regenerate on changes
+rails-ai-context uninstall          # Remove what the gem wrote
 rails-ai-context version            # Show version
 ```
 
@@ -150,6 +152,10 @@ rails generate rails_ai_context:install
 # To switch to standalone:
 bundle remove rails-ai-context
 rails-ai-context init
+
+# To remove it entirely:
+rails-ai-context uninstall
+gem uninstall rails-ai-context   # once no other app uses it
 ```
 
 The MCP config files are updated automatically. Both modes generate the same set of context files and provide the same 45 tools. The commands named inside the files follow the install mode.

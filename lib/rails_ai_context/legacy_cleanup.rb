@@ -20,10 +20,11 @@ module RailsAiContext
     # @param root [String, Pathname] project root directory
     # @param io [IO] stream for output (stderr by default)
     # @param warn_only [Boolean] skip prompt even if TTY, only print warning
+    # @param delete [Boolean] delete without asking (--prune); wins over warn_only
     # @param place [String, nil] the root as the person who typed the
     #   command names it, when they typed it outside the root: the files and
     #   the rm line are named from there, so the rm removes them where it is run
-    def prompt_legacy_files(ai_tools, root:, io: $stderr, warn_only: false, place: nil)
+    def prompt_legacy_files(ai_tools, root:, io: $stderr, warn_only: false, place: nil, delete: false)
       allowed = ai_tools ? Array(ai_tools).map(&:to_sym).to_set : nil
 
       present = LEGACY_FILES.filter_map do |entry|
@@ -39,16 +40,18 @@ module RailsAiContext
       io.puts ""
       io.puts "These files are no longer regenerated and contain stale guidance."
 
-      if warn_only || !$stdin.tty?
+      if !delete && (warn_only || !$stdin.tty?)
         io.puts "Delete manually when ready:"
         io.puts "  #{rm_line(present)}"
         return
       end
 
-      io.print "Delete them? [y/N]: "
-      input = $stdin.gets&.strip&.downcase || "n"
+      unless delete
+        io.print "Delete them? [y/N]: "
+        input = $stdin.gets&.strip&.downcase || "n"
+      end
 
-      if input == "y" || input == "yes"
+      if delete || input == "y" || input == "yes"
         require "fileutils"
         present.each do |(rel, full)|
           # rm_f swallows a permission error, so ask the filesystem rather

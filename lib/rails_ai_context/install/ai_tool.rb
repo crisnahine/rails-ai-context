@@ -21,6 +21,9 @@ module RailsAiContext
     # it has a name for it: a workspace entry's app path starts from that name. The others get
     # a bare relative path, which they resolve against the folder they were started in.
     #
+    # next_step is what the user does in the tool before it starts a project's MCP server: each
+    # tool holds one back behind its own approval or trust step.
+    #
     # mcp_config[:client] is the program that reads the config, and [:jsonc] whether it reads
     # JSONC - comments and trailing commas - or refuses them, as JSON does. VS Code reads
     # .vscode/mcp.json as a standalone configuration file, with its JSONC parser and trailing
@@ -28,7 +31,7 @@ module RailsAiContext
     # Claude Code reads .mcp.json with JSON.parse. Cursor's is held to JSON as well, the form
     # every reader takes: nothing shows its reader takes JSONC.
     AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :rule_files, :mcp_config,
-                        :legacy_paths, :owned_dir, keyword_init: true)
+                        :legacy_paths, :owned_dir, :next_step, keyword_init: true)
 
     class AiTool
       ALL = [
@@ -39,6 +42,7 @@ module RailsAiContext
           rules_dir: ".claude/rules",
           rule_files: %w[rails-context.md rails-schema.md rails-models.md rails-mcp-tools.md rails-components.md],
           mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json, client: "Claude Code", jsonc: false },
+          next_step: "start a new Claude Code session in this folder and approve each rails-ai-context server when it asks; /mcp lists them",
           legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ],
           owned_dir: ".claude"
         ),
@@ -50,6 +54,7 @@ module RailsAiContext
           rule_files: %w[rails-project.mdc rails-models.mdc rails-controllers.mdc rails-mcp-tools.mdc],
           mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json,
                         folder_variable: "${workspaceFolder}", client: "Cursor", jsonc: false },
+          next_step: "restart Cursor, then turn rails-ai-context on under MCP in Customize if it is off; the MCP Logs output panel shows it starting",
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
           owned_dir: ".cursor"
         ),
@@ -64,6 +69,7 @@ module RailsAiContext
           ],
           mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json,
                         folder_variable: "${workspaceFolder}", client: "VS Code", jsonc: true },
+          next_step: "open this folder in VS Code as a trusted workspace and send a Copilot Chat message; MCP: List Servers in the Command Palette shows rails-ai-context",
           legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
         ),
         new(
@@ -71,6 +77,7 @@ module RailsAiContext
           files: "AGENTS.md",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
           mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true },
+          next_step: "restart OpenCode in this folder; opencode mcp list shows rails-ai-context",
           legacy_paths: []
         ),
         new(
@@ -78,6 +85,7 @@ module RailsAiContext
           files: "AGENTS.md + .codex/config.toml",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
           mcp_config: { path: ".codex/config.toml", root_key: nil, format: :codex_toml, client: "Codex CLI" },
+          next_step: "trust this folder when Codex CLI asks (it skips the project config of an untrusted one), then start a new codex session here; /mcp lists rails-ai-context",
           legacy_paths: [],
           owned_dir: ".codex"
         )
@@ -93,6 +101,10 @@ module RailsAiContext
       class << self
         def all
           ALL
+        end
+
+        def keys
+          ALL.map(&:key)
         end
 
         def find(key)

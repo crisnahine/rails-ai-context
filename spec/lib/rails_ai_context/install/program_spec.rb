@@ -139,7 +139,7 @@ RSpec.describe RailsAiContext::Install::Program do
     it "confirms each answer in the words the question offered it" do
       { "1" => "Selected: MCP config + context files",
         "2" => "Selected: Context files only (CLI mode, no MCP server)",
-        "3" => "Selected: MCP config only (leaves CLAUDE.md, AGENTS.md and rules untouched)" }.each do |answer, line|
+        "3" => "Selected: MCP config only (writes no CLAUDE.md, AGENTS.md or rules files)" }.each do |answer, line|
         surface = surface_class.new(answer)
         described_class.select_setup(surface)
         expect(surface.text).to include("  #{answer}. ")
@@ -394,6 +394,22 @@ RSpec.describe RailsAiContext::Install::Program do
   end
 
   describe ".mark_gitignore" do
+    # A private setup lists the files in .git/info/exclude and keeps the
+    # tracked .gitignore as it was; a re-run must not dirty it again.
+    it "adds nothing for a path git already ignores elsewhere" do
+      Dir.mktmpdir do |root|
+        system("git", "init", "-q", root, out: File::NULL, err: File::NULL)
+        File.write(File.join(root, ".gitignore"), "log/\n")
+        File.write(File.join(root, ".git", "info", "exclude"), ".ai-context.json\n.codex/config.toml\n")
+
+        surface = surface_class.new
+        described_class.mark_gitignore(surface, root: root)
+
+        expect(File.read(File.join(root, ".gitignore"))).to eq("log/\n")
+        expect(surface.lines).to be_empty
+      end
+    end
+
     it "appends the two entries once and says nothing the second time" do
       Dir.mktmpdir do |root|
         File.write(File.join(root, ".gitignore"), "log/\n")
@@ -423,6 +439,238 @@ RSpec.describe RailsAiContext::Install::Program do
         content = File.read(File.join(root, ".gitignore"))
         expect(content).not_to include(".ai-context.json")
         expect(content).to include(".codex/config.toml")
+      end
+    end
+  end
+
+  # The answers an agent or a script gives on the command line, so the
+  # install runs to the end without a terminal to type into.
+  describe ".tools_flag" do
+    it "reads tool names in the menu's order, whatever order they came in" do
+      expect(described_class.tools_flag("cursor,claude")).to eq(%i[claude cursor])
+      expect(described_class.tools_flag(" Codex  copilot ")).to eq(%i[copilot codex])
+    end
+
+    it "reads all as every tool" do
+      expect(described_class.tools_flag("all")).to eq(%i[claude cursor copilot opencode codex])
+    end
+
+    it "is nil when the flag was not given" do
+      expect(described_class.tools_flag(nil)).to be_nil
+    end
+
+    it "refuses a name that is no tool, naming the ones that are" do
+      expect { described_class.tools_flag("claude,vim") }
+        .to raise_error(ArgumentError, /"vim" is not an AI tool.*claude, cursor, copilot, opencode, codex or all/)
+    end
+
+    # Thor hands a string option given no value its own name.
+    it "refuses an empty value and the flag's own name as a missing value" do
+      expect { described_class.tools_flag("") }.to raise_error(ArgumentError, /--tools needs a value/)
+      expect { described_class.tools_flag("tools") }.to raise_error(ArgumentError, /--tools needs a value/)
+    end
+
+    it "refuses a name that is no tool even beside all" do
+      expect { described_class.tools_flag("all,vim") }.to raise_error(ArgumentError, /"vim" is not an AI tool/)
+    end
+
+    it "refuses a menu number, which reads differently once a tool is added" do
+      expect { described_class.tools_flag("1") }.to raise_error(ArgumentError, /"1" is not an AI tool/)
+    end
+  end
+
+  describe ".setup_flag" do
+    it "is CLI mode with context files for --cli" do
+      expect(described_class.setup_flag(cli: true, mcp_only: false).to_a).to eq([ :cli, true ])
+    end
+
+    it "is MCP with no context files for --mcp-only" do
+      expect(described_class.setup_flag(cli: false, mcp_only: true).to_a).to eq([ :mcp, false ])
+    end
+
+    it "is MCP with context files for --mcp" do
+      expect(described_class.setup_flag(cli: false, mcp_only: false, mcp: true).to_a).to eq([ :mcp, true ])
+    end
+
+    it "is nil when none was given" do
+      expect(described_class.setup_flag(cli: false, mcp_only: false)).to be_nil
+    end
+
+    it "refuses two at once" do
+      expect { described_class.setup_flag(cli: true, mcp_only: true) }
+        .to raise_error(ArgumentError, /--mcp, --cli and --mcp-only/)
+      expect { described_class.setup_flag(cli: true, mcp_only: false, mcp: true) }.to raise_error(ArgumentError)
+    end
+  end
+
+  describe ".select_ai_tools, answered on the command line" do
+    it "asks nothing and says what was selected" do
+      surface = surface_class.new
+
+      expect(described_class.select_ai_tools(surface, given: %i[claude codex])).to eq(%i[claude codex])
+      expect(surface.text).not_to include("Which AI tools")
+      expect(surface.lines).to include([ :ok, "Selected: Claude Code, Codex CLI" ])
+    end
+  end
+
+  describe ".select_setup, answered on the command line" do
+    it "asks nothing and says what was selected" do
+      surface = surface_class.new
+      given = described_class::Setup.new(:cli, true)
+
+      expect(described_class.select_setup(surface, given: given)).to eq(given)
+      expect(surface.text).not_to include("What should rails-ai-context write?")
+      expect(surface.lines).to include([ :ok, "Selected: Context files only (CLI mode, no MCP server)" ])
+    end
+  end
+
+  describe ".ask_removed_tools with prune" do
+    it "takes every dropped tool without asking, and lists them" do
+      surface = surface_class.new
+
+      expect(described_class.ask_removed_tools(surface, previous: %i[claude cursor codex], selected: %i[claude], prune: true))
+        .to eq(%i[cursor codex])
+      expect(surface.text).to include("Cursor (", "Codex CLI (")
+      expect(surface.text).not_to include("Remove their generated files?")
+    end
+  end
+
+  describe ".ask_mcp_removal with prune" do
+    it "takes every config that starts the gem without asking" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".mcp.json"), %({"mcpServers": {"rails-ai-context": {"command": "rails-ai-context"}}}))
+        surface = surface_class.new
+
+        expect(described_class.ask_mcp_removal(surface, root: root, prune: true)).to eq(%i[claude])
+        expect(surface.text).not_to include("(y/N)")
+      end
+    end
+  end
+
+  # Each AI tool starts a project's MCP server only after a step in the tool.
+  describe ".next_steps" do
+    it "names each selected tool's step, in the menu's order" do
+      lines = described_class.next_steps(%i[codex claude])
+
+      expect(lines.size).to eq(2)
+      expect(lines[0]).to start_with("Claude Code: ").and include("approve", "/mcp")
+      expect(lines[1]).to start_with("Codex CLI: ").and include("trust")
+    end
+
+    it "has a step for every AI tool" do
+      expect(described_class.next_steps(RailsAiContext::Install::AiTool.all.map(&:key)).size)
+        .to eq(RailsAiContext::Install::AiTool.all.size)
+    end
+  end
+
+  # The MCP-only setup writes no context files, so ones an earlier setup
+  # generated stop being refreshed and go stale.
+  describe ".ask_context_removal" do
+    def generated_app(root)
+      FileUtils.mkdir_p(File.join(root, ".cursor/rules"))
+      File.write(File.join(root, ".cursor/rules/rails-project.mdc"), "x")
+      File.write(File.join(root, "CLAUDE.md"), "# Mine\n\n<!-- BEGIN rails-ai-context -->\ngen\n<!-- END rails-ai-context -->\n")
+      File.write(File.join(root, ".ai-context.json"), "{}")
+      File.write(File.join(root, "AGENTS.md"), "# all mine\n")
+    end
+
+    it "lists the generated files and asks, keeping them on no" do
+      Dir.mktmpdir do |root|
+        generated_app(root)
+        surface = surface_class.new("n")
+
+        expect(described_class.ask_context_removal(surface, tools: %i[claude cursor opencode], root: root)).to be(false)
+        expect(surface.text).to include("CLAUDE.md", ".cursor/rules/rails-project.mdc", ".ai-context.json")
+        expect(surface.instance_variable_get(:@answers)).to be_empty
+        expect(surface.text).not_to include("AGENTS.md")
+      end
+    end
+
+    it "takes them all under prune, and removing them keeps what the user wrote" do
+      Dir.mktmpdir do |root|
+        generated_app(root)
+        surface = surface_class.new("n")
+
+        chosen = described_class.ask_context_removal(surface, tools: %i[claude cursor opencode], root: root, prune: true)
+        described_class.remove_context_files(surface, %i[claude cursor opencode], root: root)
+
+        expect(chosen).to be(true)
+        expect(surface.instance_variable_get(:@answers)).to eq([ "n" ])
+        expect(File.read(File.join(root, "CLAUDE.md"))).to eq("# Mine\n\n")
+        expect(File.exist?(File.join(root, ".cursor"))).to be(false)
+        expect(File.exist?(File.join(root, ".ai-context.json"))).to be(false)
+        expect(File.read(File.join(root, "AGENTS.md"))).to eq("# all mine\n")
+      end
+    end
+
+    it "offers a legacy rule file and a lone JSON cache too" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, ".claude/rules"))
+        File.write(File.join(root, ".claude/rules/rails-ui-patterns.md"), "# stale")
+        surface = surface_class.new
+
+        expect(described_class.ask_context_removal(surface, tools: %i[claude], root: root, prune: true)).to be(true)
+        expect(surface.text).to include(".claude/rules/rails-ui-patterns.md")
+      end
+
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".ai-context.json"), "{}")
+        surface = surface_class.new
+
+        expect(described_class.ask_context_removal(surface, tools: %i[claude], root: root, prune: true)).to be(true)
+        described_class.remove_context_files(surface, %i[claude], root: root)
+        expect(File.exist?(File.join(root, ".ai-context.json"))).to be(false)
+      end
+    end
+
+    it "asks nothing when no generated file is there" do
+      Dir.mktmpdir do |root|
+        surface = surface_class.new
+
+        expect(described_class.ask_context_removal(surface, tools: %i[claude], root: root)).to be(false)
+        expect(surface.lines).to be_empty
+      end
+    end
+  end
+
+  # A re-run's default is what the app has, so re-running to repair an
+  # install, or under --defaults, never switches its tools or its setup.
+  describe "defaults on a re-run" do
+    it "keeps the recorded tools on an empty answer" do
+      surface = surface_class.new("")
+
+      expect(described_class.select_ai_tools(surface, current: %i[cursor])).to eq(%i[cursor])
+      expect(surface.lines).to include([ :ok, "Selected: Cursor" ])
+    end
+
+    it "keeps the recorded tools on an answer that names none, and says so" do
+      surface = surface_class.new("9")
+
+      expect(described_class.select_ai_tools(surface, current: %i[cursor])).to eq(%i[cursor])
+      expect(surface.text).to include('"9" names no tool - keeping the current selection')
+    end
+
+    it "keeps the recorded setup on an empty answer, and offers it as the default" do
+      surface = surface_class.new("")
+      current = described_class::Setup.new(:cli, true)
+
+      expect(described_class.select_setup(surface, current: current).to_a).to eq([ :cli, true ])
+      expect(surface.text).to include("Currently: Context files only")
+    end
+
+    it "takes an answer over the recorded setup" do
+      surface = surface_class.new("3")
+
+      expect(described_class.select_setup(surface, current: described_class::Setup.new(:cli, true)).to_a)
+        .to eq([ :mcp, false ])
+    end
+
+    it "reads the recorded setup, nil when none is recorded" do
+      Dir.mktmpdir do |root|
+        expect(described_class.recorded_setup(root: root)).to be_nil
+
+        File.write(File.join(root, ".rails-ai-context.yml"), "ai_tools:\n- claude\ntool_mode: mcp\ncontext_files: false\n")
+        expect(described_class.recorded_setup(root: root).to_a).to eq([ :mcp, false ])
       end
     end
   end

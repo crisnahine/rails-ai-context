@@ -35,17 +35,46 @@ module RailsAiContext
     class InstallGenerator < Rails::Generators::Base
       desc "Install rails-ai-context: creates initializer, MCP config, and generates initial context files."
 
+      # Rails drops an option a generator does not declare, so a mistyped flag,
+      # or one this version predates, would run an install nobody asked for.
+      check_unknown_options!
+
+      def self.exit_on_failure?
+        true
+      end
+
       class_option :defaults, type: :boolean, default: false,
         desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
 
       class_option :mcp_only, type: :boolean, default: false,
         desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
 
+      class_option :tools, type: :string,
+        desc: "AI tools to set up, comma-separated, without asking: claude, cursor, copilot, opencode, codex or all"
+
+      class_option :mcp, type: :boolean, default: false,
+        desc: "Write the MCP config and the context files (the MCP setup, the first install's default), without asking"
+
+      class_option :cli, type: :boolean, default: false,
+        desc: "Write the context files and no MCP config (the CLI setup), without asking"
+
+      class_option :prune, type: :boolean, default: false,
+        desc: "Without asking, remove the generated files of AI tools dropped from the selection, " \
+              "the gem's MCP entries on a switch to the CLI setup, the generated context files on a switch to the MCP-only setup, and legacy files"
+
+      class_option :hook, type: :boolean, default: false,
+        desc: "Install the pre-commit hook that checks staged Ruby, ERB and JavaScript files, without asking"
+
       BARE_GUARD_PATTERN = RailsAiContext::Install::InitializerFile::BARE_GUARD
 
+      # The first step, so a bad flag stops the install before anything is
+      # asked or written.
       def select_ai_tools
+        given = given_answers
         @previous_formats = read_previous_ai_tools
-        @selected_formats = RailsAiContext::Install::Program.select_ai_tools(program_surface, current: @previous_formats)
+        @selected_formats = RailsAiContext::Install::Program.select_ai_tools(
+          program_surface, current: @previous_formats, given: given[:tools]
+        )
       end
 
       def cleanup_removed_tools
@@ -53,18 +82,14 @@ module RailsAiContext
 
         RailsAiContext::Install::Program.cleanup_removed_tools(
           program_surface,
-          previous: @previous_formats, selected: @selected_formats, root: install_root
+          previous: @previous_formats, selected: @selected_formats, root: install_root, prune: options[:prune]
         )
       end
 
       def select_setup
-        if options[:mcp_only]
-          @tool_mode = :mcp
-          @context_files = false
-          return
-        end
-
-        setup = RailsAiContext::Install::Program.select_setup(program_surface)
+        program = RailsAiContext::Install::Program
+        setup = program.select_setup(program_surface, given: given_answers[:setup],
+                                                      current: program.recorded_setup(root: install_root))
         @tool_mode = setup.tool_mode
         @context_files = setup.context_files
       end
@@ -78,10 +103,16 @@ module RailsAiContext
           tools: @selected_formats, tool_mode: @tool_mode, root: install_root,
           standalone: RailsAiContext::InstallMode.standalone?(root: install_root)
         )
+        program = RailsAiContext::Install::Program
+        unless context_files?
+          @removed_context_files = program.ask_context_removal(program_surface, tools: @selected_formats, root: install_root,
+                                                                               prune: options[:prune])
+          program.remove_context_files(program_surface, @selected_formats, root: install_root) if @removed_context_files
+        end
         return unless @tool_mode == :cli
 
-        program = RailsAiContext::Install::Program
-        program.remove_mcp_entries(program_surface, program.ask_mcp_removal(program_surface, root: install_root),
+        program.remove_mcp_entries(program_surface,
+                                   program.ask_mcp_removal(program_surface, root: install_root, prune: options[:prune]),
                                    root: install_root)
       end
 
@@ -300,7 +331,8 @@ module RailsAiContext
         env = { "BUNDLE_GEMFILE" => install_root.join("Gemfile").to_s }
         command = %w[bundle exec rails-ai-context context]
         # The MCP configs were written a step ago.
-        run = -> { system(env, *command, "--no-mcp-refresh", chdir: install_root.to_s) }
+        # The legacy question was asked here; the child has nothing to ask.
+        run = -> { system(env, *command, "--no-mcp-refresh", chdir: install_root.to_s, in: File::NULL) }
         ok = defined?(::Bundler) && ::Bundler.respond_to?(:with_original_env) ? ::Bundler.with_original_env(&run) : run.call
         return if ok
 
@@ -320,6 +352,24 @@ module RailsAiContext
         else
           say "No #{relative} in an engine: Rails would run it in every app that mounts the engine. " \
               "The settings go in .rails-ai-context.yml", :yellow
+        end
+      end
+
+      # The files v5.0.0 stopped writing, offered for deletion once.
+      def prompt_legacy_files
+        RailsAiContext::LegacyCleanup.prompt_legacy_files(
+          @selected_formats, root: install_root, warn_only: options[:defaults], delete: options[:prune]
+        )
+      end
+
+      # The answers given as flags, read once.
+      def given_answers
+        @given_answers ||= begin
+          RailsAiContext::Install::Program.given_answers(tools: options[:tools], cli: options[:cli],
+                                                         mcp_only: options[:mcp_only], mcp: options[:mcp])
+        rescue ArgumentError => e
+          say "Error: #{e.message}", :red
+          exit 1
         end
       end
 
@@ -690,7 +740,7 @@ module RailsAiContext
         else
           "Add #{app} to the pre-commit hook#{where} that checks staged Ruby, ERB and JavaScript files for syntax errors? (y/N)"
         end
-        answer = ask_safe(question).strip.downcase
+        answer = options[:hook] ? "y" : ask_safe(question).strip.downcase
         return unless answer == "y"
 
         write_validation_hook(hook_path, repo[:hooks], hook.script(apps, standalone: standalone))
@@ -706,7 +756,10 @@ module RailsAiContext
 
         say ""
         say "Generating AI context files...", :yellow
-        return generate_engine_context if engine_root
+        if engine_root
+          prompt_legacy_files
+          return generate_engine_context
+        end
 
         unless Rails.application
           say "  Skipped (Rails app not fully loaded). Run `rails ai:context` after install.", :yellow
@@ -715,10 +768,7 @@ module RailsAiContext
 
         require "rails_ai_context"
 
-        # One-time v5.0.0 legacy UI-pattern files cleanup prompt
-        RailsAiContext::LegacyCleanup.prompt_legacy_files(
-          @selected_formats, root: install_root, warn_only: options[:defaults]
-        )
+        prompt_legacy_files
 
         # The configuration was loaded at boot, before the questions above:
         # without the answers the files came out in the mode the app had
@@ -751,7 +801,7 @@ module RailsAiContext
           files = context_files? ? tool.files_label(mcp: tool_mode == :mcp) : "MCP config only"
           say "  ✅ #{tool.name.ljust(16)} -> #{files}"
         end
-        unless context_files?
+        unless context_files? || @removed_context_files
           say ""
           say "  Left alone on purpose: CLAUDE.md, AGENTS.md, the rules directories and .ai-context.json.", :yellow
         end
@@ -763,9 +813,8 @@ module RailsAiContext
         commands.each { |command, note| say "  #{command.ljust(width)}  # #{note}" }
         say ""
         if @tool_mode == :mcp
-          say "MCP auto-discovery:", :yellow
-          say "  Each AI tool gets its own config file - auto-detected on project open."
-          say "  No manual config needed."
+          say "Next step, before the MCP tools appear:", :yellow
+          RailsAiContext::Install::Program.next_steps(@selected_formats).each { |line| say "  #{line}" }
         else
           say "CLI tools:", :yellow
           example = engine_root ? "bundle exec rails-ai-context tool schema --table users" : "rails 'ai:tool[schema]' table=users"

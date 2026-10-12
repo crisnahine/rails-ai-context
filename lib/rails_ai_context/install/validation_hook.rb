@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "open3"
 require "shellwords"
 
 module RailsAiContext
@@ -261,6 +262,53 @@ module RailsAiContext
 
         standalone = [ false, true ].find { |mode| content == earlier_script(apps, standalone: mode) }
         standalone.nil? ? nil : Coverage.new(apps: apps, standalone: standalone, legacy: true)
+      end
+
+      # Takes the app at `app_root` out of the hook git runs for it: the hook
+      # goes when it covers that app alone, loses the app when it covers
+      # others too, and is left when it was changed by hand.
+      #
+      # @return [Array(Symbol, String, String), nil] :removed, :trimmed or
+      #   :hand_changed, the hook's path and the app as the hook names it;
+      #   nil when no hook of this gem covers the app
+      def uninstall(app_root)
+        out, _err, status = Open3.capture3("git", "rev-parse", "--git-path", "hooks", "--show-toplevel", "--git-common-dir",
+                                           "--show-prefix", chdir: app_root.to_s)
+        return nil unless status.success?
+
+        lines = out.lines.map(&:chomp)
+        path = File.join(File.expand_path(lines[0], app_root.to_s), "pre-commit")
+        return nil unless File.file?(path)
+
+        # A hooks path outside the repository serves every repository that
+        # sets it; the install never writes there, and this app's uninstall
+        # must not delete what the others run.
+        hooks_dir = File.realpath(File.dirname(path))
+        repo_dirs = lines[1, 2].map { |line| File.realpath(File.expand_path(line, app_root.to_s)) }
+        return nil unless repo_dirs.any? { |dir| hooks_dir == dir || hooks_dir.start_with?("#{dir}/") }
+
+        content = File.binread(path)
+        return nil unless content.include?("rails-ai-context")
+
+        app = lines[3].to_s.strip.delete_suffix("/")
+        app = "." if app.empty?
+        found = coverage(content)
+        unless found
+          # Changed by hand, unless its apps line names only other apps.
+          named = listed(content)
+          return nil if named && !named.include?(app)
+
+          return [ :hand_changed, path, app ]
+        end
+        return nil unless found.apps.include?(app)
+
+        if found.apps == [ app ]
+          File.delete(path)
+          [ :removed, path, app ]
+        else
+          File.binwrite(path, script(found.apps - [ app ], standalone: found.standalone))
+          [ :trimmed, path, app ]
+        end
       end
 
       # EARLIER_SCRIPT as it was written for these apps in this install form.

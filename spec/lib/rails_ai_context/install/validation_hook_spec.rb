@@ -107,4 +107,79 @@ RSpec.describe RailsAiContext::Install::ValidationHook do
       expect(described_class.listed("# rails-ai-context apps: caf\xC3(\xFF\n".b)).to be_nil
     end
   end
+
+  describe ".uninstall" do
+    def repo_with_hook(apps, content = nil)
+      dir = Dir.mktmpdir
+      system("git", "init", "-q", dir, out: File::NULL, err: File::NULL)
+      apps.each { |app| FileUtils.mkdir_p(File.join(dir, app)) unless app == "." }
+      hook = File.join(dir, ".git", "hooks", "pre-commit")
+      File.write(hook, content || described_class.script(apps, standalone: true))
+      [ dir, hook ]
+    end
+
+    it "removes a hook that covers only this app" do
+      dir, hook = repo_with_hook([ "." ])
+
+      expect(described_class.uninstall(dir)).to eq([ :removed, hook, "." ])
+      expect(File.exist?(hook)).to be(false)
+    ensure
+      FileUtils.remove_entry(dir) if dir
+    end
+
+    it "takes this app out of a hook that covers others too" do
+      dir, hook = repo_with_hook(%w[apps/web apps/admin])
+
+      expect(described_class.uninstall(File.join(dir, "apps/web"))).to eq([ :trimmed, hook, "apps/web" ])
+      expect(File.read(hook)).to eq(described_class.script(%w[apps/admin], standalone: true))
+    ensure
+      FileUtils.remove_entry(dir) if dir
+    end
+
+    it "leaves a hook that covers only other apps" do
+      dir, hook = repo_with_hook(%w[apps/admin])
+      FileUtils.mkdir_p(File.join(dir, "apps/web"))
+
+      expect(described_class.uninstall(File.join(dir, "apps/web"))).to be_nil
+      expect(File.exist?(hook)).to be(true)
+    ensure
+      FileUtils.remove_entry(dir) if dir
+    end
+
+    # A shared hooks path serves every repository that sets it, so this
+    # app's uninstall must not delete what the others still run.
+    it "leaves a hook in a core.hooksPath outside the repository" do
+      dir = Dir.mktmpdir
+      shared = Dir.mktmpdir
+      system("git", "init", "-q", dir, out: File::NULL, err: File::NULL)
+      system("git", "-C", dir, "config", "core.hooksPath", shared, out: File::NULL, err: File::NULL)
+      hook = File.join(shared, "pre-commit")
+      File.write(hook, described_class.script([ "." ], standalone: true))
+
+      expect(described_class.uninstall(dir)).to be_nil
+      expect(File.exist?(hook)).to be(true)
+    ensure
+      FileUtils.remove_entry(dir) if dir
+      FileUtils.remove_entry(shared) if shared
+    end
+
+    it "names a hook changed by hand and leaves it" do
+      dir, hook = repo_with_hook([ "." ], described_class.script([ "." ], standalone: true) + "echo mine\n")
+
+      expect(described_class.uninstall(dir)).to eq([ :hand_changed, hook, "." ])
+      expect(File.exist?(hook)).to be(true)
+    ensure
+      FileUtils.remove_entry(dir) if dir
+    end
+
+    it "leaves a hook of somebody else's alone, and answers nil outside a repository" do
+      dir, hook = repo_with_hook([ "." ], "#!/bin/sh\nexit 0\n")
+
+      expect(described_class.uninstall(dir)).to be_nil
+      expect(File.exist?(hook)).to be(true)
+      Dir.mktmpdir { |outside| expect(described_class.uninstall(outside)).to be_nil }
+    ensure
+      FileUtils.remove_entry(dir) if dir
+    end
+  end
 end

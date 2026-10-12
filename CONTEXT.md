@@ -190,3 +190,23 @@ A folder an editor or agent is opened at that is no app and has no app above it,
 **Server name** - the key an entry has in a config. An app's own config calls its server `rails-ai-context`; a workspace's calls each one `rails-ai-context-<app folder>` (`Install::Workspace.server_names`), with the whole path where two apps share a folder name, and a hash where the name would be too long for the tools. `McpConfigGenerator::OWN_SERVER_NAME` matches every form, and `own_entry?` claims the ones that run the gem's server, so removal never leaves one behind and never takes an entry somebody else named that way. Not the **announced name**, which the running server gives the tool (`config.server_name`, or, in place of its default, `RAILS_AI_CONTEXT_SERVER_NAME` for one process): a workspace server announces its app first, because VS Code names tools after that and keeps 13 characters of it.
 
 **Workspace entry** - the server entry itself: `--app-path` relative to the workspace, because the file may be committed; spelled from the tool's own name for its config's folder (`${workspaceFolder}`) where it has one, bare where the tool starts servers in the folder it was launched in. For an in-Gemfile app it adds `BUNDLE_GEMFILE` naming the Gemfile the app's bundle reads (its own, else the shared one its `config/boot.rb` names, else the one `bundle exec` run inside the app would find), because `bundle exec` started in the workspace would never find it. ADR-0005 records the per-tool facts this rests on.
+
+## Setup
+
+What an install writes, one of three. Qualify it; "mode" alone names only one of its two parts.
+
+**MCP setup** - the MCP config for each AI tool plus its context files. The default.
+
+**CLI setup** - the context files and no MCP config (`tool_mode: cli`). The AI tool runs the tools as shell commands, and the context files tell it how.
+
+**MCP-only setup** - the MCP config and no context files (`context_files: false`). For a user who keeps their own `CLAUDE.md` and `AGENTS.md`.
+
+`tool_mode` is one axis (mcp or cli) and `context_files` the other, so the MCP-only setup is the mcp tool mode without context files, not a third tool mode. `Install::Program::Setup` holds the pair.
+
+## Unattended install
+
+An install with every question answered on the command line, the way an AI tool runs it from an **install prompt** or a script runs it in CI. A flag answers its question (`--tools`, `--mcp`, `--cli` or `--mcp-only`, `--prune`, `--hook`), `--defaults` answers the rest with their defaults, and a flag the install cannot read stops it before anything is asked or written. A default is what the app has: the recorded tools and **setup** on a re-run, all five tools and the MCP setup on a first install. A default never removes a file; only `--prune` does. ADR-0007 records why.
+
+## Install prompt
+
+A message a user pastes into their AI tool so the AI tool installs, changes, removes or starts using the gem in their app. `docs/PROMPTS.md` holds them. Each names its commands outright and runs an **unattended install**, since an AI tool's shell has no one at the keyboard to answer a question.

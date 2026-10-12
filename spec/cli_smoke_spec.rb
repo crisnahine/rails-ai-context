@@ -1348,4 +1348,434 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
   end
+
+  # The install an agent or a script runs: every answer on the command line,
+  # and stdin holding answers that would pick otherwise, to prove none is read.
+  describe "init and uninstall answered by flags" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+    let(:decoy) { "5\n3\ny\ny\n" }
+
+    def rails_app(dir)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "config", "application.rb"), "module X\n  class Application < Rails::Application\n  end\nend\n")
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+      File.write(File.join(dir, ".gitignore"), "*.log\n")
+      # A bundle without the gem: a standalone install.
+      File.write(File.join(dir, "Gemfile"), "")
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n\n")
+    end
+
+    def run_cli(dir, *argv, stdin: decoy)
+      Open3.capture3("ruby", "-I", lib, exe, *argv, chdir: dir, stdin_data: stdin)
+    end
+
+    def tree(dir)
+      Dir.glob("**/*", File::FNM_DOTMATCH, base: dir).reject { |path| path.end_with?(".") }.sort
+    end
+
+    it "sets up the named tools in CLI mode without asking" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "cursor,claude", "--cli")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).not_to include("Which AI tools", "What should rails-ai-context write?")
+        expect(err).to include("Selected: Claude Code, Cursor", "Selected: Context files only (CLI mode, no MCP server)")
+        expect(File.read(File.join(dir, ".rails-ai-context.yml"))).to include("- claude\n- cursor\n", "tool_mode: cli")
+        expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true)
+        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(true)
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+      end
+    end
+
+    it "closes with each tool's next step in the MCP setup, and none in the CLI setup" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude,codex", "--defaults")
+        expect(err).to include("Next step", "Claude Code: start a new Claude Code session", "Codex CLI: trust this folder")
+        expect(err).not_to include("No manual config needed")
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--cli", "--prune")
+        expect(err).not_to include("Next step")
+      end
+    end
+
+    it "closes a folder of apps with each tool's next step" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "cursor", "--mcp-only")
+
+        expect(err).to include("Next step", "Cursor: restart Cursor")
+      end
+    end
+
+    it "stops on a bad flag before writing anything" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        before = tree(dir)
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "vim")
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include('"vim" is not an AI tool')
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--cli", "--mcp-only")
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("--cli and --mcp-only")
+        expect(tree(dir)).to eq(before)
+      end
+    end
+
+    it "switches back to MCP config + context files under --mcp" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        run_cli(dir, "init", "--no-boot", "--tools", "claude", "--cli")
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--mcp", "--defaults")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.read(File.join(dir, ".rails-ai-context.yml"))).to include("tool_mode: mcp", "context_files: true")
+        expect(File.read(File.join(dir, ".mcp.json"))).to include("rails-ai-context")
+      end
+    end
+
+    it "keeps the recorded tools and setup under --defaults on a re-run" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        run_cli(dir, "init", "--no-boot", "--tools", "cursor", "--cli")
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--defaults")
+
+        expect(status.exitstatus).to eq(0), err
+        record = File.read(File.join(dir, ".rails-ai-context.yml"))
+        expect(record).to include("- cursor\n", "tool_mode: cli")
+        expect(record).not_to include("- claude")
+        expect(File.exist?(File.join(dir, ".cursor/mcp.json"))).to be(false)
+      end
+    end
+
+    it "takes every default under --defaults" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--defaults")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.read(File.join(dir, ".rails-ai-context.yml"))).to include("- codex\n", "tool_mode: mcp")
+        expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true)
+      end
+    end
+
+    it "keeps a dropped tool's files under --defaults, and removes them under --prune" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor")
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--defaults")
+        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(true), err
+
+        run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--defaults")
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--prune")
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(false)
+        expect(File.exist?(File.join(dir, ".cursor"))).to be(false)
+        expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true)
+      end
+    end
+
+    it "takes the gem out of the MCP configs on a switch to CLI mode under --prune" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        run_cli(dir, "init", "--no-boot", "--tools", "claude")
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--cli", "--prune")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+      end
+    end
+
+    it "takes the generated context files out on a switch to MCP only under --prune, and keeps them under --defaults" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor")
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--mcp-only", "--defaults")
+        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(true), err
+        expect(err).to include("would go stale")
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--mcp-only", "--prune")
+        expect(status.exitstatus).to eq(0), err
+        %w[.cursorrules .cursor/rules CLAUDE.md .claude .ai-context.json].each do |path|
+          expect(File.exist?(File.join(dir, path))).to be(false), path
+        end
+        expect(File.read(File.join(dir, ".mcp.json"))).to include("rails-ai-context")
+        expect(File.read(File.join(dir, ".cursor/mcp.json"))).to include("rails-ai-context")
+        expect(err).not_to include("Left alone on purpose")
+      end
+    end
+
+    it "takes a folder of apps' generated context files out on a switch to MCP only under --prune" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        run_cli(dir, "init", "--no-boot", "--tools", "claude")
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--mcp-only", "--prune")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(false)
+        expect(File.exist?(File.join(dir, "b", ".claude"))).to be(false)
+      end
+    end
+
+    it "deletes legacy files under --prune" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, ".claude", "rules"))
+        File.write(File.join(dir, ".claude", "rules", "rails-ui-patterns.md"), "# stale")
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--prune")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, ".claude", "rules", "rails-ui-patterns.md"))).to be(false)
+      end
+    end
+
+    it "refuses to guess under --defaults when a folder's apps recorded different setups" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        run_cli(File.join(dir, "a"), "init", "--no-boot", "--tools", "claude", "--cli")
+        run_cli(File.join(dir, "b"), "init", "--no-boot", "--tools", "claude", "--mcp-only")
+        before = File.read(File.join(dir, "a", ".rails-ai-context.yml"))
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--defaults")
+
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("recorded different setups", "--mcp, --cli or --mcp-only")
+        expect(File.read(File.join(dir, "a", ".rails-ai-context.yml"))).to eq(before)
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--cli", "--defaults")
+        expect(status.exitstatus).to eq(0), err
+      end
+    end
+
+    it "sets up a folder of apps from flags" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--mcp-only")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys)
+          .to eq(%w[rails-ai-context-a rails-ai-context-b])
+        expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(false)
+      end
+    end
+
+    it "uninstalls back to the files the app had" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        before = tree(dir)
+        run_cli(dir, "init", "--no-boot", "--defaults")
+        expect(tree(dir)).not_to eq(before)
+
+        out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(tree(dir)).to eq(before)
+        expect(File.read(File.join(dir, ".gitignore"))).to eq("*.log\n")
+        expect(out).to eq("")
+        expect(err).to include("gem uninstall rails-ai-context")
+      end
+    end
+
+    it "keeps what the user wrote in a shared context file" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.write(File.join(dir, "CLAUDE.md"), "# Mine\n\nHouse rules.\n")
+        run_cli(dir, "init", "--no-boot", "--tools", "claude")
+        expect(File.read(File.join(dir, "CLAUDE.md"))).to include("BEGIN rails-ai-context")
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.read(File.join(dir, "CLAUDE.md"))).to eq("# Mine\n\nHouse rules.\n")
+      end
+    end
+
+    it "keeps another server in a shared MCP config, and names a mounted engine" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.write(File.join(dir, ".mcp.json"), JSON.generate("mcpServers" => { "mine" => { "command" => "x" } }))
+        File.write(File.join(dir, "config", "routes.rb"),
+                   "Rails.application.routes.draw do\n  mount RailsAiContext::Engine, at: \"/mcp\"\nend\n")
+        run_cli(dir, "init", "--no-boot", "--tools", "claude")
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[mine])
+        expect(err).to include("config/routes.rb:2 mounts RailsAiContext::Engine")
+      end
+    end
+
+    it "takes out the HTTP entry under the gem's name, which only the gem's endpoint answers" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.write(File.join(dir, ".mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context" => { "type" => "http", "url" => "http://localhost:3000/mcp" }, "mine" => { "url" => "http://x" }
+        }))
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[mine])
+      end
+    end
+
+    # Releases before v5.14.0 wrote the JSON cache's note with a Unicode dash.
+    it "takes out the .gitignore lines an earlier release wrote" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.write(File.join(dir, ".gitignore"),
+                   "*.log\n\n# rails-ai-context (JSON cache \u2014 markdown files should be committed)\n.ai-context.json\n")
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.read(File.join(dir, ".gitignore"))).to eq("*.log\n")
+      end
+    end
+
+    it "says so when there is nothing to uninstall" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("Nothing of rails-ai-context's was found")
+        expect(err).not_to include("is uninstalled")
+      end
+    end
+
+    it "removes the pre-commit hook it wrote, and names one changed by hand" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        system("git", "init", "-q", dir, out: File::NULL, err: File::NULL)
+        hook = File.join(dir, ".git", "hooks", "pre-commit")
+        File.write(hook, RailsAiContext::Install::ValidationHook.script([ "." ], standalone: true))
+
+        _out, err, status = run_cli(dir, "uninstall")
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(hook)).to be(false)
+
+        File.write(hook, RailsAiContext::Install::ValidationHook.script([ "." ], standalone: true) + "echo mine\n")
+        _out, err, = run_cli(dir, "uninstall")
+        expect(File.exist?(hook)).to be(true)
+        expect(err).to include("changed by hand")
+      end
+    end
+
+    it "uninstalls a folder of apps" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        before = tree(dir)
+        run_cli(dir, "init", "--no-boot", "--defaults")
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(tree(dir)).to eq(before)
+      end
+    end
+
+    # A client the gem writes no config for (Claude Desktop, Windsurf, Zed)
+    # starts its servers from its own folder, with its own PATH.
+    it "prints an MCP entry that starts the server from any folder, with a bare environment" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+
+        out, err, status = run_cli(dir, "mcp-entry")
+
+        expect(status.exitstatus).to eq(0), err
+        entry = JSON.parse(out).fetch("mcpServers").fetch("rails-ai-context")
+        expect(entry["command"]).to eq(RbConfig.ruby)
+        expect(entry["args"].last(3)).to eq([ "serve", "--app-path", File.realpath(dir) ])
+
+        request = [
+          { jsonrpc: "2.0", id: 1, method: "initialize",
+            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: 2, method: "tools/list" }
+        ].map(&:to_json).join("\n") + "\n"
+        # The entry's args name the installed wrapper; this checkout's binary
+        # stands in for it here, run the same way.
+        args = [ "-I", lib, exe, *entry["args"].drop(1) ]
+        served, = Open3.capture2(entry.fetch("env", {}), entry["command"], *args,
+                                 chdir: Dir.home, unsetenv_others: true, stdin_data: request)
+
+        tools = served.lines.filter_map { |line| JSON.parse(line) rescue nil }.find { |m| m["id"] == 2 }
+        expect(tools&.dig("result", "tools")&.size).to be > 40
+      end
+    end
+
+    it "prints a bundle exec entry with the app's Gemfile for an in-Gemfile app" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.write(File.join(dir, "Gemfile.lock"),
+                   "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n    rails-ai-context (5.35.0)\n\n")
+
+        out, err, status = run_cli(dir, "mcp-entry")
+
+        expect(status.exitstatus).to eq(0), err
+        entry = JSON.parse(out).fetch("mcpServers").fetch("rails-ai-context")
+        expect(entry["command"]).to eq(RbConfig.ruby)
+        expect(entry["args"].first).to eq(Gem.bin_path("bundler", "bundle"))
+        expect(entry["args"].drop(1)).to eq([ "exec", "rails-ai-context", "serve", "--app-path", File.realpath(dir) ])
+        expect(entry["env"]["BUNDLE_GEMFILE"]).to eq(File.join(File.realpath(dir), "Gemfile"))
+      end
+    end
+
+    it "prints the standalone entry for an app with no Gemfile" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.delete(File.join(dir, "Gemfile"), File.join(dir, "Gemfile.lock"))
+
+        out, err, status = run_cli(dir, "mcp-entry")
+
+        expect(status.exitstatus).to eq(0), err
+        entry = JSON.parse(out).fetch("mcpServers").fetch("rails-ai-context")
+        expect(entry["args"]).not_to include("exec")
+        expect(entry["env"]).not_to have_key("BUNDLE_GEMFILE")
+      end
+    end
+
+    it "refuses mcp-entry outside a Rails app" do
+      Dir.mktmpdir do |dir|
+        _out, err, status = run_cli(dir, "mcp-entry")
+
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("No Rails app found")
+      end
+    end
+
+    it "refuses uninstall outside a Rails app" do
+      Dir.mktmpdir do |dir|
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("No Rails app found")
+      end
+    end
+  end
 end

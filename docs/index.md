@@ -14,6 +14,7 @@ Works with Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI.
 
 | Guide | Description |
 |:------|:------------|
+| **[Copy-paste prompts](PROMPTS.md)** | Paste one into your AI tool and it installs, changes, removes or uses the gem |
 | **[Quickstart](QUICKSTART.md)** | Get running in 5 minutes |
 | **[AI Tool Setup](SETUP.md)** | Claude, Cursor, Copilot, OpenCode, Codex |
 | **[Standalone Mode](STANDALONE.md)** | Use without Gemfile entry |

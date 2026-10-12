@@ -10,6 +10,9 @@
 
 ---
 
+> [!TIP]
+> Rather let your AI tool do it? Paste one of the [copy-paste prompts](PROMPTS.md) into it.
+
 ## Table of Contents
 
 - [Which path is right for you?](#which-path-is-right-for-you)
@@ -19,6 +22,8 @@
 - [OpenCode](#opencode)
 - [Codex CLI](#codex-cli)
 - [A folder of apps](#a-folder-of-apps)
+- [Ruby in Docker](#ruby-in-docker)
+- [Other MCP clients](#other-mcp-clients)
 - [Verify MCP is connected](#verify-mcp-is-connected)
 - [HTTP Transport](#http-transport-alternative)
 - [Regenerating context files](#regenerating-context-files)
@@ -50,11 +55,12 @@ flowchart TD
 ### Auto-setup (recommended)
 
 ```bash
-rails generate rails_ai_context:install  # Select "Claude Code"
+rails generate rails_ai_context:install --tools claude --defaults   # or run it bare and pick "Claude Code"
+rails-ai-context init --tools claude --defaults                     # standalone
 ```
 
 This creates:
-- `.mcp.json` - MCP auto-discovery config (auto-detected on project open)
+- `.mcp.json` - MCP config, read when a session starts in the folder; approve the server once
 - `CLAUDE.md` - Root context file
 - `.claude/rules/rails-schema.md` - Schema rules (loaded when editing a schema dump or a migration of any of the app's databases)
 - `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
@@ -105,11 +111,12 @@ Schema, model and component rules use this to only load when relevant files are 
 ### Auto-setup (recommended)
 
 ```bash
-rails generate rails_ai_context:install  # Select "Cursor"
+rails generate rails_ai_context:install --tools cursor --defaults   # or run it bare and pick "Cursor"
+rails-ai-context init --tools cursor --defaults                     # standalone
 ```
 
 This creates:
-- `.cursor/mcp.json` - MCP auto-discovery config
+- `.cursor/mcp.json` - MCP config; restart Cursor and turn the server on under MCP in Customize
 - `.cursor/rules/rails-project.mdc` - Project overview (Type 1: alwaysApply)
 - `.cursor/rules/rails-models.mdc` - Model rules (Type 2: glob `app/models/**/*.rb`)
 - `.cursor/rules/rails-controllers.mdc` - Controller rules (Type 2: glob `app/controllers/**/*.rb`)
@@ -149,11 +156,12 @@ alwaysApply: false
 ### Auto-setup (recommended)
 
 ```bash
-rails generate rails_ai_context:install  # Select "GitHub Copilot"
+rails generate rails_ai_context:install --tools copilot --defaults   # or run it bare and pick "GitHub Copilot"
+rails-ai-context init --tools copilot --defaults                     # standalone
 ```
 
 This creates:
-- `.vscode/mcp.json` - MCP auto-discovery config (VS Code format)
+- `.vscode/mcp.json` - MCP config (VS Code format), started in a trusted workspace
 - `.github/copilot-instructions.md` - Root instructions
 - `.github/instructions/rails-models.instructions.md` - Model rules
 - `.github/instructions/rails-controllers.instructions.md` - Controller rules
@@ -194,11 +202,12 @@ description: "ActiveRecord models - associations, validations, scopes, enums"
 ### Auto-setup (recommended)
 
 ```bash
-rails generate rails_ai_context:install  # Select "OpenCode"
+rails generate rails_ai_context:install --tools opencode --defaults   # or run it bare and pick "OpenCode"
+rails-ai-context init --tools opencode --defaults                     # standalone
 ```
 
 This creates:
-- `opencode.json` - MCP auto-discovery config
+- `opencode.json` - MCP config, read when OpenCode starts
 - `AGENTS.md` - Root context file
 - `app/models/AGENTS.md` - Model-level rules
 - `app/controllers/AGENTS.md` - Controller-level rules
@@ -227,11 +236,12 @@ Note: OpenCode uses an array for the command, not a string.
 ### Auto-setup (recommended)
 
 ```bash
-rails generate rails_ai_context:install  # Select "Codex CLI"
+rails generate rails_ai_context:install --tools codex --defaults   # or run it bare and pick "Codex CLI"
+rails-ai-context init --tools codex --defaults                     # standalone
 ```
 
 This creates:
-- `.codex/config.toml` - MCP config (TOML format) with Ruby environment snapshot
+- `.codex/config.toml` - MCP config (TOML format) with Ruby environment snapshot. Codex reads a project's config only once you trust the project, which it asks the first time you start it there
 - Shares `AGENTS.md` and OpenCode rules files
 
 ### Manual MCP config
@@ -293,17 +303,20 @@ The engine runs each call on the thread Rails serves the request on and sends th
 
 With a migration pending in development, Rails answers every request to the app with its pending-migration page, and the mounted engine is one of those routes: it sits behind the app's whole middleware stack, `ActiveRecord::Migration::CheckPending` included, and cannot skip it without also skipping the cookies and session an authentication constraint around the mount needs. `auto_mount` answers ahead of that check, so its tools, which report the pending migration, keep working; so do stdio and the standalone server.
 
-Then point your AI tool's MCP config to the HTTP endpoint instead of a command:
+Then point your AI tool's MCP config to the HTTP endpoint instead of a command. Claude Code's `.mcp.json` needs the `type` (it skips a URL entry without one):
 
 ```json
 {
   "mcpServers": {
     "rails-ai-context": {
+      "type": "http",
       "url": "http://localhost:3000/mcp"
     }
   }
 }
 ```
+
+Cursor's `.cursor/mcp.json` takes `{"url": "..."}` under `mcpServers`, VS Code's `.vscode/mcp.json` takes `{"type": "http", "url": "..."}` under `servers`, and OpenCode's `opencode.json` takes `{"type": "remote", "url": "..."}` under `mcp`. `rails-ai-context uninstall` removes such an entry under the gem's name along with the rest.
 
 Benefits: inherits Rails routing, authentication, and middleware stack. No separate process needed.
 
@@ -311,51 +324,58 @@ Running the install again keeps an entry like this one, under the gem's own name
 
 ---
 
+## Ruby in Docker
+
+When Ruby and the gems live in a container and the AI tool runs on your machine, the server runs in the container and the MCP entry starts it through Docker. Install inside the container, then point the entry's command at it:
+
+```json
+{
+  "mcpServers": {
+    "rails-ai-context": {
+      "command": "docker",
+      "args": ["compose", "exec", "-T", "web", "bundle", "exec", "rails-ai-context", "serve"]
+    }
+  }
+}
+```
+
+With a plain container the args are `["exec", "-i", "CONTAINER", "bundle", "exec", "rails-ai-context", "serve"]`. Keep `-T` (Compose) or `-i` (plain Docker) and never add `-t`: a terminal mangles the MCP messages. The container must be running before the AI tool starts, and running the install again rewrites the entry back to `bundle exec`. The [Ruby runs in Docker](PROMPTS.md#ruby-runs-in-docker) prompt walks an AI tool through all of it. When the AI tool runs inside the container too (a devcontainer), nothing changes: use the usual install.
+
+---
+
+## Other MCP clients
+
+Claude Desktop, Windsurf, Zed, JetBrains IDEs and other clients get no config file from the install, and they start servers from their own folder with their own `PATH`. `rails-ai-context mcp-entry` prints an entry that works from anywhere: the real Ruby binary by its full path (past any version manager's shim, which would choose a Ruby by the client's folder), the gem's executable, `--app-path` naming the app, and the gem environment it needs:
+
+```bash
+rails-ai-context mcp-entry               # standalone install
+bundle exec rails-ai-context mcp-entry   # in the Gemfile
+```
+
+Merge the printed `rails-ai-context` entry into the client's config under the key it uses for servers (`mcpServers` for most; Claude Desktop keeps it in `claude_desktop_config.json`). Run it again after the app moves or its Ruby changes. The [Another MCP client](PROMPTS.md#another-mcp-client) prompt does this for you.
+
+---
+
 ## Verify MCP is connected
 
-After setup, confirm your AI tool can reach the MCP server.
+Each AI tool holds a project's MCP server back until you take one step in the tool. The install's closing summary names it for every tool you picked, under "Next step". Then check the server is up:
 
-### Claude Code
+| AI tool | Step after the install | Check it is connected |
+|:--------|:-----------------------|:----------------------|
+| Claude Code | Start a new `claude` session in the app's folder and approve `rails-ai-context` when it asks. To be asked again about a server you declined: `claude mcp reset-project-choices` | `/mcp` in the session, or `claude mcp list` |
+| Cursor | Restart Cursor, then turn `rails-ai-context` on under MCP in Customize if it is off. Cursor asks before each tool call unless you allow it | Output panel (Cmd+Shift+U), "MCP Logs" |
+| GitHub Copilot (VS Code) | Open the folder as a trusted workspace: a restricted one starts no workspace MCP server. VS Code starts the server when you send a Copilot Chat message | Command Palette, "MCP: List Servers", then the server's "Show Output" |
+| OpenCode | Restart OpenCode in the app's folder | `opencode mcp list` |
+| Codex CLI | Trust the project when Codex asks: Codex skips the `.codex/config.toml` of a project you have not trusted, and warns that it did. Then start a new `codex` session | `/mcp` in the session, or `codex mcp list` |
 
-Type in Claude Code's prompt:
+Then ask the assistant something only the app knows, such as "What columns does the users table have?", and watch for a `rails_get_schema` call.
 
-```
-What MCP tools do you have access to?
-```
-
-You should see `rails_get_schema`, `rails_search_code`, and the rest of the tools listed.
-
-### Cursor
-
-Open the command palette (`Cmd+Shift+P`) and search "MCP". You should see "rails-ai-context" listed as a connected server. Or ask the Cursor agent:
-
-```
-List your available MCP tools
-```
-
-### GitHub Copilot
-
-In VS Code with Copilot Chat, ask:
-
-```
-@workspace What MCP servers are available?
-```
-
-### OpenCode / Codex CLI
+### If the tools still don't appear
 
 ```bash
-# OpenCode: check the status bar for MCP connection indicator
-# Codex: run with verbose output
-codex --verbose "list your tools"
-```
-
-### All tools - CLI verification
-
-If MCP isn't connecting, verify the server works standalone:
-
-```bash
-rails ai:doctor   # Check everything
-rails ai:serve    # Should start without errors (Ctrl+C to stop)
+rails ai:doctor   # in-Gemfile: checks every MCP config and whether its command can start
+rails-ai-context doctor   # standalone
+bundle exec rails-ai-context serve   # should start and wait on stdin (Ctrl+C to stop); drop bundle exec when standalone
 ```
 
 ---

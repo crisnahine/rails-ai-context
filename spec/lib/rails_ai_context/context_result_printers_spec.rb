@@ -26,7 +26,7 @@ RSpec.describe "not-applicable context files on every surface" do
     allow(generator).to receive(:say)
 
     expect(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
-      .with([ :claude ], root: anything, warn_only: true)
+      .with([ :claude ], root: anything, warn_only: true, delete: false)
 
     generator.send(:generate_context_files)
   end

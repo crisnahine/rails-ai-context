@@ -33,29 +33,38 @@ pushed.
 4. **Prose that names the last version goes stale where no check can see it.**
    `docs/COMPATIBILITY.md` names the release its proof sources come from. Grep
    the tree for the previous version before committing.
+5. **The copy-paste prompts name a version floor.** `docs/PROMPTS.md` (and the
+   README's copy of the recommended prompt) tells the AI tool to install
+   `>= 5.35.0`, the first release with the install flags. If the release that
+   first ships them gets another number, change every `5.35.0` there to it.
+   Tag that release in the same session as the merge: until it is on
+   RubyGems, a prompt pasted from the README on `main` cannot install it.
+   A change to the install, its flags or a prompt is proven by the prompt
+   bench in the qa-rails-ai-context skill (`prompt-bench.py`), not by
+   `docs_prompts_spec`, which only checks that each flag exists.
 
 ## Before the tag
 
-5. **CI is green on the exact commit that will be tagged.** Check the run, do
+6. **CI is green on the exact commit that will be tagged.** Check the run, do
    not infer it from a local pass. The release matrix is stricter than a local
    run in two ways: it runs seeds 1, 27377 and 90210 rather than a random one,
    and it runs `--order defined` as a fourth ordering no seed reproduces.
-6. **A successful E2E run exists for that same SHA.** The E2E workflow does not
+7. **A successful E2E run exists for that same SHA.** The E2E workflow does not
    run on tags, and the release's `e2e-gate` job asks the API for a completed
    successful `e2e.yml` run whose `head_sha` is this commit. Start it by hand
    from Actions and let it finish before tagging.
 
 ## Tagging
 
-7. Tag the merge commit and push the tag. Nothing publishes until the tag is on
+8. Tag the merge commit and push the tag. Nothing publishes until the tag is on
    the remote.
 
 ## After
 
-8. **Confirm the release object exists and is not a draft**, and that its notes
+9. **Confirm the release object exists and is not a draft**, and that its notes
    are this version's changelog section rather than the fallback sentence.
-9. **Confirm the gem is on RubyGems and the version is in the MCP registry.**
+10. **Confirm the gem is on RubyGems and the version is in the MCP registry.**
    Both jobs skip themselves when the version is already published, so a skip
    in the log is not the same as a failure.
-10. **Close what the release closed.** On GitHub a comma list after one `Closes`
+11. **Close what the release closed.** On GitHub a comma list after one `Closes`
    keyword closes only the first issue. Write the keyword once per issue.

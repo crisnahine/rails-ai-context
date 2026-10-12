@@ -60,6 +60,7 @@ server and nothing else:
 
 ```bash
 rails generate rails_ai_context:install --mcp-only   # or: rails-ai-context init --mcp-only
+rails generate rails_ai_context:install --tools claude --mcp-only --defaults   # asks nothing
 ```
 
 That writes the MCP config for the tools you pick and records:
