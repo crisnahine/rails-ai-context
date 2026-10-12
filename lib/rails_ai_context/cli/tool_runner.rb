@@ -25,7 +25,7 @@ module RailsAiContext
       attr_reader :tool_class, :raw_args, :json_mode, :error
 
       def initialize(tool_name, raw_args, json_mode: false, environment: nil)
-        @tool_class = resolve_tool(tool_name)
+        @tool_class = RunCache.around { resolve_tool(tool_name) }
         @raw_args = raw_args
         @json_mode = json_mode
         @environment = environment
@@ -43,14 +43,16 @@ module RailsAiContext
       # announced its Redis connection on stdout ahead of a --json envelope.
       def run
         OutputGuard.quarantine_stdout(across_exec: false) do
-          kwargs = build_kwargs
-          schema = tool_schema
-          validate_kwargs!(kwargs, schema)
-          next extract_output(invalid_required_response) if @invalid_required.any?
+          Server.with_custom_tools(@custom_tools) do
+            kwargs = build_kwargs
+            schema = tool_schema
+            validate_kwargs!(kwargs, schema)
+            next extract_output(invalid_required_response) if @invalid_required.any?
 
-          response = tool_class.call(**kwargs)
-          response = Tools::GetConfig.with_retired_note(response, @retired, kwargs) if @retired
-          extract_output(response)
+            response = tool_class.call(**kwargs)
+            response = Tools::GetConfig.with_retired_note(response, @retired, kwargs) if @retired
+            extract_output(response)
+          end
         end
       end
 
@@ -143,9 +145,9 @@ module RailsAiContext
       # The tool a name spells, loading that one class and no other. A
       # miss falls back to the full list, which also carries the suggestion.
       def direct_tool(name)
-        custom = Server.resolve_custom_tools
+        @custom_tools = Server.resolve_custom_tools
         [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
-          found = Server.served_tool(candidate, custom_tools: custom)
+          found = Server.served_tool(candidate, custom_tools: @custom_tools)
           next unless found
 
           # A retired config tool name runs its section, as the MCP server does.
