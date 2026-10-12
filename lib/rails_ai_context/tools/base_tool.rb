@@ -1100,6 +1100,17 @@ module RailsAiContext
             "(skip_tools lists #{many ? 'them' : 'it'}), so #{many ? 'their sections are' : 'its section is'} left out._"
         end
 
+        # "Call `<pointer>`" for a not-found answer's recovery line; nil when the tool is not served.
+        def call_pointer(name, args = nil, purpose = nil)
+          pointer(name, args, purpose)&.then { |call| "Call #{call}" }
+        end
+
+        # The lines, with a blank line and the next-step hint after them when a pointer is served.
+        def add_next_hint(lines, *pointers, **layout)
+          hint = next_hint(*pointers, **layout)
+          hint ? lines << "" << hint : lines
+        end
+
         # `_Next:` with the pointers that are served, on one line or one per
         # line; nil when none is.
         def next_hint(*pointers, lines: false)

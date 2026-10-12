@@ -41,14 +41,20 @@ module RailsAiContext
 
         parts = [ "#{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}" ]
         Payload.secondary_databases(schema).each do |name, db|
-          # A dump too large to read, or one holding nothing, leaves the entry without tables.
-          next parts << "#{name}: tables not read" if db[:tables].empty?
+          next parts << "#{name}: #{empty_database_text(db)}" if db[:tables].empty?
 
           tables = CountPhrase.call(db[:total_tables].to_i, "table")
           adapter = SchemaAdapter.secondary_label(ctx, name, db)
           parts << (framework_database_text(name, db) || "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}")
         end
         "- Database: #{parts.join('; ')}"
+      end
+
+      # A dump that was read and holds no table says so, in the schema section's words.
+      def empty_database_text(db)
+        return "tables not read" if db[:unread]
+
+        db[:dump] ? "#{db[:dump]} #{Introspectors::SchemaIntrospector::NO_TABLES}" : "no tables"
       end
 
       # A database a Rails framework keeps to itself, as every file names it:

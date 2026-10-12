@@ -148,7 +148,9 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       "two" => [ { "queue" => "solid_queue_jobs", "cache" => "solid_cache_entries" },
                  "Solid Queue and Solid Cache keep their tables in databases of their own: queue, cache." ],
       "three" => [ { "cache" => "solid_cache_entries", "queue" => "solid_queue_jobs", "cable" => "solid_cable_messages" },
-                   "Solid Cache, Solid Queue and Solid Cable keep their tables in databases of their own: cache, queue, cable." ]
+                   "Solid Cache, Solid Queue and Solid Cable keep their tables in databases of their own: cache, queue, cable." ],
+      "one framework's two" => [ { "queue" => "solid_queue_jobs", "queue_archive" => "solid_queue_jobs" },
+                                 "Solid Queue keeps its tables in databases of its own: queue, queue_archive." ]
     }.each do |count, (databases, sentence)|
       it "words #{count} Solid database#{"s" unless count == "one"} as a sentence" do
         schema[:secondary_databases] = databases.to_h { |name, table| [ name, { total_tables: 1, tables: { table => {} } } ] }

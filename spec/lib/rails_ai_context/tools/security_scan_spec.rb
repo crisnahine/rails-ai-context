@@ -781,6 +781,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         allow(Brakeman).to receive(:run).and_raise(RuntimeError, "parse error in config/routes.rb")
         result = described_class.call
         text = result.content.first[:text]
+        expect(result.error?).to be(true)
         expect(text).to include("Brakeman scan failed")
         expect(text).to include("parse error")
       end

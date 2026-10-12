@@ -27,6 +27,61 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     end
   end
 
+  describe "an unexpected exception" do
+    {
+      "a controller and an action" => [ RailsAiContext::Tools::GetRoutes, { controller: "PostsController", action: "index" } ],
+      "a controller" => [ RailsAiContext::Tools::GetRoutes, { controller: "PostsController" } ],
+      "a model" => [ RailsAiContext::Tools::GetSchema, { model: "Post" } ]
+    }.each do |mode, (tool, params)|
+      it "is an error result for #{mode}" do
+        allow(tool).to receive(:call).and_raise(NoMethodError, "undefined method 'to_sentence' for an instance of Array")
+
+        response = described_class.call(**params)
+
+        expect(response.error?).to be(true), response.content.first[:text]
+        expect(response.content.first[:text]).to start_with("Tool rails_get_context failed: NoMethodError: undefined method 'to_sentence'")
+      end
+    end
+  end
+
+  describe "a name the app does not have, with the tool that answers it turned off" do
+    around do |example|
+      saved = RailsAiContext.configuration.skip_tools
+      example.run
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+
+    def answer(**params)
+      described_class.call(**params).content.first[:text]
+    end
+
+    it "is answered as a model that was not found, with the models the app has" do
+      RailsAiContext.configuration.skip_tools = %w[rails_get_model_details]
+      expect(RailsAiContext::Tools::GetModelDetails).not_to receive(:call)
+
+      expect(answer(model: "Pots")).to start_with("Model 'Pots' not found.\nDid you mean 'Post'?\nAvailable: ")
+    end
+
+    it "is answered as a controller that was not found, with the controllers the app has" do
+      RailsAiContext.configuration.skip_tools = %w[rails_get_controllers]
+      expect(RailsAiContext::Tools::GetControllers).not_to receive(:call)
+
+      expect(answer(controller: "NopeController")).to start_with("Controller 'NopeController' not found.\nAvailable: ")
+      expect(answer(controller: "NopeController", action: "index")).to start_with("Controller 'NopeController' not found.\nAvailable: ")
+      expect(answer(controller: "PostsController")).not_to include("not found.")
+    end
+
+    it "is answered as a feature that matched nothing, with model names to try" do
+      RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature]
+      expect(RailsAiContext::Tools::AnalyzeFeature).not_to receive(:call)
+
+      expect(answer(feature: "zzqqxx")).to start_with(
+        "No matches found for 'zzqqxx'. No model or controller name holds this keyword.\n\nTry one of your model names: "
+      )
+    end
+  end
+
   describe "include:" do
     let(:keys) { %w[stimulus turbo services jobs conventions helpers env callbacks tests config gems security] }
 
@@ -38,6 +93,12 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       description = described_class.input_schema_value.to_h.dig(:properties, :include, :description)
 
       keys.each { |key| expect(description).to include("'#{key}'") }
+    end
+
+    it "runs a key given twice once" do
+      expect(RailsAiContext::Tools::GetConfig).to receive(:call).with(section: "gems").once.and_call_original
+
+      described_class.call(model: "Post", include: %w[gems GEMS gems])
     end
 
     it "names a key it does not take, with the keys it does" do

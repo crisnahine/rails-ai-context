@@ -79,7 +79,7 @@ module RailsAiContext
         unless located
           available = view_dirs.flat_map { |dir| find_available_partials(dir, root) }.uniq.sort.first(30)
           return not_found_response("Partial", partial, available,
-            recovery_tool: pointer("rails_get_view", %(detail:"summary"), "to see all views and partials")&.then { |call| "Call #{call}" }, note: static_engine_views_note)
+            recovery_tool: call_pointer("rails_get_view", %(detail:"summary"), "to see all views and partials"), note: static_engine_views_note)
         end
 
         file_path = located.realpath
@@ -201,8 +201,8 @@ module RailsAiContext
           lines << "```erb"
           lines << RailsAiContext::Redaction.redact_source(source, path: relative_path)
           lines << "```"
-        elsif (hint = next_hint(pointer("rails_get_view", %(path:"#{partial_name}"), "for full file content")))
-          lines << "" << hint
+        else
+          add_next_hint(lines, pointer("rails_get_view", %(path:"#{partial_name}"), "for full file content"))
         end
 
         text_response(lines.join("\n"))

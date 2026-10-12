@@ -683,10 +683,9 @@ module RailsAiContext
         )
         # The full path, which is the directory Rails resolves templates in:
         # the basename reads another component's views on a namespaced app.
-        hint = next_hint(pointer("rails_get_routes", %(controller:"#{ctrl_path}"), "for routes"),
-                         (pointer("rails_get_model_details", %(model:"#{model_name}"), "for model") if model_name),
-                         pointer("rails_get_view", %(controller:"#{ctrl_path}"), "for views"), lines: true)
-        lines << "" << hint if hint
+        add_next_hint(lines, pointer("rails_get_routes", %(controller:"#{ctrl_path}"), "for routes"),
+                      (pointer("rails_get_model_details", %(model:"#{model_name}"), "for model") if model_name),
+                      pointer("rails_get_view", %(controller:"#{ctrl_path}"), "for views"), lines: true)
 
         lines.join("\n")
       end
