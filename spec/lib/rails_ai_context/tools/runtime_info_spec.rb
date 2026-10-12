@@ -221,7 +221,7 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
         text = described_class.call(section: "cache").content.first[:text]
 
         expect(File.exist?(@file)).to be(false)
-        expect(text).to include("**Store:** Store")
+        expect(text).to include("**Store:** SolidCache::Store, this MCP server process's `Rails.cache`")
         expect(text).to include("The cache database does not exist yet: its SQLite file #{@file} is not there, and nothing was created.")
       end
 

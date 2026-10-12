@@ -153,7 +153,7 @@ module RailsAiContext
             frameworks = solid.values.uniq
             keep = frameworks.one? ? "keeps its" : "keep their"
             place = solid.one? ? "a database of its own" : "databases of their own"
-            lines << "#{frameworks.to_sentence} #{keep} tables in #{place}: #{solid.keys.join(", ")}."
+            lines << "#{AppDatabases.environment_phrase(frameworks)} #{keep} tables in #{place}: #{solid.keys.join(", ")}."
           end
           unread = unread_bundle(rails)
           lines << unread if unread

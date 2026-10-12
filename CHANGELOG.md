@@ -200,6 +200,7 @@ Ten tools that each answered one section of the app's configuration leave
   as database.yml writes it. The JSON keeps adapter names as written.
 - **`rails_onboard` words one Solid database in the singular.** "Solid Cache
   keeps its tables in a database of its own: cache."
+- **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".** The cache section's Store line read "Store".
 - **`rails_get_schema` marks a secondary database with where it is
   configured.** The Secondary databases line carries "(production only)",
   "(staging and production)" or "(committed dump only)", as the generated

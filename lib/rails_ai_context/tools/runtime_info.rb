@@ -272,7 +272,7 @@ module RailsAiContext
         def gather_cache
           cache = Rails.cache
           lines = [ "## Cache", "" ]
-          lines << "**Store:** #{cache.class.name.demodulize}, this MCP server process's `Rails.cache` (#{rails_env_name})"
+          lines << "**Store:** #{cache.class.name.delete_prefix("ActiveSupport::Cache::")}, this MCP server process's `Rails.cache` (#{rails_env_name})"
 
           if (missing = cache_database_missing(cache))
             lines << "_#{missing}_"
