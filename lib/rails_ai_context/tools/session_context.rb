@@ -24,7 +24,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 39,
+        order: 34,
         mcp: "rails_session_context(action:\"status\")",
         cli_args: "action=status",
         summary: "Track what you've already queried, avoid redundant calls"

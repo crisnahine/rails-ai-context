@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  # Loading all 45 tools to find one was a tenth of a one-tool CLI call.
+  # Loading all 35 tools to find one was a tenth of a one-tool CLI call.
   describe "resolving a name the tool classes spell" do
     it "loads no tool list for a short, medium or full name" do
       allow(described_class).to receive(:available_tools).and_call_original
@@ -52,6 +52,43 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
 
     it "suggests the closest name for a miss" do
       expect { described_class.new("shema", []) }.to raise_error(/Did you mean 'schema'/)
+    end
+  end
+
+  # Ten tools became sections of rails_get_config; scripts and context files
+  # written before that still name them.
+  describe "a name that became a config section" do
+    it "resolves every old short and full name to the class that answers its section" do
+      RailsAiContext::Tools::GetConfig::SECTIONS.except("app").each_value do |tool_name|
+        short = described_class.short_name(tool_name)
+        [ short, tool_name ].each do |name|
+          expect(described_class.new(name, []).tool_class.tool_name).to eq(tool_name)
+        end
+      end
+      expect(described_class.new("config", []).tool_class).to eq(RailsAiContext::Tools::GetConfig)
+    end
+
+    it "answers an old name as the section answers" do
+      old = described_class.new("i18n", [ "--locale", "en" ]).run
+      section = described_class.new("config", [ "--section", "i18n", "--locale", "en" ]).run
+
+      expect(old).to eq(section)
+    end
+
+    it "refuses an old name skip_tools lists, saying so" do
+      allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_env" ])
+
+      expect { described_class.new("env", []) }.to raise_error(
+        described_class::ToolNotFoundError, /\Arails_get_env is turned off in this app/
+      )
+    end
+
+    it "hands the --environment flag to the env_config section only" do
+      env_config = described_class.new("config", [ "--section", "env_config" ], environment: "production").run
+      app = described_class.new("config", [], environment: "production").run
+
+      expect(env_config).to eq(described_class.new("env_config", [ "--environment", "production" ]).run)
+      expect(app).not_to include("does not read")
     end
   end
 

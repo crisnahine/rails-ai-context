@@ -20,7 +20,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 38,
+        order: 33,
         mcp: "rails_runtime_info(detail:\"standard\")",
         cli_args: "detail=standard",
         summary: "Live runtime: DB pool, table sizes, cache stats, job queues, pending migrations"
@@ -263,7 +263,7 @@ module RailsAiContext
             store = (env[:notable] || {})["cache_store"]
             next unless store && !store.match?(PROCESS_STORES)
 
-            # The store's name; its options are rails_get_env_config's to show, unshortened.
+            # The store's name; its options are the env_config section's to show, unshortened.
             "- #{env[:name]}: `#{store[/\A:\w+/] || store}` (`#{env[:file]}`)"
           end
         end

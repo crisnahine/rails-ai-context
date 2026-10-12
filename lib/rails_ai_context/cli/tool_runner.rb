@@ -214,6 +214,8 @@ module RailsAiContext
       def with_environment(kwargs)
         return kwargs if @environment.nil? || kwargs.key?(:environment)
         return kwargs unless (tool_schema[:properties] || {}).key?(:environment)
+        # Only the env_config section reads it; the others answer for RAILS_ENV.
+        return kwargs if tool_class == Tools::GetConfig && kwargs[:section].to_s != "env_config"
 
         kwargs.merge(environment: @environment)
       end

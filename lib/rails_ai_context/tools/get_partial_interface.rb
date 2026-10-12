@@ -22,7 +22,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 18,
+        order: 17,
         mcp: "rails_get_partial_interface(partial:\"X\")",
         cli_args: "partial=X",
         summary: "Partial locals contract: what to pass + usage examples"

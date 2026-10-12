@@ -140,11 +140,18 @@ module RailsAiContext
         ]
       end
 
-      # Rule 3's check before scaffolding: the conventions and gems tools the
+      # Rule 3's check before scaffolding: the conventions and gems sections the
       # server serves, else the app's own files.
       def stack_check_text
-        refs = served_refs("rails_get_conventions", "rails_get_gems")
+        refs = %w[conventions gems].filter_map { |section| section_ref(section) }
         refs.any? ? "Check #{refs.join(" and ")}" : "Check the Gemfile and the code that already does it"
+      end
+
+      # A rails_get_config section named once in prose, or nil when skip_tools turned it off.
+      def section_ref(section)
+        return nil unless served?("rails_get_config") && RailsAiContext::Tools::GetConfig.section_on?(section)
+
+        tool_ref("rails_get_config", %(section:"#{section}"), "section=#{section}")
       end
 
       def tools_detail_guidance

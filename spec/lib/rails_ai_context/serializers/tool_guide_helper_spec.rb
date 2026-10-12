@@ -138,6 +138,17 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(text).to include("Stale context lies")
     end
 
+    it "sends the stack check to the conventions and gems config sections the app serves" do
+      text = helper.tools_anti_hallucination_section.join("\n")
+      expect(text).to include('Check `rails_get_config(section:"conventions")` and `rails_get_config(section:"gems")` BEFORE')
+
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_get_conventions]
+      expect(test_class.new.tools_anti_hallucination_section.join("\n")).to include('Check `rails_get_config(section:"gems")` BEFORE')
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+
     it "returns empty array when anti_hallucination_rules is false" do
       original = RailsAiContext.configuration.anti_hallucination_rules
       RailsAiContext.configuration.anti_hallucination_rules = false

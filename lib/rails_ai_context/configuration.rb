@@ -257,7 +257,7 @@ module RailsAiContext
     # metadata (method, tool_name, duration, error) is forwarded to
     # subscribers. When true, `tool_arguments` and `arguments` are forwarded
     # verbatim - including raw SQL from `rails_query`, env var names from
-    # `rails_get_env`, and log search patterns from `rails_read_logs`.
+    # `rails_get_config(section: "env")`, and log search patterns from `rails_read_logs`.
     #
     # Setting this to true means the operator takes on the redaction
     # obligation for any downstream observability pipeline (Datadog, Scout,

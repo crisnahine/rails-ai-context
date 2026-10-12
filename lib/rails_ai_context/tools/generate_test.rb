@@ -31,7 +31,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 34,
+        order: 29,
         mcp: "rails_generate_test(model:\"X\")",
         cli_args: "model=X",
         summary: "Generate test scaffolding matching project patterns (framework, factories, style)"

@@ -27,7 +27,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 36,
+        order: 31,
         mcp: "rails_review_changes(ref:\"main\")",
         cli_args: "ref=main",
         summary: "PR/commit review: file context + warnings (missing indexes, removed validations)"

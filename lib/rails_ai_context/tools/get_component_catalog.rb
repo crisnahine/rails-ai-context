@@ -28,7 +28,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 25,
+        order: 22,
         mcp: "rails_get_component_catalog(component:\"X\")",
         cli_args: "component=X",
         summary: "ViewComponent/Phlex: props, slots, previews, usage"

@@ -4,6 +4,7 @@ module RailsAiContext
   module Tools
     class GetFrontendStack < BaseTool
       tool_name "rails_get_frontend_stack"
+      abstract!
       description "Returns the app's frontend stack: framework, build tool, state management, TypeScript config, " \
         "component directories, and package manager. " \
         "Use when: scaffolding new frontend features, choosing libraries, or understanding the JS/TS build pipeline. " \
@@ -15,11 +16,6 @@ module RailsAiContext
         }
       )
 
-      guide_row(
-        order: 29,
-        mcp: "rails_get_frontend_stack",
-        summary: "React/Vue/Svelte/Angular, Inertia, TypeScript, package manager"
-      )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

@@ -11,13 +11,13 @@ module RailsAiContext
         "turbo"       => [ "rails_get_turbo_map", { detail: "standard" } ],
         "services"    => [ "rails_get_service_pattern", { detail: "standard" } ],
         "jobs"        => [ "rails_get_job_pattern", { detail: "standard" } ],
-        "conventions" => [ "rails_get_conventions", {} ],
+        "conventions" => [ "rails_get_config", { section: "conventions" } ],
         "helpers"     => [ "rails_get_helper_methods", { detail: "standard" } ],
-        "env"         => [ "rails_get_env", { detail: "summary" } ],
+        "env"         => [ "rails_get_config", { section: "env", detail: "summary" } ],
         "callbacks"   => [ "rails_get_callbacks", { detail: "standard" } ],
         "tests"       => [ "rails_get_test_info", { detail: "full" } ],
-        "config"      => [ "rails_get_config", {} ],
-        "gems"        => [ "rails_get_gems", {} ],
+        "config"      => [ "rails_get_config", { section: "app" } ],
+        "gems"        => [ "rails_get_config", { section: "gems" } ],
         "security"    => [ "rails_security_scan", { detail: "summary" } ]
       }.freeze
       description "Get cross-layer context in a single call - combines schema, model, controller, routes, views, stimulus, and tests. " \

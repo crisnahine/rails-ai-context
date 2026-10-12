@@ -37,7 +37,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 31,
+        order: 26,
         mcp: "rails_search_docs(query:\"X\")",
         cli_args: "query=X",
         summary: "Bundled topic index with weighted keyword search, on-demand GitHub fetch"

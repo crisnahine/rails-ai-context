@@ -92,7 +92,7 @@ TYPED_IN_ENV = "RAILS_AI_CONTEXT_TYPED_IN"
 # `context` either.
 MCP_REFRESH_FLAG_SINCE = "5.33.0"
 
-# After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
+# After one of these tools' names, or `config` with its section, `--environment` is its filter, never RAILS_ENV: this is
 # decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
 ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
 
@@ -256,7 +256,10 @@ class RailsAiContextCLI < Thor
       # keeps it: booting in the env it filters for fails where the app has no database.
       @app_path_override = extract_value_flag!(args, "--app-path")
       environment_flag = extract_value_flag!(args, "--environment")
-      if environment_flag && ENVIRONMENT_PARAM_TOOLS.include?(name.to_s.delete_prefix("rails_").delete_prefix("get_"))
+      short = name.to_s.delete_prefix("rails_").delete_prefix("get_")
+      section = args.each_cons(2).find { |flag, _| flag == "--section" }&.last ||
+        args.find { |arg| arg.start_with?("--section=", "section=") }&.split("=", 2)&.last
+      if environment_flag && (ENVIRONMENT_PARAM_TOOLS.include?(short) || (short == "config" && ENVIRONMENT_PARAM_TOOLS.include?(section)))
         args.push("--environment", environment_flag)
       else
         @environment_override = environment_flag

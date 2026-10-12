@@ -36,7 +36,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 32,
+        order: 27,
         mcp: "rails_query(sql:\"X\")",
         cli_args: "sql=X",
         summary: "Safe read-only SQL queries with timeout, row limit, column redaction"

@@ -36,7 +36,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 24,
+        order: 21,
         mcp: "rails_security_scan",
         summary: "Brakeman static analysis: SQL injection, XSS, mass assignment"
       )

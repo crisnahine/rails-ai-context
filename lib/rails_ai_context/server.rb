@@ -100,9 +100,17 @@ module RailsAiContext
       end
     end
 
-    # The built-in tools skip_tools turned off.
+    # The built-in tools skip_tools turned off, a retired config section's name among them.
     def self.skipped_tools(config = RailsAiContext.configuration)
-      config.skip_tools & builtin_tools.map(&:tool_name)
+      names = builtin_tools.map(&:tool_name) | Tools::GetConfig::SECTIONS.values
+      config.skip_tools.select { |name| names.include?(name) && skipped?(name, config) }.uniq
+    end
+
+    # rails_get_config is off only once skip_tools turns every section off.
+    def self.skipped?(name, config = RailsAiContext.configuration)
+      return Tools::GetConfig::SECTIONS.keys.none? { |section| Tools::GetConfig.section_on?(section, config) } if name == "rails_get_config"
+
+      config.skip_tools.include?(name)
     end
 
     # One answer, on every surface, for a call naming a tool skip_tools
@@ -140,13 +148,20 @@ module RailsAiContext
     end
 
     # The tool exposed_tools serves under this name, or nil, loading only
-    # that tool's class: an unskipped built-in, then the first custom tool.
+    # that tool's class: an unskipped built-in, then the first custom tool,
+    # then the renderer of the config section a retired name stands for.
     # A caller trying several names passes the custom tools it resolved once.
     def self.served_tool(name, config = RailsAiContext.configuration, custom_tools: nil)
       name = name.to_s
-      builtin = builtin_tool(name) unless config.skip_tools.include?(name)
-      builtin || (custom_tools || resolve_custom_tools(config)).find { |tool| tool_label(tool) == name }
+      builtin = builtin_tool(name) unless skipped?(name, config)
+      builtin || (custom_tools || resolve_custom_tools(config)).find { |tool| tool_label(tool) == name } || retired_tool(name, config)
     end
+
+    def self.retired_tool(name, config)
+      section = Tools::GetConfig::SECTIONS.key(name)
+      Tools::GetConfig.renderer(section) if section && section != "app" && Tools::GetConfig.section_on?(section, config)
+    end
+    private_class_method :retired_tool
 
     def self.served?(name, config = RailsAiContext.configuration)
       !served_tool(name, config).nil?
@@ -166,7 +181,7 @@ module RailsAiContext
       skip = config.skip_tools
       return tools if skip.empty?
 
-      tools.reject { |t| skip.include?(t.tool_name) }
+      tools.reject { |t| skipped?(t.tool_name, config) }
     end
 
     # The MCP SDK refuses a tool list with a repeated name, so one duplicate
@@ -325,9 +340,23 @@ module RailsAiContext
         return super if tools.key?(name)
         return MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h if @skipped_tools.include?(name)
 
+        section = Tools::GetConfig::SECTIONS.key(name)
+        return retired_call(request, name, section, ...) if section && tools.key?("rails_get_config")
+
         add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
         raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
                                                    error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
+      end
+
+      # A tool that became a config section, answered from it with the call to make instead.
+      def retired_call(request, name, section, ...)
+        arguments = (request[:arguments] || {}).transform_keys(&:to_sym).except(:section)
+        result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section)), ...)
+        call = Tools::BaseTool.pointer(name, arguments.map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", "))
+        first, *rest = result[:content]
+        return result unless call && first.is_a?(Hash) && first[:type] == "text"
+
+        result.merge(content: [ first.merge(text: "#{first[:text]}\n\n_#{name} is now #{call}; call that instead._"), *rest ])
       end
     end
 
