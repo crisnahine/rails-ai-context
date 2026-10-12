@@ -77,8 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*_params` now counts when it calls `permit`, `permit!` or `expect` on
   params (directly, through a local or an ivar, on each item a block walks,
   or on `ActionController::Parameters.new`), or when what it returns comes
-  from `super` (`super.merge(...)`), another strong params method (one this
-  file or a parent class defines, whatever its name, such as Mastodon's
+  from `super` (`super.merge(...)`), another strong params method (a call
+  runs the nearest class's method of that name, so one the controller or a
+  parent class defines counts whatever its name, such as Mastodon's
   `params_slice`; any other named `*_params` or `permitted_*`, such as a
   concern's or Pundit's `permitted_attributes(@post)`; and Devise's
   `devise_parameter_sanitizer`), or a call given the whole params
