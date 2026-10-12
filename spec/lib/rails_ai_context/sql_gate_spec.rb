@@ -959,6 +959,56 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    # Plans PostgreSQL 16 gave over rac_p (id, email, salt), partitioned in two, and over an inheritance parent.
+    describe "a partitioned table or an inheritance parent that holds a secret column" do
+      let(:relations) { %w[public.rac_p_a public.rac_p_b public.rac_parent public.rac_child].to_h { |name| [ name, %w[id email salt] ] } }
+
+      def member(relation, as, columns = %w[id email salt], extra = {})
+        { "Node Type" => "Seq Scan", "Parent Relationship" => "Member", "Relation Name" => relation, "Schema" => "public", "Alias" => as,
+          "Output" => columns.map { |column| "#{as}.#{column}" } }.merge(extra)
+      end
+
+      def append(as = "rac_p", extra = {})
+        { "Node Type" => "Append", "Subplans Removed" => 0, "Plans" => [ member("rac_p_a", "#{as}_1"), member("rac_p_b", "#{as}_2") ] }.merge(extra)
+      end
+
+      it "runs a wildcard over every partition, over a sorted and limited read, and over a parent with its child, for redaction to filter" do
+        expect(plan_refusal(append)).to be_nil
+        sorted = { "Node Type" => "Sort", "Parent Relationship" => "Outer", "Output" => %w[rac_p.id rac_p.email rac_p.salt], "Sort Key" => [ "rac_p.id" ],
+                   "Plans" => [ append("rac_p", "Parent Relationship" => "Outer") ] }
+        expect(plan_refusal({ "Node Type" => "Limit", "Output" => %w[rac_p.id rac_p.email rac_p.salt], "Plans" => [ sorted ] })).to be_nil
+        inherited = { "Node Type" => "Append", "Plans" => [ member("rac_parent", "rac_parent_1"), member("rac_child", "rac_parent_2") ] }
+        expect(plan_refusal(inherited)).to be_nil
+      end
+
+      it "names the table column behind each result column of the partitions" do
+        sources = RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(append)
+        expect(sources).to eq([ [ 0, "id", "public.rac_p_a" ], [ 1, "email", "public.rac_p_a" ], [ 2, "salt", "public.rac_p_a" ] ])
+      end
+
+      it "still refuses the secret column as a sort key, through a materialized CTE and through a set operation" do
+        by_salt = { "Node Type" => "Sort", "Output" => %w[x.id x.email x.salt], "Sort Key" => [ "x.salt" ], "Plans" => [ append("x", "Parent Relationship" => "Outer") ] }
+        expect(plan_refusal(by_salt)).to include("plan uses the secret column `salt`")
+        cte = { "Node Type" => "CTE Scan", "CTE Name" => "c", "Alias" => "c", "Output" => %w[c.id c.email c.salt],
+                "Plans" => [ append("rac_p", "Parent Relationship" => "InitPlan", "Subplan Name" => "CTE c") ] }
+        expect(plan_refusal(cte)).to include("passes the secret column `salt` through")
+        first = { "Node Type" => "Subquery Scan", "Parent Relationship" => "Member", "Alias" => "*SELECT* 1",
+                  "Output" => [ %("*SELECT* 1".id), %("*SELECT* 1".email), %("*SELECT* 1".salt), "0" ], "Plans" => [ append("rac_p", "Parent Relationship" => "Subquery") ] }
+        second = { "Node Type" => "Subquery Scan", "Parent Relationship" => "Member", "Alias" => "*SELECT* 2", "Output" => [ "0", "''::text", "''::text", "1" ],
+                   "Plans" => [ { "Node Type" => "Result", "Parent Relationship" => "Subquery", "Output" => [ "0", "''::text", "''::text" ] } ] }
+        except = { "Node Type" => "SetOp", "Command" => "Except", "Output" => [ %("*SELECT* 1".id), %("*SELECT* 1".email), %("*SELECT* 1".salt), "(0)" ],
+                   "Plans" => [ { "Node Type" => "Append", "Parent Relationship" => "Outer", "Plans" => [ first, second ] } ] }
+        expect(plan_refusal(except)).to include("passes the secret column `salt` through")
+      end
+
+      it "refuses members that hand up the secret column in another place, as a view over a UNION ALL plans them" do
+        swapped = { "Node Type" => "Append", "Plans" => [ member("rac_p_a", "t_1"), member("rac_p_a", "t_2", %w[id salt email]) ] }
+        expect(plan_refusal(swapped)).to include("passes the secret column `salt` through")
+        mixed = { "Node Type" => "Append", "Plans" => [ member("rac_p_a", "a"), member("rac_p_b", "b") ] }
+        expect(plan_refusal(mixed)).to include("passes the secret column `salt` through")
+      end
+    end
+
     it "refuses an unlisted VOLATILE function as VOLATILE" do
       allow(connection).to receive(:select_values).and_return([ "nextval" ])
       expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] }))

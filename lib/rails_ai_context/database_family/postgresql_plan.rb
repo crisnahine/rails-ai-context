@@ -33,6 +33,13 @@ module RailsAiContext
           @names[key] = rel.to_s.downcase
           map[(node["Alias"] || rel).to_s] = key
         end
+        @members = {}.compare_by_identity
+        @nodes.each { |node| read_members(node) }
+      end
+
+      # @return [Array<String>] every relation the plan reads, by its own name
+      def relation_names
+        @names.values.uniq
       end
 
       # The relation's own name, with no schema, for an answer.
@@ -51,7 +58,7 @@ module RailsAiContext
 
       # The top node's Output: its i-th entry is result column i, with any sort or group key past the result width.
       def output
-        Array(@top["Output"])
+        Array(@top["Output"] || @members[@top])
       end
 
       # @return [Array(String, String), nil] [relation, column], downcased, for a plain Var of a base relation
@@ -74,6 +81,23 @@ module RailsAiContext
       end
 
       private
+
+      # An Append over the partitions of a table, or over a parent and its children, prints no Output: its rows
+      # are its members', which hand up the same columns in the same places under the aliases `name_1`, `name_2`.
+      # The members are then read as one relation, the first, under each of their aliases and under `name`.
+      def read_members(node)
+        return if node.key?("Output") || ![ "Append", "Merge Append" ].include?(node["Node Type"])
+
+        members = Array(node["Plans"])
+        shared = members.map { |member| member["Alias"].to_s[/\A(.+)_\d+\z/m, 1] if member["Relation Name"] }.uniq
+        columns = members.map { |member| Array(member["Output"]).map { |expr| expr.to_s.match(BASE_VAR)&.then { |m| m[3] || m[4] } } }.uniq
+        return unless shared.size == 1 && shared.first && columns.size == 1 && columns.first.all?
+
+        first = @aliases[members.first["Alias"]]
+        members.each { |member| @aliases[member["Alias"]] = first }
+        @aliases[shared.first] ||= first
+        @members[node] = Array(members.first["Output"])
+      end
 
       def collect(node, parent = nil)
         return unless node.is_a?(Hash)

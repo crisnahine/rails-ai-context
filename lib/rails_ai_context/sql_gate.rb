@@ -621,7 +621,7 @@ module RailsAiContext
       return nil unless top
 
       plan = DatabaseFamily::PostgresqlPlan.new(top)
-      refusal = unread_relation_refusal(plan) || plan.aliases.each_value.lazy.filter_map { |relation| view_refusal(plan.name(relation)) }.first
+      refusal = unread_relation_refusal(plan) || plan.relation_names.lazy.filter_map { |relation| view_refusal(relation) }.first
       return refusal if refusal
 
       raw = plan.nodes.flat_map { |node| plan.expressions(node) }

@@ -203,6 +203,44 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  describe "a partitioned table and an inheritance parent that hold a secret column" do
+    before do
+      conn.execute("DROP TABLE IF EXISTS rac_pg_parts, rac_pg_parent CASCADE")
+      conn.execute("CREATE TABLE rac_pg_parts (id int, email text, salt text) PARTITION BY RANGE (id)")
+      conn.execute("CREATE TABLE rac_pg_parts_a PARTITION OF rac_pg_parts FOR VALUES FROM (0) TO (10)")
+      conn.execute("CREATE TABLE rac_pg_parts_b PARTITION OF rac_pg_parts FOR VALUES FROM (10) TO (20)")
+      conn.execute("INSERT INTO rac_pg_parts VALUES (1, 'p1@example.com', 'salt-value'), (11, 'p2@example.com', 'salt-value')")
+      conn.execute("CREATE TABLE rac_pg_parent (id int, email text, salt text)")
+      conn.execute("CREATE TABLE rac_pg_child (extra text) INHERITS (rac_pg_parent)")
+      conn.execute("INSERT INTO rac_pg_parent VALUES (1, 'p1@example.com', 'salt-value')")
+      conn.execute("INSERT INTO rac_pg_child VALUES (11, 'p2@example.com', 'salt-value', 'x')")
+    end
+
+    after { conn.execute("DROP TABLE IF EXISTS rac_pg_parts, rac_pg_parent CASCADE") }
+
+    it "filters the secret column in place, with every partition read, with one pruned, sorted and limited" do
+      { "SELECT * FROM rac_pg_parts" => 2, "SELECT * FROM rac_pg_parts WHERE id < 5" => 1, "SELECT * FROM rac_pg_parts ORDER BY id LIMIT 5" => 2,
+        "SELECT x.* FROM rac_pg_parts x WHERE x.id < 15 ORDER BY 1 DESC" => 2, "SELECT * FROM (SELECT * FROM rac_pg_parts OFFSET 0) s" => 2,
+        "SELECT * FROM rac_pg_parent" => 2, "SELECT * FROM rac_pg_parent ORDER BY id LIMIT 5" => 2, "SELECT * FROM ONLY rac_pg_parent" => 1 }.each do |sql, rows|
+        response = run(sql)
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text].scan("[FILTERED]").size).to eq(rows), sql
+        expect(response.content.first[:text]).to include("p1@example.com"), sql
+        expect(response.content.first[:text]).not_to include("salt-value"), sql
+      end
+    end
+
+    it "still refuses what would carry the secret column past the redaction" do
+      refused([ "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parts) SELECT * FROM c", "SELECT * FROM rac_pg_parts EXCEPT SELECT 0, '', ''",
+                "SELECT (1, 'p1@example.com', 'salt-valud') < (SELECT * FROM rac_pg_parts LIMIT 1) AS o",
+                "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parent) SELECT * FROM c" ],
+              "Blocked: the query passes the secret column `salt` through")
+      refused([ "SELECT * FROM (SELECT * FROM rac_pg_parts) s (a, b, c)" ], "Blocked: a column-alias list")
+      refused([ "SELECT * FROM rac_pg_parts ORDER BY 3", "SELECT * FROM rac_pg_parent ORDER BY 3" ], "Blocked: the query's plan uses the secret column `salt`")
+      refused([ "SELECT row_to_json(p) FROM rac_pg_parts p", "SELECT p::text FROM rac_pg_parent p" ], "Blocked: the query serialises a whole row of")
+    end
+  end
+
   it "runs a subquery that reads no secret column of a table that holds one" do
     { "SELECT (SELECT count(*) FROM rac_pg_accounts) AS n" => "| 1 |", "SELECT (SELECT count(id) FROM rac_pg_accounts) AS n" => "| 1 |",
       "SELECT exists (SELECT 1 FROM rac_pg_accounts) AS n" => "| true |", "SELECT (SELECT max(id) FROM rac_pg_accounts) AS n" => "| 1 |",
