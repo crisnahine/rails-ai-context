@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a file, logrotate's dated and `.old` ones included, now gets what
   `rails_read_logs` filters.
 - **A Digest or Token Authorization header is filtered with all its
-  parameters.** A Digest header in a log kept its `response=` hash, and a
-  Token header kept every parameter after `token=` (and came out as
+  parameters.** A Digest header in a log kept its `response=` hash, also
+  inside an inspected hash whose value escapes its quotes, and a Token
+  header kept every parameter after `token=` (and came out as
   `Authorization: [FILTERED]]` when unquoted).
 
 ### Added
@@ -98,8 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rails_get_model_details` printed `[VERIFIED]` and `**Table:** \`tags\``
   for a model with no `tags` table, and `onboard` and the context files
   named the table too. Each now says `` `tags` not found `` where a live
-  listing lacks the table. A database read from its dump, a secondary one
-  included, is not taken at its word, since a dump can leave out a view.
+  listing lacks the table, and the tool guide's examples pass over such a
+  model. A database read from its dump, a secondary one included, is not
+  taken at its word, since a dump can leave out a view, and nor is the
+  primary's listing for a model on a connection of its own.
 - **Callbacks on a chain a library defines are listed.** Paperclip's
   `before_file_validate` and `after_post_process` were missing from
   `rails_get_model_details` and `rails_get_callbacks`, booted too, because
@@ -115,8 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in app/models on a parent the app does not define is now a model when the
   schema holds a table it would read, one of the parent's names
   (`ahoy_messages` for `EmailMessage < Ahoy::Message`) or its own, and,
-  with no schema to ask or another database's dump that may hold the
-  table, when it declares associations or scopes. An
+  with no schema to ask or another database's dump not on disk, when it
+  declares associations or scopes. Wherever the schema can be read, an
   ActiveHash class that declares `has_many` stays out. The table comes from
   the parent as Rails' single table inheritance decides, or a line says the
   parent sets it.
@@ -144,9 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "AI"` made Zeitwerk expect `RailsAIContext::McpController` and
   `inflect.acronym "MCP"` `RailsAiContext::MCPController`, so
   `bin/rails zeitwerk:check` and any eager load failed once the gem was in
-  the Gemfile, and the mounted endpoint answered 404. The controller is now
-  kept out of the app's loader and routed as a class, which
-  `bin/rails routes` shows as an inline handler.
+  the Gemfile; the mounted endpoint answered with an error (a 404 on Rails
+  7.0 after the first request), and a production boot with eager loading
+  failed. The controller is now kept out of the app's loader and routed as
+  a class, which `bin/rails routes` shows as an inline handler.
 - **`rails ai:context` runs in an app with its own top-level
   `print_result`.** The gem's rake helpers were top-level methods guarded by
   `unless defined?`, so an app's `print_result` in lib/tasks ran instead and
