@@ -1695,7 +1695,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(posts["score"]).to include(type: "decimal")
     end
 
-    # Ruby's sort is not stable, so a block's statement on its opener's line once ran before the block opened.
+    # Ruby's sort is not stable, so a block's statement on its opener's line must keep source order.
     it "applies a one-line block's statement after the block opens, among many statements" do
       columns = (1..12).map { |i| "c#{i}" }
       ups = columns.first(3).map { |c| "    change_column :posts, :#{c}, :string, default: \"x\"\n" } +

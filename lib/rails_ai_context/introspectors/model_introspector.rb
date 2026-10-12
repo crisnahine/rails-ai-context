@@ -2263,7 +2263,6 @@ module RailsAiContext
                    scopes: ConcernMembership.owned_by(data[:scopes], class_name).map { |scope| scope.except(:owner) })
       end
 
-      # The source listeners, plus the class body's blocks evaluated on another receiver.
       MODEL_LISTENERS = LISTENERS.merge(foreign_evals: Listeners::ForeignEvalsListener).freeze
 
       def source_walk(path)
