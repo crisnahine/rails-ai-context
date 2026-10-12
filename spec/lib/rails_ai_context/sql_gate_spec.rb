@@ -124,6 +124,14 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "refuses another session's plan in every spelling MySQL and MariaDB read" do
+      [ "EXPLAIN FOR CONNECTION 12", "EXPLAIN FORMAT=JSON FOR CONNECTION 12", "DESCRIBE FOR CONNECTION 12", "DESC FORMAT=TREE FOR CONNECTION 12",
+        "explain for\nconnection 12", "EXPLAIN /*!50000 FOR CONNECTION */ 12", "EXPLAIN FOR /* x */ CONNECTION 12" ].each do |sql|
+        expect(refusal(sql, :mysql)).to eq("Blocked: sensitive SHOW command"), sql
+      end
+      expect(runs?("EXPLAIN SELECT id FROM orders", :mysql)).to be(true)
+    end
+
     it "runs the SHOW statements that list the schema" do
       [ "SHOW TABLES", "SHOW FULL TABLES", "SHOW FULL COLUMNS FROM orders", "SHOW ENGINES", "SHOW TABLES LIKE 'ord%'",
         "SHOW COLUMNS FROM orders LIKE '%where%'", "SHOW INDEX FROM orders", "SHOW TABLE STATUS", "SHOW ALL" ].each do |sql|
@@ -159,8 +167,8 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT sql_text FROM performance_schema.events_statements_history" => "performance_schema",
         "SELECT * FROM `sys`.`session`" => "sys",
         "SELECT histogram FROM information_schema.column_statistics" => "column_statistics",
-        "SELECT min_value FROM mysql.column_stats" => "column_stats",
-        "SELECT priv FROM mysql.global_priv" => "global_priv",
+        "SELECT min_value FROM mysql.column_stats" => "mysql",
+        "SELECT priv FROM global_priv" => "global_priv",
         "SELECT sample FROM sqlite_stat4" => "sqlite_stat4"
       }.each do |sql, name|
         %i[sqlite mysql postgresql].each do |family|
@@ -171,6 +179,125 @@ RSpec.describe RailsAiContext::SqlGate do
         end
       end
       expect(runs?("SELECT sys_id, processlists FROM systems sys_log")).to be(true)
+    end
+
+    def unread(name)
+      "Blocked: `#{name}` is not read. It holds values sampled from other tables, other sessions' statements " \
+        "or stored credentials, and rails_query cannot tell which of them are secret."
+    end
+
+    it "refuses the PostgreSQL relations that hold a stored credential" do
+      %w[pg_user_mapping pg_user_mappings pg_subscription pg_authid pg_shadow pg_db_role_setting pg_foreign_server pg_foreign_data_wrapper
+         pg_foreign_table pg_hba_file_rules pg_ident_file_mappings].each do |name|
+        expect(refusal("SELECT * FROM #{name}", :postgresql)).to eq(unread(name)), name
+        expect(refusal("SELECT * FROM pg_catalog.#{name} x", :postgresql)).to eq(unread(name)), name
+      end
+      expect(refusal("SELECT * FROM information_schema.user_mapping_options", :postgresql)).to eq(unread("user_mapping_options"))
+      expect(runs?("SELECT subname FROM pg_subscription_rel_names", :postgresql)).to be(true)
+    end
+
+    it "refuses the relations and functions that list every setting, and says how one setting is read" do
+      { "SELECT name, setting FROM pg_settings" => "pg_settings", "SELECT * FROM pg_show_all_settings()" => "pg_show_all_settings",
+        "SELECT * FROM pg_show_all_file_settings()" => "pg_show_all_file_settings" }.each do |sql, name|
+        expect(refusal(sql, :postgresql)).to eq("#{unread(name)} To read one setting, run SHOW with its name."), sql
+      end
+    end
+
+    it "refuses the mysql schema whole, however its name is quoted" do
+      [ "SELECT User, Host FROM mysql.user", "SELECT * FROM `mysql`.`servers`", "SELECT * FROM mysql . slave_master_info",
+        "SELECT * FROM mysql/* x */.password_history", 'SELECT * FROM "mysql"."user"', "SELECT * FROM MYSQL.db" ].each do |sql|
+        expect(refusal(sql, :mysql)).to start_with("Blocked: `mysql` is not read.").or(start_with("Blocked: `MYSQL` is not read.")), sql
+      end
+      expect(runs?("SELECT id FROM mysql_versions", :mysql)).to be(true)
+    end
+
+    it "refuses the information_schema tables that hold statements, locked rows or indexed words" do
+      { "SELECT trx_query FROM information_schema.INNODB_TRX" => "INNODB_TRX", "SELECT * FROM information_schema.innodb_locks" => "innodb_locks",
+        "SELECT * FROM information_schema.innodb_lock_waits" => "innodb_lock_waits",
+        "SELECT * FROM `information_schema`.`INNODB_FT_INDEX_TABLE`" => "INNODB_FT_INDEX_TABLE",
+        "SELECT * FROM information_schema . innodb_ft_index_cache" => "innodb_ft_index_cache",
+        "SELECT * FROM information_schema.USER_STATISTICS" => "USER_STATISTICS",
+        "SELECT * FROM information_schema.client_statistics" => "client_statistics",
+        "SELECT * FROM information_schema.PROFILING" => "PROFILING", "SELECT * FROM information_schema.optimizer_trace" => "optimizer_trace" }.each do |sql, name|
+        expect(refusal(sql, :mysql)).to eq(unread(name)), sql
+      end
+      expect(runs?("SELECT id FROM user_statistics", :mysql)).to be(true)
+      expect(runs?("SELECT * FROM information_schema.innodb_metrics", :mysql)).to be(true)
+    end
+
+    it "refuses a relation named with a letter the server folds to a plain one" do
+      expect(refusal("SELECT * FROM information_schema.PROCESSL\u0130ST", :mysql)).to eq(unread("processlist"))
+      expect(refusal("SELECT * FROM information_schema.column_stat\u0130st\u0130cs", :mysql)).to eq(unread("column_statistics"))
+    end
+
+    describe "a setting" do
+      def secret_setting(name)
+        "Blocked: the setting `#{name}` is not read. It can hold a password, a key or a command line that carries one."
+      end
+
+      it "refuses the settings that can hold a password or a command line, however they are read" do
+        %w[primary_conninfo ssl_passphrase_command archive_command restore_command archive_cleanup_command recovery_end_command].each do |name|
+          [ "SHOW #{name}", "show #{name.upcase};", "SELECT current_setting('#{name}')", "SELECT current_setting('#{name}', true) AS v" ].each do |sql|
+            expect(refusal(sql, :postgresql)).to match(/\ABlocked: the setting `#{name}` is not read\./i), sql
+          end
+        end
+        expect(refusal("SHOW primary_conninfo", :postgresql)).to eq(secret_setting("primary_conninfo"))
+      end
+
+      it "refuses a setting whose own name says it holds a secret" do
+        expect(refusal("SHOW app.jwt_secret", :postgresql)).to eq(secret_setting("app.jwt_secret"))
+        expect(refusal("SELECT current_setting('app.settings.api_key') AS k", :postgresql)).to eq(secret_setting("app.settings.api_key"))
+      end
+
+      it "refuses SHOW ALL and a quoted name on PostgreSQL, and leaves SHOW ALL to MySQL" do
+        expect(refusal("SHOW ALL", :postgresql)).to eq(
+          "Blocked: SHOW ALL is not run. It lists every setting, the ones that can hold a password among them. SHOW one setting by its name."
+        )
+        [ %(SHOW "work_mem"), %(SHOW U&"work\\005Fmem"), "SHOW $$x$$" ].each do |sql|
+          expect(refusal(sql, :postgresql)).to eq(
+            "Blocked: SHOW takes a setting's plain name on PostgreSQL, with no quotes around it, for example `SHOW work_mem`."
+          ), sql
+        end
+        expect(runs?("SHOW ALL", :mysql)).to be(true)
+      end
+
+      it "refuses current_setting with a name that is not one plain string" do
+        [ "SELECT current_setting('primary' || '_conn' || 'info') AS v", "SELECT current_setting(name) FROM settings_names",
+          "SELECT current_setting(E'work_mem')", "SELECT current_setting ( $$work_mem$$ )", "SELECT current_setting('work' '_mem')",
+          "SELECT * FROM (VALUES (current_setting(lower('WORK_MEM'))), ('x')) v" ].each do |sql|
+          expect(refusal(sql, :postgresql)).to eq(
+            "Blocked: current_setting runs only with the setting's name written as one plain string, " \
+            "for example `current_setting('work_mem')`, so that rails_query can read which setting it returns."
+          ), sql
+        end
+      end
+
+      it "runs SHOW and current_setting for any other setting" do
+        [ "SHOW server_version", "SHOW work_mem;", "SHOW TIME ZONE", "SHOW TRANSACTION ISOLATION LEVEL", "SHOW search_path",
+          "SELECT current_setting('work_mem') AS m", "SELECT current_setting( 'server_version_num' , true )::int AS v" ].each do |sql|
+          expect(runs?(sql, :postgresql)).to be(true), sql
+        end
+      end
+    end
+
+    it "refuses a quoted name followed by a parenthesis, in every quote a database reads" do
+      { postgresql: [ %(SELECT "table_to_xml"('users', true, false, '')), %(SELECT pg_catalog."upper"('x')),
+                      %(SELECT U&"table\\005Fto\\005Fxml"('users', true, false, '')), %(SELECT U&"t!0061ble_to_xml" UESCAPE '!' ('users', true, false, '')),
+                      %(SELECT * FROM (VALUES ("lo_get"(1)), (NULL)) v) ],
+        mysql: [ "SELECT `get_lock`('x', 1)", "SELECT `release_all_locks` ()", "SELECT `sleep`/* x */(1)" ],
+        sqlite: [ %(SELECT "load_extension"('x')), "SELECT [abs](1)" ] }.each do |family, statements|
+        statements.each do |sql|
+          expect(refusal(sql, family)).to start_with("Blocked: ").and(satisfy { |text|
+            text.include?("a quoted name is followed by a parenthesis") || text.include?("dangerous function")
+          }), "#{family}: #{sql}"
+        end
+      end
+      expect(refusal("SELECT `get_lock`('x', 1)", :mysql)).to eq(
+        "Blocked: a quoted name is followed by a parenthesis, the way a function is called. rails_query reads " \
+        "a function's name to decide whether it runs, so write the name without quotes."
+      )
+      [ %(SELECT count("id") FROM "users" WHERE "id" IN (1, 2)), "SELECT `id` FROM `users` JOIN `posts` USING (`id`)",
+        %(SELECT "a" FROM "t" WHERE ("a") = (1)) ].each { |sql| expect(runs?(sql, :mysql)).to be(true), sql }
     end
 
     it "reads a write keyword or INTO inside a literal as data, and the replace() function as a function" do
@@ -478,7 +605,7 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "refuses MySQL's stored password hash by its column name" do
-      expect(refusal("SELECT user, authentication_string AS a FROM mysql.user", :mysql)).to include("secret column `authentication_string`")
+      expect(refusal("SELECT user, authentication_string AS a FROM user", :mysql)).to include("secret column `authentication_string`")
     end
 
     context "with a schema whose columns the heuristic flags" do
@@ -507,7 +634,7 @@ RSpec.describe RailsAiContext::SqlGate do
       end
 
       it "refuses it in a statement that has no plan" do
-        expect(refusal("SHOW 'api_key'", :postgresql)).to include("the plan could not be obtained")
+        expect(refusal("DESCRIBE 'api_key'", :postgresql)).to include("the plan could not be obtained")
       end
 
       it "still refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
@@ -663,6 +790,73 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(plan_refusal(activity)).to start_with("Blocked: `pg_stat_get_activity` is not read.")
     end
 
+    it "refuses a function the plan calls that the text did not name, by what the function returns" do
+      set = { "Node Type" => "ProjectSet", "Output" => [ "pg_show_all_settings()" ], "Plans" => [ { "Node Type" => "Result", "Parent Relationship" => "Outer" } ] }
+      expect(plan_refusal(set)).to start_with("Blocked: `pg_show_all_settings` is not read.").and end_with("run SHOW with its name.")
+      activity = { "Node Type" => "Result", "Output" => [ "(pg_stat_get_activity(NULL::integer)).query" ] }
+      expect(plan_refusal(activity)).to start_with("Blocked: `pg_stat_get_activity` is not read.")
+      dump = { "Node Type" => "Result", "Output" => [ "table_to_xml('users'::regclass, true, false, ''::text)" ] }
+      expect(plan_refusal(dump)).to start_with("Blocked: function table_to_xml returns a whole table as one value")
+    end
+
+    it "refuses the catalogs of stored credentials and the settings functions a view reads" do
+      { "pg_user_mapping" => "Relation Name", "pg_subscription" => "Relation Name", "pg_foreign_server" => "Relation Name",
+        "pg_show_all_settings" => "Function Name", "pg_hba_file_rules" => "Function Name" }.each do |name, key|
+        node = { "Node Type" => "Seq Scan", key => name, "Alias" => "a", "Output" => [ "a.x" ] }
+        expect(plan_refusal(node)).to start_with("Blocked: `#{name}` is not read."), name
+      end
+    end
+
+    it "refuses a setting the plan reads that can hold a password, and one whose name the plan does not show" do
+      expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "current_setting('primary_conninfo'::text)" ] }))
+        .to start_with("Blocked: the setting `primary_conninfo` is not read.")
+      expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "current_setting('app.jwt_secret'::text, true)" ] }))
+        .to start_with("Blocked: the setting `app.jwt_secret` is not read.")
+      expect(plan_refusal({ "Node Type" => "Seq Scan", "Relation Name" => "posts", "Alias" => "p", "Output" => [ "current_setting(p.title)" ] }))
+        .to start_with("Blocked: current_setting runs only with the setting's name written as one plain string")
+      expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "current_setting('work_mem'::text)", "current_setting('x'::text, true)" ] })).to be_nil
+    end
+
+    it "asks pg_proc about a function the text calls where the plan prints no expression" do
+      allow(connection).to receive(:select_values).and_return([ "lo_get" ])
+      values = { "Node Type" => "Values Scan", "Alias" => "*VALUES*", "Output" => [ %("*VALUES*".column1) ] }
+      allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan).and_return(values)
+      expect(refusal("SELECT * FROM (VALUES (lo_get(1)), (NULL)) v", :postgresql)).to include("function lo_get is VOLATILE")
+      expect(connection).to have_received(:select_values).with(a_string_including("'lo_get'"))
+    end
+
+    describe "the catalog columns that hold a stored credential" do
+      let(:relations) { RailsAiContext::SecretColumns::CATALOG_CREDENTIALS }
+
+      def authid(output, extra = {})
+        { "Node Type" => "Seq Scan", "Relation Name" => "pg_authid", "Alias" => "pg_authid", "Output" => output }.merge(extra)
+      end
+
+      it "runs a view over pg_authid that reads no password, as PostgreSQL 16 plans pg_roles and information_schema.schemata" do
+        expect(plan_refusal(authid([ "pg_authid.rolname" ]))).to be_nil
+        every = %w[pg_authid.oid pg_authid.rolname pg_authid.rolsuper pg_authid.rolpassword pg_authid.rolvaliduntil]
+        counted = { "Node Type" => "Aggregate", "Output" => [ "count(*)" ], "Plans" => [ authid(every, "Parent Relationship" => "Outer") ] }
+        expect(plan_refusal(counted)).to be_nil
+        schemata = { "Node Type" => "Hash Join", "Output" => [ "(n.nspname)::information_schema.sql_identifier" ], "Hash Cond" => "(pg_authid.oid = n.nspowner)",
+                     "Plans" => [ authid(every, "Parent Relationship" => "Outer"),
+                                  { "Node Type" => "Hash", "Parent Relationship" => "Inner", "Output" => [ "n.nspname", "n.nspowner" ] } ] }
+        expect(plan_refusal(schemata)).to be_nil
+      end
+
+      it "refuses an expression over the password hash and over the stored settings, as pg_shadow and pg_roles are planned" do
+        expect(plan_refusal(authid([ "upper(pg_authid.rolpassword)" ], "Filter" => "pg_authid.rolcanlogin")))
+          .to include("plan uses the secret column `rolpassword`")
+        stored = { "Node Type" => "Seq Scan", "Relation Name" => "pg_db_role_setting", "Alias" => "s", "Output" => [ "array_to_string(s.setconfig, ','::text)" ] }
+        expect(plan_refusal(stored)).to include("plan uses the secret column `setconfig`")
+      end
+
+      it "names both columns as secret columns, whatever the schema holds" do
+        secrets = RailsAiContext::SecretColumns.new
+        expect(%w[rolpassword setconfig].map { |name| secrets.secret?(name) }).to eq([ true, true ])
+        expect(refusal("SELECT rolpassword AS p FROM anything", :postgresql)).to include("secret column `rolpassword`")
+      end
+    end
+
     it "refuses a secret column the planner expanded into a ROW()" do
       expect(plan_refusal(scan([ "ROW(id, email, password_digest, api_token)" ]))).to include("plan uses the secret column `password_digest`")
     end
@@ -676,11 +870,93 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(plan_refusal(scan([ "u.id" ], "Filter" => [ "(body ~~ '%api_token%'::text)", "x ~~ 'it''s a secret'::text" ]))).to be_nil
     end
 
+    context "with a secret column whose name ends in a character no word holds" do
+      let(:relations) { { "users" => [ "id", "api token$" ] } }
+
+      it "refuses it as a filter and inside an expression" do
+        expect(plan_refusal(scan([ "u.id" ], "Filter" => [ %((u."api token$" = 'x'::text)) ]))).to include("`api token$`")
+        expect(plan_refusal(scan([ %(upper(u."Api Token$")) ]))).to include("`api token$`")
+      end
+    end
+
     it "refuses a secret column a child passes through that the top node does not expose" do
       top = { "Node Type" => "CTE Scan", "Output" => [ "c.id", "c.t" ],
               "Plans" => [ { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users",
                              "Output" => [ "users.id", "users.api_token" ] } ] }
       expect(plan_refusal(top)).to include("through a CTE, subquery or set operation")
+    end
+
+    # Plans PostgreSQL 16 gave for `SELECT (<subquery>) AS n` over users (id, email, api_token), a secret column last.
+    describe "a subquery over a relation that holds a secret column" do
+      let(:relations) { { "users" => %w[id email api_token] } }
+      let(:columns) { %w[users.id users.email users.api_token] }
+
+      def users_scan(extra = {})
+        { "Node Type" => "Seq Scan", "Parent Relationship" => "Outer", "Relation Name" => "users", "Alias" => "users", "Output" => columns }.merge(extra)
+      end
+
+      def init_plan(node, returns = "$0")
+        { "Node Type" => "Result", "Output" => [ "$0" ],
+          "Plans" => [ node.merge("Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns #{returns})") ] }
+      end
+
+      def aggregate(output, child = users_scan, extra = {})
+        { "Node Type" => "Aggregate", "Strategy" => "Plain", "Output" => output, "Plans" => [ child ] }.merge(extra)
+      end
+
+      it "runs an aggregate that names no secret column, over a scan that hands it every column" do
+        [ "count(*)", "count(users.id)", "max(users.id)" ].each do |output|
+          expect(plan_refusal(init_plan(aggregate([ output ])))).to be_nil, output
+        end
+        filtered = users_scan("Filter" => "(users.email ~~ 'a%'::text)")
+        expect(plan_refusal(init_plan(aggregate([ "max(users.id)" ], filtered)))).to be_nil
+      end
+
+      it "runs EXISTS, whose scan returns no column" do
+        scan = { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users" }
+        expect(plan_refusal(init_plan(scan))).to be_nil
+      end
+
+      it "runs a join that names no secret column, over a scan that hands it every column" do
+        top = { "Node Type" => "Hash Join", "Output" => [ "p.title" ], "Hash Cond" => "(users.id = p.user_id)",
+                "Plans" => [ users_scan, { "Node Type" => "Hash", "Parent Relationship" => "Inner", "Output" => [ "p.title", "p.user_id" ],
+                                           "Plans" => [ { "Node Type" => "Seq Scan", "Parent Relationship" => "Outer", "Relation Name" => "posts",
+                                                          "Alias" => "p", "Output" => [ "p.title", "p.user_id" ] } ] } ] }
+        expect(plan_refusal(top)).to be_nil
+      end
+
+      it "refuses an aggregate over the secret column" do
+        [ "max(users.api_token)", "count(users.api_token)", "string_agg(users.api_token, ','::text)" ].each do |output|
+          expect(plan_refusal(init_plan(aggregate([ output ])))).to include("plan uses the secret column `api_token`"), output
+        end
+      end
+
+      it "refuses a whole row, alone, in a function and in an aggregate" do
+        whole = { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users" }
+        expect(plan_refusal(init_plan(whole.merge("Output" => [ "row_to_json(users.*)" ])))).to include("whole row of `users`")
+        expect(plan_refusal(init_plan(whole.merge("Output" => [ "users.*" ])))).to include("whole row of `users`")
+        counted = aggregate([ "count(users.*)" ], whole.merge("Parent Relationship" => "Outer", "Output" => [ "users.*" ]))
+        expect(plan_refusal(init_plan(counted))).to include("whole row of `users`")
+      end
+
+      it "refuses a subquery the aggregate reads by position" do
+        compared = users_scan("Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns $0,$1,$2)")
+        generated = { "Node Type" => "Function Scan", "Parent Relationship" => "Outer", "Function Name" => "generate_series", "Alias" => "g", "Output" => [ "g.g" ] }
+        top = { "Node Type" => "Aggregate", "Output" => [ "count(*) FILTER (WHERE (ROW(1, 'a'::text, 'b'::text) < ROW($0, $1, $2)))" ],
+                "Plans" => [ compared, generated ] }
+        expect(plan_refusal(top)).to include("passes the secret column `api_token` through")
+      end
+
+      it "refuses a scan whose columns a node between it and the aggregate passes on" do
+        sorted = { "Node Type" => "Sort", "Parent Relationship" => "Outer", "Output" => columns, "Sort Key" => %w[users.id users.email], "Plans" => [ users_scan ] }
+        unique = { "Node Type" => "Unique", "Parent Relationship" => "Outer", "Output" => columns, "Plans" => [ sorted ] }
+        expect(plan_refusal(init_plan(aggregate([ "count(*)" ], unique)))).to include("passes the secret column `api_token` through")
+      end
+
+      it "refuses an aggregate that names the secret column in a grouping set" do
+        grouped = aggregate([ "count(*)" ], users_scan, "Grouping Sets" => [ { "Group Keys" => [ [ "users.api_token" ] ] } ])
+        expect(plan_refusal(init_plan(grouped))).to include("passes the secret column `api_token` through")
+      end
     end
 
     it "refuses an unlisted VOLATILE function as VOLATILE" do

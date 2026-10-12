@@ -99,6 +99,33 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
             "Blocked: the query passes the secret column `salt` through")
   end
 
+  it "runs a subquery that reads no secret column of a table that holds one" do
+    { "SELECT (SELECT count(*) FROM rac_pg_accounts) AS n" => "| 1 |", "SELECT (SELECT count(id) FROM rac_pg_accounts) AS n" => "| 1 |",
+      "SELECT exists (SELECT 1 FROM rac_pg_accounts) AS n" => "| true |", "SELECT (SELECT max(id) FROM rac_pg_accounts) AS n" => "| 1 |",
+      "SELECT (SELECT count(*) FROM rac_pg_renamed) AS n" => "| 1 |",
+      "SELECT g, (SELECT count(*) FROM rac_pg_accounts a WHERE a.id = g) AS n FROM generate_series(1, 1) g" => "| 1 | 1 |" }.each do |sql, row|
+      response = run(sql)
+      expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+      expect(response.content.first[:text]).to include(row), sql
+    end
+  end
+
+  it "refuses a subquery that reads a secret column or a whole row" do
+    body = "FROM rac_pg_accounts"
+    refused([ "SELECT (SELECT max(api_token) #{body}) AS n", "SELECT (SELECT count(api_token) #{body}) AS n",
+              "SELECT (SELECT string_agg(api_token, ',') #{body}) AS n" ], "Blocked: query references secret column `api_token`")
+    refused([ "SELECT (SELECT row_to_json(rac_pg_accounts) #{body}) AS n", "SELECT (SELECT rac_pg_accounts #{body}) AS n",
+              "SELECT (SELECT count(rac_pg_accounts) #{body}) AS n", "SELECT count(*) #{body} a GROUP BY a",
+              "SELECT (SELECT count(*) #{body} WHERE (rac_pg_accounts.*)::text LIKE '%token-v%') AS n" ],
+            "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+    guess = "(1, 'a@example.com', 'salt-valud', 'x', 'y')"
+    refused([ "SELECT (SELECT max(harmless) FROM rac_pg_renamed) AS n", "SELECT #{guess} < (SELECT * #{body} GROUP BY 1, 2, 3, 4, 5) AS o",
+              "SELECT (SELECT count(*) #{body} a NATURAL JOIN rac_pg_accounts b) AS n",
+              "SELECT (SELECT count(*) FROM (SELECT DISTINCT * #{body}) x) AS n" ], "Blocked: the query's plan uses the secret column `salt`")
+    refused([ "SELECT count(*) FILTER (WHERE #{guess} < (SELECT * #{body})) AS n FROM generate_series(1, 1) g" ],
+            "Blocked: the query passes the secret column `salt` through")
+  end
+
   it "filters a quoted mixed-case secret column in place, and refuses what would rename or compare it" do
     conn.execute("DROP TABLE IF EXISTS rac_pg_mixed")
     conn.execute(%(CREATE TABLE rac_pg_mixed (id int, email text, "Salt" text)))
@@ -132,6 +159,56 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     refused([ "SELECT * FROM pg_stats WHERE tablename = 'rac_pg_accounts'", "SELECT stavalues1 FROM pg_statistic",
               %(SELECT * FROM U&"pg\\005Fstats" WHERE tablename = 'rac_pg_accounts'), "SELECT query FROM pg_stat_activity",
               %(SELECT query FROM U&"pg\\005Fstat\\005Factivity") ], "Blocked: `")
+  end
+
+  it "refuses the relations that hold stored credentials, by name and through a view over them" do
+    refused(%w[pg_user_mapping pg_user_mappings pg_subscription pg_authid pg_shadow pg_db_role_setting pg_foreign_server pg_hba_file_rules
+               pg_ident_file_mappings information_schema.user_mapping_options].map { |name| "SELECT * FROM #{name}" }, "Blocked: `")
+    refused([ "SELECT * FROM information_schema.user_mappings", "SELECT * FROM pg_stat_subscription", "SELECT * FROM information_schema.foreign_servers",
+              %(SELECT * FROM U&"pg\\005Fuser\\005Fmappings") ], "Blocked: `")
+  end
+
+  it "filters a role's password hash and stored settings, refuses an expression over them, and runs the views that leave them out" do
+    [ "SELECT usename, upper(passwd) AS p FROM pg_shadow", %(SELECT rolname, upper(rolpassword) AS p FROM U&"pg\\005Fauthid"),
+      "SELECT rolname, array_to_string(rolconfig, ',') AS c FROM pg_roles", %(SELECT a FROM U&"pg\\005Fauthid" a) ].each do |sql|
+      expect(run(sql).error?).to be(true), sql
+    end
+    hash = conn.select_value("SELECT rolpassword FROM pg_authid WHERE rolname = current_user")
+    [ %(SELECT * FROM U&"pg\\005Fauthid"), %(SELECT * FROM (SELECT * FROM U&"pg\\005Fshadow" OFFSET 0) x) ].each do |sql|
+      text = run(sql).content.first[:text]
+      expect(text).to include("[FILTERED]"), sql
+      expect(text).not_to include(hash), sql
+    end
+    expect(run("SELECT rolname, rolconfig FROM pg_roles WHERE rolname = current_user").content.first[:text]).to include("| [FILTERED] |")
+
+    [ "SELECT rolname FROM pg_roles", "SELECT * FROM pg_roles", "SELECT count(*) FROM pg_roles", "SELECT usename FROM pg_user",
+      "SELECT schema_name FROM information_schema.schemata", "SELECT d.datname, r.rolname FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba" ].each do |sql|
+      response = run(sql)
+      expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+    end
+  end
+
+  it "refuses every way to list the settings, and the settings that can hold a password" do
+    refused([ "SELECT name, setting FROM pg_settings", "SELECT * FROM pg_show_all_settings()", "SELECT * FROM pg_file_settings",
+              "SELECT * FROM pg_show_all_file_settings()", %(SELECT "pg_show_all_settings"()) ], "Blocked: ")
+    refused([ "SHOW ALL" ], "Blocked: SHOW ALL is not run")
+    refused([ %(SHOW "work_mem"), %(SHOW U&"primary\\005Fconninfo") ], "Blocked: SHOW takes a setting's plain name")
+    refused([ "SHOW primary_conninfo", %(SHOW "primary_conninfo"), "SHOW ssl_passphrase_command", "SHOW archive_command", "SELECT current_setting('primary_conninfo')",
+              "SELECT current_setting('restore_command', true) AS c" ], "Blocked: the setting `")
+    refused([ "SELECT current_setting('primary' || '_conninfo') AS x", "SELECT current_setting(column1) FROM (VALUES ('work_mem')) v",
+              "SELECT * FROM (VALUES (current_setting('primary' || '_conninfo')), ('x')) v" ], "Blocked: current_setting runs only with")
+    expect(run("SHOW server_version").content.first[:text]).to include(conn.select_value("SHOW server_version"))
+    expect(run("SHOW TIME ZONE").error?).to be(false)
+    expect(run("SELECT current_setting('work_mem') AS m").content.first[:text]).to include(conn.select_value("SHOW work_mem"))
+  end
+
+  it "refuses a function called by a quoted name, and one the plan prints no expression for" do
+    refused([ %(SELECT "table_to_xml"('rac_pg_accounts', true, false, '')), %(SELECT U&"table\\005Fto\\005Fxml"('rac_pg_accounts', true, false, '')),
+              %(SELECT U&"table!005Fto!005Fxml" UESCAPE '!' ('rac_pg_accounts', true, false, '')), %(SELECT "upper"('x')),
+              %(SELECT (U&"pg\\005Fstat\\005Fget\\005Factivity"(NULL)).query),
+              %(SELECT * FROM (VALUES ("table_to_xml"('rac_pg_accounts', true, false, '')), (NULL)) v) ], "Blocked: a quoted name is followed by a parenthesis")
+    refused([ "SELECT * FROM (VALUES (lo_get(0)), (NULL)) v", "SELECT 1 AS one LIMIT (SELECT length(lo_get(0)))" ], "Blocked: function lo_get is VOLATILE")
+    expect(run(%(SELECT count("id") AS n FROM "rac_pg_accounts" WHERE "id" IN (1, 2))).content.first[:text]).to include("| 1 |")
   end
 
   it "reads the schema once for the whole call" do

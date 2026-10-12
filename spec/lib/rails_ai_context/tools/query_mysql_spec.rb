@@ -143,9 +143,23 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
 
       it "refuses other sessions' statements, replication state and the stored password hashes" do
-        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS" ], "Blocked: sensitive SHOW command")
-        refused([ "SELECT * FROM information_schema.processlist", "SELECT * FROM performance_schema.threads" ], "Blocked: `")
-        expect(text("SELECT authentication_string AS a FROM mysql.user LIMIT 1")).to start_with("Blocked: query references secret column")
+        other = conn.select_value("SELECT CONNECTION_ID()").to_i
+        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS", "EXPLAIN FOR CONNECTION #{other}",
+                  "EXPLAIN FORMAT=JSON FOR CONNECTION #{other}", "DESCRIBE FOR CONNECTION #{other}" ], "Blocked: sensitive SHOW command")
+        refused([ "SELECT * FROM information_schema.processlist", "SELECT * FROM performance_schema.threads",
+                  "SELECT * FROM information_schema.PROCESSL\u0130ST", "SELECT trx_query AS q FROM information_schema.innodb_trx",
+                  "SELECT * FROM information_schema.INNODB_FT_INDEX_CACHE", "SELECT * FROM information_schema.profiling" ], "Blocked: `")
+        refused([ "SELECT authentication_string AS a FROM mysql.user LIMIT 1", "SELECT User, Host FROM `mysql`.`user`", "SELECT * FROM mysql.servers",
+                  "SELECT * FROM mysql . db" ], "Blocked: `mysql` is not read.")
+        expect(text("SELECT authentication_string AS a FROM rac_my_accounts")).to start_with("Blocked: query references secret column")
+        expect(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'mysql' LIMIT 1")).not_to start_with("Blocked")
+      end
+
+      it "refuses a function called by a quoted name" do
+        refused([ "SELECT `get_lock`('rac_my', 0) AS l", "SELECT `release_all_locks`() AS r", "SELECT `sleep` (0) AS s" ],
+                "Blocked: a quoted name is followed by a parenthesis")
+        expect(conn.select_value("SELECT IS_USED_LOCK('rac_my')")).to be_nil
+        expect(text("SELECT count(`id`) AS n FROM `rac_my_accounts` WHERE `id` IN (1, 2)")).to include("| 1 |")
       end
 
       it "runs a view that names no secret column, and shows a refused view's definition" do
