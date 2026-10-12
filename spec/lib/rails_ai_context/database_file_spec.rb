@@ -7,6 +7,9 @@ RSpec.describe RailsAiContext::DatabaseFile do
     ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "primary", { adapter: adapter, database: database })
   end
 
+  # A SQLite compiled with USE_URI, as the sqlite3 gem ships it from 2.0.
+  before { allow(described_class).to receive(:uris?).and_return(true) }
+
   describe ".missing" do
     it "names a SQLite database whose file is not there" do
       error = described_class.missing(config("sqlite3", "storage/no_such.sqlite3"))
@@ -52,6 +55,21 @@ RSpec.describe RailsAiContext::DatabaseFile do
         end
         [ "file:#{there.gsub(' ', '%20')}?mode=ro", "file://#{there.gsub(' ', '%20')}" ].each do |uri|
           expect(described_class.missing(config("sqlite3", uri))).to be_nil, uri
+        end
+      end
+    end
+  end
+
+  describe "on a SQLite that reads no URIs" do
+    before { allow(described_class).to receive(:uris?).and_return(false) }
+
+    it "takes a file: name as the file it is, from the working directory" do
+      Dir.mktmpdir do |dir|
+        Dir.chdir(dir) do
+          expect(described_class.missing?(config("sqlite3", "file:app.sqlite3?mode=memory"))).to be(true)
+          expect(described_class.in_memory?(config("sqlite3", "file:app.sqlite3?mode=memory"))).to be(false)
+          FileUtils.touch("file:app.sqlite3?mode=memory")
+          expect(described_class.missing?(config("sqlite3", "file:app.sqlite3?mode=memory"))).to be(false)
         end
       end
     end

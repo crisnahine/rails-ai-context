@@ -265,7 +265,8 @@ Ten tools that each answered one section of the app's configuration leave
   does the same for a named database. With none, its Database section says
   the primary does not exist yet and the other sections still answer.
   Nothing is created. Connecting to it created the database file. A
-  database written as a `file:` URI is checked at the path inside the URI.
+  database written as a `file:` URI is checked at the path inside the URI,
+  or at the whole name on a SQLite build that reads no URIs.
 - **The performance check finds a `has_paper_trail` model's unindexed
   versions table on the static tier.** paper_trail adds
   `has_many :versions, as: :item` when the app boots, so only the booted

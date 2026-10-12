@@ -81,6 +81,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     end
 
     it "refuses a database other than the primary that lives in memory, by name, before any connection" do
+      allow(RailsAiContext::DatabaseFile).to receive(:uris?).and_return(true)
       [ ":memory:", "file:queue?mode=memory&cache=shared", "file::memory:?cache=shared" ].each do |database|
         list = databases("queue" => config(Rails.env, "queue", database))
         expect(ActiveRecord::ConnectionAdapters::ConnectionHandler).not_to receive(:new)
@@ -101,6 +102,8 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     end
 
     it "reads the SQLite file a file: URI names when it is there" do
+      skip "this SQLite reads no URIs" unless RailsAiContext::DatabaseFile.uris?
+
       list = databases("queue" => config(Rails.env, "queue", "file:#{sqlite_file("queue")}?mode=rw"))
 
       expect(list.fetch("queue").with_connection { |conn| conn.select_value("SELECT name FROM marker") }).to eq("queue")

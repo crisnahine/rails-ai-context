@@ -30,8 +30,26 @@ module RailsAiContext
       return false unless DatabaseFamily.of(db_config).sqlite?
 
       database = db_config.database.to_s
-      database == MEMORY || (database.start_with?("file:") && (uri_path(database) == MEMORY || database.match?(/[?&]mode=memory(?:&|#|\z)/)))
+      database == MEMORY || (uri?(database) && (uri_path(database) == MEMORY || database.match?(/[?&]mode=memory(?:&|#|\z)/)))
     end
+
+    # Whether this SQLite build reads a `file:` name as a URI. One compiled without USE_URI opens it as a plain file name.
+    def self.uris?
+      return @uris if defined?(@uris)
+      return true unless defined?(SQLite3::Database)
+
+      db = SQLite3::Database.new(MEMORY)
+      @uris = db.execute("PRAGMA compile_options").flatten.any? { |option| option.to_s.match?(/\AUSE_URI(?:=1)?\z/) }
+    rescue StandardError
+      true
+    ensure
+      db&.close
+    end
+
+    def self.uri?(database)
+      database.start_with?("file:") && uris?
+    end
+    private_class_method :uri?
 
     # The file a SQLite database is, or nil when it is none.
     def self.path(db_config)
@@ -39,8 +57,8 @@ module RailsAiContext
 
       database = db_config.database.to_s
       return nil if database.empty? || in_memory?(db_config)
-      # SQLite opens a URI's path from the working directory.
-      return File.expand_path(uri_path(database)) if database.start_with?("file:")
+      # SQLite opens a `file:` name from the working directory: the URI's path, or the whole name where it reads no URIs.
+      return File.expand_path(uri?(database) ? uri_path(database) : database) if database.start_with?("file:")
 
       # Relative to Rails.root, as the adapter reads it.
       File.expand_path(database, defined?(Rails.root) ? Rails.root : nil)
