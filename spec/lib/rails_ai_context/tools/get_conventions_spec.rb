@@ -151,6 +151,12 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).not_to include("Directory structure")
     end
 
+    it "names as key dirs the first of the directories with the same file count in scan order" do
+      conventions_data[:directory_structure] = (1..24).to_h { |i| [ format("app/a%02d", i), i.even? ? 2 : 1 ] }
+      text = described_class.call.content.first[:text]
+      expect(text).to include("key dirs: app/a02, app/a04, app/a06, app/a08, app/a10.")
+    end
+
     it "handles nil config_files gracefully" do
       conventions_data[:config_files] = nil
       result = described_class.call

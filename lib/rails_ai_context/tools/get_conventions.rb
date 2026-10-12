@@ -94,8 +94,8 @@ module RailsAiContext
           fingerprint_parts = []
           fingerprint_parts << conventions[:architecture].map { |a| humanize_arch(a) }.join(", ") if conventions[:architecture]&.any?
           fingerprint_parts << conventions[:patterns].map { |p| humanize_pattern(p) }.join(", ") if conventions[:patterns]&.any?
-          top_dirs = conventions[:directory_structure]&.sort_by { |_, v| -v }&.first(5)&.map { |k, _| k }
-          fingerprint_parts << "key dirs: #{top_dirs.join(', ')}" if top_dirs&.any?
+          top_dirs = (conventions[:directory_structure] || {}).sort_by.with_index { |(_, v), i| [ -v, i ] }.first(5).map { |k, _| k }
+          fingerprint_parts << "key dirs: #{top_dirs.join(', ')}" if top_dirs.any?
           if fingerprint_parts.any?
             lines << "" << "## Convention Fingerprint"
             lines << "This app uses #{fingerprint_parts.join('; ')}."
