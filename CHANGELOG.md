@@ -70,9 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*_params` now counts when it calls `permit`, `permit!` or `expect` on
   params (directly, through a local, on each item a block walks, or on
   `ActionController::Parameters.new`), or when what it returns comes from
-  `super`, another `*_params` or `permitted_*` method, or a class given
-  params (`permitted_attributes(@post)`, `super.merge(...)`,
-  `PermittedAttributes::Enterprise.new(params).call`). A method of any other
+  `super`, another strong params method (one this file defines, or a
+  parent's, a concern's or Pundit's `*_params` and `permitted_*`), or a
+  class given params (`permitted_attributes(@post)`, `super.merge(...)`,
+  `PermittedAttributes::Enterprise.new(params).call`); a `before_action`
+  that writes into another one's params is not one. A method of any other
   name counts only when it returns the permitted params themselves, through
   a local, an `if`, a `case` or an explicit `return`, so a helper that
   permits to build a URL, or to read one value, is left out. An action that
@@ -121,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ahoy_messages` for `EmailMessage < Ahoy::Message`) or its own, and,
   with no schema to ask or another database's dump not on disk, when it
   declares associations or scopes. Wherever the schema can be read, an
-  ActiveHash class that declares `has_many` stays out. The table comes from
+  ActiveHash class that declares `has_many` stays out, and a class on a
+  framework class (`ActiveRecord::Relation`) is never one. The table comes from
   the parent as Rails' single table inheritance decides, or a line says the
   parent sets it.
 - **A filtered routes answer names the other paths an engine is mounted
