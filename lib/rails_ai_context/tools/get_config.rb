@@ -4,13 +4,6 @@ module RailsAiContext
   module Tools
     class GetConfig < BaseTool
       tool_name "rails_get_config"
-      description "Get the app's configuration, one section per call. section: app (default: database, auth, assets, cache, " \
-        "session, queue, Action Cable, middleware, initializers), gems (notable gems by category), frontend (JS framework, " \
-        "build tool, TypeScript, package manager), api (serializers, GraphQL, versioning, CORS, rate limiting, pagination), " \
-        "engines (mounted engines and Rack apps), conventions (architecture and patterns), autoload (Zeitwerk paths, inflections), " \
-        "active_support (concerns, notifications, on_load hooks), env (environment variables and credentials keys, never values), " \
-        "env_config (config/environments/*.rb per environment), i18n (locales, locale files, coverage)."
-
       # Each section and the tool that answered it before it was a section.
       # A retired name still reaches its section from the CLI and the MCP
       # server, and skip_tools lists it to turn the section off.
@@ -38,28 +31,84 @@ module RailsAiContext
         "i18n" => %i[locale offset limit]
       }.freeze
 
-      input_schema(
-        properties: {
-          section: { type: "string", enum: SECTIONS.keys, description: "Which section to answer. Default: app." },
-          detail: RailsAiContext::DetailLevel.schema("frontend, api, env: summary, standard (default) or full."),
-          category: {
-            type: "string",
-            enum: Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq + %w[all],
-            description: "gems: only this category. Default: all."
-          },
-          environment: { type: "string", description: "env_config: only this environment (e.g. \"production\")." },
-          locale: { type: "string", description: "i18n: only this locale (e.g. \"fr\")." },
-          offset: { type: "integer", description: "gems, env_config, i18n: skip this many entries. Default: 0." },
-          limit: { type: "integer", description: "gems, env_config, i18n: max entries. Default: 50." }
-        }
-      )
+      SECTION_SUMMARIES = {
+        "app" => "default: database, auth, assets, cache, session, queue, Action Cable, middleware, initializers",
+        "gems" => "notable gems by category",
+        "frontend" => "JS framework, build tool, TypeScript, package manager",
+        "api" => "serializers, GraphQL, versioning, CORS, rate limiting, pagination",
+        "engines" => "mounted engines and Rack apps",
+        "conventions" => "architecture and patterns",
+        "autoload" => "Zeitwerk paths, inflections",
+        "active_support" => "concerns, notifications, on_load hooks",
+        "env" => "environment variables and credentials keys, never values",
+        "env_config" => "config/environments/*.rb per environment",
+        "i18n" => "locales, locale files, coverage"
+      }.freeze
 
-      guide_row(
-        order: 20,
-        mcp: "rails_get_config",
-        summary: "App config (database, auth, assets, cache, queue); `section` picks another: gems, frontend, api, engines, " \
-          "conventions, autoload, active_support, env, env_config, i18n"
-      )
+      # Each parameter's schema, less the description that names its sections.
+      PARAM_SCHEMAS = {
+        detail: [ {}, "summary, standard (default) or full." ],
+        category: [
+          { type: "string", enum: Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq + %w[all] },
+          "only this category. Default: all."
+        ],
+        environment: [ { type: "string" }, "only this environment (e.g. \"production\")." ],
+        locale: [ { type: "string" }, "only this locale (e.g. \"fr\")." ],
+        offset: [ { type: "integer" }, "skip this many entries. Default: 0." ],
+        limit: [ { type: "integer" }, "max entries. Default: 50." ]
+      }.freeze
+
+      # The schema over the given sections: a parameter no section among them reads is left out.
+      def self.schema_for(sections)
+        properties = { section: { type: "string", enum: sections, description: "Which section to answer. Default: app." } }
+        PARAM_SCHEMAS.each do |param, (schema, text)|
+          readers = sections.select { |section| SECTION_PARAMS.fetch(section, []).include?(param) }
+          next if readers.empty?
+
+          text = "#{readers.join(', ')}: #{text}"
+          properties[param] = param == :detail ? RailsAiContext::DetailLevel.schema(text) : schema.merge(description: text)
+        end
+        { properties: properties }
+      end
+
+      def self.description_for(sections)
+        "Get the app's configuration, one section per call. section: " \
+          "#{sections.map { |section| "#{section} (#{SECTION_SUMMARIES.fetch(section)})" }.join(', ')}."
+      end
+
+      def self.sections_on(config = RailsAiContext.configuration)
+        SECTIONS.keys.select { |section| section_on?(section, config) }
+      end
+
+      # The full schema validates a call, so one naming an off section still
+      # reaches the turned-off answer; tools/list publishes only the sections that are on.
+      input_schema(schema_for(SECTIONS.keys))
+      description(description_for(SECTIONS.keys))
+
+      def self.input_schema(*args)
+        args.empty? ? @input_schema_value : super
+      end
+
+      def self.input_schema_value
+        MCP::Tool::InputSchema.new(schema_for(sections_on))
+      end
+
+      def self.description_value
+        description_for(sections_on)
+      end
+
+      guide_row(order: 20, mcp: "rails_get_config", summary: "")
+
+      def self.guide_row(**args)
+        row = super
+        return row unless args.empty? && row
+
+        on = sections_on
+        others = (on - [ "app" ]).join(", ")
+        summary = [ ("App config (database, auth, assets, cache, queue)" if on.include?("app")),
+                    ("`section` picks #{on.include?('app') ? 'another' : 'one'}: #{others}" unless others.empty?) ].compact.join("; ")
+        row.dup.tap { |copy| copy.summary = summary }
+      end
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

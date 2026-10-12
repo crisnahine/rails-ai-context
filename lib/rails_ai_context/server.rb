@@ -121,6 +121,12 @@ module RailsAiContext
         "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
     end
 
+    # The line an answer to a retired config tool name ends with: the call to make instead.
+    def self.retired_call_note(name, arguments)
+      call = Tools::BaseTool.pointer(name, arguments.except(:section).map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", "))
+      "\n\n_#{name} is now #{call}; call that instead._" if call
+    end
+
     # The SDK's "Tool not found" named only the guess. The nearest tools
     # follow it, or every tool when none is near.
     def self.unknown_tool_message(tool_name, names)
@@ -352,11 +358,11 @@ module RailsAiContext
       def retired_call(request, name, section, ...)
         arguments = (request[:arguments] || {}).transform_keys(&:to_sym).except(:section)
         result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section)), ...)
-        call = Tools::BaseTool.pointer(name, arguments.map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", "))
+        note = Server.retired_call_note(name, arguments)
         first, *rest = result[:content]
-        return result unless call && first.is_a?(Hash) && first[:type] == "text"
+        return result unless note && first.is_a?(Hash) && first[:type] == "text"
 
-        result.merge(content: [ first.merge(text: "#{first[:text]}\n\n_#{name} is now #{call}; call that instead._"), *rest ])
+        result.merge(content: [ first.merge(text: "#{first[:text]}#{note}"), *rest ])
       end
     end
 

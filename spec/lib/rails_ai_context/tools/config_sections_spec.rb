@@ -78,6 +78,34 @@ RSpec.describe "rails_get_config sections" do
       RailsAiContext::Server.new(Rails.application).build.tools.keys
     end
 
+    it "offers no section it turned off, in the published definition or the guide" do
+      config.skip_tools = %w[rails_get_env rails_get_gems]
+
+      definition = RailsAiContext::Server.new(Rails.application).build.tools.fetch("rails_get_config").to_h
+      enum = definition.dig(:inputSchema, :properties, :section, :enum)
+      expect(enum).to include("app", "i18n")
+      expect(enum).not_to include("env", "gems")
+      expect(definition[:description]).not_to match(/\b(env|gems)\b/)
+      expect(definition[:description]).to include("i18n")
+      expect(definition.dig(:inputSchema, :properties)).not_to have_key(:category)
+      expect(JSON.generate(definition[:inputSchema])).not_to match(/\b(env|gems)\b/)
+
+      row = RailsAiContext::Tools::GetConfig.guide_row
+      expect(row.summary).not_to match(/\b(env|gems)\b/)
+      expect(row.summary).to include("env_config")
+    end
+
+    it "still answers an off section with the turned-off message, also with a parameter only that section reads" do
+      config.skip_tools = %w[rails_get_gems]
+      result = RailsAiContext::Server.new(Rails.application).build.handle(
+        { jsonrpc: "2.0", id: 1, method: "tools/call",
+          params: { name: "rails_get_config", arguments: { section: "gems", category: "auth" } } }
+      )[:result]
+
+      expect(result[:isError]).to be(true)
+      expect(result[:content].first[:text]).to start_with("The `gems` section of rails_get_config is turned off")
+    end
+
     it "keeps the env section off when it names rails_get_env, and the rest on" do
       config.skip_tools = %w[rails_get_env]
 

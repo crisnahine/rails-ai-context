@@ -34,14 +34,18 @@ Ten tools that each answered one section of the app's configuration leave
 
 - **Old names keep working where a name is typed.** The CLI resolves
   `gems`, `rails_get_gems`, `frontend_stack` and every other old short and
-  full name to its section. An MCP call to a retired name is answered from
-  its section, with a line naming the call to make instead. Update saved
+  full name to its section, and `--json` reports `rails_get_config`. A call
+  to a retired name, from the CLI or over MCP, is answered from its section,
+  with a line naming the call to make instead. Update saved
   prompts to the new call: `rails_get_gems(category:"auth")` becomes
   `rails_get_config(section:"gems", category:"auth")`.
 - **`skip_tools` keeps its meaning.** An old tool name turns its section
   off, so an app that skipped `rails_get_env` still keeps the `env` section
-  off. `rails_get_config` turns off the `app` section only. The tool leaves
-  `tools/list` only when all eleven names are listed.
+  off. `rails_get_config` turns off the `app` section only. A section that
+  is off leaves the published `section` list, the tool description, the
+  parameters only it reads and the guide row; a call that names it anyway is
+  told it is turned off. The tool leaves `tools/list` only when all eleven
+  names are listed.
 - **Ruby callers are unchanged.** `RailsAiContext::Tools::GetGems.call` and
   the other nine classes still answer; they are out of the MCP registry, so
   `Tools::BaseTool.registered_tools` no longer lists them. The test helper's

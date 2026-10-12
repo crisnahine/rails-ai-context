@@ -58,21 +58,35 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
   # Ten tools became sections of rails_get_config; scripts and context files
   # written before that still name them.
   describe "a name that became a config section" do
-    it "resolves every old short and full name to the class that answers its section" do
-      RailsAiContext::Tools::GetConfig::SECTIONS.except("app").each_value do |tool_name|
+    it "resolves every old short and full name to rails_get_config" do
+      RailsAiContext::Tools::GetConfig::SECTIONS.each_value do |tool_name|
         short = described_class.short_name(tool_name)
         [ short, tool_name ].each do |name|
-          expect(described_class.new(name, []).tool_class.tool_name).to eq(tool_name)
+          expect(described_class.new(name, []).tool_class).to eq(RailsAiContext::Tools::GetConfig)
         end
       end
-      expect(described_class.new("config", []).tool_class).to eq(RailsAiContext::Tools::GetConfig)
     end
 
-    it "answers an old name as the section answers" do
+    it "answers an old name from its section, with the line the MCP server adds" do
       old = described_class.new("i18n", [ "--locale", "en" ]).run
       section = described_class.new("config", [ "--section", "i18n", "--locale", "en" ]).run
 
-      expect(old).to eq(section)
+      expect(old).to eq("#{section}\n\n_rails_get_i18n is now `rails_get_config(section:\"i18n\", locale:\"en\")`; call that instead._")
+    end
+
+    it "reports rails_get_config in the JSON envelope of an old name" do
+      parsed = JSON.parse(described_class.new("gems", [], json_mode: true).run)
+
+      expect(parsed["tool"]).to eq("rails_get_config")
+      expect(parsed["output"]).to include('_rails_get_gems is now `rails_get_config(section:"gems")`; call that instead._')
+    end
+
+    it "answers a section skip_tools turned off with the turned-off message" do
+      allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_gems" ])
+      runner = described_class.new("config", [ "--section", "gems" ])
+
+      expect(runner.run).to start_with("The `gems` section of rails_get_config is turned off")
+      expect(runner.error).to be(true)
     end
 
     it "refuses an old name skip_tools lists, saying so" do
@@ -87,7 +101,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       env_config = described_class.new("config", [ "--section", "env_config" ], environment: "production").run
       app = described_class.new("config", [], environment: "production").run
 
-      expect(env_config).to eq(described_class.new("env_config", [ "--environment", "production" ]).run)
+      expect(described_class.new("env_config", [ "--environment", "production" ]).run).to start_with("#{env_config}\n\n_rails_get_env_config is now")
       expect(app).not_to include("does not read")
     end
   end
@@ -256,9 +270,9 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(runner.tool_class).to eq(RailsAiContext::Tools::AnalyzeFeature)
     end
 
-    it "resolves conventions" do
+    it "resolves conventions to its config section" do
       runner = described_class.new("conventions", [])
-      expect(runner.tool_class).to eq(RailsAiContext::Tools::GetConventions)
+      expect(runner.tool_class).to eq(RailsAiContext::Tools::GetConfig)
     end
 
     it "raises ToolNotFoundError for unknown tool" do
@@ -615,7 +629,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       runner = described_class.new("conventions", [], json_mode: true)
       output = runner.run
       parsed = JSON.parse(output)
-      expect(parsed["tool"]).to eq("rails_get_conventions")
+      expect(parsed["tool"]).to eq("rails_get_config")
       expect(parsed["output"]).to be_a(String)
     end
 

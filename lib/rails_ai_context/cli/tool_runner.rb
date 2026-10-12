@@ -49,6 +49,7 @@ module RailsAiContext
           next extract_output(invalid_required_response) if @invalid_required.any?
 
           response = tool_class.call(**kwargs)
+          response = with_retired_note(response, kwargs) if @retired
           extract_output(response)
         end
       end
@@ -137,8 +138,10 @@ module RailsAiContext
       # the older #schema accessor was removed in mcp 0.20.0. to_h returns a
       # symbol-keyed hash carrying the :properties and :required this runner
       # reads (newer mcp also merges a benign :$schema key we ignore).
+      # The full schema, which takes a section skip_tools turned off, so the
+      # call is answered with why it is off.
       def tool_schema
-        tool_class.input_schema_value&.to_h || {}
+        tool_class.input_schema&.to_h || {}
       end
 
       # The tool a name spells, loading that one class rather than all 45. A
@@ -147,7 +150,15 @@ module RailsAiContext
         custom = Server.resolve_custom_tools
         [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
           found = Server.served_tool(candidate, custom_tools: custom)
-          return found if found
+          next unless found
+
+          # A retired config tool name runs its section, as the MCP server does.
+          section = Tools::GetConfig::SECTIONS.key(candidate)
+          if section && section != "app" && found == Tools::GetConfig.renderer(section)
+            @retired = [ candidate, section ]
+            return Tools::GetConfig
+          end
+          return found
         end
         nil
       end
@@ -194,7 +205,7 @@ module RailsAiContext
         when Hash
                    raw_args.transform_keys(&:to_sym).except(:server_context).transform_values { |value| utf8(value) }
         when Array
-                   return with_environment(parse_cli_args(raw_args).except(:server_context))
+                   return with_environment(with_section(parse_cli_args(raw_args).except(:server_context)))
         else
                    {}
         end
@@ -206,7 +217,11 @@ module RailsAiContext
           kwargs[key] = coerce_value(value, prop, key)
         end
 
-        with_environment(kwargs)
+        with_environment(with_section(kwargs))
+      end
+
+      def with_section(kwargs)
+        @retired ? kwargs.merge(section: @retired.last) : kwargs
       end
 
       # `--environment` sets RAILS_ENV, so it never arrives as a tool argument; a tool that
@@ -473,6 +488,14 @@ module RailsAiContext
             end
           end
         end
+      end
+
+      def with_retired_note(response, kwargs)
+        note = Server.retired_call_note(@retired.first, kwargs)
+        first = response.content.first
+        return response unless note && first.is_a?(Hash) && first[:type] == "text"
+
+        MCP::Tool::Response.new([ first.merge(text: "#{first[:text]}#{note}"), *response.content.drop(1) ], error: response.error?)
       end
 
       # Through the tool's own wrapper when it has one, so the static-tier banner rides along.
