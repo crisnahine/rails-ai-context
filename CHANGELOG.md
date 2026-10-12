@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A booted MySQL app reads "MySQL".** A connection on mysql2 or Trilogy
+  showed its driver name in the generated context and in `rails_runtime_info`;
+  it now reads "MySQL" there, as the static tier already said. PostGIS reads
+  "PostgreSQL".
+- **Migration advice for an undecided database names no engine.** When the
+  app's database is one of two candidates, `rails_migration_advisor` no
+  longer gives PostgreSQL and MySQL advice at once.
 - **One served tool set.** `tool --list` shows exactly what the MCP
   server's `tools/list` shows, so a custom tool sharing a built-in's name
   is listed once, and the CLI's single-tool lookup picks the same tool the
@@ -20,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rails_get_context(include:)`** lists all twelve keys it takes, names
   a key it does not take, and answers an include whose tool `skip_tools`
   turned off by saying so, without running that tool.
+- **Composite answers run only served tools.** `rails_get_context`,
+  `rails_diagnose` and `rails_review_changes` build each section from a
+  tool only when the app serves it. A section whose tool `skip_tools`
+  turned off is left out, and the answer names those tools in one line.
+
+### Changed
+
+- **One answer to which database an app runs.** The connection, a
+  database.yml adapter, a URL scheme, a display label and a dump's dialect
+  all go through one database family (PostgreSQL, MySQL or SQLite). An
+  adapter the gem does not know, such as SQL Server, Oracle or CockroachDB,
+  is no family.
 
 ## [5.35.0] - 2026-10-12
 

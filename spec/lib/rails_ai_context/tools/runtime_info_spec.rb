@@ -45,6 +45,12 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(text).to include("**Adapter:** PostgreSQL")
     end
 
+    it "names a Trilogy connection MySQL" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+
+      expect(described_class.call(section: "database").content.first[:text]).to include("**Adapter:** MySQL")
+    end
+
     it "shows database section" do
       result = described_class.call(section: "database")
       text = result.content.first[:text]

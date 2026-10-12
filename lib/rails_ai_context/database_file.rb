@@ -13,7 +13,7 @@ module RailsAiContext
     # create the file, or nil: for a file that is there, for :memory: and a
     # file: URI (SQLite's own to open), and for every other adapter.
     def self.missing(db_config)
-      return nil unless db_config.respond_to?(:adapter) && db_config.adapter.to_s == "sqlite3"
+      return nil unless DatabaseFamily.of(db_config).key == :sqlite
 
       database = db_config.database.to_s
       return nil if database.empty? || database == ":memory:" || database.start_with?("file:")

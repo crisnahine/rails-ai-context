@@ -520,6 +520,33 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).not_to include("validate_foreign_key")
       end
     end
+
+    context "when the app's database is undecided between two families" do
+      before do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "PostgreSQL or MySQL", tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+          models: {}
+        })
+      end
+
+      [
+        { action: "add_index", table: "users", column: "email" },
+        { action: "add_association", table: "users", column: "tenant" },
+        { action: "change_type", table: "users", column: "email", type: "text" },
+        { action: "add_column", table: "users", column: "phone", type: "string", options: "null: false" }
+      ].each do |args|
+        it "gives #{args[:action]} advice that names no engine" do
+          text = described_class.call(**args).content.first[:text]
+          expect(text).not_to match(/Postgre|MySQL|MariaDB|SQLite|concurrently|validate: false|foreign_key_checks/)
+        end
+      end
+
+      it "still warns about a NOT NULL column without a default" do
+        text = described_class.call(action: "add_column", table: "users", column: "phone", type: "string", options: "null: false").content.first[:text]
+        expect(text).to include("NOT NULL")
+      end
+    end
   end
   describe "the migration superclass version" do
     def text_for(**args)

@@ -8,14 +8,6 @@ module RailsAiContext
       extend StaticTier
       static_tier :runtime_only
 
-      # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
-      # "Trilogy", not "Mysql2") - matching only /mysql/ silently skips
-      # stats collection for every Trilogy app.
-      MYSQL_ADAPTER = /mysql|trilogy/i
-
-      # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
-      POSTGRES_ADAPTER = /postg/i
-
       def call
         return { skipped: true, reason: "ActiveRecord not available" } unless defined?(ActiveRecord::Base)
 
@@ -23,16 +15,16 @@ module RailsAiContext
         missing = DatabaseFile.missing(ActiveRecord::Base.connection_db_config)
         raise missing if missing
 
-        adapter = ActiveRecord::Base.connection.adapter_name.downcase
-        case adapter
-        when POSTGRES_ADAPTER
+        family = RailsAiContext::DatabaseFamily.of(ActiveRecord::Base.connection)
+        case family.key
+        when :postgresql
           collect_postgresql_stats
-        when MYSQL_ADAPTER
+        when :mysql
           collect_mysql_stats
-        when /sqlite/
+        when :sqlite
           collect_sqlite_stats
         else
-          { skipped: true, reason: "Stats not available for adapter: #{adapter}" }
+          { skipped: true, reason: "Stats not available for adapter: #{family.name.downcase}" }
         end
       end
 

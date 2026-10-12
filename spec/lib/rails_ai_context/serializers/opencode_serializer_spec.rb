@@ -52,7 +52,7 @@ RSpec.describe RailsAiContext::Serializers::OpencodeSerializer do
       it "includes stack overview" do
         output = described_class.new(context).call
         expect(output).to include("## Stack")
-        expect(output).to include("sqlite3")
+        expect(output).to include("SQLite")
         expect(output).to include("5 tables")
       end
 
