@@ -57,8 +57,6 @@ module RailsAiContext
         else
           text_response("Unknown action: #{echo_input(action)}. Use status, summary, or reset.")
         end
-      rescue => e
-        text_response("Session context error: #{e.message}")
       end
 
       class << self

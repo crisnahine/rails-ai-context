@@ -17,6 +17,7 @@ require "active_support/core_ext/string/inflections"
 require "active_support/core_ext/string/filters"
 require "active_support/core_ext/object/deep_dup"
 require "active_support/core_ext/object/blank"
+require "active_support/core_ext/array/conversions"
 
 # Same reason, for two stdlib constants. `Set` is autoloaded on newer Rubies
 # and not on the oldest one supported here; `Date` is never autoloaded. Both

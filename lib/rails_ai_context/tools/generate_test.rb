@@ -61,8 +61,6 @@ module RailsAiContext
         elsif file
           generate_file_test(file.strip, framework, tests_data, type)
         end
-      rescue => e
-        text_response("Generate test error: #{e.message}")
       end
 
       class << self

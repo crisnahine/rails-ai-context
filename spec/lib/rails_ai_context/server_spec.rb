@@ -422,6 +422,33 @@ RSpec.describe RailsAiContext::Server do
       expect(s.send(:puma_handler?, resolved_handler)).to be true
     end
 
+    # rackup 1.x is the release line for rack 2: it loads and defines only its
+    # version, and the handlers stay in Rack::Handler.
+    it "reads Rack::Handler when rackup loads without a handler of its own" do
+      hide_const("Rackup::Handler")
+      stub_const("Rack::Handler", double(default: :rack_two_handler))
+      allow(s).to receive(:require).with("rackup").and_return(true)
+      allow(s).to receive(:require).with("rack/handler").and_return(true)
+
+      expect(resolved_handler).to eq(:rack_two_handler)
+    end
+
+    it "reads Rack::Handler when there is no rackup gem" do
+      hide_const("Rackup::Handler")
+      stub_const("Rack::Handler", double(default: :rack_two_handler))
+      allow(s).to receive(:require).with("rackup").and_raise(LoadError)
+      allow(s).to receive(:require).with("rack/handler").and_return(true)
+
+      expect(resolved_handler).to eq(:rack_two_handler)
+    end
+
+    it "reads Rackup::Handler when rackup defines it" do
+      stub_const("Rackup::Handler", double(default: :rackup_handler))
+      allow(s).to receive(:require).with("rackup").and_return(true)
+
+      expect(resolved_handler).to eq(:rackup_handler)
+    end
+
     it "pins Puma to one process" do
       expect(options_for(resolved_handler)).to eq(
         Host: config.http_bind, Port: config.http_port, workers: 0, config_files: [ "-" ],

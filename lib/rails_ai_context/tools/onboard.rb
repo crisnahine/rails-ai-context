@@ -47,8 +47,6 @@ module RailsAiContext
           compose_standard(ctx)
         end
         text_response(body, suffix: introspection_warnings_note(ctx))
-      rescue => e
-        text_response("Onboard error: #{e.message}")
       end
 
       class << self
@@ -152,7 +150,10 @@ module RailsAiContext
           lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} #{db ? "on #{db}" : "without Active Record"}."
           solid = schema ? solid_databases(schema) : {}
           if solid.any?
-            lines << "#{solid.values.uniq.to_sentence} keep#{"s" if solid.values.uniq.one?} their tables in databases of their own: #{solid.keys.join(", ")}."
+            frameworks = solid.values.uniq
+            keep = frameworks.one? ? "keeps its" : "keep their"
+            place = solid.one? ? "a database of its own" : "databases of their own"
+            lines << "#{frameworks.to_sentence(last_word_connector: " and ")} #{keep} tables in #{place}: #{solid.keys.join(", ")}."
           end
           unread = unread_bundle(rails)
           lines << unread if unread

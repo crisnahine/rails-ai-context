@@ -131,6 +131,21 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("solid_queue_jobs")
     end
 
+    {
+      "one" => [ { "cache" => "solid_cache_entries" },
+                 "Solid Cache keeps its tables in a database of its own: cache." ],
+      "two" => [ { "queue" => "solid_queue_jobs", "cache" => "solid_cache_entries" },
+                 "Solid Queue and Solid Cache keep their tables in databases of their own: queue, cache." ],
+      "three" => [ { "cache" => "solid_cache_entries", "queue" => "solid_queue_jobs", "cable" => "solid_cable_messages" },
+                   "Solid Cache, Solid Queue and Solid Cable keep their tables in databases of their own: cache, queue, cable." ]
+    }.each do |count, (databases, sentence)|
+      it "words #{count} Solid database#{"s" unless count == "one"} as a sentence" do
+        schema[:secondary_databases] = databases.to_h { |name, table| [ name, { total_tables: 1, tables: { table => {} } } ] }
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("\n#{sentence}\n")
+      end
+    end
+
     it "counts the app's tables across its databases in the summary overview" do
       text = described_class.call(detail: "summary").content.first[:text]
 

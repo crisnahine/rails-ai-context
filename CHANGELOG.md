@@ -113,6 +113,10 @@ Ten tools that each answered one section of the app's configuration leave
   SQLite a query that gave the column an alias returned the stored value.
   The check now refuses the name on every database family, and the refusal
   says the allowed list does not release it.
+- **`rails_query` also keeps nonce and initialization vector columns
+  secret.** A column whose name holds `nonce`, or is `iv` or ends in `_iv`,
+  is refused by name and filtered in results. `query_allowed_columns`
+  releases one by name, as for any name the heuristic flags.
 - **`skip_tools` holds inside composite answers.**
   `rails_get_context(include:)` ran `rails_security_scan` and the
   environment listing when `skip_tools` listed them. An include whose tool
@@ -172,6 +176,35 @@ Ten tools that each answered one section of the app's configuration leave
 
 ### Fixed
 
+- **`context` and `rails_onboard` run with `--no-boot` on an app whose
+  database two other environments configure.** `context --no-boot` exited 1
+  with "undefined method 'to_sentence'", and `tool onboard --no-boot` gave
+  the same message as its answer. The gem called an ActiveSupport extension
+  that only a booted app had loaded; it now loads it itself.
+- **A tool that fails unexpectedly is an error result.** `rails_onboard`,
+  `rails_diagnose`, `rails_generate_test`, `rails_review_changes`,
+  `rails_runtime_info` and `rails_session_context` answered an exception
+  they did not plan for as ordinary text, so the CLI exited 0. They now
+  answer as every other tool does: `isError: true` over MCP, exit 1 from the
+  CLI, and a text that starts "Tool <name> failed:".
+- **`serve --transport http` starts on rack 2 with rackup 1.x.** It stopped
+  with "uninitialized constant Rackup::Handler" on an app that pins rack
+  below 3 and bundles the rackup gem.
+- **`rails_runtime_info` creates no Solid Cache database.** Under an
+  environment whose Solid Cache SQLite file was not there, the cache
+  section's read created an empty one. The section now says the database
+  does not exist yet.
+- **The `rails_get_config` app section names the database family.** Its
+  Database line showed `mysql2` where every other surface says "MySQL". It
+  now reads "MySQL", "PostgreSQL" or "SQLite", and an adapter with no family
+  as database.yml writes it. The JSON keeps adapter names as written.
+- **`rails_onboard` words one Solid database in the singular.** "Solid Cache
+  keeps its tables in a database of its own: cache."
+- **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".** The cache section's Store line read "Store".
+- **`rails_get_schema` marks a secondary database with where it is
+  configured.** The Secondary databases line carries "(production only)",
+  "(staging and production)" or "(committed dump only)", as the generated
+  files do.
 - **`rails_runtime_info` reads pending migrations in every database
   configured here.** It said "all up to date" while another database had
   pending migrations.

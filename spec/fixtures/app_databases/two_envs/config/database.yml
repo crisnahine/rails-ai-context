@@ -1,0 +1,29 @@
+default: &default
+  adapter: sqlite3
+  pool: 5
+
+development:
+  <<: *default
+  database: storage/development.sqlite3
+
+test:
+  <<: *default
+  database: storage/test.sqlite3
+
+staging:
+  primary: &primary_staging
+    <<: *default
+    database: storage/staging.sqlite3
+  cache:
+    <<: *primary_staging
+    database: storage/staging_cache.sqlite3
+    migrations_paths: db/cache_migrate
+
+production:
+  primary: &primary_production
+    <<: *default
+    database: storage/production.sqlite3
+  cache:
+    <<: *primary_production
+    database: storage/production_cache.sqlite3
+    migrations_paths: db/cache_migrate
