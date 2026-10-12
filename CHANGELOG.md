@@ -62,9 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *_params` was listed, so a method that builds associations counted while
   `article_params_json`, which calls `permit`, did not. A strong-params
   method now calls `permit`, `permit!` or `expect` on params, on a local
-  that holds them, or on `ActionController::Parameters.new`, whatever its
-  name. An action that permits inline is left out, a public `*_params`
-  helper is kept, and `permit!` on a `slice` lists the keys it slices.
+  that holds them, or on `ActionController::Parameters.new`. A method named
+  `*_params` counts too when it hands params to another class
+  (`PermittedAttributes::Enterprise.new(params)`) or returns another strong
+  params method; one of any other name only when it returns what it
+  permits, so a helper that permits to build a URL is left out. An action
+  that permits inline is left out, a public `*_params` helper is kept,
+  `permit!` on a `slice` lists the keys it slices, and a computed filter
+  (`settings_attributes: UserSettings.keys`) is shown as written, not as a
+  scalar.
 
 ### Fixed
 
@@ -150,7 +156,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, which flipflop's dashboard does in a generator boot and not in a rake
   one, so the install wrote "Controllers (99)" and `rails ai:context` wrote
   "(97)" and `ai:doctor` called the files stale. A `*_controller.rb` that
-  declares only a module was listed as a controller too.
+  declares only a module was listed as a controller too, and one that names
+  another controller (`GoogleController = OAuth2Controller`) is listed as
+  its alias, with its actions.
 - **A module in app/policies is not a policy.** `onboard` counted
   `module Authorizer`, which nests a helper class, among the Pundit
   policies. A policy is now the class its file is named for.
