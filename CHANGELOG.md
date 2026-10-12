@@ -145,6 +145,17 @@ Ten tools that each answered one section of the app's configuration leave
   secret.** A column whose name holds `nonce`, or is `iv` or ends in `_iv`,
   is refused by name and filtered in results. `query_allowed_columns`
   releases one by name, as for any name the heuristic flags.
+- **Every statement a `rails_query` call sends is bounded by
+  `query_timeout`.** The reads a call makes beside the query, such as the
+  schema read behind the secret column rule, had no time limit, so a call
+  against a table another session had locked waited until the lock went.
+  Each family now bounds those reads the way it bounds the query, a wait on
+  a lock included, and a read that runs out of time is the call's timeout
+  answer. A call answers within about twice `query_timeout`. On MySQL and
+  MariaDB `explain: true` is bounded while it waits on a lock too.
+  `rails_runtime_info` reads table sizes, index usage and pending migrations
+  under the same limit, and a database leased by name has `query_timeout`
+  to connect in unless its entry sets `connect_timeout`.
 - **`skip_tools` holds inside composite answers.**
   `rails_get_context(include:)` ran `rails_security_scan` and the
   environment listing when `skip_tools` listed them. An include whose tool
@@ -316,6 +327,18 @@ Ten tools that each answered one section of the app's configuration leave
 - **A `query_timeout` under a millisecond still bounds the statement.** On
   PostgreSQL it turned the statement timeout off. PostgreSQL, MySQL and
   MariaDB now bound the statement at one millisecond.
+- **A database `rails_query` cannot reach is an error that names it.** A
+  server that was down, or a database its server does not hold, came back
+  as an ordinary answer headed "Database unavailable" or "Database not
+  found", with no database named and advice to try `RAILS_ENV=test`. With
+  or without `database`, the answer is now an error that names the database
+  and says what to do: start its server or fix its `config/database.yml`
+  entry, or run `bin/rails db:create`. A connection lost while the
+  statement runs is an error that names the database too.
+- **`rails_query` reads the schema in three statements.** The secret column
+  rule read each table's columns with a statement of its own on every call,
+  about 1.5 seconds on a 300-table PostgreSQL schema and 2 seconds on
+  MySQL. One catalogue read per family now lists every table's columns.
 - **A `rails_query` timeout is an error.** A query that ran past
   `query_timeout` came back as an ordinary answer. With the same text it is
   now an error response, for a query and for `explain: true`: the CLI exits

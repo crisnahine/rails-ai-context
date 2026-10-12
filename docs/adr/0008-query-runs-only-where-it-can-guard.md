@@ -11,8 +11,9 @@ Status: accepted
 - The timeout per family:
   - PostgreSQL: `SET LOCAL statement_timeout` inside the read-only transaction, at one millisecond or more, since zero turns the timeout off.
   - MySQL: the session's `max_execution_time`, read first, set for the statement and restored after. The `MAX_EXECUTION_TIME` hint binds only the outermost SELECT and leaves a statement that starts with WITH or EXPLAIN with no bound, so it is not used.
-  - MariaDB: `SET STATEMENT max_statement_time = N FOR <statement>`. MariaDB ignores the MySQL hint and has no `max_execution_time`.
+  - MariaDB: the session's `max_statement_time`, read first, set for the statement and restored after. MariaDB ignores the MySQL hint and has no `max_execution_time`.
   - SQLite: a forked child with a deadline, since sqlite3-ruby cannot interrupt a statement.
+- The timeout covers every statement a call sends. The reads beside the query (the schema, the PostgreSQL plan, the column trace) run in a block the family bounds the same way, and share one `query_timeout` between them. MySQL and MariaDB also set the session's `lock_wait_timeout`, since their statement limit does not cover `EXPLAIN` or `SHOW`. On SQLite those reads run on the app's own connection and end at its busy timeout.
 - A timeout is recognised by `ActiveRecord::QueryAborted` (QueryCanceled, StatementTimeout) or by the database's native code. MariaDB's 1969 has no Rails class in any version. Message text is never read, so a missing column named "timeout" is reported as an SQL error.
 - The statement checks before execution stay on every family. MySQL's read-only transaction lets `FOR SHARE`, `LOCK IN SHARE MODE`, `INTO @var` and `INTO OUTFILE` through, so it cannot be the only guard.
 - Only PostgreSQL traces a result column to its table column, through the statement's plan, so there a statement runs only with a plan. MySQL, MariaDB and SQLite have no such trace, so a view is checked by the definition the database stores and refused when it names a secret column.

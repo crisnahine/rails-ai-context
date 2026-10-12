@@ -712,7 +712,7 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
 
-It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. On MySQL, MariaDB and SQLite a statement that names a view whose definition names a sensitive column is refused; see the security model.
+It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. So is a database no connection reaches, which the answer names with what to do about it. Every statement a call sends is bounded, so a call answers within about twice `query_timeout`. On MySQL, MariaDB and SQLite a statement that names a view whose definition names a sensitive column is refused; see the security model.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
