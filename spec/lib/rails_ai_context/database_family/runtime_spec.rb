@@ -21,12 +21,13 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   let(:mysql_class) do
     Class.new do
       attr_reader :statements
-      attr_accessor :failure, :session_timeout
+      attr_accessor :failure, :session_timeout, :session
 
       def initialize(mariadb)
         @mariadb = mariadb
         @statements = []
         @session_timeout = 250
+        @session = 7
       end
 
       def adapter_name = "Mysql2"
@@ -43,7 +44,12 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       def select_rows(sql)
         @statements << sql
-        [ [ @session_timeout, 31_536_000 ] ]
+        [ [ @session_timeout, 31_536_000, 7 ] ]
+      end
+
+      def select_value(sql)
+        @statements << sql
+        @session
       end
 
       def transaction
@@ -65,6 +71,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
   end
 
+  def statements
+    sent = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+    yield
+    sent
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
   # An adapter error whose cause carries the driver's native code, as Rails raises it.
   def driver_error(error_class, code, reader: :error_number)
     native = Class.new(StandardError) { attr_accessor reader }.new("native").tap { |e| e.public_send("#{reader}=", code) }
@@ -83,9 +98,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       expect(rows.rows).to eq([ [ 1 ] ])
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout",
+        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout, CONNECTION_ID()",
         "SET SESSION max_execution_time = 2000, lock_wait_timeout = 2",
-        "SET TRANSACTION READ ONLY", "BEGIN", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
+        "SET TRANSACTION READ ONLY", "BEGIN", "SELECT CONNECTION_ID()", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
         "SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000"
       ])
     end
@@ -95,7 +110,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       expect(answer).to eq(:read)
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout",
+        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout, CONNECTION_ID()",
         "SET SESSION max_execution_time = 400, lock_wait_timeout = 1", "SHOW FULL FIELDS FROM t",
         "SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000"
       ])
@@ -156,6 +171,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         expect(described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2).rows).to eq([ [ 1 ] ])
         expect(conn.statements.last).to eq("THROW AWAY")
       end
+    end
+
+    it "sends no statement when the session inside the transaction is another one, and raises the lost connection" do
+      conn.session = 8
+
+      expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }
+        .to raise_error(ActiveRecord::ConnectionNotEstablished, /the connection was replaced before the statement was sent/)
+      expect(conn.statements).not_to include("SELECT 1")
+      expect(conn.statements.last).to eq("SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000")
     end
 
     it "refuses a guarded read inside a transaction that is already open, and sends nothing" do
@@ -221,9 +245,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       described_class::MYSQL.read_only(conn, "WITH t AS (SELECT 1) SELECT * FROM t", timeout: 2)
 
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout",
+        "SELECT @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, CONNECTION_ID()",
         "SET SESSION max_statement_time = 2.0, lock_wait_timeout = 2",
-        "SET TRANSACTION READ ONLY", "BEGIN", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
+        "SET TRANSACTION READ ONLY", "BEGIN", "SELECT CONNECTION_ID()", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
         "SET SESSION max_statement_time = 250, lock_wait_timeout = 31536000"
       ])
     end
@@ -326,7 +350,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   end
 
   describe "a block of reads on SQLite" do
-    it "answers what the block answers, and raises a read that waited out the busy timeout as the timeout" do
+    it "answers what the block answers, and raises a read of a database another connection has locked as busy, which is no timeout" do
       conn = double("connection")
       busy = begin
         begin
@@ -339,7 +363,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
 
       expect(described_class::SQLITE.bounded(conn, timeout: 1) { :read }).to eq(:read)
-      expect { described_class::SQLITE.bounded(conn, timeout: 1) { raise busy } }.to raise_error(described_class::TimedOut)
+      expect { described_class::SQLITE.bounded(conn, timeout: 1) { raise busy } }
+        .to raise_error(described_class::Busy) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+      expect(described_class.timed_out?(busy)).to be(false)
     end
   end
 
@@ -363,15 +389,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     after do
       RuntimeSchemaRecord.remove_connection
       FileUtils.rm_rf(dir)
-    end
-
-    def statements
-      sent = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-      yield
-      sent
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
     end
 
     it "explains a statement by the tables it reads, says which names the statement gave, and reads no table for a constant row" do
@@ -420,15 +437,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
-    def statements
-      sent = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-      yield
-      sent
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
-
     after do
       RuntimeStatementRecord.remove_connection
       FileUtils.rm_rf(dir)
@@ -436,6 +444,19 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
     context "in a file", if: Process.respond_to?(:fork) do
       let(:conn) { connect(File.join(dir, "statement.sqlite3")) }
+
+      it "answers from the rows of a transaction that is already open, on the app's own connection, and leaves it as it found it" do
+        conn.transaction do
+          conn.execute("INSERT INTO big VALUES (2001)")
+          result = described_class::SQLITE.read_only(conn, "SELECT count(*) FROM big", timeout: 5)
+          expect([ result.rows, result.unbounded ]).to eq([ [ [ 2001 ] ], true ])
+          expect { described_class::SQLITE.read_only(conn, "INSERT INTO big VALUES (9)", timeout: 5) }
+            .to raise_error(ActiveRecord::StatementInvalid, /readonly/)
+          conn.execute("INSERT INTO big VALUES (2002)")
+        end
+
+        expect(conn.select_value("SELECT count(*) FROM big")).to eq(2002)
+      end
 
       # total_changes() is 0 in the child and above it here, so only the child reaches the failing branch.
       it "raises the error of a statement that fails while it runs, whatever its message says, and runs it nowhere else" do

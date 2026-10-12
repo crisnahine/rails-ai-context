@@ -7,28 +7,31 @@ module RailsAiContext
     module MysqlRuntime
       module_function
 
-      # MySQL has no way to make a transaction read-only once it is open, or to scope that to a savepoint.
       IN_TRANSACTION = "MySQL cannot make a transaction that is already open read-only, so the statement " \
         "was not sent. Run it outside the transaction."
 
       def read_only(conn, sql, timeout)
         raise Unsupported, IN_TRANSACTION if conn.transaction_open?
 
-        result = bounded(conn, timeout) { in_read_only_transaction(conn, sql) }
+        result = bounded(conn, timeout) { |session| in_read_only_transaction(conn, sql, session) }
         Rows.new(result.columns, result.rows, false)
       end
 
+      REPLACED = "the connection was replaced before the statement was sent, and the new session has no " \
+        "read-only transaction and no time limit, so the statement was not sent"
+
       # The statement limit does not cover SHOW, so lock_wait_timeout (whole seconds) ends a wait on a
       # metadata lock. Both session values are read first and put back after the block.
+      # Yields the id of the session that holds them.
       def bounded(conn, timeout)
-        limit, value = if mariadb?(conn) then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
+        limit, value = if conn.mariadb? then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
         else [ "max_execution_time", [ (timeout * 1000).to_i, 1 ].max ]
         end
         DatabaseFamily.bounding do
-          previous = conn.select_rows("SELECT @@SESSION.#{limit}, @@SESSION.lock_wait_timeout").first
+          previous = conn.select_rows("SELECT @@SESSION.#{limit}, @@SESSION.lock_wait_timeout, CONNECTION_ID()").first
           begin
             conn.execute("SET SESSION #{limit} = #{value}, lock_wait_timeout = #{[ timeout.ceil, 1 ].max}")
-            yield
+            yield previous[2]
           ensure
             DatabaseFamily.restore(conn, "SET SESSION #{limit} = #{previous[0]}, lock_wait_timeout = #{previous[1]}")
           end
@@ -37,21 +40,22 @@ module RailsAiContext
 
       # MySQL rejects SET TRANSACTION once a transaction is open, and Rails opens the lazy BEGIN
       # before the first statement in the block. Unscoped, it applies to the next transaction only.
-      def in_read_only_transaction(conn, sql)
+      def in_read_only_transaction(conn, sql, session)
         result = nil
         conn.execute("SET TRANSACTION READ ONLY")
         conn.transaction do
+          # Rails replaces a connection it lost before BEGIN, and a new session has neither guard.
+          raise ActiveRecord::ConnectionNotEstablished, REPLACED unless conn.select_value("SELECT CONNECTION_ID()").to_i == session.to_i
+
           result = conn.select_all(sql)
           raise ActiveRecord::Rollback
         end
         result
       end
 
-      def mariadb?(conn) = conn.mariadb?
-
       def explain(conn, sql, timeout)
         # MySQL 8.3+ defaults to TREE output, which has no table/type/key columns. MariaDB has no FORMAT=TRADITIONAL.
-        prefix = mariadb?(conn) ? "EXPLAIN" : "EXPLAIN FORMAT=TRADITIONAL"
+        prefix = conn.mariadb? ? "EXPLAIN" : "EXPLAIN FORMAT=TRADITIONAL"
         result = read_only(conn, "#{prefix} #{sql}", timeout)
         scans = []
         warnings = []
@@ -91,24 +95,57 @@ module RailsAiContext
         nil
       end
 
-      def relation_columns(conn)
+      # The schemas no secret column rule reads: their relations are refused by name or hold no app data.
+      SYSTEM_SCHEMAS = %w[mysql sys performance_schema information_schema].freeze
+
+      def unqualified_schemas(_conn)
+        []
+      end
+
+      # Compared by the server, so a name matches a schema as a statement's own reference would.
+      def schemas_named(conn, names)
+        conn.select_values(
+          "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME IN (#{quoted(conn, names)}) " \
+          "AND SCHEMA_NAME NOT IN (#{quoted(conn, SYSTEM_SCHEMAS)}) AND SCHEMA_NAME <> DATABASE()"
+        )
+      end
+
+      def quoted(conn, names)
+        names.map { |name| conn.quote(name) }.join(", ")
+      end
+
+      def in_schemas(conn, column, schemas)
+        schemas.empty? ? "#{column} = DATABASE()" : "#{column} IN (#{quoted(conn, schemas)})"
+      end
+
+      def relation_columns(conn, schemas = [])
         DatabaseFamily.by_table(conn.select_rows(
           "SELECT c.TABLE_NAME, c.COLUMN_NAME FROM information_schema.COLUMNS c JOIN information_schema.TABLES t " \
           "ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME " \
-          "WHERE c.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE' ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION"
+          "WHERE #{in_schemas(conn, "c.TABLE_SCHEMA", schemas)} AND t.TABLE_TYPE = 'BASE TABLE' ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION"
         )).transform_values(&:flatten)
       end
 
       # The definition is empty for a view the account may not SHOW.
-      def view_definitions(conn)
-        conn.select_rows("SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE()").to_h
+      def view_definitions(conn, schemas = [])
+        DatabaseFamily.by_view(conn.select_rows(
+          "SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS WHERE #{in_schemas(conn, "TABLE_SCHEMA", schemas)}"
+        ))
       end
 
-      def generated_columns(conn)
+      def traced_views(_conn, _schemas = [])
+        []
+      end
+
+      def generated_columns(conn, schemas = [])
         DatabaseFamily.by_table(conn.select_rows(
           "SELECT TABLE_NAME, COLUMN_NAME, GENERATION_EXPRESSION FROM information_schema.COLUMNS " \
-          "WHERE TABLE_SCHEMA = DATABASE() AND GENERATION_EXPRESSION <> ''"
+          "WHERE #{in_schemas(conn, "TABLE_SCHEMA", schemas)} AND GENERATION_EXPRESSION <> ''"
         )).transform_values(&:to_h)
+      end
+
+      def index_tables(_conn, _schemas = [])
+        {}
       end
 
       # Base tables only: a view has no rows or bytes of its own.

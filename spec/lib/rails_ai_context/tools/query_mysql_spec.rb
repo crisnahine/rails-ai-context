@@ -50,6 +50,77 @@ RSpec.describe RailsAiContext::Tools::Query do
         answer(sql, **options).content.first[:text]
       end
 
+      describe "a table in another database of the server" do
+        def drop_others
+          conn.execute("DROP VIEW IF EXISTS rac_my_across")
+          %w[rac_my_other rac_my_third].each { |name| conn.execute("DROP DATABASE IF EXISTS #{name}") }
+        end
+
+        before do
+          drop_others
+          %w[rac_my_other rac_my_third].each { |name| conn.execute("CREATE DATABASE #{name}") }
+          conn.execute("CREATE TABLE rac_my_other.acc (id int, email varchar(50), session_token varchar(50), passwd varchar(50))")
+          conn.execute("INSERT INTO rac_my_other.acc VALUES (1, 'b@example.com', 'tok-value', 'pw2-value')")
+          conn.execute("CREATE TABLE rac_my_third.far (id int, far_token varchar(50))")
+          conn.execute("INSERT INTO rac_my_third.far VALUES (1, 'far-value')")
+          conn.execute("CREATE VIEW rac_my_other.v AS SELECT id, passwd AS p FROM rac_my_other.acc")
+          conn.execute("CREATE VIEW rac_my_other.chain AS SELECT far_token AS f FROM rac_my_third.far")
+          conn.execute("CREATE VIEW rac_my_across AS SELECT id, session_token AS t FROM rac_my_other.acc")
+        end
+
+        after { drop_others }
+
+        def refused(statements, start)
+          statements.each do |sql|
+            response = answer(sql)
+            expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with(start) ]), sql
+            expect(response.content.first[:text]).not_to include("tok-value", "pw2-value", "far-value"), sql
+          end
+        end
+
+        it "refuses a statement that names its secret column, as it does for a table of the connection's database" do
+          from = "FROM rac_my_other.acc"
+          refused([ "SELECT session_token AS x #{from}", "SELECT upper(session_token) #{from}", "SELECT concat(session_token, '') AS d #{from}",
+                    "SELECT d FROM (SELECT session_token AS d #{from}) s", "SELECT id #{from} WHERE session_token LIKE 'tok%'",
+                    "SELECT max(session_token) AS m #{from}", "SELECT id #{from} ORDER BY session_token", "SELECT (SELECT session_token #{from} LIMIT 1) AS d",
+                    "SELECT session_token AS x FROM `rac_my_other` . `acc`", "SELECT session_token AS x FROM rac_my_other/* c */.acc",
+                    "SELECT a.email, o.session_token AS d FROM rac_my_accounts a JOIN rac_my_other.acc o ON o.id = a.id" ],
+                  "Blocked: query references secret column `session_token`")
+          refused([ "SELECT passwd AS x #{from}" ], "Blocked: query references secret column `passwd`")
+          refused([ "SELECT * FROM (SELECT * #{from}) s", "SELECT s.id FROM (SELECT * #{from}) s WHERE s.email LIKE 'b%'" ], "Blocked: ")
+        end
+
+        it "refuses a view over it, in either database, and a view that leads to a third database" do
+          refused([ "SELECT * FROM rac_my_across", "SELECT t FROM rac_my_across" ],
+                  "Blocked: the view `rac_my_across` is not queried: its definition names the secret column `session_token`")
+          refused([ "SELECT * FROM rac_my_other.v", "SELECT upper(p) AS u FROM rac_my_other.v" ],
+                  "Blocked: the view `v` is not queried: its definition names the secret column `passwd`")
+          refused([ "SELECT * FROM rac_my_other.chain" ], "Blocked: the view `chain` is not queried: its definition names the secret column `far_token`")
+        end
+
+        it "filters its secret columns in place, runs a join that reads none, and shows a refused view's definition" do
+          listed = answer("SELECT * FROM rac_my_other.acc")
+          expect([ listed.error?, listed.content.first[:text] ]).to match([ false, a_string_including("b@example.com", "[FILTERED]") ])
+          expect(listed.content.first[:text]).not_to include("tok-value", "pw2-value")
+          joined = answer("SELECT a.email, o.email AS other FROM rac_my_accounts a JOIN rac_my_other.acc o ON o.id = a.id")
+          expect([ joined.error?, joined.content.first[:text] ]).to match([ false, a_string_including("a@example.com", "b@example.com") ])
+          expect(answer("SHOW CREATE VIEW rac_my_other.v").error?).to be(false)
+        end
+
+        it "reads the other database's columns in the same budget, and no system schema" do
+          sent = []
+          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+          answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
+          ActiveSupport::Notifications.unsubscribe(subscriber)
+
+          asked = sent.grep(/SCHEMATA/)
+          expect(asked.size).to eq(2)
+          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_other'\)/).size).to eq(3)
+          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/).size).to eq(3)
+          expect(sent.grep(/TABLE_SCHEMA IN \('information_schema'\)/)).to be_empty
+        end
+      end
+
       it "refuses every spelling of a locking read and sends none" do
         allow(runtime).to receive(:read_only).and_call_original
         [ "LOCK IN SHARE MODE", "FOR SHARE", "FOR UPDATE", "FOR UPDATE NOWAIT", "FOR UPDATE SKIP LOCKED", "FOR SHARE OF rac_my_accounts",
@@ -105,10 +176,17 @@ RSpec.describe RailsAiContext::Tools::Query do
         guess = "(1, 'a@example.com', 'pw-valud', 'x', 'y', 'z')"
         refused([
           "SELECT #{guess} < (SELECT * FROM rac_my_accounts) AS o", "SELECT ROW#{guess} < (SELECT DISTINCTROW * FROM rac_my_accounts) AS o",
-          "SELECT #{guess} < (SELECT SQL_NO_CACHE rac_my_accounts.* FROM rac_my_accounts) AS o", "SELECT #{guess} < (TABLE rac_my_accounts) AS o",
-          "SELECT 1 FROM rac_my_contacts WHERE #{guess} IN (TABLE rac_my_accounts)", "SELECT * FROM (SELECT * FROM rac_my_accounts) x",
-          "SELECT * FROM (TABLE rac_my_accounts) x", "WITH x AS (SELECT * FROM rac_my_accounts) SELECT * FROM x"
-        ], "Blocked: a `*` inside a subquery reads every column of `rac_my_accounts`, which holds the secret column `passwd`. On MySQL")
+          "SELECT #{guess} < (SELECT SQL_NO_CACHE rac_my_accounts.* FROM rac_my_accounts) AS o", "SELECT * FROM (SELECT * FROM rac_my_accounts) x",
+          "WITH x AS (SELECT * FROM rac_my_accounts) SELECT * FROM x"
+        ], "Blocked: a `*` inside a subquery is not run in a statement that names `rac_my_accounts`, which holds the secret column `passwd`. On MySQL")
+        refused([ "SELECT #{guess} < (TABLE rac_my_accounts) AS o", "SELECT 1 FROM rac_my_contacts WHERE #{guess} IN (TABLE rac_my_accounts)",
+                  "SELECT * FROM (TABLE rac_my_accounts) x" ],
+                "Blocked: `TABLE` inside a subquery is not run in a statement that names `rac_my_accounts`, which holds the secret column `passwd`.")
+        expect(text("SELECT c.email FROM (SELECT * FROM rac_my_contacts) c WHERE c.email <> 'rac_my_accounts'")).to include("a@example.com")
+      end
+
+      it "reads the words for connection and a mysql host name inside a literal as data" do
+        expect(text("SELECT email FROM rac_my_accounts WHERE email <> 'waiting for connection' AND email NOT LIKE '%@mysql.com'")).to include("a@example.com")
         expect(text("SELECT EXISTS (SELECT * FROM rac_my_accounts) AS found, (SELECT count(*) FROM rac_my_accounts) AS n")).to include("| 1     | 1 |")
       end
 
@@ -134,18 +212,20 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       it "refuses a WHERE clause on SHOW and sends nothing, and runs SHOW with a LIKE" do
         RailsAiContext.configuration.query_timeout = 1
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        refused([ "SHOW TABLES WHERE SLEEP(4) = 0", "SHOW COLUMNS FROM rac_my_accounts WHERE SLEEP(4) = 0", "SHOW STATUS WHERE SLEEP(4) = 0" ],
-                "Blocked: SHOW with a WHERE clause is not run")
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        took = seconds do
+          refused([ "SHOW TABLES WHERE SLEEP(4) = 0", "SHOW COLUMNS FROM rac_my_accounts WHERE SLEEP(4) = 0", "SHOW STATUS WHERE SLEEP(4) = 0" ],
+                  "Blocked: SHOW with a WHERE clause is not run")
+        end
+        expect(took).to be < 2
         expect(text("SHOW TABLES LIKE 'rac_my_acc%'")).to include("rac_my_accounts")
         expect(text("SHOW COLUMNS FROM rac_my_accounts LIKE 'ema%'")).to include("email")
       end
 
       it "refuses other sessions' statements, replication state and the stored password hashes" do
         other = conn.select_value("SELECT CONNECTION_ID()").to_i
-        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS", "EXPLAIN FOR CONNECTION #{other}",
-                  "EXPLAIN FORMAT=JSON FOR CONNECTION #{other}", "DESCRIBE FOR CONNECTION #{other}" ], "Blocked: sensitive SHOW command")
+        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS" ], "Blocked: sensitive SHOW command")
+        refused([ "EXPLAIN FOR CONNECTION #{other}", "EXPLAIN FORMAT=JSON FOR CONNECTION #{other}", "DESCRIBE FOR CONNECTION #{other}" ],
+                "Blocked: EXPLAIN FOR CONNECTION is not run.")
         refused([ "SELECT * FROM information_schema.processlist", "SELECT * FROM performance_schema.threads",
                   "SELECT * FROM information_schema.PROCESSL\u0130ST", "SELECT trx_query AS q FROM information_schema.innodb_trx",
                   "SELECT * FROM information_schema.INNODB_FT_INDEX_CACHE", "SELECT * FROM information_schema.profiling" ], "Blocked: `")

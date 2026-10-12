@@ -422,6 +422,15 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           expect(`cd #{dir} && ruby -I #{lib} #{exe} tool gems --help 2>&1`).to start_with("rails_get_gems - runs the `gems` section")
         end
       end
+
+      it "prints the help when --app-path is left without a value before --help" do
+        Dir.mktmpdir do |dir|
+          out = `cd #{dir} && ruby -I #{lib} #{exe} tool config --app-path --help 2>&1`
+
+          expect($?.exitstatus).to eq(0), out
+          expect(out).to start_with("rails_get_config")
+        end
+      end
     end
 
     it "names inspect as it is typed when it is given an argument it does not take" do

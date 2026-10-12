@@ -240,6 +240,11 @@ class RailsAiContextCLI < Thor
 
       # Value-taking class options land in args too.
       @app_path_override = extract_value_flag!(args, "--app-path")
+      # `--app-path --help` names no path: the flag took the help flag for its value.
+      if %w[--help -h].include?(@app_path_override)
+        @app_path_override = nil
+        args << "--help"
+      end
 
       if args.include?("--help") || args.include?("-h")
         # The app's configuration file says which tools and sections it serves; reading it boots nothing.

@@ -24,7 +24,7 @@ RSpec.describe RailsAiContext::Tools::Query do
   def fake_family(adapter_name)
     allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)
     [ RailsAiContext::DatabaseFamily::MysqlRuntime, RailsAiContext::DatabaseFamily::PostgresqlRuntime ].each do |runtime|
-      allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {})
+      allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {}, traced_views: [], schemas_named: [])
       allow(runtime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
       allow(runtime).to receive(:relation_columns) { |connection| RailsAiContext::DatabaseFamily::SqliteRuntime.relation_columns(connection) }
     end
@@ -338,11 +338,10 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     context "production environment guard" do
-      it "blocks in production by default" do
+      it "blocks in production by default, as an error" do
         allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
         result = described_class.call(sql: "SELECT 1")
-        text = result.content.first[:text]
-        expect(text).to include("disabled in production")
+        expect([ result.error?, result.content.first[:text] ]).to match([ true, a_string_including("disabled in production") ])
       end
 
       it "allows in production when config overrides" do
@@ -563,6 +562,28 @@ RSpec.describe RailsAiContext::Tools::Query do
       writer&.close
     end
 
+    it "answers a database another process keeps locked as locked, from the reads before the statement and from the child" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        $stdout.puts "locked"
+        $stdout.flush
+        sleep 30
+      RUBY
+      expect(writer.gets).to eq("locked\n")
+
+      response = described_class.call(sql: "SELECT count(*) AS n FROM nums")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished." ]
+      )
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 1) }
+        .to raise_error(RailsAiContext::DatabaseFamily::Busy)
+    ensure
+      Process.kill(:KILL, writer.pid) if writer
+      writer&.close
+    end
+
     it "reruns in-process, without a time limit, what only the app connection can answer" do
       conn.raw_connection.create_function("rac_twice", 1) { |func, x| func.result = x * 2 }
       text = described_class.call(sql: "SELECT rac_twice(n) AS t FROM nums ORDER BY n").content.first[:text]
@@ -670,6 +691,148 @@ RSpec.describe RailsAiContext::Tools::Query do
 
   # Where there is no fork (Windows), a file-backed database gets no
   # timeout: the query runs in this process, and the answer says so.
+  describe "SQLite tables that hold another table's rows or words, on a file-backed database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:marker) { "MARKER7f3a" }
+    let(:conn) do
+      stub_const("QueryIndexTablesSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryIndexTablesSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QueryIndexTablesSpecRecord.connection.tap do |c|
+        [ "CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT, api_token TEXT)",
+          "INSERT INTO accounts VALUES (1, 'a@example.com', '#{marker}')",
+          "CREATE VIRTUAL TABLE docs USING fts5(title, api_token)",
+          "INSERT INTO docs VALUES ('hello', '#{marker}')",
+          "CREATE VIRTUAL TABLE docs_words USING fts5vocab(docs, row)",
+          "CREATE VIRTUAL TABLE notes USING fts5(title, body)",
+          "INSERT INTO notes VALUES ('plain', 'ordinary words')",
+          "CREATE VIRTUAL TABLE notes_words USING fts5vocab('notes', 'row')",
+          "CREATE TABLE notes_archive (id INTEGER, title TEXT)",
+          "INSERT INTO notes_archive VALUES (7, 'kept')",
+          "CREATE VIEW note_rows AS SELECT c1 AS body FROM notes_content",
+          "CREATE VIEW pages AS SELECT data FROM sqlite_dbpage" ].each { |sql| c.execute(sql) }
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryIndexTablesSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    def refused(sql, text)
+      expect(answer(sql)).to eq([ true, text ]), sql
+    end
+
+    it "never reads the database file's raw pages" do
+      [ "SELECT CAST(substr(data, instr(data, 'MARKER'), 20) AS TEXT) AS v FROM sqlite_dbpage WHERE instr(data, 'MARKER') > 0",
+        "SELECT pgno FROM SQLITE_DBPAGE('main')", "SELECT 'sqlite_dbpage' AS v" ].each do |sql|
+        refused(sql, "Blocked: `sqlite_dbpage` is not read: it returns the database file's raw pages, and every stored value is in them.")
+      end
+    end
+
+    it "never reads a shadow table, and names the virtual table to query" do
+      [ "SELECT * FROM notes_content", "SELECT c1 AS v FROM NOTES_CONTENT", "SELECT block FROM \"notes_data\"", "SELECT term FROM notes_idx" ].each do |sql|
+        table = sql[/notes_\w+/i].downcase
+        refused(sql, "Blocked: `#{table}` is not read: it is a shadow table, where SQLite keeps what the virtual table `notes` " \
+                     "stores under other column names. Query `notes`.")
+      end
+      refused("SELECT * FROM docs_content",
+              "Blocked: `docs_content` is not read: it is a shadow table, where SQLite keeps what the virtual table `docs` stores under other column names.")
+    end
+
+    it "refuses a view over a shadow table and over the raw pages" do
+      refused("SELECT body FROM note_rows", "Blocked: the view `note_rows` is not queried: its definition reads `notes_content`, which is not read. " \
+                                            "A view can rename a column past the redaction on SQLite, so query the tables it reads.")
+      expect(answer("SELECT * FROM pages").last).to start_with("Blocked: the view `pages` is not queried: its definition reads `sqlite_dbpage`")
+    end
+
+    it "refuses the vocabulary of a virtual table that holds a secret column, and the virtual table whole" do
+      refused("SELECT term FROM docs_words",
+              "Blocked: `docs_words` is not read: it lists the words of the full-text table `docs`, which holds the secret column `api_token`.")
+      [ "SELECT highlight(docs, 1, '', '') AS h FROM docs", "SELECT snippet(docs, 1, '', '', '', 8) AS s FROM docs",
+        "SELECT count(*) AS n FROM docs WHERE docs MATCH 'marker*'", "SELECT title FROM docs" ].each do |sql|
+        refused(sql, "Blocked: `docs` is not read: it is a virtual table that holds the secret column `api_token`, and a search or a " \
+                     "function over a virtual table reads a column by its position, with no name written.")
+      end
+    end
+
+    it "runs dbstat, a full-text table with no secret column, its vocabulary, and a table that only shares its prefix" do
+      # A SQLite built without dbstat has no such table to run.
+      sizes = conn.select_values("SELECT name FROM pragma_module_list").include?("dbstat") ? { "SELECT name, sum(pgsize) AS bytes FROM dbstat GROUP BY name" => "accounts" } : {}
+      { **sizes,
+        "SELECT title, body FROM notes WHERE notes MATCH 'ordinary'" => "ordinary words",
+        "SELECT highlight(notes, 1, '<', '>') AS h FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",
+        "SELECT snippet(notes, 1, '<', '>', '', 8) AS s FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",
+        "SELECT title FROM notes" => "plain",
+        "SELECT term FROM notes_words ORDER BY term" => "ordinary",
+        "SELECT id, title FROM notes_archive" => "kept" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+    end
+
+    it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
+      allow(conn).to receive(:database_version).and_return(ActiveRecord::ConnectionAdapters::AbstractAdapter::Version.new("3.36.0"))
+      expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
+      expect(answer("SELECT id FROM notes_archive").last).to start_with("Blocked: `notes_archive` is not read: it is a shadow table")
+      expect(answer("SELECT id, email FROM accounts").first).to be(false)
+    end
+  end
+
+  describe "SQLite tables in the temp schema and in an attached database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QuerySchemasSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QuerySchemasSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QuerySchemasSpecRecord.connection.tap do |c|
+        [ "CREATE TABLE notes (id INTEGER, body TEXT)", "INSERT INTO notes VALUES (1, 'kept')",
+          "ATTACH DATABASE '#{File.join(dir, "other.sqlite3")}' AS other",
+          "CREATE TABLE other.vault (id INTEGER, email TEXT, door_token TEXT)", "INSERT INTO other.vault VALUES (1, 'v@example.com', 'door-value')",
+          "CREATE TEMP TABLE scratch (id INTEGER, pin_token TEXT)", "INSERT INTO scratch VALUES (1, 'pin-value')",
+          "CREATE TEMP VIEW peek AS SELECT door_token AS d FROM other.vault" ].each { |sql| c.execute(sql) }
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QuerySchemasSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "refuses a statement that names a secret column of either, as it does for a table of the main database" do
+      { "SELECT door_token AS d FROM other.vault" => "door_token", "SELECT upper(door_token) AS d FROM vault" => "door_token",
+        "SELECT pin_token AS p FROM scratch" => "pin_token", "SELECT id FROM temp.scratch WHERE pin_token LIKE 'pin%'" => "pin_token" }.each do |sql, column|
+        expect(answer(sql)).to match([ true, a_string_starting_with("Blocked: query references secret column `#{column}`") ]), sql
+      end
+      expect(answer("SELECT * FROM peek")).to match([ true, a_string_starting_with("Blocked: the view `peek` is not queried: its definition names the secret column `door_token`") ])
+    end
+
+    it "filters a secret column of either in place, and runs a statement that reads none" do
+      expect(answer("SELECT * FROM other.vault")).to match([ false, a_string_including("v@example.com", "[FILTERED]") ])
+      expect(answer("SELECT * FROM other.vault").last).not_to include("door-value")
+      expect(answer("SELECT n.body, v.email FROM notes n JOIN other.vault v ON v.id = n.id")).to match([ false, a_string_including("kept", "v@example.com") ])
+      expect(answer("SELECT id FROM scratch")).to match([ false, a_string_including("| 1") ])
+    end
+  end
+
   describe "SQLite on a file-backed database where the platform has no fork" do
     let(:dir) { Dir.mktmpdir }
     let(:conn) do
@@ -888,10 +1051,21 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).to include("full table scan").or include("SCAN")
     end
 
-    it "rejects non-SELECT queries with explain" do
-      result = described_class.call(sql: "SHOW tables", explain: true)
-      text = result.content.first[:text]
-      expect(text).to include("EXPLAIN only supports SELECT")
+    it "says what explain takes for a statement that is no SELECT, and that an EXPLAIN is one already" do
+      expect(described_class.call(sql: "SHOW tables", explain: true).content.first[:text])
+        .to eq("`explain: true` takes a SELECT or WITH statement and explains it.")
+      [ "EXPLAIN SELECT 1 AS test", "explain query plan SELECT 1 AS test" ].each do |sql|
+        response = described_class.call(sql: sql, explain: true)
+        expect([ response.error?, response.content.first[:text] ]).to eq(
+          [ true, "The statement is already an EXPLAIN. `explain: true` takes a SELECT or WITH statement and explains it." ]
+        ), sql
+      end
+    end
+
+    it "ends an SQL error where the database's message ends, with no colon after it" do
+      expect(described_class.call(sql: "SELECT id FROM no_such_table").content.first[:text]).to eq("SQL error: SQLite3::SQLException: no such table: no_such_table")
+      expect(described_class.call(sql: "SELECT id FROM no_such_table", explain: true).content.first[:text])
+        .to eq("EXPLAIN failed: SQLite3::SQLException: no such table: no_such_table")
     end
 
     it "does not apply row limit to EXPLAIN output" do
@@ -951,7 +1125,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "issues EXPLAIN FORMAT=TRADITIONAL (not the bare EXPLAIN MySQL 8.3+/9.x would render as TREE)" do
-      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:mariadb?).and_return(false)
+      without_partial_double_verification { allow(ActiveRecord::Base.connection).to receive(:mariadb?).and_return(false) }
       explain_result = ActiveRecord::Result.new(
         %w[id select_type table type possible_keys key key_len ref rows filtered Extra],
         [ [ 1, "SIMPLE", "products", "ALL", nil, nil, nil, nil, 5, 100.0, "" ] ]
@@ -1031,10 +1205,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     it "escapes newlines in cell values" do
       columns = %w[id note]
       rows = [ [ 1, "line1\nline2" ] ]
-      mock_result = ActiveRecord::Result.new(columns, rows)
-
-      allow(ActiveRecord::Base.connection).to receive(:select_all).and_return(mock_result)
-      allow(ActiveRecord::Base.connection).to receive(:execute)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+        .and_return(RailsAiContext::DatabaseFamily::Rows.new(columns, rows, false))
 
       result = described_class.call(sql: "SELECT id, note FROM notes", format: "csv")
       text = result.content.first[:text]
@@ -1183,15 +1355,20 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(took).to be_between(1.2, 2.2)
     end
 
-    it "answers the timeout when the reads beside the statement used all of theirs" do
+    it "says the reads before the statement took the time and the statement was not run, when they used all of theirs" do
       RailsAiContext.configuration.query_timeout = 0.3
       allow(described_class).to receive(:cached_context).and_return({})
       allow(runtime).to receive(:relation_columns).and_wrap_original { |original, conn| sleep(0.4) && original.call(conn) }
+      allow(runtime).to receive(:read_only).and_call_original
 
       response, took = timed
 
       expect(response.error?).to be(true)
-      expect(response.content.first[:text]).to start_with("Query exceeded 0.3 second timeout")
+      expect(response.content.first[:text]).to eq(
+        "The reads rails_query makes before a statement (the columns of the schema, and on PostgreSQL the statement's plan) " \
+        "took the whole 0.3 second timeout, so the statement was not run."
+      )
+      expect(runtime).not_to have_received(:read_only)
       expect(took).to be < 1.2
     end
   end
@@ -1314,6 +1491,31 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "SQLite pragma functions and counters of the connection" do
+    def answer(sql)
+      response = described_class.call(sql: sql)
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "runs a pragma function that describes the schema or the database file" do
+      ActiveRecord::Base.connection.create_table(:rac_pragma_rows, force: true) { |t| t.string :label }
+      expect(answer("SELECT name FROM pragma_table_info('rac_pragma_rows') ORDER BY cid")).to match([ false, a_string_including("| label") ])
+      expect(answer("SELECT page_size FROM pragma_page_size")).to match([ false, a_string_matching(/\| \d+/) ])
+    ensure
+      ActiveRecord::Base.connection.drop_table(:rac_pragma_rows, if_exists: true)
+    end
+
+    it "refuses a pragma function and a counter that tell of the connection, which is the tool's own" do
+      { "SELECT * FROM pragma_foreign_keys" => "pragma_foreign_keys", "SELECT timeout FROM PRAGMA_BUSY_TIMEOUT" => "pragma_busy_timeout",
+        %(SELECT * FROM "pragma_cache_size") => "pragma_cache_size", "SELECT changes() AS n" => "changes",
+        "SELECT total_changes () AS n" => "total_changes", "SELECT last_insert_rowid() AS id" => "last_insert_rowid" }.each do |sql, name|
+        expect(answer(sql)).to eq([ true, "Blocked: `#{name}` tells of the connection that runs it. rails_query runs a statement on a connection of its " \
+          "own and sets some of that connection's values itself, so the answer would not be the app's. A pragma function that describes the schema or " \
+          "the database file runs, for example `pragma_table_info`." ]), sql
+      end
+    end
+  end
+
   describe "a literal that reads like an injection or a locking clause" do
     it "runs a literal holding OR 1=1" do
       response = described_class.call(sql: "SELECT 'a' AS v WHERE 'x' LIKE '%OR 1=1%' OR 1 = 1")
@@ -1374,7 +1576,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       {
         "renamed" => "the view `renamed` is not queried: its definition names the secret column `passwd`",
         "nested" => "the view `nested` is not queried: it reads the view `renamed`",
-        "everything" => "the view `everything` is not queried: its definition reads every column of `accounts`"
+        "everything" => "the view `everything` is not queried: its definition has a wildcard and names `accounts`"
       }.each do |view, reason|
         response = answer("SELECT * FROM #{view}")
         expect(response.error?).to be(true), view
@@ -1440,7 +1642,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         response = answer(sql)
         expect(response.error?).to be(true), sql
         expect(response.content.first[:text]).to start_with(
-          "Blocked: a `*` inside a subquery reads every column of `accounts`, which holds the secret column `passwd`. On SQLite"
+          "Blocked: a `*` inside a subquery is not run in a statement that names `accounts`, which holds the secret column `passwd`. On SQLite"
         ).and(end_with("so name the columns in the subquery.")), sql
       end
     end
@@ -1462,6 +1664,13 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "returns a generated column of a table that holds no secret column" do
       expect(text("SELECT size FROM notes")).to include("| 5")
+    end
+
+    it "returns a generated column that reads no secret column, beside two on the same table that read one" do
+      expect(text("SELECT shout AS s FROM accounts")).to include("| A@EXAMPLE.COM")
+      everything = text("SELECT * FROM accounts")
+      expect(everything).to include("A@EXAMPLE.COM")
+      expect(everything.scan("[FILTERED]").size).to eq(3)
     end
 
     it "releases a view and a generated column over a column the app allows" do
@@ -1497,10 +1706,22 @@ RSpec.describe RailsAiContext::Tools::Query do
       response.content.first[:text]
     end
 
-    it "answers planning's timeout as the timeout and runs nothing" do
+    it "answers planning's timeout as the reads before the statement, and runs nothing" do
       allow(runtime).to receive(:plan).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "canceling statement due to statement timeout")
-      expect(answer).to start_with("Query exceeded 5 second timeout")
-      expect(answer(explain: true)).to start_with("Query exceeded 5 second timeout")
+      [ answer, answer(explain: true) ].each do |text|
+        expect(text).to start_with("The reads rails_query makes before a statement").and end_with("took the whole 5 second timeout, so the statement was not run.")
+      end
+    end
+
+    it "says the statement ran when the trace of its columns ran out of time" do
+      allow(runtime).to receive(:plan).and_return("Node Type" => "Result")
+      allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
+      allow(runtime).to receive(:column_sources).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "canceling statement due to statement timeout")
+      response = described_class.call(sql: "SELECT 1 AS x")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "The statement ran, and the read that traces its result columns to their table columns took what was left of the " \
+                "5 second timeout the reads beside a statement share, so its rows are not shown." ]
+      )
     end
 
     it "answers planning's error as the SQL error and runs nothing" do
@@ -1548,6 +1769,37 @@ RSpec.describe RailsAiContext::Tools::Query do
         { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_query", arguments: arguments } }
       )[:result]
       [ result[:content].first[:text], result[:isError] ]
+    end
+
+    it "answers the production guard with a non-zero exit on the CLI and isError over MCP" do
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
+      guard = [ "rails_query is disabled in production for data privacy. Set config.allow_query_in_production = true to override.", true ]
+
+      expect(cli("sql=SELECT 1")).to eq(guard)
+      expect(mcp(sql: "SELECT 1")).to eq(guard)
+    end
+
+    it "answers a locked SQLite database as locked, with no word of a timeout, for a query and for its EXPLAIN" do
+      busy = begin
+        begin
+          raise SQLite3::BusyException, "database is locked"
+        rescue SQLite3::BusyException
+          raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
+        end
+      rescue ActiveRecord::StatementInvalid => e
+        e
+      end
+      locked = [ "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished.", true ]
+
+      allow(ActiveRecord::Base.connection).to receive(:select_all).and_wrap_original do |original, sql, *rest, **options|
+        sql.to_s.match?(/FROM users/) ? raise(busy) : original.call(sql, *rest, **options)
+      end
+      expect(cli("sql=SELECT id FROM users")).to eq(locked)
+      expect(cli("sql=SELECT id FROM users", "explain=true")).to eq(locked)
+      expect(mcp(sql: "SELECT id FROM users")).to eq(locked)
+
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:relation_columns).and_raise(busy)
+      expect(mcp(sql: "SELECT 1 AS one")).to eq(locked)
     end
 
     it "answers a failing EXPLAIN with a non-zero exit on the CLI and isError over MCP" do
