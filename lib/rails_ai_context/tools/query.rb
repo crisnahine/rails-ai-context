@@ -96,9 +96,7 @@ module RailsAiContext
       rescue DatabaseFamily::TimedOut
         text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
-        # Only a missing DATABASE: PostgreSQL words a missing column and table
-        # the same way, and those are real SQL errors. A missing database stays
-        # informational, the question answerable, just not now.
+        # Only a missing DATABASE: PostgreSQL words a missing column and table the same way, and those are SQL errors.
         if e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
           text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
         else
@@ -112,7 +110,7 @@ module RailsAiContext
         family = DatabaseFamily.of(connection)
         unless family.known?
           return error_response(
-            "rails_query refuses the #{family.name} adapter: it runs SQL only on an engine whose read-only " \
+            "rails_query refuses the #{family.name} adapter: it runs SQL only on a database whose read-only " \
             "transaction and statement timeout it knows (PostgreSQL, MySQL with MariaDB, SQLite). No statement was sent."
           )
         end
@@ -279,22 +277,17 @@ module RailsAiContext
       end
 
       # ── Column redaction (Layer 4) ──────────────────────────────────
-      # Redact a column by the secret column rule applied to its output name,
-      # and to the table column it reads where the family can say, so a secret
-      # column reaches [FILTERED] whatever name it was given. An `encrypts`
-      # column is filtered even when the app allows its name. A source whose
-      # column name could not be read is filtered when its relation holds a
-      # secret column, or, with the relation unknown too, any does.
+      # A column is filtered when its output name or the table column it reads is secret. A source
+      # whose column could not be read is filtered when its relation, or any relation, holds a secret.
       private_class_method def self.redact_results(result, secrets, sources)
         columns = result.columns
         rows = result.rows
-        hidden = ->(name) { secrets.secret?(name) || secrets.encrypted?(name) }
         provenance = sources.filter_map do |i, column, relation|
           unread = column.nil? && (relation ? secrets.relation_secret?(relation) : secrets.in_schema.any?)
-          i if unread || hidden.call(column)
+          i if unread || secrets.secret?(column)
         end
 
-        redacted_indices = columns.each_index.select { |i| provenance.include?(i) || hidden.call(columns[i]) }
+        redacted_indices = columns.each_index.select { |i| provenance.include?(i) || secrets.secret?(columns[i]) }
 
         return result if redacted_indices.empty?
 

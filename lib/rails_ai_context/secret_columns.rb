@@ -33,12 +33,18 @@ module RailsAiContext
     # Cached per run and database: one schema read however many checks ask.
     def self.for(connection, context: nil)
       RunCache.fetch([ :secret_columns, database_key(connection) ]) do
-        new(
-          relations: relations_from(connection) || relations_from(context) || {},
-          encrypted: encrypted_from(context)
-        )
+        # The context's schema is the primary's, so no other database falls back to it.
+        relations = relations_from(connection) || (relations_from(context) if primary?(connection)) || {}
+        new(relations: relations, encrypted: encrypted_from(context))
       end
     end
+
+    def self.primary?(connection)
+      connection.pool.db_config.name == ActiveRecord::Base.connection_db_config.name
+    rescue StandardError
+      false
+    end
+    private_class_method :primary?
 
     def self.database_key(connection)
       db_config = connection.pool.db_config
@@ -89,15 +95,16 @@ module RailsAiContext
         acc[relation.to_s.downcase] = flagged.uniq unless flagged.empty?
       end
       @in_schema = @by_relation.values.flatten.uniq.freeze
-      @named = ((@redacted.to_a - @allowed.to_a) | @in_schema).map { |c| [ c, /\b#{Regexp.escape(c)}\b/ ] }
+      @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, /\b#{Regexp.escape(c)}\b/ ] }
     end
 
     def secret?(name)
       down = name.to_s.downcase
-      return false if down.empty? || @allowed.include?(down)
+      return false if down.empty?
+      return true if @encrypted.include?(down)
+      return false if @allowed.include?(down)
 
-      @redacted.include?(down) || @encrypted.include?(down) || heuristic?(down) ||
-        RailsAiContext::Redaction.secret_name?(down)
+      @redacted.include?(down) || heuristic?(down) || RailsAiContext::Redaction.secret_name?(down)
     end
 
     def encrypted?(name)
