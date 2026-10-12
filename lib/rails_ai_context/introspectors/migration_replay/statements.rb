@@ -113,6 +113,7 @@ module RailsAiContext
 
         POSTGRES_ADAPTER = /postg/i
         MYSQL_ADAPTER = /mysql|trilogy/i
+        SQLITE_ADAPTER = /sqlite/i
 
         # A declared type and its sizes as the dump writes them (each adapter's type_to_sql and schema_precision, 7.0 to 8.1).
         def dumped_type(type, options, adapter)
@@ -198,7 +199,7 @@ module RailsAiContext
         def change_column(col, entry, adapter = nil)
           return unless col
 
-          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry, adapter).merge(col.slice(:primary_key))) if adapter.to_s.start_with?("sqlite")
+          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry, adapter).merge(col.slice(:primary_key))) if adapter.to_s.match?(SQLITE_ADAPTER)
 
           opts = entry[:options] || {}
           col[:type], sizes = dumped_type(entry[:column_type] || col[:type], opts, adapter)

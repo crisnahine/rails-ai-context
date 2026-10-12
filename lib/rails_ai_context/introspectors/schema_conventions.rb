@@ -13,8 +13,8 @@ module RailsAiContext
     module SchemaConventions
       module_function
 
-      # The implicit key's default, an id: hash's over create_table's own; of an expression
-      # no literal carries, only a proc's text, which is all a dump writes.
+      # The default create_table gives its implicit key: `id: { default: }` wins over `default:`, and
+      # an expression counts only as a proc's text, the one form a dump writes.
       def key_default(options, event)
         id = options[:id]
         value = id.is_a?(Hash) && id.key?(:default) ? id[:default] : options[:default]

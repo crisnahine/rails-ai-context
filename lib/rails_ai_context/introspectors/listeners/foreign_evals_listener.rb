@@ -6,7 +6,7 @@ module RailsAiContext
       # The blocks a class body evaluates on another receiver (`translation_class.class_eval do`),
       # each with the source of every outermost call, by the line it starts on.
       class ForeignEvalsListener < BaseListener
-        Block = Struct.new(:receiver, :lines, :length, :calls)
+        Block = Struct.new(:receiver, :lines, :span, :calls)
 
         def initialize
           super

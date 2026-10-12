@@ -335,7 +335,7 @@ module RailsAiContext
             **column_detail(table, col, bigint),
             comment: col.comment
           }
-          # A function default as the dump writes it: PostgreSQL's leaves out only a serial column's own sequence.
+          # A generated column's expression, else a function default as the dump writes it (PostgreSQL's leaves out a serial's sequence).
           if col.respond_to?(:virtual?) && col.virtual?
             entry[:generated] = (col.default_function || declared_generated(table, col.name)).to_s
             entry[:stored] = stored_generated?(col)

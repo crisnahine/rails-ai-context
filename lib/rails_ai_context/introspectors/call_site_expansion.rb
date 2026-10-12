@@ -151,7 +151,7 @@ module RailsAiContext
 
           [ key, found.reject do |entry|
             line = entry.is_a?(Hash) && entry[:location]
-            block = line && blocks.select { |candidate| candidate.lines.cover?(line) }.min_by(&:length)
+            block = line && blocks.select { |candidate| candidate.lines.cover?(line) }.min_by(&:span)
             next false unless block
 
             lines[line] ||= [ block, entry[:text].to_s ]

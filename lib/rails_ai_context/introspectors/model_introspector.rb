@@ -308,10 +308,8 @@ module RailsAiContext
         outside_model_base?(class_name, candidates)
       end
 
-      # A parent the app does not define (a gem's `ActsAsTaggableOn::Tag`) is an ActiveRecord
-      # base when the schema holds a table it gives the class (ActiveHash declares has_many too);
-      # with no schema to ask, or another database's dump that may hold it, when the class
-      # declares associations or scopes on it.
+      # A gem parent (`ActsAsTaggableOn::Tag`, not ActiveHash) is an ActiveRecord base when the schema holds
+      # a table it gives the class; failing that, or with no schema, when the class declares associations or scopes.
       def outside_model_base?(class_name, candidates)
         candidate = candidates[class_name]
         return false unless candidate[:path]
@@ -1683,7 +1681,7 @@ module RailsAiContext
       end
 
       # `<Plugin>::Patches::<Model>Patch` modules under the app's and its in-repo gems' lib/: an engine
-      # includes them in to_prepare (OpenProject's `patches`), which no line the static walk follows says.
+      # includes them in to_prepare (OpenProject's `patches`), outside any file the static walk reads.
       def unread_patches(class_name, mixins)
         included = Array(mixins).map { |m| m[:name].to_s.delete_prefix("::") }
         patch_index.fetch(class_name, []) - included
