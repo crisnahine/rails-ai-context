@@ -964,7 +964,7 @@ rails_get_service_pattern(detail: "full")
   → All services with methods, initialize params, side effects, and rescue blocks
 ```
 
-**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing rather than counted as a service; asking for it by name still answers.
+**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing rather than counted as a service; asking for it by name still answers. When the service directories hold more Ruby files than the listing counts, one line says how many were left out and of which kind.
 
 ### rails_get_job_pattern
 
@@ -1451,7 +1451,7 @@ end
 | `context_files` | Boolean | `true` | Set `false` for an MCP-only install: no CLAUDE.md, AGENTS.md, rules files or `.ai-context.json` are written |
 | `frontend_paths` | Array | `nil` (auto-detected) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for manifests only |
 | `extra_app_paths` | Array | `[]` | More app-root-relative directories that hold Rails app code. Each one's `app/models`, `app/controllers` and `app/views` are scanned |
-| `query_timeout` | Integer | `5` | `rails_query` statement timeout in seconds |
+| `query_timeout` | Number | `5` | `rails_query` statement timeout in seconds, a positive number |
 | `query_row_limit` | Integer | `100` | Max rows `rails_query` returns (1 to 1000) |
 | `query_redacted_columns` | Array | `password_digest`, `encrypted_password`, tokens, etc. | Column names `rails_query` refuses: a query naming one is rejected before it runs, and a returned column of that name comes back `[FILTERED]` |
 | `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in secret column names. It does not release an `encrypts` column |

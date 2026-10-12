@@ -136,7 +136,7 @@ module RailsAiContext
             db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
             # Every database the app's own dumps declare, as rails_get_schema reads them.
             own_secondary_databases(ctx, schema).each do |other|
-              db += ", plus the #{other[:name]} database#{" on #{other[:adapter]}" if other[:adapter]} (#{count_phrase(other[:tables], 'table')})"
+              db += ", plus the #{other[:name]} database#{Payload.named_database_scope(ctx, other[:name])}#{" on #{other[:adapter]}" if other[:adapter]} (#{count_phrase(other[:tables], 'table')})"
             end
           elsif RailsAiContext::AppKind.mongoid?(rails_app.root)
             database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
@@ -153,7 +153,8 @@ module RailsAiContext
             frameworks = solid.values.uniq
             keep = frameworks.one? ? "keeps its" : "keep their"
             place = solid.one? ? "a database of its own" : "databases of their own"
-            lines << "#{frameworks.to_sentence(last_word_connector: " and ")} #{keep} tables in #{place}: #{solid.keys.join(", ")}."
+            names = solid.keys.map { |name| "#{name}#{Payload.named_database_scope(ctx, name)}" }
+            lines << "#{frameworks.to_sentence(last_word_connector: " and ")} #{keep} tables in #{place}: #{names.join(", ")}."
           end
           unread = unread_bundle(rails)
           lines << unread if unread

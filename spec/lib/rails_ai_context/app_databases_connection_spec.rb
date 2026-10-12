@@ -157,6 +157,26 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
       end
     end
 
+    it "gives a leased server connection query_timeout to connect in, unless its entry sets its own, and SQLite none" do
+      seen = []
+      allow_any_instance_of(ActiveRecord::ConnectionAdapters::ConnectionHandler).to receive(:establish_connection)
+        .and_wrap_original do |original, config, **options|
+          seen << config.configuration_hash[:connect_timeout]
+          original.call(config, **options)
+        end
+      RailsAiContext.configuration.query_timeout = 2.5
+      own = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "slow", { adapter: "sqlite3", database: sqlite_file("slow"), connect_timeout: 9 })
+      server = ->(name, entry) { described_class.new(**databases(name => entry).fetch(name).to_h, family: RailsAiContext::DatabaseFamily::MYSQL) }
+
+      server.call("queue", config(Rails.env, "queue", sqlite_file("queue"))).with_connection { nil }
+      server.call("slow", own).with_connection { nil }
+      databases("cache" => config(Rails.env, "cache", sqlite_file("cache"))).fetch("cache").with_connection { nil }
+
+      expect(seen).to eq([ 3, 9, nil ])
+    ensure
+      RailsAiContext.configuration.query_timeout = 5
+    end
+
     it "hands an error the block raises back as it is" do
       list = databases("queue" => config(Rails.env, "queue", sqlite_file("queue")))
 

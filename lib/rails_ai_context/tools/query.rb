@@ -53,9 +53,8 @@ module RailsAiContext
 
       HARD_ROW_CAP = 1000
 
-      # SHOW/DESCRIBE/EXPLAIN return schema metadata, never application rows:
-      # a LIMIT appended to them is a syntax error, and MySQL's DESCRIBE has a
-      # column named "Key" that name redaction would filter into uselessness.
+      # SHOW/DESCRIBE/EXPLAIN return schema metadata: a LIMIT appended to them is a syntax error,
+      # and name redaction would filter the "Key" column of MySQL's DESCRIBE.
       SCHEMA_METADATA_PREFIX = /\A\s*(SHOW|DESCRIBE|DESC|EXPLAIN)\b/i
 
       # The session record is echoed back to the model; a full query body can
@@ -91,17 +90,14 @@ module RailsAiContext
         AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain) }
       rescue AppDatabases::Error => e
         error_response(e.message)
-      rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
-        text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
+      rescue ActiveRecord::ConnectionNotEstablished => e
+        # The lease checked the connection answers, so this one was lost while the statement ran.
+        name = database.to_s.empty? ? ActiveRecord::Base.connection_db_config.name : database
+        error_response("The #{name} database stopped answering during the query: #{clean_error_message(e.message)}")
       rescue DatabaseFamily::TimedOut
-        text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
+        error_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
-        # Only a missing DATABASE: PostgreSQL words a missing column and table the same way, and those are SQL errors.
-        if e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
-          text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
-        else
-          error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
-        end
+        error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
       rescue => e
         error_response("Query failed: #{clean_error_message(e.message)}")
       end
@@ -115,9 +111,11 @@ module RailsAiContext
           )
         end
 
-        secrets = SecretColumns.for(connection, context: cached_context)
+        # The statement has query_timeout to itself. Every other read the call sends shares a second one.
         timeout = config.query_timeout
-        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, timeout: timeout).check(sql)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        secrets = family.bounded(connection, timeout: timeout) { SecretColumns.for(connection, context: cached_context) }
+        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, timeout: time_left(deadline)).check(sql)
         return error_response(verdict.refusal) if verdict.refused?
 
         sql = verdict.sql
@@ -134,7 +132,8 @@ module RailsAiContext
         elsif schema_metadata
           result
         else
-          redact_results(result, secrets, family.column_sources(connection, sql, plan: verdict.plan))
+          sources = family.bounded(connection, timeout: time_left(deadline)) { family.column_sources(connection, sql, plan: verdict.plan) }
+          redact_results(result, secrets, sources)
         end
 
         # The truncation note rides every format (for CSV after a blank line, so
@@ -148,6 +147,13 @@ module RailsAiContext
         end
 
         text_response(output)
+      end
+
+      private_class_method def self.time_left(deadline)
+        left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        raise DatabaseFamily::TimedOut, "the reads beside the statement used the whole timeout" unless left.positive?
+
+        left
       end
 
       MISSING_TABLE = /no such table: (?:\w+\.)?(\w+)|relation "(?:\w+\.)?(\w+)" does not exist|Table '(?:[^'.]+\.)?(\w+)' doesn't exist/i
@@ -222,10 +228,8 @@ module RailsAiContext
         error_response("EXPLAIN failed: #{clean_error_message(e.message)}")
       end
 
-      # ── Row limit enforcement (Layer 3) ─────────────────────────────
-      # The query's own limit ends the statement. A LIMIT anywhere else belongs
-      # to a subquery or a string literal and is left as written. LIMIT ALL,
-      # LIMIT NULL (PostgreSQL) and a negative limit (SQLite) are no limit at all.
+      # The query's own limit ends the statement; a LIMIT anywhere else belongs to a subquery or a literal.
+      # LIMIT ALL, LIMIT NULL (PostgreSQL) and a negative limit (SQLite) are no limit at all.
       TRAILING_LIMIT = /\bLIMIT\s+(?:(\d+)\s*,\s*)?(\d+|ALL|NULL|-\s*\d+)(\s+OFFSET\s+\d+)?\s*;?\s*\z/i
       TRAILING_FETCH = /\bFETCH\s+(FIRST|NEXT)\s+(\d+)(\s+ROWS?\s+ONLY)\s*;?\s*\z/i
 
@@ -276,7 +280,6 @@ module RailsAiContext
         ResultProxy.new(result.columns, result.rows.first(cap), unbounded, true)
       end
 
-      # ── Column redaction (Layer 4) ──────────────────────────────────
       # A column is filtered when its output name or the table column it reads is secret. A source
       # whose column could not be read is filtered when its relation, or any relation, holds a secret.
       private_class_method def self.redact_results(result, secrets, sources)
@@ -311,7 +314,6 @@ module RailsAiContext
         ResultProxy.new(result.columns, rows)
       end
 
-      # ── Output formatting ───────────────────────────────────────────
       private_class_method def self.format_table(result)
         columns = result.columns
         rows = result.rows

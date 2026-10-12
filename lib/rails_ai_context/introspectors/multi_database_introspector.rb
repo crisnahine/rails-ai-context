@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module RailsAiContext
   module Introspectors
     # Discovers multi-database configuration: multiple databases, replicas,

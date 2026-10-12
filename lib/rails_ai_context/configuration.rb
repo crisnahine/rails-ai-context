@@ -379,7 +379,7 @@ module RailsAiContext
     attr_accessor :extra_app_paths
 
     # Database query tool settings (rails_query)
-    attr_accessor :query_timeout              # Statement timeout in seconds (default: 5)
+    attr_reader :query_timeout                # Statement timeout in seconds, a positive number (default: 5)
     attr_reader :query_row_limit              # Max rows returned (default: 100, hard cap: 1000)
     attr_accessor :query_redacted_columns     # Column names a query may not reference, redacted in output
     attr_accessor :query_allowed_columns      # Column names to exempt from the built-in sensitive list
@@ -522,6 +522,16 @@ module RailsAiContext
       value = value.to_i
       raise ArgumentError, "max_tool_response_chars must be positive (got #{value})" unless value > 0
       @max_tool_response_chars = value
+    end
+
+    # A fraction of a second is kept as given: each database family rounds it up to the least it can bound.
+    def query_timeout=(value)
+      number = value.is_a?(String) ? Integer(value, exception: false) || Float(value, exception: false) : value
+      unless number.is_a?(Numeric) && number.positive? && number.finite?
+        raise ArgumentError, "query_timeout must be positive (got #{value})"
+      end
+
+      @query_timeout = number
     end
 
     def query_row_limit=(value)

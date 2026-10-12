@@ -442,10 +442,9 @@ module RailsAiContext
         secondary = schema[:secondary_databases]
         return [] unless secondary
 
-        configured = Payload.list(ctx, :multi_database, :databases).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          label = "**#{name}**#{Payload.database_scope(configured[name.to_s])}"
+          label = "**#{name}**#{Payload.named_database_scope(ctx, name)}"
           next lines << "- #{label}: #{db[:note]}" if db[:tables].blank?
 
           pending = Array(db[:pending_migrations])

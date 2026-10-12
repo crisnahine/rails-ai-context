@@ -199,7 +199,7 @@ fits neither that shape nor the conventional one.
 
 | Option | Type | Default | Validation | Description |
 |:-------|:-----|:--------|:-----------|:------------|
-| `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
+| `query_timeout` | Number | `5` | positive | SQL query timeout in seconds. A fraction of a second is allowed |
 | `query_row_limit` | Integer | `100` | 1 to 1000 | Maximum rows returned |
 | `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected, on top of a fixed built-in list (see [SECURITY.md](SECURITY.md)) |
 | `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in secret column names and from `query_redacted_columns`. It does not release an `encrypts` column |
