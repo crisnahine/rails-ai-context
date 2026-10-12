@@ -1411,6 +1411,47 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).not_to include("page_params` _(from ApplicationController)_")
     end
 
+    it "lists a *_params method that returns its parent's strong params method, whatever that one is named" do
+      files = {
+        "app/controllers/application_controller.rb" => <<~RUBY,
+          class ApplicationController < ActionController::Base
+            private
+
+            def params_slice(*keys)
+              params.slice(*keys).permit(*keys)
+            end
+          end
+        RUBY
+        "app/controllers/replies_controller.rb" => <<~RUBY,
+          class RepliesController < ApplicationController
+            def index; end
+
+            private
+
+            def page_params
+              params_slice(:min_id).merge(page: true)
+            end
+          end
+        RUBY
+        "app/controllers/notes_controller.rb" => <<~RUBY
+          class NotesController < ApplicationController
+            def index; end
+
+            private
+
+            def params_slice(*keys) = keys
+
+            def page_params
+              params_slice(:min_id).merge(page: true)
+            end
+          end
+        RUBY
+      }
+
+      expect(answer_for(files, controller: "RepliesController")).to include("`page_params`")
+      expect(answer_for(files, controller: "NotesController")).not_to include("`page_params`")
+    end
+
     it "keeps a parent's strong params method when the child defines that name only as a class method or in a nested class" do
       files = {
         "app/controllers/application_controller.rb" => <<~RUBY,

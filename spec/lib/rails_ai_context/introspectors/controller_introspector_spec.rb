@@ -779,6 +779,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
                                                                         { name: "clean_params" }, { name: "account_update_params" } ])
     end
 
+    it "reads a *_params method that returns what another strong params method in the file does, whatever that one is named" do
+      source = <<~RUBY
+        def build_attrs
+          params.require(:post).permit(:title)
+        end
+
+        def post_params
+          build_attrs.merge(author_id: 1)
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source).map { |entry| entry[:name] }).to eq(%w[build_attrs post_params])
+    end
+
     it "leaves out a permit on something that is not params" do
       source = <<~RUBY
         def plug_params(app)

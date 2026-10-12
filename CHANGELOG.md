@@ -76,10 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `article_params_json`, which calls `permit`, did not. A method named
   `*_params` now counts when it calls `permit`, `permit!` or `expect` on
   params (directly, through a local or an ivar, on each item a block walks,
-  or on `ActionController::Parameters.new`), or when what it returns comes from
-  `super` (`super.merge(...)`), another strong params method (one this file
-  defines, or a parent's, a concern's or Pundit's `*_params` or
-  `permitted_*`, such as `permitted_attributes(@post)`, and Devise's
+  or on `ActionController::Parameters.new`), or when what it returns comes
+  from `super` (`super.merge(...)`), another strong params method (one this
+  file or a parent class defines, whatever its name, such as Mastodon's
+  `params_slice`; any other named `*_params` or `permitted_*`, such as a
+  concern's or Pundit's `permitted_attributes(@post)`; and Devise's
   `devise_parameter_sanitizer`), or a call given the whole params
   (`PermittedAttributes::Enterprise.new(params).call`); a `before_action`
   that writes into another one's params is not one. A method of any other

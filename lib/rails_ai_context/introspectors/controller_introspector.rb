@@ -224,16 +224,36 @@ module RailsAiContext
 
       # A parent's strong-params method is the child's too unless a nearer class defines that name.
       def inherited_strong_params(result, links)
-        nearer_defs = Set.new
-        links.each_with_object({}) do |(link, entry, source), by_name|
+        lineage = links.map do |link, entry, source|
+          source = controller_source(entry) if entry
           params = entry ? Array(entry[:strong_params]) : base_class_declarations(source, link)[:strong_params]
+          [ link, entry, source, params, defined_methods(source) ]
+        end
+        add_lineage_delegates(lineage)
+        nearer_defs = Set.new
+        lineage.each_with_object({}) do |(link, _entry, _source, params, defs), by_name|
           params.each do |sp|
             next unless sp.is_a?(Hash) && !nearer_defs.include?(sp[:name])
 
-            by_name[sp[:name]] ||= link == links.first.first ? sp : sp.merge(from: link)
+            by_name[sp[:name]] ||= link == lineage.first.first ? sp : sp.merge(from: link)
           end
-          nearer_defs.merge(defined_methods(entry ? controller_source(entry) : source))
+          nearer_defs.merge(defs)
         end.values
+      end
+
+      # A *_params method that returns a farther class's strong-params method is one too, whatever that
+      # method is named (`params_slice(:a).merge(page: true)`), unless a nearer class redefines it.
+      def add_lineage_delegates(lineage)
+        farther = Set.new
+        lineage.reverse_each do |row|
+          link, entry, source, params, defs = row
+          unnamed = farther.grep_v(DELEGATE_NAME)
+          if source && unnamed.any? { |name| source.include?(name) }
+            actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(source, class_name: link)
+            row[3] = params = extract_strong_params(source, class_body_walk(source), actions, unnamed.to_set)
+          end
+          farther = (farther - defs) | params.filter_map { |sp| sp[:name] if sp.is_a?(Hash) }
+        end
       end
 
       def controller_source(entry)
@@ -245,11 +265,13 @@ module RailsAiContext
         tree = source && AstCache.parse_string(source)&.value
         return [] unless tree
 
-        nodes = AstWalk.each(tree).to_a
-        elsewhere = nested_ranges(class_body_walk(source)) +
-                    nodes.grep(Prism::SingletonClassNode).map { |node| node.location.start_offset...node.location.end_offset }
-        nodes.grep(Prism::DefNode).filter_map do |def_node|
-          def_node.name.to_s if def_node.receiver.nil? && elsewhere.none? { |range| range.cover?(def_node.location.start_offset) }
+        (@defined_methods ||= {})[source] ||= begin
+          nodes = AstWalk.each(tree).to_a
+          elsewhere = nested_ranges(class_body_walk(source)) +
+                      nodes.grep(Prism::SingletonClassNode).map { |node| node.location.start_offset...node.location.end_offset }
+          nodes.grep(Prism::DefNode).filter_map do |def_node|
+            def_node.name.to_s if def_node.receiver.nil? && elsewhere.none? { |range| range.cover?(def_node.location.start_offset) }
+          end
         end
       end
 
@@ -763,7 +785,7 @@ module RailsAiContext
 
       # An action that permits inline is still an action, not a strong-params helper;
       # a public method named *_params is a helper left above `private`.
-      def extract_strong_params(source, walked = class_body_walk(source), actions = [])
+      def extract_strong_params(source, walked = class_body_walk(source), actions = [], inherited = Set.new)
         return [] if source.nil?
 
         nested = nested_ranges(walked)
@@ -773,7 +795,7 @@ module RailsAiContext
           nested.any? { |range| range.cover?(def_node.location.start_offset) } || (actions.include?(name) && !name.end_with?("_params"))
         end
         entries = defs.to_h { |def_node| [ def_node, strong_params_entry(def_node) ] }.compact
-        add_delegating_params(defs, entries, all_defs.to_set { |def_node| def_node.name.to_s })
+        add_delegating_params(defs, entries, all_defs.to_set { |def_node| def_node.name.to_s }, inherited)
         defs.filter_map { |def_node| entries[def_node] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
@@ -804,14 +826,16 @@ module RailsAiContext
 
       # A *_params method that returns what super, a call given the whole params, or another strong-params
       # method makes: one this file defines only when it is one, one it does not (a parent's, a concern's,
-      # Pundit's) taken at its *_params or permitted_* name.
-      def add_delegating_params(defs, entries, defined)
+      # Pundit's) taken at its *_params or permitted_* name, or named among the `inherited` ones.
+      def add_delegating_params(defs, entries, defined, inherited)
         chains = defs.to_h { |def_node| [ def_node, def_node.name.end_with?("_params") ? returned_chains(def_node.body) : [] ] }
         loop do
           strong = entries.keys.to_set { |def_node| def_node.name.to_s }
           added = defs.select do |def_node|
             !entries.key?(def_node) && def_node.name.end_with?("_params") &&
-              hands_params_on?(chains[def_node]) { |called| !defined.include?(called) || strong.include?(called) }
+              hands_params_on?(chains[def_node]) do |called|
+                defined.include?(called) ? strong.include?(called) : called.match?(DELEGATE_NAME) || inherited.include?(called)
+              end
           end
           break if added.empty?
 
@@ -854,13 +878,13 @@ module RailsAiContext
       # Devise's sanitizer permits what each of its actions takes.
       DELEGATE_NAME = /_params\z|\Apermitted_|\Adevise_parameter_sanitizer\z/
 
-      # A returned super, call given the whole params, or call to a *_params or permitted_* method `may_permit`
-      # allows; only through calls that keep it params (`base_params.merge(...)`), not `edition_params[:x] = nil`.
+      # A returned super, call given the whole params, or call to a method `may_permit` allows; only through
+      # calls that keep it params (`base_params.merge(...)`), not `edition_params[:x] = nil`.
       def hands_params_on?(chains, &may_permit)
         chains.any? do |chain|
           chain.each_with_index.any? do |call, index|
             delegate = call.is_a?(Prism::SuperNode) || call.is_a?(Prism::ForwardingSuperNode) ||
-                       (call.receiver.nil? && call.name.to_s.match?(DELEGATE_NAME) && may_permit.call(call.name.to_s))
+                       (call.receiver.nil? && may_permit.call(call.name.to_s))
             next chain.first(index).all? { |outer| outer.is_a?(Prism::CallNode) && (PARAMS_PRESERVING.include?(outer.name) || NESTED_PARAMS.include?(outer.name)) } if delegate
 
             (call.arguments&.arguments || []).any? do |arg|
