@@ -127,8 +127,8 @@ RSpec.describe "rails_get_config sections" do
       expect(text(response)).to start_with("The `env` section of rails_get_config is turned off in this app: skip_tools lists rails_get_env")
       expect(RailsAiContext::Tools::GetConfig.call(section: "i18n").error?).to be(false)
       expect(served_names).to include("rails_get_config")
-      expect(RailsAiContext::Server.served?("rails_get_env")).to be(false)
-      expect(RailsAiContext::Server.served?("rails_get_i18n")).to be(true)
+      expect(RailsAiContext::Server.served_tool("rails_get_env")).to be_nil
+      expect(RailsAiContext::Server.served_tool("rails_get_i18n")).not_to be_nil
     end
 
     it "turns off only the app section when it names rails_get_config" do
@@ -144,7 +144,7 @@ RSpec.describe "rails_get_config sections" do
       config.skip_tools = all_eleven
 
       expect(served_names).not_to include("rails_get_config")
-      expect(RailsAiContext::Server.served?("rails_get_config")).to be(false)
+      expect(RailsAiContext::Server.served_tool("rails_get_config")).to be_nil
       expect(RailsAiContext::Server.skipped_tools).to match_array(all_eleven)
     end
 

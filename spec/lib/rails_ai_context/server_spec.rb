@@ -97,7 +97,6 @@ RSpec.describe RailsAiContext::Server do
     it "answers the built-in, and nil for a name nothing serves" do
       expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
       expect(described_class.served_tool("rails_not_a_tool", config)).to be_nil
-      expect(described_class.served?("rails_get_schema", config)).to be(true)
     end
 
     it "keeps the built-in over a custom tool of the same name, as tools/list does" do
@@ -108,10 +107,43 @@ RSpec.describe RailsAiContext::Server do
 
     it "answers nil for a skipped built-in, and the custom tool that takes its name" do
       config.skip_tools = %w[rails_get_schema]
-      expect(described_class.served?("rails_get_schema", config)).to be(false)
+      expect(described_class.served_tool("rails_get_schema", config)).to be_nil
 
       allow(described_class).to receive(:resolve_custom_tools).and_return([ custom ])
       expect(described_class.served_tool("rails_get_schema", config)).to eq(custom)
+    end
+
+    context "with a BaseTool subclass the app defines outside Tools and leaves out of custom_tools" do
+      let!(:app_tool) do
+        Class.new(RailsAiContext::Tools::BaseTool) do
+          tool_name "rails_get_deploy_status"
+          description "The deploy the app runs"
+
+          def self.call(server_context: nil)
+            text_response("deployed")
+          end
+        end
+      end
+
+      after { app_tool.abstract! }
+
+      it "answers it, as tools/list does" do
+        expect(described_class.exposed_tools(config)).to include(app_tool)
+        expect(described_class.served_tool("rails_get_deploy_status", config)).to eq(app_tool)
+      end
+
+      it "answers nil once skip_tools lists it" do
+        config.skip_tools = %w[rails_get_deploy_status]
+
+        expect(described_class.exposed_tools(config)).not_to include(app_tool)
+        expect(described_class.served_tool("rails_get_deploy_status", config)).to be_nil
+      end
+
+      it "runs from the CLI by its full, medium and short name" do
+        %w[rails_get_deploy_status get_deploy_status deploy_status].each do |typed|
+          expect(RailsAiContext::CLI::ToolRunner.new(typed, []).run).to eq("deployed")
+        end
+      end
     end
 
     it "agrees with exposed_tools on every built-in" do

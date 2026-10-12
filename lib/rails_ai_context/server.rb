@@ -186,8 +186,8 @@ module RailsAiContext
       RunCache.around { merge_tools(active_tools(config), resolve_custom_tools(config), warn: false) }
     end
 
-    # The tool served under this name, or nil, loading only that class: a built-in, then
-    # a custom tool, then the renderer of the config section a retired name stands for.
+    # The tool served under this name, or nil, loading only that class: a registered tool,
+    # then a custom tool, then the renderer of the config section a retired name stands for.
     def self.served_tool(name, config = RailsAiContext.configuration)
       name = name.to_s
       RunCache.around do
@@ -203,13 +203,13 @@ module RailsAiContext
     end
     private_class_method :retired_renderer
 
-    def self.served?(name, config = RailsAiContext.configuration)
-      !served_tool(name, config).nil?
-    end
-
     def self.builtin_tool(name)
       tool = Tools::BaseTool.tool_class(name)
-      tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
+      return tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
+
+      # An app's BaseTool subclass registers itself wherever it is defined.
+      loaded = Tools::BaseTool.registry_mutex.synchronize { Tools::BaseTool.descendants.dup }
+      loaded.find { |registered| !registered.abstract? && registered.tool_name.to_s == name }
     end
     private_class_method :builtin_tool
 
