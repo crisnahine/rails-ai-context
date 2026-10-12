@@ -86,6 +86,21 @@ module RailsAiContext
         end
       end
 
+      def view_definitions(_conn)
+        nil
+      end
+
+      # A stored generated column is a plain column to the plan, so its expression is read here.
+      def generated_columns(conn)
+        return {} if conn.database_version < 12_00_00
+
+        conn.select_rows(
+          "SELECT c.relname, a.attname, pg_get_expr(d.adbin, d.adrelid) FROM pg_attribute a " \
+          "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " \
+          "WHERE a.attgenerated <> '' AND NOT a.attisdropped"
+        ).each_with_object({}) { |(table, column, expression), found| (found[table] ||= {})[column] = expression }
+      end
+
       def relation_name(conn, oid)
         conn.select_value("SELECT relname FROM pg_class WHERE oid = #{oid.to_i}")&.to_s
       rescue StandardError

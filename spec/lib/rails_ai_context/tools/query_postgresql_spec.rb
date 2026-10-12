@@ -13,7 +13,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     RacPgQueryRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
     conn.execute("DROP VIEW IF EXISTS rac_pg_renamed")
     conn.execute("DROP TABLE IF EXISTS rac_pg_accounts")
-    conn.execute("CREATE TABLE rac_pg_accounts (id int, email text, salt text, api_token text)")
+    conn.execute("CREATE TABLE rac_pg_accounts (id int, email text, salt text, api_token text, shadow text GENERATED ALWAYS AS (salt) STORED)")
     conn.execute("INSERT INTO rac_pg_accounts VALUES (1, 'a@example.com', 'salt-value', 'token-value')")
     conn.execute("CREATE VIEW rac_pg_renamed AS SELECT id, salt AS harmless FROM rac_pg_accounts")
     allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
@@ -24,6 +24,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP VIEW IF EXISTS rac_pg_renamed")
     conn.execute("DROP TABLE IF EXISTS rac_pg_accounts")
     RacPgQueryRecord.remove_connection
+    RailsAiContext.configuration.query_timeout = 5
   end
 
   def run(sql)
@@ -73,6 +74,57 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       expect(text).to include("2 rows returned").and include("2 rows shown; the query returned more")
     end
     expect(sent.grep(/\ASELECT/)).to eq([ "SELECT g FROM generate_series(1, 5) g LIMIT 3" ] * 2)
+  end
+
+  it "refuses a statement naming a generated column that reads a secret column" do
+    response = run("SELECT shadow AS s FROM rac_pg_accounts")
+    expect(response.error?).to be(true)
+    expect(response.content.first[:text]).to include("`shadow` is a generated column that reads `salt`")
+  end
+
+  it "answers a timeout as an error, for a query and for its EXPLAIN" do
+    RailsAiContext.configuration.query_timeout = 1
+    [ false, true ].each do |explain|
+      response = described_class.call(sql: "SELECT pg_sleep(3)", explain: explain)
+      expect(response.error?).to be(true)
+      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+    end
+  end
+
+  # The lock holds planning past the timeout and is gone before the statement's own timeout would end.
+  # It is taken after the schema read, which Rails runs with no timeout.
+  it "runs nothing when another connection holds a lock on the table past the timeout" do
+    RailsAiContext.configuration.query_timeout = 1
+    stub_const("RacPgLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+    RacPgLockRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
+    locker = RacPgLockRecord.connection_pool.checkout
+
+    [ "SELECT row_to_json(a) FROM rac_pg_accounts a", "WITH a AS (SELECT * FROM rac_pg_accounts) SELECT row_to_json(a) FROM a",
+      "EXPLAIN ANALYZE SELECT row_to_json(a) FROM rac_pg_accounts a" ].each do |sql|
+      response = RailsAiContext::RunCache.around do
+        RailsAiContext::SecretColumns.for(conn, context: {})
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_pg_accounts IN ACCESS EXCLUSIVE MODE")
+        release = Thread.new { sleep 1.5 and locker.execute("ROLLBACK") }
+        described_class.call(sql: sql).tap { release.join }
+      end
+
+      expect(response.error?).to be(true), sql
+      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+      expect(response.content.first[:text]).not_to include("salt-value", "token-value")
+    end
+  ensure
+    RacPgLockRecord.remove_connection if defined?(RacPgLockRecord)
+  end
+
+  it "answers an SQL error from planning as the SQL error" do
+    response = run("SELECT nope FROM rac_pg_accounts")
+    expect(response.error?).to be(true)
+    expect(response.content.first[:text]).to start_with("SQL error:").and include("nope")
+  end
+
+  it "runs SHOW, which has no plan" do
+    expect(run("SHOW server_version").error?).to be(false)
   end
 
   it "flags a failing EXPLAIN as an error" do

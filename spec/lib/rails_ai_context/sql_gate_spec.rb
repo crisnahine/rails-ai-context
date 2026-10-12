@@ -8,6 +8,9 @@ RSpec.describe RailsAiContext::SqlGate do
       postgresql: RailsAiContext::DatabaseFamily::POSTGRESQL }
   end
   let(:relations) { {} }
+  let(:views) { nil }
+  let(:generated) { {} }
+  let(:encrypted) { [] }
   let(:connection) { double("connection", quote: nil, select_values: []) }
   let(:plan) { { "Node Type" => "Result" } }
 
@@ -26,7 +29,7 @@ RSpec.describe RailsAiContext::SqlGate do
   after { RailsAiContext.configuration.query_allowed_columns = [] }
 
   def check(sql, family = :sqlite)
-    secrets = RailsAiContext::SecretColumns.new(relations: relations)
+    secrets = RailsAiContext::SecretColumns.new(relations: relations, views: views, generated: generated, encrypted: encrypted)
     described_class.new(family: families.fetch(family), secrets: secrets, connection: connection, timeout: 5).check(sql)
   end
 
@@ -301,6 +304,46 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(refusal(%(SELECT 1 AS "a'b", upper(api_key), 'x' FROM users), :postgresql)).to include("api_key")
         expect(refusal("SELECT id FROM t WHERE id = $1 AND api_key = $1", :postgresql)).to include("api_key")
       end
+    end
+  end
+
+  describe "a view the database cannot redact" do
+    let(:relations) { { "users" => %w[id email passwd] } }
+    let(:views) { { "people" => "SELECT id, passwd AS p1 FROM users", "emails" => "SELECT id, email FROM users" } }
+
+    it "refuses a statement that names it, by the view and the column, and points at the tables" do
+      %i[sqlite mysql].each do |family|
+        text = refusal("SELECT * FROM people", family)
+        expect(text).to start_with("Blocked: the view `people` is not queried: its definition names the sensitive column `passwd`."), family.to_s
+        expect(text).to include("A view can rename a column past the redaction on #{families.fetch(family).name}", "query the tables it reads")
+      end
+    end
+
+    it "refuses it in a join, a subquery and an EXPLAIN, and reads a literal as the raw text" do
+      [ "SELECT e.id FROM emails e JOIN people p ON p.id = e.id", "SELECT (SELECT p1 FROM people LIMIT 1) AS x",
+        "EXPLAIN SELECT * FROM people", "SELECT 'people' AS x" ].each { |sql| expect(refusal(sql)).to include("the view `people`"), sql }
+    end
+
+    it "runs a view that names no secret column, and the definition of a refused one" do
+      expect(runs?("SELECT * FROM emails")).to be(true)
+      expect(runs?("SHOW CREATE VIEW people", :mysql)).to be(true)
+    end
+  end
+
+  describe "a generated column that reads a secret column" do
+    let(:relations) { { "users" => %w[id email passwd tax_number] } }
+    let(:generated) { { "users" => { "shadow" => "`passwd`", "taxed" => "`tax_number`" } } }
+    let(:encrypted) { %w[tax_number] }
+
+    it "refuses a statement naming it and says how to release it" do
+      text = refusal("SELECT shadow FROM users")
+      expect(text).to include("sensitive column `shadow`", "`shadow` is a generated column that reads `passwd`")
+      expect(text).to include('add "shadow" to config.query_allowed_columns')
+    end
+
+    it "says one that reads an encrypts column is not released" do
+      expect(refusal("SELECT taxed FROM users"))
+        .to include("`taxed` is a generated column that reads `tax_number`", "config.query_allowed_columns does not release it")
     end
   end
 

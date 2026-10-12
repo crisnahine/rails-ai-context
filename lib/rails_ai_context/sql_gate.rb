@@ -227,19 +227,37 @@ module RailsAiContext
 
       return "Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed" unless cleaned.match?(ALLOWED_PREFIX)
 
-      # An alias or an expression renames a column past the redaction that
-      # reads output names, so a statement naming a secret column is refused whole.
       if (offending = @secrets.named_in(literal_free))
-        way_out = if @secrets.encrypted?(offending)
-          "A model declares `#{offending}` with `encrypts`, so config.query_allowed_columns does not release it."
-        else
-          "If `#{offending}` is not sensitive in your app, add \"#{offending}\" to config.query_allowed_columns in an initializer."
-        end
-        "Blocked: query references sensitive column `#{offending}`. " \
-          "Name the columns you need; `#{offending}` is sensitive and never " \
-          "returned, and an alias or expression over it cannot be redacted after " \
-          "the query runs, so the whole query is refused. #{way_out}"
+        return secret_column_refusal(offending)
       end
+
+      # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
+      view, why = @secrets.refused_view_in(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
+      return nil unless view
+
+      "Blocked: the view `#{view}` is not queried: #{why}. A view can rename a column past the redaction " \
+        "on #{@family.name}, so query the tables it reads."
+    end
+
+    # An alias or an expression renames a column past the redaction that
+    # reads output names, so a statement naming a secret column is refused whole.
+    def secret_column_refusal(offending)
+      source = @secrets.generated_from(offending)
+      reads = "`#{offending}` is a generated column that reads `#{source}`" if source
+      way_out = if @secrets.encrypted?(offending)
+        if source
+          "#{reads}, an `encrypts` value, so config.query_allowed_columns does not release it."
+        else
+          "A model declares `#{offending}` with `encrypts`, so config.query_allowed_columns does not release it."
+        end
+      else
+        "#{"#{reads}. " if source}If `#{offending}` is not sensitive in your app, add \"#{offending}\" to " \
+          "config.query_allowed_columns in an initializer."
+      end
+      "Blocked: query references sensitive column `#{offending}`. " \
+        "Name the columns you need; `#{offending}` is sensitive and never " \
+        "returned, and an alias or expression over it cannot be redacted after " \
+        "the query runs, so the whole query is refused. #{way_out}"
     end
 
     # Comments out, everything else as written: this is the text that runs.

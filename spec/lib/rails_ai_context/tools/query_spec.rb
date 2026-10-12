@@ -20,6 +20,14 @@ RSpec.describe RailsAiContext::Tools::Query do
     RailsAiContext.configuration.query_allowed_columns = []
   end
 
+  # A faked adapter name would send the family's catalogue reads to this SQLite database.
+  def fake_family(adapter_name)
+    allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)
+    [ RailsAiContext::DatabaseFamily::MysqlRuntime, RailsAiContext::DatabaseFamily::PostgresqlRuntime ].each do |runtime|
+      allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {})
+    end
+  end
+
   # The text asks for one row past the cap, so a result the cap cut can be
   # told from one that fit; the extra row is dropped.
   describe "the row limit in the text sent to the database" do
@@ -724,7 +732,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n # why\nLIMIT 101")
 
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      fake_family("Trilogy")
       sent = nil
       allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:read_only) { |_conn, text, _timeout|
         sent = text
@@ -873,7 +881,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
   describe "Trilogy adapter dispatch" do
     before do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      fake_family("Trilogy")
     end
 
     it "runs regular queries through the MySQL family" do
@@ -902,7 +910,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
 
     before do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
+      fake_family("PostGIS")
       allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ "[]" ] ]))
       allow(runtime).to receive(:plan).and_return("Node Type" => "Result")
     end
@@ -1176,7 +1184,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "runs a literal holding a locking phrase on PostgreSQL" do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostgreSQL")
+      fake_family("PostgreSQL")
       allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan).and_return("Node Type" => "Result")
       allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:column_sources).and_return([])
       allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[id], [ [ 4 ] ]))
@@ -1187,11 +1195,95 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "a SQLite view or generated column that reads a secret column" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryViewSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryViewSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "views.sqlite3"))
+      QueryViewSpecRecord.connection.tap do |c|
+        c.execute("CREATE TABLE accounts (id INTEGER, email TEXT, passwd TEXT, " \
+          "shadow TEXT GENERATED ALWAYS AS (passwd) VIRTUAL, kept TEXT AS (passwd || '-kept') STORED, shout TEXT AS (upper(email)) VIRTUAL)")
+        c.execute("CREATE TABLE notes (id INTEGER, body TEXT, size INTEGER AS (length(body)) VIRTUAL)")
+        c.execute("INSERT INTO accounts (id, email, passwd) VALUES (1, 'a@example.com', 'pw-value')")
+        c.execute("INSERT INTO notes (id, body) VALUES (1, 'hello')")
+        c.execute("CREATE VIEW renamed AS SELECT id, passwd AS p1 FROM accounts")
+        c.execute("CREATE VIEW nested AS SELECT p1 AS p2 FROM renamed")
+        c.execute("CREATE VIEW everything (a, b, c, d, e, f) AS SELECT * FROM accounts")
+        c.execute("CREATE VIEW contacts AS SELECT id, email FROM accounts")
+      end
+    end
+    let(:context) { {} }
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return(context)
+    end
+
+    after do
+      QueryViewSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+    end
+
+    def text(sql)
+      answer(sql).content.first[:text]
+    end
+
+    it "refuses a view that renames a secret column, a view built on it, and a view that lists every column" do
+      {
+        "renamed" => "the view `renamed` is not queried: its definition names the sensitive column `passwd`",
+        "nested" => "the view `nested` is not queried: it reads the view `renamed`",
+        "everything" => "the view `everything` is not queried: its definition reads every column of `accounts`"
+      }.each do |view, reason|
+        response = answer("SELECT * FROM #{view}")
+        expect(response.error?).to be(true), view
+        expect(response.content.first[:text]).to include(reason, "on SQLite, so query the tables it reads")
+        expect(response.content.first[:text]).not_to include("pw-value")
+      end
+    end
+
+    it "runs a view that names no secret column" do
+      expect(text("SELECT * FROM contacts")).to include("a@example.com")
+    end
+
+    it "filters a generated column that reads a secret column, and refuses a statement naming it" do
+      everything = text("SELECT * FROM accounts")
+      expect(everything).to include("a@example.com", "[FILTERED]")
+      expect(everything).not_to include("pw-value")
+      expect(text("SELECT shadow AS s FROM accounts")).to include("`shadow` is a generated column")
+      expect(text("SELECT kept AS k FROM accounts")).to include("sensitive column `kept`")
+    end
+
+    it "returns a generated column of a table that holds no secret column" do
+      expect(text("SELECT size FROM notes")).to include("| 5")
+    end
+
+    it "releases a view and a generated column over a column the app allows" do
+      RailsAiContext.configuration.query_allowed_columns = %w[passwd shadow kept]
+      expect(text("SELECT * FROM renamed")).to include("pw-value")
+      expect(text("SELECT shadow FROM accounts")).to include("pw-value")
+    end
+
+    context "when a model declares the column with encrypts" do
+      let(:context) { { models: { "Account" => { encrypts: %w[passwd] } } } }
+
+      it "keeps the view refused and the generated column secret, whatever the app allows" do
+        RailsAiContext.configuration.query_allowed_columns = %w[passwd shadow kept]
+        expect(answer("SELECT * FROM renamed").error?).to be(true)
+        expect(answer("SELECT shadow FROM accounts").error?).to be(true)
+        expect(text("SELECT * FROM accounts")).not_to include("pw-value")
+      end
+    end
+  end
+
   describe "a PostgreSQL statement whose plan cannot be read" do
     let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
 
     before do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostgreSQL")
+      fake_family("PostgreSQL")
       allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[row], [ [ "secret-value" ] ]))
     end
 

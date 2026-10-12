@@ -59,6 +59,17 @@ module RailsAiContext
         runtime.column_sources(connection, sql, plan)
       end
 
+      # @return [Hash{String => String, nil}, nil] view name => the definition the database stores, nil for one it
+      #   will not show; nil where column_sources traces a view's columns to their table columns
+      def view_definitions(connection)
+        runtime.view_definitions(connection)
+      end
+
+      # @return [Hash{String => Hash{String => String}}] table name => { generated column => its expression }
+      def generated_columns(connection)
+        runtime.generated_columns(connection)
+      end
+
       # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
       def table_sizes(connection)
         runtime.table_sizes(connection)

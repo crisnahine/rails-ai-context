@@ -68,6 +68,28 @@ module RailsAiContext
         nil
       end
 
+      # The body only: the header names the view itself. A temporary view lives in its own catalogue.
+      def view_definitions(conn)
+        conn.select_rows(
+          "SELECT name, sql FROM sqlite_master WHERE type = 'view' UNION ALL SELECT name, sql FROM sqlite_temp_master WHERE type = 'view'"
+        ).to_h { |name, sql| [ name, sql.to_s.sub(/\A.*?\bAS\b/mi, "") ] }
+      end
+
+      # SQLite keeps no expression per column, so each generated column answers its table's definition with one
+      # mention of every column taken out: a column name still in it is one some expression reads.
+      def generated_columns(conn)
+        conn.select_rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").each_with_object({}) do |(table, sql), found|
+          next unless sql.to_s.match?(/\bAS\s*\(/i)
+
+          columns = conn.select_all("PRAGMA table_xinfo(#{conn.quote_table_name(table)})").to_a
+          generated = columns.select { |column| column["hidden"].to_i >= 2 }
+          next if generated.empty?
+
+          read = columns.reduce(sql.to_s) { |text, column| text.sub(/\b#{Regexp.escape(column["name"])}\b/i, " ") }
+          found[table] = generated.to_h { |column| [ column["name"], read ] }
+        end
+      end
+
       def table_sizes(conn)
         # dbstat lists every b-tree, indexes and SQLite internals too.
         app_tables = conn.select_values("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").to_set

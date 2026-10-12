@@ -68,10 +68,13 @@ module RailsAiContext
           table = cols["table"]
           rows = cols["rows"].to_i
           extra = cols["Extra"].to_s
-          scans << { table: table, type: scan_label(cols["type"]), index: cols["key"] }
-          warnings << "Full table scan on #{table} (#{rows} rows)" if cols["type"] == "ALL" && rows > 1000
-          warnings << "Using filesort on #{table}" if extra.include?("filesort")
-          warnings << "Using temporary table on #{table}" if extra.include?("temporary")
+          # A row with no table ("No tables used") scans nothing.
+          if table
+            scans << { table: table, type: scan_label(cols["type"]), index: cols["key"] }
+            warnings << "Full table scan on #{table} (#{rows} rows)" if cols["type"] == "ALL" && rows > 1000
+            warnings << "Using filesort on #{table}" if extra.include?("filesort")
+            warnings << "Using temporary table on #{table}" if extra.include?("temporary")
+          end
           cols.map { |k, v| "#{k}: #{v}" }.join(", ")
         end
         { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n"), unbounded: false }
@@ -94,6 +97,18 @@ module RailsAiContext
 
       def plan(_conn, _sql, _timeout)
         nil
+      end
+
+      # The definition is empty for a view the account may not SHOW.
+      def view_definitions(conn)
+        conn.select_rows("SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE()").to_h
+      end
+
+      def generated_columns(conn)
+        conn.select_rows(
+          "SELECT TABLE_NAME, COLUMN_NAME, GENERATION_EXPRESSION FROM information_schema.COLUMNS " \
+          "WHERE TABLE_SCHEMA = DATABASE() AND GENERATION_EXPRESSION <> ''"
+        ).each_with_object({}) { |(table, column, expression), found| (found[table] ||= {})[column] = expression }
       end
 
       # Base tables only: a view has no rows or bytes of its own.

@@ -104,7 +104,8 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
 
     it "traces a renamed result column to its table column" do
-      expect(family.column_sources(conn, "SELECT 1 AS one, id AS n FROM rac_server_rows", plan: nil)).to eq([ [ 1, "id", "rac_server_rows" ] ])
+      sql = "SELECT 1 AS one, id AS n FROM rac_server_rows"
+      expect(family.column_sources(conn, sql, plan: family.plan(conn, sql, timeout: 5)).uniq).to eq([ [ 1, "id", "rac_server_rows" ] ])
     end
 
     it "reports each index with its table and scan count" do

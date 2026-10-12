@@ -117,8 +117,125 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
   end
 
+  describe "#refused_view_in" do
+    let(:relations) { { "users" => %w[id email passwd tax_number], "posts" => %w[id title] } }
+
+    def refused(views, sql, **options)
+      described_class.new(relations: relations, views: views, **options).refused_view_in(sql)
+    end
+
+    it "refuses a view that renames a secret column, by the view and the column" do
+      views = { "people" => "select `app`.`users`.`id` AS `id`,`app`.`users`.`passwd` AS `p1` from `app`.`users`" }
+      expect(refused(views, "SELECT p1 FROM People")).to eq([ "people", "its definition names the sensitive column `passwd`" ])
+    end
+
+    it "refuses a view built on such a view, however deep" do
+      views = { "third" => "SELECT * FROM second", "second" => "SELECT p1 FROM people", "people" => "SELECT passwd AS p1 FROM users" }
+      expect(refused(views, "SELECT * FROM second")).to eq([ "second", "it reads the view `people`: its definition names the sensitive column `passwd`" ])
+      expect(refused(views, "SELECT * FROM third").last).to start_with("it reads the view `second`: it reads the view `people`")
+    end
+
+    it "refuses a view that reads every column of a relation holding a secret column" do
+      [ "SELECT * FROM users", "SELECT u.* FROM users u", "SELECT DISTINCT * FROM users", "SELECT id, * FROM users" ].each do |definition|
+        expect(refused({ "everyone" => definition }, "SELECT * FROM everyone"))
+          .to eq([ "everyone", "its definition reads every column of `users`, which holds the sensitive column `passwd`" ]), definition
+      end
+    end
+
+    it "runs a view that names no secret column" do
+      views = { "titles" => "SELECT * FROM posts", "emails" => "SELECT id, email FROM users", "headcount" => "SELECT count(*) AS n FROM users" }
+      %w[titles emails headcount].each { |view| expect(refused(views, "SELECT * FROM #{view}")).to be_nil, view }
+    end
+
+    it "runs a statement that names no refused view, and reads whole words only" do
+      views = { "people" => "SELECT passwd AS p1 FROM users" }
+      expect(refused(views, "SELECT id FROM posts")).to be_nil
+      expect(refused(views, "SELECT id FROM people_archive")).to be_nil
+    end
+
+    it "runs a view over a column the app allows, and refuses one over an allowed encrypts column" do
+      config.query_allowed_columns = %w[passwd tax_number]
+      expect(refused({ "people" => "SELECT passwd AS p1 FROM users" }, "SELECT * FROM people")).to be_nil
+      expect(refused({ "taxes" => "SELECT tax_number AS t FROM users" }, "SELECT * FROM taxes", encrypted: %w[tax_number]))
+        .to eq([ "taxes", "its definition names the sensitive column `tax_number`" ])
+    end
+
+    it "refuses a view whose definition cannot be read when a relation holds a secret column" do
+      [ nil, "", "  " ].each do |unreadable|
+        expect(refused({ "opaque" => unreadable }, "SELECT * FROM opaque"))
+          .to eq([ "opaque", "its definition could not be read, and this database holds sensitive columns" ]), unreadable.inspect
+      end
+      expect(described_class.new(relations: { "posts" => %w[id title] }, views: { "opaque" => nil }).refused_view_in("SELECT * FROM opaque")).to be_nil
+    end
+
+    it "refuses no view where the family traces a result column to its table column" do
+      expect(refused(nil, "SELECT * FROM people")).to be_nil
+    end
+  end
+
+  describe "a generated column" do
+    let(:relations) { { "users" => %w[id email passwd tax_number shown hidden deeper] } }
+    let(:generated) { { "users" => { "Hidden" => "`passwd`", "deeper" => "concat(`hidden`,'x')", "shown" => "upper(`email`)" } } }
+
+    def secrets(**options)
+      described_class.new(relations: relations, generated: generated, **options)
+    end
+
+    it "is secret when its expression reads a secret column, also through another generated column" do
+      expect(%w[hidden deeper shown].map { |name| secrets.secret?(name) }).to eq([ true, true, false ])
+      expect(secrets.of_relation("users")).to contain_exactly("passwd", "hidden", "deeper")
+      expect(secrets.named_in("SELECT deeper FROM users")).to eq("deeper")
+    end
+
+    it "is secret on a relation whose column list leaves it out" do
+      secrets = described_class.new(relations: { "users" => %w[id passwd] }, generated: generated)
+      expect(secrets.of_relation("users")).to contain_exactly("passwd", "hidden", "deeper")
+    end
+
+    it "is released by name, unless it reads an encrypts column" do
+      config.query_allowed_columns = %w[hidden]
+      expect(secrets.secret?("hidden")).to be(false)
+
+      taxed = { "users" => { "hidden" => "`tax_number`" } }
+      secrets = described_class.new(relations: relations, generated: taxed, encrypted: %w[tax_number])
+      expect([ secrets.secret?("hidden"), secrets.encrypted?("hidden") ]).to eq([ true, true ])
+    end
+
+    it "makes a view that names it a refused view" do
+      secrets = secrets(views: { "people" => "SELECT hidden AS h FROM users" })
+      expect(secrets.refused_view_in("SELECT h FROM people")).to eq([ "people", "its definition names the sensitive column `hidden`" ])
+    end
+  end
+
   describe ".for" do
     let(:conn) { ActiveRecord::Base.connection }
+
+    it "reads the family's view definitions and generated columns, once per run" do
+      runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
+      allow(conn).to receive(:tables).and_return(%w[users])
+      allow(conn).to receive(:columns).with("users").and_return([ double(name: "passwd") ])
+      allow(runtime).to receive(:view_definitions).with(conn).and_return("people" => "SELECT passwd AS p FROM users")
+      allow(runtime).to receive(:generated_columns).with(conn).and_return("users" => { "hidden" => "passwd" })
+
+      RailsAiContext::RunCache.around do
+        2.times do
+          secrets = described_class.for(conn, context: context)
+          expect(secrets.refused_view_in("SELECT * FROM people")&.first).to eq("people")
+          expect(secrets.secret?("hidden")).to be(true)
+        end
+      end
+      expect(runtime).to have_received(:view_definitions).once
+      expect(runtime).to have_received(:generated_columns).once
+    end
+
+    it "names every view with no definition when the definitions cannot be read" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:view_definitions).and_raise(ActiveRecord::StatementInvalid, "denied")
+      allow(conn).to receive(:tables).and_return(%w[users])
+      allow(conn).to receive(:columns).with("users").and_return([ double(name: "passwd") ])
+      allow(conn).to receive(:views).and_return(%w[people])
+
+      expect(described_class.for(conn, context: context).refused_view_in("SELECT * FROM people")&.first).to eq("people")
+    end
     let(:context) do
       {
         schema: { tables: {
