@@ -76,16 +76,20 @@ A whole-row read of a relation with no sensitive column (`row_to_json(posts.*)`)
 
 ### Layer 2 - Database-level read-only
 
-After validation, the query runs inside a transaction:
+After validation, the query runs through its database family, which knows how its engine spells a read-only transaction and a statement timeout:
 
-| Database | Mechanism |
-|:---------|:----------|
-| PostgreSQL | `SET TRANSACTION READ ONLY` + `SET LOCAL statement_timeout` |
-| MySQL | `SET TRANSACTION READ ONLY` + `MAX_EXECUTION_TIME` hint |
-| MariaDB | `SET TRANSACTION READ ONLY` + `SET STATEMENT max_statement_time = <seconds> FOR <query>` (MariaDB ignores MySQL's hint, so a long query would otherwise run unbounded) |
-| SQLite | A read-only connection in a child process, killed at timeout |
+| Family | Mechanism | A timeout arrives as |
+|:-------|:----------|:---------------------|
+| PostgreSQL (and PostGIS) | `SET TRANSACTION READ ONLY` + `SET LOCAL statement_timeout` | `ActiveRecord::QueryCanceled` |
+| MySQL (mysql2 and Trilogy) | `SET TRANSACTION READ ONLY` + the session's `max_execution_time`, read first, set for the statement and put back afterwards, also when the statement fails | `ActiveRecord::StatementTimeout` (3024), sometimes `QueryCanceled` (1317) |
+| MariaDB | `SET TRANSACTION READ ONLY` + `SET STATEMENT max_statement_time = <seconds> FOR <statement>` (MariaDB has no `max_execution_time` and ignores MySQL's hint) | native code 1969 |
+| SQLite | A read-only connection in a child process, killed at timeout | the gem's own timeout |
 
-On PostgreSQL and MySQL the query executes inside a transaction, then rolls back (even if it could write, it can't). Any other adapter has no database-level guard: the query runs with Layer 1 validation and the row limit only.
+The MySQL session variable bounds a statement that starts with `WITH` or `EXPLAIN ANALYZE` too; the `MAX_EXECUTION_TIME` hint bound only the outermost `SELECT`, so it is not used. A timeout is read from the error's class or the engine's native code, never from the message, so an SQL error about a column named `timeout` is reported as an SQL error.
+
+On PostgreSQL and MySQL the query executes inside a transaction, then rolls back (even if it could write, it can't). MySQL's read-only transaction still lets `FOR SHARE`, `LOCK IN SHARE MODE` and `INTO` through, so the Layer 1 checks stay on every family.
+
+An engine with no family (SQL Server, Oracle, CockroachDB and any other adapter) is refused: `rails_query` answers with the adapter's name and sends it no statement, because it cannot give that engine a read-only transaction and a timeout it has verified. CockroachDB's adapter is built on PostgreSQL's, but the family is chosen by adapter name, never by class ancestry, so it is refused too.
 
 A SQLite query runs in-process under `PRAGMA query_only = ON`, with no time
 limit, for an in-memory database, on a platform without `fork`, or when it

@@ -716,6 +716,8 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
 
+It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other engine it answers with the adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout; any other database error is an SQL error.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `sql` | string | *required* | SQL query. Only `SELECT`, `WITH`, `SHOW`, `EXPLAIN`, `DESCRIBE` are allowed |
@@ -775,6 +777,8 @@ Each diff passes through the redaction every tool's source does, read as the fil
 ### `rails_runtime_info`
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
+
+Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On an engine with no database family the database section says table sizes and index usage are not available for that adapter.
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there.
 
