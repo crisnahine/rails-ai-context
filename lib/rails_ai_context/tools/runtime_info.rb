@@ -15,6 +15,10 @@ module RailsAiContext
             type: "string",
             enum: %w[database cache jobs connections],
             description: "Filter to one section. Omit for all sections."
+          },
+          database: {
+            type: "string",
+            description: "The app database whose table sizes and index usage to show, by its config/database.yml name. Default: the primary."
           }
         }
       )
@@ -28,10 +32,11 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: false)
 
-      def self.call(detail: "standard", section: nil, server_context: nil)
+      def self.call(detail: "standard", section: nil, database: nil, server_context: nil)
         if (refusal = static_tier_refusal("Live runtime state"))
           return refusal
         end
+        AppDatabases.for(rails_app.root).fetch(database) unless database.to_s.empty?
 
         lines = [ "# Runtime Info", "" ]
 
@@ -40,7 +45,7 @@ module RailsAiContext
         sections.each do |s|
           result = case s
           when "connections" then gather_connection_pool
-          when "database"    then gather_database(detail)
+          when "database"    then gather_database(detail, database)
           when "cache"       then gather_cache
           when "jobs"        then gather_jobs(detail)
           end
@@ -52,6 +57,8 @@ module RailsAiContext
         end
 
         text_response(lines.join("\n"))
+      rescue AppDatabases::Error => e
+        error_response(e.message)
       rescue => e
         text_response("Runtime info error: #{e.message}")
       end
@@ -91,12 +98,19 @@ module RailsAiContext
 
         # ── Database section ─────────────────────────────────────────────
 
-        def gather_database(detail)
+        def gather_database(detail, database)
           return [ "## Database", "", "_ActiveRecord not available._", "" ] unless defined?(ActiveRecord::Base)
 
-          conn = ActiveRecord::Base.connection
+          AppDatabases.lease(rails_app.root, database) { |conn| database_lines(conn, detail, database) }
+        rescue AppDatabases::Error
+          raise
+        rescue => e
+          [ "## Database", "", "_Not available: #{e.message}_", "" ]
+        end
+
+        def database_lines(conn, detail, database)
           family = DatabaseFamily.of(conn)
-          lines = [ "## Database", "" ]
+          lines = [ database.to_s.empty? ? "## Database" : "## Database: #{database}", "" ]
           lines << "**Adapter:** #{SchemaAdapter.display(conn.adapter_name)}"
           unless family.known?
             lines << "" << "_Table sizes and index usage are not available for the #{family.name} adapter._"
@@ -116,16 +130,7 @@ module RailsAiContext
             lines << "_#{count_phrase(sizes.size - shown, "more table")}..._" if sizes.size > shown
           end
 
-          # Pending migrations
-          pending = gather_pending_migrations
-          if pending
-            if pending.empty?
-              lines << "" << "**Migrations:** all up to date"
-            else
-              lines << "" << "**Pending migrations:** #{pending.size}"
-              pending.each { |m| lines << "- #{m[:version]} #{m[:name]}" }
-            end
-          end
+          lines.concat(pending_migration_lines)
 
           # Index usage (full detail only)
           if RailsAiContext::DetailLevel.full?(detail)
@@ -146,8 +151,6 @@ module RailsAiContext
 
           lines << ""
           lines
-        rescue => e
-          [ "## Database", "", "_Not available: #{e.message}_", "" ]
         end
 
         # Rails-managed bookkeeping tables - real tables, but noise in a
@@ -163,8 +166,29 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, nil, label: "gather_table_sizes")
         end
 
-        def gather_pending_migrations
-          RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root))
+        # Every database the app migrates here, each through its own connection.
+        def pending_migration_lines
+          databases = AppDatabases.for(rails_app.root).here.select(&:tasks)
+          if databases.size <= 1
+            pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root))
+            return [] unless pending
+            return [ "", "**Migrations:** all up to date" ] if pending.empty?
+
+            return [ "", "**Pending migrations:** #{pending.size}", *pending.map { |m| "- #{m[:version]} #{m[:name]}" } ]
+          end
+
+          states = databases.to_h { |db| [ db.name, db.pending_migrations[:pending] ] }
+          unread = states.select { |_, pending| pending.nil? }.keys
+          pending = states.flat_map { |name, found| Array(found).map { |m| m.merge(database: name) } }
+          lines = []
+          if pending.any?
+            by_database = pending.map { |m| m[:database] }.tally.map { |name, count| "#{count} in #{name}" }
+            lines << "" << "**Pending migrations:** #{by_database.one? ? by_database.first : "#{pending.size} (#{by_database.join(', ')})"}"
+            pending.each { |m| lines << "- #{m[:version]} #{m[:name]} (#{m[:database]})" }
+          end
+          lines << "" << "_Pending migrations could not be read for #{unread.join(', ')}._" if unread.any?
+          lines << "" << "**Migrations:** all up to date in #{databases.map(&:name).join(', ')}" if pending.empty? && unread.empty?
+          lines
         end
 
         def gather_index_usage(conn, family)

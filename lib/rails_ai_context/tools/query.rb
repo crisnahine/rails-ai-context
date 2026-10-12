@@ -28,6 +28,10 @@ module RailsAiContext
           explain: {
             type: "boolean",
             description: "Run EXPLAIN on the query. Returns execution plan analysis instead of data. SELECT only."
+          },
+          database: {
+            type: "string",
+            description: "The app database to query, by its config/database.yml name (for example queue). Default: the primary."
           }
         },
         required: [ "sql" ]
@@ -62,7 +66,7 @@ module RailsAiContext
         params.key?(:sql) ? params.merge(sql: params[:sql].to_s.truncate(60)) : params
       end
 
-      def self.call(sql: nil, limit: nil, format: "table", explain: false, server_context: nil, **_extra)
+      def self.call(sql: nil, limit: nil, format: "table", explain: false, database: nil, server_context: nil, **_extra)
         if (refusal = static_tier_refusal("Running SQL queries"))
           return refusal
         end
@@ -84,7 +88,27 @@ module RailsAiContext
           )
         end
 
-        connection = ActiveRecord::Base.connection
+        AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain) }
+      rescue AppDatabases::Error => e
+        error_response(e.message)
+      rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
+        text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
+      rescue DatabaseFamily::TimedOut
+        text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
+      rescue ActiveRecord::StatementInvalid => e
+        # Only a missing DATABASE: PostgreSQL words a missing column and table
+        # the same way, and those are real SQL errors. A missing database stays
+        # informational, the question answerable, just not now.
+        if e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
+          text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
+        else
+          error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
+        end
+      rescue => e
+        error_response("Query failed: #{clean_error_message(e.message)}")
+      end
+
+      private_class_method def self.answer(connection, sql, limit, format, explain)
         family = DatabaseFamily.of(connection)
         unless family.known?
           return error_response(
@@ -126,21 +150,29 @@ module RailsAiContext
         end
 
         text_response(output)
-      rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
-        text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
-      rescue DatabaseFamily::TimedOut
-        text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
-      rescue ActiveRecord::StatementInvalid => e
-        # Only a missing DATABASE: PostgreSQL words a missing column and table
-        # the same way, and those are real SQL errors. A missing database stays
-        # informational, the question answerable, just not now.
-        if e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
-          text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
-        else
-          error_response("SQL error: #{clean_error_message(e.message)}")
-        end
-      rescue => e
-        error_response("Query failed: #{clean_error_message(e.message)}")
+      end
+
+      MISSING_TABLE = /no such table: (?:\w+\.)?(\w+)|relation "(?:\w+\.)?(\w+)" does not exist|Table '(?:[^'.]+\.)?(\w+)' doesn't exist/i
+
+      # Where a table the statement did not find lives, read from the schema
+      # section's tables for the primary and each other database's dump.
+      private_class_method def self.held_elsewhere(message, database)
+        table = message.match(MISSING_TABLE)&.captures&.compact&.first or return ""
+        databases = AppDatabases.for(rails_app.root)
+        asked = database.to_s.empty? ? databases.primary&.name : database.to_s
+        schema = cached_context[:schema]
+        return "" unless schema.is_a?(Hash)
+
+        held = { (databases.primary&.name || "primary") => schema[:tables] }
+        (schema[:secondary_databases] || {}).each { |name, dump| held[name.to_s] ||= dump[:tables] if dump.is_a?(Hash) }
+        holder = held.find { |name, tables| name != asked && tables.is_a?(Hash) && tables.key?(table) }&.first or return ""
+
+        found = databases[holder]
+        return " The #{table} table is on the #{holder} database: run the query again with database: \"#{holder}\"." if found.nil? || found.here
+
+        " The #{table} table is on the #{holder} database, which #{RailsAiContext.environment_name} does not configure."
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, "", label: "held_elsewhere")
       end
 
       private_class_method def self.unbounded_note(result)

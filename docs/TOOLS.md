@@ -714,6 +714,11 @@ It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-o
 | `limit` | integer | `100` | Maximum rows to return (hard cap: 1000) |
 | `format` | enum | `table` | `table`, `csv` |
 | `explain` | boolean | `false` | Show query plan instead of results |
+| `database` | string | the primary | The app database to query, by its `config/database.yml` name (`queue`, `cache`). The secret column rule and the engine are that database's |
+
+`database` is checked when the tool runs, against the databases the app has then. A name the app does not have is answered with the closest one and every name it has. A database only another environment configures is answered with the environments that do, and one that only a committed dump names is answered as such. A SQLite file that is not there is said to be missing, and is not created. When a statement fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
+
+Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.
 
 > Disabled in production by default.
 
@@ -776,6 +781,9 @@ The pool and the cache are read inside the MCP server process, and the answer sa
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 | `section` | enum | - | One section only: `database`, `cache`, `jobs`, `connections` |
+| `database` | string | the primary | The app database whose adapter, table sizes and index usage the database section shows, named and checked as `rails_query`'s `database` is |
+
+Pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`, so "all up to date" means all of them. The connections section is always about the app's own pools.
 
 ### `rails_session_context`
 

@@ -131,7 +131,7 @@ module RailsAiContext
 
     # A connection to the named database for the block. No name is the app's own pool, as it always was.
     def lease(root, name, &block)
-      return ActiveRecord::Base.connection_pool.with_connection(&block) if name.to_s.empty?
+      return yield(ActiveRecord::Base.connection) if name.to_s.empty?
 
       self.for(root).fetch(name).with_connection(&block)
     end

@@ -64,7 +64,26 @@ Ten tools that each answered one section of the app's configuration leave
 - **Regenerate the context files** (`rails ai:context` or
   `rails-ai-context context`) so the tool guide and tables name the new call.
 
+### Added
+
+- **`rails_query(database:)` and `rails_runtime_info(database:)`.** Both
+  take an app database's name from `config/database.yml`, checked when the
+  tool runs; with none they read the primary as before. Another database is
+  reached through a connection handler of its own for the call, so the app's
+  pools are untouched and two calls at once never share a pool. A misspelled
+  name is answered with the closest one; a database only another environment
+  configures, one only a dump names, the static tier and a missing SQLite
+  file are each refused with the reason. A query that misses a table another
+  database holds names that database.
+
 ### Fixed
+
+- **`rails_runtime_info` reads pending migrations in every database
+  configured here.** It said "all up to date" while another database had
+  pending migrations.
+- **A database configured in several other environments names them all.**
+  A cache database that staging and production both configure read
+  "(staging only)"; it now reads "(staging and production)".
 
 - **A booted MySQL app reads "MySQL".** A connection on mysql2 or Trilogy
   showed its driver name in the generated context and in `rails_runtime_info`;
