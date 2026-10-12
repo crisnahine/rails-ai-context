@@ -346,9 +346,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     # useful: a Gemfile, a Rakefile and a .md carry no listed extension. The
     # Ruby fallback still globs by extension, so this is ripgrep's property.
     it "finds a match in a file whose name carries no listed extension" do
+      previous_root = RailsAiContext.configuration.app_root
       skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
 
-      previous_root = RailsAiContext.configuration.app_root
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "Gemfile"), %(source "https://rubygems.org"\ngem "devise"\n))
@@ -1365,9 +1365,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     # behind its own leading context and the answer read "No results found".
     [ true, false ].each do |rg|
       it "still shows the first match under a cap below its leading context, #{rg ? 'with ripgrep' : 'with the Ruby fallback'}" do
+        previous_cap = RailsAiContext.configuration.max_search_results
         skip "requires ripgrep" if rg && !described_class.send(:ripgrep_available?)
         allow(described_class).to receive(:ripgrep_available?).and_return(false) unless rg
-        previous_cap = RailsAiContext.configuration.max_search_results
         RailsAiContext.configuration.max_search_results = 1
 
         with_search_app("app/models/order.rb" => "class Order\n  validates :total\n\n  before_save :compute_total\nend\n") do
@@ -1599,9 +1599,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
 
     it "searches a placeholder a sensitive glob matches on both paths, and never the secret beside it" do
+      original = RailsAiContext.configuration.sensitive_patterns
       skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
 
-      original = RailsAiContext.configuration.sensitive_patterns
       RailsAiContext.configuration.sensitive_patterns = %w[keys.*]
       files = { "secrets/keys.yml" => "NEEDLE_TOKEN: real\n", "secrets/keys.yml.sample" => "NEEDLE_TOKEN: placeholder\n" }
       with_ripgrep = with_search_app(files) { files_found }
