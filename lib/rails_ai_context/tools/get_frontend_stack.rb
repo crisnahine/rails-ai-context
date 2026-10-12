@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetFrontendStack < BaseTool
       tool_name "rails_get_frontend_stack"
-      abstract!
+      section_renderer!
       description "Returns the app's frontend stack: framework, build tool, state management, TypeScript config, " \
         "component directories, and package manager. " \
         "Use when: scaffolding new frontend features, choosing libraries, or understanding the JS/TS build pipeline. " \
@@ -15,7 +15,6 @@ module RailsAiContext
           detail: RailsAiContext::DetailLevel.schema("Level of detail: summary (one-liner), standard (stack overview + component counts), full (+ config details, path aliases, monorepo info)")
         }
       )
-
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

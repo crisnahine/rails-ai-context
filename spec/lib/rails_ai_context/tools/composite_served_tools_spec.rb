@@ -59,6 +59,45 @@ RSpec.describe "Composite tools in an app whose skip_tools turns tools off" do
     expect(answer).not_to include("## Controller Context")
   end
 
+  describe "a built-in a custom tool replaced" do
+    let(:custom) { double("MyApp::Tool", call: nil) }
+
+    before { allow(RailsAiContext::Server).to receive(:resolve_custom_tools).and_return([ custom ]) }
+
+    it "is left out as a composed section and as an include, and the custom tool is never run" do
+      expect(custom).not_to receive(:call)
+
+      allow(custom).to receive(:tool_name).and_return("rails_get_model_details")
+      skip("rails_get_model_details")
+      expect(text(RailsAiContext::Tools::GetContext.call(model: "Post"))).to include(left_out("rails_get_model_details"))
+
+      allow(custom).to receive(:tool_name).and_return("rails_security_scan")
+      skip("rails_security_scan")
+      expect(text(RailsAiContext::Tools::GetContext.call(model: "Post", include: %w[security])))
+        .to include(RailsAiContext::Server.skipped_tool_message("rails_security_scan"))
+    end
+  end
+
+  it "a composite another composite calls keeps its own left-out list" do
+    base = RailsAiContext::Tools::BaseTool
+    inner = Class.new(base) do
+      tool_name "rails_nest_inner"
+      define_singleton_method(:call) { |server_context: nil| text_response("inner#{response_text(compose(RailsAiContext::Tools::GetRoutes))}") }
+    end
+    outer = Class.new(base) do
+      tool_name "rails_nest_outer"
+      define_singleton_method(:call) do |server_context: nil|
+        text_response("outer[#{response_text(compose(inner))}]#{response_text(compose(RailsAiContext::Tools::GetSchema))}")
+      end
+    end
+    stub_const("RailsAiContext::Tools::NestInner", inner)
+    skip("rails_get_routes", "rails_get_schema")
+
+    expect(text(outer.call)).to eq("outer[inner\n\n#{left_out('rails_get_routes')}]\n\n#{left_out('rails_get_schema')}")
+  ensure
+    [ inner, outer ].each(&:abstract!)
+  end
+
   describe "rails_review_changes" do
     def git(*args)
       out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",

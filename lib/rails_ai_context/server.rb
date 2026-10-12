@@ -100,18 +100,27 @@ module RailsAiContext
       end
     end
 
-    # The built-in tools skip_tools turned off, a retired config section's name among them.
-    def self.skipped_tools(config = RailsAiContext.configuration)
-      names = builtin_tools.map(&:tool_name) | Tools::GetConfig::SECTIONS.values
-      config.skip_tools.select { |name| names.include?(name) && skipped?(name, config) }.uniq
+    # The built-in tools skip_tools turned off, a retired config section's name
+    # among them unless a custom tool took rails_get_config's place.
+    def self.skipped_tools(config = RailsAiContext.configuration, custom_tools: nil)
+      names = builtin_tools.map(&:tool_name)
+      names |= Tools::GetConfig::SECTIONS.map(&:tool_name) unless config_replaced?(config, custom_tools)
+      config.skip_tools.select { |name| names.include?(name) && skipped?(name, config, custom_tools: custom_tools) }.uniq
     end
 
-    # rails_get_config is off only once skip_tools turns every section off.
-    def self.skipped?(name, config = RailsAiContext.configuration)
-      return Tools::GetConfig::SECTIONS.keys.none? { |section| Tools::GetConfig.section_on?(section, config) } if name == "rails_get_config"
+    # rails_get_config is off once skip_tools turns every section off, or
+    # lists it while a custom tool claims the name.
+    def self.skipped?(name, config = RailsAiContext.configuration, custom_tools: nil)
+      return config.skip_tools.include?(name) unless name == "rails_get_config"
 
-      config.skip_tools.include?(name)
+      Tools::GetConfig.sections_on(config).empty? || config_replaced?(config, custom_tools)
     end
+
+    def self.config_replaced?(config, custom_tools)
+      config.skip_tools.include?("rails_get_config") &&
+        (custom_tools || resolve_custom_tools(config)).any? { |tool| tool_label(tool) == "rails_get_config" }
+    end
+    private_class_method :config_replaced?
 
     # One answer, on every surface, for a call naming a tool skip_tools
     # turned off: it is out of every list, and "Unknown tool" sent the
@@ -119,12 +128,6 @@ module RailsAiContext
     def self.skipped_tool_message(tool_name)
       "#{tool_name} is turned off in this app: skip_tools lists it " \
         "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
-    end
-
-    # The line an answer to a retired config tool name ends with: the call to make instead.
-    def self.retired_call_note(name, arguments)
-      call = Tools::BaseTool.pointer(name, arguments.except(:section).map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", "))
-      "\n\n_#{name} is now #{call}; call that instead._" if call
     end
 
     # The SDK's "Tool not found" named only the guess. The nearest tools
@@ -150,44 +153,41 @@ module RailsAiContext
     # context files count and list this set, so they name no tool the
     # server lacks and leave out none it serves.
     def self.exposed_tools(config = RailsAiContext.configuration)
-      merge_tools(active_tools(config), resolve_custom_tools(config), warn: false)
+      custom = resolve_custom_tools(config)
+      merge_tools(active_tools(config, custom_tools: custom), custom, warn: false)
     end
 
-    # The tool exposed_tools serves under this name, or nil, loading only
-    # that tool's class: an unskipped built-in, then the first custom tool,
-    # then the renderer of the config section a retired name stands for.
-    # A caller trying several names passes the custom tools it resolved once.
+    # The tool served under this name, or nil, loading only that class: a built-in, then
+    # a custom tool, then the renderer of the config section a retired name stands for.
     def self.served_tool(name, config = RailsAiContext.configuration, custom_tools: nil)
       name = name.to_s
-      builtin = builtin_tool(name) unless skipped?(name, config)
-      builtin || (custom_tools || resolve_custom_tools(config)).find { |tool| tool_label(tool) == name } || retired_tool(name, config)
+      custom_tools ||= resolve_custom_tools(config)
+      builtin = builtin_tool(name) unless skipped?(name, config, custom_tools: custom_tools)
+      builtin || custom_tools.find { |tool| tool_label(tool) == name } || retired_renderer(name, config)
     end
 
-    def self.retired_tool(name, config)
-      section = Tools::GetConfig::SECTIONS.key(name)
-      Tools::GetConfig.renderer(section) if section && section != "app" && Tools::GetConfig.section_on?(section, config)
+    def self.retired_renderer(name, config)
+      section = Tools::GetConfig.retired_section(name)
+      section.renderer if section&.served?(config)
     end
-    private_class_method :retired_tool
+    private_class_method :retired_renderer
 
     def self.served?(name, config = RailsAiContext.configuration)
       !served_tool(name, config).nil?
     end
 
     def self.builtin_tool(name)
-      const = name.delete_prefix("rails_").split("_").map(&:capitalize).join
-      return nil unless const.match?(/\A[A-Z]\w*\z/) && Tools.const_defined?(const, false)
-
-      tool = Tools.const_get(const, false)
+      tool = Tools::BaseTool.tool_class(name)
       tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
     end
     private_class_method :builtin_tool
 
-    def self.active_tools(config)
+    def self.active_tools(config, custom_tools: nil)
       tools = builtin_tools
       skip = config.skip_tools
       return tools if skip.empty?
 
-      tools.reject { |t| skipped?(t.tool_name, config) }
+      tools.reject { |t| skipped?(t.tool_name, config, custom_tools: custom_tools) }
     end
 
     # The MCP SDK refuses a tool list with a repeated name, so one duplicate
@@ -278,11 +278,11 @@ module RailsAiContext
       )
 
       server = SdkServer.new(
-        skipped_tools: self.class.skipped_tools(config),
+        skipped_tools: self.class.skipped_tools(config, custom_tools: validated_custom_tools),
         name: self.class.announced_name(config),
         version: config.server_version,
         instructions: self.class.instructions,
-        tools: self.class.merge_tools(self.class.active_tools(config), validated_custom_tools),
+        tools: self.class.merge_tools(self.class.active_tools(config, custom_tools: validated_custom_tools), validated_custom_tools),
         resource_templates: Resources.resource_templates,
         configuration: mcp_config
       )
@@ -346,8 +346,8 @@ module RailsAiContext
         return super if tools.key?(name)
         return MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h if @skipped_tools.include?(name)
 
-        section = Tools::GetConfig::SECTIONS.key(name)
-        return retired_call(request, name, section, ...) if section && tools.key?("rails_get_config")
+        section = Tools::GetConfig.retired_section(name)
+        return retired_call(request, section, ...) if section && tools["rails_get_config"].equal?(Tools::GetConfig)
 
         add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
         raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
@@ -355,14 +355,10 @@ module RailsAiContext
       end
 
       # A tool that became a config section, answered from it with the call to make instead.
-      def retired_call(request, name, section, ...)
+      def retired_call(request, section, ...)
         arguments = (request[:arguments] || {}).transform_keys(&:to_sym).except(:section)
-        result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section)), ...)
-        note = Server.retired_call_note(name, arguments)
-        first, *rest = result[:content]
-        return result unless note && first.is_a?(Hash) && first[:type] == "text"
-
-        result.merge(content: [ first.merge(text: "#{first[:text]}#{note}"), *rest ])
+        result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section.name)), ...)
+        result.merge(content: Tools::SafeCall.noted(result[:content], Tools::GetConfig.retired_note(section, arguments)))
       end
     end
 

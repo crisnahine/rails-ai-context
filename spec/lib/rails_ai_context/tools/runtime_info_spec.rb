@@ -211,7 +211,7 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(database_section).to include("| products | 1 KB |")
     end
 
-    it "says table sizes and index usage are not available on an engine with no family" do
+    it "says table sizes and index usage are not available on an adapter with no family" do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
 
       text = described_class.call(section: "database", detail: "full").content.first[:text]

@@ -62,7 +62,8 @@ RSpec.describe RailsAiContext::AppDatabases do
 
   it_behaves_like "the same list on both tiers", "no_tasks", lambda { |root|
     [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ], environments: %w[test production]),
-      entry(root, "legacy", tasks: false, adapter: "mysql2") ]
+      entry(root, "legacy", tasks: false, adapter: "mysql2"),
+      entry(root, "warehouse", environment: "production", here: false, tasks: false, adapter: "postgresql") ]
   }
 
   it_behaves_like "the same list on both tiers", "no_dump", lambda { |root|
@@ -121,6 +122,29 @@ RSpec.describe RailsAiContext::AppDatabases do
       expect(queue.environments).to eq(%w[production])
       expect(queue.config["migrations_paths"]).to eq("db/queue_migrate")
     end
+  end
+
+  it "lists a replica and a database with no tasks that only another environment configures, flagged, and keeps both out of the secondaries" do
+    list = described_class.build(
+      environments: {
+        "test" => { "primary" => { "adapter" => "postgresql" } },
+        "production" => {
+          "primary" => { "adapter" => "postgresql" },
+          "primary_replica" => { "adapter" => "postgresql", "replica" => true },
+          "warehouse" => { "adapter" => "mysql2", "database_tasks" => false },
+          "queue" => { "adapter" => "postgresql" }
+        }
+      },
+      current: "test", root: Dir.tmpdir, dumps: []
+    )
+
+    expect(list.map { |db| [ db.name, db.here, db.replica, db.tasks ] }).to eq(
+      [ [ "primary", true, false, true ], [ "primary_replica", false, true, false ],
+        [ "warehouse", false, false, false ], [ "queue", false, false, true ] ]
+    )
+    expect(list.secondaries.map(&:name)).to eq(%w[queue])
+    expect { list.fetch("warehouse").with_connection { nil } }
+      .to raise_error(described_class::NotHere, /warehouse database is configured in production/)
   end
 
   describe "the one list" do

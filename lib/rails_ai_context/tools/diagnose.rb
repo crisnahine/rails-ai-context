@@ -63,7 +63,7 @@ module RailsAiContext
           fix: [
             "Check for typo in class/module name, missing require, or autoload issue",
             "Verify the file is in the correct autoload path (e.g. app/models, app/services)",
-            [ "rails_search_code", %(pattern:"ClassName", match_type:"trace"), "Run %s to find where the constant is defined" ]
+            { tool: "rails_search_code", args: %(pattern:"ClassName", match_type:"trace"), text: "Run %s to find where the constant is defined" }
           ]
         },
         /NoMethodError/ => {
@@ -81,7 +81,7 @@ module RailsAiContext
           fix: [
             "Check for typo in class/module name, missing require, or autoload issue",
             "Verify the name is defined and accessible in the current scope",
-            [ "rails_search_code", %(pattern:"name", match_type:"trace"), "Use %s to find where it is defined" ]
+            { tool: "rails_search_code", args: %(pattern:"name", match_type:"trace"), text: "Use %s to find where it is defined" }
           ]
         },
         /RecordNotFound/ => {
@@ -106,7 +106,7 @@ module RailsAiContext
           type: :routing,
           likely: "No route matches the request. The URL or HTTP verb doesn't match any defined route.",
           fix: [
-            [ "rails_get_routes", nil, "Run %s to see all defined routes" ],
+            { tool: "rails_get_routes", args: nil, text: "Run %s to see all defined routes" },
             "Check the HTTP verb (GET vs POST vs PATCH) matches",
             "Verify the route is not restricted by constraints"
           ]
@@ -125,7 +125,7 @@ module RailsAiContext
           likely: "A database query references a column or table that doesn't exist. Common after migrations or in stale schema.",
           fix: [
             "Run `rails db:migrate` to apply pending migrations",
-            [ "rails_get_schema", %(table:"..."), "Check %s for actual column names" ],
+            { tool: "rails_get_schema", args: %(table:"..."), text: "Check %s for actual column names" },
             "Verify the migration was generated correctly"
           ]
         },
@@ -135,7 +135,7 @@ module RailsAiContext
           fix: [
             "Check the instance variables set in the controller action",
             "Verify partial locals are passed correctly",
-            [ "rails_get_view", %(controller:"..."), "Use %s to see template structure" ]
+            { tool: "rails_get_view", args: %(controller:"..."), text: "Use %s to see template structure" }
           ]
         },
         /ArgumentError/ => {
@@ -143,7 +143,7 @@ module RailsAiContext
           likely: "A method received wrong number or type of arguments.",
           fix: [
             "Check the method signature matches the call site",
-            [ "rails_search_code", %(pattern:"method_name", match_type:"trace"), "Use %s to see definition and callers" ]
+            { tool: "rails_search_code", args: %(pattern:"method_name", match_type:"trace"), text: "Use %s to see definition and callers" }
           ]
         },
         # The authorization gems' two failures, by the words their class names share.
@@ -153,7 +153,7 @@ module RailsAiContext
           fix: [
             "Call `authorize record` (or `policy_scope(Model)`) in the action",
             "If the action is meant to be open, leave it out of the check: `skip_after_action :verify_authorized, only: :action_name`",
-            [ "rails_get_controllers", %(controller:"...", action:"..."), "Use %s to see the filters that run on the action" ]
+            { tool: "rails_get_controllers", args: %(controller:"...", action:"..."), text: "Use %s to see the filters that run on the action" }
           ]
         },
         /NotAuthorized|AccessDenied/ => {
@@ -227,7 +227,7 @@ module RailsAiContext
           lines.concat(next_steps)
         end
 
-        output = lines.join("\n")
+        output = lines.join("\n").rstrip
 
         # Final safety cap: if total output still exceeds limit, hard-truncate
         if output.length > MAX_TOTAL_OUTPUT
@@ -247,14 +247,14 @@ module RailsAiContext
       class << self
         private
 
-        # Numbered steps; a step pointing at a tool the app does not serve
-        # ([tool, args, text with %s for the call]) is left out.
+        # Numbered steps; one whose text holds a tool call (%s) is left out
+        # when the app does not serve that tool.
         def fix_steps(steps)
           kept = steps.filter_map do |step|
-            next step unless step.is_a?(Array)
+            next step unless step.is_a?(Hash)
 
-            call = pointer(step[0], step[1])
-            step[2].sub("%s") { call } if call
+            call = pointer(step[:tool], step[:args])
+            step[:text].sub("%s") { call } if call
           end
           kept.each_with_index.map { |step, index| "#{index + 1}. #{step}" }.join("\n")
         end
@@ -355,8 +355,8 @@ module RailsAiContext
             likely: likely,
             fix: [
               "Check the error message for clues about what went wrong",
-              [ "rails_search_code", %(pattern:"#{exception_class&.split("::")&.last || "ErrorName"}"), "Use %s to find where the app raises or rescues it" ],
-              [ "rails_read_logs", %(level:"ERROR"), "Use %s for the backtrace" ]
+              { tool: "rails_search_code", args: %(pattern:"#{exception_class&.split("::")&.last || "ErrorName"}"), text: "Use %s to find where the app raises or rescues it" },
+              { tool: "rails_read_logs", args: %(level:"ERROR"), text: "Use %s for the backtrace" }
             ]
           }
         end
@@ -407,7 +407,7 @@ module RailsAiContext
               likely: "`#{m[2]}` is #{m[1]} on #{receiver ? "`#{receiver}`" : "the receiver"}, so it cannot be called from outside the object.",
               fix: [
                 "Call it from inside the class, or make it public if it is part of the interface",
-                [ "rails_search_code", %(pattern:"#{m[2]}", match_type:"definition"), "Use %s to see where it is defined and under which visibility" ]
+                { tool: "rails_search_code", args: %(pattern:"#{m[2]}", match_type:"definition"), text: "Use %s to see where it is defined and under which visibility" }
               ]
             }
           end
@@ -430,7 +430,7 @@ module RailsAiContext
             fix: [
               suggestion ? "Call `#{suggestion}`, the method #{subject} has" : "Check the name against the methods #{subject} defines",
               "Check the call goes to the object you think: an association or a presenter can hand back another class",
-              [ "rails_search_code", %(pattern:"#{name}", match_type:"trace"), "Use %s to find its definition and its callers" ]
+              { tool: "rails_search_code", args: %(pattern:"#{name}", match_type:"trace"), text: "Use %s to find its definition and its callers" }
             ]
           }
         end
@@ -511,7 +511,7 @@ module RailsAiContext
             type: :undefined_method_on_model,
             likely: likely,
             fix: [
-              [ "rails_get_model_details", %(model:"#{receiver}"), "Run %s to see #{receiver}'s real associations and columns" ],
+              { tool: "rails_get_model_details", args: %(model:"#{receiver}"), text: "Run %s to see #{receiver}'s real associations and columns" },
               "Check for a typo in the method name or a missing association declaration (has_many/belongs_to)",
               "If the data lives on another model, add the association or a delegate"
             ]

@@ -44,8 +44,7 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
-  # One tool by name, by the rule tools/list follows, without loading the
-  # other 44 classes.
+  # One tool by name, by the rule tools/list follows, loading no other class.
   describe ".served_tool" do
     let(:config) { RailsAiContext::Configuration.new }
     let(:custom) { double("MyApp::SchemaTool", tool_name: "rails_get_schema") }

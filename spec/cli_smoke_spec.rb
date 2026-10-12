@@ -132,7 +132,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     declared = RailsAiContext::Server.builtin_tools
       .select { |tool| tool != config && (tool.input_schema_value&.to_h || {}).fetch(:properties, {}).key?(:environment) }
       .map { |tool| RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) }
-    declared += config::SECTION_PARAMS.select { |_, params| params.include?(:environment) }.keys
+    declared += config::SECTIONS.select { |section| section.params.include?(:environment) }.map(&:name)
 
     expect(listed.sort).to eq(declared.sort)
   end

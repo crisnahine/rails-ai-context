@@ -199,7 +199,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
   end
 
   describe "CLI tool invocations" do
-    # Representative sample of the 35 tools - covers the main output
+    # Representative sample of the tools - covers the main output
     # channels (schema, routes, models, components, etc.). Running ALL 35
     # via subprocess per describe block would push wall-clock past 5
     # minutes; the in-process ToolRunner smoke spec covers complete

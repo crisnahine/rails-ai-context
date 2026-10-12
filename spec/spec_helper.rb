@@ -8,6 +8,10 @@ end
 
 require "rails_ai_context"
 
+# Rails 8 draws routes on first use, which loads the controllers and runs their load hooks:
+# inside an example that hides ActiveRecord, that first use raises NameError.
+Rails.application.reload_routes_unless_loaded if Rails.application.respond_to?(:reload_routes_unless_loaded)
+
 # A commit starts git's auto maintenance, which runs in the background from
 # git 2.47 on and writes under .git while the spec that committed removes the
 # repository (ENOENT on .git/objects/maintenance.lock). Every git the suite

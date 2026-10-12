@@ -2,9 +2,8 @@
 
 module RailsAiContext
   module DatabaseFamily
-    # MySQL bounds every statement with the session max_execution_time, which also holds a
-    # WITH or EXPLAIN ANALYZE that the optimizer hint would miss. MariaDB has no
-    # max_execution_time and ignores the hint, so it scopes max_statement_time to the statement.
+    # MySQL bounds a statement with the session max_execution_time, which also holds a WITH or EXPLAIN ANALYZE.
+    # MariaDB has no max_execution_time, so it scopes max_statement_time to the statement.
     module MysqlRuntime
       module_function
 

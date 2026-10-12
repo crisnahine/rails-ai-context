@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  # Loading all 35 tools to find one was a tenth of a one-tool CLI call.
+  # Loading every tool to find one was a tenth of a one-tool CLI call.
   describe "resolving a name the tool classes spell" do
     it "loads no tool list for a short, medium or full name" do
       allow(described_class).to receive(:available_tools).and_call_original
@@ -55,11 +55,10 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  # Ten tools became sections of rails_get_config; scripts and context files
-  # written before that still name them.
+  # Scripts and context files name the ten tools whose answers are rails_get_config sections.
   describe "a name that became a config section" do
     it "resolves every old short and full name to rails_get_config" do
-      RailsAiContext::Tools::GetConfig::SECTIONS.each_value do |tool_name|
+      RailsAiContext::Tools::GetConfig::SECTIONS.map(&:tool_name).each do |tool_name|
         short = described_class.short_name(tool_name)
         [ short, tool_name ].each do |name|
           expect(described_class.new(name, []).tool_class).to eq(RailsAiContext::Tools::GetConfig)

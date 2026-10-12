@@ -4,12 +4,11 @@ module RailsAiContext
   module Tools
     class GetActiveSupport < BaseTool
       tool_name "rails_get_active_support"
-      abstract!
+      section_renderer!
       description "Get ActiveSupport surface: concern modules across app/**/concerns, registered deprecators, MessageVerifier/MessageEncryptor usage, the ActiveSupport::Notifications events the app subscribes to and where, tagged logging, subscribed on_load hooks, and cache store. " \
         "Use when: checking framework-level wiring, finding where crypto helpers are used, or understanding boot-time hooks."
 
       input_schema(properties: {})
-
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

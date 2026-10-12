@@ -195,7 +195,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.error?).to be true
       end
 
-      it "refuses an engine with no family by its adapter's name and sends no statement" do
+      it "refuses an adapter with no family by its adapter's name and sends no statement" do
         conn = ActiveRecord::Base.connection
         allow(conn).to receive(:adapter_name).and_return("SQLServer")
         %i[execute select_all select_value select_rows exec_query columns tables transaction].each do |sent|
@@ -646,10 +646,15 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).not_to include("[FILTERED]")
     end
 
-    it "still redacts an allowed column declared with encrypts" do
+    it "refuses a statement naming an allowed column declared with encrypts, under any alias" do
       allow(described_class).to receive(:cached_context).and_return(models: { "Thing" => { encrypts: %w[secret] } })
-      text = described_class.call(sql: "SELECT 7 AS secret").content.first[:text]
-      expect(text).to include("[FILTERED]")
+      [ "SELECT 7 AS secret", "SELECT secret AS s FROM (SELECT 7 AS secret) t" ].each do |sql|
+        response = described_class.call(sql: sql)
+        text = response.content.first[:text]
+        expect(response.error?).to be(true), sql
+        expect(text).to include("sensitive column `secret`", "config.query_allowed_columns does not release it")
+        expect(text).not_to include("| 7", "add \"secret\"")
+      end
     end
   end
 

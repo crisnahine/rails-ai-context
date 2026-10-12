@@ -53,6 +53,20 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(secrets(encrypted: %w[tax_number]).encrypted?("TAX_NUMBER")).to be(true)
     end
 
+    it "keeps an allowed encrypts column secret, so a statement naming it is refused" do
+      config.query_allowed_columns = %w[tax_number]
+      secrets = secrets(relations: { "users" => %w[id tax_number] }, encrypted: %w[tax_number])
+      expect(secrets.secret?("tax_number")).to be(true)
+      expect(secrets.named_in("select tax_number as t from users")).to eq("tax_number")
+      expect(secrets.in_schema).to eq(%w[tax_number])
+      expect(secrets.of_relation("users")).to eq(%w[tax_number])
+    end
+
+    it "names an allowed encrypts column the schema does not list" do
+      config.query_allowed_columns = %w[tax_number]
+      expect(secrets(encrypted: %w[tax_number]).named_in("select tax_number from users")).to eq("tax_number")
+    end
+
     it "treats a word added to Redaction's secret words as secret with no other change" do
       allow(RailsAiContext::Redaction).to receive(:secret_name?).and_call_original
       allow(RailsAiContext::Redaction).to receive(:secret_name?).with("national_id").and_return(true)
@@ -133,6 +147,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "keeps one answer per database within a run" do
       other = conn.dup
       allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
+      allow(other).to receive(:tables).and_return([])
       RailsAiContext::RunCache.around do
         expect(described_class.for(conn, context: context)).to be(described_class.for(conn, context: context))
         expect(described_class.for(other, context: context)).not_to be(described_class.for(conn, context: context))
@@ -149,6 +164,15 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(secrets.of_relation("widgets")).to eq(%w[api_token])
       expect(secrets.relation_secret?("ar_internal_metadata")).to be(false)
       expect(secrets.named_in("select key from ar_internal_metadata")).to be_nil
+    end
+
+    it "reads no schema from the context for another database whose tables cannot be read" do
+      other = conn.dup
+      allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
+      allow(other).to receive(:tables).and_raise(ActiveRecord::StatementInvalid, "gone")
+      secrets = described_class.for(other, context: context)
+      expect(secrets.of_relation("widgets")).to eq([])
+      expect(secrets.in_schema).to eq([])
     end
 
     it "leaves bookkeeping tables out of a connection read" do

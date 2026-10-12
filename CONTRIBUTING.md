@@ -82,13 +82,13 @@ bundle exec rspec spec/lib/    # Just lib specs
 bundle exec rubocop --parallel # Lint check
 ```
 
-### Real database engines
+### Real database servers
 
-The suite runs on SQLite. `spec/lib/rails_ai_context/database_family/engines_spec.rb`
-runs the PostgreSQL, MySQL and MariaDB families against real engines, one group
+The suite runs on SQLite. `spec/lib/rails_ai_context/database_family/database_servers_spec.rb`
+runs the PostgreSQL, MySQL and MariaDB families against real database servers, one group
 per URL that is set:
 
-| Variable | Engine | Example |
+| Variable | Database server | Example |
 |---|---|---|
 | `RAC_TEST_PG_URL` | PostgreSQL | `postgresql://postgres:secret@127.0.0.1:5432/rac` |
 | `RAC_TEST_MYSQL_URL` | MySQL, through mysql2 or Trilogy | `trilogy://root:secret@127.0.0.1:3306/rac` |
@@ -98,13 +98,14 @@ The URL's scheme picks the adapter. The drivers come from a separate Gemfile:
 
 ```bash
 docker run -d --name rac-mysql -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=rac -p 3306:3306 mysql:8.4
-BUNDLE_GEMFILE=gemfiles/engines.gemfile bundle install
+BUNDLE_GEMFILE=gemfiles/database_servers.gemfile bundle install
 RAC_TEST_MYSQL_URL=trilogy://root:secret@127.0.0.1:3306/rac \
-  BUNDLE_GEMFILE=gemfiles/engines.gemfile bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+  BUNDLE_GEMFILE=gemfiles/database_servers.gemfile bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
 ```
 
-The specs create and drop the tables `rac_engine_rows` and `rac_engine_view`, so point them at a scratch database.
-CI's `engines` job runs them on MySQL 8.0 and 8.4, MariaDB 10.6 and 11.4 and PostgreSQL 16.
+The specs create and drop the tables `rac_server_rows` and `rac_server_view`, so point them at a scratch database.
+CI's `database_servers` job runs them on MySQL 8.0 and 8.4, MariaDB 10.6 and 11.4 and PostgreSQL 16, on Rails 7.0, 8.0 and 8.1.
+Rails 7.0 has no Trilogy adapter, so its leg runs PostgreSQL and mysql2 only.
 
 ### Static fixture
 

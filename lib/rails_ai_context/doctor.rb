@@ -303,7 +303,7 @@ module RailsAiContext
 
     def unreachable_database_check(databases, pending)
       env = RailsAiContext.environment_name
-      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(ActiveRecord::NoDatabaseError) }
+      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(ActiveRecord::NoDatabaseError) || db[:error].is_a?(AppDatabases::Missing) }
       shown = ->(db) { databases.one? ? database_named(db[:config]) : "#{db[:name]} (#{database_named(db[:config])})" }
       said = []
       if missing.any?
@@ -345,7 +345,7 @@ module RailsAiContext
     # the app's root, as the adapter reads it, named from where doctor was typed.
     def database_named(db_config)
       name = db_config.database.to_s
-      return name unless DatabaseFamily.of(db_config).key == :sqlite && !name.empty? && name != ":memory:" &&
+      return name unless DatabaseFamily.of(db_config).sqlite? && !name.empty? && name != ":memory:" &&
         !name.start_with?("file:") && !SafePath.absolute?(name)
 
       typed_path(File.expand_path(name, app.root.to_s))

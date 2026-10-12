@@ -182,6 +182,37 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
   end
 
+  describe "a timeout of zero or under a millisecond" do
+    [ 0, 0.0004 ].each do |timeout|
+      it "still bounds a PostgreSQL statement, at one millisecond (#{timeout})" do
+        conn = mysql_class.new(false)
+        conn.define_singleton_method(:execute) { |sql| statements << sql }
+        described_class::POSTGRESQL.read_only(conn, "SELECT 1", timeout: timeout)
+        expect(conn.statements).to include("SET LOCAL statement_timeout = '1'")
+      end
+
+      it "still bounds a MySQL and a MariaDB statement (#{timeout})" do
+        mysql = mysql_class.new(false)
+        mariadb = mysql_class.new(true)
+        described_class::MYSQL.read_only(mysql, "SELECT 1", timeout: timeout)
+        described_class::MYSQL.read_only(mariadb, "SELECT 1", timeout: timeout)
+        expect(mysql.statements).to include("SET SESSION max_execution_time = 1")
+        expect(mariadb.statements).to include("SET STATEMENT max_statement_time = 0.001 FOR SELECT 1")
+      end
+    end
+
+    it "times a SQLite statement out at once", if: Process.respond_to?(:fork) do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "bounded.sqlite3")
+        SQLite3::Database.new(path).close
+        conn = double("connection", pool: double(db_config: double(configuration_hash: {})))
+        allow(described_class::SqliteRuntime).to receive(:fork_path).and_return(path)
+
+        expect { described_class::SQLITE.read_only(conn, "SELECT 1", timeout: 0) }.to raise_error(described_class::TimedOut)
+      end
+    end
+  end
+
   it "raises errors under the gem's own base class" do
     expect([ described_class::TimedOut, described_class::Unsupported ]).to all(be < RailsAiContext::Error)
   end
@@ -222,7 +253,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
   end
 
-  describe "an engine with no family" do
+  describe "an adapter with no family" do
     let(:family) { described_class.of(untouchable) }
 
     %i[read_only explain plan].each do |call|

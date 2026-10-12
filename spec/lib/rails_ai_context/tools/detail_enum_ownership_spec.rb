@@ -22,7 +22,7 @@ RSpec.describe "DetailLevel owns the schema enum" do
 
   it "builds every tool's detail property, wording aside" do
     config = RailsAiContext::Tools::GetConfig
-    renderers = config::SECTIONS.keys.drop(1).map { |section| config.renderer(section) }
+    renderers = config::SECTIONS.reject(&:app?).map(&:renderer)
     tools = (RailsAiContext::Tools::BaseTool.registered_tools + renderers).select(&:detail_param?)
 
     expect(tools.size).to be >= 20

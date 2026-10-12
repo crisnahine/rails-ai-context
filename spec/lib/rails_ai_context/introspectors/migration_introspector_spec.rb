@@ -230,6 +230,19 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
       end
     end
 
+    it "leaves out a database whose migrations directories hold no files" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => database_yml.sub("db/cache.sqlite3", "db/cache.sqlite3\n    migrations_paths: db/cache_migrate"),
+                       "db/migrate/20260101000001_create_users.rb" => "class CreateUsers; end\n",
+                       "db/cache_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\nend\n",
+                       "db/analytics_migrate/.keep" => "")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call).not_to have_key(:secondary_databases)
+      end
+    end
+
     it "says nothing pending for a database whose dump is not written yet" do
       hide_const("ActiveRecord")
 

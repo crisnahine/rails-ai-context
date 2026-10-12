@@ -13,6 +13,16 @@ module RailsAiContext
     # model's context instead, with enough detail to retry or route around
     # the failure.
     module SafeCall
+      # The content with the note ending its first text block, or the content
+      # itself when there is no note or no text to end.
+      def self.noted(content, note)
+        first = Array(content).first
+        return content unless note && first.is_a?(Hash) && first[:type] == "text"
+
+        body = first[:text].to_s
+        [ first.merge(text: body.strip.empty? ? note.lstrip : "#{body}#{note}") ] + content[1..].to_a
+      end
+
       def call(**kwargs)
         # An MCP client sends whatever keys it likes. Reaching the tool with
         # one it does not declare answers with an unknown-keyword ArgumentError
@@ -174,12 +184,8 @@ module RailsAiContext
       def append_note(response, note)
         return response unless note && response.respond_to?(:content)
 
-        content = response.content
-        first = content.first
-        return response unless first.is_a?(Hash) && first[:type] == "text"
-
-        body = first[:text].to_s
-        noted = [ first.merge(text: body.strip.empty? ? note.lstrip : "#{body}#{note}") ] + content[1..].to_a
+        noted = SafeCall.noted(response.content, note)
+        return response if noted.equal?(response.content)
 
         # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
         # reader is still asked for rather than assumed: getting it wrong

@@ -18,7 +18,7 @@ RSpec.describe "the app databases on a Rails 8 app" do
     ENV["RAILS_ENV"] = previous.last
   end
 
-  it "names the same four databases in the schema, multi-database, model and migrations sections" do
+  it "names the same four databases in the schema, multi-database and model sections, and none in migrations while they have no migration files" do
     schema = RailsAiContext::Introspectors::SchemaIntrospector.new(app).static_call
     multi = RailsAiContext::Introspectors::MultiDatabaseIntrospector.new(app).call
     models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
@@ -29,6 +29,6 @@ RSpec.describe "the app databases on a Rails 8 app" do
       .to eq([ [ "primary", nil ], [ "cache", %w[production] ], [ "queue", %w[production] ], [ "cable", %w[production] ] ])
     expect(multi[:multi_db]).to be(true)
     expect(models["QueuedJob"]&.dig(:table_name)).to eq("solid_queue_jobs")
-    expect(migrations[:secondary_databases].keys).to eq(%w[cache queue cable])
+    expect(migrations).not_to have_key(:secondary_databases)
   end
 end

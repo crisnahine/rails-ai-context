@@ -149,7 +149,7 @@ module RailsAiContext
 
       # A rails_get_config section named once in prose, or nil when skip_tools turned it off.
       def section_ref(section)
-        return nil unless served?("rails_get_config") && RailsAiContext::Tools::GetConfig.section_on?(section)
+        return nil unless RailsAiContext::Tools::GetConfig.section_named(section).served?
 
         tool_ref("rails_get_config", %(section:"#{section}"), "section=#{section}")
       end
@@ -181,7 +181,7 @@ module RailsAiContext
 
       def detail_tool_names
         exposed_tools
-          .select { |tool| tool.respond_to?(:input_schema) && tool.input_schema.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
+          .select { |tool| tool.input_schema_value.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
           .map { |tool| name = RailsAiContext::Server.tool_label(tool); "`#{tool_mode == :cli ? RailsAiContext::CLI::ToolRunner.short_name(name) : name}`" }
       end
 
