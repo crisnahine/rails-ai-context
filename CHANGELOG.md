@@ -82,9 +82,10 @@ Ten tools that each answered one section of the app's configuration leave
   `--detail quick` warns with them and answers at `standard`.
 - **Apps on SQL Server, Oracle or CockroachDB lose `rails_query`.** It
   answers with the adapter's name and runs nothing (ADR-0008). It ran there
-  with no read-only transaction and no timeout, and on SQL Server and Oracle
-  its row cap appended a `LIMIT` those databases do not read. Add
-  `rails_query` to `skip_tools` to take it out of `tools/list`.
+  with no read-only transaction and no timeout. On SQL Server and Oracle the
+  `LIMIT` its row cap appended is a syntax error, so a query without its own
+  row limit failed. Add `rails_query` to `skip_tools` to take it out of
+  `tools/list`.
   `rails_runtime_info` still answers, and says table sizes, row estimates
   and index usage are not available for the adapter.
 - **Regenerate the context files** (`rails ai:context` or
@@ -213,8 +214,8 @@ Ten tools that each answered one section of the app's configuration leave
   names a key it does not take.
 - **A SQLite database whose file is not there is refused by name.**
   `rails_query` and `rails_runtime_info` name the database and
-  `bin/rails db:prepare`, with or without `database`, and create nothing. A
-  query on it created an empty file.
+  `bin/rails db:prepare`, with or without `database`, and create nothing.
+  Connecting to it created the database file.
 - **PostgreSQL bounds a statement when `query_timeout` is zero.** Zero, or
   a value under a millisecond, turned the statement timeout off. The
   statement is now bounded at one millisecond.

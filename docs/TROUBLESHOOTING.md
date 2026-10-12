@@ -276,10 +276,12 @@ config.allow_query_in_production = true
 
 The SQL gate refuses write statements, file and admin functions and secret column names, and the message names what it hit. Only read statements run: SELECT, WITH, SHOW, EXPLAIN and DESCRIBE.
 
-Common false positives:
-- A blocked keyword inside a string (`WHERE note = 'please insert coin'`) → the validator matches words, not SQL structure, so the query is refused
-- Hash characters → a `#` starts a comment on MySQL only, and never inside a quoted string
-- JSONB operators (`#>>`) → preserved correctly since v5.6.0
+What a string literal holds decides some of these:
+- A write keyword or a semicolon inside a string (`WHERE note = 'please insert coin'`, `'a; b'`) is data on every database, and the query runs
+- A secret column's name, `FOR UPDATE` / `FOR SHARE` or `UNION` inside a string is data on PostgreSQL only. On MySQL and SQLite the raw text decides and the query is refused, since no later check there would catch a quote the masking misread
+- A file or network function (`pg_read_file`, `LOAD_FILE`), `INTO OUTFILE` / `INTO DUMPFILE`, a session or administrative function (`pg_terminate_backend`, `GET_LOCK`) and a refused `SHOW` form (`SHOW GRANTS`) are refused wherever they stand, inside a string too
+- A `#` starts a comment on MySQL only, and never inside a quoted string
+- A JSONB operator (`#>>`) runs as written (since v5.6.0)
 
 ### "Column values show [FILTERED]"
 

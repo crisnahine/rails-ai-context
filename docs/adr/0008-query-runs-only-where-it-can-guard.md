@@ -18,7 +18,7 @@ Status: accepted
 
 ## Consequences
 
-Apps on SQL Server, Oracle or CockroachDB have no `rails_query`. On SQL Server and Oracle its row cap appends a `LIMIT` those databases do not read. Supporting another database means adding a family with its own read-only and timeout spelling, verified against a real server.
+Apps on SQL Server, Oracle or CockroachDB have no `rails_query`. On SQL Server and Oracle the `LIMIT` its row cap appends is a syntax error, so a query without its own row limit fails there. Supporting another database means adding a family with its own read-only and timeout spelling, verified against a real server.
 
 ## Alternatives not taken
 
