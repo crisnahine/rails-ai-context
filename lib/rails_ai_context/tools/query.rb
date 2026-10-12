@@ -259,6 +259,14 @@ module RailsAiContext
           )
         end
 
+        family = DatabaseFamily.of(ActiveRecord::Base.connection)
+        unless family.known?
+          return error_response(
+            "rails_query refuses the #{family.name} adapter: it runs SQL only on an engine whose read-only " \
+            "transaction and statement timeout it knows (PostgreSQL, MySQL with MariaDB, SQLite). No statement was sent."
+          )
+        end
+
         # ── Layer 1: SQL validation ─────────────────────────────────
         mysql = mysql_dialect?
         postgres = postgres_adapter?
@@ -288,7 +296,7 @@ module RailsAiContext
 
         # ── EXPLAIN mode ────────────────────────────────────────────
         if explain
-          return execute_explain(sql, config.query_timeout)
+          return execute_explain(family, sql, config.query_timeout)
         end
 
         # Resolve row limit
@@ -297,7 +305,7 @@ module RailsAiContext
         timeout_seconds = config.query_timeout
 
         # ── Layers 2-3: Execute with DB-level safety + row limit ────
-        result = execute_safely(sql, row_limit, timeout_seconds)
+        result = execute_safely(family, sql, row_limit, timeout_seconds)
 
         # ── Layer 4: Redact sensitive columns ───────────────────────
         # Skip for SHOW/DESCRIBE/EXPLAIN - see SCHEMA_METADATA_PREFIX.
@@ -328,15 +336,15 @@ module RailsAiContext
         text_response(output)
       rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
         text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
+      rescue DatabaseFamily::TimedOut
+        text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
-        if e.message.match?(/timeout|statement_timeout|MAX_EXECUTION_TIME|max_statement_time|maximum statement execution time exceeded/i)
-          text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
         # Only a missing DATABASE. Postgres words a missing column and a
         # missing table the same way ("... does not exist"), and matching
         # that shape answered a real SQL error with `db:create` advice and
         # exit 0. `ActiveRecord::NoDatabaseError` is rescued above, so this
         # only catches adapters that raise the plain StatementInvalid.
-        elsif e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
+        if e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
           text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
         else
           # Genuine execution failure (unknown column, bad table, syntax
@@ -741,192 +749,14 @@ module RailsAiContext
       end
 
       # ── Database-level execution (Layer 2) ──────────────────────────
-      private_class_method def self.execute_safely(sql, row_limit, timeout_seconds)
-        conn = ActiveRecord::Base.connection
-        adapter = conn.adapter_name.downcase
-
+      private_class_method def self.execute_safely(family, sql, row_limit, timeout_seconds)
         limited_sql = apply_row_limit(sql, row_limit)
 
-        cap_rows(run_guarded(conn, adapter, limited_sql, timeout_seconds), sql, row_limit)
-      end
-
-      # EXPLAIN goes through the adapter wrappers too (READ ONLY, timeout): EXPLAIN ANALYZE runs
-      # the plan, so `explain: true` must not hold a connection past query_timeout.
-      private_class_method def self.run_guarded(conn, adapter, sql, timeout)
-        case DatabaseFamily.of(adapter).key
-        when :postgresql
-          execute_postgresql(conn, sql, timeout)
-        when :mysql
-          execute_mysql(conn, sql, timeout)
-        when :sqlite
-          execute_sqlite(conn, sql, timeout)
-        else
-          # Unknown adapter -- rely on Layer 1 regex validation only
-          conn.select_all(sql)
-        end
-      end
-
-      private_class_method def self.execute_postgresql(conn, sql, timeout)
-        result = nil
-        conn.transaction do
-          conn.execute("SET TRANSACTION READ ONLY")
-          conn.execute("SET LOCAL statement_timeout = '#{(timeout * 1000).to_i}'")
-          result = conn.select_all(sql)
-          raise ActiveRecord::Rollback
-        end
-        result
-      end
-
-      private_class_method def self.execute_mysql(conn, sql, timeout)
-        # Per-query timeout. MySQL honours the MAX_EXECUTION_TIME optimizer hint;
-        # MariaDB ignores it (a long query would run unbounded, holding the
-        # connection), so there the statement is bounded with MariaDB's own
-        # `SET STATEMENT max_statement_time = <seconds> FOR <query>`, which scopes
-        # the limit to this one statement and needs no restore on the pool.
-        bounded_sql = if mariadb_server?(conn)
-          "SET STATEMENT max_statement_time=#{[ timeout.to_f, 0.001 ].max} FOR #{sql}"
-        elsif sql.match?(/\ASELECT/i)
-          sql.sub(/\ASELECT/i, "SELECT /*+ MAX_EXECUTION_TIME(#{(timeout * 1000).to_i}) */")
-        else
-          sql
-        end
-
-        # The SET must run BEFORE the transaction opens: Rails materializes
-        # the lazy BEGIN ahead of the first in-block statement, and MySQL
-        # rejects changing transaction characteristics mid-transaction
-        # (error 1568). Without GLOBAL/SESSION scope the SET applies only to
-        # the next transaction, which the block below immediately consumes,
-        # so the read-only characteristic cannot leak onto the pooled
-        # connection. (#89)
-        result = nil
-        conn.execute("SET TRANSACTION READ ONLY")
-        conn.transaction do
-          result = conn.select_all(bounded_sql)
-          raise ActiveRecord::Rollback
-        end
-        result
-      end
-
-      # MariaDB and MySQL share the mysql2/trilogy adapters but bound a query
-      # differently; the adapter answers `mariadb?` on Rails 7.1+, and the
-      # server version string is the fallback.
-      private_class_method def self.mariadb_server?(conn)
-        return conn.mariadb? if conn.respond_to?(:mariadb?)
-
-        conn.select_value("SELECT VERSION()").to_s.include?("MariaDB")
-      rescue StandardError
-        false
-      end
-
-      # sqlite3-ruby cannot interrupt a running statement, so a killable child runs it instead.
-      private_class_method def self.execute_sqlite(conn, sql, timeout)
-        if (path = sqlite_fork_path(conn))
-          begin
-            return execute_sqlite_in_child(conn, path, sql, timeout)
-          rescue ActiveRecord::StatementInvalid => e
-            raise unless e.message.match?(SQLITE_APP_CONNECTION_ONLY)
-          end
-        end
-
-        result = nil
-        begin
-          conn.execute("PRAGMA query_only = ON")
-          result = conn.select_all(sql)
-        ensure
-          conn.execute("PRAGMA query_only = OFF")
-        end
-        ResultProxy.new(result.columns, result.rows, true)
-      end
-
-      # Errors from state only the app's own connection has: registered functions,
-      # virtual table modules, collations, an encryption key.
-      SQLITE_APP_CONNECTION_ONLY = /no such (?:function|module|collation)|file is not a database/i
-
-      # A row-capped result is far below this; a larger prefix is a corrupt one.
-      SQLITE_MAX_RESULT_BYTES = 1 << 30
-
-      private_class_method def self.read_before(reader, size, deadline)
-        data = "".b
-        while data.bytesize < size
-          left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          raise ActiveRecord::StatementInvalid, "SQLite query exceeded the statement timeout" unless left.positive? && IO.select([ reader ], nil, nil, left)
-
-          chunk = reader.read_nonblock([ size - data.bytesize, 1 << 16 ].min, exception: false)
-          raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result" if chunk.nil?
-
-          data << chunk unless chunk == :wait_readable
-        end
-        data
-      end
-
-      # nil for an in-memory or temporary database, or where there is no fork.
-      private_class_method def self.sqlite_fork_path(conn)
-        return nil unless Process.respond_to?(:fork)
-
-        path = conn.raw_connection.filename("main").to_s
-        path unless path.empty?
-      end
-
-      private_class_method def self.execute_sqlite_in_child(conn, path, sql, timeout)
-        parent = Process.pid
-        extensions = Array(conn.pool.db_config.configuration_hash[:extensions]).map { |ext| (ext.is_a?(String) && ext.safe_constantize) || ext }
-        # sqlite3 2.x warns in every child that inherits a writable handle; Rails 8 silences it the same way.
-        SQLite3::ForkSafety.suppress_warnings! if defined?(SQLite3::ForkSafety)
-
-        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-        reader, writer = IO.pipe.each(&:binmode)
-        pid = fork { answer_in_child(reader, writer, path, sql, timeout, extensions) }
-        writer.close
-        read_child_result(reader, deadline)
-      ensure
-        # Also reached in a child whose fork hooks raised: it must not carry on as a second server.
-        exit!(1) if parent && Process.pid != parent
-        reader&.close
-        writer&.close
-        reap_child(pid) if pid
-      end
-
-      # Writes the length-prefixed result and exits without the parent's at_exit hooks.
-      private_class_method def self.answer_in_child(reader, writer, path, sql, timeout, extensions)
-        reader.close
-        payload = begin
-          db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
-          db.busy_timeout = (timeout * 1000).to_i
-          stmt = db.prepare(sql)
-          [ :ok, stmt.columns, stmt.to_a ]
-        rescue => e
-          [ :error, "#{e.class}: #{e.message}" ]
-        end
-        bytes = Marshal.dump(payload)
-        writer.write([ bytes.bytesize ].pack("Q>"), bytes)
-      ensure
-        exit!(0)
-      end
-
-      # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
-      private_class_method def self.read_child_result(reader, deadline)
-        size = read_before(reader, 8, deadline).unpack1("Q>")
-        status, *rest = begin
-          raise ArgumentError, "result length out of range" if size > SQLITE_MAX_RESULT_BYTES
-
-          Marshal.load(read_before(reader, size, deadline))
-        rescue ArgumentError, TypeError
-          raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result"
-        end
-        raise ActiveRecord::StatementInvalid, rest.first if status == :error
-
-        ActiveRecord::Result.new(*rest)
-      end
-
-      # KILL: TERM cannot land while `step` holds the GVL, and would run inherited at_exit hooks.
-      # Runs in an ensure, so it rescues everything: nothing here may replace the query's own error.
-      private_class_method def self.reap_child(pid)
-        Process.kill(:KILL, pid) rescue nil
-        Process.wait(pid) rescue nil
+        cap_rows(family.read_only(ActiveRecord::Base.connection, limited_sql, timeout: timeout_seconds), sql, row_limit)
       end
 
       private_class_method def self.unbounded_note(result)
-        result.is_a?(ResultProxy) && result.unbounded ? UNBOUNDED_SQLITE_NOTE : ""
+        result.respond_to?(:unbounded) && result.unbounded ? UNBOUNDED_SQLITE_NOTE : ""
       end
 
       # Says, in every format, that the row cap held rows back, so a reader (or a
@@ -1024,21 +854,9 @@ module RailsAiContext
         RailsAiContext::RunCache.fetch([ :pg_plan, target ]) { explain_plan(target, timeout) }
       end
 
-      # Run EXPLAIN in its own read-only transaction and parse the JSON plan.
       private_class_method def self.explain_plan(sql, timeout)
         conn = ActiveRecord::Base.connection
-        json = nil
-        conn.transaction do
-          conn.execute("SET TRANSACTION READ ONLY")
-          conn.execute("SET LOCAL statement_timeout = '#{(timeout * 1000).to_i}'")
-          row = conn.select_all("EXPLAIN (VERBOSE, FORMAT JSON) #{sql}").rows.first
-          json = row&.first
-          raise ActiveRecord::Rollback
-        end
-        data = JSON.parse(json.to_s)
-        data.is_a?(Array) ? data.first&.dig("Plan") : nil
-      rescue ActiveRecord::StatementInvalid
-        nil
+        DatabaseFamily.of(conn).plan(conn, sql, timeout: timeout)
       end
 
       # Result-column indices whose top-node Output expression is a plain Var of
@@ -1316,37 +1134,17 @@ module RailsAiContext
       end
 
       # ── EXPLAIN execution ────────────────────────────────────────────
-      private_class_method def self.execute_explain(sql, timeout)
+      private_class_method def self.execute_explain(family, sql, timeout)
         unless sql.match?(/\A\s*(SELECT|WITH)\b/i)
           return text_response("EXPLAIN only supports SELECT queries.")
         end
 
-        conn = ActiveRecord::Base.connection
-        adapter = conn.adapter_name.downcase
-
-        explain_sql, parser = case DatabaseFamily.of(adapter).key
-        when :postgresql
-          [ "EXPLAIN (FORMAT JSON, ANALYZE) #{sql}", :parse_pg_explain ]
-        when :mysql
-          # MySQL 8.3+ and 9.x default explain_format to TREE, which
-          # parse_mysql_explain can't read (it expects the classic
-          # table/type/key/rows/Extra columns). Force TRADITIONAL explicitly
-          # so parsing works regardless of the server's default.
-          [ "EXPLAIN FORMAT=TRADITIONAL #{sql}", :parse_mysql_explain ]
-        when :sqlite
-          [ "EXPLAIN QUERY PLAN #{sql}", :parse_sqlite_explain ]
-        else
-          [ "EXPLAIN #{sql}", :parse_generic_explain ]
-        end
-
-        result = run_guarded(conn, adapter, explain_sql, timeout)
-        parsed = send(parser, result)
+        parsed = family.explain(ActiveRecord::Base.connection, sql, timeout: timeout)
 
         lines = [ "# EXPLAIN Analysis", "" ]
         lines << "**Query:** `#{sql.truncate(120)}`"
         lines << ""
 
-        # Summary
         if parsed[:scan_types]&.any?
           lines << "## Scan Summary"
           parsed[:scan_types].each do |scan|
@@ -1355,124 +1153,20 @@ module RailsAiContext
           lines << ""
         end
 
-        # Warnings
         if parsed[:warnings]&.any?
           lines << "## Warnings"
           parsed[:warnings].each { |w| lines << "- #{w}" }
           lines << ""
         end
 
-        # Raw plan
         lines << "## Raw Plan"
         lines << "```"
         lines << parsed[:raw]
         lines << "```"
 
-        text_response(lines.join("\n") + unbounded_note(result))
+        text_response(lines.join("\n") + (parsed[:unbounded] ? UNBOUNDED_SQLITE_NOTE : ""))
       rescue ActiveRecord::StatementInvalid => e
         text_response("EXPLAIN failed: #{clean_error_message(e.message)}")
-      end
-
-      private_class_method def self.parse_sqlite_explain(result)
-        scans = []
-        warnings = []
-        raw_lines = []
-
-        result.rows.each do |row|
-          # SQLite EXPLAIN QUERY PLAN columns: id, parent, notused, detail
-          detail = row.last.to_s
-          raw_lines << detail
-
-          if detail.match?(/SCAN\b/i)
-            table = detail.match(/SCAN\s+(?:TABLE\s+)?(\w+)/i)&.captures&.first
-            scan_type = detail.match?(/USING.*INDEX/i) ? "index scan" : "full table scan"
-            index = detail.match(/USING.*INDEX\s+(\w+)/i)&.captures&.first
-            scans << { table: table, type: scan_type, index: index }
-            warnings << "Full table scan on #{table}" if scan_type == "full table scan" && table
-          elsif detail.match?(/SEARCH\b/i)
-            table = detail.match(/SEARCH\s+(?:TABLE\s+)?(\w+)/i)&.captures&.first
-            index = detail.match(/USING.*INDEX\s+(\w+)/i)&.captures&.first
-            scans << { table: table, type: "index search", index: index }
-          end
-        end
-
-        { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n") }
-      end
-
-      private_class_method def self.parse_pg_explain(result)
-        scans = []
-        warnings = []
-
-        raw = result.rows.map { |r| r.first.to_s }.join("\n")
-
-        # PostgreSQL JSON format returns plan as JSON
-        begin
-          plan_data = JSON.parse(raw)
-          if plan_data.is_a?(Array) && plan_data.first.is_a?(Hash)
-            plan = plan_data.first["Plan"]
-            extract_pg_nodes(plan, scans, warnings) if plan
-          end
-        rescue JSON::ParserError
-          # Non-JSON EXPLAIN format - fall through to raw output
-        end
-
-        { scan_types: scans, warnings: warnings, raw: raw }
-      end
-
-      private_class_method def self.extract_pg_nodes(node, scans, warnings)
-        return unless node.is_a?(Hash)
-
-        node_type = node["Node Type"].to_s
-        table = node["Relation Name"]
-        index = node["Index Name"]
-        rows = node["Actual Rows"] || node["Plan Rows"]
-
-        if node_type.include?("Seq Scan")
-          scans << { table: table, type: "sequential scan", index: nil }
-          warnings << "Sequential scan on #{table} (#{rows} rows)" if rows.to_i > 1000
-        elsif node_type.include?("Index")
-          scans << { table: table, type: node_type.downcase, index: index }
-        end
-
-        (node["Plans"] || []).each { |child| extract_pg_nodes(child, scans, warnings) }
-      end
-
-      private_class_method def self.parse_mysql_explain(result)
-        scans = []
-        warnings = []
-        raw_lines = []
-
-        result.rows.each do |row|
-          cols = result.columns.zip(row).to_h
-          raw_lines << cols.map { |k, v| "#{k}: #{v}" }.join(", ")
-
-          table = cols["table"]
-          scan_type = cols["type"]
-          key = cols["key"]
-          rows = cols["rows"].to_i
-          extra = cols["Extra"].to_s
-
-          type_label = case scan_type
-          when "ALL" then "full table scan"
-          when "index" then "full index scan"
-          when "range" then "index range scan"
-          when "ref", "eq_ref" then "index lookup"
-          when "const", "system" then "constant lookup"
-          else scan_type.to_s
-          end
-
-          scans << { table: table, type: type_label, index: key }
-          warnings << "Full table scan on #{table} (#{rows} rows)" if scan_type == "ALL" && rows > 1000
-          warnings << "Using filesort on #{table}" if extra.include?("filesort")
-          warnings << "Using temporary table on #{table}" if extra.include?("temporary")
-        end
-
-        { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n") }
-      end
-
-      private_class_method def self.parse_generic_explain(result)
-        raw = result.rows.map { |r| r.join(" | ") }.join("\n")
-        { scan_types: [], warnings: [], raw: raw }
       end
 
       # ── Row limit enforcement (Layer 3) ─────────────────────────────

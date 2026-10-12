@@ -95,12 +95,14 @@ module RailsAiContext
           return [ "## Database", "", "_ActiveRecord not available._", "" ] unless defined?(ActiveRecord::Base)
 
           conn = ActiveRecord::Base.connection
-          adapter = conn.adapter_name.downcase
+          family = DatabaseFamily.of(conn)
           lines = [ "## Database", "" ]
           lines << "**Adapter:** #{SchemaAdapter.display(conn.adapter_name)}"
+          unless family.known?
+            lines << "" << "_Table sizes and index usage are not available for the #{family.name} adapter._"
+          end
 
-          # Table sizes
-          sizes = gather_table_sizes(conn, adapter)
+          sizes = gather_table_sizes(conn, family)
           if sizes&.any?
             lines << "" << "### Table Sizes"
             lines << "| Table | Size |"
@@ -127,7 +129,7 @@ module RailsAiContext
 
           # Index usage (full detail only)
           if RailsAiContext::DetailLevel.full?(detail)
-            index_usage = gather_index_usage(conn, adapter)
+            index_usage = gather_index_usage(conn, family)
             if index_usage&.any?
               lines << "" << "### Index Usage"
               unused = index_usage.select { |i| i[:scans] == 0 }
@@ -153,62 +155,20 @@ module RailsAiContext
         # introspector, which also skips them).
         INTERNAL_TABLES = %w[schema_migrations ar_internal_metadata].freeze
 
-        def gather_table_sizes(conn, adapter)
-          rows =
-            case DatabaseFamily.of(adapter).key
-            when :postgresql
-              Introspectors::PgPartitions.table_bytes(conn).sort_by { |r| [ -r[:bytes], r[:name] ] }
-            when :mysql
-              sql = "SELECT table_name AS name, (data_length + index_length) AS bytes FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() ORDER BY bytes DESC"
-              conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
-            when :sqlite
-              gather_sqlite_table_sizes(conn)
-            end
-          return nil unless rows
+        def gather_table_sizes(conn, family)
+          return nil unless family.known?
 
-          rows.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
+          family.table_sizes(conn)&.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "gather_table_sizes")
-        end
-
-        def gather_sqlite_table_sizes(conn)
-          # dbstat lists every b-tree: user tables, their indexes, and SQLite
-          # internals (sqlite_schema, sqlite_autoindex_*, sqlite_sequence).
-          # Restrict to real application tables so indexes and internal objects
-          # don't crowd out (or get mistaken for) the tables agents care about.
-          app_tables = conn.select_values(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-          ).to_set
-
-          begin
-            result = conn.select_all("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC")
-            rows = result.filter_map do |r|
-              { name: r["name"], bytes: r["bytes"].to_i } if app_tables.include?(r["name"])
-            end
-            return rows if rows.any?
-          rescue => e
-            RailsAiContext.debug_fail(e, label: "gather_sqlite_table_sizes (dbstat)")
-          end
-
-          # Fallback: whole-DB size split across user tables (dbstat unavailable).
-          page_count = conn.select_value("PRAGMA page_count").to_i
-          page_size = conn.select_value("PRAGMA page_size").to_i
-          total = page_count * page_size
-          tables = app_tables.to_a.sort
-          tables.map { |t| { name: t, bytes: total / [ tables.size, 1 ].max } }
         end
 
         def gather_pending_migrations
           RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root))
         end
 
-        def gather_index_usage(conn, adapter)
-          case DatabaseFamily.of(adapter).key
-          when :postgresql
-            Introspectors::PgPartitions.index_stats(conn).sort_by { |i| [ i[:scans], i[:table], i[:index] ] }
-          else
-            nil
-          end
+        def gather_index_usage(conn, family)
+          family.index_usage(conn) if family.known?
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "gather_index_usage")
         end
