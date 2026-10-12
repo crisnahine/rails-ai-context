@@ -68,13 +68,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   end
 
   describe "the library" do
-    database = /postg|mysql|trilogy|sqlite|maria/i
+    # A `sqlite_` table prefix and a URL scheme name no adapter.
+    database = %r{postg(?!\w*://)|mysql(?!\w*://)|trilogy|sqlite(?!_|\w*://)|maria}i
     rules = {
-      "tests an adapter name" => /\badapter\w*\b.*(?:\.match\?|=~|\.start_with\?|\.end_with\?|\.include\?|==|!=|\.casecmp)/,
+      "tests a database name" => /\.match\?|=~|!~|\.start_with\?|\.end_with\?|==|!=|\.eql\?|\.casecmp/,
+      "tests an adapter name against a list" => /\A(?=.*\badapter)(?=.*\.include\?)/,
       "switches on a database name" => /^\s*when\s+(?:\/|"|')/,
       "keeps a database name pattern" => /\b[A-Z_]*(?:ADAPTER|DIALECT)[A-Z_]*\s*=\s*(?:\/|%r)/
     }
-    # Only a database name inside a string or a pattern counts; a family key such as :mysql is the answer, not a test.
+    # Only a database name inside a string or a pattern counts. A family key such as :mysql is the answer the family gave.
     offences = lambda do |source|
       lines = source.lines
       named = Prism.lex(source).value.filter_map do |token, _|
@@ -101,10 +103,18 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         'adapter_name.to_s.match?(/sqlite/i)',
         'db_config.adapter.to_s == "sqlite3"',
         'return if adapter && !adapter.start_with?("postg")',
+        'return [ [ "public", false ] ] if known && !known.start_with?("postg")',
+        "mysql = name =~ /mysql|trilogy/",
+        'lite = settings["kind"] == "sqlite3"',
+        '%w[mysql2 trilogy].include?(adapter)',
         "case adapter\nwhen /sqlite/ then 1\nend",
         'MYSQL_ADAPTER = /mysql|trilogy/i'
       ].each { |source| expect(offences.call(source)).not_to be_empty, source }
-      expect(offences.call('x = family(adapter) == :mysql if type == "string"')).to be_empty
+      [
+        'x = family(adapter) == :mysql if type == "string"',
+        'next if dialect == :sqlite && shown.start_with?("sqlite_")',
+        'if name.start_with?("postgres://", "mysql://", "sqlite://")'
+      ].each { |source| expect(offences.call(source)).to be_empty, source }
     end
   end
 end
