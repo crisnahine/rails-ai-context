@@ -1,0 +1,8 @@
+test:
+  primary:
+    adapter: mysql2
+    database: app_test
+  primary_replica:
+    adapter: mysql2
+    database: app_test
+    replica: true
