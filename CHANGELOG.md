@@ -220,6 +220,17 @@ Ten tools that each answered one section of the app's configuration leave
   database family, `rails_runtime_info` says table sizes and index usage are
   not available for that adapter, and the database stats say the same of row
   estimates.
+- **`rails_query` reads the schema in three statements at most.** The
+  secret column rule read each table's columns with a statement of its own
+  on every call, about 1.5 seconds on a 300-table PostgreSQL schema and 2
+  seconds on MySQL. One catalogue read per family now lists every table's
+  columns, and one each reads the view definitions and the generated columns.
+- **`rails_get_service_pattern` says which files its count leaves out.** A
+  listing that counts fewer services than the service directories hold Ruby
+  files adds one line with the number left out and the kinds: base classes,
+  concerns, modules with no entry point that other code mixes in, mailers
+  and files too large to read. It names up to five of each kind, and the
+  base classes are named above the listing as before.
 - **Each database family owns its database's reads.** The read-only
   transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
   plan, table sizes, row estimates and index usage live in one place per
@@ -238,12 +249,11 @@ Ten tools that each answered one section of the app's configuration leave
 
 ### Fixed
 
-- **Every file requires the standard library it names.** Twelve files used `JSON`, `YAML`, `URI`, `Pathname`, `FileUtils`, `RbConfig`, `DidYouMean`, `Prism` or `Time.parse` and `iso8601` and worked only when another library had loaded it first. On a Ruby that does not load the library by itself that showed as "uninitialized constant" or "undefined method".
-- **`rails_get_service_pattern` says which files its count leaves out.** A
-  listing that counts fewer services than the service directories hold Ruby
-  files adds one line with the number left out and the kinds: base classes,
-  concerns, modules with no entry point that other code mixes in, mailers
-  and files too large to read, naming up to five of each.
+- **Every file requires the standard library it names.** Twelve files used
+  `JSON`, `YAML`, `URI`, `Pathname`, `FileUtils`, `RbConfig`, `DidYouMean`,
+  `Prism`, `Time.parse` or `iso8601` and worked only when another library
+  had loaded it first. On a Ruby that does not load the library by itself
+  that showed as "uninitialized constant" or "undefined method".
 - **`rails_onboard` answers on the static tier for an app with Solid
   databases.** On a default Rails 8 app `tool onboard --no-boot` answered
   "Onboard error: undefined method 'to_sentence'". The gem called an
@@ -289,7 +299,8 @@ Ten tools that each answered one section of the app's configuration leave
   marked with every one of them, "(production only)" or "(staging and
   production)", and one only a committed dump names is marked "(committed
   dump only)". The `rails_get_schema` Secondary databases line carries the
-  same mark as the generated files.
+  same mark as the generated files, and so does each database
+  `rails_onboard` names.
 - **A secondary dump too large to read is named.** It keeps an entry in the
   schema section that gives the reason, and a database whose migrations are
   replayed instead no longer has its existing dump called missing.
@@ -347,10 +358,6 @@ Ten tools that each answered one section of the app's configuration leave
   and says what to do: start its server or fix its `config/database.yml`
   entry, or run `bin/rails db:create`. A connection lost while the
   statement runs is an error that names the database too.
-- **`rails_query` reads the schema in three statements.** The secret column
-  rule read each table's columns with a statement of its own on every call,
-  about 1.5 seconds on a 300-table PostgreSQL schema and 2 seconds on
-  MySQL. One catalogue read per family now lists every table's columns.
 - **A `rails_query` timeout is an error.** A query that ran past
   `query_timeout` came back as an ordinary answer. With the same text it is
   now an error response, for a query and for `explain: true`: the CLI exits
