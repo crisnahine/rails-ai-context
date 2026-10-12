@@ -65,7 +65,7 @@ RSpec.describe RailsAiContext::Tools::GetContext do
 
       answer = text(described_class.call(model: "Post", include: %w[env gems]))
 
-      expect(answer).to include(RailsAiContext::Tools::GetConfig.section_off_message("env"))
+      expect(answer).to include("\n\n---\n\n_#{RailsAiContext::Tools::GetConfig.section_named('env').off_message}_")
       expect(answer).to include(text(RailsAiContext::Tools::GetConfig.call(section: "gems")))
     ensure
       RailsAiContext.configuration.skip_tools = saved

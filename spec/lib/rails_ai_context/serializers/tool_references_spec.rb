@@ -168,7 +168,7 @@ RSpec.describe "the tools every generated file names" do
 
       sections = RailsAiContext::Tools::GetConfig::SECTIONS
       RailsAiContext::Server.builtin_tools.map(&:tool_name).each do |name|
-        # rails_get_config is off only once every section is.
+        # Skipping its own name turns off the app section alone; every section's name takes it out of tools/list.
         RailsAiContext.configuration.skip_tools = name == "rails_get_config" ? sections.map(&:tool_name) : [ name ]
         generated_files.each { |path, content| expect(mentions(content, name)).to eq([]), "#{path} names skipped #{name}" }
       end

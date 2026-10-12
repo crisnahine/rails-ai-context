@@ -63,7 +63,7 @@ module RailsAiContext
         # Whether the app serves this built-in itself. A custom tool under its
         # name takes other parameters, so no answer runs it or points at it.
         def own_served?(tool)
-          RailsAiContext::Server.served_tool(tool.tool_name).equal?(tool)
+          !tool.nil? && RailsAiContext::Server.served_tool(tool.tool_name).equal?(tool)
         end
 
         # Sorted so load order never reaches tool --list or tools/list.
@@ -1068,13 +1068,13 @@ module RailsAiContext
         MCP_CALL = /\b(rails_\w+)\(([^()]*)\)/
         PARAM_HINT = /`((?:\w+:(?:"[^"`]*"|[\w.]+)(?:,\s*)?)+)`/
 
-        # A call to another tool as an answer writes it, then what it is for; nil when the
-        # app does not serve that tool or config section, so the hint around it is left out.
+        # A call to another tool as an answer writes it, then what it is for; nil when the app does not
+        # serve the gem's own tool or config section, so the hint is left out. A section goes by its retired name.
         def pointer(name, args = nil, purpose = nil)
           section = GetConfig.retired_section(name)
           args = [ %(section:"#{section.name}"), args ].compact.reject(&:empty?).join(", ") if section
-          section ||= GetConfig.section_named(args.to_s[/\bsection:"(\w+)"/, 1] || "app") if name == "rails_get_config"
-          return nil unless section ? section.served? : RailsAiContext::Server.served?(name)
+          section ||= GetConfig.section_named("app") if name == "rails_get_config"
+          return nil unless section ? section.served? : own_served?(tool_class(name))
 
           [ "`#{section ? 'rails_get_config' : name}(#{args})`", purpose ].compact.join(" ")
         end

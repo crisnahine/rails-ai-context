@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  # Loading every tool to find one was a tenth of a one-tool CLI call.
+  # Loading every tool to find one is a tenth of a one-tool CLI call.
   describe "resolving a name the tool classes spell" do
     it "loads no tool list for a short, medium or full name" do
       allow(described_class).to receive(:available_tools).and_call_original
@@ -460,11 +460,34 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(output).to include("Pattern is required")
     end
 
-    it "strips invalid enum value and uses tool default instead of raising" do
+    it "warns about a detail level it does not have and answers at the default one" do
       runner = described_class.new("schema", [ "--detail", "superdetailed" ])
-      output = runner.run
-      expect(output).to be_a(String)
-      expect(output).not_to be_empty
+      output = nil
+      expect { output = runner.run }.to output(/'superdetailed' is not a valid value for detail/).to_stderr
+      expect(output).to include("posts")
+      expect(runner.error).to eq(false)
+    end
+
+    it "refuses a value outside an optional parameter's list, naming the list, without running the tool" do
+      expect(RailsAiContext::Tools::GetSchema).not_to receive(:call)
+      runner = described_class.new("schema", [ "--format", "xml" ])
+
+      answer = nil
+      expect { answer = runner.run }.not_to output.to_stderr
+      expect(answer).to start_with("**Error:** `xml` is not a valid `format`. Valid: json, markdown")
+      expect(runner.error).to eq(true)
+    end
+
+    it "hands rails_get_config any section, so the tool refuses one it does not have" do
+      runner = described_class.new("config", [ "--section", "bogus" ])
+
+      expect(runner.run).to start_with("`section` does not take 'bogus'. It takes: app, gems,")
+      expect(runner.error).to eq(true)
+    end
+
+    it "takes a value in another case as the listed one" do
+      expect(described_class.new("schema", [ "--format", "JSON" ]).run).to start_with("{")
+      expect(described_class.new("config", [ "--section", "I18N" ]).run).to include("- **Default locale:** en")
     end
 
     # The text says the parameter is required, so a script wrapping the CLI

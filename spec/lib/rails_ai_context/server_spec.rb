@@ -44,6 +44,51 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  describe "a custom_tools entry that does not resolve" do
+    around do |example|
+      saved = RailsAiContext.configuration.custom_tools
+      RailsAiContext.configuration.custom_tools = [ "NoSuchApp::Tool" ]
+      example.run
+    ensure
+      RailsAiContext.configuration.custom_tools = saved
+    end
+
+    def warnings
+      printed = StringIO.new
+      saved, $stderr = $stderr, printed
+      yield
+      printed.string.scan("Skipping custom_tool").size
+    ensure
+      $stderr = saved
+    end
+
+    it "is warned about once in a tool call, however many pointers and sections the answer builds" do
+      expect(warnings { RailsAiContext::Tools::GetContext.call(model: "Post") }).to eq(1)
+    end
+
+    it "is warned about once by the server, and by no call it then answers" do
+      server = nil
+      expect(warnings { server = described_class.new(Rails.application).build }).to eq(1)
+
+      call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_context", arguments: { model: "Post" } } }
+      expect(warnings { server.handle(call) }).to eq(0)
+    end
+
+    it "is warned about once by a CLI run" do
+      expect(warnings { RailsAiContext::CLI::ToolRunner.new("context", { model: "Post" }).run }).to eq(1)
+    end
+
+    it "is resolved again in the same run once custom_tools changes" do
+      custom = Class.new(MCP::Tool) { tool_name "my_app_tool" }
+
+      RailsAiContext::RunCache.around do
+        expect(described_class.resolve_custom_tools).to eq([])
+        RailsAiContext.configuration.custom_tools = [ custom ]
+        expect(described_class.resolve_custom_tools).to eq([ custom ])
+      end
+    end
+  end
+
   # One tool by name, by the rule tools/list follows, loading no other class.
   describe ".served_tool" do
     let(:config) { RailsAiContext::Configuration.new }
@@ -323,9 +368,10 @@ RSpec.describe RailsAiContext::Server do
         expect(summary[:isError]).to be_falsey
         expect(summary[:content].first[:text]).not_to include("## ")
 
-        quick = call.call("quick")[:result]
-        expect(quick[:isError]).to be true
-        expect(quick[:content].first[:text]).to include('not one of: ["summary", "standard", "full"]')
+        # A newer SDK refuses the value as an error result, an older one as a JSON-RPC error.
+        quick = call.call("quick")
+        expect(quick.dig(:result, :isError)).to be(true) if quick[:result]
+        expect(quick.dig(:result, :content, 0, :text) || quick.dig(:error, :data)).to match(/summary\W+standard\W+full/)
       end
 
       # The SDK named only the guess.

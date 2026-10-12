@@ -514,7 +514,7 @@ module RailsAiContext
 
       private_class_method def self.check_column_references_ast(file, visitor, context)
         warnings = []
-        return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
+        return warnings unless file.start_with?("app/models/")
 
         valid = model_valid_columns(file, context)
         return warnings unless valid
@@ -534,7 +534,7 @@ module RailsAiContext
       # Regex fallback
       private_class_method def self.check_column_references_regex(file, content, context)
         warnings = []
-        return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
+        return warnings unless file.start_with?("app/models/")
 
         valid = model_valid_columns(file, context)
         return warnings unless valid
@@ -647,7 +647,7 @@ module RailsAiContext
 
       private_class_method def self.check_callback_existence_ast(file, visitor, context)
         warnings = []
-        return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
+        return warnings unless file.start_with?("app/models/")
         return warnings if visitor.callback_registrations.empty?
 
         models = Payload.models(context)
@@ -740,7 +740,7 @@ module RailsAiContext
       # `:versions`) has no line in the app to fix.
       private_class_method def self.check_has_many_dependent(file, context, content)
         warnings = []
-        return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
+        return warnings unless file.start_with?("app/models/")
 
         models = Payload.models(context)
         return warnings if models.empty?
@@ -767,7 +767,7 @@ module RailsAiContext
 
       private_class_method def self.check_missing_fk_index(file, context)
         warnings = []
-        return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
+        return warnings unless file.start_with?("app/models/")
 
         schema = Payload.section(context, :schema)
         models = Payload.models(context)
