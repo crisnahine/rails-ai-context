@@ -259,7 +259,7 @@ module RailsAiContext
       rescue StandardError
         nil
       end
-      private_class_method :installed_gem?, :gem_dirs, :bundle_path
+      private_class_method :gem_dirs, :bundle_path
     end
   end
 end

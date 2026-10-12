@@ -269,6 +269,8 @@ module RailsAiContext
       def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
+        # A *_controller.rb that declares only a module is a mixin controllers extend.
+        return nil if !DeclaredConstant.declares_class?(source, path_name: path_name) && DeclaredConstant.declared_module_names(source).any?
         return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source, path_name)
 
         name = DeclaredConstant.resolve(source, path_name)
@@ -291,8 +293,19 @@ module RailsAiContext
 
         bases.flat_map(&:descendants).reject do |ctrl|
           ctrl.name.nil? || ctrl.name == "ApplicationController" || DeclaredConstant.renamed?(ctrl) ||
-            ctrl.name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
+            ctrl.name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::") || gem_controller?(ctrl)
         end.uniq.sort_by(&:name)
+      end
+
+      # A gem's controller is in descendants only when something loaded it, which a rake
+      # boot and a generator boot do differently; it is not the app's. One with no source location stays.
+      def gem_controller?(ctrl)
+        located = Object.const_source_location(ctrl.name)&.first
+        return false unless located && File.exist?(located)
+
+        project_relative(located).nil? || SourceScan.installed_gem?(File.realpath(located), File.realpath(app.root.to_s))
+      rescue StandardError
+        false
       end
 
       # Controller files not yet loaded as classes, keyed by the name the path

@@ -22,6 +22,43 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:controllers]).to have_key("PostsController")
     end
 
+    # A gem's controller is in descendants only when something loaded it, which a rake boot
+    # and a generator boot do differently (flipflop's dashboard), so it is not the app's.
+    describe "a controller defined outside the app" do
+      let(:gem_dir) { Dir.mktmpdir }
+
+      after do
+        Object.send(:remove_const, :GemThingController) if defined?(GemThingController)
+        FileUtils.rm_rf(gem_dir)
+        GC.start
+      end
+
+      it "is not listed" do
+        path = File.join(gem_dir, "gem_thing_controller.rb")
+        File.write(path, "class GemThingController < ActionController::Base\n  def show; end\nend\n")
+        load path
+
+        expect(result[:controllers]).not_to have_key("GemThingController")
+        expect(result[:controllers]).to have_key("PostsController")
+      end
+    end
+
+    describe "a *_controller.rb that declares only a module" do
+      let(:mixin) { File.join(Rails.root, "app/controllers/listing_scope_controller.rb") }
+
+      before { File.write(mixin, "module ListingScopeController\n  def self.extended(base); end\nend\n") }
+
+      after do
+        FileUtils.rm_f(mixin)
+        Object.send(:remove_const, :ListingScopeController) if defined?(ListingScopeController)
+      end
+
+      it "is not listed, booted or static" do
+        expect(result[:controllers]).not_to have_key("ListingScopeController")
+        expect(introspector.static_call[:controllers]).not_to have_key("ListingScopeController")
+      end
+    end
+
     # A class that answers a name no constant carries stays in
     # ActionController::Base.descendants for the life of the process, and
     # keyed by that name it would overwrite the real controller's entry.
