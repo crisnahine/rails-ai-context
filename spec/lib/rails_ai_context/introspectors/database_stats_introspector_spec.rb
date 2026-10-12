@@ -39,6 +39,21 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
       connection&.drop_table(:ds_counted, if_exists: true)
     end
 
+    it "lists SQLite tables with the same row count by name" do
+      connection = ActiveRecord::Base.connection
+      names = (1..24).map { |i| format("ds_tie_%02d", i) }
+      names.reverse_each.with_index do |name, i|
+        connection.create_table(name, force: true) { |t| t.string :name }
+        connection.execute("INSERT INTO #{name} (name) VALUES ('x')") if (i % 3).zero?
+      end
+
+      listed = introspector.call[:tables].map { |t| t[:table] } & names
+      filled = names.reverse.each_slice(3).map(&:first).sort
+      expect(listed).to eq(filled + (names - filled))
+    ensure
+      names&.each { |name| connection&.drop_table(name, if_exists: true) }
+    end
+
     it "counts no SQLite virtual table or its shadow tables" do
       connection = ActiveRecord::Base.connection
       connection.execute("CREATE VIRTUAL TABLE ds_fts USING fts5 (title)")

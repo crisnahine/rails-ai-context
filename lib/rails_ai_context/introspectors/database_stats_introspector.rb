@@ -82,7 +82,7 @@ module RailsAiContext
           entry = { table: table, approximate_rows: [ count, SQLITE_COUNT_CAP ].min }
           entry[:at_least] = true if count > SQLITE_COUNT_CAP
           entry
-        end.sort_by { |t| -t[:approximate_rows] }
+        end.sort_by { |t| [ -t[:approximate_rows], t[:table] ] }
 
         { adapter: "sqlite", tables: tables, total_tables: tables.size }
       end
