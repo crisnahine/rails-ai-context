@@ -181,7 +181,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         expect(result.error?).to be true
         expect(result.content.first[:text]).to include("SQL error:")
-        expect(result.content.first[:text]).not_to include("was not found on its server")
+        expect(result.content.first[:text]).not_to include("cannot be reached")
       end
 
       it "answers the family's timeout as an error" do
@@ -225,33 +225,31 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.content.first[:text]).to include("refuses the SQLServer adapter")
       end
 
-      [
-        ActiveRecord::StatementInvalid.new(%(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist)),
-        ActiveRecord::NoDatabaseError.new("Unknown database 'racfix_nope'")
-      ].each do |missing|
-        it "answers a database its server does not have as an error that names it (#{missing.class.name.demodulize})" do
-          allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(missing)
-
-          result = described_class.call(sql: "SELECT 1")
-          text = result.content.first[:text]
-
-          expect(result.error?).to be true
-          expect(text).to start_with("The primary database was not found on its server:").and include("racfix_nope")
-          expect(text).to include("`bin/rails db:create`", "the `primary` entry of `config/database.yml`", "RAILS_ENV=test")
-        end
-      end
-
-      it "answers a server that cannot be reached as an error that names the database" do
-        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+      it "answers a primary no connection reaches as an error that names it" do
+        allow(ActiveRecord::Base.connection).to receive(:verify!)
           .and_raise(ActiveRecord::ConnectionNotEstablished, "connection to server at 127.0.0.1, port 5432 failed")
-
         result = described_class.call(sql: "SELECT 1")
-        text = result.content.first[:text]
 
         expect(result.error?).to be true
-        expect(text).to start_with("The primary database cannot be reached: connection to server at 127.0.0.1")
-        expect(text).to include("the `primary` entry of `config/database.yml`", "RAILS_ENV=test")
-        expect(text).not_to include("db:create")
+        expect(result.content.first[:text]).to eq("The primary database cannot be reached: connection to server at 127.0.0.1, " \
+          "port 5432 failed. Check the file its config/database.yml entry names.")
+      end
+
+      it "answers a connection lost during the statement as an error that names the database" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+          .and_raise(ActiveRecord::ConnectionNotEstablished, "server closed the connection unexpectedly")
+
+        result = described_class.call(sql: "SELECT 1")
+
+        expect(result.error?).to be true
+        expect(result.content.first[:text]).to eq("The primary database stopped answering during the query: server closed the connection unexpectedly")
+      end
+
+      it "reads a missing database named in an SQL error as the SQL error" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+          .and_raise(ActiveRecord::StatementInvalid, "Unknown database 'reports' in a cross-database read")
+
+        expect(described_class.call(sql: "SELECT 1").content.first[:text]).to start_with("SQL error: Unknown database 'reports'")
       end
 
       it "flags genuine SQL execution errors as error results" do
@@ -1350,6 +1348,14 @@ RSpec.describe RailsAiContext::Tools::Query do
     it "answers a failing EXPLAIN with a non-zero exit on the CLI and isError over MCP" do
       expect(cli("sql=SELECT nope FROM no_such_table", "explain=true")).to match([ a_string_starting_with("EXPLAIN failed:"), true ])
       expect(mcp(sql: "SELECT nope FROM no_such_table", explain: true)).to match([ a_string_starting_with("EXPLAIN failed:"), true ])
+    end
+
+    it "answers a database no connection reaches the same way" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished, "refused")
+      unreachable = [ "The primary database cannot be reached: refused. Check the file its config/database.yml entry names.", true ]
+
+      expect(cli("sql=SELECT 1")).to eq(unreachable)
+      expect(mcp(sql: "SELECT 1")).to eq(unreachable)
     end
 
     it "answers a timeout the same way, with the same text, for a query and for its EXPLAIN" do

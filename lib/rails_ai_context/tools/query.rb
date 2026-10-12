@@ -91,33 +91,15 @@ module RailsAiContext
       rescue AppDatabases::Error => e
         error_response(e.message)
       rescue ActiveRecord::ConnectionNotEstablished => e
-        unreachable_response(database, e, "cannot be reached", [
-          "Check %s for the host, port and credentials", "Start the database server if it is not running"
-        ])
+        # The lease checked the connection answers, so this one was lost while the statement ran.
+        name = database.to_s.empty? ? ActiveRecord::Base.connection_db_config.name : database
+        error_response("The #{name} database stopped answering during the query: #{clean_error_message(e.message)}")
       rescue DatabaseFamily::TimedOut
         error_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
-        if e.is_a?(ActiveRecord::NoDatabaseError) || e.message.match?(MISSING_DATABASE)
-          unreachable_response(database, e, "was not found on its server", [
-            "Run `bin/rails db:create` or `bin/rails db:prepare` to create it", "Check the database name in %s"
-          ])
-        else
-          error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
-        end
+        error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
       rescue => e
         error_response("Query failed: #{clean_error_message(e.message)}")
-      end
-
-      # Only a missing DATABASE: PostgreSQL words a missing column and table the same way, and those are SQL errors.
-      MISSING_DATABASE = /database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i
-
-      private_class_method def self.unreachable_response(database, error, what, advice)
-        named = !database.to_s.empty?
-        name = named ? database.to_s : ActiveRecord::Base.connection_db_config.name
-        advice += [ "Try `RAILS_ENV=test` if the development database is remote" ] unless named
-        entry = "the `#{name}` entry of `config/database.yml`"
-        error_response("The #{name} database #{what}: #{clean_error_message(error.message)}\n\n" \
-          "**Troubleshooting:**\n#{advice.map { |line| "- #{format(line, entry)}" }.join("\n")}")
       end
 
       private_class_method def self.answer(connection, sql, limit, format, explain)
