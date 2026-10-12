@@ -964,7 +964,7 @@ rails_get_service_pattern(detail: "full")
   → All services with methods, initialize params, side effects, and rescue blocks
 ```
 
-**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing rather than counted as a service; asking for it by name still answers.
+**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing rather than counted as a service; asking for it by name still answers. When the service directories hold more Ruby files than the listing counts, one line says how many were left out and of which kind.
 
 ### rails_get_job_pattern
 

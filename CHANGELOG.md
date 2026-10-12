@@ -176,6 +176,11 @@ Ten tools that each answered one section of the app's configuration leave
 
 ### Fixed
 
+- **`rails_get_service_pattern` says which files its count leaves out.** A
+  listing that counts fewer services than the service directories hold Ruby
+  files adds one line with the number left out and the kinds: base classes,
+  concerns, modules with no entry point that other code mixes in, mailers
+  and files too large to read, naming up to five of each.
 - **`context` and `rails_onboard` run with `--no-boot` on an app whose
   database two other environments configure.** `context --no-boot` exited 1
   with "undefined method 'to_sentence'", and `tool onboard --no-boot` gave

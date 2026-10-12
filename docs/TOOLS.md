@@ -571,7 +571,11 @@ nested inside a `hash` filter shown under it. Callers are read from every
 autoloads, and the page says when the twenty-caller display cap or the scan's
 own file ceiling left the list partial. A module under
 `app/services/concerns/` is a concern rather than a service object, so
-`rails_get_concern` lists it and this tool does not.
+`rails_get_concern` lists it and this tool does not. The listing counts
+services, and when the service directories hold more Ruby files than that,
+one line under the heading says how many it left out and of which kind: base
+classes, concerns, modules with no entry point that other code mixes in,
+mailers, and files too large to read.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
