@@ -1404,10 +1404,12 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       File.write(File.join(dir, "config", "database.yml"), "development:\n#{dbs}test:\n#{dbs}")
       File.write(File.join(dir, "db", "schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "users" do |t|\n    t.string "name"\n  end\nend\n))
       File.write(File.join(dir, "db", "analytics_schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "page_views" do |t|\n    t.bigint "user_id"\n  end\nend\n))
-      File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < Ahoy::Event\n  connects_to database: { writing: :analytics }\n  belongs_to :user\nend\n")
+      File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < Ahoy::Event\n  connects_to database: { writing: :analytics }\nend\n")
+      File.write(File.join(dir, "app", "models", "country.rb"), "class Country < ActiveHash::Base\n  has_many :people\nend\n")
       models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
 
       expect(models.keys).to include("PageView")
+      expect(models.keys).not_to include("Country")
     end
   end
 

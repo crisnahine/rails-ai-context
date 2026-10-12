@@ -308,16 +308,19 @@ module RailsAiContext
         outside_model_base?(class_name, candidates)
       end
 
-      # A gem parent (`ActsAsTaggableOn::Tag`, not ActiveHash) is an ActiveRecord base when the schema holds
-      # a table it gives the class; failing that, or with no schema, when the class declares associations or scopes.
+      # A gem parent (`ActsAsTaggableOn::Tag`, not ActiveHash) is an ActiveRecord base when a database's dump holds
+      # a table it gives the class; with no schema, or a dump not on disk, when the class declares associations or scopes.
       def outside_model_base?(class_name, candidates)
         candidate = candidates[class_name]
         return false unless candidate[:path]
 
         if SchemaReader.for(app.root).tables.any?
           own = candidate[:table_name] || own_table_name(class_name, candidates)
-          return true if outside_parent_tables(class_name, candidates, own, outside_parent(class_name, candidates)).any?
-          return false if SchemaDumpPath.secondaries(app.root).empty?
+          names = outside_parent_names(class_name, candidates, own, outside_parent(class_name, candidates))
+          return true if names.any? { |table| SchemaReader.for(app.root).table?(table) }
+
+          secondary = secondary_dump_tables
+          return names.any? { |table| secondary.include?(table) } if secondary
         end
 
         data = sti_base_source(candidate[:path])
@@ -370,10 +373,26 @@ module RailsAiContext
       # A concrete parent the app does not define sets the table, unread here; the
       # schema picks among its names, plus the class's own for a parent that is abstract.
       def outside_parent_tables(class_name, candidates, own, parent)
+        reader = SchemaReader.for(app.root)
+        outside_parent_names(class_name, candidates, own, parent).select { |table| reader.table?(table) }
+      end
+
+      def outside_parent_names(class_name, candidates, own, parent)
         names = [ TableName.derive(parent), parent.underscore.tr("/", "_").pluralize ]
         names = names.map(&:singularize) unless pluralize_tables?(class_name, candidates)
-        reader = SchemaReader.for(app.root)
-        [ *names, own ].uniq.select { |table| reader.table?(table) }
+        [ *names, own ].uniq
+      end
+
+      # The tables every other database's dump holds; nil when one of them is not on disk to read.
+      def secondary_dump_tables
+        RunCache.fetch([ :secondary_dump_tables, app.root.to_s ]) do
+          SchemaDumpPath.secondaries(app.root).values.each_with_object(Set.new) do |(format, path), tables|
+            break nil unless File.exist?(path)
+
+            found = format == :ruby ? SchemaReader.new(path).tables : StructureSqlReader.parse(SafeFile.read(path).to_s)[:tables]
+            tables.merge(found.keys)
+          end
+        end
       end
 
       def outside_parent(class_name, candidates)
