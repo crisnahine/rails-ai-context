@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Migration advice for an undecided database names no engine.** When the
   app's database is one of two candidates, `rails_migration_advisor` no
   longer gives PostgreSQL and MySQL advice at once.
+- **Every surface names the same databases.** On a default Rails 8 app,
+  where the running environment configures only the primary and production
+  configures queue, cache and cable, the schema section, the multi-database
+  section, the stack overview, the model listing and the migrations section
+  now all name the four databases. A database only another environment
+  configures is marked "(production only)", and one only a committed dump
+  names "(committed dump only)".
+- **A secondary dump too large to read is named.** It keeps an entry in the
+  schema section that gives the reason, and a database whose migrations are
+  replayed instead no longer has its existing dump called missing.
+- **The performance check covers every database.** Missing indexes and
+  counter caches are checked in each database's dump, a finding outside the
+  primary names its database, and a database it could not read is listed
+  under "Not checked" with the reason.
+- **Migration advice counts rows only on the primary.** The row estimate
+  comes from the primary database, so a table on another database is no
+  longer given the primary's count.
 
 ### Changed
 
@@ -24,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all go through one database family (PostgreSQL, MySQL or SQLite). An
   adapter the gem does not know, such as SQL Server, Oracle or CockroachDB,
   is no family.
+- **One list of the app's databases.** Both tiers build it through one
+  builder, the primary first, then the rest of the running environment's,
+  then those only another environment configures, then dumps no environment
+  names. The schema, multi-database, connection pool and migrations
+  sections, doctor, migration advice and the performance check all read it.
 
 ## [5.35.0] - 2026-10-12
 
