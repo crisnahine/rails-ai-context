@@ -147,7 +147,7 @@ generator's template, and the Railties under `lib/` with their initializers.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `quick`, `standard`, `full` |
+| `detail` | enum | `standard` | `summary` (one-paragraph overview), `standard`, `full` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 

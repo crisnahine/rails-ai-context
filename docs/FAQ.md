@@ -110,7 +110,7 @@ The server, the CLI and the generated context files then leave them out alike, s
 
 ### What's the `detail` parameter?
 
-Individual lookup tools accept `detail`: `summary` (compact), `standard` (default), `full` (everything). Start with summary and drill down as needed. This keeps AI context windows lean. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail` - they always return their full bundled output.
+Every tool that takes `detail` takes the same three levels: `summary` (compact), `standard` (default), `full` (everything). The generated tool guide lists which tools take it. Start with summary and drill down as needed. This keeps AI context windows lean. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail` - they always return their full bundled output.
 
 ### What are `[VERIFIED]` and `[INFERRED]` tags?
 

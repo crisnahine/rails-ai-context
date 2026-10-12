@@ -26,6 +26,9 @@ Ten tools that each answered one section of the app's configuration leave
   `locale` (`i18n`), and `offset` and `limit` (`gems`, `env_config`,
   `i18n`). A parameter the asked section does not read is named in the
   answer as ignored.
+- **`rails_onboard` drops `quick`.** It takes `summary`, `standard` and
+  `full`, the levels every other tool with `detail` takes, and `summary` is
+  the one-paragraph overview `quick` gave.
 - **`tools/list` is smaller:** measured as the JSON of every tool's
   definition, 47,795 characters (about 11,950 tokens at four characters per
   token) before and 40,931 characters (about 10,230 tokens) after.
@@ -55,6 +58,9 @@ Ten tools that each answered one section of the app's configuration leave
 - **CLI `--environment`:** after `config --section env_config` it is the
   section's filter, as it is after `env_config`; after any other section it
   sets `RAILS_ENV`.
+- **`rails_onboard(detail:"quick")` becomes `detail:"summary"`.** Over MCP
+  a `quick` call is refused with the three valid levels; the CLI's
+  `--detail quick` warns with them and answers at `standard`.
 - **Regenerate the context files** (`rails ai:context` or
   `rails-ai-context context`) so the tool guide and tables name the new call.
 
