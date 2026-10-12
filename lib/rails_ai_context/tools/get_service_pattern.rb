@@ -187,8 +187,7 @@ module RailsAiContext
           lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}#{"; run #{search} for the rest" if search}._"
         end
 
-        hint = next_hint(pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
-        lines << "" << hint if hint
+        add_next_hint(lines, pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
 
         text_response(lines.join("\n"))
       end
