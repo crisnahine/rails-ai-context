@@ -90,6 +90,27 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
+  # A dump can leave out a view, so only a live listing that lacks the table says it is missing.
+  describe ".missing_table?" do
+    let(:schema) do
+      { adapter: "postgresql", tables: { "users" => { columns: [] } },
+        secondary_databases: { "analytics" => { adapter: "static_parse", tables: { "events" => { columns: [] } } },
+                               "cache" => { adapter: "postgresql", tables: { "entries" => { columns: [] } } } } }
+    end
+
+    it "says a live primary lacks the table" do
+      expect(described_class.missing_table?(schema, { table_name: "ghosts" })).to be(true)
+    end
+
+    it "says nothing for a secondary database read from its dump" do
+      expect(described_class.missing_table?(schema, { table_name: "daily_rollups", database: { writing: "analytics" } })).to be(false)
+    end
+
+    it "says a live secondary lacks the table" do
+      expect(described_class.missing_table?(schema, { table_name: "ghosts", database: { writing: "cache" } })).to be(true)
+    end
+  end
+
   describe ".database_framework" do
     def database(*tables)
       { tables: tables.to_h { |name| [ name, {} ] } }

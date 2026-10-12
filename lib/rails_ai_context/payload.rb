@@ -186,7 +186,10 @@ module RailsAiContext
       return false if parsed_schema?(schema)
 
       writing = model.dig(:database, :writing)&.to_s
-      return false if writing && writing != "primary" && !secondary_databases(schema).keys.map(&:to_s).include?(writing)
+      if writing && writing != "primary"
+        secondary = secondary_databases(schema).find { |name, _| name.to_s == writing }&.last
+        return false unless secondary && !parsed_schema?(secondary)
+      end
 
       model_tables(schema, model).empty?
     end
