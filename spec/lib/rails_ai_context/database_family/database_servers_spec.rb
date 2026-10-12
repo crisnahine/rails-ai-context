@@ -184,6 +184,17 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "raises the timeout when the trace of a result column to its table column waits on a lock" do
+      sql = "SELECT * FROM (SELECT * FROM rac_server_view OFFSET 0) x"
+      plan = family.plan(conn, sql, timeout: 5)
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
+
+        expect { family.bounded(conn, timeout: 0.3) { family.column_sources(conn, sql, plan: plan) } }.to raise_error(described_class::TimedOut)
+      end
+    end
+
     it "reads a lock wait the session's own lock_timeout ended as the timeout" do
       conn.execute("SET lock_timeout = '200ms'")
       second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|

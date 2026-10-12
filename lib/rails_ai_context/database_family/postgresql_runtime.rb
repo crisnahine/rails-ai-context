@@ -81,7 +81,11 @@ module RailsAiContext
           next [ i, nil, relation ] unless names
           [ i, names[col], relation ] if names[col]
         end
-      rescue StandardError
+      rescue StandardError => e
+        # The driver raises its own class here. A trace the timeout ended is the call's timeout, never half an answer.
+        raise TimedOut, e.message if defined?(PG::QueryCanceled) && e.is_a?(PG::QueryCanceled)
+        raise if e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e)
+
         []
       end
 
