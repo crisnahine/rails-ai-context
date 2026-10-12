@@ -766,7 +766,9 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "runs dbstat, a full-text table with no secret column, its vocabulary, and a table that only shares its prefix" do
-      { "SELECT name, sum(pgsize) AS bytes FROM dbstat GROUP BY name" => "accounts",
+      # A SQLite built without dbstat has no such table to run.
+      sizes = conn.select_values("SELECT name FROM pragma_module_list").include?("dbstat") ? { "SELECT name, sum(pgsize) AS bytes FROM dbstat GROUP BY name" => "accounts" } : {}
+      { **sizes,
         "SELECT title, body FROM notes WHERE notes MATCH 'ordinary'" => "ordinary words",
         "SELECT highlight(notes, 1, '<', '>') AS h FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",
         "SELECT snippet(notes, 1, '<', '>', '', 8) AS s FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",

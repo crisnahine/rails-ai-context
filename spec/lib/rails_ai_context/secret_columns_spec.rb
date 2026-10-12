@@ -321,7 +321,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     it "keeps one answer per database within a run" do
-      allow(runtime).to receive_messages(relation_columns: {}, view_definitions: {}, generated_columns: {}, index_tables: {})
+      allow(runtime).to receive_messages(unqualified_schemas: [], relation_columns: {}, view_definitions: {}, generated_columns: {}, index_tables: {})
       other = conn.dup
       allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       RailsAiContext::RunCache.around do
