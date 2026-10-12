@@ -125,14 +125,15 @@ module RailsAiContext
     NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
     EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
 
-    # family decides the lexing and whether the plan checks run; connection and timeout are for planning.
+    # family decides the lexing and whether the plan checks run. timeout is the seconds every read
+    # the gate sends has between them: the plan and the pg_proc lookup.
     def initialize(family:, secrets:, connection:, timeout:)
       @mysql = family.mysql?
       @postgres = family.postgresql?
       @family = family
       @secrets = secrets
       @connection = connection
-      @timeout = timeout
+      @deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     end
 
     # @return [Verdict]
@@ -145,7 +146,7 @@ module RailsAiContext
 
       text = comment_free(sql)
       planned = @postgres && !text.match?(NO_PLAN)
-      plan = @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: @timeout) if planned
+      plan = @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: time_left) if planned
       if planned && plan.nil?
         return refuse("Blocked: the query is not run because its plan could not be read. On PostgreSQL " \
           "the plan shows which columns a query returns, so no query runs without one.")
@@ -444,9 +445,18 @@ module RailsAiContext
       return nil if names.empty?
 
       quoted = names.map { |n| @connection.quote(n) }.join(", ")
-      @connection.select_values(
-        "SELECT DISTINCT lower(proname) FROM pg_proc WHERE lower(proname) IN (#{quoted}) AND provolatile = 'v'"
-      ).first
+      @family.bounded(@connection, timeout: time_left) do
+        @connection.select_values(
+          "SELECT DISTINCT lower(proname) FROM pg_proc WHERE lower(proname) IN (#{quoted}) AND provolatile = 'v'"
+        ).first
+      end
+    end
+
+    def time_left
+      left = @deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      raise DatabaseFamily::TimedOut, "the reads before the statement used the whole timeout" unless left.positive?
+
+      left
     end
   end
 end

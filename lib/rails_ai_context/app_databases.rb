@@ -56,7 +56,7 @@ module RailsAiContext
 
         handler = ActiveRecord::ConnectionAdapters::ConnectionHandler.new
         begin
-          yield handler.establish_connection(config, owner_name: LeaseOwner)
+          yield handler.establish_connection(connecting_in_time, owner_name: LeaseOwner)
         ensure
           handler.remove_connection_pool(LeaseOwner.name)
         end
@@ -65,8 +65,11 @@ module RailsAiContext
       # { pending: [{ version:, name: }, ...] } read through the lease, or { error: exception }.
       def pending_migrations(dirs = migrate_dirs)
         with_pool do |pool|
-          pool.with_connection(&:verify!)
-          { pending: MigrationStatus.pending_on(pool, dirs) }
+          pool.with_connection do |connection|
+            connection.verify!
+            read = -> { { pending: MigrationStatus.pending_on(pool, dirs) } }
+            family.known? ? family.bounded(connection, timeout: RailsAiContext.configuration.query_timeout, &read) : read.call
+          end
         end
       rescue ActiveRecord::NoDatabaseError => e
         { error: Missing.new(e.message) }
@@ -75,6 +78,17 @@ module RailsAiContext
       end
 
       private
+
+      # A server that never answers would hold the lease for as long as its driver waits, so the
+      # entry's own connect_timeout, or query_timeout when it sets none, ends the wait.
+      def connecting_in_time
+        settings = config.configuration_hash
+        return config if family.sqlite? || settings[:connect_timeout]
+
+        ActiveRecord::DatabaseConfigurations::HashConfig.new(
+          config.env_name, config.name, settings.merge(connect_timeout: RailsAiContext.configuration.query_timeout.ceil)
+        )
+      end
 
       def in_memory_message
         "The #{name} database lives in memory, inside the process that created it. " \

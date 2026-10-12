@@ -56,9 +56,10 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   it "reads the schema once for the whole call" do
-    allow(conn).to receive(:tables).and_call_original
+    runtime = RailsAiContext::DatabaseFamily::PostgresqlRuntime
+    allow(runtime).to receive(:relation_columns).and_call_original
     run("SELECT * FROM rac_pg_accounts")
-    expect(conn).to have_received(:tables).once
+    expect(runtime).to have_received(:relation_columns).once
   end
 
   it "runs a locking phrase inside a literal and refuses the clause itself" do
@@ -115,6 +116,81 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   ensure
     RacPgLockRecord.remove_connection if defined?(RacPgLockRecord)
+  end
+
+  it "answers the timeout inside twice query_timeout when the lock is held before the call starts and never let go" do
+    RailsAiContext.configuration.query_timeout = 1
+    stub_const("RacPgLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+    RacPgLockRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
+    locker = RacPgLockRecord.connection_pool.checkout
+    locker.execute("BEGIN")
+    locker.execute("LOCK TABLE rac_pg_accounts IN ACCESS EXCLUSIVE MODE")
+
+    [ "SELECT id FROM rac_pg_accounts", "SELECT 1 AS one" ].each do |sql|
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      response = run(sql)
+      took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+      expect(response.error?).to be(true), sql
+      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+      expect(took).to be_between(0.9, 2.5), sql
+    end
+  ensure
+    RacPgLockRecord.remove_connection if defined?(RacPgLockRecord)
+  end
+
+  describe "a database no connection reaches" do
+    def configure(entries)
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash }.merge(entries)
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+    end
+
+    def at_port(port, params = "")
+      uri = URI(ENV.fetch("RAC_TEST_PG_URL"))
+      uri.port = port
+      "#{uri}#{params}"
+    end
+
+    def answer(name)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1", database: name) }
+      @took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      expect(response.error?).to be(true)
+      response.content.first[:text]
+    end
+
+    it "names a database at a port nothing listens on, and says to start its server" do
+      configure("closed" => { "url" => at_port(1, "?connect_timeout=2") })
+
+      expect(answer("closed")).to start_with("The closed database cannot be reached: ")
+        .and end_with("Start its server, or fix its settings in config/database.yml.")
+      expect(@took).to be < 4
+    end
+
+    it "names a database its server does not hold, and says to create it" do
+      configure("absent" => { "url" => ENV.fetch("RAC_TEST_PG_URL").sub(%r{/[^/?]+(\?.*)?\z}, "/rac_no_such_database") })
+
+      expect(answer("absent")).to start_with("The absent database cannot be reached: ")
+        .and include("rac_no_such_database").and end_with("Run `bin/rails db:create` or `bin/rails db:prepare` to create it.")
+    end
+
+    # libpq waits two seconds at least, whatever smaller connect_timeout it is given.
+    it "gives up on a server that accepts the connection and never answers, with no connect_timeout in the entry" do
+      RailsAiContext.configuration.query_timeout = 1
+      silent = TCPServer.new("127.0.0.1", 0)
+      held = []
+      accepting = Thread.new { loop { held << silent.accept } }
+      configure("silent" => { "url" => at_port(silent.addr[1]) })
+
+      expect(answer("silent")).to start_with("The silent database cannot be reached: ")
+      expect(@took).to be < 8
+    ensure
+      accepting&.kill
+      held&.each(&:close)
+      silent&.close
+    end
   end
 
   it "answers an SQL error from planning as the SQL error" do

@@ -39,6 +39,12 @@ module RailsAiContext
         Rows.new(result.columns, result.rows, true)
       end
 
+      # These reads run on the app's own connection, where a wait on another writer ends at the
+      # connection's busy timeout (database.yml `timeout`; with none, a busy database fails at once).
+      def bounded(_conn, _timeout, &reads)
+        DatabaseFamily.bounding(&reads)
+      end
+
       def explain(conn, sql, timeout)
         result = read_only(conn, "EXPLAIN QUERY PLAN #{sql}", timeout)
         scans = []
@@ -68,6 +74,13 @@ module RailsAiContext
         nil
       end
 
+      def relation_columns(conn)
+        conn.select_rows(
+          "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
+          "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, p.cid"
+        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
+      end
+
       # The body only: the header names the view itself. A temporary view lives in its own catalogue.
       def view_definitions(conn)
         conn.select_rows(
@@ -78,15 +91,16 @@ module RailsAiContext
       # SQLite keeps no expression per column, so each generated column answers its table's definition with one
       # mention of every column taken out: a column name still in it is one some expression reads.
       def generated_columns(conn)
-        conn.select_rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").each_with_object({}) do |(table, sql), found|
-          next unless sql.to_s.match?(/\bAS\s*\(/i)
-
-          columns = conn.select_all("PRAGMA table_xinfo(#{conn.quote_table_name(table)})").to_a
-          generated = columns.select { |column| column["hidden"].to_i >= 2 }
+        rows = conn.select_rows(
+          "SELECT m.name, m.sql, p.name, p.hidden FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
+          "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
+        )
+        rows.group_by(&:first).each_with_object({}) do |(table, columns), found|
+          generated = columns.select { |column| column[3].to_i >= 2 }
           next if generated.empty?
 
-          read = columns.reduce(sql.to_s) { |text, column| text.sub(/\b#{Regexp.escape(column["name"])}\b/i, " ") }
-          found[table] = generated.to_h { |column| [ column["name"], read ] }
+          read = columns.reduce(columns.first[1].to_s) { |text, column| text.sub(/\b#{Regexp.escape(column[2])}\b/i, " ") }
+          found[table] = generated.to_h { |column| [ column[2], read ] }
         end
       end
 

@@ -9,16 +9,22 @@ module RailsAiContext
       module_function
 
       def read_only(conn, sql, timeout)
+        result = bounded(conn, timeout) { conn.select_all(sql) }
+        Rows.new(result.columns, result.rows, false)
+      end
+
+      # statement_timeout ends each statement in the block, a wait on a lock included. Read-only, rolled back.
+      def bounded(conn, timeout)
         result = nil
         DatabaseFamily.bounding do
           conn.transaction do
             conn.execute("SET TRANSACTION READ ONLY")
             conn.execute("SET LOCAL statement_timeout = '#{[ (timeout * 1000).to_i, 1 ].max}'")
-            result = conn.select_all(sql)
+            result = yield
             raise ActiveRecord::Rollback
           end
         end
-        Rows.new(result.columns, result.rows, false)
+        result
       end
 
       def explain(conn, sql, timeout)
@@ -84,6 +90,15 @@ module RailsAiContext
           rel, col = read.base_column(expr)
           [ i, col, rel ] if col
         end
+      end
+
+      # The tables Rails lists, in one read that takes no lock on any of them.
+      def relation_columns(conn)
+        conn.select_rows(
+          "SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
+          "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND a.attnum > 0 " \
+          "AND NOT a.attisdropped AND n.nspname = ANY (current_schemas(false)) ORDER BY c.relname, a.attnum"
+        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
       end
 
       def view_definitions(_conn)

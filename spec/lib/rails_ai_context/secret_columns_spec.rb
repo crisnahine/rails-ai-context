@@ -226,11 +226,10 @@ RSpec.describe RailsAiContext::SecretColumns do
 
   describe ".for" do
     let(:conn) { ActiveRecord::Base.connection }
+    let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }
 
     it "reads the family's view definitions and generated columns, once per run" do
-      runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
-      allow(conn).to receive(:tables).and_return(%w[users])
-      allow(conn).to receive(:columns).with("users").and_return([ double(name: "passwd") ])
+      allow(runtime).to receive(:relation_columns).and_return("users" => %w[passwd])
       allow(runtime).to receive(:view_definitions).with(conn).and_return("people" => "SELECT passwd AS p FROM users")
       allow(runtime).to receive(:generated_columns).with(conn).and_return("users" => { "hidden" => "passwd" })
 
@@ -247,8 +246,7 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "names every view with no definition when the definitions cannot be read" do
       allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:view_definitions).and_raise(ActiveRecord::StatementInvalid, "denied")
-      allow(conn).to receive(:tables).and_return(%w[users])
-      allow(conn).to receive(:columns).with("users").and_return([ double(name: "passwd") ])
+      allow(runtime).to receive(:relation_columns).and_return("users" => %w[passwd])
       allow(conn).to receive(:views).and_return(%w[people])
 
       expect(described_class.for(conn, context: context).refused_view_in("SELECT * FROM people")&.first).to eq("people")
@@ -264,8 +262,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     it "reads the connection's schema once per run, however many checks ask" do
-      allow(conn).to receive(:tables).and_return(%w[users])
-      allow(conn).to receive(:columns).with("users").and_return([ double(name: "api_token") ])
+      allow(runtime).to receive(:relation_columns).and_return("users" => %w[api_token])
       RailsAiContext::RunCache.around do
         3.times do
           s = described_class.for(conn, context: context)
@@ -275,17 +272,38 @@ RSpec.describe RailsAiContext::SecretColumns do
           expect(s.in_schema).to eq(%w[api_token])
         end
       end
-      expect(conn).to have_received(:columns).with("users").once
+      expect(runtime).to have_received(:relation_columns).once
     end
 
     it "keeps one answer per database within a run" do
       other = conn.dup
       allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
-      allow(other).to receive(:tables).and_return([])
       RailsAiContext::RunCache.around do
         expect(described_class.for(conn, context: context)).to be(described_class.for(conn, context: context))
         expect(described_class.for(other, context: context)).not_to be(described_class.for(conn, context: context))
       end
+    end
+
+    it "reads the columns of every table in one statement" do
+      sent = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+      described_class.for(conn, context: {})
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+
+      expect(sent.size).to eq(3)
+      expect(runtime.relation_columns(conn)).to eq(conn.tables.sort.to_h { |table| [ table, conn.columns(table).map(&:name) ] })
+    end
+
+    it "raises a read the timeout ended, from the columns and from the view definitions, with no fallback" do
+      stopped = ActiveRecord::QueryCanceled.new("canceling statement due to statement timeout")
+      allow(conn).to receive(:views).and_raise("the views were listed")
+
+      allow(runtime).to receive(:relation_columns).and_raise(stopped)
+      expect { described_class.for(conn, context: context) }.to raise_error(ActiveRecord::QueryCanceled)
+
+      allow(runtime).to receive(:relation_columns).and_return({})
+      allow(runtime).to receive(:view_definitions).and_raise(stopped)
+      expect { described_class.for(conn, context: context) }.to raise_error(ActiveRecord::QueryCanceled)
     end
 
     it "takes the encrypts columns from the context" do
@@ -293,7 +311,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     it "falls back to the context's schema when the connection cannot be read, leaving bookkeeping tables out" do
-      allow(conn).to receive(:tables).and_raise(ActiveRecord::StatementInvalid, "gone")
+      allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
       secrets = described_class.for(conn, context: context)
       expect(secrets.of_relation("widgets")).to eq(%w[api_token])
       expect(secrets.relation_secret?("ar_internal_metadata")).to be(false)
@@ -303,16 +321,14 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "reads no schema from the context for another database whose tables cannot be read" do
       other = conn.dup
       allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
-      allow(other).to receive(:tables).and_raise(ActiveRecord::StatementInvalid, "gone")
+      allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
       secrets = described_class.for(other, context: context)
       expect(secrets.of_relation("widgets")).to eq([])
       expect(secrets.in_schema).to eq([])
     end
 
     it "leaves bookkeeping tables out of a connection read" do
-      allow(conn).to receive(:tables).and_return(%w[users ar_internal_metadata])
-      allow(conn).to receive(:columns).with("users").and_return([ double(name: "id") ])
-      allow(conn).to receive(:columns).with("ar_internal_metadata").and_return([ double(name: "key") ])
+      allow(runtime).to receive(:relation_columns).and_return("users" => %w[id], "ar_internal_metadata" => %w[key])
       expect(described_class.for(conn, context: context).relation_secret?("ar_internal_metadata")).to be(false)
     end
   end

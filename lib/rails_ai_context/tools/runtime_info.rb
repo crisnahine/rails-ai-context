@@ -167,16 +167,27 @@ module RailsAiContext
         def gather_table_sizes(conn, family)
           return nil unless family.known?
 
-          family.table_sizes(conn)&.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
+          bounded(conn) { family.table_sizes(conn) }&.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "gather_table_sizes")
+        end
+
+        # A statistics or migrations read ends at query_timeout, so a locked table cannot hold the answer.
+        def bounded(conn, &reads)
+          family = DatabaseFamily.of(conn)
+          family.known? ? family.bounded(conn, timeout: config.query_timeout, &reads) : reads.call
         end
 
         # Every database the app migrates here, each through its own connection.
         def pending_migration_lines
           databases = AppDatabases.for(rails_app.root).here.select(&:tasks)
           if databases.size <= 1
-            pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root))
+            dirs = RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root)
+            pending = begin
+              bounded(ActiveRecord::Base.connection) { RailsAiContext::PendingMigrations.live(dirs) }
+            rescue => e
+              RailsAiContext.debug_fail(e, nil, label: "pending_migration_lines")
+            end
             return [] unless pending
             return [ "", "**Migrations:** all up to date" ] if pending.empty?
 
@@ -213,7 +224,7 @@ module RailsAiContext
         end
 
         def gather_index_usage(conn, family)
-          family.index_usage(conn) if family.known?
+          bounded(conn) { family.index_usage(conn) } if family.known?
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "gather_index_usage")
         end

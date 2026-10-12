@@ -24,6 +24,7 @@ RSpec.describe RailsAiContext::SqlGate do
     RailsAiContext.configuration.query_allowed_columns = []
     allow(connection).to receive(:quote) { |name| "'#{name}'" }
     allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan) { plan }
+    allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
   end
 
   after { RailsAiContext.configuration.query_allowed_columns = [] }
@@ -440,7 +441,7 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "plans the statement a leading EXPLAIN ANALYZE would run" do
       refusal("EXPLAIN ANALYZE SELECT 1 AS x", :postgresql)
-      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", 5)
+      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", a_value_within(1).of(5))
     end
 
     it "plans nothing off PostgreSQL" do
@@ -476,12 +477,35 @@ RSpec.describe RailsAiContext::SqlGate do
         expect { check("SELECT nextval('s')", :postgresql) }.to raise_error(ActiveRecord::StatementInvalid)
       end
 
+      it "gives the plan and the pg_proc lookup one timeout between them" do
+        allow(runtime).to receive(:plan) do
+          sleep 0.2
+          { "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] }
+        end
+        described_class.new(family: families.fetch(:postgresql), secrets: RailsAiContext::SecretColumns.new, connection: connection, timeout: 2)
+          .check("SELECT nextval('s')")
+
+        expect(runtime).to have_received(:plan).with(connection, "SELECT nextval('s')", a_value_within(0.1).of(2))
+        expect(runtime).to have_received(:bounded).with(connection, a_value_between(1, 1.8))
+      end
+
+      it "raises the timeout when the plan used all of it" do
+        allow(runtime).to receive(:plan) do
+          sleep 0.06
+          { "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] }
+        end
+        gate = described_class.new(family: families.fetch(:postgresql), secrets: RailsAiContext::SecretColumns.new, connection: connection, timeout: 0.05)
+
+        expect { gate.check("SELECT nextval('s')") }.to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+        expect(connection).not_to have_received(:select_values)
+      end
+
       it "plans whatever a leading EXPLAIN would run, in either spelling of its options" do
         [ "EXPLAIN VALUES (1)", "EXPLAIN (ANALYZE, VERBOSE) VALUES (1)", "EXPLAIN ANALYZE VERBOSE VALUES (1)" ].each { |sql| check(sql, :postgresql) }
-        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", 5).exactly(3).times
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", a_value_within(1).of(5)).exactly(3).times
 
         check("EXPLAIN (ANALYZE) (SELECT 1)", :postgresql)
-        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", 5)
+        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5))
       end
 
       # SHOW reads a setting and PostgreSQL has no DESCRIBE, so neither has a plan to read.

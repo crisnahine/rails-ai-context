@@ -8,6 +8,7 @@ RSpec.describe RailsAiContext::Tools::Query do
   { "MySQL" => "RAC_TEST_MYSQL_URL", "MariaDB" => "RAC_TEST_MARIADB_URL" }.each do |server, env|
     describe "on #{server}", skip: (ENV[env] ? false : "set #{env} to run rails_query against #{server}") do
       let(:conn) { RacMysqlQueryRecord.connection }
+      let(:env) { env }
       let(:context) { {} }
       let(:runtime) { RailsAiContext::DatabaseFamily::MysqlRuntime }
 
@@ -116,6 +117,47 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
         expect(response.error?).to be(true)
         expect(response.content.first[:text]).to start_with("Query exceeded 0.5 second timeout")
+      end
+
+      it "answers the timeout inside twice query_timeout while another session holds the table, for a query and its EXPLAIN" do
+        RailsAiContext.configuration.query_timeout = 1
+        limits = "SELECT @@SESSION.lock_wait_timeout, @@SESSION.#{conn.mariadb? ? "max_statement_time" : "max_execution_time"}"
+        before = conn.select_rows(limits)
+        stub_const("RacMysqlLockRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+        RacMysqlLockRecord.establish_connection(ENV.fetch(env))
+        locker = RacMysqlLockRecord.connection_pool.checkout
+        locker.execute("LOCK TABLES rac_my_accounts WRITE")
+
+        [ false, true ].each do |explain|
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          response = answer("SELECT id FROM rac_my_accounts", explain: explain)
+          took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+          expect(response.error?).to be(true), "explain: #{explain}"
+          expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+          expect(took).to be_between(0.9, 2.5)
+        end
+        expect(conn.select_rows(limits)).to eq(before)
+      ensure
+        locker&.execute("UNLOCK TABLES")
+        RacMysqlLockRecord.remove_connection if defined?(RacMysqlLockRecord)
+      end
+
+      it "names a database at a port nothing listens on, and says to start its server" do
+        uri = URI(ENV.fetch(env))
+        uri.port = 1
+        configurations = ActiveRecord::DatabaseConfigurations.new(
+          Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                         "closed" => { "url" => "#{uri}?connect_timeout=2" } }
+        )
+        allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        response = answer("SELECT 1", database: "closed")
+
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 4
+        expect(response.error?).to be(true)
+        expect(response.content.first[:text]).to start_with("The closed database cannot be reached: ")
+          .and end_with("Start its server, or fix its settings in config/database.yml.")
       end
 
       it "explains a statement, leaving a row with no table out of the summary" do

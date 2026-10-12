@@ -37,9 +37,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         @statements << sql
       end
 
-      def select_value(sql)
+      def select_rows(sql)
         @statements << sql
-        @session_timeout
+        [ [ @session_timeout, 31_536_000 ] ]
       end
 
       def transaction
@@ -79,24 +79,51 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       expect(rows.rows).to eq([ [ 1 ] ])
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_execution_time", "SET SESSION max_execution_time = 2000",
+        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout",
+        "SET SESSION max_execution_time = 2000, lock_wait_timeout = 2",
         "SET TRANSACTION READ ONLY", "BEGIN", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
-        "SET SESSION max_execution_time = 250"
+        "SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000"
       ])
+    end
+
+    it "bounds a block of reads the same way, answers what the block answers, and puts both session values back" do
+      answer = described_class::MYSQL.bounded(conn, timeout: 0.4) { conn.select_all("SHOW FULL FIELDS FROM t") && :read }
+
+      expect(answer).to eq(:read)
+      expect(conn.statements).to eq([
+        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout",
+        "SET SESSION max_execution_time = 400, lock_wait_timeout = 1", "SHOW FULL FIELDS FROM t",
+        "SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000"
+      ])
+    end
+
+    it "puts both session values back when a read in the block raises, and reads a lock wait that ran out as a timeout" do
+      conn.failure = driver_error(ActiveRecord::StatementInvalid, 1205)
+
+      expect { described_class::MYSQL.bounded(conn, timeout: 2) { conn.select_all("SHOW FULL FIELDS FROM t") } }
+        .to raise_error(described_class::TimedOut)
+      expect(conn.statements.last).to eq("SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000")
+    end
+
+    it "changes nothing when the session values cannot be read" do
+      conn.define_singleton_method(:select_rows) { |_sql| raise ActiveRecord::StatementInvalid, "gone" }
+
+      expect { described_class::MYSQL.bounded(conn, timeout: 2) { raise "the block ran" } }.to raise_error(ActiveRecord::StatementInvalid, "gone")
+      expect(conn.statements).to eq([])
     end
 
     it "restores the session's max_execution_time when the statement raises" do
       conn.failure = ActiveRecord::StatementInvalid.new("syntax")
 
       expect { described_class::MYSQL.read_only(conn, "EXPLAIN ANALYZE SELECT 1", timeout: 2) }.to raise_error(ActiveRecord::StatementInvalid)
-      expect(conn.statements.last).to eq("SET SESSION max_execution_time = 250")
+      expect(conn.statements.last).to eq("SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000")
     end
 
     context "when the restore itself fails" do
       before do
         conn.failure = ActiveRecord::StatementInvalid.new("Lost connection to server during query")
         conn.define_singleton_method(:execute) do |sql|
-          raise ActiveRecord::ConnectionNotEstablished, "gone" if sql == "SET SESSION max_execution_time = 250"
+          raise ActiveRecord::ConnectionNotEstablished, "gone" if sql.start_with?("SET SESSION max_execution_time = 250")
 
           statements << sql
         end
@@ -167,12 +194,23 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   describe "MariaDB" do
     let(:conn) { mysql_class.new(true) }
 
-    it "bounds a WITH statement with SET STATEMENT max_statement_time inside the read-only transaction" do
+    it "bounds a WITH statement with the session max_statement_time and restores the session's own" do
       described_class::MYSQL.read_only(conn, "WITH t AS (SELECT 1) SELECT * FROM t", timeout: 2)
 
       expect(conn.statements).to eq([
-        "SET TRANSACTION READ ONLY", "BEGIN",
-        "SET STATEMENT max_statement_time = 2.0 FOR WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK"
+        "SELECT @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout",
+        "SET SESSION max_statement_time = 2.0, lock_wait_timeout = 2",
+        "SET TRANSACTION READ ONLY", "BEGIN", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
+        "SET SESSION max_statement_time = 250, lock_wait_timeout = 31536000"
+      ])
+    end
+
+    it "bounds a block of reads the same way" do
+      described_class::MYSQL.bounded(conn, timeout: 0.4) { conn.select_all("SHOW FULL FIELDS FROM t") }
+
+      expect(conn.statements[1..]).to eq([
+        "SET SESSION max_statement_time = 0.4, lock_wait_timeout = 1", "SHOW FULL FIELDS FROM t",
+        "SET SESSION max_statement_time = 250, lock_wait_timeout = 31536000"
       ])
     end
 
@@ -211,8 +249,8 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         mariadb = mysql_class.new(true)
         described_class::MYSQL.read_only(mysql, "SELECT 1", timeout: timeout)
         described_class::MYSQL.read_only(mariadb, "SELECT 1", timeout: timeout)
-        expect(mysql.statements).to include("SET SESSION max_execution_time = 1")
-        expect(mariadb.statements).to include("SET STATEMENT max_statement_time = 0.001 FOR SELECT 1")
+        expect(mysql.statements).to include("SET SESSION max_execution_time = 1, lock_wait_timeout = 1")
+        expect(mariadb.statements).to include("SET SESSION max_statement_time = 0.001, lock_wait_timeout = 1")
       end
     end
 
@@ -226,6 +264,108 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       ensure
         RuntimeSpecRecord.remove_connection
       end
+    end
+  end
+
+  describe "a block of reads on PostgreSQL" do
+    let(:conn) do
+      Class.new do
+        attr_reader :statements
+
+        def initialize = @statements = []
+
+        def adapter_name = "PostgreSQL"
+
+        def execute(sql) = @statements << sql
+
+        def transaction
+          @statements << "BEGIN"
+          yield
+        rescue ActiveRecord::Rollback
+          @statements << "ROLLBACK"
+        end
+      end.new
+    end
+
+    it "runs read-only under SET LOCAL statement_timeout, answers what the block answers, and rolls back" do
+      answer = described_class::POSTGRESQL.bounded(conn, timeout: 0.25) { conn.execute("SELECT attname FROM pg_attribute") && :read }
+
+      expect(answer).to eq(:read)
+      expect(conn.statements).to eq([
+        "BEGIN", "SET TRANSACTION READ ONLY", "SET LOCAL statement_timeout = '250'", "SELECT attname FROM pg_attribute", "ROLLBACK"
+      ])
+    end
+
+    it "raises a read the timeout ended as the timeout" do
+      expect { described_class::POSTGRESQL.bounded(conn, timeout: 1) { raise ActiveRecord::QueryCanceled, "canceling statement due to statement timeout" } }
+        .to raise_error(described_class::TimedOut)
+    end
+  end
+
+  describe "a block of reads on SQLite" do
+    it "answers what the block answers, and raises a read that waited out the busy timeout as the timeout" do
+      conn = double("connection")
+      busy = begin
+        begin
+          raise SQLite3::BusyException, "database is locked"
+        rescue SQLite3::BusyException
+          raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
+        end
+      rescue ActiveRecord::StatementInvalid => e
+        e
+      end
+
+      expect(described_class::SQLITE.bounded(conn, timeout: 1) { :read }).to eq(:read)
+      expect { described_class::SQLITE.bounded(conn, timeout: 1) { raise busy } }.to raise_error(described_class::TimedOut)
+    end
+  end
+
+  it "refuses a block of reads on an adapter with no family before running it" do
+    expect { described_class.of(untouchable).bounded(untouchable, timeout: 1) { raise "the block ran" } }
+      .to raise_error(described_class::Unsupported, /SQLServer/)
+  end
+
+  describe "the schema reads on SQLite" do
+    let(:dir) { Dir.mktmpdir }
+
+    before do
+      stub_const("RuntimeSchemaRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      RuntimeSchemaRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "schema.sqlite3"))
+      @conn = RuntimeSchemaRecord.connection
+      @conn.execute("CREATE TABLE accounts (id INTEGER, passwd TEXT, shadow TEXT AS (passwd) VIRTUAL, kept TEXT AS (id || 'k') STORED)")
+      @conn.execute("CREATE TABLE notes (id INTEGER, body TEXT)")
+      @conn.execute("CREATE VIEW people (a, b) AS SELECT id, passwd FROM accounts")
+    end
+
+    after do
+      RuntimeSchemaRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def statements
+      sent = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+      yield
+      sent
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "lists every table's columns, generated ones too, in one statement" do
+      columns = nil
+      expect(statements { columns = described_class::SQLITE.relation_columns(@conn) }.size).to eq(1)
+      expect(columns).to eq("accounts" => %w[id passwd shadow kept], "notes" => %w[id body])
+    end
+
+    it "reads the view bodies in one statement and the generated columns in one" do
+      views = generated = nil
+      expect(statements { views = described_class::SQLITE.view_definitions(@conn) }.size).to eq(1)
+      expect(statements { generated = described_class::SQLITE.generated_columns(@conn) }.size).to eq(1)
+
+      expect(views).to eq("people" => " SELECT id, passwd FROM accounts")
+      expect(generated.keys).to eq([ "accounts" ])
+      expect(generated["accounts"].keys).to eq(%w[shadow kept])
+      expect(generated["accounts"]["shadow"]).to match(/\bpasswd\b/).and satisfy { |text| text.scan(/\bpasswd\b/).size == 1 }
     end
   end
 

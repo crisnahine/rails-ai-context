@@ -25,6 +25,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)
     [ RailsAiContext::DatabaseFamily::MysqlRuntime, RailsAiContext::DatabaseFamily::PostgresqlRuntime ].each do |runtime|
       allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {})
+      allow(runtime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
+      allow(runtime).to receive(:relation_columns) { |connection| RailsAiContext::DatabaseFamily::SqliteRuntime.relation_columns(connection) }
     end
   end
 
@@ -658,9 +660,10 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "reads the schema once for the whole call" do
       allow(described_class).to receive(:cached_context).and_return({})
-      allow(ActiveRecord::Base.connection).to receive(:tables).and_call_original
+      runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
+      %i[relation_columns view_definitions generated_columns].each { |read| allow(runtime).to receive(read).and_call_original }
       RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1 AS n") }
-      expect(ActiveRecord::Base.connection).to have_received(:tables).once
+      %i[relation_columns view_definitions generated_columns].each { |read| expect(runtime).to have_received(read).once }
     end
   end
 

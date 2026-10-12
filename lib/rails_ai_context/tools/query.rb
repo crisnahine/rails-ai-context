@@ -111,9 +111,11 @@ module RailsAiContext
           )
         end
 
-        secrets = SecretColumns.for(connection, context: cached_context)
+        # The statement has query_timeout to itself. Every other read the call sends shares a second one.
         timeout = config.query_timeout
-        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, timeout: timeout).check(sql)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        secrets = family.bounded(connection, timeout: timeout) { SecretColumns.for(connection, context: cached_context) }
+        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, timeout: time_left(deadline)).check(sql)
         return error_response(verdict.refusal) if verdict.refused?
 
         sql = verdict.sql
@@ -130,7 +132,8 @@ module RailsAiContext
         elsif schema_metadata
           result
         else
-          redact_results(result, secrets, family.column_sources(connection, sql, plan: verdict.plan))
+          sources = family.bounded(connection, timeout: time_left(deadline)) { family.column_sources(connection, sql, plan: verdict.plan) }
+          redact_results(result, secrets, sources)
         end
 
         # The truncation note rides every format (for CSV after a blank line, so
@@ -144,6 +147,13 @@ module RailsAiContext
         end
 
         text_response(output)
+      end
+
+      private_class_method def self.time_left(deadline)
+        left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        raise DatabaseFamily::TimedOut, "the reads beside the statement used the whole timeout" unless left.positive?
+
+        left
       end
 
       MISSING_TABLE = /no such table: (?:\w+\.)?(\w+)|relation "(?:\w+\.)?(\w+)" does not exist|Table '(?:[^'.]+\.)?(\w+)' doesn't exist/i

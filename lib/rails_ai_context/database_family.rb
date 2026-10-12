@@ -40,6 +40,13 @@ module RailsAiContext
         runtime.read_only(connection, sql, timeout)
       end
 
+      # Runs a block of reads beside the statement (the schema, a plan check) under the family's limit,
+      # so each statement in it ends at timeout seconds, a wait on a lock included.
+      # @raise [TimedOut, Unsupported]
+      def bounded(connection, timeout:, &reads)
+        runtime.bounded(connection, timeout, &reads)
+      end
+
       # @return [Hash] { scan_types:, warnings:, raw:, unbounded: }
       def explain(connection, sql, timeout:)
         runtime.explain(connection, sql, timeout)
@@ -57,6 +64,11 @@ module RailsAiContext
       #   [] where the family cannot say
       def column_sources(connection, sql, plan:)
         runtime.column_sources(connection, sql, plan)
+      end
+
+      # @return [Hash{String => Array<String>}] table name => its column names, from one catalogue read
+      def relation_columns(connection)
+        runtime.relation_columns(connection)
       end
 
       # @return [Hash{String => String, nil}, nil] view name => the definition the database stores, nil for one it
@@ -112,8 +124,8 @@ module RailsAiContext
 
     DEFAULT_SUFFIX = " by database.yml default"
 
-    # 3024 MySQL max_execution_time, 1317 query interrupted, 1969 MariaDB max_statement_time.
-    TIMEOUT_CODES = [ 3024, 1317, 1969 ].freeze
+    # 3024 MySQL max_execution_time, 1317 query interrupted, 1969 MariaDB max_statement_time, 1205 lock_wait_timeout.
+    TIMEOUT_CODES = [ 3024, 1317, 1969, 1205 ].freeze
 
     module_function
 
@@ -145,6 +157,9 @@ module RailsAiContext
       return true if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
 
       cause = error.cause
+      # A SQLite read that waited out the connection's busy timeout. Rails 7.0 gives it no class of its own.
+      return true if defined?(SQLite3::BusyException) && cause.is_a?(SQLite3::BusyException)
+
       code = if cause.respond_to?(:error_number) then cause.error_number
       elsif cause.respond_to?(:error_code) then cause.error_code
       end

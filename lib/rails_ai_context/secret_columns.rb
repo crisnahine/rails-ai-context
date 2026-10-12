@@ -53,7 +53,9 @@ module RailsAiContext
 
       views = begin
         family.view_definitions(connection)
-      rescue ActiveRecord::StatementInvalid
+      rescue ActiveRecord::StatementInvalid => e
+        raise if DatabaseFamily.timed_out?(e)
+
         # Named with no definition, so each one is refused as unreadable.
         connection.views.to_h { |view| [ view, nil ] }
       end
@@ -72,11 +74,11 @@ module RailsAiContext
     # relation name => column names, from a live connection or a cached
     # context's schema; nil when neither can be read.
     def self.relations_from(source)
-      if source.respond_to?(:tables)
-        source.tables.each_with_object({}) do |table, acc|
-          next if BOOKKEEPING_TABLES.include?(table.to_s.downcase)
-          acc[table.to_s] = source.columns(table).map(&:name)
-        end
+      if source.respond_to?(:adapter_name)
+        family = DatabaseFamily.of(source)
+        return nil unless family.known?
+
+        family.relation_columns(source).reject { |table, _columns| BOOKKEEPING_TABLES.include?(table.to_s.downcase) }
       else
         tables = source&.dig(:schema, :tables)
         return nil unless tables.is_a?(Hash)
@@ -86,7 +88,10 @@ module RailsAiContext
           acc[table.to_s] = Array(data.is_a?(Hash) && data[:columns]).map { |col| col.is_a?(Hash) ? col[:name] : col }.compact
         end
       end
-    rescue StandardError
+    rescue StandardError => e
+      # A read the timeout ended is the call's timeout, so it is no reason to fall back.
+      raise if e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e)
+
       nil
     end
     private_class_method :relations_from
