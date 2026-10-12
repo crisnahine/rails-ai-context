@@ -1351,7 +1351,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
           queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
 
-          expect(queue).to include(tables: {}, total_tables: 0, dump: "db/queue_schema.rb")
+          expect(queue).to include(tables: {}, total_tables: 0, dump: "db/queue_schema.rb", unread: true)
           expect(queue[:note]).to eq("db/queue_schema.rb too large (#{queue_dump.bytesize} bytes, over max_schema_file_size), so its tables are not listed")
         end
       end
