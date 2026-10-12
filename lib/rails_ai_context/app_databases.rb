@@ -306,7 +306,9 @@ module RailsAiContext
       adapter, from_default = value.respond_to?(:adapter) ? [ value.adapter, false ] : DatabaseYml.adapter(name, settings)
       replica = settings["replica"] == true
       tasks = tasks?(settings)
-      dump = (first ? primary_dump(root) : Introspectors::SchemaDumpPath.secondary(root, name, settings) if tasks)
+      dump = first ? primary_dump(root) : Introspectors::SchemaDumpPath.secondary(root, name, settings)
+      # Rails writes no dump for a database it runs no tasks on, so only a committed one counts.
+      dump = nil unless tasks || (dump && File.exist?(dump.last))
       Database.new(name: name, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks,
                    adapter: adapter, adapter_default: from_default, family: DatabaseFamily.of(adapter),
                    dump: (Dump.new(*dump) if dump),

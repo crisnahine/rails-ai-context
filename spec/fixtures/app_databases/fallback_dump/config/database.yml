@@ -1,0 +1,11 @@
+test:
+  primary:
+    adapter: postgresql
+    database: app_test
+  queue:
+    adapter: postgresql
+    database: queue_test
+  legacy:
+    adapter: mysql2
+    database: legacy
+    database_tasks: false

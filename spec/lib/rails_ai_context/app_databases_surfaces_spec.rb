@@ -54,3 +54,59 @@ RSpec.describe "the app databases on a Rails 8 app" do
     end
   end
 end
+
+module AppDatabasesTiers
+  # Runs the block against the fixture at `root` on one tier, in the test environment.
+  def on_tier(tier, root, connected: nil)
+    previous = [ RailsAiContext.tier, ENV.fetch("RAILS_ENV", nil) ]
+    ENV["RAILS_ENV"] = "test"
+    if tier == :static
+      RailsAiContext.tier = :static
+    else
+      configurations = ActiveRecord::DatabaseConfigurations.new(YAML.safe_load_file(File.join(root, "config/database.yml"), aliases: true))
+      own = configurations.configs_for(env_name: "test")
+      allow(ActiveRecord::Base).to receive_messages(configurations: configurations,
+                                                    connection_db_config: own.find { |config| config.name == connected } || own.first)
+      allow(Rails).to receive(:root).and_return(Pathname.new(root))
+    end
+    RailsAiContext::RunCache.around { yield }
+  ensure
+    RailsAiContext.tier = previous.first
+    ENV["RAILS_ENV"] = previous.last
+  end
+end
+
+# The sql format with a secondary whose only dump is queue_schema.rb, and a database_tasks: false entry with a committed dump.
+RSpec.describe "a dump on disk under a database's name" do
+  include AppDatabasesTiers
+
+  let(:root) { File.expand_path("../../fixtures/app_databases/fallback_dump", __dir__) }
+  let(:app) { RailsAiContext::StaticApp.new(root) }
+
+  %i[booted static].each do |tier|
+    it "is read by the schema section and rails_get_schema on the #{tier} tier" do
+      on_tier(tier, root) do
+        schema = RailsAiContext::Introspectors::SchemaIntrospector.new(app).static_call
+        allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: schema }, rails_app: app)
+        text = RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+
+        expect(schema[:tables].keys).to eq(%w[users])
+        expect(schema[:secondary_databases].transform_values { |db| [ db[:tables].keys, db[:dump] ] })
+          .to eq("queue" => [ %w[jobs], "db/queue_schema.rb" ], "legacy" => [ %w[legacy_orders], "db/legacy_schema.rb" ])
+        expect(text).to include("jobs").and include("legacy_orders")
+      end
+    end
+
+    it "is read by the model introspector and the performance check on the #{tier} tier" do
+      on_tier(tier, root) do
+        tables = RailsAiContext::Introspectors::ModelIntrospector.new(app).send(:secondary_dump_tables)
+        performance = RailsAiContext::Introspectors::PerformanceIntrospector.new(app).call
+
+        expect(tables).to eq(Set["jobs", "legacy_orders"])
+        expect(performance[:missing_fk_indexes].map { |f| f.values_at(:database, :table, :column) })
+          .to contain_exactly(%w[queue jobs user_id], %w[legacy legacy_orders user_id])
+        expect(performance).not_to have_key(:unchecked_databases)
+      end
+    end
+  end
+end

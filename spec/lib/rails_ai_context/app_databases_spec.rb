@@ -84,6 +84,12 @@ RSpec.describe RailsAiContext::AppDatabases do
       entry(root, "primary", adapter: "mysql2", dump: [ :ruby, "db/schema.rb" ]) ]
   }
 
+  it_behaves_like "the same list on both tiers", "fallback_dump", lambda { |root|
+    [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :sql, "db/structure.sql" ]),
+      entry(root, "queue", adapter: "postgresql", dump: [ :ruby, "db/queue_schema.rb" ]),
+      entry(root, "legacy", tasks: false, adapter: "mysql2", dump: [ :ruby, "db/legacy_schema.rb" ]) ]
+  }
+
   describe "an environment whose first database is not the one named primary" do
     let(:root) { fixture("animals_first") }
 
