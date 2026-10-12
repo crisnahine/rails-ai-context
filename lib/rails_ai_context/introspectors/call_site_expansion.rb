@@ -138,15 +138,16 @@ module RailsAiContext
               declaration(entry, block_out, conditions).merge(receiver: receiver) if entry.is_a?(Hash) && entry[:location]
             end
           end
-        end.sort_by { |entry| entry[:location].to_i }
+        end.sort_by.with_index { |entry, i| [ entry[:location].to_i, i ] }
       end
 
       # A class body's walk with what its blocks evaluated on another receiver declare
-      # (ForeignEvalsListener's `blocks`) moved to `:foreign`, named as `foreign_entries` names them.
+      # (ForeignEvalsListener's blocks) moved to `:foreign`, named as `foreign_entries` names them:
+      # each call on a line the walk found a declaration on, in source order.
       def class_body_foreign(blocks, walked)
         return walked if blocks.empty?
 
-        foreign = []
+        lines = {}
         kept = walked.to_h do |key, found|
           next [ key, found ] unless found.is_a?(Array) && key != :methods
 
@@ -155,10 +156,14 @@ module RailsAiContext
             block = line && blocks.select { |candidate| candidate.lines.cover?(line) }.min_by(&:length)
             next false unless block
 
-            foreign << { declaration: block.calls[line] || entry[:text].to_s, receiver: block.receiver, location: line }
+            lines[line] ||= [ block, entry[:text].to_s ]
           end ]
         end
-        kept.merge(foreign: foreign.sort_by { |entry| entry[:location] })
+        foreign = lines.sort.flat_map do |line, (block, text)|
+          sources = Array(block.calls[line]).map { |call| call[:source] }
+          (sources.empty? ? [ text ] : sources).map { |source| { declaration: source, receiver: block.receiver, location: line } }
+        end
+        kept.merge(foreign: foreign)
       end
 
       # The branch whose condition holds the entry back; nil when every way

@@ -1248,6 +1248,28 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     expect(text).to include("- `validates :description, presence: true` on `translation_class` if `options.many?`")
   end
 
+  it "names each of two macros a class_eval line declares on another class" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          translation_class.class_eval do
+            belongs_to :locale_owner, optional: true; has_many :notes, -> { order(:id) }
+          end
+        end
+      RUBY
+      models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(models: models)
+
+      foreign = described_class.call(model: "Post", detail: "full").content.first[:text].split("## Declared on another class").last
+
+      expect(foreign).to include("- `belongs_to :locale_owner, optional: true` on `translation_class`")
+      expect(foreign).to include("- `has_many :notes, -> { order(:id) }` on `translation_class`")
+      expect(foreign).not_to include("`order(:id)` on")
+    end
+  end
+
   # Consul's Budget::Investment audits its translation class from its own body.
   it "names a macro the model body declares in another class's class_eval, apart from its own" do
     Dir.mktmpdir do |dir|
