@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-**All 45 read-only tools, with every parameter.**
+**All 35 read-only tools, with every parameter.**
 
 [Quickstart](QUICKSTART.md) · [Recipes](RECIPES.md) · [Custom Tools](CUSTOM_TOOLS.md) · [CLI Reference](CLI.md)
 
@@ -59,9 +59,9 @@ Most lookup tools accept a **`detail`** parameter: `summary` (compact), `standar
 | [Understand](#understand) | `analyze_feature`, `get_context`, `onboard` |
 | [Schema & Models](#schema--models) | `get_schema`, `get_model_details`, `get_callbacks`, `get_concern` |
 | [Controllers & Routes](#controllers--routes) | `get_controllers`, `get_routes` |
-| [Views & Frontend](#views--frontend) | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map`, `get_frontend_stack` |
+| [Views & Frontend](#views--frontend) | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map` |
 | [Testing & Quality](#testing--quality) | `get_test_info`, `generate_test`, `validate`, `security_scan`, `performance_check` |
-| [App Config & Services](#app-config--services) | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_i18n`, `get_mailers`, `get_engines`, `get_autoload`, `get_active_support`, `get_env_config` |
+| [App Config & Services](#app-config--services) | `get_config`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_mailers` |
 | [Data & Debugging](#data--debugging) | `dependency_graph`, `migration_advisor`, `search_docs`, `query`, `read_logs`, `diagnose`, `review_changes`, `runtime_info`, `session_context` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -369,14 +369,6 @@ Turbo Stream broadcast-to-subscription wiring with mismatch warnings. Streams ar
 | `stream` | string | - | Filter by stream or channel name (e.g., `notifications`); a name no broadcast or subscription carries says so and lists the app's streams |
 | `controller` | string | - | Filter by controller name (e.g., `messages`) |
 
-### `rails_get_frontend_stack`
-
-Auto-detects React/Vue/Svelte/Angular, Hotwire, TypeScript, Vite/Shakapacker, package manager, monorepo layout.
-
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
-
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
 ---
@@ -478,27 +470,27 @@ or over `max_schema_file_size`) is listed under **Not checked** with the reason.
 
 ## App Config & Services
 
-### `rails_get_api`
+### `rails_get_config`
 
-API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQL, versioning, rate limiting, OpenAPI specs, CORS, pagination.
+The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and an MCP call to an old name is answered from its section with a note naming the new call. A parameter the asked section does not read is named in the answer as ignored.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary` (one-liner), `standard` (per-area breakdown), `full` (adds OpenAPI spec paths) |
+| `section` | enum | `app` | `app`, `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env`, `env_config`, `i18n` |
+| `detail` | enum | `standard` | `summary`, `standard`, `full`. Read by `frontend`, `api`, `env` |
+| `category` | enum | `all` | Read by `gems`. See below |
+| `environment` | string | - | Read by `env_config`. One environment, by exact name (e.g. `production`) |
+| `locale` | string | - | Read by `i18n`. One locale's files and coverage, by exact name |
+| `offset` | integer | `0` | Read by `gems`, `env_config`, `i18n`. Skip this many entries |
+| `limit` | integer | `50` | Read by `gems`, `env_config`, `i18n`. Max entries to return |
 
-### `rails_get_conventions`
+`skip_tools` turns one section off by its old tool's name (`rails_get_env` turns `env` off); `rails_get_config` turns off `app` alone. The tool leaves `tools/list` only when every section is off.
 
-Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
-
-*No parameters.*
-
-### `rails_get_config`
+#### `app` (default)
 
 Database config, auth framework, assets, cache, queue, Action Cable. The `use` and `map` calls in `config.ru` are listed apart from the stack, since they run before Rails.
 
-*No parameters.*
-
-### `rails_get_gems`
+#### `gems` (was `rails_get_gems`)
 
 Notable gems with versions, categories, and config file locations. A config
 location is printed only when the app has that file, and an initializer is
@@ -509,19 +501,47 @@ another gem brings in, or, for a framework `rails` pulls in, when
 config/application.rb loads it; a gem the lockfile holds only for another
 gem's own use is left out.
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `category` | enum | `all` | `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` |
-| `offset` | integer | `0` | Skip this many gems |
-| `limit` | integer | `50` | Max gems to return |
+`category` takes: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all`.
 
-### `rails_get_env`
+#### `frontend` (was `rails_get_frontend_stack`)
+
+Auto-detects React/Vue/Svelte/Angular, Hotwire, TypeScript, Vite/Shakapacker, package manager, monorepo layout.
+
+#### `api` (was `rails_get_api`)
+
+API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQL, versioning, rate limiting, OpenAPI specs, CORS, pagination.
+
+#### `engines` (was `rails_get_engines`)
+
+What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - the app's own in-repo engines, plugins and modules read from the tree, each with the models the model scan filed under its path, and loaded engine classes with route/model counts.
+
+#### `conventions` (was `rails_get_conventions`)
+
+Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
+
+#### `autoload` (was `rails_get_autoload`)
+
+Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, custom inflections.
+
+#### `active_support` (was `rails_get_active_support`)
+
+ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, the `ActiveSupport::Notifications` events the app subscribes to (`subscribe`, `monotonic_subscribe`, and a Subscriber's `attach_to`) with file and line, read from source in both tiers, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
+
+#### `env` (was `rails_get_env`)
 
 Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`, plus `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`. A tag on a YAML comment line is not read: ERB runs it, but what it writes goes with the comment. Config YAML matching `sensitive_patterns` (`config/database.yml`, `config/cable.yml`, `config/storage.yml` and the rest) is read only for the ENV names in its ERB tags, so a default there is listed as present and not read; credentials and keys are never read, and the answer says so. A default is read from a second argument or from a block whose one statement is a literal (`ENV.fetch("REDIS_URL") { "redis://localhost:6379/1" }`). The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, and clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so. So are the setting keys in the config gem's `config/settings.yml` and `config/settings/<env>.yml` when the bundle has the config gem, and the attributes of each `Anyway::Config` class in `config/configs` or `app/configs` with the env name it reads (`PAYMENT_API_KEY`), never their values. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+#### `env_config` (was `rails_get_env_config`)
+
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved. An
+"Every environment" block above them lists the keys `config/application.rb`
+sets (`config.x` included) and, for each `config_for(:name)`, the keys
+`config/name.yml` gives the running environment, `shared` merged in, names
+only.
+
+#### `i18n` (was `rails_get_i18n`)
+
+I18n setup: default/available locales, backend, locale files with key counts, per-locale coverage, fallbacks.
 
 ### `rails_get_helper_methods`
 
@@ -595,16 +615,6 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 | `offset` | integer | `0` | Skip this many components |
 | `limit` | integer | `50` | Max components to return |
 
-### `rails_get_i18n`
-
-I18n setup: default/available locales, backend, locale files with key counts, per-locale coverage, fallbacks.
-
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `locale` | string | - | Show only this locale's files and coverage, by exact name |
-| `offset` | integer | `0` | Pagination offset over locale files |
-| `limit` | integer | `50` | Max locale files to return |
-
 ### `rails_get_mailers`
 
 ActionMailer mailers: every mailer class with its delivery actions and delivery method. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
@@ -627,38 +637,6 @@ defines it), and each mailbox's processing callbacks.
 | `mailer` | string | - | One mailer, by exact name |
 | `offset` | integer | `0` | Pagination offset |
 | `limit` | integer | `50` | Max mailers to return |
-
-### `rails_get_engines`
-
-What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - the app's own in-repo engines, plugins and modules read from the tree, each with the models the model scan filed under its path, and loaded engine classes with route/model counts.
-
-*No parameters.*
-
-### `rails_get_autoload`
-
-Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, custom inflections.
-
-*No parameters.*
-
-### `rails_get_active_support`
-
-ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, the `ActiveSupport::Notifications` events the app subscribes to (`subscribe`, `monotonic_subscribe`, and a Subscriber's `attach_to`) with file and line, read from source in both tiers, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
-
-*No parameters.*
-
-### `rails_get_env_config`
-
-Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved. An
-"Every environment" block above them lists the keys `config/application.rb`
-sets (`config.x` included) and, for each `config_for(:name)`, the keys
-`config/name.yml` gives the running environment, `shared` merged in, names
-only.
-
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `environment` | string | - | One environment, by exact name (e.g. `production`) |
-| `offset` | integer | `0` | Skip this many config keys per environment |
-| `limit` | integer | `50` | Max config keys listed per environment |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 

@@ -106,7 +106,7 @@ module RailsAiContext
       end
 
       # The names the app reads beyond the known catalogue, from the scan
-      # rails_get_env reads too, so the tool and the context file agree.
+      # the env section of rails_get_config reads too, so the tool and the context file agree.
       def scan_env_references
         real_root = File.realpath(root)
         refs = {}

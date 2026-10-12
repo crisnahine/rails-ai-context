@@ -55,7 +55,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 20,
+        order: 19,
         mcp: "rails_get_helper_methods",
         summary: "App + framework helpers with view cross-references"
       )

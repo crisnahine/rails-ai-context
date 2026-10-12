@@ -11,11 +11,11 @@
 ---
 
 > [!CAUTION]
-> This gem is designed for **development environments**. The query tool, and MCP over HTTP from inside the app, are disabled in production by default. Sensitive files are blocked. All 45 tools are read-only.
+> This gem is designed for **development environments**. The query tool, and MCP over HTTP from inside the app, are disabled in production by default. Sensitive files are blocked. All 35 tools are read-only.
 
 ## Design principles
 
-1. **Read-only by design** - All 45 tools are annotated as non-destructive in the MCP protocol
+1. **Read-only by design** - All 35 tools are annotated as non-destructive in the MCP protocol
 2. **Defense in depth** - Multiple security layers, not single points of failure
 3. **Sensitive data blocking** - Configurable patterns prevent access to secrets
 4. **Offline by default** - No network calls except optional `rails_search_docs` with `fetch: true`
@@ -417,7 +417,7 @@ The engine builds one transport per process, under a mutex, outside the controll
 
 ## Credential handling
 
-- `rails_get_env` returns credential **keys**, never values
+- `rails_get_config(section:"env")` returns credential **keys**, never values
 - The process's environment variable values are never read. A default written in code, and a placeholder from `.env.example`, `.env.sample` or `.env.template`, is shown after redaction
 - `config/credentials/*.yml.enc` is in the sensitive patterns list
 

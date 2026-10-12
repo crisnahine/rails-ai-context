@@ -57,6 +57,19 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     ensure
       RailsAiContext.configuration.skip_tools = saved
     end
+
+    it "answers a config include from its rails_get_config section, and says when skip_tools turned the section off" do
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_get_env]
+      expect(RailsAiContext::Tools::GetEnv).not_to receive(:call)
+
+      answer = text(described_class.call(model: "Post", include: %w[env gems]))
+
+      expect(answer).to include(RailsAiContext::Tools::GetConfig.section_off_message("env"))
+      expect(answer).to include(text(RailsAiContext::Tools::GetConfig.call(section: "gems")))
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
   end
 
   # Rails resolves a namespaced controller's templates under its full

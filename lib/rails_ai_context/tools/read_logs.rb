@@ -34,7 +34,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 33,
+        order: 28,
         mcp: "rails_read_logs(level:\"X\")",
         cli_args: "level=X",
         summary: "Reverse file tail with level filtering and sensitive data redaction"

@@ -20,7 +20,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 37,
+        order: 32,
         mcp: "rails_onboard(detail:\"standard\")",
         cli_args: "detail=standard",
         summary: "Narrative app walkthrough for new developers or AI agents"

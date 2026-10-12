@@ -23,7 +23,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 19,
+        order: 18,
         mcp: "rails_get_turbo_map",
         summary: "Turbo Stream/Frame wiring + mismatch warnings"
       )

@@ -100,6 +100,17 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    it "is the env_config section's alone when config asks for that section" do
+      Dir.mktmpdir do |dir|
+        env_app(dir)
+        out = `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool config --section env_config --environment prod --no-boot 2>&1`
+
+        expect(out).to include("_Current: **development**"), out
+        expect(out).to include("## prod")
+        expect(out).not_to include("## development")
+      end
+    end
+
     # Set through the child's environment, not a `VAR=value` prefix, which
     # cmd.exe, the shell backticks run on Windows, reads as a command.
     it "still reads RAILS_ENV from the environment variable" do
@@ -117,9 +128,11 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
   it "names exactly the built-in tools that declare an environment parameter" do
     source = File.read(File.expand_path("../exe/rails-ai-context", __dir__))
     listed = source[/ENVIRONMENT_PARAM_TOOLS = %w\[([^\]]*)\]/, 1].to_s.split
+    config = RailsAiContext::Tools::GetConfig
     declared = RailsAiContext::Server.builtin_tools
-      .select { |tool| (tool.input_schema_value&.to_h || {}).fetch(:properties, {}).key?(:environment) }
+      .select { |tool| tool != config && (tool.input_schema_value&.to_h || {}).fetch(:properties, {}).key?(:environment) }
       .map { |tool| RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) }
+    declared += config::SECTION_PARAMS.select { |_, params| params.include?(:environment) }.keys
 
     expect(listed.sort).to eq(declared.sort)
   end
@@ -1725,7 +1738,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
                                  chdir: Dir.home, unsetenv_others: true, stdin_data: request)
 
         tools = served.lines.filter_map { |line| JSON.parse(line) rescue nil }.find { |m| m["id"] == 2 }
-        expect(tools&.dig("result", "tools")&.size).to be > 40
+        expect(tools&.dig("result", "tools")&.size).to be > 30
       end
     end
 

@@ -34,7 +34,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 35,
+        order: 30,
         mcp: "rails_diagnose(error:\"X\")",
         cli_args: "error=\"X\"",
         summary: "One-call error diagnosis: context + git changes + logs + fix suggestions"

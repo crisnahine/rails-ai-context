@@ -96,9 +96,9 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
   end
 
   describe ".registered_tools" do
-    it "returns all 45 built-in tool classes" do
+    it "returns all 35 built-in tool classes" do
       tools = described_class.registered_tools
-      expect(tools.size).to eq(45)
+      expect(tools.size).to eq(35)
     end
 
     # Registration order is reversed here so the sort has something to undo.
@@ -109,7 +109,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       names = described_class.registered_tools.map(&:tool_name)
 
       expect(names).to eq(registered.map(&:tool_name).sort)
-      expect(names.size).to eq(45)
+      expect(names.size).to eq(35)
     end
 
     it "sorts past a tool that has no name yet" do
@@ -149,7 +149,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
 
     it "tracks all subclasses" do
       expect(described_class.descendants).to be_an(Array)
-      expect(described_class.descendants.size).to eq(45)
+      expect(described_class.descendants.size).to eq(35)
     end
   end
 
@@ -162,7 +162,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
   describe "const_missing backwards compatibility" do
     it "Server::TOOLS still works" do
       expect(RailsAiContext::Server::TOOLS).to be_an(Array)
-      expect(RailsAiContext::Server::TOOLS.size).to eq(45)
+      expect(RailsAiContext::Server::TOOLS.size).to eq(35)
     end
   end
 

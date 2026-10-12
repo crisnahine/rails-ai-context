@@ -25,7 +25,7 @@ Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI. Each gets tailored
 No. The gem works three ways:
 1. **MCP server** - AI calls tools via the protocol (best experience)
 2. **Static files** - Generated context files (CLAUDE.md, .cursor/rules/, etc.)
-3. **CLI** - Same 45 tools from the terminal, no server needed
+3. **CLI** - Same 35 tools from the terminal, no server needed
 
 ### Is this safe for production?
 
@@ -55,7 +55,7 @@ Yes. [Copy-paste prompts](PROMPTS.md) has one prompt per setup: the usual instal
 
 ### Can I switch between Gemfile and standalone?
 
-Yes, freely. Both write the same context files and serve the same 45 tools; only the commands those files name follow the install (`rails ai:context` and `rails 'ai:tool[...]'` in the Gemfile, `rails-ai-context context` and `rails-ai-context tool ...` standalone). Re-run the install or `init` after switching: it updates the MCP config files and regenerates the context files with the new commands.
+Yes, freely. Both write the same context files and serve the same 35 tools; only the commands those files name follow the install (`rails ai:context` and `rails 'ai:tool[...]'` in the Gemfile, `rails-ai-context context` and `rails-ai-context tool ...` standalone). Re-run the install or `init` after switching: it updates the MCP config files and regenerates the context files with the new commands.
 
 ### My editor opens a folder that holds several apps. Does that work?
 
@@ -96,7 +96,7 @@ Start with `rails_onboard` for an app overview, `rails_analyze_feature` for feat
 
 ### Can I add my own tools?
 
-Yes. See [Custom Tools](CUSTOM_TOOLS.md). Create an `MCP::Tool` subclass, register it via `config.custom_tools`, and it appears alongside the 45 built-in tools, in the generated context files' tool counts and lists too.
+Yes. See [Custom Tools](CUSTOM_TOOLS.md). Create an `MCP::Tool` subclass, register it via `config.custom_tools`, and it appears alongside the 35 built-in tools, in the generated context files' tool counts and lists too.
 
 ### Can I remove built-in tools?
 

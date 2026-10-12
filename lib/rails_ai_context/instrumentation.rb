@@ -9,7 +9,7 @@ module RailsAiContext
     # Metadata-only fields forwarded to ActiveSupport::Notifications. We
     # deliberately exclude `tool_arguments`, `params`, `arguments`, and
     # `request` because the MCP SDK includes raw tool inputs in those keys.
-    # e.g. `rails_query(sql: "SELECT password_digest...")`, `rails_get_env(name: "SECRET_KEY_BASE")`,
+    # e.g. `rails_query(sql: "SELECT password_digest...")`, `rails_get_config(section: "env")`,
     # `rails_read_logs(search: "api_key=xyz")`. Forwarding them unredacted
     # would leak the request-side data that each tool's response-side
     # redaction was specifically designed to protect. Fixed in v5.8.1.

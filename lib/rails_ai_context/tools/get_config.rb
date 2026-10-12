@@ -4,21 +4,161 @@ module RailsAiContext
   module Tools
     class GetConfig < BaseTool
       tool_name "rails_get_config"
-      description "Get Rails app configuration: cache store, session store, timezone, queue adapter, custom middleware, initializers. " \
-        "Use when: configuring caching, checking session/queue setup, or seeing what initializers exist. " \
-        "No parameters needed. Returns non-default middleware and all initializers."
+      # Each section and the tool that answered it before it was a section.
+      # A retired name still reaches its section from the CLI and the MCP
+      # server, and skip_tools lists it to turn the section off.
+      SECTIONS = {
+        "app" => "rails_get_config",
+        "gems" => "rails_get_gems",
+        "frontend" => "rails_get_frontend_stack",
+        "api" => "rails_get_api",
+        "engines" => "rails_get_engines",
+        "conventions" => "rails_get_conventions",
+        "autoload" => "rails_get_autoload",
+        "active_support" => "rails_get_active_support",
+        "env" => "rails_get_env",
+        "env_config" => "rails_get_env_config",
+        "i18n" => "rails_get_i18n"
+      }.freeze
 
-      input_schema(properties: {})
+      # The parameters each section reads.
+      SECTION_PARAMS = {
+        "gems" => %i[category offset limit],
+        "frontend" => %i[detail],
+        "api" => %i[detail],
+        "env" => %i[detail],
+        "env_config" => %i[environment offset limit],
+        "i18n" => %i[locale offset limit]
+      }.freeze
 
-      guide_row(
-        order: 21,
-        mcp: "rails_get_config",
-        summary: "Database adapter, auth, assets, cache, queue, Action Cable"
-      )
+      SECTION_SUMMARIES = {
+        "app" => "default: database, auth, assets, cache, session, queue, Action Cable, middleware, initializers",
+        "gems" => "notable gems by category",
+        "frontend" => "JS framework, build tool, TypeScript, package manager",
+        "api" => "serializers, GraphQL, versioning, CORS, rate limiting, pagination",
+        "engines" => "mounted engines and Rack apps",
+        "conventions" => "architecture and patterns",
+        "autoload" => "Zeitwerk paths, inflections",
+        "active_support" => "concerns, notifications, on_load hooks",
+        "env" => "environment variables and credentials keys, never values",
+        "env_config" => "config/environments/*.rb per environment",
+        "i18n" => "locales, locale files, coverage"
+      }.freeze
+
+      # Each parameter's schema, less the description that names its sections.
+      PARAM_SCHEMAS = {
+        detail: [ {}, "summary, standard (default) or full." ],
+        category: [
+          { type: "string", enum: Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq + %w[all] },
+          "only this category. Default: all."
+        ],
+        environment: [ { type: "string" }, "only this environment (e.g. \"production\")." ],
+        locale: [ { type: "string" }, "only this locale (e.g. \"fr\")." ],
+        offset: [ { type: "integer" }, "skip this many entries. Default: 0." ],
+        limit: [ { type: "integer" }, "max entries. Default: 50." ]
+      }.freeze
+
+      # The schema over the given sections: a parameter no section among them reads is left out.
+      def self.schema_for(sections)
+        properties = { section: { type: "string", enum: sections, description: "Which section to answer. Default: app." } }
+        PARAM_SCHEMAS.each do |param, (schema, text)|
+          readers = sections.select { |section| SECTION_PARAMS.fetch(section, []).include?(param) }
+          next if readers.empty?
+
+          text = "#{readers.join(', ')}: #{text}"
+          properties[param] = param == :detail ? RailsAiContext::DetailLevel.schema(text) : schema.merge(description: text)
+        end
+        { properties: properties }
+      end
+
+      def self.description_for(sections)
+        "Get the app's configuration, one section per call. section: " \
+          "#{sections.map { |section| "#{section} (#{SECTION_SUMMARIES.fetch(section)})" }.join(', ')}."
+      end
+
+      def self.sections_on(config = RailsAiContext.configuration)
+        SECTIONS.keys.select { |section| section_on?(section, config) }
+      end
+
+      # The full schema validates a call, so one naming an off section still
+      # reaches the turned-off answer; tools/list publishes only the sections that are on.
+      input_schema(schema_for(SECTIONS.keys))
+      description(description_for(SECTIONS.keys))
+
+      def self.input_schema(*args)
+        args.empty? ? @input_schema_value : super
+      end
+
+      def self.input_schema_value
+        MCP::Tool::InputSchema.new(schema_for(sections_on))
+      end
+
+      def self.description_value
+        description_for(sections_on)
+      end
+
+      guide_row(order: 20, mcp: "rails_get_config", summary: "")
+
+      def self.guide_row(**args)
+        row = super
+        return row unless args.empty? && row
+
+        on = sections_on
+        others = (on - [ "app" ]).join(", ")
+        summary = [ ("App config (database, auth, assets, cache, queue)" if on.include?("app")),
+                    ("`section` picks #{on.include?('app') ? 'another' : 'one'}: #{others}" unless others.empty?) ].compact.join("; ")
+        row.dup.tap { |copy| copy.summary = summary }
+      end
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(server_context: nil)
+      def self.call(section: nil, detail: nil, category: nil, offset: nil, limit: nil, environment: nil, locale: nil, server_context: nil)
+        section = section.nil? ? "app" : section.to_s
+        unless SECTIONS.key?(section)
+          return error_response("`section` does not take '#{echo_input(section)}'. It takes: #{SECTIONS.keys.join(', ')}.")
+        end
+        return error_response(section_off_message(section)) unless section_on?(section)
+
+        given = { detail: detail, category: category, offset: offset, limit: limit, environment: environment, locale: locale }.compact
+        reads = SECTION_PARAMS.fetch(section, [])
+        response = section == "app" ? app_section : renderer(section).call(**given.slice(*reads))
+        append_note(response, unread_note(section, given.keys - reads))
+      end
+
+      # The section a tool name or CLI short name stands for, or nil.
+      def self.section_for(name)
+        name = name.to_s
+        SECTIONS.key(name) || SECTIONS.key("rails_#{name}") || SECTIONS.key("rails_get_#{name}")
+      end
+
+      # skip_tools turns a section off by the name of the tool that answered it.
+      def self.section_on?(section, config = RailsAiContext.configuration)
+        !config.skip_tools.include?(SECTIONS.fetch(section))
+      end
+
+      def self.renderer(section)
+        Tools.const_get(SECTIONS.fetch(section).delete_prefix("rails_").split("_").map(&:capitalize).join, false)
+      end
+
+      def self.section_off_message(section)
+        "The `#{section}` section of rails_get_config is turned off in this app: skip_tools lists #{SECTIONS.fetch(section)} " \
+          "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
+      end
+
+      # Only a detail the caller sent is normalized, so a section that does
+      # not read it can say so.
+      def self.normalize_detail(kwargs)
+        kwargs.key?(:detail) ? super : kwargs
+      end
+
+      private_class_method def self.unread_note(section, unread)
+        return nil if unread.empty?
+
+        names = unread.map { |name| "`#{name}`" }.join(", ")
+        "\n\n_The `#{section}` section does not read #{names}, so #{unread.size > 1 ? 'they were' : 'it was'} ignored._"
+      end
+
+      private_class_method def self.app_section
         if static_refusal_for(:config) && (rackup = rackup_lines).any?
           return text_response(([ unavailable_text ] + rackup).join("\n"))
         end

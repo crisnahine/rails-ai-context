@@ -1055,6 +1055,13 @@ module RailsAiContext
         # for after it; nil when the app does not serve that tool, so the
         # hint around it is left out. cli_form turns it into the command.
         def pointer(name, args = nil, purpose = nil)
+          section = GetConfig::SECTIONS.key(name)
+          if section
+            return nil unless RailsAiContext::Server.served?("rails_get_config") && GetConfig.section_on?(section)
+
+            name = "rails_get_config"
+            args = [ (%(section:"#{section}") unless section == "app"), args ].compact.reject(&:empty?).join(", ")
+          end
           return nil unless RailsAiContext::Server.served?(name)
 
           [ "`#{name}(#{args})`", purpose ].compact.join(" ")

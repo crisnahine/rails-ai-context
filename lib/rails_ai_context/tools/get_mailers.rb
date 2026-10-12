@@ -28,7 +28,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 41,
+        order: 35,
         mcp: "rails_get_mailers(mailer:\"X\")",
         cli_args: "mailer=X",
         summary: "Mailer classes with delivery actions and delivery method, mailboxes and their routing"

@@ -166,9 +166,20 @@ RSpec.describe "the tools every generated file names" do
     it "names no skipped built-in anywhere, whichever it is" do
       RailsAiContext.configuration.tool_mode = :mcp
 
+      sections = RailsAiContext::Tools::GetConfig::SECTIONS
       RailsAiContext::Server.builtin_tools.map(&:tool_name).each do |name|
-        RailsAiContext.configuration.skip_tools = [ name ]
+        # rails_get_config is off only once every section is.
+        RailsAiContext.configuration.skip_tools = name == "rails_get_config" ? sections.values : [ name ]
         generated_files.each { |path, content| expect(mentions(content, name)).to eq([]), "#{path} names skipped #{name}" }
+      end
+    end
+
+    it "names no config section whose tool skip_tools lists" do
+      RailsAiContext.configuration.tool_mode = :mcp
+
+      RailsAiContext::Tools::GetConfig::SECTIONS.except("app").each do |section, name|
+        RailsAiContext.configuration.skip_tools = [ name ]
+        generated_files.each { |path, content| expect(content).not_to include(%(section:"#{section}")), "#{path} names skipped #{name}" }
       end
     end
   end

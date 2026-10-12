@@ -4,6 +4,7 @@ module RailsAiContext
   module Tools
     class GetGems < BaseTool
       tool_name "rails_get_gems"
+      abstract!
       description "Get notable gems from Gemfile.lock grouped by category (auth, jobs, frontend, API, database, testing, deploy and more). " \
         "Use when: checking what libraries are available before adding a dependency, or understanding the tech stack. " \
         "Filter with category:\"auth\" or category:\"database\". Omit for all categories."
@@ -26,11 +27,6 @@ module RailsAiContext
         }
       )
 
-      guide_row(
-        order: 22,
-        mcp: "rails_get_gems",
-        summary: "Notable gems with versions, categories, config file locations"
-      )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

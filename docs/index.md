@@ -4,7 +4,7 @@ title: Home
 
 # rails-ai-context Documentation
 
-**45 MCP tools that give AI agents live access to your Rails app.**
+**35 MCP tools that give AI agents live access to your Rails app.**
 
 Works with Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI.
 
@@ -23,7 +23,7 @@ Works with Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI.
 
 | Guide | Description |
 |:------|:------------|
-| **[Tools Reference](TOOLS.md)** | All 45 tools with every parameter |
+| **[Tools Reference](TOOLS.md)** | All 35 tools with every parameter |
 | **[Configuration](CONFIGURATION.md)** | 40+ config options with defaults |
 | **[CLI Reference](CLI.md)** | Commands and argument syntax |
 | **[Introspectors](INTROSPECTORS.md)** | All 40 introspectors and AST engine |

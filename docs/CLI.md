@@ -17,7 +17,7 @@
 | In-Gemfile (Rake) | `rails ai:` | `rails 'ai:tool[schema]' table=users` |
 | Standalone (Thor) | `rails-ai-context` | `rails-ai-context tool schema --table users` |
 
-Both provide the same 45 tools and functionality.
+Both provide the same 35 tools and functionality.
 
 ---
 
@@ -46,7 +46,7 @@ The server announces itself to the client as `server_name` from config, else `ra
 
 ### `tool`
 
-Run any of the 45 MCP tools from the terminal.
+Run any of the 35 MCP tools from the terminal.
 
 ```bash
 # Rake syntax
@@ -92,8 +92,8 @@ than one environment, because the environment decides which database
 configuration the booted tier reads.
 
 After the name of a tool that declares an `environment` parameter of its own
-(`env_config`), `--environment` is that tool's filter and does not set
-`RAILS_ENV`: `tool env_config --environment production` lists production and
+(`env_config`, or `config --section env_config`), `--environment` is that tool's filter and does not set
+`RAILS_ENV`: `tool config --section env_config --environment production` lists production and
 boots the app in its usual environment. Set `RAILS_ENV` through the
 environment variable, or put `--environment` before the command name, to boot
 in another one. Every other tool reads the flag as `RAILS_ENV`. A custom tool

@@ -227,7 +227,7 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML) |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files, and no other tool's answer points at it: the hint that would name it is left out. A custom tool with the same name takes its place. A call that names a skipped tool anyway - from the CLI, rake, an MCP client or `rails_get_context(include:)` - says it is turned off here |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files, and no other tool's answer points at it: the hint that would name it is left out. A custom tool with the same name takes its place. A call that names a skipped tool anyway - from the CLI, rake, an MCP client or `rails_get_context(include:)` - says it is turned off here. The ten tools that became `rails_get_config` sections still go here by their old names: `rails_get_env` turns the `env` section off, `rails_get_config` turns off only `app`, and the tool leaves `tools/list` once all eleven are listed |
 
 ### Output
 

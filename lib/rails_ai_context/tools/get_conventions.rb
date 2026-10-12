@@ -4,17 +4,13 @@ module RailsAiContext
   module Tools
     class GetConventions < BaseTool
       tool_name "rails_get_conventions"
+      abstract!
       description "Detect app architecture and conventions: API-only vs Hotwire, design patterns, directory layout. " \
         "Use when: starting work on an unfamiliar codebase, choosing implementation patterns, or checking what frameworks are in use. " \
         "No parameters needed. Returns architecture style, detected patterns (STI, service objects), and notable config files."
 
       input_schema(properties: {})
 
-      guide_row(
-        order: 23,
-        mcp: "rails_get_conventions",
-        summary: "App patterns: auth checks, flash messages, test patterns"
-      )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

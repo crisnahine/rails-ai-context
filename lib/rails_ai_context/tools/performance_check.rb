@@ -38,7 +38,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 26,
+        order: 23,
         mcp: "rails_performance_check(model:\"X\")",
         cli_args: "model=X",
         summary: "N+1 risks, missing indexes, Model.all anti-patterns"

@@ -38,7 +38,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 27,
+        order: 24,
         mcp: "rails_dependency_graph(model:\"X\")",
         cli_args: "model=X",
         summary: "Model association graph as Mermaid diagram"

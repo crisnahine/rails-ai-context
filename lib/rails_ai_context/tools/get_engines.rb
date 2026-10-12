@@ -4,16 +4,12 @@ module RailsAiContext
   module Tools
     class GetEngines < BaseTool
       tool_name "rails_get_engines"
+      abstract!
       description "Get what config/routes.rb mounts - engines and plain Rack apps alike, with known-engine descriptions - the app's own in-repo engines, plugins and modules, and every loaded Rails::Engine subclass (routes and model counts). " \
         "Use when: checking what is mounted where, finding an admin dashboard's path, listing the repository's own engines, or understanding engine-provided routes."
 
       input_schema(properties: {})
 
-      guide_row(
-        order: 42,
-        mcp: "rails_get_engines",
-        summary: "Mounted apps (engines and Rack apps) + in-repo engines + loaded engine classes with route/model counts"
-      )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

@@ -43,7 +43,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 28,
+        order: 25,
         mcp: "rails_migration_advisor(action:\"X\", table:\"Y\")",
         cli_args: "action=X table=Y",
         summary: "Generate migration code, flag irreversible ops"
