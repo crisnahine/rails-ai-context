@@ -43,6 +43,13 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       expect(classify).to eq(:other)
     end
 
+    it "counts the context files the install writes beside the code as other files, not code" do
+      %w[app/models/AGENTS.md app/controllers/CLAUDE.md app/services/AGENTS.md app/jobs/AGENTS.md db/migrate/README.md].each do |path|
+        expect(described_class.send(:classify_file, path)).to eq(:other), path
+      end
+      expect(described_class.send(:classify_file, "app/models/concerns/taggable.rb")).to eq(:model)
+    end
+
     it "detects missing index warnings in migration diffs" do
       warnings = described_class.send(:detect_warnings, [], Rails.root.to_s, "HEAD")
       expect(warnings).to be_an(Array)

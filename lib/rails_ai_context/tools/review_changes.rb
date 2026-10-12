@@ -215,18 +215,19 @@ module RailsAiContext
           status.success? && !prefix.strip.empty?
         end
 
+        # The Ruby folders count only Ruby files: the install writes app/models/AGENTS.md beside the models.
         def classify_file(path)
           case path
-          when %r{\Aapp/models/}          then :model
-          when %r{\Aapp/controllers/}     then :controller
-          when %r{\Adb/migrate/}          then :migration
-          when %r{\Aapp/views/}           then :view
-          when %r{\Aconfig/routes}        then :routes
-          when %r{\A(spec|test)/}         then :test
-          when %r{\Aapp/services/}        then :service
-          when %r{\Aapp/jobs/}            then :job
-          when %r{\Aapp/javascript/}      then :javascript
-          when %r{\Aconfig/}              then :config
+          when %r{\Aapp/models/.*\.rb\z}          then :model
+          when %r{\Aapp/controllers/.*\.rb\z}     then :controller
+          when %r{\Adb/migrate/.*\.rb\z}          then :migration
+          when %r{\Aapp/views/}                   then :view
+          when %r{\Aconfig/routes}                then :routes
+          when %r{\A(spec|test)/}                 then :test
+          when %r{\Aapp/services/.*\.rb\z}        then :service
+          when %r{\Aapp/jobs/.*\.rb\z}            then :job
+          when %r{\Aapp/javascript/}              then :javascript
+          when %r{\Aconfig/}                      then :config
           else :other
           end
         end
