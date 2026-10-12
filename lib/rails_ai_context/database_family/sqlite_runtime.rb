@@ -26,7 +26,8 @@ module RailsAiContext
 
       def read_only(conn, sql, timeout)
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-        if (path = fork_path(conn))
+        # A child opens the file itself and would answer without the rows of a transaction open here.
+        if !conn.transaction_open? && (path = fork_path(conn))
           result = in_child(conn, path, sql, deadline)
           return Rows.new(result.columns, result.rows, false) if result
         end

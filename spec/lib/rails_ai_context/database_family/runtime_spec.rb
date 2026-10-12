@@ -437,6 +437,19 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     context "in a file", if: Process.respond_to?(:fork) do
       let(:conn) { connect(File.join(dir, "statement.sqlite3")) }
 
+      it "answers from the rows of a transaction that is already open, on the app's own connection, and leaves it as it found it" do
+        conn.transaction do
+          conn.execute("INSERT INTO big VALUES (2001)")
+          result = described_class::SQLITE.read_only(conn, "SELECT count(*) FROM big", timeout: 5)
+          expect([ result.rows, result.unbounded ]).to eq([ [ [ 2001 ] ], true ])
+          expect { described_class::SQLITE.read_only(conn, "INSERT INTO big VALUES (9)", timeout: 5) }
+            .to raise_error(ActiveRecord::StatementInvalid, /readonly/)
+          conn.execute("INSERT INTO big VALUES (2002)")
+        end
+
+        expect(conn.select_value("SELECT count(*) FROM big")).to eq(2002)
+      end
+
       # total_changes() is 0 in the child and above it here, so only the child reaches the failing branch.
       it "raises the error of a statement that fails while it runs, whatever its message says, and runs it nowhere else" do
         sql = "SELECT CASE WHEN total_changes() = 0 THEN json_extract('{}', 'no such function: x') " \
