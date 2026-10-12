@@ -141,7 +141,9 @@ module RailsAiContext
           # Index usage (full detail only)
           if RailsAiContext::DetailLevel.full?(detail)
             index_usage = gather_index_usage(conn, family)
-            if index_usage&.any?
+            if index_usage.nil? && family.known?
+              lines << "" << "_Index usage is not available for the #{family.name} database family._"
+            elsif index_usage&.any?
               lines << "" << "### Index Usage"
               unused = index_usage.select { |i| i[:scans] == 0 }
               if unused.any?
@@ -193,7 +195,7 @@ module RailsAiContext
           pending = begin
             AppDatabases.bounded(ActiveRecord::Base.connection) { RailsAiContext::PendingMigrations.live(dirs) }
           rescue => e
-            RailsAiContext.debug_fail(e, nil, label: "pending_migration_lines")
+            RailsAiContext.debug_fail(e, nil, label: "primary_pending_lines")
           end
           pending ? pending_lines({ "primary" => pending }) : []
         end
@@ -233,7 +235,7 @@ module RailsAiContext
         def gather_index_usage(conn, family)
           AppDatabases.bounded(conn) { family.index_usage(conn) } if family.known?
         rescue => e
-          RailsAiContext.debug_fail(e, nil, label: "gather_index_usage")
+          RailsAiContext.debug_fail(e, [], label: "gather_index_usage")
         end
 
         # ── Cache section ────────────────────────────────────────────────

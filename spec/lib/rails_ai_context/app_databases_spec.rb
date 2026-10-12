@@ -150,6 +150,18 @@ RSpec.describe RailsAiContext::AppDatabases do
     expect(list.map(&:tasks)).to eq([ true, false, true ])
   end
 
+  it "reads replica by truthiness, as Rails does" do
+    list = described_class.build(
+      environments: { "test" => { "primary" => { "adapter" => "sqlite3" }, "copy" => { "adapter" => "sqlite3", "replica" => "yes" },
+                                  "own" => { "adapter" => "sqlite3", "replica" => false } } },
+      current: "test", root: Dir.tmpdir, dumps: []
+    )
+    rails = ->(value) { ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "x", { adapter: "sqlite3", replica: value }).replica? }
+
+    expect(list.map(&:replica)).to eq([ false, !!rails.call("yes"), !!rails.call(false) ])
+    expect(list.map(&:replica)).to eq([ false, true, false ])
+  end
+
   describe "the list's readers" do
     subject(:list) { static(fixture("rails8")) }
 
