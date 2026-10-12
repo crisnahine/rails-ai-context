@@ -671,6 +671,18 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       comments_pos = text.index("comments")
       expect(users_pos).to be < comments_pos
     end
+
+    it "lists tables with the same column count in schema order in standard view" do
+      many = (1..24).to_h do |i|
+        [ format("t%02d", i), { columns: (1..(i.even? ? 2 : 1)).map { |c| { name: "c#{c}", type: "string" } }, indexes: [], foreign_keys: [] } ]
+      end
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "sqlite3", tables: many, total_tables: 24 }, models: {} })
+
+      text = described_class.call(detail: "standard", limit: 50).content.first[:text]
+      evens = (2..24).step(2).map { |i| format("t%02d", i) }
+      odds = (1..23).step(2).map { |i| format("t%02d", i) }
+      expect(text.scan(/\bt\d\d\b/).uniq).to eq(evens + odds)
+    end
   end
 
   # An STI child or a namespaced second model shares its parent's table, and

@@ -151,7 +151,7 @@ module RailsAiContext
 
           when "standard"
             # Sort by column count (most complex first) - AI agents care about big tables first
-            sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
+            sorted = tables.keys.sort_by.with_index { |name, i| [ -(tables[name][:columns]&.size || 0), i ] }
             page = paginate(sorted, offset: offset, limit: limit, default_limit: 25)
             paginated = page[:items]
             return json_page_response(schema, tables, paginated, models_data) if format == "json"
