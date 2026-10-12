@@ -269,7 +269,8 @@ module RailsAiContext
       def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
-        if path_name.end_with?("Controller") && (targets = alias_candidates(source, path_name))
+        if path_name.end_with?("Controller") && !DeclaredConstant.declares_class?(source, path_name: path_name) &&
+           (targets = alias_candidates(source, path_name))
           return [ path_name, unloaded ? { error: unloaded, file: record.file } : { alias_of: targets, file: record.file } ]
         end
         # A *_controller.rb that declares only a module is a mixin controllers include.
@@ -747,13 +748,14 @@ module RailsAiContext
         return [] if source.nil?
 
         nested = nested_ranges(walked)
-        AstWalk.each(AstCache.parse_string(source).value).grep(Prism::DefNode).filter_map do |def_node|
+        all_defs = AstWalk.each(AstCache.parse_string(source).value).grep(Prism::DefNode)
+        defs = all_defs.reject do |def_node|
           name = def_node.name.to_s
-          next if nested.any? { |range| range.cover?(def_node.location.start_offset) }
-          next if actions.include?(name) && !name.end_with?("_params")
-
-          strong_params_entry(def_node)
+          nested.any? { |range| range.cover?(def_node.location.start_offset) } || (actions.include?(name) && !name.end_with?("_params"))
         end
+        entries = defs.to_h { |def_node| [ def_node, strong_params_entry(def_node) ] }.compact
+        add_delegating_params(defs, entries, all_defs.to_set { |def_node| def_node.name.to_s })
+        defs.filter_map { |def_node| entries[def_node] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
@@ -761,6 +763,8 @@ module RailsAiContext
       PERMITS = %i[permit! permit expect].freeze
       # What these return is still the permitted params; `[]`, `fetch` or `dig` returns one value.
       PARAMS_PRESERVING = %i[merge reverse_merge tap to_h to_hash slice except with_indifferent_access compact compact_blank].freeze
+      # A nested key of a strong-params method's answer (`permitted_params[:post]`) is params too.
+      NESTED_PARAMS = %i[[] fetch require].freeze
 
       # A strong-params method returns params it permits. One named *_params counts when it permits anywhere
       # in it, or returns what super, another *_params or permitted_* method, or a class given params makes of
@@ -775,9 +779,22 @@ module RailsAiContext
         else
           returned_permit(chains, locals)
         end
-        return permit_entry(name, call, locals) if call
+        permit_entry(name, call, locals) if call
+      end
 
-        { name: name } if name.end_with?("_params") && hands_params_on?(chains.flatten)
+      # A *_params method that returns what another strong-params method makes: one this file defines only
+      # when it is one, one it does not (a parent's, a concern's, Pundit's) taken at its name.
+      def add_delegating_params(defs, entries, defined)
+        loop do
+          strong = entries.keys.to_set { |def_node| def_node.name.to_s }
+          added = defs.select do |def_node|
+            !entries.key?(def_node) && def_node.name.end_with?("_params") &&
+              hands_params_on?(returned_chains(def_node.body)) { |called| !defined.include?(called) || strong.include?(called) }
+          end
+          break if added.empty?
+
+          added.each { |def_node| entries[def_node] = { name: def_node.name.to_s } }
+        end
       end
 
       def returned_permit(chains, locals)
@@ -813,14 +830,18 @@ module RailsAiContext
         end
       end
 
-      # A returned super, call handing the whole params on, or call to another *_params or permitted_*
-      # method of the controller, its parents or its concerns, which may be the one that permits.
-      def hands_params_on?(returned)
-        returned.any? do |call|
-          next true if call.is_a?(Prism::SuperNode) || call.is_a?(Prism::ForwardingSuperNode)
+      # A returned call handing the whole params on, or a super or another *_params or permitted_* method
+      # of the controller, its parents or its concerns, which may be the one that permits; only through
+      # calls that keep it params (`base_params.merge(...)`), not a before_action's `edition_params[:x] = nil`.
+      def hands_params_on?(chains, &strong)
+        chains.any? do |chain|
+          chain.each_with_index.any? do |call, index|
+            delegate = call.is_a?(Prism::SuperNode) || call.is_a?(Prism::ForwardingSuperNode) ||
+                       (call.receiver.nil? && call.name != :params && call.name.to_s.match?(/params|permit/) && strong.call(call.name.to_s))
+            next chain.first(index).all? { |outer| outer.is_a?(Prism::CallNode) && (PARAMS_PRESERVING.include?(outer.name) || NESTED_PARAMS.include?(outer.name)) } if delegate
 
-          (call.arguments&.arguments || []).any? { |arg| bare_params?(arg) } ||
-            (call.receiver.nil? && call.name != :params && call.name.to_s.match?(/params|permit/))
+            (call.arguments&.arguments || []).any? { |arg| bare_params?(arg) }
+          end
         end
       end
 

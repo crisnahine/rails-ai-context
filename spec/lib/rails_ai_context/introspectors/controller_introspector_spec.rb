@@ -66,6 +66,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         File.write(File.join(dir, "oauth2_controller.rb"), "module AliasLogin\n  class OAuth2Controller < ApplicationController\n    def new; end\n  end\nend\n")
         File.write(File.join(dir, "google_controller.rb"), "module AliasLogin\n  GoogleController = OAuth2Controller\nend\n")
         File.write(File.join(dir, "gmail_controller.rb"), "module AliasLogin\n  GmailController = GoogleController\nend\n")
+        # Canvas's lti/ims file: the class under an acronym, then the path's spelling assigned to it.
+        File.write(File.join(dir, "ims_profile_controller.rb"),
+                   "module AliasLogin\n  class IMSProfileController < ApplicationController\n    def show; end\n  end\n  ImsProfileController = IMSProfileController\nend\n")
       end
 
       after do
@@ -80,6 +83,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           expect(google[:actions]).to eq([ "new" ])
           expect(answer[:controllers]["AliasLogin::GmailController"]).to include(alias_of: "AliasLogin::OAuth2Controller", actions: [ "new" ])
           expect(answer[:controllers]["AliasLogin::OAuth2Controller"][:file]).to eq("app/controllers/alias_login/oauth2_controller.rb")
+          expect(answer[:controllers]["AliasLogin::IMSProfileController"]).to include(actions: [ "show" ])
+          expect(answer[:controllers]).not_to have_key("AliasLogin::ImsProfileController")
         end
       end
     end
@@ -700,6 +705,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
         def order_params
           params.require(resource.object_name).permit(:total)
+        end
+
+        def build_nation_params
+          edition_params["nation_inapplicabilities_attributes"]["0"] = nil unless checked
+        end
+
+        def clean_logo_params
+          organisation_params.delete(:logo_cache)
         end
       RUBY
 
