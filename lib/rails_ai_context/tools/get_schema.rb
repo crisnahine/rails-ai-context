@@ -115,9 +115,8 @@ module RailsAiContext
             end
             # Cross-reference hint for AI: suggest next tool call
             model_refs = models_for_table([ table_key, listed_as ], models_data, schema: schema, database: (databases.first if databases.size == 1))
-            if model_refs.any?
-              output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
-            end
+            hint = next_hint(pointer("rails_get_model_details", %(model:"#{model_refs.first}"), "for associations, validations, scopes.")) if model_refs.any?
+            output += "\n\n#{hint}" if hint
             return text_response(output)
           end
 

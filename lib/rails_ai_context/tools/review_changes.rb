@@ -150,7 +150,8 @@ module RailsAiContext
         rb_files = classified.select { |c| c[:file].end_with?(".rb") }.map { |c| c[:file] }
         if rb_files.any?
           file_list = rb_files.first(10).map { |f| "\"#{f}\"" }.join(", ")
-          lines << "_Next: `rails_validate(files:[#{file_list}], level:\"rails\")` to validate all changes._"
+          hint = next_hint(pointer("rails_validate", %(files:[#{file_list}], level:"rails"), "to validate all changes."))
+          lines << hint if hint
         end
 
         text_response(lines.join("\n"))

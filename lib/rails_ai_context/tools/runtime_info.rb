@@ -309,8 +309,8 @@ module RailsAiContext
           lines << "" << cache_scope(cache)
           elsewhere = configured_elsewhere
           if elsewhere.any?
-            lines.push("", "**The app's cache in other environments:**", *elsewhere,
-                       "_`rails_get_env_config(environment:\"...\")` shows each one's options._")
+            options = pointer("rails_get_env_config", %(environment:"..."), "shows each one's options.")
+            lines.push("", "**The app's cache in other environments:**", *elsewhere, *("_#{options}_" if options))
           end
 
           lines << ""
