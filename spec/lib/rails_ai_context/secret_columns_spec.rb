@@ -21,6 +21,11 @@ RSpec.describe RailsAiContext::SecretColumns do
   end
 
   describe "#secret?" do
+    it "is true for MySQL's stored password hash, and for a name with a letter MySQL folds to a plain one" do
+      expect(secrets.secret?("authentication_string")).to be(true)
+      expect(secrets.secret?("AP\u0130_KEY")).to be(true)
+    end
+
     {
       "a name the app redacts" => "ssn_last_four",
       "a built-in secret name" => "otp_secret",
@@ -134,6 +139,21 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
   end
 
+  describe "#relation_named_in" do
+    let(:held) { secrets(relations: { "users" => %w[id passwd], "posts" => %w[id title], "led$" => %w[api_token] }) }
+
+    it "is the first relation holding a secret column that the text names, as a whole identifier in any quoting" do
+      expect(held.relation_named_in("SELECT * FROM (SELECT * FROM Users) x")).to eq("users")
+      expect(held.relation_named_in(%(SELECT * FROM (SELECT * FROM "users") x))).to eq("users")
+      expect(held.relation_named_in("SELECT * FROM (SELECT * FROM led$) x")).to eq("led$")
+    end
+
+    it "is nil for a relation with no secret column and for a longer name" do
+      expect(held.relation_named_in("SELECT * FROM (SELECT * FROM posts) x")).to be_nil
+      expect(held.relation_named_in("SELECT * FROM (SELECT * FROM users_archive) x")).to be_nil
+    end
+  end
+
   describe "#refused_view_in" do
     let(:relations) { { "users" => %w[id email passwd tax_number], "posts" => %w[id title] } }
 
@@ -143,19 +163,32 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "refuses a view that renames a secret column, by the view and the column" do
       views = { "people" => "select `app`.`users`.`id` AS `id`,`app`.`users`.`passwd` AS `p1` from `app`.`users`" }
-      expect(refused(views, "SELECT p1 FROM People")).to eq([ "people", "its definition names the sensitive column `passwd`" ])
+      expect(refused(views, "SELECT p1 FROM People")).to eq([ "people", "its definition names the secret column `passwd`" ])
     end
 
     it "refuses a view built on such a view, however deep" do
       views = { "third" => "SELECT * FROM second", "second" => "SELECT p1 FROM people", "people" => "SELECT passwd AS p1 FROM users" }
-      expect(refused(views, "SELECT * FROM second")).to eq([ "second", "it reads the view `people`: its definition names the sensitive column `passwd`" ])
+      expect(refused(views, "SELECT * FROM second")).to eq([ "second", "it reads the view `people`: its definition names the secret column `passwd`" ])
       expect(refused(views, "SELECT * FROM third").last).to start_with("it reads the view `second`: it reads the view `people`")
+    end
+
+    it "matches a view's name as an identifier, whatever characters it holds and however it is quoted" do
+      definition = "SELECT passwd AS p1 FROM users"
+      {
+        "v$" => [ "SELECT * FROM v$", %(SELECT * FROM "v$" WHERE p1 > ''), "SELECT * FROM `V$`" ],
+        "two  words" => [ %(SELECT * FROM "two words"), "SELECT * FROM [two words]" ],
+        'quo"ted' => [ %(SELECT * FROM "quo""ted") ],
+        "back`tick" => [ "SELECT * FROM `back``tick`" ]
+      }.each do |view, statements|
+        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view), sql }
+      end
+      expect(refused({ "v$" => definition }, "SELECT * FROM v$x")).to be_nil
     end
 
     it "refuses a view that reads every column of a relation holding a secret column" do
       [ "SELECT * FROM users", "SELECT u.* FROM users u", "SELECT DISTINCT * FROM users", "SELECT id, * FROM users" ].each do |definition|
         expect(refused({ "everyone" => definition }, "SELECT * FROM everyone"))
-          .to eq([ "everyone", "its definition reads every column of `users`, which holds the sensitive column `passwd`" ]), definition
+          .to eq([ "everyone", "its definition reads every column of `users`, which holds the secret column `passwd`" ]), definition
       end
     end
 
@@ -174,13 +207,13 @@ RSpec.describe RailsAiContext::SecretColumns do
       config.query_allowed_columns = %w[passwd tax_number]
       expect(refused({ "people" => "SELECT passwd AS p1 FROM users" }, "SELECT * FROM people")).to be_nil
       expect(refused({ "taxes" => "SELECT tax_number AS t FROM users" }, "SELECT * FROM taxes", encrypted: %w[tax_number]))
-        .to eq([ "taxes", "its definition names the sensitive column `tax_number`" ])
+        .to eq([ "taxes", "its definition names the secret column `tax_number`" ])
     end
 
     it "refuses a view whose definition cannot be read when a relation holds a secret column" do
       [ nil, "", "  " ].each do |unreadable|
         expect(refused({ "opaque" => unreadable }, "SELECT * FROM opaque"))
-          .to eq([ "opaque", "its definition could not be read, and this database holds sensitive columns" ]), unreadable.inspect
+          .to eq([ "opaque", "its definition could not be read, and this database holds secret columns" ]), unreadable.inspect
       end
       expect(described_class.new(relations: { "posts" => %w[id title] }, views: { "opaque" => nil }).refused_view_in("SELECT * FROM opaque")).to be_nil
     end
@@ -220,13 +253,22 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "makes a view that names it a refused view" do
       secrets = secrets(views: { "people" => "SELECT hidden AS h FROM users" })
-      expect(secrets.refused_view_in("SELECT h FROM people")).to eq([ "people", "its definition names the sensitive column `hidden`" ])
+      expect(secrets.refused_view_in("SELECT h FROM people")).to eq([ "people", "its definition names the secret column `hidden`" ])
     end
   end
 
   describe ".for" do
     let(:conn) { ActiveRecord::Base.connection }
     let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }
+    let(:context) do
+      {
+        schema: { tables: {
+          "widgets" => { columns: [ { name: "id" }, { name: "api_token" } ] },
+          "ar_internal_metadata" => { columns: [ { name: "key" }, { name: "value" } ] }
+        } },
+        models: { "User" => { encrypts: %w[email] } }
+      }
+    end
 
     it "reads the family's view definitions and generated columns, once per run" do
       allow(runtime).to receive(:relation_columns).and_return("users" => %w[passwd])
@@ -251,14 +293,17 @@ RSpec.describe RailsAiContext::SecretColumns do
 
       expect(described_class.for(conn, context: context).refused_view_in("SELECT * FROM people")&.first).to eq("people")
     end
-    let(:context) do
-      {
-        schema: { tables: {
-          "widgets" => { columns: [ { name: "id" }, { name: "api_token" } ] },
-          "ar_internal_metadata" => { columns: [ { name: "key" }, { name: "value" } ] }
-        } },
-        models: { "User" => { encrypts: %w[email] } }
-      }
+
+    it "reads a view's definition with its comments out, as the database runs it" do
+      allow(runtime).to receive(:relation_columns).and_return("users" => %w[id passwd])
+      allow(runtime).to receive(:view_definitions).and_return(
+        "lined" => " SELECT -- note\n * FROM users", "blocked" => " SELECT /* note */ * FROM users", "plain" => " SELECT id -- passwd\n FROM users"
+      )
+      secrets = described_class.for(conn, context: context)
+
+      expect(secrets.refused_view_in("SELECT * FROM lined")&.last).to start_with("its definition reads every column of `users`")
+      expect(secrets.refused_view_in("SELECT * FROM blocked")&.last).to start_with("its definition reads every column of `users`")
+      expect(secrets.refused_view_in("SELECT * FROM plain")).to be_nil
     end
 
     it "reads the connection's schema once per run, however many checks ask" do
@@ -285,11 +330,14 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
-    it "reads the columns of every table in one statement" do
+    it "reads the columns, the views and the generated columns in one statement each" do
       sent = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-      described_class.for(conn, context: {})
-      ActiveSupport::Notifications.unsubscribe(subscriber)
+      begin
+        described_class.for(conn, context: {})
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
 
       expect(sent.size).to eq(3)
       expect(runtime.relation_columns(conn)).to eq(conn.tables.sort.to_h { |table| [ table, conn.columns(table).map(&:name) ] })
@@ -319,13 +367,36 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(secrets.named_in("select key from ar_internal_metadata")).to be_nil
     end
 
-    it "reads no schema from the context for another database whose tables cannot be read" do
+    it "raises for another database whose tables cannot be read, naming it, and reads no schema from the context" do
       other = conn.dup
       allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
-      secrets = described_class.for(other, context: context)
-      expect(secrets.of_relation("widgets")).to eq([])
-      expect(secrets.in_schema).to eq([])
+
+      expect { described_class.for(other, context: context) }.to raise_error(
+        described_class::Unreadable,
+        "The columns of the queue database could not be read, so its secret columns cannot be told and no query runs on it."
+      )
+    end
+
+    it "raises for the primary when neither the connection nor the context holds its tables" do
+      allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
+      expect { described_class.for(conn, context: {}) }.to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
+    end
+
+    it "raises a lost connection, from the columns and from the view definitions, with no fallback" do
+      lost = [ ActiveRecord::ConnectionNotEstablished.new("server closed the connection") ]
+      lost << ActiveRecord::ConnectionFailed.new("server has gone away") if defined?(ActiveRecord::ConnectionFailed)
+      allow(conn).to receive(:views).and_raise("the views were listed")
+
+      lost.each do |error|
+        allow(runtime).to receive(:relation_columns).and_raise(error)
+        expect { described_class.for(conn, context: context) }.to raise_error(error.class)
+      end
+      if defined?(ActiveRecord::ConnectionFailed)
+        allow(runtime).to receive(:relation_columns).and_return({})
+        allow(runtime).to receive(:view_definitions).and_raise(lost.last)
+        expect { described_class.for(conn, context: context) }.to raise_error(ActiveRecord::ConnectionFailed)
+      end
     end
 
     it "leaves bookkeeping tables out of a connection read" do

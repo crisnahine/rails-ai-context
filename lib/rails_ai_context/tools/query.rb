@@ -87,39 +87,63 @@ module RailsAiContext
           )
         end
 
-        AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain) }
-      rescue AppDatabases::Error => e
+        # Decided from the configuration, so an adapter with no family is refused before its server is pinged.
+        family = configured_family(database)
+        return no_family_response(family) if family && !family.known?
+
+        AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain, database) }
+      rescue AppDatabases::Error, SecretColumns::Unreadable => e
         error_response(e.message)
       rescue ActiveRecord::ConnectionNotEstablished => e
         # The lease checked the connection answers, so this one was lost while the statement ran.
-        name = database.to_s.empty? ? ActiveRecord::Base.connection_db_config.name : database
-        error_response("The #{name} database stopped answering during the query: #{clean_error_message(e.message)}")
-      rescue DatabaseFamily::TimedOut
+        stopped_answering_response(database, e)
+      rescue DatabaseFamily::TimedOut => e
+        return stopped_answering_response(database, e.cause) if e.cause && SecretColumns.lost_connection?(e.cause)
+
         error_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
+        return stopped_answering_response(database, e) if SecretColumns.lost_connection?(e)
+
         error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
       rescue => e
         error_response("Query failed: #{clean_error_message(e.message)}")
       end
 
-      private_class_method def self.answer(connection, sql, limit, format, explain)
-        family = DatabaseFamily.of(connection)
-        unless family.known?
-          return error_response(
-            "rails_query refuses the #{family.name} adapter: it runs SQL only on a database whose read-only " \
-            "transaction and statement timeout it knows (PostgreSQL, MySQL with MariaDB, SQLite). No statement was sent."
-          )
-        end
+      # nil where the lease has its own refusal to give: a database this environment does not configure.
+      private_class_method def self.configured_family(database)
+        return DatabaseFamily.of(ActiveRecord::Base.connection_db_config) if database.to_s.empty?
 
+        named = AppDatabases.for(rails_app.root)[database]
+        named.family if named&.here
+      end
+
+      private_class_method def self.no_family_response(family)
+        error_response(
+          "rails_query refuses the #{family.name} adapter: it runs SQL only on a database whose read-only " \
+          "transaction and statement timeout it knows (PostgreSQL, MySQL with MariaDB, SQLite). No statement was sent."
+        )
+      end
+
+      private_class_method def self.stopped_answering_response(database, error)
+        name = database.to_s.empty? ? ActiveRecord::Base.connection_db_config.name : database
+        error_response("The #{name} database stopped answering during the query: #{clean_error_message(error.message)}")
+      end
+
+      private_class_method def self.answer(connection, sql, limit, format, explain, database)
+        family = DatabaseFamily.of(connection)
+        return no_family_response(family) unless family.known?
+
+        # Built before any clock starts: a cold context is the app's whole introspection.
+        context = cached_context
         # The statement has query_timeout to itself. Every other read the call sends shares a second one.
         timeout = config.query_timeout
-        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-        secrets = family.bounded(connection, timeout: timeout) { SecretColumns.for(connection, context: cached_context) }
-        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, timeout: time_left(deadline)).check(sql)
+        reads = SqlGate::Budget.new(timeout)
+        secrets = reads.spend { |left| family.bounded(connection, timeout: left) { SecretColumns.for(connection, context: context) } }
+        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, budget: reads).check(sql)
         return error_response(verdict.refusal) if verdict.refused?
 
         sql = verdict.sql
-        return explain_response(family, connection, sql, timeout) if explain
+        return explain_response(family, connection, sql, timeout, database) if explain
 
         row_limit = limit ? [ limit.to_i, HARD_ROW_CAP ].min : config.query_row_limit
         row_limit = [ row_limit, 1 ].max
@@ -132,7 +156,9 @@ module RailsAiContext
         elsif schema_metadata
           result
         else
-          sources = family.bounded(connection, timeout: time_left(deadline)) { family.column_sources(connection, sql, plan: verdict.plan) }
+          sources = reads.spend do |left|
+            family.bounded(connection, timeout: left) { family.column_sources(connection, sql, plan: verdict.plan) }
+          end
           redact_results(result, secrets, sources)
         end
 
@@ -147,13 +173,6 @@ module RailsAiContext
         end
 
         text_response(output)
-      end
-
-      private_class_method def self.time_left(deadline)
-        left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        raise DatabaseFamily::TimedOut, "the reads beside the statement used the whole timeout" unless left.positive?
-
-        left
       end
 
       MISSING_TABLE = /no such table: (?:\w+\.)?(\w+)|relation "(?:\w+\.)?(\w+)" does not exist|Table '(?:[^'.]+\.)?(\w+)' doesn't exist/i
@@ -195,7 +214,7 @@ module RailsAiContext
         format == "csv" ? "\n\n#{note}" : "\n\n_#{note}_"
       end
 
-      private_class_method def self.explain_response(family, connection, sql, timeout)
+      private_class_method def self.explain_response(family, connection, sql, timeout, database)
         return error_response("EXPLAIN only supports SELECT queries.") unless sql.match?(/\A\s*(SELECT|WITH)\b/i)
 
         parsed = family.explain(connection, sql, timeout: timeout)
@@ -225,7 +244,9 @@ module RailsAiContext
 
         text_response(lines.join("\n") + (parsed[:unbounded] ? UNBOUNDED_SQLITE_NOTE : ""))
       rescue ActiveRecord::StatementInvalid => e
-        error_response("EXPLAIN failed: #{clean_error_message(e.message)}")
+        raise if SecretColumns.lost_connection?(e)
+
+        error_response("EXPLAIN failed: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
       end
 
       # The query's own limit ends the statement; a LIMIT anywhere else belongs to a subquery or a literal.
@@ -290,7 +311,10 @@ module RailsAiContext
           i if unread || secrets.secret?(column)
         end
 
-        redacted_indices = columns.each_index.select { |i| provenance.include?(i) || secrets.secret?(columns[i]) }
+        # SQLite names a second result column of the same name `name:1`.
+        redacted_indices = columns.each_index.select do |i|
+          provenance.include?(i) || secrets.secret?(columns[i]) || secrets.secret?(columns[i].to_s.sub(/:\d+\z/, ""))
+        end
 
         return result if redacted_indices.empty?
 
@@ -368,14 +392,8 @@ module RailsAiContext
       end
 
       private_class_method def self.format_csv(result)
-        columns = result.columns
-        rows = result.rows
-
-        return "_Query returned 0 rows._" if rows.empty?
-
-        lines = []
-        lines << columns.map { |col| csv_field(col.to_s) }.join(",")
-        rows.each do |row|
+        lines = [ result.columns.map { |col| csv_field(col.to_s) }.join(",") ]
+        result.rows.each do |row|
           lines << row.map { |val| csv_field(csv_cell(val)) }.join(",")
         end
 
