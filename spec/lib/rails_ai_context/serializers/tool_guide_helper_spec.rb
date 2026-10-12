@@ -127,6 +127,17 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       RailsAiContext.configuration.skip_tools = []
     end
 
+    it "names rails_get_config only while a section that reads detail is on" do
+      expect(named_line).to include("`rails_get_config`")
+
+      RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_api rails_get_env]
+      line = helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      expect(line).to include("`rails_onboard`")
+      expect(line).not_to include("rails_get_config")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
+
     it "leaves the detail advice out when no served tool takes detail" do
       allow(helper).to receive(:exposed_tools).and_return([ RailsAiContext::Tools::GetContext ])
       expect(helper.tools_detail_guidance).to eq([])

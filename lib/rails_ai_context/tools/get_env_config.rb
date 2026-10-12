@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetEnvConfig < BaseTool
       tool_name "rails_get_env_config"
-      abstract!
+      section_renderer!
       description "Get per-environment configuration from config/environments/*.rb: notable toggles (force_ssl, eager_load, caching, log level, queue adapter, mailer delivery) and every config key each environment sets, " \
         "plus the keys config/application.rb sets for every environment (config.x included) and the keys each config_for YAML file gives. " \
         "Use when: comparing development vs production behavior, debugging env-specific bugs, or checking what a custom environment changes. " \
@@ -27,7 +27,6 @@ module RailsAiContext
           }
         }
       )
-
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

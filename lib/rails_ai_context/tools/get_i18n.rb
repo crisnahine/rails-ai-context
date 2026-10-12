@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetI18n < BaseTool
       tool_name "rails_get_i18n"
-      abstract!
+      section_renderer!
       description "Get I18n setup: default/available locales, backend, locale files with key counts, per-locale coverage vs the default locale, and fallbacks. " \
         "Use when: adding translations, checking locale coverage before shipping, or finding which file defines a locale. " \
         "Filter with locale:\"fr\". Omit for the full picture."
@@ -25,7 +25,6 @@ module RailsAiContext
           }
         }
       )
-
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

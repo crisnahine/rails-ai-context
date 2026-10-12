@@ -7,7 +7,7 @@ module RailsAiContext
   module Tools
     class GetEnv < BaseTool
       tool_name "rails_get_env"
-      abstract!
+      section_renderer!
       description "Discover environment variables, external service dependencies, and credentials keys used by the app. " \
         "Use when: setting up a development environment, debugging missing config, or auditing external dependencies. " \
         "Scans .rb, .rake, ERB views and config YAML for ENV[], plus .env.example, Dockerfile, the env Kamal's config/deploy.yml sets, config gem settings and Anyway::Config keys, external HTTP calls, and credentials keys (never values)."
@@ -17,7 +17,6 @@ module RailsAiContext
           detail: RailsAiContext::DetailLevel.schema("Detail level. summary: env var names only. standard: env vars grouped by source + external services (default). full: everything including per-file locations, Dockerfile vars, and credentials keys.")
         }
       )
-
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

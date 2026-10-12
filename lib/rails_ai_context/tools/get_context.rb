@@ -345,8 +345,8 @@ module RailsAiContext
             next
           end
 
-          tool = RailsAiContext::Server.served_tool(name)
-          unless tool
+          tool = tool_class(name)
+          unless own_served?(tool)
             extra << "\n\n---\n\n_#{RailsAiContext::Server.skipped_tool_message(name)}_"
             next
           end

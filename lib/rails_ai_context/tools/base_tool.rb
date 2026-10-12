@@ -48,6 +48,24 @@ module RailsAiContext
           @abstract == true
         end
 
+        # A class that renders one rails_get_config section: called through
+        # that tool, and so never registered under its own name.
+        def section_renderer!
+          abstract!
+        end
+
+        # The class in Tools a tool name spells, or nil.
+        def tool_class(name)
+          const = name.to_s.delete_prefix("rails_").split("_").map(&:capitalize).join
+          Tools.const_get(const, false) if const.match?(/\A[A-Z]\w*\z/) && Tools.const_defined?(const, false)
+        end
+
+        # Whether the app serves this built-in itself. A custom tool under its
+        # name takes other parameters, so no answer runs it or points at it.
+        def own_served?(tool)
+          RailsAiContext::Server.served_tool(tool.tool_name).equal?(tool)
+        end
+
         # Sorted so load order never reaches tool --list or tools/list.
         def registered_tools
           eager_load!
@@ -1050,27 +1068,21 @@ module RailsAiContext
         MCP_CALL = /\b(rails_\w+)\(([^()]*)\)/
         PARAM_HINT = /`((?:\w+:(?:"[^"`]*"|[\w.]+)(?:,\s*)?)+)`/
 
-        # A call to another tool as an answer writes it, with what the call is
-        # for after it; nil when the app does not serve that tool, so the
-        # hint around it is left out. cli_form turns it into the command.
+        # A call to another tool as an answer writes it, then what it is for; nil when the
+        # app does not serve that tool or config section, so the hint around it is left out.
         def pointer(name, args = nil, purpose = nil)
-          section = GetConfig::SECTIONS.key(name)
-          if section
-            return nil unless RailsAiContext::Server.served?("rails_get_config") && GetConfig.section_on?(section)
+          section = GetConfig.retired_section(name)
+          args = [ %(section:"#{section.name}"), args ].compact.reject(&:empty?).join(", ") if section
+          section ||= GetConfig.section(args.to_s[/\bsection:"(\w+)"/, 1] || "app") if name == "rails_get_config"
+          return nil unless section ? section.served? : RailsAiContext::Server.served?(name)
 
-            name = "rails_get_config"
-            args = [ (%(section:"#{section}") unless section == "app"), args ].compact.reject(&:empty?).join(", ")
-          end
-          return nil unless RailsAiContext::Server.served?(name)
-
-          [ "`#{name}(#{args})`", purpose ].compact.join(" ")
+          [ "`#{section ? 'rails_get_config' : name}(#{args})`", purpose ].compact.join(" ")
         end
 
-        # A section of this answer that another tool builds, run only when the
-        # app serves that tool; otherwise an empty answer, and SafeCall names
-        # the tool once at the end of this one.
+        # A section of this answer that another tool builds. A tool the app does not
+        # serve gives an empty one, and SafeCall names it once at the end of this answer.
         def compose(tool, **args)
-          return tool.call(**args) if RailsAiContext::Server.served_tool(tool.tool_name).equal?(tool)
+          return tool.call(**args) if own_served?(tool)
 
           Thread.current[BaseTool::LEFT_OUT]&.last&.push(tool.tool_name)
           MCP::Tool::Response.new([ { type: "text", text: "" } ], meta: { empty: true })

@@ -103,8 +103,8 @@ module RailsAiContext
           t.tool_name == "rails_get_#{name}" ||
           t.tool_name == "get_#{name}"
       end
-      section = RailsAiContext::Tools::GetConfig.section_for(name) unless found
-      found || (RailsAiContext::Tools::GetConfig.renderer(section) if section && section != "app")
+      found || [ name, "rails_#{name}", "rails_get_#{name}" ]
+        .filter_map { |candidate| RailsAiContext::Tools::GetConfig.retired_section(candidate) }.first&.renderer
     end
 
     def all_tools

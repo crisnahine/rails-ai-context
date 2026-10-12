@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetAutoload < BaseTool
       tool_name "rails_get_autoload"
-      abstract!
+      section_renderer!
       description "Get autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, and custom inflections. " \
         "Use when: debugging NameError/unloaded-constant issues, naming a file or class to match Zeitwerk rules, or checking custom inflections."
 
@@ -13,7 +13,6 @@ module RailsAiContext
       MAX_PATHS_SHOWN = 40
 
       input_schema(properties: {})
-
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 

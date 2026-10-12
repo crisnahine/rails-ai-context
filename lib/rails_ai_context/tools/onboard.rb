@@ -54,8 +54,6 @@ module RailsAiContext
       class << self
         private
 
-        # ── Summary: single paragraph ──────────────────────────────────────
-
         def compose_summary(ctx)
           app = ctx[:app_name] || "This Rails app"
 
