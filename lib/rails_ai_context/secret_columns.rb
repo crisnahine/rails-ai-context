@@ -99,9 +99,8 @@ module RailsAiContext
     end
     private_class_method :encrypted_from
 
-    # relations: relation name => its column names. encrypted: the columns an `encrypts` declaration covers.
-    # views: view name => its definition, nil where the family traces a result column to its table column.
-    # generated: relation name => { generated column => its expression }.
+    # relations: relation => its column names. generated: relation => { generated column => its expression }.
+    # views: view => its definition, or nil where the family traces a result column to its table column.
     def initialize(relations: {}, encrypted: [], views: nil, generated: {}, config: RailsAiContext.configuration)
       @redacted = (Array(config.query_redacted_columns) + BUILT_IN_NAMES).to_set { |c| c.to_s.downcase }
       @allowed = Array(config.query_allowed_columns).to_set { |c| c.to_s.downcase }
@@ -137,9 +136,8 @@ module RailsAiContext
       @generated[name.to_s.downcase]
     end
 
-    # The first view the text names that this database cannot redact, with the reason, or nil.
-    # A view's definition renames a column outside the statement, where no check on the statement reads it.
-    # @return [Array(String, String), nil]
+    # [view, why] for the first refused view the text names, or nil. A view's definition renames a
+    # column outside the statement, where no check on the statement reads it.
     def refused_view_in(text)
       down = text.to_s.downcase
       @refused_views.find { |view, _why| names?(down, view) }
