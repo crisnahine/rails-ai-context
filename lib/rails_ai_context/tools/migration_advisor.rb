@@ -716,14 +716,14 @@ module RailsAiContext
             ]
           when "change_type"
             [
-              "**`change_column` (type change) blocks writes**#{" on Postgres" if family.key == :postgresql} for the duration of the table rewrite, which can be hours on large tables.",
+              "**`change_column` (type change) blocks writes**#{" on Postgres" if family.postgresql?} for the duration of the table rewrite, which can be hours on large tables.",
               "Safer pattern: add a new column with the new type, backfill, dual-write, swap, drop the old column."
             ]
           when "add_index"
             # strong_migrations only requires algorithm: :concurrently on
             # PostgreSQL (its ACCESS EXCLUSIVE lock is the problem) - it
             # doesn't flag plain add_index on MySQL/MariaDB or SQLite at all.
-            if family.key == :postgresql && !options.to_s.include?("concurrently")
+            if family.postgresql? && !options.to_s.include?("concurrently")
               [
                 "**`add_index` without `algorithm: :concurrently`** acquires an `ACCESS EXCLUSIVE` lock on Postgres and blocks writes.",
                 "Use `add_index :#{table}, :#{column}, algorithm: :concurrently` and add `disable_ddl_transaction!` at the top of the migration."
@@ -752,7 +752,7 @@ module RailsAiContext
           when "add_column"
             if options.to_s.match?(/null:\s*false/) && !options.to_s.include?("default:")
               [
-                if family.key == :postgresql
+                if family.postgresql?
                   "**Adding a `NOT NULL` column without a default rewrites the table** on older Postgres and fails on existing rows."
                 else
                   "**Adding a `NOT NULL` column without a default** needs a value for every existing row."
@@ -925,7 +925,7 @@ module RailsAiContext
         end
 
         # Locking/DDL advice differs by family (MySQL's online DDL vs Postgres's ACCESS EXCLUSIVE
-        # locks); an undecided database is no family and gets advice that names no engine.
+        # locks); an undecided database is no family and gets advice that names no database.
         def family
           RailsAiContext::DatabaseFamily.of(cached_context.dig(:schema, :adapter).to_s)
         end

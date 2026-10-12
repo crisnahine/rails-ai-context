@@ -39,15 +39,15 @@ module RailsAiContext
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
       return [] if dirs.empty?
       # Rails 7.0's schema_migration is a model that finds its pool through the app's handler, where a leased pool is not.
-      return PendingMigrations.for(migrate_dir: dirs, applied: applied_versions(pool.connection)) if rails70?(pool)
+      return PendingMigrations.for(migrate_dir: dirs, applied: applied_versions(pool.connection)) if schema_migration_model?(pool)
 
       pending_in(migration_context(dirs, pool), dirs)
     end
 
-    def self.rails70?(pool)
+    def self.schema_migration_model?(pool)
       !pool.respond_to?(:schema_migration) && !pool.connection.respond_to?(:internal_metadata)
     end
-    private_class_method :rails70?
+    private_class_method :schema_migration_model?
 
     def self.applied_versions(connection)
       table = ActiveRecord::Base.schema_migrations_table_name

@@ -1,26 +1,37 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # The kind of engine a database is: PostgreSQL, MySQL or SQLite, else no family.
-  # Claimed by name only, never by class ancestry (ADR-0008). A family also owns
-  # how its engine runs a guarded read and the statistics other tools show.
+  # What a database is by its adapter's name: PostgreSQL, MySQL or SQLite, else no family (ADR-0008).
+  # A family also owns how its database runs a guarded read and the statistics other tools show.
   module DatabaseFamily
     # A statement ran past the timeout it was given.
     class TimedOut < RailsAiContext::Error; end
 
-    # The engine has no family, so nothing was sent to it.
+    # The adapter has no family, so nothing was sent to its database.
     class Unsupported < RailsAiContext::Error; end
 
     # Rows from a guarded read; unbounded when no timeout could hold it.
-    Rows = Struct.new(:columns, :rows, :unbounded)
+    Rows = Data.define(:columns, :rows, :unbounded)
 
-    Family = Struct.new(:key, :name) do
+    Family = Data.define(:key, :name) do
       def known?
         key != :unknown
       end
 
+      def postgresql?
+        key == :postgresql
+      end
+
+      def mysql?
+        key == :mysql
+      end
+
+      def sqlite?
+        key == :sqlite
+      end
+
       def implicit_pk_type
-        key == :sqlite ? "integer" : "bigint"
+        sqlite? ? "integer" : "bigint"
       end
 
       # @return [Rows] run in a read-only transaction, bounded by timeout seconds
@@ -34,7 +45,7 @@ module RailsAiContext
         runtime.explain(connection, sql, timeout)
       end
 
-      # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other engines or when planning fails
+      # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when planning fails
       def plan(connection, sql, timeout:)
         runtime.plan(connection, sql, timeout)
       end
@@ -42,12 +53,12 @@ module RailsAiContext
       # @param plan [Hash, nil] the statement's plan, when one was read already
       # @return [Array<Array(Integer, String, String)>] [result column index, the table column it reads, its relation];
       #   the column is nil when the relation's columns could not be read, the relation nil when it is unknown too;
-      #   [] where the engine cannot say
+      #   [] where the family cannot say
       def column_sources(connection, sql, plan:)
         runtime.column_sources(connection, sql, plan)
       end
 
-      # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the engine has none
+      # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
       def table_sizes(connection)
         runtime.table_sizes(connection)
       end
@@ -76,9 +87,9 @@ module RailsAiContext
       end
     end
 
-    POSTGRESQL = Family.new(:postgresql, "PostgreSQL").freeze
-    MYSQL = Family.new(:mysql, "MySQL").freeze
-    SQLITE = Family.new(:sqlite, "SQLite").freeze
+    POSTGRESQL = Family.new(:postgresql, "PostgreSQL")
+    MYSQL = Family.new(:mysql, "MySQL")
+    SQLITE = Family.new(:sqlite, "SQLite")
 
     # Live adapter_name values, database.yml adapters, URL schemes, display labels and dump dialects, downcased.
     NAMES = {
@@ -98,7 +109,7 @@ module RailsAiContext
     # @return [Family] never raises; no family carries the raw name
     def of(source)
       raw = raw_name(source)
-      NAMES.fetch(raw.downcase.delete_suffix(DEFAULT_SUFFIX)) { Family.new(:unknown, raw.empty? ? "unknown" : raw).freeze }
+      NAMES.fetch(raw.downcase.delete_suffix(DEFAULT_SUFFIX)) { Family.new(:unknown, raw.empty? ? "unknown" : raw) }
     end
 
     def raw_name(source)
@@ -109,7 +120,7 @@ module RailsAiContext
       ""
     end
 
-    # Runs the block and raises TimedOut for an engine's timeout. Message text is never read.
+    # Runs the block and raises TimedOut for a database's timeout. Message text is never read.
     def bounding
       yield
     rescue ActiveRecord::StatementInvalid => e

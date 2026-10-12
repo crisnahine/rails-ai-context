@@ -16,7 +16,7 @@ module RailsAiContext
       def names(conn)
         # relispartition arrived with partitions in 10; querying it before then
         # fails, and a failed query aborts any open transaction.
-        return [] unless RailsAiContext::DatabaseFamily.of(conn).key == :postgresql && conn.database_version >= 10_00_00
+        return [] unless RailsAiContext::DatabaseFamily.of(conn).postgresql? && conn.database_version >= 10_00_00
 
         conn.select_values(NAMES_SQL)
       rescue => e
