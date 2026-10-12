@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The controller listing marks `permit!` and names a parent's strong
   params.** The listing marks `permit!` as the per-action view did, and
   strong params a parent controller in the app defines are listed with the
-  parent named.
+  parent named, unless the controller defines a method of that name itself.
 
 ### Changed
 
@@ -68,12 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *_params` was listed, so a method that builds associations counted while
   `article_params_json`, which calls `permit`, did not. A method named
   `*_params` now counts when it calls `permit`, `permit!` or `expect` on
-  params (directly, through a local, on each item a block walks, or on
-  `ActionController::Parameters.new`), or when what it returns comes from
+  params (directly, through a local or an ivar, on each item a block walks,
+  or on `ActionController::Parameters.new`), or when what it returns comes from
   `super` (`super.merge(...)`), another strong params method (one this file
   defines, or a parent's, a concern's or Pundit's `*_params` or
-  `permitted_*`, such as `permitted_attributes(@post)`), or a call given the
-  whole params (`PermittedAttributes::Enterprise.new(params).call`); a
+  `permitted_*`, such as `permitted_attributes(@post)`, and Devise's
+  `devise_parameter_sanitizer`), or a call given the whole params
+  (`PermittedAttributes::Enterprise.new(params).call`); a
   `before_action` that writes into another one's params is not one. A method of any other
   name counts only when it returns the permitted params themselves, through
   a local, an `if`, a `case` or an explicit `return`, so a helper that
