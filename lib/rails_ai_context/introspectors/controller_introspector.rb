@@ -776,11 +776,15 @@ module RailsAiContext
         end
       end
 
-      # Whether the method's last expression, or the value it assigns, is a chain through `call`.
+      # Whether the method's last expression, the value it assigns, or a branch's last, is a chain through `call`.
       def returned?(body, call)
-        body = body.statements if body.is_a?(Prism::BeginNode)
+        body = body.statements if body.is_a?(Prism::BeginNode) || body.is_a?(Prism::ElseNode)
         node = body.is_a?(Prism::StatementsNode) ? body.body.last : body
         node = node.value while node.respond_to?(:value) && node.class.name.end_with?("WriteNode")
+        case node
+        when Prism::IfNode then return [ node.statements, node.subsequent ].any? { |branch| branch && returned?(branch, call) }
+        when Prism::UnlessNode then return [ node.statements, node.else_clause ].any? { |branch| branch && returned?(branch, call) }
+        end
         while node.is_a?(Prism::CallNode)
           return true if node.equal?(call)
 

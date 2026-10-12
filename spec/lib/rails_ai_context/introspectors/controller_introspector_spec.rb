@@ -560,9 +560,18 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         def cached_attributes
           @cached_attributes ||= params.require(:post).permit(:body).to_h
         end
+
+        def editable_topic_custom_fields(params_key)
+          if (fields = params[params_key]).present?
+            fields.permit(*Topic.editable_custom_fields).to_h
+          else
+            {}
+          end
+        end
       RUBY
 
-      expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] }).to eq(%w[article_params_json cached_attributes])
+      expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] })
+        .to eq(%w[article_params_json cached_attributes editable_topic_custom_fields])
     end
 
     # A key with a value always filters a nested hash or array; a computed one is kept as written.
