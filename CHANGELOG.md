@@ -68,17 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *_params` was listed, so a method that builds associations counted while
   `article_params_json`, which calls `permit`, did not. A method named
   `*_params` now counts when it calls `permit`, `permit!` or `expect` on
-  params (directly, through a local, or on `ActionController::Parameters.new`),
-  or when what it returns comes from another method or class given params
-  (`permitted_attributes(@post)`, `super.merge(...)`, a parent's
-  `base_params`, `PermittedAttributes::Enterprise.new(params).call`). A
-  method of any other name counts only when it returns what it permits,
-  through a local, an `if`, a `case` or an explicit `return`, so a helper
-  that permits to build a URL is left out. An action that permits inline is
-  left out, a public `*_params` helper is kept, `permit!` on a `slice` lists
-  the keys it slices, and a computed filter
+  params (directly, through a local, on each item a block walks, or on
+  `ActionController::Parameters.new`), or when what it returns comes from
+  `super`, another `*_params` or `permitted_*` method, or a class given
+  params (`permitted_attributes(@post)`, `super.merge(...)`,
+  `PermittedAttributes::Enterprise.new(params).call`). A method of any other
+  name counts only when it returns the permitted params themselves, through
+  a local, an `if`, a `case` or an explicit `return`, so a helper that
+  permits to build a URL, or to read one value, is left out. An action that
+  permits inline is left out, a public `*_params` helper is kept, `permit!`
+  on a `slice` lists the keys it slices, a computed filter
   (`settings_attributes: UserSettings.keys`) is shown as written, not as a
-  scalar.
+  scalar, and a key `require` computes is not printed as one.
 
 ### Fixed
 
