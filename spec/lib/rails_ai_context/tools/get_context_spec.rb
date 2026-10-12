@@ -27,6 +27,38 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     end
   end
 
+  describe "include:" do
+    let(:keys) { %w[stimulus turbo services jobs conventions helpers env callbacks tests config gems security] }
+
+    def text(response)
+      response.content.first[:text]
+    end
+
+    it "lists every key it takes in its schema" do
+      description = described_class.input_schema_value.to_h.dig(:properties, :include, :description)
+
+      keys.each { |key| expect(description).to include("'#{key}'") }
+    end
+
+    it "names a key it does not take, with the keys it does" do
+      answer = text(described_class.call(model: "Post", include: %w[stimulus bogus]))
+
+      expect(answer).to include("_`include` does not take 'bogus'. It takes: #{keys.join(', ')}._")
+    end
+
+    it "answers an include whose tool skip_tools turned off without running it" do
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_security_scan]
+      expect(RailsAiContext::Tools::SecurityScan).not_to receive(:call)
+
+      answer = text(described_class.call(model: "Post", include: %w[security]))
+
+      expect(answer).to include(RailsAiContext::Server.skipped_tool_message("rails_security_scan"))
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+  end
+
   # Rails resolves a namespaced controller's templates under its full
   # controller_path. Handing GetView the basename read app/views/orders,
   # which on this app is a directory of templates a service renders.

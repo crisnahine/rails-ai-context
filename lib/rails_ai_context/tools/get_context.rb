@@ -4,6 +4,22 @@ module RailsAiContext
   module Tools
     class GetContext < BaseTool
       tool_name "rails_get_context"
+
+      # Each include key and the call it bundles, run only when the app serves that tool.
+      INCLUDE_MAP = {
+        "stimulus"    => [ "rails_get_stimulus", { detail: "standard" } ],
+        "turbo"       => [ "rails_get_turbo_map", { detail: "standard" } ],
+        "services"    => [ "rails_get_service_pattern", { detail: "standard" } ],
+        "jobs"        => [ "rails_get_job_pattern", { detail: "standard" } ],
+        "conventions" => [ "rails_get_conventions", {} ],
+        "helpers"     => [ "rails_get_helper_methods", { detail: "standard" } ],
+        "env"         => [ "rails_get_env", { detail: "summary" } ],
+        "callbacks"   => [ "rails_get_callbacks", { detail: "standard" } ],
+        "tests"       => [ "rails_get_test_info", { detail: "full" } ],
+        "config"      => [ "rails_get_config", {} ],
+        "gems"        => [ "rails_get_gems", {} ],
+        "security"    => [ "rails_security_scan", { detail: "summary" } ]
+      }.freeze
       description "Get cross-layer context in a single call - combines schema, model, controller, routes, views, stimulus, and tests. " \
         "Use when: you need full context for implementing a feature or modifying an action. " \
         "Specify controller:\"PostsController\" action:\"create\" to get everything for that action in one call."
@@ -29,7 +45,7 @@ module RailsAiContext
           include: {
             type: "array",
             items: { type: "string" },
-            description: "Additional context to bundle: 'stimulus', 'turbo', 'services', 'jobs', 'conventions', 'helpers', 'env', 'callbacks'. Appends these to any mode."
+            description: "Additional context to bundle: #{INCLUDE_MAP.keys.map { |key| "'#{key}'" }.join(', ')}. Appends these to any mode."
           }
         }
       )
@@ -319,28 +335,23 @@ module RailsAiContext
         "Error assembling context: #{e.message}"
       end
 
-      INCLUDE_MAP = {
-        "stimulus"    => -> { GetStimulus.call(detail: "standard") },
-        "turbo"       => -> { GetTurboMap.call(detail: "standard") },
-        "services"    => -> { GetServicePattern.call(detail: "standard") },
-        "jobs"        => -> { GetJobPattern.call(detail: "standard") },
-        "conventions" => -> { GetConventions.call },
-        "helpers"     => -> { GetHelperMethods.call(detail: "standard") },
-        "env"         => -> { GetEnv.call(detail: "summary") },
-        "callbacks"   => -> { GetCallbacks.call(detail: "standard") },
-        "tests"       => -> { GetTestInfo.call(detail: "full") },
-        "config"      => -> { GetConfig.call },
-        "gems"        => -> { GetGems.call },
-        "security"    => -> { SecurityScan.call(detail: "summary") }
-      }.freeze
-
       private_class_method def self.append_includes(includes)
         extra = +""
         includes.each do |key|
-          handler = INCLUDE_MAP[key.to_s.downcase]
-          next unless handler
+          name, args = INCLUDE_MAP[key.to_s.downcase]
+          unless name
+            extra << "\n\n---\n\n_`include` does not take '#{echo_input(key)}'. It takes: #{INCLUDE_MAP.keys.join(', ')}._"
+            next
+          end
+
+          tool = RailsAiContext::Server.served_tool(name)
+          unless tool
+            extra << "\n\n---\n\n_#{RailsAiContext::Server.skipped_tool_message(name)}_"
+            next
+          end
+
           begin
-            extra << "\n\n---\n\n" << response_text(handler.call)
+            extra << "\n\n---\n\n" << response_text(tool.call(**args))
           rescue => e
             extra << "\n\n---\n\n_Error loading #{key}: #{e.message}_"
           end
