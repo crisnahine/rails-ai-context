@@ -119,7 +119,7 @@ module RailsAiContext
         info[:replica] = true if db.replica
         # Configured only in another environment, or only a committed dump names it.
         unless db.here
-          db.environment ? info[:environment] = db.environment : info[:dump_only] = true
+          db.environments.any? ? info[:environments] = db.environments : info[:dump_only] = true
         end
         info
       end

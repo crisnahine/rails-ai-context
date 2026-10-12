@@ -25,8 +25,8 @@ RSpec.describe "the app databases on a Rails 8 app" do
     migrations = RailsAiContext::Introspectors::MigrationIntrospector.new(app).call
 
     expect(schema[:secondary_databases].keys).to eq(%w[cache queue cable])
-    expect(multi[:databases].map { |db| [ db[:name], db[:environment] ] })
-      .to eq([ [ "primary", nil ], %w[cache production], %w[queue production], %w[cable production] ])
+    expect(multi[:databases].map { |db| [ db[:name], db[:environments] ] })
+      .to eq([ [ "primary", nil ], [ "cache", %w[production] ], [ "queue", %w[production] ], [ "cable", %w[production] ] ])
     expect(multi[:multi_db]).to be(true)
     expect(models["QueuedJob"]&.dig(:table_name)).to eq("solid_queue_jobs")
     expect(migrations[:secondary_databases].keys).to eq(%w[cache queue cable])

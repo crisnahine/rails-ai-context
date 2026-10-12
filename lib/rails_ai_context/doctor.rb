@@ -294,7 +294,7 @@ module RailsAiContext
       @database_states = begin
         AppDatabases.for(app.root).here.select(&:tasks).map do |db|
           dirs = db.primary ? primary_migrate_dirs : db.migrate_dirs
-          { name: db.name, config: db.config, **MigrationStatus.of_database(db.config, dirs, primary: db.primary) }
+          { name: db.name, config: db.config, **db.pending_migrations(dirs) }
         end
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "database_states")

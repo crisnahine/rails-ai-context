@@ -26,8 +26,9 @@ RSpec.describe RailsAiContext::AppDatabases do
   end
 
   def entry(root, name, environment: "test", here: true, primary: false, replica: false, tasks: true, adapter: nil,
-            family: RailsAiContext::DatabaseFamily.of(adapter), dump: nil, migrate_dirs: [ "db/migrate" ], adapter_default: false)
-    { name: name, environment: environment, here: here, primary: primary, replica: replica, tasks: tasks, adapter: adapter,
+            family: RailsAiContext::DatabaseFamily.of(adapter), dump: nil, migrate_dirs: [ "db/migrate" ], adapter_default: false,
+            environments: [ environment ].compact)
+    { name: name, environment: environment, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks, adapter: adapter,
       adapter_default: adapter_default, family: family, dump: dump && [ dump.first, File.join(root, dump.last) ],
       migrate_dirs: migrate_dirs.map { |dir| File.join(root, dir) } }
   end
@@ -44,14 +45,14 @@ RSpec.describe RailsAiContext::AppDatabases do
   end
 
   it_behaves_like "the same list on both tiers", "rails8", lambda { |root|
-    [ entry(root, "primary", primary: true, adapter: "sqlite3", dump: [ :ruby, "db/schema.rb" ]),
+    [ entry(root, "primary", primary: true, adapter: "sqlite3", dump: [ :ruby, "db/schema.rb" ], environments: %w[development test production]),
       *%w[cache queue cable].map do |db|
         entry(root, db, environment: "production", here: false, adapter: "sqlite3", dump: [ :ruby, "db/#{db}_schema.rb" ], migrate_dirs: [])
       end ]
   }
 
   it_behaves_like "the same list on both tiers", "url_primary", lambda { |root|
-    [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ]) ]
+    [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ], environments: %w[test production]) ]
   }
 
   it_behaves_like "the same list on both tiers", "replica", lambda { |root|
@@ -60,7 +61,7 @@ RSpec.describe RailsAiContext::AppDatabases do
   }
 
   it_behaves_like "the same list on both tiers", "no_tasks", lambda { |root|
-    [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ]),
+    [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ], environments: %w[test production]),
       entry(root, "legacy", tasks: false, adapter: "mysql2") ]
   }
 
@@ -117,6 +118,7 @@ RSpec.describe RailsAiContext::AppDatabases do
       queue = static(root).fetch("queue")
 
       expect(queue.environment).to eq("production")
+      expect(queue.environments).to eq(%w[production])
       expect(queue.config["migrations_paths"]).to eq("db/queue_migrate")
     end
   end

@@ -33,27 +33,11 @@ module RailsAiContext
     end
 
     # One database's pending migrations, as `db:migrate:status:<name>` reads
-    # them: from that database's own schema_migrations, through a pool of its
-    # own that is removed after, so the app's connections are left as they
-    # are. The primary is asked through the app's own pool. The connection is
-    # made first, so a database that does not exist, or a server that does
-    # not answer, says so rather than reading as nothing pending; a SQLite
-    # file that is not there is said to be missing without connecting, which
-    # would create it.
-    #
-    # @param db_config [ActiveRecord::DatabaseConfigurations::DatabaseConfig]
-    # @return [Hash] { pending: [{ version:, name: }, ...] }, or { error: exception }
-    def self.of_database(db_config, migrate_dir, primary: false)
-      missing = DatabaseFile.missing(db_config)
-      return { error: missing } if missing
-
+    # them: from that database's own schema_migrations, through its pool.
+    # AppDatabases::Database#pending_migrations leases the pool.
+    def self.pending_on(pool, migrate_dir)
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
-      with_pool(db_config, primary: primary) do |pool|
-        pool.with_connection(&:verify!)
-        { pending: dirs.empty? ? [] : pending_in(migration_context(dirs, pool), dirs) }
-      end
-    rescue StandardError => e
-      { error: e }
+      dirs.empty? ? [] : pending_in(migration_context(dirs, pool), dirs)
     end
 
     def self.pending_in(context, dirs)
@@ -64,32 +48,6 @@ module RailsAiContext
       # read) stops it reading the directory; the applied set still answers.
       PendingMigrations.for(migrate_dir: dirs, applied: context.get_all_versions)
     end
-
-    # What a pool established for another database belongs to: Rails names a
-    # pool by its owner, and an owner that is no primary class leaves the
-    # app's own pools alone (ActiveRecord::PendingMigrationConnection, which
-    # Rails 7.0 lacks and 7.1 shapes differently).
-    class TemporaryOwner
-      def self.primary_class?
-        false
-      end
-
-      def self.current_preventing_writes
-        false
-      end
-    end
-
-    def self.with_pool(db_config, primary:)
-      return yield(ActiveRecord::Base.connection_pool) if primary
-
-      handler = ActiveRecord::Base.connection_handler
-      begin
-        yield handler.establish_connection(db_config, owner_name: TemporaryOwner)
-      ensure
-        handler.remove_connection_pool(TemporaryOwner.name)
-      end
-    end
-    private_class_method :with_pool
 
     # @return [ActiveRecord::MigrationContext]
     def self.migration_context(migrate_dir, pool = ActiveRecord::Base.connection_pool)

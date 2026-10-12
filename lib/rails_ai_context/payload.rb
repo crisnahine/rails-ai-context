@@ -121,7 +121,9 @@ module RailsAiContext
     # Where a multi-database entry is configured, when that is not the running environment.
     def database_scope(database)
       return "" unless database.is_a?(Hash)
-      return " (#{database[:environment]} only)" if database[:environment]
+      environments = Array(database[:environments])
+      return " (#{environments.first} only)" if environments.one?
+      return " (#{AppDatabases.environment_phrase(environments)})" if environments.any?
 
       database[:dump_only] ? " (committed dump only)" : ""
     end

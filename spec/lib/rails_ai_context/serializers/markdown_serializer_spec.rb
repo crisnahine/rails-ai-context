@@ -67,14 +67,14 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       context = {
         multi_database: {
           multi_db: true,
-          databases: [ { name: "primary", adapter: "sqlite3" }, { name: "queue", adapter: "sqlite3", environment: "production" },
+          databases: [ { name: "primary", adapter: "sqlite3" }, { name: "queue", adapter: "sqlite3", environments: %w[staging production] },
                        { name: "archive", adapter: nil, dump_only: true } ]
         }
       }
 
       output = described_class.new(context).call
 
-      expect(output).to include("- `primary` - SQLite\n", "- `queue` - SQLite (production only)", "- `archive` - unknown (committed dump only)")
+      expect(output).to include("- `primary` - SQLite\n", "- `queue` - SQLite (staging and production)", "- `archive` - unknown (committed dump only)")
     end
   end
 

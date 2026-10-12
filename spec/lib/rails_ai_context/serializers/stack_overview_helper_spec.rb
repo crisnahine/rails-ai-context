@@ -223,10 +223,17 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
     end
 
     it "says which databases only another environment configures" do
-      databases = [ { name: "primary" }, { name: "queue", environment: "production" }, { name: "archive", dump_only: true } ]
+      databases = [ { name: "primary" }, { name: "queue", environments: %w[production] }, { name: "archive", dump_only: true } ]
       helper = test_class.new({ multi_database: { databases: databases } })
 
       expect(helper.full_preset_stack_lines).to include("- Databases: 3 (primary, queue (production only), archive (committed dump only))")
+    end
+
+    it "names every environment that configures a database" do
+      databases = [ { name: "primary" }, { name: "cache", environments: %w[staging production] } ]
+      helper = test_class.new({ multi_database: { databases: databases } })
+
+      expect(helper.full_preset_stack_lines).to include("- Databases: 2 (primary, cache (staging and production))")
     end
 
     it "skips sections that have errors" do
