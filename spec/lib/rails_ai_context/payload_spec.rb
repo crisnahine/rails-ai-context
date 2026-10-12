@@ -106,6 +106,15 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.missing_table?(schema, { table_name: "daily_rollups", database: { writing: "analytics" } })).to be(false)
     end
 
+    # A full model listing asks once per model; scanning every table each time cost seconds on a big app.
+    it "answers a thousand models over a thousand tables in well under a second" do
+      big = { adapter: "postgresql", tables: (1..1000).to_h { |i| [ "t#{i}", { columns: [] } ] } }
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      (1..1000).each { |i| described_class.missing_table?(big, { table_name: "t#{i}" }) }
+
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.5
+    end
+
     it "says a live secondary lacks the table" do
       expect(described_class.missing_table?(schema, { table_name: "ghosts", database: { writing: "cache" } })).to be(true)
     end

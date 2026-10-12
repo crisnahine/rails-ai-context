@@ -97,6 +97,21 @@ module RailsAiContext
       primary + secondary
     end
 
+    TABLE_INDEXES = ObjectSpace::WeakMap.new
+
+    # schema_tables by name, built once per schema: a full model listing asks once per model.
+    def table_index(schema)
+      return {} unless schema.is_a?(Hash)
+
+      stamp = [ schema[:tables].is_a?(Hash) ? schema[:tables].size : 0, secondary_databases(schema).sum { |_, info| info[:tables].size } ]
+      stamped, index = TABLE_INDEXES[schema]
+      return index if stamped == stamp
+
+      index = schema_tables(schema).group_by { |_, table, _| table.to_s }
+      TABLE_INDEXES[schema] = [ stamp, index ]
+      index
+    end
+
     # Each database past the primary that the schema section read tables
     # for, by its database.yml name.
     def secondary_databases(schema)
@@ -167,7 +182,7 @@ module RailsAiContext
     # A schema-qualified name the listing does not hold is looked up when asked for: a table outside
     # the search path, or a listed one by its qualified name, as Rails resolves both.
     def table_holders(schema, name)
-      found = schema_tables(schema).select { |_, table, _| table.to_s == name.to_s }
+      found = table_index(schema).fetch(name.to_s, [])
       return found if found.any? || !name.to_s.include?(".") || !schema.is_a?(Hash)
 
       secondary = schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases].keys : []
