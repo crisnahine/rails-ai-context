@@ -389,6 +389,7 @@ module RailsAiContext
                 end
                 sp[:arrays]&.each { |a| lines << "- array: `#{a}: []`" }
                 sp[:hashes]&.each { |h| lines << "- hash: `#{h}: {}`" }
+                sp[:computed]&.each { |key, source| lines << "- nested, computed: `#{key}: #{source}`" }
               end
               body = extract_method_with_lines(source_path, sp[:name], source: source, owner: controller_name)
               lines << "```ruby" << redacted(body[:code], carried) << "```" if body
@@ -616,7 +617,8 @@ module RailsAiContext
               permits_summary = (Array(sp[:permits]).map { |p| ":#{p}" } +
                                  Array(sp[:nested]).map { |key, fields| permit_field_text({ key => fields }) } +
                                  Array(sp[:arrays]).map { |key| "#{key}: []" } +
-                                 Array(sp[:hashes]).map { |key| "#{key}: {}" }).join(", ")
+                                 Array(sp[:hashes]).map { |key| "#{key}: {}" } +
+                                 Array(sp[:computed]).map { |key, source| "#{key}: #{source}" }).join(", ")
               shape = if sp[:unrestricted]
                 " #{UNRESTRICTED}"
               else

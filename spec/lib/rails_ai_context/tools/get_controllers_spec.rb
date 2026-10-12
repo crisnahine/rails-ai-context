@@ -504,6 +504,15 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("- `user_params` (requires: :user) permits: :name, preferences: [:color], tags: []")
     end
 
+    it "prints a computed nested filter as the source writes it" do
+      params = [ { name: "user_params", requires: "user", permits: [ "locale" ], computed: { "settings_attributes" => "UserSettings.keys" } } ]
+      stub_controllers({ "UsersController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })
+
+      text = described_class.call(controller: "UsersController").content.first[:text]
+
+      expect(text).to include("- `user_params` (requires: :user) permits: :locale, settings_attributes: UserSettings.keys")
+    end
+
     it "summarizes the arrays and hashes a nested key permits" do
       params = [ { name: "s_params", requires: "s", permits: [ "hide" ], hashes: [ "colors" ],
                    nested: { "filters" => [ "module_id", { "module_ids" => [] }, { "range" => %w[from to] }, { "opts" => {} } ] } } ]

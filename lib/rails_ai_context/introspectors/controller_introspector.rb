@@ -849,6 +849,7 @@ module RailsAiContext
         nested = {}
         arrays = []
         hashes = []
+        computed = {}
 
         args = permit_call.arguments&.arguments || []
         args.each do |arg|
@@ -864,7 +865,7 @@ module RailsAiContext
                 fields = permit_value(val)
                 fields.any? ? nested[key] = fields : (val.is_a?(Prism::HashNode) ? hashes : arrays) << key
               else
-                permits << key
+                computed[key] = computed_filter(val)
               end
             end
           when Prism::AssocSplatNode
@@ -877,7 +878,13 @@ module RailsAiContext
         result[:nested] = nested if nested.any?
         result[:arrays] = arrays if arrays.any?
         result[:hashes] = hashes if hashes.any?
+        result[:computed] = computed if computed.any?
         result
+      end
+
+      # A key's value always filters a nested hash or array, so one computed at run time is kept as written.
+      def computed_filter(node)
+        node.slice.gsub(/\s*\n\s*/, " ")
       end
 
       # params.expect(article: [ :title, :body ]) combines require + permit in
@@ -889,6 +896,7 @@ module RailsAiContext
         nested = {}
         arrays = []
         hashes = []
+        computed = {}
 
         args = expect_call.arguments&.arguments || []
         args.each do |arg|
@@ -901,9 +909,10 @@ module RailsAiContext
               key = extract_ast_value(assoc.key).to_s
               if assoc.value.is_a?(Prism::ArrayNode)
                 result[:requires] ||= key
-                collect_expect_array(assoc.value, key, permits, nested, arrays, hashes)
+                collect_expect_array(assoc.value, key, permits, nested, arrays, hashes, computed)
               else
-                permits << key
+                result[:requires] ||= key
+                computed[key] = computed_filter(assoc.value)
               end
             end
           end
@@ -913,10 +922,11 @@ module RailsAiContext
         result[:nested] = nested if nested.any?
         result[:arrays] = arrays if arrays.any?
         result[:hashes] = hashes if hashes.any?
+        result[:computed] = computed if computed.any?
         result
       end
 
-      def collect_expect_array(array_node, key, permits, nested, arrays, hashes)
+      def collect_expect_array(array_node, key, permits, nested, arrays, hashes, computed)
         array_node.elements.each do |el|
           case el
           when Prism::SymbolNode
@@ -936,7 +946,7 @@ module RailsAiContext
                 fields = permit_value(inner.value)
                 fields.any? ? nested[inner_key] = fields : hashes << inner_key
               else
-                permits << inner_key
+                computed[inner_key] = computed_filter(inner.value)
               end
             end
           end

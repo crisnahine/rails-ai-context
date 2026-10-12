@@ -565,6 +565,19 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] }).to eq(%w[article_params_json cached_attributes])
     end
 
+    # A key with a value always filters a nested hash or array; a computed one is kept as written.
+    it "keeps a computed nested filter as the source writes it, not as a scalar" do
+      source = <<~RUBY
+        def user_params = params.expect(user: [:locale, settings_attributes: UserSettings.keys])
+        def post_params = params.require(:post).permit(:title, tag_ids: TAG_KEYS)
+      RUBY
+
+      user, post = introspector.send(:extract_strong_params, source)
+
+      expect(user).to eq(name: "user_params", requires: "user", permits: [ "locale" ], computed: { "settings_attributes" => "UserSettings.keys" })
+      expect(post).to eq(name: "post_params", requires: "post", permits: [ "title" ], computed: { "tag_ids" => "TAG_KEYS" })
+    end
+
     it "leaves out a permit on something that is not params" do
       source = <<~RUBY
         def plug_params(app)
