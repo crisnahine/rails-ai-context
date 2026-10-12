@@ -80,7 +80,7 @@ module RailsAiContext
         begin
           yield AppDatabases.reaching(name, adapter) { handler.establish_connection(connecting_in_time, owner_name: LeaseOwner) }
         ensure
-          handler.remove_connection_pool(LeaseOwner.name)
+          release(handler)
         end
       end
 
@@ -96,6 +96,15 @@ module RailsAiContext
       end
 
       private
+
+      # Rails 7.0 verifies each connection as it disconnects a pool, which reconnects to a server that
+      # stopped answering. Thrown away first, no connection is left to verify. Never replaces the block's error.
+      def release(handler)
+        handler.retrieve_connection_pool(LeaseOwner.name)&.connections&.each(&:throw_away!)
+        handler.remove_connection_pool(LeaseOwner.name)
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "AppDatabases release")
+      end
 
       # A server that never answers would hold the lease for as long as its driver waits. Where the entry
       # sets no limit of its own, connecting ends at query_timeout and a MySQL read above the statement's budget.
