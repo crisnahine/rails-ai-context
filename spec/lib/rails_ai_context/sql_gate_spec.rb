@@ -1054,7 +1054,9 @@ RSpec.describe RailsAiContext::SqlGate do
 
     # Plans PostgreSQL 16 gave over rac_p (id, email, salt), partitioned in two, and over an inheritance parent.
     describe "a partitioned table or an inheritance parent that holds a secret column" do
-      let(:relations) { %w[public.rac_p_a public.rac_p_b public.rac_parent public.rac_child].to_h { |name| [ name, %w[id email salt] ] } }
+      let(:relations) do
+        %w[rac_p_a rac_p_b rac_parent rac_child].flat_map { |name| [ name, "public.#{name}" ] }.to_h { |name| [ name, %w[id email salt] ] }
+      end
 
       def member(relation, as, columns = %w[id email salt], extra = {})
         { "Node Type" => "Seq Scan", "Parent Relationship" => "Member", "Relation Name" => relation, "Schema" => "public", "Alias" => as,
