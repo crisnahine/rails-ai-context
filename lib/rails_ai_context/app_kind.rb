@@ -36,8 +36,8 @@ module RailsAiContext
       loads_framework?(root, "activerecord")
     end
 
-    # False only when config/application.rb picks its frameworks railtie by railtie (a require, or a list
-    # it requires in a loop) and leaves this one out; a file it cannot read is taken to load it.
+    # Whether config/application.rb loads this framework: not when it picks its frameworks railtie by railtie
+    # (a require, or a list it requires in a loop) and leaves this one out; a file it cannot read loads it.
     def loads_framework?(root, gem_name)
       railtie = FRAMEWORK_RAILTIES[gem_name] or return false
       framework = File.dirname(railtie)

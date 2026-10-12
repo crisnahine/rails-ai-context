@@ -269,10 +269,10 @@ module RailsAiContext
       def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
-        if (targets = alias_targets(source, path_name))
+        if (targets = alias_candidates(source, path_name))
           return [ path_name, unloaded ? { error: unloaded, file: record.file } : { alias_of: targets, file: record.file } ]
         end
-        # A *_controller.rb that declares only a module is a mixin controllers extend.
+        # A *_controller.rb that declares only a module is a mixin controllers include.
         return nil if !DeclaredConstant.declares_class?(source, path_name: path_name) && DeclaredConstant.declared_module_names(source).any?
         return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source, path_name)
 
@@ -284,7 +284,7 @@ module RailsAiContext
 
       # `GoogleController = OAuth2Controller`: the file names another controller, which Ruby looks
       # up from the innermost module outward; the candidates in that order.
-      def alias_targets(source, path_name)
+      def alias_candidates(source, path_name)
         tree = AstCache.parse_string(source)&.value or return nil
         DeclaredConstant.constants(tree, assignments: true).each do |name, node, nesting|
           next unless (node.is_a?(Prism::ConstantWriteNode) || node.is_a?(Prism::ConstantPathWriteNode)) && name.casecmp?(path_name)
@@ -307,8 +307,8 @@ module RailsAiContext
 
           target = alias_target(result, name)
           details = result[target]
-          own = details.is_a?(Hash) && !details[:alias_of] ? details : {}
-          result[name] = own.merge(alias_of: target, file: entry[:file])
+          target_details = details.is_a?(Hash) && !details[:alias_of] ? details : {}
+          result[name] = target_details.merge(alias_of: target, file: entry[:file])
         end
         result
       end
@@ -759,9 +759,9 @@ module RailsAiContext
       end
 
       # A strong-params method returns params it permits. One named *_params counts when it permits
-      # anywhere in it, or returns what another method or class makes of params (`permitted_attributes(@post)`,
-      # a parent's `base_params.merge(...)`, `Filter.new(params).call`); one of another name only when
-      # it returns what it permits, so a helper that permits to build a URL is not one.
+      # anywhere in it, or returns what another method, super or a class makes of params (`permitted_attributes(@post)`,
+      # `super.merge(...)`, `Filter.new(params).call`); one of another name only when it returns what it
+      # permits, so a helper that permits to build a URL is not one.
       def strong_params_entry(def_node)
         name = def_node.name.to_s
         locals = params_locals(def_node.body)
@@ -798,8 +798,8 @@ module RailsAiContext
         end
       end
 
-      # A returned call that hands the whole params to another method, or a call to another method of
-      # the controller, its parents or its concerns, which may be the one that permits.
+      # A returned super, call handing the whole params on, or call to another method of the controller,
+      # its parents or its concerns, which may be the one that permits.
       def hands_params_on?(returned)
         returned.any? do |call|
           next true if call.is_a?(Prism::SuperNode) || call.is_a?(Prism::ForwardingSuperNode)
@@ -952,7 +952,7 @@ module RailsAiContext
         result
       end
 
-      # A key's value always filters a nested hash or array, so one computed at run time is kept as written.
+      # A key's value always filters a nested hash or array, so one computed at run time is kept as written, on one line.
       def filter_source(node)
         node.slice.gsub(/\s*\n\s*/, " ")
       end

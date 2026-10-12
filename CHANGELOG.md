@@ -130,9 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them: an integer limit picks smallint or bigint on PostgreSQL and MySQL,
   a datetime keeps any precision but the default 6, MySQL sizes a text or
   blob by its limit, and a size the dump leaves out stays out. A type-only
-  `change_column`
-  keeps null and default on PostgreSQL and MySQL and resets them on SQLite,
-  as each adapter does.
+  `change_column` keeps null and default on PostgreSQL and MySQL and resets
+  them on SQLite, as each adapter does.
 - **Migration replay keeps a partial index's condition.** A Symbol
   `where: :schedule_manually` and the `where:` of a `t.references ...,
   index: { where: ... }` were dropped, so a partial index read as a full one.

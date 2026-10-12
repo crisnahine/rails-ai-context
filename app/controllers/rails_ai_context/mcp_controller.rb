@@ -169,7 +169,6 @@ module RailsAiContext
     end
 
     class << self
-      # One transport per process, kept by McpEdge.engine_transport.
       def mcp_transport
         McpEdge.engine_transport
       end

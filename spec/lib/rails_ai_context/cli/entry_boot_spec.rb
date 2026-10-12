@@ -211,9 +211,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
   end
 
-  # Bundler.setup marks each gem loaded and adds the load paths only after the loop, so a
-  # version clash mid-loop (Consul's sassc-embedded activating json before bundler/setup)
-  # left activesupport registered with no path, and the static fallback could not load it.
+  # Bundler.setup adds load paths after marking every gem loaded, so a clash mid-loop leaves gems with no path.
   describe "splicing the binstub's gems back for the static tier" do
     around do |example|
       stash = described_class.preboot_gem_specs
