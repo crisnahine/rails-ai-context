@@ -198,7 +198,7 @@ module RailsAiContext
     # a dump can leave out a view, and a database the schema section did not read says nothing.
     def missing_table?(schema, model)
       return false unless model.is_a?(Hash) && model[:table_name] && schema.is_a?(Hash) && schema[:tables].is_a?(Hash)
-      return false if parsed_schema?(schema)
+      return false if parsed_schema?(schema) || model[:own_connection]
 
       writing = model.dig(:database, :writing)&.to_s
       if writing && writing != "primary"

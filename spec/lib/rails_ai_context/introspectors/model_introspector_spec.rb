@@ -5532,6 +5532,20 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "marks a model on a connection of its own, so its table is not looked for in the primary's" do
+      db = File.join(Dir.mktmpdir, "legacy.sqlite3")
+      model = Class.new(ActiveRecord::Base) { self.table_name = "legacy_items" }
+      stub_const("LegacyItem", model)
+      LegacyItem.establish_connection(adapter: "sqlite3", database: db)
+
+      details = described_class.new(Rails.application).send(:extract_model_details, LegacyItem)
+
+      expect(details[:own_connection]).to be(true)
+      expect(described_class.new(Rails.application).send(:extract_model_details, Post)).not_to have_key(:own_connection)
+    ensure
+      LegacyItem.remove_connection if defined?(LegacyItem)
+    end
+
     # A concern the model and one of its bases both include is walked once per
     # class, so one `validates` line arrived twice. ActiveSupport::Concern runs
     # `included do` once, so Rails holds one validator and the answer says one.

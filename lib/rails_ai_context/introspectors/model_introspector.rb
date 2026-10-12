@@ -694,8 +694,16 @@ module RailsAiContext
         detailed = extract_detailed_macros_from_ast(source_data)
         details.merge!(detailed)
         details[:ignored_columns] = model.ignored_columns.map(&:to_s).presence
+        details[:own_connection] = true if own_connection?(model, details)
 
         details.compact
+      end
+
+      # A model on a connection of its own (`establish_connection`) reads a database the schema section did not list.
+      def own_connection?(model, details)
+        !details[:database] && model.connection_specification_name != ActiveRecord::Base.connection_specification_name
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, false, label: "own_connection?")
       end
 
       # Run SourceIntrospector on the model's source file.

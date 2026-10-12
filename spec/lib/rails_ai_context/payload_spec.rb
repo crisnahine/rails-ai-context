@@ -115,6 +115,10 @@ RSpec.describe RailsAiContext::Payload do
       expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.5
     end
 
+    it "says nothing for a model on a connection of its own" do
+      expect(described_class.missing_table?(schema, { table_name: "legacy_items", own_connection: true })).to be(false)
+    end
+
     it "says a live secondary lacks the table" do
       expect(described_class.missing_table?(schema, { table_name: "ghosts", database: { writing: "cache" } })).to be(true)
     end
