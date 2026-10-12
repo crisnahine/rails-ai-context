@@ -88,6 +88,12 @@ Ten tools that each answered one section of the app's configuration leave
   `tools/list`.
   `rails_runtime_info` still answers, and says table sizes, row estimates
   and index usage are not available for the adapter.
+- **`query_timeout` takes a positive number only.** Zero, a negative value
+  or a value that is no number raises `ArgumentError` in an initializer, as
+  `query_row_limit` does, and in `rails_ai_context.yml` it is reported and
+  the default of 5 seconds is kept. In 5.35.0 zero turned the timeout off on
+  PostgreSQL and MySQL; set a larger number for a slow query. A fraction of
+  a second is allowed.
 - **Regenerate the context files** (`rails ai:context` or
   `rails-ai-context context`) so the tool guide and tables name the new call.
 
@@ -113,6 +119,28 @@ Ten tools that each answered one section of the app's configuration leave
   SQLite a query that gave the column an alias returned the stored value.
   The check now refuses the name on every database family, and the refusal
   says the allowed list does not release it.
+- **On PostgreSQL a statement whose plan cannot be read does not run.** The
+  checks that keep a secret column out of a result read the statement's
+  plan, and a statement ran without them when planning timed out or failed.
+  Every statement except `SHOW` now runs only with a plan, an `EXPLAIN` by
+  the statement it explains: planning's timeout is answered as the timeout
+  and planning's error as the SQL error.
+- **`rails_query` refuses `LOCK IN SHARE MODE` and `FOR KEY SHARE`.** MySQL
+  and MariaDB ran `LOCK IN SHARE MODE` inside the read-only transaction,
+  where it locks the rows it reads. The gate now refuses it wherever it
+  refuses `FOR SHARE`, with `NOWAIT`, `SKIP LOCKED`, `OF` or `WAIT` after it
+  too.
+- **A view cannot rename a secret column past `rails_query`.** On MySQL,
+  MariaDB and SQLite a view that selects a secret column under another name
+  returned its values. A statement that names such a view is now refused
+  with the view and the column, and so is a view built on it, a view that
+  lists every column of a table holding a secret column, and a view whose
+  definition cannot be read on a database that holds secret columns.
+  `query_allowed_columns` releases a column by name as before, and an
+  `encrypts` column stays secret. PostgreSQL keeps filtering the one column.
+- **A generated column that reads a secret column is secret.** On every
+  database family its values were returned under its own name. A statement
+  that names it is now refused and its values come back `[FILTERED]`.
 - **`skip_tools` holds inside composite answers.**
   `rails_get_context(include:)` ran `rails_security_scan` and the
   environment listing when `skip_tools` listed them. An include whose tool
@@ -219,9 +247,16 @@ Ten tools that each answered one section of the app's configuration leave
   does the same for a named database. With none, its Database section says
   the primary does not exist yet and the other sections still answer.
   Nothing is created. Connecting to it created the database file.
-- **PostgreSQL bounds a statement when `query_timeout` is zero.** Zero, or
-  a value under a millisecond, turned the statement timeout off. The
-  statement is now bounded at one millisecond.
+- **A `query_timeout` under a millisecond still bounds the statement.** On
+  PostgreSQL it turned the statement timeout off. PostgreSQL, MySQL and
+  MariaDB now bound the statement at one millisecond.
+- **A `rails_query` timeout is an error.** A query that ran past
+  `query_timeout` came back as an ordinary answer. With the same text it is
+  now an error response, for a query and for `explain: true`: the CLI exits
+  non-zero and an MCP client sees `isError`.
+- **EXPLAIN on MySQL leaves a row with no table out of the scan summary.**
+  `explain: true` on a statement that reads no table, such as `SELECT 1`,
+  listed a scan of `?`.
 - **Only a timeout is reported as a timeout.** `rails_query` read any SQL
   error that mentioned "timeout" as a timeout, so an unknown column named
   `timeout` came back as one. A timeout is now read from the error's class

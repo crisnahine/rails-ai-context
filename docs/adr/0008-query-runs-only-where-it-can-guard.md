@@ -15,6 +15,7 @@ Status: accepted
   - SQLite: a forked child with a deadline, since sqlite3-ruby cannot interrupt a statement.
 - A timeout is recognised by `ActiveRecord::QueryAborted` (QueryCanceled, StatementTimeout) or by the database's native code. MariaDB's 1969 has no Rails class in any version. Message text is never read, so a missing column named "timeout" is reported as an SQL error.
 - The statement checks before execution stay on every family. MySQL's read-only transaction lets `FOR SHARE`, `LOCK IN SHARE MODE`, `INTO @var` and `INTO OUTFILE` through, so it cannot be the only guard.
+- Only PostgreSQL traces a result column to its table column, through the statement's plan, so there a statement runs only with a plan. MySQL, MariaDB and SQLite have no such trace, so a view is checked by the definition the database stores and refused when it names a secret column.
 
 ## Consequences
 

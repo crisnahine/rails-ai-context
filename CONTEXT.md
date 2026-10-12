@@ -225,13 +225,13 @@ A tool that needs a connection reaches an App database configured here and nothi
 
 ## Secret column
 
-A column whose values `rails_query` never returns, and whose name a statement may not mention: one the app lists in `query_redacted_columns`, an `encrypts` column, a built-in secret name, a name the result heuristic flags, or a name `Redaction`'s secret words cover, unless the app allows it by name in `query_allowed_columns`. An `encrypts` column is secret whatever that list holds: a statement that names it is refused, and its values come back filtered. `SecretColumns` decides for every check in the tool, from one read of the schema of the database the statement runs on. Only the primary falls back to the cached context's schema when its tables cannot be read.
+A column whose values `rails_query` never returns, and whose name a statement may not mention: one the app lists in `query_redacted_columns`, an `encrypts` column, a built-in secret name, a name the result heuristic flags, or a name `Redaction`'s secret words cover, unless the app allows it by name in `query_allowed_columns`. An `encrypts` column is secret whatever that list holds: a statement that names it is refused, and its values come back filtered. A generated column whose expression reads a secret column is a secret column. On MySQL, MariaDB and SQLite, where no result column is traced to its table column, the rule also refuses a view whose definition names a secret column. `SecretColumns` decides for every check in the tool, from one read of the schema of the database the statement runs on. Only the primary falls back to the cached context's schema when its tables cannot be read.
 
 Not redaction itself: `Redaction` scrubs secret values out of text (logs, config, source). The two share the vocabulary, so a word added to one is secret in both.
 
 ## SQL gate
 
-What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. `SqlGate`. The read-only transaction behind it is the second guard, never the only one (ADR-0008).
+What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is the second guard, never the only one (ADR-0008).
 
 ## Served tool
 
