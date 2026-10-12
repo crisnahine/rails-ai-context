@@ -2,10 +2,11 @@
 
 module RailsAiContext
   class Engine < ::Rails::Engine
-    # The app's loader camelizes app/controllers/rails_ai_context with the
-    # app's inflections, and an "AI" acronym would expect RailsAIContext.
-    initializer "rails_ai_context.inflection" do
-      Rails.autoloaders.main.inflector.inflect("rails_ai_context" => "RailsAiContext")
+    # The app's loader would camelize the controller's path with the app's inflections, and an
+    # acronym ("AI", "MCP") names a constant the file does not define, so it is required instead.
+    initializer "rails_ai_context.controller" do
+      Rails.autoloaders.main.ignore(root.join("app/controllers").to_s)
+      RailsAiContext.autoload(:McpController, root.join("app/controllers/rails_ai_context/mcp_controller").to_s)
     end
 
     # The YAML is the base a configure block overrides key by key, so it has

@@ -62,28 +62,39 @@ RSpec.describe RailsAiContext::Engine do
     end
   end
 
-  describe "eager loading" do
-    # The app's main loader camelizes the engine's app/ directories with the
-    # app's inflections, so an "AI" acronym named the namespace RailsAIContext.
-    it "eager loads in an app whose inflections make AI an acronym" do
-      skip "eager_load_dir needs zeitwerk 2.6" unless Zeitwerk::Loader.method_defined?(:eager_load_dir)
+  describe "an app whose inflections make acronyms" do
+    # The app's loader and router camelize with the app's inflections, so "AI" or "MCP"
+    # named constants the gem does not define: eager loading raised and the mount 404'd.
+    %w[AI MCP].each do |acronym|
+      it "eager loads and answers at the mount with #{acronym} an acronym" do
+        skip "eager_load_dir needs zeitwerk 2.6" unless Zeitwerk::Loader.method_defined?(:eager_load_dir)
 
-      script = <<~'RUBY'
-        require "combustion"
-        ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym "AI" }
-        Combustion.initialize! :active_record, :action_controller, :action_mailer do
-          config.eager_load = false
-        end
-        Rails.autoloaders.main.eager_load_dir(RailsAiContext::Engine.root.join("app/controllers").to_s)
-        puts RailsAiContext::McpController.name
-        puts "rails_ai_context".camelize
-      RUBY
+        script = <<~RUBY
+          require "combustion"
+          ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym #{acronym.inspect} }
+          Combustion.initialize! :active_record, :action_controller, :action_mailer do
+            config.eager_load = false
+          end
+          Rails.application.routes.prepend { mount RailsAiContext::Engine, at: "/mcp" }
+          Rails.application.reload_routes!
+          Rails.autoloaders.main.eager_load_dir(RailsAiContext::Engine.root.join("app/controllers").to_s)
+          body = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}'
+          env = Rack::MockRequest.env_for("/mcp", method: "POST", input: body, "CONTENT_TYPE" => "application/json",
+                                          "HTTP_ACCEPT" => "application/json, text/event-stream")
+          status, _headers, response = Rails.application.call(env)
+          text = +""
+          response.each { |chunk| text << chunk }
+          puts status
+          puts text.include?('"protocolVersion"')
+          puts RailsAiContext::McpController.name
+        RUBY
 
-      out, err, status = Open3.capture3(RbConfig.ruby, "-e", script, chdir: File.expand_path("../../..", __dir__))
+        out, err, status = Open3.capture3(RbConfig.ruby, "-e", script, chdir: File.expand_path("../../..", __dir__))
 
-      expect(err).not_to include("to define constant")
-      expect(status).to be_success
-      expect(out.lines.map(&:chomp)).to eq([ "RailsAiContext::McpController", "RailsAIContext" ])
+        expect(err).not_to include("to define constant")
+        expect(status).to be_success
+        expect(out.lines.map(&:chomp).last(3)).to eq([ "200", "true", "RailsAiContext::McpController" ])
+      end
     end
   end
 
