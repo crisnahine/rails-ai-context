@@ -283,6 +283,16 @@ Proof sources:
    changed every 0.3 seconds; the pre-commit hook installed and run by real
    commits in an app's own repository, a monorepo's folder and a submodule;
    and the unit suite and the E2E harness on Linux, macOS and Windows.
+   In the v5.34.0 release QA: the 21 apps of the v5.33.0 acceptance run
+   (Mastodon, OpenProject, Discourse, Canvas, Forem, Whitehall, Consul, Open
+   Food Network, Diaspora, Errbit, Huginn, Plots2, a private app and the small
+   blogs), 11 booted and 10 static, their answers compared with v5.33.0's,
+   and their strong params and model tables compared again after the last
+   fix; a fresh Rails 8.1 and a fresh Rails 7.0 app through the install,
+   `ai:context` twice, `zeitwerk:check` with the engine mounted, MCP over the
+   mounted HTTP endpoint and stdio, and the standalone CLI; an app that loads
+   a gem before `bundler/setup`; and the unit suite and the E2E harness on
+   Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
