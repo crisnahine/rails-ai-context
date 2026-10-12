@@ -240,8 +240,7 @@ class RailsAiContextCLI < Thor
 
       if args.include?("--help") || args.include?("-h")
         entry_boot.require_gem_without_app!
-        tool_class = ::RailsAiContext::CLI::ToolRunner.new(name, []).tool_class
-        puts ::RailsAiContext::CLI::ToolRunner.tool_help(tool_class)
+        puts ::RailsAiContext::CLI::ToolRunner.new(name, []).help
         return
       end
 
@@ -261,7 +260,7 @@ class RailsAiContextCLI < Thor
       # Read here because the tool parses its own arguments after boot, and the section decides which env boots.
       section = args.each_cons(2).find { |flag, _| flag == "--section" }&.last ||
         args.find { |arg| arg.start_with?("--section=", "section=") }&.split("=", 2)&.last
-      if environment_flag && (ENVIRONMENT_FILTER_OWNERS.include?(short) || (short == "config" && ENVIRONMENT_FILTER_OWNERS.include?(section)))
+      if environment_flag && (ENVIRONMENT_FILTER_OWNERS.include?(short) || (short == "config" && ENVIRONMENT_FILTER_OWNERS.include?(section.to_s.downcase)))
         args.push("--environment", environment_flag)
       else
         @environment_override = environment_flag

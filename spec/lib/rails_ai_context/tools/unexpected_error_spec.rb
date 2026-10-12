@@ -3,8 +3,7 @@
 require "spec_helper"
 
 # An exception nobody planned for is an error on every surface: isError over
-# MCP and exit 1 on the CLI. Answered as ordinary text, a crash read as a
-# result and the exit code said nothing was wrong.
+# MCP and exit 1 on the CLI, so a crash never reads as a result.
 RSpec.describe "a tool that raises unexpectedly" do
   {
     RailsAiContext::Tools::Onboard => [ :cached_context, {} ],

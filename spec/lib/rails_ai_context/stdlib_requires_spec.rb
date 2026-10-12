@@ -4,10 +4,8 @@ require "spec_helper"
 require "open3"
 require "prism"
 
-# The suite runs with all of Rails loaded and the local Ruby loads parts of
-# the standard library by itself, so a file that names a stdlib constant
-# nothing requires passes here and raises NameError on an older Ruby. Only
-# reading the source can tell.
+# With Rails loaded, and on a Ruby that loads parts of the standard library by itself, a file naming
+# a stdlib constant nothing requires passes here and raises NameError elsewhere. Only the source tells.
 RSpec.describe "the standard library the shipped code names" do
   let(:root) { File.expand_path("../../..", __dir__) }
   let(:exe) { "exe/rails-ai-context" }
@@ -34,9 +32,8 @@ RSpec.describe "the standard library the shipped code names" do
   end
   # Called on Time itself these come from "time"; on anything else they are someone else's.
   let(:time_class_methods) { %i[parse strptime rfc2822 httpdate] }
-  # A value of one of these exists only once its library is loaded, so a
-  # method that names the class was handed one by a file that requires it.
-  # Only a reference the file evaluates while it loads counts.
+  # A value of one of these exists only once its library is loaded, so a method naming the class
+  # was handed one by a file that requires it. Only a reference evaluated at load counts.
   let(:value_types) { %i[Prism] }
   # A feature that loads another as documented behaviour.
   let(:implied) { { "yaml" => %w[psych], "time" => %w[date], "net/http" => %w[uri], "tmpdir" => %w[fileutils] } }

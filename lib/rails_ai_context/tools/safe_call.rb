@@ -23,6 +23,12 @@ module RailsAiContext
         [ first.merge(text: body.strip.empty? ? note.lstrip : "#{body}#{note}") ] + content[1..].to_a
       end
 
+      # The parameters tools/list shows, which for rails_get_config leaves out those of a section turned off.
+      def self.published_params(tool)
+        schema = tool.respond_to?(:input_schema_value) ? tool.input_schema_value : tool.input_schema
+        (schema&.to_h&.dig(:properties) || {}).keys.map(&:to_s)
+      end
+
       def call(**kwargs)
         # An MCP client sends whatever keys it likes. Reaching the tool with
         # one it does not declare answers with an unknown-keyword ArgumentError
@@ -56,7 +62,7 @@ module RailsAiContext
         end
       end
 
-      def unknown_param_response(unknown, known = published_params)
+      def unknown_param_response(unknown, known = SafeCall.published_params(self))
         lines = unknown.map do |name|
           suggestion = RailsAiContext::Tools::BaseTool.find_closest_match(name, known)
           suggestion ? "'#{name}' - did you mean '#{suggestion}'?" : "'#{name}'"
@@ -67,12 +73,6 @@ module RailsAiContext
       end
 
       private
-
-      # The parameters tools/list shows, which for rails_get_config leaves out those of a section turned off.
-      def published_params
-        schema = respond_to?(:input_schema_value) ? input_schema_value : input_schema
-        (schema&.to_h&.dig(:properties) || {}).keys.map(&:to_s)
-      end
 
       def answer_call(discarded)
         # Held across the tool body: a reload another call runs must not
