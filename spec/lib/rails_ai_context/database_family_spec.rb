@@ -68,17 +68,17 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   end
 
   describe "the library" do
-    engine = /postg|mysql|trilogy|sqlite|maria/i
+    database = /postg|mysql|trilogy|sqlite|maria/i
     rules = {
       "tests an adapter name" => /\badapter\w*\b.*(?:\.match\?|=~|\.start_with\?|\.end_with\?|\.include\?|==|!=|\.casecmp)/,
-      "switches on an engine name" => /^\s*when\s+(?:\/|"|')/,
-      "keeps an engine name pattern" => /\b[A-Z_]*(?:ADAPTER|DIALECT)[A-Z_]*\s*=\s*(?:\/|%r)/
+      "switches on a database name" => /^\s*when\s+(?:\/|"|')/,
+      "keeps a database name pattern" => /\b[A-Z_]*(?:ADAPTER|DIALECT)[A-Z_]*\s*=\s*(?:\/|%r)/
     }
-    # Only an engine name inside a string or a pattern counts; a family key such as :mysql is the answer, not a test.
+    # Only a database name inside a string or a pattern counts; a family key such as :mysql is the answer, not a test.
     offences = lambda do |source|
       lines = source.lines
       named = Prism.lex(source).value.filter_map do |token, _|
-        token.location.start_line if token.type == :STRING_CONTENT && token.value.match?(engine)
+        token.location.start_line if token.type == :STRING_CONTENT && token.value.match?(database)
       end
       named.uniq.filter_map do |number|
         rule = rules.find { |_, pattern| lines[number - 1].match?(pattern) }&.first
@@ -86,7 +86,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
-    it "decides the engine nowhere but in the family" do
+    it "decides the family nowhere but in DatabaseFamily" do
       root = File.expand_path("../../../lib", __dir__)
       found = Dir.glob(File.join(root, "**", "*.rb")).sort.flat_map do |file|
         next [] if file.end_with?("rails_ai_context/database_family.rb")
@@ -96,7 +96,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(found).to be_empty
     end
 
-    it "catches each way an engine test is spelled" do
+    it "catches each way a database name test is spelled" do
       [
         'adapter_name.to_s.match?(/sqlite/i)',
         'db_config.adapter.to_s == "sqlite3"',

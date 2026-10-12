@@ -89,7 +89,7 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
       expect(queries).to all(satisfy { |sql| !sql.include?("pg_total_relation_size") })
     end
 
-    it "says row estimates are not available on an engine with no family" do
+    it "says row estimates are not available on an adapter with no family" do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
 
       expect(introspector.call).to eq(skipped: true, reason: "Row estimates are not available for the SQLServer adapter")

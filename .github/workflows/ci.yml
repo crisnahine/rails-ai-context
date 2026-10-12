@@ -97,11 +97,11 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
-  # The database families against real engines: the read-only transaction,
-  # the statement timeout and how each engine reports it. Each URL runs
-  # spec/lib/rails_ai_context/database_family/engines_spec.rb once, and
-  # PostgreSQL also runs rails_query end to end.
-  engines:
+  # The database families against real database servers: the read-only
+  # transaction, the statement timeout and how each server reports it. Each URL
+  # runs spec/lib/rails_ai_context/database_family/database_servers_spec.rb
+  # once, and PostgreSQL also runs rails_query end to end.
+  database_servers:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -111,8 +111,16 @@ jobs:
             mariadb: "10.6"
           - mysql: "8.4"
             mariadb: "11.4"
+          # Rails 7.0 runs on Ruby 3.1 only and has no Trilogy adapter.
+          - mysql: "8.0"
+            mariadb: "10.6"
+            rails: "7.0"
+            ruby: "3.1"
+          - mysql: "8.4"
+            mariadb: "11.4"
+            rails: "8.1"
 
-    name: Engines - MySQL ${{ matrix.mysql }} / MariaDB ${{ matrix.mariadb }} / PostgreSQL 16
+    name: Database servers - Rails ${{ matrix.rails || '8.0' }} / MySQL ${{ matrix.mysql }} / MariaDB ${{ matrix.mariadb }} / PostgreSQL 16
 
     services:
       postgres:
@@ -153,7 +161,8 @@ jobs:
           --health-retries 20
 
     env:
-      BUNDLE_GEMFILE: gemfiles/engines.gemfile
+      BUNDLE_GEMFILE: gemfiles/database_servers.gemfile
+      RAILS_VERSION: ${{ matrix.rails || '8.0' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -164,33 +173,35 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.4"
+          ruby-version: ${{ matrix.ruby || '3.4' }}
           bundler-cache: true
 
       - name: PostgreSQL
         env:
           RAC_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb
 
       - name: MySQL (mysql2)
         env:
           RAC_TEST_MYSQL_URL: mysql2://root:rac@127.0.0.1:3306/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
 
       - name: MySQL (Trilogy)
+        if: matrix.rails != '7.0'
         env:
           RAC_TEST_MYSQL_URL: trilogy://root:rac@127.0.0.1:3306/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
 
       - name: MariaDB (mysql2)
         env:
           RAC_TEST_MARIADB_URL: mysql2://root:rac@127.0.0.1:3307/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
 
       - name: MariaDB (Trilogy)
+        if: matrix.rails != '7.0'
         env:
           RAC_TEST_MARIADB_URL: trilogy://root:rac@127.0.0.1:3307/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
 
   lint:
     runs-on: ubuntu-latest
