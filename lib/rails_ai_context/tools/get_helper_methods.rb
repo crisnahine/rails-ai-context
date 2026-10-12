@@ -233,7 +233,7 @@ module RailsAiContext
           }
         end
 
-        sorted = helpers_data.sort_by { |h| -h[:method_count] }
+        sorted = helpers_data.sort_by.with_index { |h, i| [ -h[:method_count], i ] }
         page = paginate(sorted, offset: offset, limit: limit, default_limit: 50)
         declared = controller_helper_methods(root)
 

@@ -143,6 +143,33 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    context "with helpers defining the same number of methods" do
+      around do |example|
+        Dir.mktmpdir("helper-ties") do |dir|
+          (1..24).each do |i|
+            name = format("h%02d", i)
+            methods = (1..(i.even? ? 2 : 1)).map { |m| "  def #{name}_m#{m}; end\n" }.join
+            FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+            File.write(File.join(dir, "app/helpers/#{name}_helper.rb"), "module #{name.capitalize}Helper\n#{methods}end\n")
+          end
+          @root = dir
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "lists them in path order" do
+        text = described_class.call(detail: "summary").content.first[:text]
+        evens = (2..24).step(2).map { |i| format("H%02dHelper", i) }
+        odds = (1..23).step(2).map { |i| format("H%02dHelper", i) }
+        expect(text.scan(/H\d\dHelper/).uniq).to eq(evens + odds)
+      end
+    end
+
     # An app that registers an acronym keeps JsonLdHelper in jsonld_helper.rb;
     # underscoring the name here, knowing none of the app's acronyms, looked
     # for json_ld_helper.rb.
