@@ -49,8 +49,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool only when the app serves it. A section whose tool `skip_tools`
   turned off is left out, and the answer names those tools in one line.
 
+- **MySQL bounds every `rails_query` statement.** The `MAX_EXECUTION_TIME`
+  hint bound only a statement that starts with SELECT; one that starts with
+  WITH or EXPLAIN ANALYZE ran with no time limit. The session's
+  `max_execution_time` now bounds every statement and is put back after it,
+  also when the statement fails.
+- **A timeout is a timeout, and nothing else is.** `rails_query` read any
+  SQL error that mentioned "timeout" as a timeout, so an unknown column named
+  `timeout` came back as one. A timeout is now read from the error's class or
+  the engine's native code, and MariaDB's 1969 counts.
+- **MySQL table sizes count base tables only**, as the row estimates do.
+
 ### Changed
 
+- **`rails_query` refuses an engine it cannot guard.** On an adapter with no
+  database family (SQL Server, Oracle, CockroachDB) it answers with the
+  adapter's name and sends no statement, where before it ran the query with
+  the text checks alone. `rails_runtime_info` and the row estimates say table
+  sizes, row estimates and index usage are not available for that adapter.
+- **Each database family owns its engine's reads.** The read-only
+  transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
+  plan, table sizes, row estimates and index usage live in one place per
+  family, which `rails_query`, `rails_runtime_info` and the database stats
+  ask.
 - **One answer to which database an app runs.** The connection, a
   database.yml adapter, a URL scheme, a display label and a dump's dialect
   all go through one database family (PostgreSQL, MySQL or SQLite). An

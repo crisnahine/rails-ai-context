@@ -97,6 +97,100 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
+  # The database families against real engines: the read-only transaction,
+  # the statement timeout and how each engine reports it. Each URL runs
+  # spec/lib/rails_ai_context/database_family/engines_spec.rb once.
+  engines:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mysql: "8.0"
+            mariadb: "10.6"
+          - mysql: "8.4"
+            mariadb: "11.4"
+
+    name: Engines - MySQL ${{ matrix.mysql }} / MariaDB ${{ matrix.mariadb }} / PostgreSQL 16
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rac
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: rac
+          MYSQL_DATABASE: rac
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -prac"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mariadb:
+        image: mariadb:${{ matrix.mariadb }}
+        env:
+          MARIADB_ROOT_PASSWORD: rac
+          MARIADB_DATABASE: rac
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      BUNDLE_GEMFILE: gemfiles/engines.gemfile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the MySQL client library mysql2 builds against
+        run: sudo apt-get update && sudo apt-get install -y libmysqlclient-dev
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: PostgreSQL
+        env:
+          RAC_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/rac
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+
+      - name: MySQL (mysql2)
+        env:
+          RAC_TEST_MYSQL_URL: mysql2://root:rac@127.0.0.1:3306/rac
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+
+      - name: MySQL (Trilogy)
+        env:
+          RAC_TEST_MYSQL_URL: trilogy://root:rac@127.0.0.1:3306/rac
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+
+      - name: MariaDB (mysql2)
+        env:
+          RAC_TEST_MARIADB_URL: mysql2://root:rac@127.0.0.1:3307/rac
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+
+      - name: MariaDB (Trilogy)
+        env:
+          RAC_TEST_MARIADB_URL: trilogy://root:rac@127.0.0.1:3307/rac
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+
   lint:
     runs-on: ubuntu-latest
     steps:

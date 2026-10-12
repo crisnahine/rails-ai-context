@@ -192,36 +192,35 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
     end
   end
 
-  describe ".gather_table_sizes (private)" do
-    # Rails 8's default MySQL adapter reports adapter_name "Trilogy", not
-    # "Mysql2" - matching only /mysql/ here would silently drop table sizes
-    # for every Trilogy app (returns nil instead of querying INFORMATION_SCHEMA).
-    it "queries INFORMATION_SCHEMA.TABLES for the trilogy adapter" do
-      conn = double("connection")
-      allow(conn).to receive(:select_all)
-        .with(a_string_matching(/INFORMATION_SCHEMA\.TABLES/))
-        .and_return([ { "name" => "products", "bytes" => 1024 } ])
-
-      result = described_class.send(:gather_table_sizes, conn, "trilogy")
-      expect(result).to eq([ { name: "products", bytes: 1024 } ])
+  describe "table sizes" do
+    def database_section
+      described_class.call(section: "database").content.first[:text]
     end
 
-    it "reads PostgreSQL's table sizes for the PostGIS adapter" do
-      conn = double("connection")
-      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_bytes).with(conn)
-        .and_return([ { name: "parcels", bytes: 8192 } ])
+    it "shows the family's table sizes in its order" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:table_sizes)
+        .and_return([ { name: "users", bytes: 16384 }, { name: "comments", bytes: 8192 }, { name: "posts", bytes: 8192 } ])
 
-      expect(described_class.send(:gather_table_sizes, conn, "postgis")).to eq([ { name: "parcels", bytes: 8192 } ])
+      expect(database_section.scan(/^\| (\w+) \|/).flatten).to eq(%w[Table users comments posts])
     end
 
-    it "lists equally large PostgreSQL tables by name" do
-      conn = double("connection")
-      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_bytes).with(conn)
-        .and_return([ { name: "posts", bytes: 8192 }, { name: "comments", bytes: 8192 }, { name: "users", bytes: 16384 } ])
+    it "asks the MySQL family on a Trilogy connection" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:table_sizes).and_return([ { name: "products", bytes: 1024 } ])
 
-      expect(described_class.send(:gather_table_sizes, conn, "postgresql").map { |r| r[:name] }).to eq(%w[users comments posts])
+      expect(database_section).to include("| products | 1 KB |")
+    end
+
+    it "says table sizes and index usage are not available on an engine with no family" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
+
+      text = described_class.call(section: "database", detail: "full").content.first[:text]
+
+      expect(text).to include("**Adapter:** SQLServer")
+      expect(text).to include("Table sizes and index usage are not available for the SQLServer adapter")
     end
   end
+
   # SQLite reports no table sizes, so this is the only reachable seam for the
   # byte labels the database section prints.
   describe "index usage" do
@@ -233,7 +232,7 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
         { table: "posts", index: "index_posts_on_slug", scans: 0 }
       ])
 
-      expect(described_class.send(:gather_index_usage, conn, "postgresql").map { |i| i[:index] })
+      expect(RailsAiContext::DatabaseFamily::POSTGRESQL.index_usage(conn).map { |i| i[:index] })
         .to eq(%w[index_comments_on_post_id index_posts_on_slug index_posts_on_title])
     end
 
