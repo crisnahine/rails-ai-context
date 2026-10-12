@@ -118,6 +118,14 @@ module RailsAiContext
       end
     end
 
+    # Where a multi-database entry is configured, when that is not the running environment.
+    def database_scope(database)
+      return "" unless database.is_a?(Hash)
+      return " (#{database[:environment]} only)" if database[:environment]
+
+      database[:dump_only] ? " (committed dump only)" : ""
+    end
+
     # Each database past the primary that the schema section read tables
     # for, by its database.yml name.
     def secondary_databases(schema)

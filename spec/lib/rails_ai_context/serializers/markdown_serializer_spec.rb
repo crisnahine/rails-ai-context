@@ -62,6 +62,20 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       expect(output).to include("- `cache` - PostgreSQL")
       expect(output).to include("- `archive` - unknown")
     end
+
+    it "says which databases only another environment or a dump names" do
+      context = {
+        multi_database: {
+          multi_db: true,
+          databases: [ { name: "primary", adapter: "sqlite3" }, { name: "queue", adapter: "sqlite3", environment: "production" },
+                       { name: "archive", adapter: nil, dump_only: true } ]
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- `primary` - SQLite\n", "- `queue` - SQLite (production only)", "- `archive` - unknown (committed dump only)")
+    end
   end
 
   describe "the Custom Middleware section" do

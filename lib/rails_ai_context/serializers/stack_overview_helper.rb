@@ -83,7 +83,7 @@ module RailsAiContext
         raw_databases = Payload.section(ctx, :multi_database)&.dig(:databases)
         db_list = raw_databases.is_a?(Hash) ? raw_databases.keys : Array(raw_databases)
         if db_list.size > 1
-          db_names = db_list.map { |d| d.is_a?(Hash) ? d[:name] : d }
+          db_names = db_list.map { |d| d.is_a?(Hash) ? "#{d[:name]}#{Payload.database_scope(d)}" : d }
           # The names it leaves out are counted, as the mounted apps' are.
           shown = db_names.first(DATABASES_SHOWN)
           shown << "...#{db_names.size - DATABASES_SHOWN} more" if db_names.size > DATABASES_SHOWN

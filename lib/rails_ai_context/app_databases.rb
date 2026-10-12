@@ -109,7 +109,7 @@ module RailsAiContext
       tasks = tasks?(settings)
       Database.new(name: name, environment: env_name, here: here, primary: primary, replica: replica, tasks: tasks,
                    adapter: adapter, adapter_default: from_default, family: DatabaseFamily.of(adapter),
-                   dump: (primary ? primary_dump(root) : secondary_dump(root, name, settings) if tasks),
+                   dump: (primary ? primary_dump(root) : Introspectors::SchemaDumpPath.secondary(root, name, settings) if tasks),
                    migrate_dirs: Introspectors::MigrationReplay.configured_dirs(root, settings) || [ File.join(root, "db", "migrate") ],
                    config: value)
     end
@@ -132,15 +132,6 @@ module RailsAiContext
 
     def primary_dump(root)
       Introspectors::SchemaDumpPath.present(root) || Introspectors::SchemaDumpPath.candidates(root).first
-    end
-
-    # schema_dump_path's rule: its schema_dump, else <name>_schema.rb or <name>_structure.sql in its format.
-    def secondary_dump(root, name, settings)
-      dump_path = Introspectors::SchemaDumpPath
-      format = dump_path.schema_format(root, settings)
-      return dump_path.configured(root, settings, format) if settings.key?("schema_dump")
-
-      [ format, File.join(root, "db", "#{name}_#{dump_path::FILE_NAMES[format]}") ]
     end
 
     # ActiveRecord's configurations describe the app booted at Rails.root; any other root is read from its file.
