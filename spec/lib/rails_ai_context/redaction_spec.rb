@@ -793,6 +793,9 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class.redact_log_line("skip_authorization = true")).to eq("skip_authorization = true")
       expect(described_class.redact_log_line("requires_authorization: FALSE, authorization => nil")).to eq("requires_authorization: FALSE, authorization => nil")
       expect(described_class.redact_log_line("Authorization: true-abc123")).to eq("Authorization: [FILTERED]")
+      expect(described_class.redact_log_line("Authorization: null/Zm9vYmFyc2VjcmV0")).to eq("Authorization: [FILTERED]")
+      expect(described_class.redact_log_line("authorization=nil:hunter2")).to eq("authorization=[FILTERED]")
+      expect(described_class.redact_log_line("Authorization: Bearer abc&secret2")).to eq("Authorization: [FILTERED]")
     end
 
     it "filters a Token or Digest header's parameters whole, with no stray bracket" do
