@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed (BREAKING)
+### Removed
 
 Ten tools that each answered one section of the app's configuration leave
 `tools/list`, and `rails_get_config` answers all of them through a new
@@ -30,7 +30,7 @@ Ten tools that each answered one section of the app's configuration leave
   `full`, the levels every other tool with `detail` takes, and `summary` is
   the one-paragraph overview `quick` gave.
 - **`tools/list` is smaller:** measured as the JSON of every tool's
-  definition, 47,795 characters (about 11,950 tokens at four characters per
+  definition, 47,802 characters (about 11,950 tokens at four characters per
   token) before and 41,280 characters (about 10,320 tokens) after.
 
 ### Migration notes
@@ -85,9 +85,17 @@ Ten tools that each answered one section of the app's configuration leave
   with no read-only transaction and no timeout. On SQL Server and Oracle the
   `LIMIT` its row cap appended is a syntax error, so a query without its own
   row limit failed. Add `rails_query` to `skip_tools` to take it out of
-  `tools/list`.
-  `rails_runtime_info` still answers, and says table sizes, row estimates
+  `tools/list`. `rails_runtime_info` still answers, and says table sizes
   and index usage are not available for the adapter.
+- **`query_allowed_columns` no longer releases an `encrypts` column.** A
+  query that names one is refused, and the refusal says the allowed list
+  does not release it. Its values come back `[FILTERED]` under `SELECT *`.
+  Take the column out of the query.
+- **`rails_query` refuses more column names.** A column named `salt`,
+  `passwd`, `credentials` or `pepper`, one whose name holds `nonce`, and one
+  named `iv` or ending in `_iv` is refused by name and comes back
+  `[FILTERED]` under `SELECT *`. To read one that holds no secret, list its
+  name in `query_allowed_columns`.
 - **Regenerate the context files** (`rails ai:context` or
   `rails-ai-context context`) so the tool guide and tables name the new call.
 
@@ -118,8 +126,8 @@ Ten tools that each answered one section of the app's configuration leave
   is refused by name and filtered in results. `query_allowed_columns`
   releases one by name, as for any name the heuristic flags.
 - **`skip_tools` holds inside composite answers.**
-  `rails_get_context(include:)` ran `rails_security_scan` and the
-  environment listing when `skip_tools` listed them. An include whose tool
+  `rails_get_context(include:)` ran `rails_security_scan` and
+  `rails_get_env` when `skip_tools` listed them. An include whose tool
   is turned off is now answered by saying so, and that tool does not run.
   `rails_get_context`, `rails_diagnose` and `rails_review_changes` build
   every other section the same way: from a built-in tool only when the app
@@ -133,12 +141,13 @@ Ten tools that each answered one section of the app's configuration leave
   tool runs; with none they read the primary as before. Another database is
   reached through a connection handler of its own for the call, so the app's
   pools are untouched and two calls at once never share a pool. Its secret
-  columns come from its own schema, never the primary's. A misspelled name
-  is answered with the closest one. A database only another environment
-  configures, a replica and one with `database_tasks: false` included, is
-  answered with the environment that configures it. One only a dump names
-  and the static tier are each refused with the reason. A query that misses
-  a table another database holds names that database.
+  columns are read from its own schema. A misspelled name is answered with
+  the closest one. A database only other environments configure, a replica
+  and one with `database_tasks: false` included, is answered with the
+  environments that configure it. One only a dump names is refused with the
+  reason. On the static tier both tools are unavailable as a whole, with or
+  without `database`. A query that misses a table another database holds
+  names that database.
   `rails_runtime_info` checks the name whatever the `section`: a name it
   cannot reach is an error for every section, and a section that does not
   read `database` says so.
@@ -169,8 +178,9 @@ Ten tools that each answered one section of the app's configuration leave
   call. `query_redacted_columns` and `query_allowed_columns` keep their
   meaning.
 - **Statistics say when an adapter has none.** On an adapter with no
-  database family, `rails_runtime_info` and the row estimates say table
-  sizes, row estimates and index usage are not available for that adapter.
+  database family, `rails_runtime_info` says table sizes and index usage are
+  not available for that adapter, and the database stats say the same of row
+  estimates.
 - **Each database family owns its database's reads.** The read-only
   transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
   plan, table sizes, row estimates and index usage live in one place per
@@ -189,11 +199,11 @@ Ten tools that each answered one section of the app's configuration leave
 
 ### Fixed
 
-- **`context` and `rails_onboard` run with `--no-boot` on an app whose
-  database two other environments configure.** `context --no-boot` exited 1
-  with "undefined method 'to_sentence'", and `tool onboard --no-boot` gave
-  the same message as its answer. The gem called an ActiveSupport extension
-  that only a booted app had loaded; it now loads it itself.
+- **`rails_onboard` answers on the static tier for an app with Solid
+  databases.** On a default Rails 8 app `tool onboard --no-boot` answered
+  "Onboard error: undefined method 'to_sentence'". The gem called an
+  ActiveSupport extension that only a booted app had loaded. It now loads
+  the extension itself.
 - **A tool that fails unexpectedly is an error result.** `rails_onboard`,
   `rails_diagnose`, `rails_generate_test`, `rails_review_changes`,
   `rails_runtime_info` and `rails_session_context` answered an exception
@@ -213,17 +223,11 @@ Ten tools that each answered one section of the app's configuration leave
   as database.yml writes it. The JSON keeps adapter names as written.
 - **`rails_onboard` words one Solid database in the singular.** "Solid Cache
   keeps its tables in a database of its own: cache."
-- **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".** The cache section's Store line read "Store".
-- **`rails_get_schema` marks a secondary database with where it is
-  configured.** The Secondary databases line carries "(production only)",
-  "(staging and production)" or "(committed dump only)", as the generated
-  files do.
+- **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".**
+  The cache section's Store line read "Store".
 - **`rails_runtime_info` reads pending migrations in every database
   configured here.** It said "all up to date" while another database had
   pending migrations.
-- **A database configured in several other environments names them all.**
-  A cache database that staging and production both configure read
-  "(staging only)"; it now reads "(staging and production)".
 - **A booted MySQL app reads "MySQL".** A connection on mysql2 or Trilogy
   showed its driver name in the generated context and in `rails_runtime_info`;
   it now reads "MySQL" there, as the static tier already said. PostGIS reads
@@ -236,9 +240,11 @@ Ten tools that each answered one section of the app's configuration leave
   configures queue, cache and cable, the schema section, the multi-database
   section, the stack overview and the model listing now all name the four
   databases. The migrations section names each one whose migrations
-  directories hold files. A database only another environment configures is
-  marked "(production only)", and one only a committed dump names
-  "(committed dump only)".
+  directories hold files. A database only other environments configure is
+  marked with every one of them, "(production only)" or "(staging and
+  production)", and one only a committed dump names is marked "(committed
+  dump only)". The `rails_get_schema` Secondary databases line carries the
+  same mark as the generated files.
 - **A secondary dump too large to read is named.** It keeps an entry in the
   schema section that gives the reason, and a database whose migrations are
   replayed instead no longer has its existing dump called missing.
@@ -275,9 +281,9 @@ Ten tools that each answered one section of the app's configuration leave
   `rails_query` answers with an error that names the database and
   `bin/rails db:prepare`, with or without `database`. `rails_runtime_info`
   does the same for a named database. With none, its Database section says
-  the primary does not exist yet and the other sections still answer.
-  Nothing is created. Connecting to it created the database file. A
-  database written as a `file:` URI is checked at the path inside the URI,
+  the primary does not exist yet and the other sections still answer. In
+  5.35.0 the connection created an empty database file. Now no file is
+  created. A database written as a `file:` URI is checked at the path inside the URI,
   or at the whole name on a SQLite build that reads no URIs.
 - **The performance check finds a `has_paper_trail` model's unindexed
   versions table on the static tier.** paper_trail adds

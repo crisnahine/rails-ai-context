@@ -7,7 +7,7 @@ Status: accepted
 ## Decision
 
 - Three families: PostgreSQL (PostGIS too), MySQL (Trilogy and MariaDB too) and SQLite. Any other adapter gets a refusal that names it before anything reaches the database. Statistics answers (table sizes, row estimates, index usage) say "not available" for it instead.
-- A family is claimed by the adapter's name, as `adapter_name` and database.yml spell it, never by class ancestry. CockroachDB's adapter subclasses PostgreSQL's, but it has no `EXPLAIN (FORMAT JSON)` and its own read-only rules, so it is refused until someone verifies them.
+- A family is claimed by the adapter's name alone, as `adapter_name` and database.yml spell it. CockroachDB's adapter subclasses PostgreSQL's, but it has no `EXPLAIN (FORMAT JSON)` and its own read-only rules, so it is refused until someone verifies them.
 - The timeout per family:
   - PostgreSQL: `SET LOCAL statement_timeout` inside the read-only transaction, at one millisecond or more, since zero turns the timeout off.
   - MySQL: the session's `max_execution_time`, read first, set for the statement and restored after. The `MAX_EXECUTION_TIME` hint binds only the outermost SELECT and leaves a statement that starts with WITH or EXPLAIN with no bound, so it is not used.

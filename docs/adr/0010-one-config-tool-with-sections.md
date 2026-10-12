@@ -10,7 +10,7 @@ Eleven tools each read one payload section and take no target: `rails_get_config
 - The old names keep working wherever a name is typed:
   - the CLI resolves `gems`, `rails_get_gems`, `frontend_stack` and the rest to their section;
   - the MCP server answers a call to a retired name from its section and says which call to make instead, with the arguments that section reads.
-- `skip_tools` naming one of the eleven old tools turns its section off; `rails_get_config` names the `app` section. A skip that hid the process environment keeps hiding it after an upgrade, and a skip that hid the overview still hides only the overview. The tool leaves `tools/list` only when every section is off.
+- `skip_tools` naming one of the ten retired tools turns its section off, and `rails_get_config` turns off the `app` section. A skip that hid the process environment keeps hiding it after an upgrade, and a skip that hid the overview still hides only the overview. The tool leaves `tools/list` only when every section is off.
 - With `app` off there is no default, so `section` is required: the published schema and the description say so, and a call with none is answered with the sections that are on.
 - A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, as a custom tool takes any skipped built-in's. The ten sections go with the built-in, and a retired name is then an unknown tool.
 - A custom tool that reuses a retired name is served as its own tool. The gem's own hints still mean the built-in section.
@@ -19,7 +19,7 @@ Eleven tools each read one payload section and take no target: `rails_get_config
 
 ## Consequences
 
-Removing ten tools from `tools/list` breaks a client prompt that names them, so the change ships in a major version, with migration notes. The section names are public interface from here on, like the tool names before them: renaming one keeps the old name as an alias.
+The change ships in 5.35.1, with migration notes. A retired name still answers on the CLI and over MCP, with a line naming the new call, so a prompt that names one keeps working. Only a client that checks names against `tools/list` sees the removal. The section names are public interface from here on, like the tool names before them: renaming one keeps the old name as an alias.
 
 ## Alternatives not taken
 

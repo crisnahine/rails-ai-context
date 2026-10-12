@@ -104,7 +104,7 @@ RAC_TEST_MYSQL_URL=trilogy://root:secret@127.0.0.1:3306/rac \
 ```
 
 The specs create and drop the tables `rac_server_rows` and `rac_server_view`, so point them at a scratch database.
-CI's `database_servers` job runs them on MySQL 8.0 and 8.4, MariaDB 10.6 and 11.4 and PostgreSQL 16, on Rails 7.0, 8.0 and 8.1.
+CI's `database_servers` job runs them on PostgreSQL 16 in every leg. Rails 8.0 runs two legs: MySQL 8.0 with MariaDB 10.6, and MySQL 8.4 with MariaDB 11.4. Rails 7.0 runs MySQL 8.0 with MariaDB 10.6, and Rails 8.1 runs MySQL 8.4 with MariaDB 11.4.
 Rails 7.0 has no Trilogy adapter, so its leg runs PostgreSQL and mysql2 only.
 
 ### Static fixture

@@ -9,7 +9,7 @@ bytebase/dbhub is a database MCP server: one connector per kind of database, nam
 - `rails_query` stays the gem's own. dbhub needs Node 22.5 or later, while this gem is pure Ruby. dbhub connects by DSN; `rails_query` runs on the app's own connection, so database.yml, SSL settings, SQLite extensions and app-registered functions all apply. dbhub returns column values unredacted, and the **secret column** rule is this tool's main safety property. The production guard and the static-tier refusal would also go.
 - The shapes come over:
   - one adapter per **database family** (dbhub's connector), ADR-0008;
-  - one list of **App databases** with the primary first (dbhub's named sources);
+  - one list of **app databases** with the primary first (dbhub's named sources);
   - one module deciding what a statement may do (dbhub's access policy): the **SQL gate**, with the **secret column** rule beside it;
   - one answer to which tools are served;
   - a short default tool list, through **config sections** (ADR-0010).

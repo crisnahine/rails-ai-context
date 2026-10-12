@@ -1454,7 +1454,7 @@ end
 | `query_timeout` | Integer | `5` | `rails_query` statement timeout in seconds |
 | `query_row_limit` | Integer | `100` | Max rows `rails_query` returns (1 to 1000) |
 | `query_redacted_columns` | Array | `password_digest`, `encrypted_password`, tokens, etc. | Column names `rails_query` refuses: a query naming one is rejected before it runs, and a returned column of that name comes back `[FILTERED]` |
-| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in sensitive list. It does not release an `encrypts` column |
+| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in secret column names. It does not release an `encrypts` column |
 | `allow_query_in_production` | Boolean | `false` | Allow `rails_query` in production |
 | `log_lines` | Integer | `50` | Default number of lines `rails_read_logs` tails |
 | `instrumentation_include_arguments` | Boolean | `false` | Forward raw tool arguments in `ActiveSupport::Notifications` events |

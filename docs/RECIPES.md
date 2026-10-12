@@ -138,7 +138,7 @@ AI sees the full picture: the parent controller's `authenticate_user!` filter, t
 AI sees what already exists before building anything. Then:
 
 ```
-→ rails_get_config(section: "conventions")   # Your app's patterns, not generic Rails
+→ rails_get_config(section: "conventions")   # Your app's own patterns
 → rails_get_config(section: "gems")          # Sees ActionMailer, Sidekiq, etc.
 → rails_get_schema()                          # Picks the right foreign keys and types
 ```

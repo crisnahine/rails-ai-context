@@ -202,7 +202,7 @@ fits neither that shape nor the conventional one.
 | `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
 | `query_row_limit` | Integer | `100` | 1 to 1000 | Maximum rows returned |
 | `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected, on top of a fixed built-in list (see [SECURITY.md](SECURITY.md)) |
-| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list and from `query_redacted_columns`. It does not release an `encrypts` column |
+| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in secret column names and from `query_redacted_columns`. It does not release an `encrypts` column |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
 `rails_query` treats a column as secret when its name is in `query_redacted_columns` or the built-in list, an `encrypts` declaration covers it, it ends in `password`, `secret`, `token`, `key`, `digest` or `hash` (or contains `password`, `secret` or `token`), or it is a secret name to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the like). A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret, except an `encrypts` column: a statement that names it is still refused, and its values stay filtered. See [SECURITY.md](SECURITY.md) for how each check reads the rule.
