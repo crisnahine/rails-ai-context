@@ -21,6 +21,11 @@ module RailsAiContext
       end
     end
 
+    # What an open run holds was read before this moment; the run goes on empty.
+    def clear
+      Thread.current[KEY]&.clear
+    end
+
     def active?
       !Thread.current[KEY].nil?
     end

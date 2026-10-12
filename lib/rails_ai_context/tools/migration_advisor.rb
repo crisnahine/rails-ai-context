@@ -331,7 +331,7 @@ module RailsAiContext
           listed = RailsAiContext::AppDatabases.for(root)
           found = databases.filter_map do |name|
             db = listed[name]
-            [ name, [ (db.environments.first unless db.here), RailsAiContext::AppDatabases.settings_of(db.config) ] ] if db&.config
+            [ name, [ (db.environments unless db.here), db.settings ] ] if db&.config
           end.to_h
           if found.empty?
             note = "**Database:** `#{table}` is in the #{databases.join(", ")} dump, which no environment in config/database.yml configures: " \
@@ -340,13 +340,15 @@ module RailsAiContext
           end
 
           names = found.keys
-          env_name = found.values.first.first
+          elsewhere = found.values.first.first
+          env_name = elsewhere&.first
+          configuring = "#{RailsAiContext::AppDatabases.environment_phrase(elsewhere)} #{elsewhere.one? ? "configures" : "configure"}" if elsewhere
           configured = Array(found.values.first.last["migrations_paths"])
           dirs = configured.any? ? configured.map { |path| File.expand_path(path, root.to_s) } : [ File.join(root.to_s, "db", "#{names.first}_migrate") ]
           target = { flag: " --database #{names.first}", env: env_name, dirs: dirs }
           paths = configured.join(", ")
           note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}," \
-                 "#{" which #{env_name} configures and this environment does not," if env_name} not the primary database: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
+                 "#{" which #{configuring} and this environment does not," if env_name} not the primary database: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
                  "so the migration lands in #{env_name && !paths.empty? ? paths : "that database's migrations_paths"} and " \
                  "#{"#{env_name}'s " if env_name}`bin/rails db:migrate` runs it there."
           groups = found.group_by { |_, (_, entry)| Array(entry["migrations_paths"]) }
@@ -400,9 +402,8 @@ module RailsAiContext
           lines
         end
 
-        # NOT NULL with no default has no value for the rows already there, so
-        # the migration fails on a table that holds any. The row count is the
-        # primary database's own estimate when the app is booted, so a table only another database holds has none.
+        # NOT NULL with no default fails on a table that holds rows. The row count is the booted
+        # primary's own estimate, so a table only another database holds has none.
         def not_null_warning(table, column)
           held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
           on_primary = held_in.empty? || held_in.include?("primary")
@@ -510,7 +511,7 @@ module RailsAiContext
           lines << "```"
           lines << ""
           lines << "**Reversible:** Yes"
-          lines << case family.key
+          lines << case family(table).key
           when :mysql
             "**Note:** MySQL/MariaDB add indexes to InnoDB tables via online DDL by default (`ALGORITHM=INPLACE`, no table lock) - there's no `algorithm: :concurrently` equivalent to reach for here (that option is PostgreSQL-only; Rails raises `ArgumentError` if you pass it on this adapter)."
           when :postgresql
@@ -716,21 +717,21 @@ module RailsAiContext
             ]
           when "change_type"
             [
-              "**`change_column` (type change) blocks writes**#{" on Postgres" if family.postgresql?} for the duration of the table rewrite, which can be hours on large tables.",
+              "**`change_column` (type change) blocks writes**#{" on Postgres" if family(table).postgresql?} for the duration of the table rewrite, which can be hours on large tables.",
               "Safer pattern: add a new column with the new type, backfill, dual-write, swap, drop the old column."
             ]
           when "add_index"
             # strong_migrations only requires algorithm: :concurrently on
             # PostgreSQL (its ACCESS EXCLUSIVE lock is the problem) - it
             # doesn't flag plain add_index on MySQL/MariaDB or SQLite at all.
-            if family.postgresql? && !options.to_s.include?("concurrently")
+            if family(table).postgresql? && !options.to_s.include?("concurrently")
               [
                 "**`add_index` without `algorithm: :concurrently`** acquires an `ACCESS EXCLUSIVE` lock on Postgres and blocks writes.",
                 "Use `add_index :#{table}, :#{column}, algorithm: :concurrently` and add `disable_ddl_transaction!` at the top of the migration."
               ]
             end
           when "add_association"
-            case family.key
+            case family(table).key
             when :mysql
               [
                 "**`add_foreign_key` blocks writes on both tables while validating existing rows.** MySQL/MariaDB has no `validate: false` + separate-validation two-step like Postgres.",
@@ -752,7 +753,7 @@ module RailsAiContext
           when "add_column"
             if options.to_s.match?(/null:\s*false/) && !options.to_s.include?("default:")
               [
-                if family.postgresql?
+                if family(table).postgresql?
                   "**Adding a `NOT NULL` column without a default rewrites the table** on older Postgres and fails on existing rows."
                 else
                   "**Adding a `NOT NULL` column without a default** needs a value for every existing row."
@@ -924,10 +925,13 @@ module RailsAiContext
           parts.join(".")
         end
 
-        # Locking/DDL advice differs by family (MySQL's online DDL vs Postgres's ACCESS EXCLUSIVE
-        # locks); an undecided database is no family and gets advice that names no database.
-        def family
-          RailsAiContext::DatabaseFamily.of(cached_context.dig(:schema, :adapter).to_s)
+        # The family of the database that holds the table, since locking advice differs by family.
+        # An undecided database is no family and gets advice that names no database.
+        def family(table)
+          held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
+          return RailsAiContext::DatabaseFamily.of(cached_context.dig(:schema, :adapter).to_s) if held_in.empty? || held_in.include?("primary")
+
+          RailsAiContext::AppDatabases.for(rails_app.root)[held_in.first]&.family || RailsAiContext::DatabaseFamily.of(nil)
         end
       end
     end

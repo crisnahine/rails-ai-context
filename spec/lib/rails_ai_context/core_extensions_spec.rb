@@ -6,13 +6,11 @@ require "prism"
 require "tmpdir"
 require "fileutils"
 
-# With --no-boot nothing loads Rails, so an ActiveSupport core extension exists
-# only when the gem's entry file requires it. Under the suite Combustion has
-# loaded all of ActiveSupport, which is why only a clean process can tell.
+# With --no-boot an ActiveSupport core extension exists only when the gem's entry file requires
+# it. The suite has all of ActiveSupport loaded, so only a clean process can tell.
 RSpec.describe "the ActiveSupport core extensions the gem calls" do
-  # Method name => where ActiveSupport defines it. Names core Ruby also
-  # defines on a common receiver (first, last, at, sum, except) are left out:
-  # a call by name alone cannot tell the two apart.
+  # Method name => where ActiveSupport defines it. Names core Ruby also defines on a common
+  # receiver (first, last, at, sum, except) are left out: a call by name cannot tell them apart.
   let(:extensions) do
     {
       to_sentence: "Array", extract_options!: "Array", second: "Array", third: "Array", in_groups_of: "Array",

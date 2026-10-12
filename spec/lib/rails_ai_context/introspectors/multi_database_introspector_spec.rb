@@ -30,6 +30,28 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     end
   end
 
+  it "lists a replica only another environment configures with the environments that do, so it takes the same mark" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "database.yml"), <<~YAML)
+        #{Rails.env}:
+          primary:
+            adapter: postgresql
+        production:
+          primary:
+            adapter: postgresql
+          primary_replica:
+            adapter: postgresql
+            replica: true
+      YAML
+
+      replica = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:replicas].first
+
+      expect(replica).to eq(name: "primary_replica", adapter: "postgresql", environments: %w[production])
+      expect(RailsAiContext::Payload.database_mark(replica)).to eq(" (production only)")
+    end
+  end
+
   describe "replicas without a booted ActiveRecord" do
     it "lists the database.yml entries marked replica" do
       hide_const("ActiveRecord")

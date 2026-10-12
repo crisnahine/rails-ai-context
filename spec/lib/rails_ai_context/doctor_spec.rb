@@ -2496,15 +2496,32 @@ RSpec.describe RailsAiContext::Doctor do
     end
 
     # A test environment often keeps a secondary in memory, which only the app's own process holds.
-    it "leaves a database that lives in memory out of the databases it reads" do
-      memory = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "cache", { adapter: "sqlite3", database: ":memory:" })
+    def with_database_here(name, settings)
+      other = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, name, settings)
       list = RailsAiContext::AppDatabases.build(
-        environments: { Rails.env => { "primary" => ActiveRecord::Base.connection_db_config, "cache" => memory } },
+        environments: { Rails.env => { "primary" => ActiveRecord::Base.connection_db_config, name => other } },
         current: Rails.env, root: Rails.root.to_s, dumps: []
       )
       allow(RailsAiContext::AppDatabases).to receive(:for).and_return(list)
+    end
 
-      expect(doctor.send(:database_states).map { |state| state[:name] }).to eq(%w[primary])
+    it "leaves a database that lives in memory out of the databases it reads" do
+      with_database_here("cache", { adapter: "sqlite3", database: ":memory:" })
+
+      checks = doctor.run[:checks]
+
+      expect(checks.find { |check| check.name == "Pending migrations" }).to have_attributes(status: :pass)
+      expect(checks.map(&:name)).not_to include("Database")
+    end
+
+    it "says which gem to add for a database whose adapter is not in the bundle" do
+      with_database_here("warehouse", { adapter: "sqlserver", database: "warehouse" })
+
+      expect(doctor.run[:checks].find { |check| check.name == "Database" }).to have_attributes(
+        status: :fail,
+        message: "the #{Rails.env} database warehouse (warehouse) cannot be reached: its sqlserver adapter did not load",
+        fix: "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`"
+      )
     end
   end
 end

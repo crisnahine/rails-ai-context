@@ -103,7 +103,7 @@ module RailsAiContext
           t.tool_name == "rails_get_#{name}" ||
           t.tool_name == "get_#{name}"
       end
-      found || [ name, "rails_#{name}", "rails_get_#{name}" ]
+      found || RailsAiContext::CLI::ToolRunner.candidate_names(name)
         .filter_map { |candidate| RailsAiContext::Tools::GetConfig.retired_section(candidate) }.first&.renderer
     end
 

@@ -311,12 +311,16 @@ module RailsAiContext
         said << "the #{env} #{missing.one? ? "database" : "databases"} #{missing.map(&shown).join(' and ')} " \
                 "#{missing.one? ? "does" : "do"} not exist"
       end
-      failing.each { |db| said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].message)}" }
+      failing.each do |db|
+        said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].is_a?(AppDatabases::Unreachable) ? db[:error].reason : db[:error].message)}"
+      end
       said << pending_phrase(pending, databases) if pending.any?
 
       fixes = []
       fixes << "Run `#{database_task("db:prepare")}`#{where_tasks_run}" if missing.any? || pending.any?
-      fixes << "Start the database server, or fix its settings in #{fix_path(File.join(app.root.to_s, "config/database.yml"))}" if failing.any?
+      unloaded, down = failing.partition { |db| db[:error].is_a?(AppDatabases::AdapterMissing) }
+      fixes.concat(unloaded.map { |db| db[:error].advice.chomp(".") }.uniq)
+      fixes << "Start the database server, or fix its settings in #{fix_path(File.join(app.root.to_s, "config/database.yml"))}" if down.any?
       Check.new(name: "Database", status: :fail, message: said.join("; "), fix: fixes.join("; "))
     end
 
@@ -346,10 +350,7 @@ module RailsAiContext
     # the app's root, as the adapter reads it, named from where doctor was typed.
     def database_named(db_config)
       name = db_config.database.to_s
-      return name unless DatabaseFamily.of(db_config).sqlite? && !name.empty? && name != ":memory:" &&
-        !name.start_with?("file:") && !SafePath.absolute?(name)
-
-      typed_path(File.expand_path(name, app.root.to_s))
+      DatabaseFile.root_relative?(db_config) ? typed_path(File.expand_path(name, app.root.to_s)) : name
     end
 
     # The primary's migrations directories, and in an engine's test/dummy

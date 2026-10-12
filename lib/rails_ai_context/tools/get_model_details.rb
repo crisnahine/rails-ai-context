@@ -578,10 +578,9 @@ module RailsAiContext
         # Only a controller the app has: the conventional name is a guess, and
         # a hint naming a class that does not exist sends the reader nowhere.
         controller_name = Payload.controller_for_route_key(cached_context, name.underscore.pluralize)&.first
-        hint = next_hint((pointer("rails_get_schema", %(table:"#{data[:table_name]}"), "for columns/indexes") if data[:table_name]),
-                         (pointer("rails_get_controllers", %(controller:"#{controller_name}"), "for actions") if controller_name),
-                         pointer("rails_analyze_feature", %(feature:"#{name}"), "for full-stack view"))
-        lines << "" << hint if hint
+        add_next_hint(lines, (pointer("rails_get_schema", %(table:"#{data[:table_name]}"), "for columns/indexes") if data[:table_name]),
+                      (pointer("rails_get_controllers", %(controller:"#{controller_name}"), "for actions") if controller_name),
+                      pointer("rails_analyze_feature", %(feature:"#{name}"), "for full-stack view"))
 
         lines.join("\n")
       end

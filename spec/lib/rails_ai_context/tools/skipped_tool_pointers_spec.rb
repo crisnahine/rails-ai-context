@@ -38,6 +38,17 @@ RSpec.describe "Answers in an app whose skip_tools turns tools off" do
     expect(calls_to_skipped(text(RailsAiContext::Tools::GetControllers.call(controller: "PostsController")))).to be_empty
   end
 
+  it "writes a recovery line and a next-step hint for a served tool only" do
+    tool = RailsAiContext::Tools::BaseTool
+
+    expect(tool.call_pointer("rails_get_schema", %(detail:"summary"), "to see all tables")).to be_nil
+    expect(tool.call_pointer("rails_get_controllers", %(detail:"summary"), "to see all controllers"))
+      .to eq("Call `rails_get_controllers(detail:\"summary\")` to see all controllers")
+    expect(tool.add_next_hint([ "# Post" ], tool.pointer("rails_get_schema", %(table:"posts")))).to eq([ "# Post" ])
+    expect(tool.add_next_hint([ "# Post" ], tool.pointer("rails_get_controllers", %(controller:"posts"), "for actions")))
+      .to eq([ "# Post", "", "_Next: `rails_get_controllers(controller:\"posts\")` for actions_" ])
+  end
+
   it "keeps the pointers to tools still served" do
     RailsAiContext.configuration.skip_tools = []
 

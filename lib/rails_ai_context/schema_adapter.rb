@@ -86,9 +86,8 @@ module RailsAiContext
       multi = context[:multi_database]
       return nil unless Tools::SectionFetch.usable?(multi)
 
-      primary = Array(multi[:databases]).find { |db| db[:name].to_s == "primary" } ||
-                Array(multi[:databases]).first
-      database_label(primary)
+      # The app databases list puts the primary first.
+      database_label(Array(multi[:databases]).first)
     end
 
     # A secondary database's adapter: its database.yml entry, else the dialect

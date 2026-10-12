@@ -1,0 +1,7 @@
+test:
+  animals:
+    adapter: postgresql
+    database: animals_test
+  primary:
+    adapter: mysql2
+    database: app_test

@@ -163,6 +163,12 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "names a file under a concerns directory without the namespace, unless the file declares it" do
+    expect(described_class.concerns_name("Concerns::Billable", "module Billable\nend\n")).to eq("Billable")
+    expect(described_class.concerns_name("Concerns::AuditRow", "module Concerns\n  class AuditRow < ApplicationRecord\n  end\nend\n")).to eq("Concerns::AuditRow")
+    expect(described_class.concerns_name("Admin::Concerns::Flag", "module Flag\nend\n")).to eq("Admin::Concerns::Flag")
+  end
+
   it "keeps a class outside app/models whose chain reaches a model base through another such class" do
     Dir.mktmpdir do |dir|
       {

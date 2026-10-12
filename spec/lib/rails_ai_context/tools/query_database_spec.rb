@@ -198,6 +198,65 @@ RSpec.describe "the database argument" do
       expect(answer).not_to include("all up to date")
     end
 
+    it "reports another database's pending migration when Rails runs none on the primary" do
+      pending_queue_migration
+      with_database("primary", ActiveRecord::Base.connection_db_config.configuration_hash.merge(database_tasks: false))
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("**Pending migrations:** 1 in queue", "- 20240101000000 CreateJobs (queue)")
+      expect(answer).not_to include("all up to date")
+    end
+
+    it "reports the databases it read, and says why of each it could not read, leaving one in memory out" do
+      pending_queue_migration
+      with_database("gone", { adapter: "sqlite3", database: File.join(@dir, "gone.sqlite3") })
+      with_database("bad", { adapter: "sqlite3", database: @dir })
+      with_database("warehouse", { adapter: "sqlserver", database: "warehouse" })
+      with_database("mem", { adapter: "sqlite3", database: ":memory:" })
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include(
+        "**Pending migrations:** 1 in queue\n- 20240101000000 CreateJobs (queue)\n",
+        "_Pending migrations could not be read for gone: The gone database does not exist yet: its SQLite file #{File.join(@dir, "gone.sqlite3")} is not there, " \
+        "and nothing was created. Run `bin/rails db:prepare` to create it._",
+        "_Pending migrations could not be read for warehouse: The warehouse database cannot be reached: its sqlserver adapter did not load. " \
+        "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`._"
+      )
+      expect(answer).to match(/^_Pending migrations could not be read for bad: The bad database cannot be reached: .*unable to open database file.* Check the file its config\/database.yml entry names\._$/i)
+      expect(answer).not_to include("mem")
+    end
+
+    it "names the databases that are up to date beside one it could not read" do
+      with_database("gone", { adapter: "sqlite3", database: File.join(@dir, "gone.sqlite3") })
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("**Migrations:** all up to date in primary, queue\n", "_Pending migrations could not be read for gone: The gone database does not exist yet")
+    end
+
+    it "opens one connection to a named database for a call" do
+      opened = 0
+      subscription = ActiveSupport::Notifications.subscribe("!connection.active_record") { opened += 1 }
+
+      runtime(database: "queue")
+
+      expect(opened).to eq(1)
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscription)
+    end
+
+    it "says Rails runs no migrations when the app's one database sets database_tasks: false" do
+      with_database("queue", { adapter: "sqlite3", database: @path, replica: true })
+      with_database("primary", ActiveRecord::Base.connection_db_config.configuration_hash.merge(database_tasks: false))
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("_Rails runs no migrations on primary: its database.yml entry turns `database_tasks` off._")
+      expect(answer).not_to include("up to date", "Pending")
+    end
+
     it "says the primary's SQLite file is not there in the database section, creates nothing, and still answers the other sections" do
       missing_primary
 
@@ -260,7 +319,7 @@ RSpec.describe "the database argument" do
 
       answer = text(runtime(section: "database", database: "legacy"))
 
-      expect(answer).to include("## Database: legacy", "_Rails runs no migrations on legacy: its database.yml entry sets `database_tasks: false`._")
+      expect(answer).to include("## Database: legacy", "_Rails runs no migrations on legacy: its database.yml entry turns `database_tasks` off._")
       expect(answer).not_to include("CreateJobs", "Pending migrations", "up to date")
     end
 

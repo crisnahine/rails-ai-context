@@ -26,12 +26,14 @@ module RailsAiContext
         format = schema_format(root, config)
         return configured(root, config, format) if config.key?("schema_dump")
 
-        [ format, File.join(root, "db", "#{name}_#{FILE_NAMES[format]}") ]
+        # Rails gives an entry named primary the unprefixed file wherever it stands.
+        [ format, File.join(root, "db", "#{"#{name}_" unless name == "primary"}#{FILE_NAMES[format]}") ]
       end
 
       # The database a dump belongs to: the app database whose dump it is, else the one its file name says.
+      # No dump is the primary's.
       def database_name(root, dump_path)
-        return "primary" if dump_path.nil?
+        return RailsAiContext::AppDatabases.for(root).primary&.name || "primary" if dump_path.nil?
 
         named = RailsAiContext::AppDatabases.for(root).find_by_dump(dump_path)&.name
         named || File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "").then { |name| name.empty? ? "primary" : name }

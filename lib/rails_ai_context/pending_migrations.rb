@@ -39,8 +39,7 @@ module RailsAiContext
 
     # The same, for the app database named `name`.
     def migrate_dirs_of(root, name)
-      databases = AppDatabases.for(root)
-      found = name == "primary" ? databases.primary : databases[name]
+      found = AppDatabases.for(root).of_dump_name(name)
       found ? found.migrate_dirs : [ File.join(root.to_s, "db", name == "primary" ? "migrate" : "#{name}_migrate") ]
     end
 

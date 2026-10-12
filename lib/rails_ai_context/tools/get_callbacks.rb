@@ -98,8 +98,7 @@ module RailsAiContext
         if callbacks.empty?
           lines << "No record callbacks defined."
           lines.concat(association_section(association_lines))
-          hint = next_hint(pointer("rails_get_model_details", %(model:"#{name}"), "for associations and validations"))
-          lines << "" << hint if hint
+          add_next_hint(lines, pointer("rails_get_model_details", %(model:"#{name}"), "for associations and validations"))
           return lines.join("\n")
         end
 
@@ -152,9 +151,8 @@ module RailsAiContext
         lines.concat(association_section(association_lines))
 
         # Cross-reference hints
-        hint = next_hint(pointer("rails_get_model_details", %(model:"#{name}"), "for associations and validations"),
-                         pointer("rails_get_concern", %(name:"ConcernName"), "for concern-provided callbacks"), lines: true)
-        lines << "" << hint if hint
+        add_next_hint(lines, pointer("rails_get_model_details", %(model:"#{name}"), "for associations and validations"),
+                      pointer("rails_get_concern", %(name:"ConcernName"), "for concern-provided callbacks"), lines: true)
 
         lines.join("\n")
       end

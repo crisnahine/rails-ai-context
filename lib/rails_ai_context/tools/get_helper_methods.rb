@@ -210,9 +210,8 @@ module RailsAiContext
         route_key = relative_under(file_path, helper_dirs).delete_suffix(".rb").delete_suffix("_helper")
         views = RailsAiContext::PathResolver.view_dirs(root).any? { |dir| Dir.exist?(File.join(dir, route_key)) }
         controller = Payload.controller_for_route_key(cached_context, route_key)&.first
-        hint = next_hint((pointer("rails_get_view", %(controller:"#{route_key}"), "for views") if views),
-                         (pointer("rails_get_controllers", %(controller:"#{controller}"), "for controller") if controller))
-        lines << "" << hint if hint
+        add_next_hint(lines, (pointer("rails_get_view", %(controller:"#{route_key}"), "for views") if views),
+                      (pointer("rails_get_controllers", %(controller:"#{controller}"), "for controller") if controller))
 
         text_response(lines.join("\n"))
       end

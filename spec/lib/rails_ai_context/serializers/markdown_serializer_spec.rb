@@ -76,6 +76,19 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
 
       expect(output).to include("- `primary` - SQLite\n", "- `queue` - SQLite (staging and production)", "- `archive` - unknown (committed dump only)")
     end
+
+    it "marks a database only another environment configures on its Migrations line" do
+      context = {
+        multi_database: { multi_db: true, databases: [ { name: "primary", adapter: "sqlite3" }, { name: "queue", adapter: "sqlite3", environments: %w[production] },
+                                                       { name: "cache", adapter: "sqlite3" } ] },
+        migrations: { total: 3, pending: [], recent: [],
+                      secondary_databases: { "queue" => { total: 2, pending: [], migrations_paths: [ "db/queue_migrate" ] }, "cache" => { total: 1, pending: [] } } }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- queue (production only): 2 total, 0 pending in db/queue_migrate\n", "- cache: 1 total, 0 pending\n")
+    end
   end
 
   describe "the Custom Middleware section" do

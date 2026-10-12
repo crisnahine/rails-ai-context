@@ -78,15 +78,15 @@ module RailsAiContext
         def known_tool_name(name)
           return nil if name.to_s.empty?
 
-          tools = RailsAiContext::CLI::ToolRunner.available_tools.map(&:tool_name)
-          [ name, "rails_#{name}", "rails_get_#{name}" ].find { |candidate| tools.include?(candidate) }
+          tools = RailsAiContext::Server.exposed_tools.map(&:tool_name)
+          RailsAiContext::CLI::ToolRunner.candidate_names(name).find { |candidate| tools.include?(candidate) }
         end
 
         def unknown_mark_message(name)
           usage = "Pass `tool:params`, e.g. `get_schema:users`."
           return "`mark` names no tool. #{usage}" if name.to_s.empty?
 
-          short_names = RailsAiContext::CLI::ToolRunner.available_tools.map { |t| RailsAiContext::CLI::ToolRunner.short_name(t.tool_name) }
+          short_names = RailsAiContext::Server.exposed_tools.map { |t| RailsAiContext::CLI::ToolRunner.short_name(t.tool_name) }
           suggestion = find_closest_match(name, short_names)
           "Unknown tool '#{echo_input(name)}' in `mark`.#{" Did you mean '#{suggestion}'?" if suggestion} #{usage}"
         end

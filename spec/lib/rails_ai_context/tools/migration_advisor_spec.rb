@@ -706,6 +706,36 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
                               "**Run:** `RAILS_ENV=production bin/rails generate migration RemoveTotalCentsFromOrders total_cents:integer --database shard_one`")
     end
 
+    it "names every environment that configures the database" do
+      allow(described_class).to receive(:cached_context).and_return(shard_context)
+      elsewhere = { "primary" => {}, "shard_one" => { "migrations_paths" => "db/analytics_migrate" } }
+      here = RailsAiContext.environment_name
+      list = RailsAiContext::AppDatabases.build(
+        environments: { here => { "primary" => { "adapter" => "postgresql" } }, "staging" => elsewhere, "production" => elsewhere },
+        current: here, root: Rails.root.to_s, dumps: []
+      )
+      allow(RailsAiContext::AppDatabases).to receive(:for).and_return(list)
+
+      text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
+
+      expect(text).to include("`orders` is in shard_one, which staging and production configure and this environment does not, " \
+                              "not the primary database: generate with `RAILS_ENV=staging` and `--database shard_one`")
+    end
+
+    it "gives index advice for the family of the database that holds the table" do
+      context = shard_context
+      context[:schema][:adapter] = "postgresql"
+      allow(described_class).to receive(:cached_context).and_return(context)
+      stub_databases("analytics" => { "adapter" => "mysql2" })
+
+      held_elsewhere = described_class.call(action: "add_index", table: "page_views", column: "path").content.first[:text]
+      on_primary = described_class.call(action: "add_index", table: "users", column: "email").content.first[:text]
+
+      expect(held_elsewhere).to include("MySQL/MariaDB add indexes to InnoDB tables via online DDL")
+      expect(held_elsewhere).not_to include("consider `algorithm: :concurrently`")
+      expect(on_primary).to include("consider `algorithm: :concurrently` (PostgreSQL)")
+    end
+
     # The database's statistics are the primary's, so they say nothing about a table on another database.
     it "does not count a secondary database's rows from the primary's statistics" do
       context = shard_context.merge(database_stats: { tables: [ { table: "page_views", approximate_rows: 12 } ] })

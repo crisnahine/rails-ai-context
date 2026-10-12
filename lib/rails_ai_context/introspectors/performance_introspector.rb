@@ -50,25 +50,26 @@ module RailsAiContext
         unchecked = []
         AppDatabases.for(root).reject { |db| db.primary || db.replica }.each do |db|
           read = read_dump(db)
-          read.is_a?(String) ? unchecked << { name: db.name, reason: read } : schemas << [ db.name, *read ]
+          read[:reason] ? unchecked << { name: db.name, reason: read[:reason] } : schemas << [ db.name, read[:tables], read[:foreign_keys] ]
         end
         [ schemas, unchecked ]
       end
 
-      # [tables, foreign keys] from the database's dump, or why there is none to read.
+      # { tables:, foreign_keys: } from the database's dump, or { reason: } saying why there is none to read.
       def read_dump(db)
-        return "#{db.tasks ? "schema_dump" : "database_tasks"}: false, so it has no dump to read" unless db.dump
+        return { reason: "#{db.tasks ? "schema_dump" : "database_tasks"}: false, so it has no dump to read" } unless db.dump
 
-        format, path = db.dump
+        path = db.dump.path
         shown = path.delete_prefix("#{root.to_s.chomp('/')}/")
-        return "#{shown} is not on disk" unless File.exist?(path)
+        return { reason: "#{shown} is not on disk" } unless File.exist?(path)
 
         content = SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return "#{shown} is over max_schema_file_size" unless content
-        return SchemaReader.new(path).then { |schema| [ schema.tables, schema.foreign_keys ] } if format == :ruby
+        return { reason: "#{shown} is over max_schema_file_size" } unless content
+        return SchemaReader.new(path).then { |schema| { tables: schema.tables, foreign_keys: schema.foreign_keys } } if db.dump.format == :ruby
 
         tables = StructureSqlReader.parse(content)[:tables]
-        [ tables, tables.values.flat_map { |table| Array(table[:foreign_keys]).map { |fk| { from: fk[:from_table], to: fk[:to_table], column: fk[:column] } } } ]
+        { tables: tables,
+          foreign_keys: tables.values.flat_map { |table| Array(table[:foreign_keys]).map { |fk| { from: fk[:from_table], to: fk[:to_table], column: fk[:column] } } } }
       end
 
       # The models section when the run has one; otherwise the model tier is
