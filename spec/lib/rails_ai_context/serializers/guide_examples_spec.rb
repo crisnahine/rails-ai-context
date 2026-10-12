@@ -50,6 +50,13 @@ RSpec.describe RailsAiContext::Serializers::GuideExamples do
     end
   end
 
+  # The live database lacks `books`, so the add_column example would name a table that does not exist.
+  it "passes over a model whose table the live database lacks" do
+    examples = described_class.new(library.merge(schema: { adapter: "postgresql", tables: { "authors" => { columns: [] } } }))
+
+    expect([ examples.model, examples.table ]).to eq([ "Author", "authors" ])
+  end
+
   it "falls back to a scope when the source defines no method" do
     library[:models]["Book"][:source_instance_methods] = []
 

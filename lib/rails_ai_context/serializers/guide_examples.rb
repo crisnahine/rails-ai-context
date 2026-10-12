@@ -102,9 +102,10 @@ module RailsAiContext
         return @model_entry if defined?(@model_entry)
 
         models = Payload.models(@context)
+        schema = Payload.section(@context, :schema)
         name = Payload.models_by_connection(models).find do |candidate|
           data = models[candidate]
-          data.is_a?(Hash) && !data[:error] && !data[:file].to_s.start_with?("gem:")
+          data.is_a?(Hash) && !data[:error] && !data[:file].to_s.start_with?("gem:") && !Payload.missing_table?(schema, data)
         end
         @model_entry = name && [ name.to_s, models[name] ]
       end
