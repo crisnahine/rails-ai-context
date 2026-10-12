@@ -43,7 +43,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("# Service Objects (1)")
         expect(text).to include("- Accessibility::ScanService")
         expect(text).not_to match(/^- .*Queueable/)
-        expect(text).to include("are left out: 1 concern (Accessibility::Concerns::Queueable)._")
+        expect(text).to include("_1 of the 2 Ruby files under the service directories is left out: 1 concern (Accessibility::Concerns::Queueable)._")
       end
     end
 
@@ -310,7 +310,6 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
-    # A mailer and a module the services mix in are not services, by name or in a listing.
     # A reader who counts the files under app/services gets a larger number
     # than the heading, and the answer has to say where the rest went.
     context "with files the listing leaves out" do
@@ -377,6 +376,14 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("contains no service objects")
         expect(text).to include("_2 of the 2 Ruby files under the service directories are left out: 2 concerns (Payloadable, Trackable)._")
       end
+
+      it "words the note for a directory that holds one file" do
+        %w[charge_card application_service auditable trackable].each { |name| FileUtils.rm(File.join(services, "#{name}.rb")) }
+
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("_1 of the 1 Ruby file under the service directories is left out: 1 concern (Payloadable)._")
+      end
     end
 
     context "with every file a service" do
@@ -401,6 +408,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    # A mailer and a module the services mix in are not services, by name or in a listing.
     context "with a mailer and a mixin beside a service" do
       let(:tmpdir) { Dir.mktmpdir }
 
@@ -1055,7 +1063,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
         expect(text).to include("# Service Objects (1)")
         expect(text).not_to include("## Payloadable")
-        expect(text).to include("are left out: 1 concern (Payloadable)._")
+        expect(text).to include("is left out: 1 concern (Payloadable)._")
       end
 
       it "does not answer for it by name" do

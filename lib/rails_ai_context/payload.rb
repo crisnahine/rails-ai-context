@@ -118,19 +118,31 @@ module RailsAiContext
       end
     end
 
-    # Where a multi-database entry is configured, when that is not the running environment.
-    def database_scope(database)
-      return "" unless database.is_a?(Hash)
-      environments = Array(database[:environments])
-      return " (#{environments.first} only)" if environments.one?
-      return " (#{AppDatabases.environment_phrase(environments)})" if environments.any?
+    # Where a multi-database entry is configured when that is not the running environment, in words, or nil.
+    def scope_words(database)
+      return nil unless database.is_a?(Hash)
 
-      database[:dump_only] ? " (committed dump only)" : ""
+      environments = Array(database[:environments])
+      return "#{environments.first} only" if environments.one?
+      return AppDatabases.environment_phrase(environments) if environments.any?
+
+      "committed dump only" if database[:dump_only]
     end
 
-    # The same mark for a database known by its database.yml name.
-    def named_database_scope(context, name)
-      database_scope(list(context, :multi_database, :databases).grep(Hash).find { |database| database[:name].to_s == name.to_s })
+    # The same in parentheses, to follow the database's name.
+    def database_mark(database)
+      words = scope_words(database)
+      words ? " (#{words})" : ""
+    end
+
+    def named_scope_words(context, name)
+      scope_words(list(context, :multi_database, :databases).grep(Hash).find { |database| database[:name].to_s == name.to_s })
+    end
+
+    # The mark for a database known by its database.yml name.
+    def named_database_mark(context, name)
+      words = named_scope_words(context, name)
+      words ? " (#{words})" : ""
     end
 
     # Each database past the primary that the schema section read tables

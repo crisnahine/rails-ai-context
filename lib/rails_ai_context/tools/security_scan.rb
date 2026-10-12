@@ -95,7 +95,7 @@ module RailsAiContext
           unbundled_scan(min_confidence, resolved_checks)
         end
         return text_response(unavailable_message(scan&.dig(:unavailable))) if scan.nil? || scan.key?(:unavailable)
-        return text_response("Brakeman scan failed: #{portable_error(scan[:error])}") if scan[:error]
+        return error_response("Brakeman scan failed: #{portable_error(scan[:error])}") if scan[:error]
 
         warnings = scan[:warnings]
         checks_run = scan[:checks_run]

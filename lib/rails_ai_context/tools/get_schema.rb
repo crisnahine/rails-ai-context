@@ -444,7 +444,7 @@ module RailsAiContext
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          label = "**#{name}**#{Payload.named_database_scope(ctx, name)}"
+          label = "**#{name}**#{Payload.named_database_mark(ctx, name)}"
           next lines << "- #{label}: #{db[:note]}" if db[:tables].blank?
 
           pending = Array(db[:pending_migrations])

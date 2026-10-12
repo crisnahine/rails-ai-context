@@ -34,7 +34,6 @@ module RailsAiContext
 
     # One database's pending migrations, as `db:migrate:status:<name>` reads
     # them: from that database's own schema_migrations, through its pool.
-    # AppDatabases::Database#pending_migrations leases the pool.
     def self.pending_on(pool, migrate_dir)
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
       return [] if dirs.empty?

@@ -111,6 +111,17 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    it "reads the section's name in any capitalisation, as the tool does" do
+      Dir.mktmpdir do |dir|
+        env_app(dir)
+        out = `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool config --section ENV_CONFIG --environment prod --no-boot 2>&1`
+
+        expect(out).to include("_Current: **development**"), out
+        expect(out).to include("## prod")
+        expect(out).not_to include("## development")
+      end
+    end
+
     # Set through the child's environment, not a `VAR=value` prefix, which
     # cmd.exe, the shell backticks run on Windows, reads as a command.
     it "still reads RAILS_ENV from the environment variable" do
@@ -125,7 +136,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
   # The binary decides before boot, without the gem loaded, which tools own
   # `--environment`; the list is a constant, so it has to match the schemas.
-  it "names exactly the built-in tools that declare an environment parameter" do
+  it "names exactly the built-in tools and config sections that declare an environment parameter" do
     source = File.read(File.expand_path("../exe/rails-ai-context", __dir__))
     listed = source[/ENVIRONMENT_FILTER_OWNERS = %w\[([^\]]*)\]/, 1].to_s.split
     config = RailsAiContext::Tools::GetConfig
@@ -350,6 +361,17 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect($?.exitstatus).to eq(0), out
         expect(out).to start_with("rails_get_schema - ")
+      end
+    end
+
+    it "gives a retired tool name the help of its config section" do
+      Dir.mktmpdir do |dir|
+        out = `cd #{dir} && ruby -I #{lib} #{exe} tool gems --help 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to start_with("rails_get_gems - runs the `gems` section of rails_get_config")
+        expect(out).to include("--category")
+        expect(out).not_to include("--locale")
       end
     end
 

@@ -8,7 +8,7 @@ RSpec.describe RailsAiContext::DatabaseFile do
   end
 
   # A SQLite compiled with USE_URI, as the sqlite3 gem ships it from 2.0.
-  before { allow(described_class).to receive(:uris?).and_return(true) }
+  before { allow(described_class).to receive(:sqlite_reads_uris?).and_return(true) }
 
   describe ".missing" do
     it "names a SQLite database whose file is not there" do
@@ -61,7 +61,7 @@ RSpec.describe RailsAiContext::DatabaseFile do
   end
 
   describe "on a SQLite that reads no URIs" do
-    before { allow(described_class).to receive(:uris?).and_return(false) }
+    before { allow(described_class).to receive(:sqlite_reads_uris?).and_return(false) }
 
     it "takes a file: name as the file it is, from the working directory" do
       Dir.mktmpdir do |dir|

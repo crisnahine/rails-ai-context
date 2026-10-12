@@ -395,8 +395,6 @@ module RailsAiContext
           .reject { |r| sensitive_file?(r[:file]) || sensitive_in_tree?(r[:file], trees, root) }
           .first(max_results)
         [ rows, failed ]
-      rescue => e
-        [ [ { file: "error", line_number: 0, content: e.message } ], false ]
       end
 
       # rg opens sensitive files too, and one it cannot read is not an error
@@ -862,8 +860,6 @@ module RailsAiContext
         return definition_missing_response(lines.join("\n")) if def_results.empty?
 
         text_response(lines.join("\n"))
-      rescue => e
-        text_response("Trace error: #{e.message}")
       end
 
       SCOPE_WRAPPERS = %w[scope lambda proc].freeze

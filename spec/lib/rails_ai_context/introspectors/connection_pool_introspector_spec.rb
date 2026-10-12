@@ -64,12 +64,12 @@ RSpec.describe RailsAiContext::Introspectors::ConnectionPoolIntrospector do
     end
 
     it "skips a role whose pool list raises" do
-      handler = instance_double(ActiveRecord::ConnectionAdapters::ConnectionHandler)
-      allow(handler).to receive(:connection_pool_list).with(:writing).and_return([ :pool ])
+      handler = ActiveRecord::Base.connection_handler
+      writing = handler.connection_pool_list(:writing).size
+      allow(handler).to receive(:connection_pool_list).and_call_original
       allow(handler).to receive(:connection_pool_list).with(:reading).and_raise(ArgumentError)
-      allow(ActiveRecord::Base).to receive(:connection_handler).and_return(handler)
 
-      expect(result[:pool_handlers]).to eq([ { role: "writing", pool_count: 1 } ])
+      expect(result[:pool_handlers]).to eq([ { role: "writing", pool_count: writing } ])
     end
 
     context "when a nested initializer wires the ShardSelector" do

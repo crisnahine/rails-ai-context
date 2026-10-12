@@ -7,10 +7,13 @@ RSpec.describe RailsAiContext::AppDatabases do
     File.expand_path("../../fixtures/app_databases/#{name}", __dir__)
   end
 
-  # The booted tier reads ActiveRecord's configurations for the app at Rails.root.
-  def booted(root)
+  # The booted tier reads ActiveRecord's configurations for the app at Rails.root, and ActiveRecord::Base
+  # is connected to the environment's first database unless `connected` names another.
+  def booted(root, connected: nil)
     configurations = ActiveRecord::DatabaseConfigurations.new(YAML.safe_load_file(File.join(root, "config/database.yml"), aliases: true))
     allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+    own = configurations.configs_for(env_name: "test")
+    allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(own.find { |config| config.name == connected } || own.first)
     allow(Rails).to receive(:root).and_return(Pathname.new(root))
     RailsAiContext::RunCache.around { described_class.for(root) }.tap { expect(ActiveRecord::Base).to have_received(:configurations) }
   end
@@ -28,7 +31,7 @@ RSpec.describe RailsAiContext::AppDatabases do
   def entry(root, name, environments: %w[test], here: true, primary: false, replica: false, tasks: true, adapter: nil,
             family: RailsAiContext::DatabaseFamily.of(adapter), dump: nil, migrate_dirs: [ "db/migrate" ], adapter_default: false)
     { name: name, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks, adapter: adapter,
-      adapter_default: adapter_default, family: family, dump: dump && [ dump.first, File.join(root, dump.last) ],
+      adapter_default: adapter_default, family: family, dump: dump && described_class::Dump.new(format: dump.first, path: File.join(root, dump.last)),
       migrate_dirs: migrate_dirs.map { |dir| File.join(root, dir) } }
   end
 
@@ -75,6 +78,71 @@ RSpec.describe RailsAiContext::AppDatabases do
     [ entry(root, "primary", primary: true, adapter: "sqlite3", dump: [ :ruby, "db/schema.rb" ]),
       entry(root, "archive", environments: [], here: false, dump: [ :ruby, "db/archive_schema.rb" ], migrate_dirs: [ "db/archive_migrate" ]) ]
   }
+
+  it_behaves_like "the same list on both tiers", "animals_first", lambda { |root|
+    [ entry(root, "animals", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ]),
+      entry(root, "primary", adapter: "mysql2", dump: [ :ruby, "db/schema.rb" ]) ]
+  }
+
+  describe "an environment whose first database is not the one named primary" do
+    let(:root) { fixture("animals_first") }
+
+    it "answers the first database for no name, and the one named primary only by its name, on both tiers" do
+      [ booted(root), static(root) ].each do |list|
+        expect(list.fetch(nil).name).to eq("animals")
+        expect(list.fetch("primary")).to have_attributes(name: "primary", primary: false, adapter: "mysql2")
+        expect(list.of_dump_name(nil).name).to eq("animals")
+        expect(list.of_dump_name("primary").name).to eq("primary")
+      end
+    end
+
+    it "reads the first database's settings wherever the primary's are asked for, and the one named primary by its name" do
+      previous = [ RailsAiContext.tier, ENV.fetch("RAILS_ENV", nil) ]
+      RailsAiContext.tier = :static
+      ENV["RAILS_ENV"] = "test"
+      conventions = RailsAiContext::Introspectors::SchemaConventions
+
+      RailsAiContext::RunCache.around do
+        expect(RailsAiContext::DatabaseYml.primary_name(root)).to eq("animals")
+        expect(RailsAiContext::DatabaseYml.primary(root)).to include("adapter" => "postgresql")
+        expect(RailsAiContext::DatabaseYml.entry(root, "primary")).to include("database" => "app_test")
+        expect(RailsAiContext::Introspectors::SchemaDumpPath.database_name(root, nil)).to eq("animals")
+        expect([ conventions.database_adapter_for(root, nil), conventions.database_adapter_for(root, "primary") ]).to eq(%w[postgresql mysql2])
+      end
+    ensure
+      RailsAiContext.tier = previous.first
+      ENV["RAILS_ENV"] = previous.last
+    end
+
+    it "takes the database ActiveRecord::Base is connected to as the primary on the booted tier, and lists it first" do
+      list = booted(root, connected: "primary")
+
+      expect(list.map { |db| [ db.name, db.primary ] }).to eq([ [ "primary", true ], [ "animals", false ] ])
+      expect(list.fetch("animals").dump).to have_attributes(format: :ruby, path: File.join(root, "db/schema.rb"))
+    end
+  end
+
+  it "reads an environment whose whole value is a URL as its one database" do
+    Dir.mktmpdir do |root|
+      File.write(File.join(FileUtils.mkdir_p(File.join(root, "config")).first, "database.yml"), "test: postgres://app@localhost/app_test\n")
+
+      [ booted(root), static(root) ].each do |list|
+        expect(list.map { |db| [ db.name, db.primary, db.here, db.adapter ] }).to eq([ [ "primary", true, true, "postgresql" ] ])
+      end
+    end
+  end
+
+  it "reads database_tasks with no value as Rails does: no tasks" do
+    list = described_class.build(
+      environments: { "test" => { "primary" => { "adapter" => "sqlite3" }, "legacy" => { "adapter" => "sqlite3", "database_tasks" => nil },
+                                  "kept" => { "adapter" => "sqlite3", "database_tasks" => "no" } } },
+      current: "test", root: Dir.tmpdir, dumps: []
+    )
+    rails = ->(value) { ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "x", { adapter: "sqlite3", database_tasks: value }).database_tasks? }
+
+    expect(list.map(&:tasks)).to eq([ true, rails.call(nil), rails.call("no") ])
+    expect(list.map(&:tasks)).to eq([ true, false, true ])
+  end
 
   describe "the list's readers" do
     subject(:list) { static(fixture("rails8")) }

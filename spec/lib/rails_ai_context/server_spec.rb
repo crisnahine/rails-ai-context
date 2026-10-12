@@ -361,6 +361,19 @@ RSpec.describe RailsAiContext::Server do
         RailsAiContext.configuration.skip_tools = []
       end
 
+      it "names the skipped tool and why the call failed to an instrumentation subscriber" do
+        RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
+        payloads = []
+        subscriber = ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") { |*, payload| payloads << payload }
+
+        server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } })
+
+        expect(payloads).to contain_exactly(include(tool_name: "rails_get_schema", error: :tool_skipped))
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+        RailsAiContext.configuration.skip_tools = []
+      end
+
       it "answers rails_onboard at summary with the overview, and the retired quick with the valid levels" do
         call = ->(detail) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_onboard", arguments: { detail: detail } } }) }
 
@@ -382,6 +395,10 @@ RSpec.describe RailsAiContext::Server do
         expect(near[:code]).to eq(-32602)
         expect(near[:message]).to start_with("Tool not found: rails_get_schemaa. Did you mean rails_get_schema")
         expect(near[:data][:available]).to include("rails_get_schema", "rails_get_view")
+
+        retired = call.call("rails_get_gemz")[:error]
+        expect(retired[:message]).to start_with("Tool not found: rails_get_gemz. Did you mean rails_get_gems")
+        expect(retired[:data][:available]).not_to include("rails_get_gems")
 
         far = call.call("zzz_no_such_tool")[:error]
         expect(far[:message]).to start_with("Tool not found: zzz_no_such_tool. The tools are: rails_analyze_feature,")

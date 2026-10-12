@@ -31,6 +31,16 @@ RSpec.describe "rails_get_config sections" do
     response.content.first[:text]
   end
 
+  def handle(name, arguments = {})
+    RailsAiContext::Server.new(Rails.application).build.handle(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
+    )
+  end
+
+  def call(name, arguments = {})
+    handle(name, arguments)[:result]
+  end
+
   describe "tools/list" do
     it "serves 35 tools, rails_get_config among them and none of the ten section tools" do
       names = RailsAiContext::Server.new(Rails.application).build.tools.keys
@@ -60,6 +70,12 @@ RSpec.describe "rails_get_config sections" do
 
     it "says nothing about a parameter the section reads" do
       expect(text(RailsAiContext::Tools::GetConfig.call(section: "i18n", locale: "en"))).not_to include("does not read")
+    end
+
+    it "takes a nil detail as no detail" do
+      expect(text(RailsAiContext::Tools::GetConfig.call(detail: nil))).not_to include("does not read")
+      expect(text(RailsAiContext::Tools::GetConfig.call(section: "frontend", detail: nil)))
+        .to eq(text(RailsAiContext::Tools::GetConfig.call(section: "frontend")))
     end
 
     it "refuses a section it does not have, naming the ones it has" do
@@ -97,10 +113,7 @@ RSpec.describe "rails_get_config sections" do
 
     it "still answers an off section with the turned-off message, also with a parameter only that section reads" do
       config.skip_tools = %w[rails_get_gems]
-      result = RailsAiContext::Server.new(Rails.application).build.handle(
-        { jsonrpc: "2.0", id: 1, method: "tools/call",
-          params: { name: "rails_get_config", arguments: { section: "gems", category: "auth" } } }
-      )[:result]
+      result = call("rails_get_config", { section: "gems", category: "auth" })
 
       expect(result[:isError]).to be(true)
       expect(result[:content].first[:text]).to start_with("The `gems` section of rails_get_config is turned off")
@@ -134,15 +147,20 @@ RSpec.describe "rails_get_config sections" do
       expect(RailsAiContext::Server.served?("rails_get_config")).to be(false)
       expect(RailsAiContext::Server.skipped_tools).to match_array(all_eleven)
     end
+
+    it "answers a Ruby caller that the tool is turned off when it names all eleven" do
+      config.skip_tools = all_eleven
+
+      [ {}, { section: "gems" }, { section: "routes" } ].each do |arguments|
+        response = RailsAiContext::Tools::GetConfig.call(**arguments)
+
+        expect(response.error?).to be(true)
+        expect(text(response)).to eq(RailsAiContext::Server.skipped_tool_message("rails_get_config"))
+      end
+    end
   end
 
   describe "a retired name over MCP" do
-    def call(name, arguments = {})
-      RailsAiContext::Server.new(Rails.application).build.handle(
-        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
-      )[:result]
-    end
-
     it "is answered from its section, with the new call named" do
       result = call("rails_get_i18n", { locale: "en" })
       section = text(RailsAiContext::Tools::GetConfig.call(section: "i18n", locale: "en"))
@@ -164,12 +182,6 @@ RSpec.describe "rails_get_config sections" do
 
   describe "a refusal" do
     let(:config) { RailsAiContext.configuration }
-
-    def call(name, arguments = {})
-      RailsAiContext::Server.new(Rails.application).build.handle(
-        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
-      )[:result]
-    end
 
     def refusal(name, arguments = {})
       result = call(name, arguments)
@@ -278,12 +290,6 @@ RSpec.describe "rails_get_config sections" do
       RailsAiContext.configuration.custom_tools = saved
     end
 
-    def call(name, arguments = {})
-      RailsAiContext::Server.new(Rails.application).build.handle(
-        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
-      )
-    end
-
     it "serves the custom tool in the built-in's place, with no warning" do
       server = nil
       expect { server = RailsAiContext::Server.new(Rails.application).build }.not_to output.to_stderr
@@ -291,13 +297,13 @@ RSpec.describe "rails_get_config sections" do
       expect(server.tools.fetch("rails_get_config")).to equal(custom)
       expect(RailsAiContext::Server.exposed_tools).to include(custom)
       expect(RailsAiContext::Server.exposed_tools).not_to include(RailsAiContext::Tools::GetConfig)
-      expect(call("rails_get_config")[:result][:content].first[:text]).to eq("custom config")
+      expect(call("rails_get_config")[:content].first[:text]).to eq("custom config")
     end
 
     it "answers a retired name as an unknown tool, on both surfaces" do
       allow($stderr).to receive(:puts)
 
-      expect(call("rails_get_gems")[:error][:message]).to start_with("Tool not found: rails_get_gems.")
+      expect(handle("rails_get_gems")[:error][:message]).to start_with("Tool not found: rails_get_gems.")
       expect { RailsAiContext::CLI::ToolRunner.new("gems", []) }
         .to raise_error(RailsAiContext::CLI::ToolRunner::ToolNotFoundError, /Unknown tool 'gems'/)
     end
@@ -313,11 +319,25 @@ RSpec.describe "rails_get_config sections" do
 
   describe "the line a retired name's answer ends with" do
     it "names only the parameters the section reads" do
-      result = RailsAiContext::Server.new(Rails.application).build.handle(
-        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_engines", arguments: { limit: 3 } } }
-      )[:result]
+      result = call("rails_get_engines", { limit: 3 })
 
       expect(result[:content].first[:text]).to end_with('_rails_get_engines is now `rails_get_config(section:"engines")`; call that instead._')
+    end
+
+    it "names a value over 80 characters, or one holding a backtick, after the call" do
+      [ "x" * 81, "e`n" ].each do |locale|
+        note = call("rails_get_i18n", { locale: locale })[:content].first[:text].lines.last
+        expect(note).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n")`, with the same `locale`; call that instead._))
+      end
+
+      kept = call("rails_get_i18n", { locale: "x" * 80 })[:content].first[:text].lines.last
+      expect(kept).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n", locale:"#{'x' * 80}")`; call that instead._))
+    end
+
+    it "keeps a short argument in the call beside a long one named after it" do
+      note = call("rails_get_i18n", { locale: "x" * 5_000, limit: 3 })[:content].first[:text].lines.last
+
+      expect(note).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n", limit:3)`, with the same `locale`; call that instead._))
     end
 
     it "is the command under tool_mode :cli" do
@@ -327,6 +347,12 @@ RSpec.describe "rails_get_config sections" do
       command = RailsAiContext::InstallMode.tool_command("config")
 
       expect(answer).to end_with("_rails_get_i18n is now `#{command} section=i18n locale=en`; call that instead._")
+      [ "e`n", "x" * 5_000 ].each do |locale|
+        expect(RailsAiContext::CLI::ToolRunner.new("i18n", [ "--locale", locale ]).run)
+          .to end_with("_rails_get_i18n is now `#{command} section=i18n`, with the same `locale`; call that instead._")
+      end
+      expect(RailsAiContext::CLI::ToolRunner.new("i18n", [ "--locale", "x" * 5_000, "--limit", "3" ]).run)
+        .to end_with("_rails_get_i18n is now `#{command} section=i18n limit=3`, with the same `locale`; call that instead._")
     end
   end
 
@@ -338,14 +364,20 @@ RSpec.describe "rails_get_config sections" do
     end
 
     it "names rails_get_config with its section for a section call and for a retired name" do
-      server = RailsAiContext::Server.new(Rails.application).build
-      server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call",
-                      params: { name: "rails_get_config", arguments: { section: "gems" } } })
-      server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rails_get_i18n", arguments: {} } })
+      call("rails_get_config", { section: "gems" })
+      call("rails_get_i18n")
       RailsAiContext::CLI::ToolRunner.new("engines", []).run
 
       expect(status).to include("section:gems", "section:i18n", "section:engines")
       expect(status).not_to match(/rails_get_(gems|i18n|engines)/)
+    end
+
+    it "holds no section call that was answered with an error" do
+      refused = RailsAiContext::Tools::BaseTool.error_response("refused")
+      allow(RailsAiContext::Tools::GetEngines).to receive(:call).and_return(refused)
+
+      expect(call("rails_get_config", { section: "engines" })[:isError]).to be(true)
+      expect(status).not_to include("section:engines")
     end
   end
 
@@ -353,9 +385,7 @@ RSpec.describe "rails_get_config sections" do
   # name, with the parameters the retired tool took and a fact of the app it reads.
   describe "each section through the server" do
     def answer(name, arguments)
-      result = RailsAiContext::Server.new(Rails.application).build.handle(
-        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
-      )[:result]
+      result = call(name, arguments)
       expect(result[:isError]).to be(false), "#{name} #{arguments.inspect}: #{result[:content].first[:text]}"
       result[:content].first[:text]
     end
@@ -406,7 +436,14 @@ RSpec.describe "rails_get_config sections" do
           [ "gems", { offset: 1, limit: 2 }, "- **pg** `1.5.9`", "_Showing 2-3 of 9. Use offset:3 for next page._" ],
           [ "env", { detail: "summary" }, "**External services:** 1" ],
           [ "env", { detail: "full" }, "- **Sidekiq (Redis)**", "  - Gem: `sidekiq`" ],
-          [ "frontend", { detail: "full" }, "- **Stimulus controllers:** 3 (hello, search, tabs)" ]
+          [ "frontend", { detail: "full" }, "- **Stimulus controllers:** 3 (hello, search, tabs)" ],
+          [ "api", { detail: "full" }, "- **Versioning:** v1 (app/controllers/api/v1)", "No OpenAPI/Swagger spec files detected." ],
+          [ "engines", {}, "_Nothing mounted in config/routes.rb._", "## Loaded Engine Classes\n[UNAVAILABLE: requires a booted Rails app]" ],
+          [ "active_support", {}, "_No concerns found under app/**/concerns._", "## Deprecators\n[UNAVAILABLE: requires a booted Rails app]" ],
+          [ "env_config", {}, "_config/application.rb_", "**Config keys set (1):** `load_defaults`" ],
+          [ "env_config", { environment: "production" }, "Environment 'production' not found." ],
+          [ "i18n", {}, "- **Available locales (from locale files):** en (1)", "- `en.yml` - 3 keys" ],
+          [ "i18n", { locale: "en" }, "# I18n: en", "## Files for en\n- `en.yml` - 3 keys" ]
         ])
         expect(answer("rails_get_config", { section: "gems", category: "auth" })).not_to include("**pg**")
       end

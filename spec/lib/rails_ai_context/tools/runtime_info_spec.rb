@@ -192,9 +192,7 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       end
     end
 
-    # Solid Cache answers #stats from its database, and SQLite makes the file
-    # a connection asks for. Under production on a fresh clone that left an
-    # empty storage/production_cache.sqlite3 behind a read.
+    # Solid Cache answers #stats from its database, and SQLite creates the file a connection asks for.
     describe "a Solid Cache store whose SQLite file is missing" do
       around do |example|
         Dir.mktmpdir do |dir|

@@ -25,7 +25,10 @@ module RailsAiContext
       attr_reader :tool_class, :raw_args, :json_mode, :error
 
       def initialize(tool_name, raw_args, json_mode: false, environment: nil)
-        @tool_class = RunCache.around { resolve_tool(tool_name) }
+        RunCache.around do
+          @custom_tools = Server.resolve_custom_tools
+          @tool_class, @retired = resolve_tool(tool_name)
+        end
         @raw_args = raw_args
         @json_mode = json_mode
         @environment = environment
@@ -56,10 +59,15 @@ module RailsAiContext
         end
       end
 
+      # The tool's help, or for a retired name its config section's.
+      def help
+        self.class.tool_help(tool_class, @retired)
+      end
+
       # List all available tools with short names and descriptions.
       def self.tool_list
         lines = [ "Available tools:", "" ]
-        available_tools.each do |tool|
+        Server.exposed_tools.each do |tool|
           short = short_name(tool.tool_name)
           full = tool.description_value.to_s
           desc = full.truncate(79, separator: " ", omission: "...")
@@ -85,26 +93,25 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # What the MCP server's tools/list answers with.
-      def self.available_tools
-        Server.exposed_tools
-      end
-
-      # Generate help for a specific tool from its input_schema.
-      def self.tool_help(tool_class)
-        schema = tool_class.input_schema_value&.to_h || {}
+      # Generate help for a specific tool from its input_schema. A retired
+      # name gets its own section's parameters, read from rails_get_config.
+      def self.tool_help(tool_class, retired = nil)
+        schema = retired ? Tools::GetConfig.schema_for([ retired ]) : tool_class.input_schema_value&.to_h || {}
         properties = schema[:properties] || {}
-        required = schema[:required] || []
+        properties = properties.except(:section) if retired
+        required = retired ? [] : schema[:required] || []
+        name = retired ? retired.tool_name : tool_class.tool_name
+        about = retired ? "runs the `#{retired.name}` section of rails_get_config (#{retired.summary})." : tool_class.description_value
 
         lines = [
-          "#{tool_class.tool_name} - #{tool_class.description_value}",
+          "#{name} - #{about}",
           "",
           "Usage:"
         ]
         # Standalone installs have no rake tasks; only show the rake form when
         # the gem lives in an app's Gemfile, not at an engine's root.
         form = RailsAiContext::InstallMode.form
-        short = short_name(tool_class.tool_name)
+        short = short_name(name)
         if form == :tasks
           lines << "  rails 'ai:tool[#{short}]' #{properties.keys.map { |k| "#{k}=VALUE" }.join(' ')}"
         end
@@ -134,6 +141,11 @@ module RailsAiContext
         tool_name.sub(/\Arails_get_/, "").sub(/\Arails_/, "")
       end
 
+      # The full names a typed name can spell: `schema`, `get_schema` and `rails_get_schema` are one tool.
+      def self.candidate_names(name)
+        [ name, "rails_#{name}", "rails_get_#{name}" ]
+      end
+
       private
 
       # The schema a call is checked against, as InputSchema#to_h gives it on every
@@ -142,20 +154,16 @@ module RailsAiContext
         tool_class.input_schema&.to_h || {}
       end
 
-      # The tool a name spells, loading that one class and no other. A
-      # miss falls back to the full list, which also carries the suggestion.
+      # The tool a name spells and the config section a retired name stands for, loading
+      # that one class and no other. A miss falls back to the full list for the suggestion.
       def direct_tool(name)
-        @custom_tools = Server.resolve_custom_tools
-        [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
-          found = Server.served_tool(candidate, custom_tools: @custom_tools)
+        self.class.candidate_names(name).each do |candidate|
+          found = Server.served_tool(candidate)
           next unless found
 
           # A retired config tool name runs its section, as the MCP server does.
           section = Tools::GetConfig.retired_section(candidate)
-          return found unless section && found.equal?(section.renderer)
-
-          @retired = section
-          return Tools::GetConfig
+          return section && found.equal?(section.renderer) ? [ Tools::GetConfig, section ] : [ found, nil ]
         end
         nil
       end
@@ -166,21 +174,15 @@ module RailsAiContext
         direct = direct_tool(name)
         return direct if direct
 
-        tools = self.class.available_tools
-
-        [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
-          found = tools.find { |t| t.tool_name == candidate }
-          return found if found
-        end
-
+        tools = Server.exposed_tools
         found = tools.find { |t| self.class.short_name(t.tool_name) == name }
-        return found if found
+        return [ found, nil ] if found
 
-        skipped = [ name, "rails_#{name}", "rails_get_#{name}" ].find { |candidate| Server.skipped_tools.include?(candidate) }
-        raise ToolNotFoundError, Server.skipped_tool_message(skipped) if skipped
+        skipped = self.class.candidate_names(name) & Server.skipped_tools
+        raise ToolNotFoundError, Server.skipped_tool_message(skipped.first) if skipped.any?
 
         # Fuzzy suggestion
-        short_names = tools.map { |t| self.class.short_name(t.tool_name) }
+        short_names = (tools.map(&:tool_name) | Server.retired_names).map { |tool_name| self.class.short_name(tool_name) }
         suggestion = Tools::BaseTool.find_closest_match(name, short_names)
         msg = "Unknown tool '#{name}'."
         msg += " Did you mean '#{suggestion}'?" if suggestion
@@ -226,10 +228,14 @@ module RailsAiContext
       def with_environment(kwargs)
         return kwargs if @environment.nil? || kwargs.key?(:environment)
         return kwargs unless (tool_schema[:properties] || {}).key?(:environment)
-        # Only the env_config section reads it; the others answer for RAILS_ENV.
-        return kwargs if tool_class == Tools::GetConfig && kwargs[:section].to_s != "env_config"
+        # Only a section that reads it gets it; the others answer for RAILS_ENV.
+        return kwargs if tool_class == Tools::GetConfig && !section_reads_environment?(kwargs[:section])
 
         kwargs.merge(environment: @environment)
+      end
+
+      def section_reads_environment?(name)
+        Tools::GetConfig.section_named(name || "app")&.params&.include?(:environment)
       end
 
       # Parse ["--table", "users", "--detail", "full", "--app-only"] into { table: "users", ... }
@@ -340,16 +346,15 @@ module RailsAiContext
         end
       end
 
-      # The flag a stray word was most likely meant for: a required param
-      # first, since that is the one a caller must supply.
+      # The flag a stray word was most likely meant for, among the ones
+      # offered: a required param first, since a caller must supply it.
       def suggested_flag
-        schema = tool_schema
-        properties = (schema[:properties] || {})
-        return nil if properties.empty?
+        offered = offered_params
+        return nil if offered.empty?
 
-        required = (schema[:required] || []).map(&:to_s)
-        name = properties.keys.find { |k| required.include?(k.to_s) } || properties.keys.first
-        "--#{name.to_s.tr('_', '-')}"
+        required = (tool_schema[:required] || []).map(&:to_s)
+        name = offered.find { |param| required.include?(param) } || offered.first
+        "--#{name.tr('_', '-')}"
       end
 
       # A suggested param in the form the unknown one was typed: `--table`
@@ -365,9 +370,7 @@ module RailsAiContext
 
       # The parameters to name to the caller: the ones tools/list shows, or a retired name's own section's.
       def offered_params
-        return @retired.params.map(&:to_s) if @retired
-
-        (tool_class.input_schema_value&.to_h || {}).fetch(:properties, {}).keys.map(&:to_s)
+        @retired ? @retired.params.map(&:to_s) : Tools::SafeCall.published_params(tool_class)
       end
 
       def stray_argument_message(arg)
@@ -400,21 +403,21 @@ module RailsAiContext
         [ tokens.flat_map { |a| Array(coerce_value(a, { type: "array" })) }, tokens.size ]
       end
 
-      # Coerce a string value to the type specified in the JSON Schema property.
+      # Coerce a string value to its JSON Schema type. One of another type (`--limit abc`, `app_only=maybe`)
+      # is recorded for validation to refuse: coerced to 0 or false it answers a question nobody asked.
       def coerce_value(raw, property_schema, key = nil)
         case property_schema[:type]
         when "integer"
-          # `--limit abc` is 0 through `to_i`, which answers a question
-          # nobody asked. Record it instead, so validation refuses it the way
-          # an out-of-enum value is refused.
-          if raw.is_a?(Integer) || raw.to_s.strip.match?(/\A[-+]?\d+\z/)
-            raw.to_i
-          else
-            @out_of_type[key] = raw if key
-            nil
-          end
+          return raw.to_i if raw.is_a?(Integer) || raw.to_s.strip.match?(/\A[-+]?\d+\z/)
+
+          @out_of_type[key] = raw if key
+          nil
         when "boolean"
-          TRUTHY_WORDS.include?(raw.to_s.downcase)
+          return raw if raw == true || raw == false
+          return TRUTHY_WORDS.include?(raw.to_s.downcase) if BOOLEAN_WORDS.include?(raw.to_s.downcase)
+
+          @out_of_type[key] = raw if key
+          nil
         when "array"
           raw.is_a?(Array) ? raw : raw.to_s.split(",").map(&:strip)
         else
@@ -425,7 +428,8 @@ module RailsAiContext
       # Validate kwargs against the tool's input_schema.
       # For missing required params: strip empty values so the tool's own guards
       # can return a friendly response (matching MCP behavior).
-      # For a value outside an enum: refuse the call, except `detail`, which falls back with a warning.
+      # For a value the parameter cannot take, by type or by list: refuse the call, except
+      # `detail`, which falls back with a warning.
       # For unknown params: raise InvalidArgumentError with closest-match suggestion.
       def validate_kwargs!(kwargs, schema)
         properties = schema[:properties] || {}
@@ -444,12 +448,9 @@ module RailsAiContext
           raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_params_line}"
         end
 
-        # A value the schema's type cannot hold is dropped with a warning, the
-        # same treatment an out-of-enum value gets, so the tool applies its own
-        # default rather than the zero `to_i` would invent.
         @out_of_type.each do |key, raw|
-          prop = properties[key] || {}
-          $stderr.puts "Warning: '#{raw}' is not a valid value for #{key}. Expected #{prop[:type]}. Using default."
+          type = properties.dig(key, :type)
+          refuse(key, raw, type == "boolean" ? "true or false" : "#{article(type)} #{type}")
           kwargs.delete(key)
         end
 
@@ -486,10 +487,14 @@ module RailsAiContext
               $stderr.puts "Warning: '#{value}' is not a valid value for #{key}. Valid: #{valid}. Using default."
               kwargs.delete(key)
             else
-              @refused << "**Error:** `#{value}` is not a valid `#{key}`. Valid: #{valid}"
+              refuse(key, value, valid)
             end
           end
         end
+      end
+
+      def refuse(key, value, valid)
+        @refused << "**Error:** `#{value}` is not a valid `#{key}`. Valid: #{valid}"
       end
 
       # Through the tool's own wrapper when it has one, so the static-tier banner rides along.
