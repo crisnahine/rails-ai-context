@@ -33,6 +33,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         GC.start
       end
 
+      it "is not listed when the bundle is installed under the app root" do
+        gem_home = File.join(Rails.root, "vendor", "bundle", "ruby", "3.4.0")
+        path = File.join(gem_home, "gems", "thing-1.0", "app", "controllers", "gem_thing_controller.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "class GemThingController < ActionController::Base\n  def show; end\nend\n")
+        allow(Gem).to receive(:path).and_return([ gem_home, *Gem.path ])
+        load path
+
+        expect(result[:controllers]).not_to have_key("GemThingController")
+      ensure
+        FileUtils.rm_rf(File.join(Rails.root, "vendor", "bundle"))
+        FileUtils.rmdir(File.join(Rails.root, "vendor")) if Dir.exist?(File.join(Rails.root, "vendor")) && Dir.empty?(File.join(Rails.root, "vendor"))
+      end
+
       it "is not listed" do
         path = File.join(gem_dir, "gem_thing_controller.rb")
         File.write(path, "class GemThingController < ActionController::Base\n  def show; end\nend\n")

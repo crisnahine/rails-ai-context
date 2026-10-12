@@ -221,8 +221,8 @@ module RailsAiContext
         result
       end
 
-      # A private method is inherited like any other, so a parent's strong-params
-      # method is the child's too unless a nearer class defines that name.
+      # A private method is inherited like any other, so a parent's strong-params method is the
+      # child's too unless a nearer one has that name; an override that permits nothing usually calls super.
       def inherited_strong_params(result, links)
         links.each_with_object({}) do |(link, entry, source), by_name|
           params = entry ? Array(entry[:strong_params]) : base_class_declarations(source, link)[:strong_params]
@@ -304,8 +304,8 @@ module RailsAiContext
         return false unless located && File.exist?(located)
 
         project_relative(located).nil? || SourceScan.installed_gem?(File.realpath(located), File.realpath(app.root.to_s))
-      rescue StandardError
-        false
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, false, label: "gem_controller?")
       end
 
       # Controller files not yet loaded as classes, keyed by the name the path
