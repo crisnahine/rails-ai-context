@@ -155,10 +155,15 @@ module RailsAiContext
       end
 
       def tools_detail_guidance
+        names = detail_tool_names
+        return [] if names.empty?
+
         lines = [
           "### detail parameter - ALWAYS start with summary",
           "",
-          "Individual lookup tools accept `#{param_text("detail", "summary")}`. Use the right level:",
+          "Tools that take `detail`: #{names.join(", ")}.",
+          "",
+          "Pass `#{param_text("detail", "summary")}` first. Use the right level:",
           "- **summary** - first call, orient yourself (table list, model names, route overview)",
           "- **standard** - working detail (columns with types, associations, action source) - DEFAULT",
           "- **full** - only when you need indexes, foreign keys, code snippets, or complete content",
@@ -172,6 +177,12 @@ module RailsAiContext
           lines << ""
         end
         lines
+      end
+
+      def detail_tool_names
+        exposed_tools
+          .select { |tool| tool.respond_to?(:input_schema) && tool.input_schema.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
+          .map { |tool| name = RailsAiContext::Server.tool_label(tool); "`#{tool_mode == :cli ? RailsAiContext::CLI::ToolRunner.short_name(name) : name}`" }
       end
 
       def tools_power_tool_section

@@ -110,6 +110,35 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
   end
 
+  describe "the tools #tools_detail_guidance names" do
+    let(:taking_detail) { "Tools that take `detail`: " }
+    let(:named_line) { helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) } }
+
+    it "names the served tools that take detail and none that do not" do
+      expect(named_line).to include("`rails_onboard`", "`rails_get_schema`")
+      expect(named_line).not_to include("rails_get_context", "rails_analyze_feature", "rails_search_code")
+    end
+
+    it "leaves out a tool skip_tools turned off" do
+      RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
+      expect(named_line).to include("`rails_onboard`")
+      expect(named_line).not_to include("rails_get_schema")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
+
+    it "leaves the detail advice out when no served tool takes detail" do
+      allow(helper).to receive(:exposed_tools).and_return([ RailsAiContext::Tools::GetContext ])
+      expect(helper.tools_detail_guidance).to eq([])
+    end
+
+    it "names them by their command names in :cli mode" do
+      RailsAiContext.configuration.tool_mode = :cli
+      expect(named_line).to include("`onboard`", "`schema`")
+      expect(named_line).not_to include("rails_onboard")
+    end
+  end
+
   describe "#tools_name_list" do
     it "returns a compact list of all tool names" do
       lines = helper.tools_name_list
