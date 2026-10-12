@@ -68,10 +68,14 @@ module RailsAiContext
           stats = []
           schema = Payload.section(ctx, :schema)
           if schema
-            own = own_secondary_databases(ctx, schema)
+            unread, own = own_secondary_databases(ctx, schema).partition { |db| db[:unread] }
             table_count = schema[:total_tables].to_i + own.sum { |db| db[:tables] }
             if table_count > 0
               stats << count_phrase(table_count, "table") + (own.any? ? " in #{count_phrase(own.size + 1, "database")}" : "")
+            end
+            if unread.any?
+              stats << "the #{unread.map { |db| db[:name] }.to_sentence(two_words_connector: " and ", last_word_connector: " and ")} " \
+                       "#{unread.one? ? 'database' : 'databases'} not read"
             end
           end
 
@@ -136,7 +140,7 @@ module RailsAiContext
             db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
             # Every database the app's own dumps declare, as rails_get_schema reads them.
             own_secondary_databases(ctx, schema).each do |other|
-              db += ", plus the #{other[:name]} database#{Payload.named_database_mark(ctx, other[:name])}#{" on #{other[:adapter]}" if other[:adapter]} (#{count_phrase(other[:tables], 'table')})"
+              db += ", plus the #{other[:name]} database#{Payload.named_database_mark(ctx, other[:name])}#{" on #{other[:adapter]}" if other[:adapter]} (#{other[:unread] ? 'tables not read' : count_phrase(other[:tables], 'table')})"
             end
           elsif RailsAiContext::AppKind.mongoid?(rails_app.root)
             database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
@@ -186,12 +190,13 @@ module RailsAiContext
         # The app's own databases besides the primary, as its schema dumps
         # declare them: metrics71's analytics database on SQLite went
         # uncounted beside its PostgreSQL primary. Each is
-        # { name:, adapter:, tables: }, the adapter nil when database.yml does not say.
+        # { name:, adapter:, tables:, unread: }, the adapter nil when database.yml does not say,
+        # `unread` true for a dump that could not be read, whose table count is then no count.
         def own_secondary_databases(ctx, schema)
           configured = Array(Payload.section(ctx, :multi_database)&.dig(:databases)).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
           Payload.app_databases(schema).map do |name, db|
             { name: name.to_s, adapter: RailsAiContext::SchemaAdapter.database_label(configured[name.to_s]),
-              tables: (db[:total_tables] || db[:tables].size).to_i }
+              tables: (db[:total_tables] || db[:tables].size).to_i, unread: db[:unread] }
           end
         end
 

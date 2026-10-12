@@ -347,6 +347,19 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       expect(schema_rule(context)).not_to include("## primary")
     end
 
+    it "marks a database this environment does not configure in its heading" do
+      multi_context[:multi_database][:databases].last[:environments] = %w[production]
+
+      expect(schema_rule(multi_context)).to include("## analytics (production only, SQLite, 2 tables)")
+    end
+
+    it "names the first database by its own name where another database is named primary" do
+      multi_context[:multi_database] = { primary_name: "animals", databases: [ { name: "animals", adapter: "postgresql" }, { name: "primary", adapter: "sqlite3" } ] }
+      multi_context[:schema][:secondary_databases]["primary"] = multi_context[:schema][:secondary_databases].delete("analytics")
+
+      expect(schema_rule(multi_context)).to include("## animals (PostgreSQL, 2 tables)", "## primary (SQLite, 2 tables)")
+    end
+
     # Rails 8's queue, cache and cable databases: the framework's tables, read
     # on every load of the rule, said nothing about the app.
     it "leaves out a database a Rails framework keeps to itself" do

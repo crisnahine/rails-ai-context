@@ -188,9 +188,24 @@ module RailsAiContext
       # A concerns/ under an app/ root is an autoload root of its own, so its files carry no
       # `Concerns::`; under a root the app adds it is a namespace, which the file then declares.
       def concerns_name(path_name, source)
-        return path_name unless path_name.start_with?("Concerns::") && !source.match?(/\b(?:module|class)\s+(?:::)?Concerns\b/)
+        return path_name unless path_name.start_with?("Concerns::")
 
-        path_name.delete_prefix("Concerns::")
+        declared = DeclaredConstant.declared_names(source) + DeclaredConstant.declared_module_names(source)
+        declared.any? { |name| name.split("::").include?("Concerns") } ? path_name : path_name.delete_prefix("Concerns::")
+      end
+
+      # The class a file under a concerns/ is named for; an inner class of a mixin is not it.
+      def concern_class(source, path_name)
+        DeclaredConstant.declaration_named(DeclaredConstant.declarations(source, path_name: path_name), path_name)
+      end
+
+      # Whether a concerns file's own class names a model file's class or a record base as its superclass.
+      def concern_model?(source, path_name, model_names, base_model)
+        declaration = concern_class(source, path_name)
+        return false unless declaration&.superclass
+
+        candidates = declaration.nesting.map { |scope| "#{scope}::#{declaration.superclass}" } << declaration.superclass
+        candidates.any? { |candidate| model_names.include?(candidate.downcase) } || (base_model ? base_model.call(candidates) : false)
       end
 
       # [name, superclass] of each `class X < Y` that starts its line. A `^` anchor
@@ -205,7 +220,7 @@ module RailsAiContext
         pairs
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup, :qualified
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup, :qualified, :concern_model?
 
       # `kind: :models` reads model_paths: what model_details lists, not only app/models.
       def each(root, kind:, skip_concerns: true, base_model: nil, &block)
@@ -217,13 +232,16 @@ module RailsAiContext
         end
         return paths(root, kind: kind, skip_concerns: skip_concerns, &read) unless kind == :models
 
+        model_names = nil
         model_paths(root, base_model: base_model) do |record|
           next read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::")
 
-          # The concerns root does not namespace its files, and one that declares a class may be a model.
+          # The concerns root does not namespace its files, and one named for a class with a model superclass is a model.
           source = SafeFile.read(record.path) or next
           name = concerns_name(record.path_name, source)
-          block.call(record.with(source: source, path_name: name)) if DeclaredConstant.declares_class?(source, path_name: name)
+          # An inflection changes only the case of a path's name, so the names compare without it.
+          model_names ||= model_paths(root, base_model: base_model).to_set { |known| known.path_name.delete_prefix("Concerns::").downcase }.merge(MODEL_BASES.map(&:downcase))
+          block.call(record.with(source: source, path_name: name)) if concern_model?(source, name, model_names, base_model)
         end
       end
 

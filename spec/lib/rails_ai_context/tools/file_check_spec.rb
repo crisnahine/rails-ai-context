@@ -99,11 +99,11 @@ RSpec.describe "a server's check of the app's files at each call" do
       allow(RailsAiContext).to receive(:introspect).and_return({ app_name: "Before" }, { app_name: "After" })
 
       RailsAiContext::RunCache.around do
-        first = RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name]
+        first = RailsAiContext::Tools::GetConventions.cached_context[:app_name]
         File.write(model, "class Post\n  has_many :comments\nend\n")
         RailsAiContext::Tools::GetConventions.call
 
-        expect([ first, RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name] ]).to eq(%w[Before After])
+        expect([ first, RailsAiContext::Tools::GetConventions.cached_context[:app_name] ]).to eq(%w[Before After])
       end
     end
 
@@ -276,11 +276,11 @@ RSpec.describe "a server's check of the app's files at each call" do
     base.check_files_per_call!(RailsAiContext::StaticApp.new(root))
     allow(RailsAiContext).to receive(:introspect).and_return({ app_name: "Before" }, { app_name: "After" })
 
-    first = RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name]
+    first = RailsAiContext::Tools::GetConventions.cached_context[:app_name]
     File.write(model, "class Post\n  has_many :comments\nend\n")
     RailsAiContext::Tools::GetConventions.call
 
-    expect([ first, RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name] ]).to eq(%w[Before After])
+    expect([ first, RailsAiContext::Tools::GetConventions.cached_context[:app_name] ]).to eq(%w[Before After])
   end
 
   # RAILS_ENV=test, or production with eager loading: Rails keeps the code it

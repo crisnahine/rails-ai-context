@@ -164,6 +164,25 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
       expect(text).to include("5 tables in 2 databases")
     end
+
+    it "says a secondary whose dump was not read was not read, at every level, and counts no tables for it" do
+      schema[:secondary_databases]["warehouse"] = { tables: {}, total_tables: 0, unread: true,
+                                                    note: "db/warehouse_schema.rb is over the size limit, so its tables are not listed" }
+
+      summary, standard, full = %w[summary standard full].map { |detail| described_class.call(detail: detail).content.first[:text] }
+
+      expect(summary).to include("- 5 tables in 2 databases, the warehouse database not read.")
+      [ standard, full ].each do |text|
+        expect(text).to include("plus the analytics database on SQLite (2 tables), plus the warehouse database (tables not read).")
+      end
+      expect([ summary, standard, full ].join).not_to include("0 tables")
+    end
+
+    it "names the unread databases in the summary when no other secondary was read" do
+      schema[:secondary_databases] = %w[warehouse ledger].to_h { |name| [ name, { tables: {}, total_tables: 0, unread: true } ] }
+
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- 3 tables, the warehouse and ledger databases not read")
+    end
   end
 
   describe "an app that does not load Active Record" do

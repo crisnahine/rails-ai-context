@@ -94,7 +94,11 @@ module RailsAiContext
           # can still answer - from outside the bundle, which is where it is.
           unbundled_scan(min_confidence, resolved_checks)
         end
-        return text_response(unavailable_message(scan&.dig(:unavailable))) if scan.nil? || scan.key?(:unavailable)
+        if scan.nil? || scan.key?(:unavailable)
+          # A run that said why it failed did start; one that could not start is brakeman not being there.
+          message = unavailable_message(scan&.dig(:unavailable))
+          return scan&.dig(:unavailable) ? error_response(message) : text_response(message)
+        end
         return error_response("Brakeman scan failed: #{portable_error(scan[:error])}") if scan[:error]
 
         warnings = scan[:warnings]
@@ -147,7 +151,7 @@ module RailsAiContext
 
         report, failure = run_brakeman_unbundled(min_confidence, resolved_checks)
         unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
-          failure = echo_checks(failure, resolved_checks)
+          failure = echo_checks(report.nil? ? failure : "its report could not be read", resolved_checks)
           # A check name brakeman does not know is the caller's to fix, and
           # is answered as the in-process scan answers it: the Gemfile advice
           # an unavailable scan gets would send them to change nothing wrong.
@@ -311,7 +315,7 @@ module RailsAiContext
 
           _out, err = with_unbundled_env { capture_with_timeout(command) }
           next [ nil, "no report after #{SCAN_TIMEOUT} seconds" ] if err.nil?
-          next [ nil, brakeman_error_line(err) ] unless File.file?(report_path) && File.size?(report_path)
+          next [ nil, brakeman_error_line(err) || "it wrote no report and printed nothing" ] unless File.file?(report_path) && File.size?(report_path)
 
           [ JSON.parse(File.read(report_path)), nil ]
         end

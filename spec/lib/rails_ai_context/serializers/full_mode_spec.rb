@@ -133,5 +133,29 @@ RSpec.describe "full mode's root files" do
       expect(output).to include("Framework databases, their tables not listed: queue: Solid Queue (1 table)")
       expect(output).not_to include("solid\\_queue\\_jobs", "Database Schema: queue")
     end
+
+    it "marks a database this environment does not configure in its schema heading and in the framework line" do
+      context[:multi_database] = { multi_db: true, databases: [ { name: "primary" }, { name: "analytics", environments: %w[production] },
+                                                               { name: "queue", environments: %w[production] } ] }
+      context[:schema][:secondary_databases] = {
+        "analytics" => { adapter: "static_parse", total_tables: 1, tables: { "page_views" => { columns: [ { name: "id", type: "integer" } ] } } },
+        "queue" => { adapter: "static_parse", total_tables: 1, tables: { "solid_queue_jobs" => { columns: [ { name: "id", type: "integer" } ] } } }
+      }
+
+      expect(output).to include("## Database Schema: analytics (production only, 1 table)",
+                                "Framework databases, their tables not listed: queue (production only): Solid Queue (1 table)")
+    end
+
+    it "names the first database by its own name where another database is named primary" do
+      context[:multi_database] = { multi_db: true, primary_name: "animals", databases: [ { name: "animals" }, { name: "primary" } ] }
+      context[:schema][:secondary_databases] = {
+        "primary" => { adapter: "static_parse", total_tables: 1, tables: { "orders" => { columns: [ { name: "id", type: "integer" } ] } } }
+      }
+      context[:migrations] = { total: 3, pending: [ { version: "20261009140925", name: "AddTitle" } ], recent: [],
+                               secondary_databases: { "primary" => { total: 1, pending: [] } } }
+
+      expect(output).to include("## Database Schema: animals (1 table)", "## Database Schema: primary (1 table)",
+                                "- Total: 3 (animals)", "### Pending Migrations: animals (1)")
+    end
   end
 end

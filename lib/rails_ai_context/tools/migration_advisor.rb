@@ -123,7 +123,7 @@ module RailsAiContext
         end
         # What the app's migrations already hold: a file the generator's name
         # collides with, and a pending one that makes the same change.
-        prior = prior_migration_lines(action, table, column, rename_to, type, migration_files_for(target), pending_versions(schema, databases))
+        prior = prior_migration_lines(action, table, column, rename_to, type, migration_files_for(target), pending_versions(schema, table, databases))
         lines.concat(prior)
         # The generator refuses a name another migration has, so its command is not offered.
         target = false if prior.any? { |line| line.start_with?("**Warning:** Another migration is already named") }
@@ -190,8 +190,8 @@ module RailsAiContext
         end
 
         # The versions not yet run on that database; nil when unknown.
-        def pending_versions(schema, databases)
-          pending = if databases.empty? || databases.include?("primary")
+        def pending_versions(schema, table, databases)
+          pending = if on_primary?(table)
             schema&.dig(:pending_migrations)
           else
             schema&.dig(:secondary_databases, databases.first, :pending_migrations)
@@ -325,7 +325,7 @@ module RailsAiContext
         # [lines, target]: target is nil for the primary, false when no environment configures the
         # database, else the generator's --database flag and the RAILS_ENV that configures it.
         def database_option(table, databases)
-          return [ [], nil ] if databases.empty? || databases.include?("primary")
+          return [ [], nil ] if on_primary?(table)
 
           root = rails_app.root
           listed = RailsAiContext::AppDatabases.for(root)
@@ -347,8 +347,8 @@ module RailsAiContext
           dirs = configured.any? ? configured.map { |path| File.expand_path(path, root.to_s) } : [ File.join(root.to_s, "db", "#{names.first}_migrate") ]
           target = { flag: " --database #{names.first}", env: env_name, dirs: dirs }
           paths = configured.join(", ")
-          note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}," \
-                 "#{" which #{configuring} and this environment does not," if env_name} not the primary database: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
+          note = "**Database:** `#{table}` is in #{[ names[0..-2].join(", "), names.last ].reject(&:empty?).join(" and ")}" \
+                 "#{", which #{configuring} and this environment does not" if env_name}: generate with #{"`RAILS_ENV=#{env_name}` and " if env_name}`#{target[:flag].strip}` " \
                  "so the migration lands in #{env_name && !paths.empty? ? paths : "that database's migrations_paths"} and " \
                  "#{"#{env_name}'s " if env_name}`bin/rails db:migrate` runs it there."
           groups = found.group_by { |_, (_, entry)| Array(entry["migrations_paths"]) }
@@ -405,9 +405,7 @@ module RailsAiContext
         # NOT NULL with no default fails on a table that holds rows. The row count is the booted
         # primary's own estimate, so a table only another database holds has none.
         def not_null_warning(table, column)
-          held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
-          on_primary = held_in.empty? || held_in.include?("primary")
-          stats = (Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table } if on_primary)
+          stats = (Array(Payload.section(cached_context, :database_stats)&.dig(:tables)).find { |t| t[:table].to_s == table } if on_primary?(table))
           rows = stats&.dig(:approximate_rows)
           held = if rows.nil? then "if `#{table}` holds any rows"
           elsif stats[:at_least] then "as `#{table}` holds at least #{count_phrase(rows, "row")}"
@@ -928,10 +926,16 @@ module RailsAiContext
         # The family of the database that holds the table, since locking advice differs by family.
         # An undecided database is no family and gets advice that names no database.
         def family(table)
-          held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
-          return RailsAiContext::DatabaseFamily.of(cached_context.dig(:schema, :adapter).to_s) if held_in.empty? || held_in.include?("primary")
+          return RailsAiContext::DatabaseFamily.of(cached_context.dig(:schema, :adapter).to_s) if on_primary?(table)
 
+          held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
           RailsAiContext::AppDatabases.for(rails_app.root)[held_in.first]&.family || RailsAiContext::DatabaseFamily.of(nil)
+        end
+
+        # A table no database holds yet goes to the primary. Another database can carry the name "primary".
+        def on_primary?(table)
+          holders = Payload.table_holders(Payload.section(cached_context, :schema), table)
+          holders.empty? || holders.any? { |database, _, _| database.nil? }
         end
       end
     end

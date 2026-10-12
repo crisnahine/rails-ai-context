@@ -20,14 +20,14 @@ module RailsAiContext
         end
       end
 
-      # A secondary database's dump as schema_dump_path names it: its schema_dump,
-      # else <name>_schema.rb or <name>_structure.sql in its format; nil for none.
+      # A secondary database's dump: the file schema_dump_path names (its schema_dump, else <name>_schema.rb or
+      # <name>_structure.sql in its format) when on disk, else a file under its name in either format. nil for none.
       def secondary(root, name, config)
         format = schema_format(root, config)
-        return configured(root, config, format) if config.key?("schema_dump")
-
+        own = configured(root, config, format) if config.key?("schema_dump")
         # Rails gives an entry named primary the unprefixed file wherever it stands.
-        [ format, File.join(root, "db", "#{"#{name}_" unless name == "primary"}#{FILE_NAMES[format]}") ]
+        named = [ format, *(FILE_NAMES.keys - [ format ]) ].map { |f| [ f, File.join(root, "db", "#{"#{name}_" unless name == "primary"}#{FILE_NAMES[f]}") ] }
+        [ own, *named ].compact.find { |_, path| File.exist?(path) } || (config.key?("schema_dump") ? own : named.first)
       end
 
       # The database a dump belongs to: the app database whose dump it is, else the one its file name says.

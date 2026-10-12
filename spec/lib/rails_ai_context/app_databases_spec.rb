@@ -81,7 +81,13 @@ RSpec.describe RailsAiContext::AppDatabases do
 
   it_behaves_like "the same list on both tiers", "animals_first", lambda { |root|
     [ entry(root, "animals", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ]),
-      entry(root, "primary", adapter: "mysql2", dump: [ :ruby, "db/schema.rb" ]) ]
+      entry(root, "primary", adapter: "mysql2", dump: [ :ruby, "db/schema.rb" ], migrate_dirs: [ "db/primary_migrate" ]) ]
+  }
+
+  it_behaves_like "the same list on both tiers", "fallback_dump", lambda { |root|
+    [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :sql, "db/structure.sql" ]),
+      entry(root, "queue", adapter: "postgresql", dump: [ :ruby, "db/queue_schema.rb" ]),
+      entry(root, "legacy", tasks: false, adapter: "mysql2", dump: [ :ruby, "db/legacy_schema.rb" ]) ]
   }
 
   describe "an environment whose first database is not the one named primary" do
@@ -142,6 +148,18 @@ RSpec.describe RailsAiContext::AppDatabases do
 
     expect(list.map(&:tasks)).to eq([ true, rails.call(nil), rails.call("no") ])
     expect(list.map(&:tasks)).to eq([ true, false, true ])
+  end
+
+  it "reads replica by truthiness, as Rails does" do
+    list = described_class.build(
+      environments: { "test" => { "primary" => { "adapter" => "sqlite3" }, "copy" => { "adapter" => "sqlite3", "replica" => "yes" },
+                                  "own" => { "adapter" => "sqlite3", "replica" => false } } },
+      current: "test", root: Dir.tmpdir, dumps: []
+    )
+    rails = ->(value) { ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "x", { adapter: "sqlite3", replica: value }).replica? }
+
+    expect(list.map(&:replica)).to eq([ false, !!rails.call("yes"), !!rails.call(false) ])
+    expect(list.map(&:replica)).to eq([ false, true, false ])
   end
 
   describe "the list's readers" do

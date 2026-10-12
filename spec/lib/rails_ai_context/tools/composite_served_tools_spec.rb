@@ -100,7 +100,7 @@ RSpec.describe "Composite tools in an app whose skip_tools turns tools off" do
       expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_schema", 'table:"posts"')).to eq('`rails_get_schema(table:"posts")`')
 
       skip("rails_get_schema")
-      expect(RailsAiContext::Server.served?("rails_get_schema")).to be(true)
+      expect(RailsAiContext::Server.served_tool("rails_get_schema")).not_to be_nil
       expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_schema", 'table:"posts"')).to be_nil
     end
   end

@@ -238,8 +238,14 @@ class RailsAiContextCLI < Thor
         return
       end
 
+      # Value-taking class options land in args too.
+      @app_path_override = extract_value_flag!(args, "--app-path")
+
       if args.include?("--help") || args.include?("-h")
+        # The app's configuration file says which tools and sections it serves; reading it boots nothing.
+        root = app_root.resolve(cwd: Dir.pwd, app_path: @app_path_override || options[:app_path]).root
         entry_boot.require_gem_without_app!
+        ::RailsAiContext::Configuration.auto_load!(root || Dir.pwd)
         puts ::RailsAiContext::CLI::ToolRunner.new(name, []).help
         return
       end
@@ -252,14 +258,14 @@ class RailsAiContextCLI < Thor
       json_mode = true if args.delete("--json")
       json_mode = true if args.delete("-j")
 
-      # Value-taking class options land in args too. A tool that declares `environment`
-      # keeps it: booting in the env it filters for fails where the app has no database.
-      @app_path_override = extract_value_flag!(args, "--app-path")
+      # A tool that declares `environment` keeps it: booting in the env it filters for fails where the app has no database.
       environment_flag = extract_value_flag!(args, "--environment")
       short = name.to_s.delete_prefix("rails_").delete_prefix("get_")
-      # Read here because the tool parses its own arguments after boot, and the section decides which env boots.
-      section = args.each_cons(2).find { |flag, _| flag == "--section" }&.last ||
-        args.find { |arg| arg.start_with?("--section=", "section=") }&.split("=", 2)&.last
+      # Read here because the tool parses its own arguments after boot, and the section decides
+      # which env boots: the last one named, as the tool reads it.
+      section = args.each_with_index.filter_map do |arg, at|
+        arg == "--section" ? args[at + 1] : (arg.split("=", 2).last if arg.start_with?("--section=", "section="))
+      end.last
       if environment_flag && (ENVIRONMENT_FILTER_OWNERS.include?(short) || (short == "config" && ENVIRONMENT_FILTER_OWNERS.include?(section.to_s.downcase)))
         args.push("--environment", environment_flag)
       else

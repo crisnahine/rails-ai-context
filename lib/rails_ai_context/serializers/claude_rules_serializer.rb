@@ -90,11 +90,11 @@ module RailsAiContext
 
       def database_heading_lines(name, tables, secondary)
         relations = Introspectors::SchemaConventions.relations_phrase(tables)
-        return [ "## primary (#{SchemaAdapter.label(context)}, #{relations})", "" ] unless name
+        return [ "## #{Payload.primary_label(context)} (#{SchemaAdapter.label(context)}, #{relations})", "" ] unless name
 
         db = secondary[name]
         adapter = SchemaAdapter.secondary_label(context, name, db)
-        lines = [ "## #{name} (#{[ adapter, relations ].compact.join(', ')})", "" ]
+        lines = [ "## #{name} (#{[ Payload.named_scope_words(context, name), adapter, relations ].compact.join(', ')})", "" ]
         # Where the snapshot comes from: a booted run reads the primary live, this from its files.
         lines.push("_#{db[:note]}._", "") if db[:note]
         lines

@@ -95,7 +95,7 @@ module RailsAiContext
 
       private_class_method def self.controller_action_context(controller_name, action_name)
         # Controller + action source + private methods + instance vars
-        ctrl_text = controller_text(compose(GetControllers, controller: controller_name, action: action_name), controller_name)
+        ctrl_text = controller_text(compose(GetControllers, controller: controller_name, action: action_name), controller_name, action_name)
 
         # Infer model from controller
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
@@ -143,12 +143,31 @@ module RailsAiContext
         [ text, *extras ].reject(&:empty?).join("\n\n")
       end
 
-      # The controller section. With rails_get_controllers off it is empty, so a
-      # name the app does not have is answered here as that tool answers it.
-      private_class_method def self.controller_text(result, name)
+      # The controller section. With rails_get_controllers off it is empty, so a controller
+      # or an action the app does not have is answered here as that tool answers it.
+      private_class_method def self.controller_text(result, name, action = nil)
         ctx = cached_context
-        known = own_served?(GetControllers) || Payload.find_controller(ctx, name) || name.to_s.strip.casecmp?("ApplicationController")
-        response_text(known ? result : not_found_response("Controller", name, Payload.app_controllers(ctx).keys.sort))
+        return response_text(result) if own_served?(GetControllers)
+
+        key = Payload.find_controller(ctx, name)
+        known = key || name.to_s.strip.casecmp?("ApplicationController")
+        return response_text(not_found_response("Controller", name, Payload.app_controllers(ctx).keys.sort)) unless known
+
+        (action && key && missing_action_text(ctx, key, action)).to_s
+      end
+
+      private_class_method def self.missing_action_text(ctx, name, action)
+        controllers = Payload.controllers(ctx)
+        info = controllers[name]
+        return nil unless info.is_a?(Hash)
+
+        name, info = info[:alias_of], controllers[info[:alias_of]] if controllers[info[:alias_of]].is_a?(Hash)
+        actions = Array(info[:actions]).map { |a| (a.is_a?(Hash) ? a[:name] : a).to_s }
+        return nil if actions.any? { |a| a.casecmp?(action.to_s) }
+        return nil if RailsAiContext::Introspectors::ActionSource.unlisted_action(rails_app.root, name, action.to_s,
+                                                                                 file: Payload.controller_file(ctx, name), controllers: controllers)
+
+        "Action '#{echo_input(action)}' not found in #{name}. Available: #{actions.join(', ')}"
       end
 
       # The templates for a controller, read from the directory Rails would
@@ -335,6 +354,7 @@ module RailsAiContext
         analyze_result = compose(AnalyzeFeature, feature: feature_name)
         parts = [ response_text(analyze_result) ]
         related = []
+        named = []
 
         # Enrich with schema columns for matching models
         ctx = begin; cached_context; rescue; nil; end
@@ -344,6 +364,7 @@ module RailsAiContext
 
           models.each_key do |model_name|
             next unless model_name.downcase.include?(feature_name.downcase)
+            named << model_name
             table_name = models[model_name][:table_name]
             next unless table_name
             matched_tables << table_name
@@ -375,6 +396,8 @@ module RailsAiContext
         return text unless text.empty? && !own_served?(AnalyzeFeature)
 
         # With rails_analyze_feature off, only model and controller names were matched.
+        return "The model names that hold '#{echo_input(feature_name)}': #{named.sort.join(', ')}." if named.any?
+
         "No matches found for '#{echo_input(feature_name)}'. No model or controller name holds this keyword.#{AnalyzeFeature.model_names_hint(ctx)}"
       rescue => e
         # Fall back to plain analyze_feature on error

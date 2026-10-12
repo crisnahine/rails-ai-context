@@ -551,12 +551,12 @@ module RailsAiContext
           source.match?(/^[^\S\n]*primary_abstract_class\b/)
       end
 
-      # A file under any concerns/ that declares no class. One that declares a
-      # class may be a model: Whitehall keeps one in app/models/concerns itself.
+      # A file under any concerns/ that is not named for a class. One that is
+      # may be a model: Whitehall keeps one in app/models/concerns itself.
       def mixin_path?(relative, source)
         return false unless relative.split("/").include?("concerns")
 
-        !DeclaredConstant.declares_class?(source, path_name: SourceScan.concerns_name(relative.camelize, source))
+        SourceScan.concern_class(source, SourceScan.concerns_name(relative.camelize, source)).nil?
       end
 
       # A class whose file is inside an installed gem (PaperTrail::Version) is

@@ -260,9 +260,8 @@ module RailsAiContext
       end
     end
 
-    # environments: { env => { name => settings Hash or db_config } } in file order;
-    # dumps: [format, path] for each secondary-looking dump on disk;
-    # primary: the database ActiveRecord::Base is connected to, when the app is booted.
+    # environments: { env => { name => settings Hash or db_config } } in file order. dumps: [format, path] of each
+    # secondary-looking dump on disk. primary: the database ActiveRecord::Base is connected to, when the app is booted.
     def build(environments:, current:, root:, dumps:, primary: nil)
       own = environments[current] || {}
       first = DatabaseYml.primary_name_in(own)
@@ -304,9 +303,11 @@ module RailsAiContext
     def database(root, name, value, here:, primary:, first:, environments:)
       settings = settings_of(value)
       adapter, from_default = value.respond_to?(:adapter) ? [ value.adapter, false ] : DatabaseYml.adapter(name, settings)
-      replica = settings["replica"] == true
+      replica = !!settings["replica"]
       tasks = tasks?(settings)
-      dump = (first ? primary_dump(root) : Introspectors::SchemaDumpPath.secondary(root, name, settings) if tasks)
+      dump = first ? primary_dump(root) : Introspectors::SchemaDumpPath.secondary(root, name, settings)
+      # Rails writes no dump for a database it runs no tasks on, so only a committed one counts.
+      dump = nil unless tasks || (dump && File.exist?(dump.last))
       Database.new(name: name, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks,
                    adapter: adapter, adapter_default: from_default, family: DatabaseFamily.of(adapter),
                    dump: (Dump.new(*dump) if dump),

@@ -1493,6 +1493,15 @@ end
           legacy:
             adapter: mysql2
             database_tasks: false
+          quiet:
+            adapter: mysql2
+            database_tasks:
+          computed:
+            adapter: postgresql
+            schema_dump: <%= ENV.fetch("COMPUTED_DUMP") %>
+          outside:
+            adapter: postgresql
+            schema_dump: ../../elsewhere.rb
           reporting:
             adapter: postgresql
       YAML
@@ -1515,8 +1524,11 @@ end
         expect(result[:missing_fk_indexes]).to eq([ { table: "page_views", column: "user_id", database: "analytics",
                                                       suggestion: "add_index :page_views, :user_id" } ])
         expect(result[:unchecked_databases]).to eq([
-          { name: "archive", reason: "schema_dump: false, so it has no dump to read" },
-          { name: "legacy", reason: "database_tasks: false, so it has no dump to read" },
+          { name: "archive", reason: "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" },
+          { name: "legacy", reason: "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" },
+          { name: "quiet", reason: "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" },
+          { name: "computed", reason: "`schema_dump` in its database.yml entry names no file this check reads" },
+          { name: "outside", reason: "`schema_dump` in its database.yml entry names no file this check reads" },
           { name: "reporting", reason: "db/reporting_schema.rb is not on disk" }
         ])
       end

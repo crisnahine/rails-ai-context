@@ -163,6 +163,81 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "leaves out a concern that holds an inner class, and keeps the concerns file named for a class with a model superclass" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/user.rb" => "class User < ApplicationRecord\nend\n",
+        "app/models/concerns/authenticatable.rb" =>
+          "module Authenticatable\n  extend ActiveSupport::Concern\n  class InvalidToken < StandardError; end\n  included do\n    has_secure_password\n  end\nend\n",
+        "app/models/concerns/token_error.rb" => "class TokenError < StandardError\nend\n",
+        "app/models/concerns/admin_user.rb" => "class AdminUser < User\nend\n",
+        "app/models/concerns/root_user.rb" => "module Staff\n  class ::RootUser < ::AdminUser\n  end\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.each(dir, kind: :models).map(&:path_name)).to contain_exactly("User", "AdminUser", "RootUser")
+      expect(described_class.classes(dir, kind: :models).map(&:first)).to contain_exactly("User", "AdminUser", "RootUser")
+    end
+  end
+
+  [ [ "static", ->(dir) { RailsAiContext::StaticApp.new(dir) } ], [ "booted", ->(dir) { Struct.new(:root).new(Pathname.new(dir)) } ] ].each do |tier, build|
+    it "gives the auth, Active Storage, Action Text and database answers no model named for a concern with an inner class, on the #{tier} tier" do
+      Dir.mktmpdir do |dir|
+        {
+          "app/models/user.rb" => "class User < ApplicationRecord\n  include Authenticatable\n  has_one_attached :avatar\nend\n",
+          "app/models/concerns/authenticatable.rb" => <<~RUBY
+            module Authenticatable
+              extend ActiveSupport::Concern
+              class InvalidToken < StandardError; end
+              included do
+                has_secure_password
+                has_one_attached :badge
+                has_rich_text :bio
+                connects_to database: { writing: :primary }
+              end
+            end
+          RUBY
+        }.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+        app = build.call(dir)
+        answers = [
+          RailsAiContext::Introspectors::AuthIntrospector.new(app).call,
+          RailsAiContext::Introspectors::ActiveStorageIntrospector.new(app).call,
+          RailsAiContext::Introspectors::ActionTextIntrospector.new(app).call,
+          RailsAiContext::Introspectors::MultiDatabaseIntrospector.new(app).call
+        ]
+
+        expect(answers.inspect).not_to include("Authenticatable")
+        expect(answers[1][:attachments]).to include(a_hash_including(model: "User", name: "avatar"))
+      end
+    end
+  end
+
+  it "keeps a concerns class whose superclass only the booted app knows as a record base" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models/concerns"))
+      File.write(File.join(dir, "app/models/concerns/blob_copy.rb"), "class BlobCopy < GemRecord\nend\n")
+      asked = []
+
+      names = described_class.each(dir, kind: :models, base_model: ->(candidates) { asked << candidates; true }).map(&:path_name)
+
+      expect(names).to eq([ "BlobCopy" ])
+      expect(asked).to eq([ [ "GemRecord" ] ])
+      expect(described_class.each(dir, kind: :models, base_model: ->(_) { false }).to_a).to be_empty
+    end
+  end
+
+  it "reads the concerns namespace from the declarations a file parses to" do
+    commented = "# Unlike module Concerns::Noted, this one is top level.\nmodule Noted\n  NOTE = \"module Concerns\"\nend\n"
+
+    expect(described_class.concerns_name("Concerns::Noted", commented)).to eq("Noted")
+    expect(described_class.concerns_name("Concerns::AuditRow", "class Concerns::AuditRow < ApplicationRecord\nend\n")).to eq("Concerns::AuditRow")
+  end
+
   it "names a file under a concerns directory without the namespace, unless the file declares it" do
     expect(described_class.concerns_name("Concerns::Billable", "module Billable\nend\n")).to eq("Billable")
     expect(described_class.concerns_name("Concerns::AuditRow", "module Concerns\n  class AuditRow < ApplicationRecord\n  end\nend\n")).to eq("Concerns::AuditRow")
