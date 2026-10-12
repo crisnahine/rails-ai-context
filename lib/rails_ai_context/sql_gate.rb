@@ -41,8 +41,9 @@ module RailsAiContext
     SHOW_CREATE_DEFINITION = /\A\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\b/i
     BLOCKED_CLAUSES  = /\bFOR\s+(?:UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b|\bLOCK\s+IN\s+SHARE\s+MODE\b/i
     # Other sessions' statements, replication hosts and users, and the row data a log holds.
+    # EXPLAIN FOR CONNECTION shows the plan of the statement another session is running.
     BLOCKED_SHOWS    = /\bSHOW\s+(?:(?:FULL|ALL)\s+)?(?:GRANTS|PROCESSLIST|BINLOG|BINARY|RELAYLOG|SLAVES?|MASTER|REPLICAS?|ENGINE|
-      PROFILES?|OPEN\s+TABLES|EXPLAIN|ANALYZE|USER_STATISTICS|CLIENT_STATISTICS|WSREP_\w+)\b/ix
+      PROFILES?|OPEN\s+TABLES|EXPLAIN|ANALYZE|USER_STATISTICS|CLIENT_STATISTICS|WSREP_\w+)\b|\bFOR\s+CONNECTION\b/ix
     # A SHOW filter runs an expression for each row, and MySQL's statement timeout holds SELECT only.
     SHOW_WHERE       = /\A\s*SHOW\b.*\bWHERE\b/mi
     SELECT_INTO      = /\bSELECT\b[^;]*\bINTO\b/i

@@ -143,7 +143,9 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
 
       it "refuses other sessions' statements, replication state and the stored password hashes" do
-        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS" ], "Blocked: sensitive SHOW command")
+        other = conn.select_value("SELECT CONNECTION_ID()").to_i
+        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS", "EXPLAIN FOR CONNECTION #{other}",
+                  "EXPLAIN FORMAT=JSON FOR CONNECTION #{other}", "DESCRIBE FOR CONNECTION #{other}" ], "Blocked: sensitive SHOW command")
         refused([ "SELECT * FROM information_schema.processlist", "SELECT * FROM performance_schema.threads" ], "Blocked: `")
         expect(text("SELECT authentication_string AS a FROM mysql.user LIMIT 1")).to start_with("Blocked: query references secret column")
       end

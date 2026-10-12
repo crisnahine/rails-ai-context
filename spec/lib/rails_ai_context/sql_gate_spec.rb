@@ -124,6 +124,14 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "refuses another session's plan in every spelling MySQL and MariaDB read" do
+      [ "EXPLAIN FOR CONNECTION 12", "EXPLAIN FORMAT=JSON FOR CONNECTION 12", "DESCRIBE FOR CONNECTION 12", "DESC FORMAT=TREE FOR CONNECTION 12",
+        "explain for\nconnection 12", "EXPLAIN /*!50000 FOR CONNECTION */ 12", "EXPLAIN FOR /* x */ CONNECTION 12" ].each do |sql|
+        expect(refusal(sql, :mysql)).to eq("Blocked: sensitive SHOW command"), sql
+      end
+      expect(runs?("EXPLAIN SELECT id FROM orders", :mysql)).to be(true)
+    end
+
     it "runs the SHOW statements that list the schema" do
       [ "SHOW TABLES", "SHOW FULL TABLES", "SHOW FULL COLUMNS FROM orders", "SHOW ENGINES", "SHOW TABLES LIKE 'ord%'",
         "SHOW COLUMNS FROM orders LIKE '%where%'", "SHOW INDEX FROM orders", "SHOW TABLE STATUS", "SHOW ALL" ].each do |sql|
