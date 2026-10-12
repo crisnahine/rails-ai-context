@@ -179,12 +179,13 @@ module RailsAiContext
         "webauthn"        => { category: :auth, note: "WebAuthn/passkey registration and authentication." }
       }.freeze
 
-      # Notable gems that ship a Rails::Railtie or Rails::Engine: once a parent gem requires one, it runs inside the app.
+      # Notable gems that run inside the app whichever gem brings them in: one that ships a Rails::Railtie or
+      # Rails::Engine, and OmniAuth, the Rack middleware a gem pulls in only to mount it in the app.
       ENGINE_GEMS = %w[
         action_policy activeadmin administrate alba apipie-rails avo bullet carrierwave clearance cocoon cssbundling-rails
         datadog delayed_job devise devise-jwt doorkeeper factory_bot_rails falcon figaro flipper good_job grape graphql
         hotwire-native-rails importmap-rails inertia_rails jbuilder jsbundling-rails jsonapi-serializer kredis lockbox
-        lookbook madmin mission_control-jobs mongoid motor-admin neighbor newrelic_rpm noticed paper_trail pg_search
+        lookbook madmin mission_control-jobs mongoid motor-admin neighbor newrelic_rpm noticed omniauth paper_trail pg_search
         propshaft pundit rack-attack react-rails rodauth-rails rolify rspec-rails rswag-api rswag-ui sentry-rails sidekiq
         simple_form skylight solid_cable solid_cache solid_errors solid_queue sorcery stimulus-rails
         stripe tailwindcss-rails trestle turbo-rails view_component will_paginate

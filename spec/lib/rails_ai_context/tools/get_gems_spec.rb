@@ -415,6 +415,27 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       expect(texts.last).to include("**sprockets-rails**")
     end
 
+    # OmniAuth is Rack middleware: only a gem that mounts it in the app pulls it in (gds-sso, a strategy gem).
+    it "keeps OmniAuth a wrapper gem brings in" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              gds-sso (22.3.0)
+                omniauth (~> 2.1)
+              omniauth (2.1.4)
+
+          DEPENDENCIES
+            gds-sso
+        LOCK
+        context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+        allow(described_class).to receive(:cached_context).and_return(context)
+
+        expect(described_class.call.content.first[:text]).to include("**omniauth** `2.1.4`")
+      end
+    end
+
     # The parent gem requires its engine, so devise runs inside the app; jwt stays oauth2's own detail.
     it "keeps a Rails engine the app gets through another gem" do
       Dir.mktmpdir do |dir|
