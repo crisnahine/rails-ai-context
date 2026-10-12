@@ -212,67 +212,38 @@ module RailsAiContext
           end
           formats = lineage.each_with_object(Set.new) { |(_, declared), set| fold_formats(set, declared[:formats]) }
           limits = lineage.flat_map { |link, declared| link == name ? declared[:rate_limits] : declared[:rate_limits].map { |limit| limit.merge(from: link) } }
-          [ name, (formats.to_a | own[name][:block_formats]).sort, limits, inherited_strong_params(result, links) ]
+          [ name, (formats.to_a | own[name][:block_formats]).sort, limits, inherited_strong_params(links) ]
         end
         folded.each do |name, formats, limits, params|
           result[name][:respond_to_formats] = formats
           limits.any? ? result[name][:rate_limits] = limits : result[name].delete(:rate_limits)
-          result[name][:strong_params] = params if params.any?
+          result[name][:strong_params] = params
         end
         result
       end
 
-      # A parent's strong-params method is the child's too unless a nearer class defines that name.
-      def inherited_strong_params(result, links)
-        lineage = links.map do |link, entry, source|
+      # The strong params the controller has, its own and each ancestor's that no nearer class redefines.
+      def inherited_strong_params(links)
+        facts = links.map do |link, entry, source|
           source = controller_source(entry) if entry
-          params = entry ? Array(entry[:strong_params]) : base_class_declarations(source, link)[:strong_params]
-          [ link, entry, source, params, defined_methods(source) ]
-        end
-        add_lineage_delegates(lineage)
-        nearer_defs = Set.new
-        lineage.each_with_object({}) do |(link, _entry, _source, params, defs), by_name|
-          params.each do |sp|
-            next unless sp.is_a?(Hash) && !nearer_defs.include?(sp[:name])
+          next NO_STRONG_PARAMS unless source
 
-            by_name[sp[:name]] ||= link == lineage.first.first ? sp : sp.merge(from: link)
+          actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(source, class_name: link)
+          strong_params_facts(source, actions)
+        end
+        nearer = Set.new
+        lineage_strong_params(facts).each_with_index.each_with_object({}) do |(strong, index), by_name|
+          facts[index][:order].each do |name|
+            next unless strong.key?(name) && !nearer.include?(name)
+
+            by_name[name] ||= index.zero? ? strong[name] : strong[name].merge(from: links[index].first)
           end
-          nearer_defs.merge(defs)
+          nearer.merge(facts[index][:defined])
         end.values
-      end
-
-      # A *_params method that returns a farther class's strong-params method is one too, whatever that
-      # method is named (`params_slice(:a).merge(page: true)`), unless a nearer class redefines it.
-      def add_lineage_delegates(lineage)
-        farther = Set.new
-        lineage.reverse_each do |row|
-          link, entry, source, params, defs = row
-          unnamed = farther.grep_v(DELEGATE_NAME)
-          if source && unnamed.any? { |name| source.include?(name) }
-            actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(source, class_name: link)
-            row[3] = params = extract_strong_params(source, class_body_walk(source), actions, unnamed.to_set)
-          end
-          farther = (farther - defs) | params.filter_map { |sp| sp[:name] if sp.is_a?(Hash) }
-        end
       end
 
       def controller_source(entry)
         entry[:file] && SafeFile.read(File.join(app.root.to_s, entry[:file]))
-      end
-
-      # The instance methods the class body defines, not a nested class's or a class method.
-      def defined_methods(source)
-        tree = source && AstCache.parse_string(source)&.value
-        return [] unless tree
-
-        (@defined_methods ||= {})[source] ||= begin
-          nodes = AstWalk.each(tree).to_a
-          elsewhere = nested_ranges(class_body_walk(source)) +
-                      nodes.grep(Prism::SingletonClassNode).map { |node| node.location.start_offset...node.location.end_offset }
-          nodes.grep(Prism::DefNode).filter_map do |def_node|
-            def_node.name.to_s if def_node.receiver.nil? && elsewhere.none? { |range| range.cover?(def_node.location.start_offset) }
-          end
-        end
       end
 
       # `clear_respond_to` empties the class attribute; each `respond_to` adds to it.
@@ -783,22 +754,58 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_concerns_from_source AST")
       end
 
-      # An action that permits inline is still an action, not a strong-params helper;
-      # a public method named *_params is a helper left above `private`.
-      def extract_strong_params(source, walked = class_body_walk(source), actions = [], inherited = Set.new)
+      def extract_strong_params(source, walked = class_body_walk(source), actions = [])
         return [] if source.nil?
 
-        nested = nested_ranges(walked)
-        all_defs = AstWalk.each(AstCache.parse_string(source).value).grep(Prism::DefNode)
-        defs = all_defs.reject do |def_node|
-          name = def_node.name.to_s
-          nested.any? { |range| range.cover?(def_node.location.start_offset) } || (actions.include?(name) && !name.end_with?("_params"))
-        end
-        entries = defs.to_h { |def_node| [ def_node, strong_params_entry(def_node) ] }.compact
-        add_delegating_params(defs, entries, all_defs.to_set { |def_node| def_node.name.to_s }, inherited)
-        defs.filter_map { |def_node| entries[def_node] }
+        facts = strong_params_facts(source, actions, walked)
+        strong = lineage_strong_params([ facts ]).first
+        facts[:order].filter_map { |name| strong[name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
+      end
+
+      NO_STRONG_PARAMS = { defined: Set.new, order: [], direct: {}, chains: {} }.freeze
+
+      # What a class body's own instance methods say about strong params, read once per source: the names it
+      # defines, the methods that permit, and what each *_params method returns. An action that permits inline
+      # is still an action, not a strong-params helper; a public *_params method is a helper left above `private`.
+      def strong_params_facts(source, actions, walked = nil)
+        (@strong_params_facts ||= {})[[ source, actions.sort ]] ||= begin
+          nodes = AstWalk.each(AstCache.parse_string(source).value).to_a
+          elsewhere = nested_ranges(walked || class_body_walk(source)) +
+                      nodes.grep(Prism::SingletonClassNode).map { |node| node.location.start_offset...node.location.end_offset }
+          own = nodes.grep(Prism::DefNode).select do |def_node|
+            def_node.receiver.nil? && elsewhere.none? { |range| range.cover?(def_node.location.start_offset) }
+          end
+          defs = own.reject { |def_node| actions.include?(def_node.name.to_s) && !def_node.name.end_with?("_params") }
+          chains = defs.to_h { |def_node| [ def_node.name.to_s, returned_chains(def_node.body) ] }
+          { defined: own.to_set { |def_node| def_node.name.to_s },
+            order: chains.keys,
+            direct: defs.to_h { |def_node| [ def_node.name.to_s, strong_params_entry(def_node, chains[def_node.name.to_s]) ] }.compact,
+            chains: chains.select { |name, _| name.end_with?("_params") } }
+        end
+      end
+
+      # Each class's strong params as the controller runs them, nearest class first. A *_params method also
+      # counts when it returns what super, a call given the whole params, or another strong-params method
+      # makes: a call runs the nearest class's method of that name, so it counts when that one does, and one no
+      # class here defines (a concern's, a gem's, Pundit's) is taken at its *_params or permitted_* name.
+      def lineage_strong_params(facts)
+        owner = {}
+        facts.each_with_index { |fact, index| fact[:defined].each { |name| owner[name] ||= index } }
+        strong = facts.map { |fact| fact[:direct].dup }
+        loop do
+          added = facts.each_with_index.flat_map do |fact, index|
+            fact[:chains].filter_map do |name, chains|
+              next if strong[index].key?(name)
+
+              [ index, name ] if hands_params_on?(chains) { |called| owner.key?(called) ? strong[owner[called]].key?(called) : called.match?(DELEGATE_NAME) }
+            end
+          end
+          break strong if added.empty?
+
+          added.each { |index, name| strong[index][name] = { name: name } }
+        end
       end
 
       PERMITS = %i[permit! permit expect].freeze
@@ -812,35 +819,15 @@ module RailsAiContext
 
       # A method that permits: one named *_params anywhere in it, one of another name only when it returns
       # the permitted params themselves, so a helper that permits to build a URL, or reads one value, is not one.
-      def strong_params_entry(def_node)
+      def strong_params_entry(def_node, chains = returned_chains(def_node.body))
         name = def_node.name.to_s
         locals = params_locals(def_node.body)
-        chains = returned_chains(def_node.body)
         call = if name.end_with?("_params")
           PERMITS.lazy.filter_map { |method| find_call_in_tree(def_node.body, method, locals) }.first
         else
           returned_permit(chains, locals)
         end
         permit_entry(name, call, locals) if call
-      end
-
-      # A *_params method that returns what super, a call given the whole params, or another strong-params
-      # method makes: one this file defines only when it is one, one it does not (a parent's, a concern's,
-      # Pundit's) taken at its *_params or permitted_* name, or named among the `inherited` ones.
-      def add_delegating_params(defs, entries, defined, inherited)
-        chains = defs.to_h { |def_node| [ def_node, def_node.name.end_with?("_params") ? returned_chains(def_node.body) : [] ] }
-        loop do
-          strong = entries.keys.to_set { |def_node| def_node.name.to_s }
-          added = defs.select do |def_node|
-            !entries.key?(def_node) && def_node.name.end_with?("_params") &&
-              hands_params_on?(chains[def_node]) do |called|
-                defined.include?(called) ? strong.include?(called) : called.match?(DELEGATE_NAME) || inherited.include?(called)
-              end
-          end
-          break if added.empty?
-
-          added.each { |def_node| entries[def_node] = { name: def_node.name.to_s } }
-        end
       end
 
       def returned_permit(chains, locals)
@@ -909,7 +896,7 @@ module RailsAiContext
         return [] unless body
 
         nodes = AstWalk.each(body).to_a
-        writes = nodes.select { |n| VARIABLE_WRITES.any? { |type| n.is_a?(type) } }
+        writes = nodes.select { |n| VARIABLE_WRITES.include?(n.class) }
                       .group_by(&:name).transform_values { |found| found.max_by { |n| n.location.start_offset } }
         explicit = nodes.grep(Prism::ReturnNode).flat_map { |node| Array(node.arguments&.arguments) }
         [ body, *explicit ].flat_map { |node| tail_expressions(node) }.flat_map { |node| call_chains(node, writes, Set.new) }
@@ -953,7 +940,7 @@ module RailsAiContext
         return {} unless body
 
         AstWalk.each(body).each_with_object({}) do |node, locals|
-          if VARIABLE_WRITES.any? { |type| node.is_a?(type) }
+          if VARIABLE_WRITES.include?(node.class)
             locals[node.name] = node.value if params_value?(node.value, locals)
           elsif node.is_a?(Prism::CallNode) && node.block.is_a?(Prism::BlockNode) && params_value?(node.receiver, locals)
             block_params = node.block.parameters
@@ -1002,7 +989,7 @@ module RailsAiContext
 
       # A local the method assigned from params reads as the value it holds.
       def through_local(node, locals)
-        VARIABLE_READS.any? { |type| node.is_a?(type) } ? locals[node.name] : node
+        VARIABLE_READS.include?(node.class) ? locals[node.name] : node
       end
 
       def find_require_in_chain(node, locals = {})

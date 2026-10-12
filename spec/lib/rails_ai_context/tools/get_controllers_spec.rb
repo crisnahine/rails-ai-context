@@ -1452,6 +1452,70 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(answer_for(files, controller: "NotesController")).not_to include("`page_params`")
     end
 
+    it "reads a call in any class as the nearest instance method of that name, as the controller runs it" do
+      files = {
+        "app/controllers/application_controller.rb" => <<~RUBY,
+          class ApplicationController < ActionController::Base
+            private
+
+            def params_slice(*keys)
+              params.slice(*keys).permit(*keys)
+            end
+
+            def plug_params(app)
+              app.watchers.build
+            end
+
+            def slice_for(*keys)
+              params.permit(*keys)
+            end
+          end
+        RUBY
+        "app/controllers/middle_controller.rb" => <<~RUBY,
+          class MiddleController < ApplicationController
+            private
+
+            def mid_params
+              slice_for(:a).merge(b: 1)
+            end
+          end
+        RUBY
+        "app/controllers/replies_controller.rb" => <<~RUBY,
+          class RepliesController < ApplicationController
+            def self.params_slice(*keys) = keys
+
+            def index; end
+
+            private
+
+            def page_params
+              params_slice(:min_id).merge(page: true)
+            end
+
+            def x_params
+              plug_params(1).merge(b: 2)
+            end
+          end
+        RUBY
+        "app/controllers/notes_controller.rb" => <<~RUBY
+          class NotesController < MiddleController
+            def index; end
+
+            private
+
+            def slice_for(*keys) = keys
+          end
+        RUBY
+      }
+      replies = answer_for(files, controller: "RepliesController")
+      notes = answer_for(files, controller: "NotesController")
+
+      expect(replies).to include("`page_params`")
+      expect(replies).not_to include("`x_params`")
+      expect(notes).not_to include("mid_params")
+      expect(answer_for(files, controller: "MiddleController")).to include("`mid_params`")
+    end
+
     it "keeps a parent's strong params method when the child defines that name only as a class method or in a nested class" do
       files = {
         "app/controllers/application_controller.rb" => <<~RUBY,
