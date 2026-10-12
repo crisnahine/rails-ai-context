@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "fileutils"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::DatabaseFamily do
   # Fails on any message a statement could ride, so a refusal is proven to send nothing.
@@ -366,6 +368,93 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(generated.keys).to eq([ "accounts" ])
       expect(generated["accounts"].keys).to eq(%w[shadow kept])
       expect(generated["accounts"]["shadow"]).to match(/\bpasswd\b/).and satisfy { |text| text.scan(/\bpasswd\b/).size == 1 }
+    end
+  end
+
+  describe "a SQLite statement" do
+    let(:dir) { Dir.mktmpdir }
+
+    def connect(database)
+      stub_const("RuntimeStatementRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      RuntimeStatementRecord.establish_connection(adapter: "sqlite3", database: database)
+      RuntimeStatementRecord.connection.tap do |conn|
+        conn.execute("CREATE TABLE big (n INTEGER)")
+        conn.execute("INSERT INTO big WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2000) SELECT x FROM r")
+      end
+    end
+
+    def statements
+      sent = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+      yield
+      sent
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    after do
+      RuntimeStatementRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    context "in a file", if: Process.respond_to?(:fork) do
+      let(:conn) { connect(File.join(dir, "statement.sqlite3")) }
+
+      # total_changes() is 0 in the child and above it here, so only the child reaches the failing branch.
+      it "raises the error of a statement that fails while it runs, whatever its message says, and runs it nowhere else" do
+        sql = "SELECT CASE WHEN total_changes() = 0 THEN json_extract('{}', 'no such function: x') " \
+          "ELSE (SELECT count(*) FROM big a, big b) END AS n"
+        conn
+
+        sent = statements do
+          expect { described_class::SQLITE.read_only(conn, sql, timeout: 5) }
+            .to raise_error(ActiveRecord::StatementInvalid, /no such function: x/) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+        end
+        expect(sent).to eq([])
+      end
+
+      it "raises the SQL error of a statement neither connection can prepare" do
+        expect { described_class::SQLITE.read_only(conn, "SELECT * FROM [no such function: x]", timeout: 5) }
+          .to raise_error(ActiveRecord::StatementInvalid, /no such table/)
+        expect(conn.select_value("PRAGMA query_only")).to eq(0)
+      end
+    end
+
+    context "on the app's own connection" do
+      let(:conn) { connect(":memory:") }
+      # 400,000 rows, each after a scan of the table: it returns to Ruby between rows for minutes.
+      let(:slow_rows) { "SELECT a.n FROM big a, big d WHERE d.n <= 200 AND (SELECT count(*) FROM big b WHERE b.n <> a.n + d.n) >= 0" }
+
+      it "ends a statement that returns rows slowly at the deadline, as the timeout, and leaves the connection usable" do
+        expect { described_class::SQLITE.read_only(conn, slow_rows, timeout: 0.5) }.to raise_error(described_class::TimedOut)
+        expect(conn.select_value("PRAGMA query_only")).to eq(0)
+        expect(described_class::SQLITE.read_only(conn, "SELECT count(*) FROM big", timeout: 5).to_h)
+          .to eq(columns: [ "count(*)" ], rows: [ [ 2000 ] ], unbounded: true)
+      end
+
+      it "puts PRAGMA query_only back to the value it found" do
+        conn.execute("PRAGMA query_only = ON")
+        described_class::SQLITE.read_only(conn, "SELECT 1", timeout: 5)
+
+        expect(conn.select_value("PRAGMA query_only")).to eq(1)
+      end
+
+      it "raises the statement's own error and takes the connection out of use when query_only cannot be put back" do
+        allow(conn).to receive(:execute).and_call_original
+        allow(conn).to receive(:execute).with("PRAGMA query_only = 0").and_raise(ActiveRecord::StatementInvalid, "reset failed")
+        allow(conn).to receive(:throw_away!)
+
+        expect { described_class::SQLITE.read_only(conn, "SELECT nope", timeout: 5) }
+          .to raise_error(ActiveRecord::StatementInvalid, /no such column: nope/)
+        expect(conn).to have_received(:throw_away!)
+      end
+
+      it "times a statement out at once when the timeout is zero" do
+        conn
+
+        expect(statements { expect { described_class::SQLITE.read_only(conn, "SELECT 1", timeout: 0) }.to raise_error(described_class::TimedOut) })
+          .to eq([])
+      end
     end
   end
 

@@ -4,14 +4,12 @@ require "set"
 
 module RailsAiContext
   module DatabaseFamily
-    # sqlite3-ruby cannot interrupt a running statement, so a killable child runs it with a
-    # deadline. Where there is no child to fork, PRAGMA query_only runs it here, unbounded.
+    # sqlite3-ruby holds the interpreter lock while a statement steps, so only a killable child ends
+    # one at the deadline. A statement the child cannot run goes to the app's own connection, unbounded.
     module SqliteRuntime
       module_function
 
-      # Errors from state only the app's own connection has: registered functions,
-      # virtual table modules, collations, an encryption key.
-      APP_CONNECTION_ONLY = /no such (?:function|module|collation)|file is not a database/i
+      TIMED_OUT = "SQLite query exceeded the statement timeout"
 
       # A row-capped result is far below this; a larger prefix is a corrupt one.
       MAX_RESULT_BYTES = 1 << 30
@@ -20,23 +18,36 @@ module RailsAiContext
       COUNT_CAP = 100_000
 
       def read_only(conn, sql, timeout)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
         if (path = fork_path(conn))
-          begin
-            result = in_child(conn, path, sql, timeout)
-            return Rows.new(result.columns, result.rows, false)
-          rescue ActiveRecord::StatementInvalid => e
-            raise unless e.message.match?(APP_CONNECTION_ONLY)
-          end
+          result = in_child(conn, path, sql, deadline)
+          return Rows.new(result.columns, result.rows, false) if result
         end
 
-        result = nil
+        result = on_app_connection(conn, sql, deadline)
+        Rows.new(result.columns, result.rows, true)
+      end
+
+      # The watchdog's interrupt lands when the driver is back in Ruby between two rows, so it ends a
+      # statement that returns rows slowly and cannot end one long step: the run counts as unbounded.
+      def on_app_connection(conn, sql, deadline)
+        left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        raise TimedOut, TIMED_OUT unless left.positive?
+
+        raw = conn.raw_connection
+        found = conn.select_value("PRAGMA query_only").to_i
+        watchdog = Thread.new { sleep(left) and raw.interrupt }
         begin
           conn.execute("PRAGMA query_only = ON")
-          result = conn.select_all(sql)
+          conn.select_all(sql)
+        rescue ActiveRecord::StatementInvalid => e
+          raise TimedOut, TIMED_OUT if e.cause.is_a?(SQLite3::InterruptException)
+
+          raise
         ensure
-          conn.execute("PRAGMA query_only = OFF")
+          watchdog.kill.join
+          DatabaseFamily.restore(conn, "PRAGMA query_only = #{found}")
         end
-        Rows.new(result.columns, result.rows, true)
       end
 
       # These reads run on the app's own connection, where a wait on another writer ends at the
@@ -145,13 +156,15 @@ module RailsAiContext
         path unless path.empty?
       end
 
-      def in_child(conn, path, sql, timeout)
+      # @return [ActiveRecord::Result, nil] nil when the child could not prepare the statement, as when it
+      #   names a function, module, collation, key or temporary table only the app's connection has
+      def in_child(conn, path, sql, deadline)
         parent = Process.pid
         extensions = Array(conn.pool.db_config.configuration_hash[:extensions]).map { |ext| (ext.is_a?(String) && ext.safe_constantize) || ext }
         # sqlite3 2.x warns in every child that inherits a writable handle; Rails 8 silences it the same way.
         SQLite3::ForkSafety.suppress_warnings! if defined?(SQLite3::ForkSafety)
 
-        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        timeout = [ deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0 ].max
         reader, writer = IO.pipe.each(&:binmode)
         pid = fork { answer_in_child(reader, writer, path, sql, timeout, extensions) }
         writer.close
@@ -173,7 +186,8 @@ module RailsAiContext
           stmt = db.prepare(sql)
           [ :ok, stmt.columns, stmt.to_a ]
         rescue => e
-          [ :error, "#{e.class}: #{e.message}" ]
+          # Which step failed is the child's own fact; the message can hold text from the statement.
+          [ db && !stmt && !e.is_a?(SQLite3::BusyException) ? :unprepared : :error, "#{e.class}: #{e.message}" ]
         end
         bytes = Marshal.dump(payload)
         writer.write([ bytes.bytesize ].pack("Q>"), bytes)
@@ -192,6 +206,7 @@ module RailsAiContext
           raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result"
         end
         raise ActiveRecord::StatementInvalid, rest.first if status == :error
+        return nil if status == :unprepared
 
         ActiveRecord::Result.new(*rest)
       end
@@ -200,7 +215,7 @@ module RailsAiContext
         data = "".b
         while data.bytesize < size
           left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          raise TimedOut, "SQLite query exceeded the statement timeout" unless left.positive? && IO.select([ reader ], nil, nil, left)
+          raise TimedOut, TIMED_OUT unless left.positive? && IO.select([ reader ], nil, nil, left)
 
           chunk = reader.read_nonblock([ size - data.bytesize, 1 << 16 ].min, exception: false)
           raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result" if chunk.nil?

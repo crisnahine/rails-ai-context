@@ -24,20 +24,8 @@ module RailsAiContext
             conn.execute("SET SESSION #{limit} = #{value}, lock_wait_timeout = #{[ timeout.ceil, 1 ].max}")
             yield
           ensure
-            restore(conn, "SET SESSION #{limit} = #{previous[0]}, lock_wait_timeout = #{previous[1]}")
+            DatabaseFamily.restore(conn, "SET SESSION #{limit} = #{previous[0]}, lock_wait_timeout = #{previous[1]}")
           end
-        end
-      end
-
-      # A failed restore never replaces the block's own error, and the connection it
-      # left with a short timeout leaves the pool so no later statement inherits it.
-      def restore(conn, statement)
-        conn.execute(statement)
-      rescue StandardError
-        begin
-          conn.respond_to?(:throw_away!) ? conn.throw_away! : conn.disconnect!
-        rescue StandardError
-          nil
         end
       end
 

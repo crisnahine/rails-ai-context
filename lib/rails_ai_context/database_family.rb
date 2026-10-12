@@ -153,6 +153,18 @@ module RailsAiContext
       raise
     end
 
+    # Puts a session setting back. A failed restore never replaces the caller's own error, and the
+    # connection it left changed leaves the pool so no later statement inherits the setting.
+    def restore(connection, statement)
+      connection.execute(statement)
+    rescue StandardError
+      begin
+        connection.respond_to?(:throw_away!) ? connection.throw_away! : connection.disconnect!
+      rescue StandardError
+        nil
+      end
+    end
+
     def timed_out?(error)
       return true if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
 
