@@ -236,8 +236,6 @@ module RailsAiContext
 
         # The diagnosis still answers the error, and the result is an error as every refusal is.
         refusal ? error_response(output) : text_response(output)
-      rescue => e
-        text_response("Diagnosis error: #{e.message}")
       end
 
       # A name an error message gives its exception: a class ending the way

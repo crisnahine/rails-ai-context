@@ -62,8 +62,6 @@ module RailsAiContext
         text_response(lines.join("\n"))
       rescue AppDatabases::Error => e
         error_response(e.message)
-      rescue => e
-        text_response("Runtime info error: #{e.message}")
       end
 
       class << self

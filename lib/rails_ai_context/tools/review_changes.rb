@@ -155,8 +155,6 @@ module RailsAiContext
         end
 
         text_response(lines.join("\n"))
-      rescue => e
-        text_response("Review error: #{e.message}")
       end
 
       class << self
