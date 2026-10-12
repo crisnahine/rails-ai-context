@@ -312,7 +312,7 @@ module RailsAiContext
                 "#{missing.one? ? "does" : "do"} not exist"
       end
       failing.each do |db|
-        said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].try(:reason) || db[:error].message)}"
+        said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].is_a?(AppDatabases::Unreachable) ? db[:error].reason : db[:error].message)}"
       end
       said << pending_phrase(pending, databases) if pending.any?
 

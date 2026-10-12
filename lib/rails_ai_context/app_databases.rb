@@ -37,12 +37,12 @@ module RailsAiContext
       end
     end
 
-    # environments: every one that configures it, in file order.
     # Seconds a leased MySQL connection waits for an answer past twice query_timeout.
     READ_MARGIN = 5
 
     Dump = Data.define(:format, :path)
 
+    # environments: every one that configures it, in file order.
     Database = Data.define(:name, :environments, :here, :primary, :replica, :tasks, :adapter, :adapter_default,
                            :family, :dump, :migrate_dirs, :config) do
       # Its database.yml entry by string key, or {} for a database only a dump names.
