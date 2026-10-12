@@ -720,7 +720,7 @@ It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-o
 | `explain` | boolean | `false` | Show query plan instead of results |
 | `database` | string | the primary | The app database to query, by its `config/database.yml` name (`queue`, `cache`). The secret column rule and the database family are that database's |
 
-`database` is checked when the tool runs, against the databases the app has then. A name the app does not have is answered with the closest one and every name it has. A database only another environment configures, a replica and one with `database_tasks: false` included, is answered with the environments that do, and one that only a committed dump names is answered as such. On the static tier a `database` argument is refused: the answer says the database needs the booted app to connect. A SQLite database whose file is not there is refused by name, with or without `database`: nothing is created, and the answer names `bin/rails db:prepare`. When a statement fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
+`database` is checked when the tool runs, against the databases the app has then. A name the app does not have is answered with the closest one and every name it has. A database only another environment configures, a replica and one with `database_tasks: false` included, is answered with the environments that do, and one that only a committed dump names is answered as such. On the static tier a `database` argument is refused: the answer says the database needs the booted app to connect. A SQLite database whose file is not there is an error, with or without `database`: the message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. When a statement fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
 
 Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.
 
@@ -785,9 +785,9 @@ The pool and the cache are read inside the MCP server process, and the answer sa
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 | `section` | enum | - | One section only: `database`, `cache`, `jobs`, `connections` |
-| `database` | string | the primary | The app database whose adapter, table sizes and index usage the database section shows, named and checked as `rails_query`'s `database` is, whatever the `section`. A section that does not read it says so |
+| `database` | string | the primary | The app database whose adapter, table sizes and index usage the database section shows, named and checked as `rails_query`'s `database` is, whatever the `section`. A name that cannot be reached is an error for every section, and a section that does not read `database` says so |
 
-Pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`, so "all up to date" means all of them. The connections section is always about the app's own pools. A SQLite database whose file is not there is named in the database section as not available, and is not created.
+Pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`, so "all up to date" means all of them. The connections section is always about the app's own pools. A named database that is not configured here, that needs the booted app, or whose SQLite file is not there is an error whatever the `section`. With no `database`, a primary SQLite file that is not there is a note in the Database section, and the other sections still answer. Nothing is created either way.
 
 ### `rails_session_context`
 

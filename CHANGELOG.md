@@ -135,8 +135,9 @@ Ten tools that each answered one section of the app's configuration leave
   answered with the environment that configures it. One only a dump names
   and the static tier are each refused with the reason. A query that misses
   a table another database holds names that database.
-  `rails_runtime_info` checks the name whatever the `section`, and says so
-  when the asked section does not read `database`.
+  `rails_runtime_info` checks the name whatever the `section`: a name it
+  cannot reach is an error for every section, and a section that does not
+  read `database` says so.
 
 ### Changed
 
@@ -213,9 +214,11 @@ Ten tools that each answered one section of the app's configuration leave
 - **`rails_get_context(include:)`** lists all twelve keys it takes and
   names a key it does not take.
 - **A SQLite database whose file is not there is refused by name.**
-  `rails_query` and `rails_runtime_info` name the database and
-  `bin/rails db:prepare`, with or without `database`, and create nothing.
-  Connecting to it created the database file.
+  `rails_query` answers with an error that names the database and
+  `bin/rails db:prepare`, with or without `database`. `rails_runtime_info`
+  does the same for a named database. With none, its Database section says
+  the primary does not exist yet and the other sections still answer.
+  Nothing is created. Connecting to it created the database file.
 - **PostgreSQL bounds a statement when `query_timeout` is zero.** Zero, or
   a value under a millisecond, turned the statement timeout off. The
   statement is now bounded at one millisecond.
