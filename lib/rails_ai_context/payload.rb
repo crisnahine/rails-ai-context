@@ -97,19 +97,24 @@ module RailsAiContext
       primary + secondary
     end
 
-    TABLE_INDEXES = ObjectSpace::WeakMap.new
+    # The last few schemas' indexes; a process answers from one context at a time.
+    TABLE_INDEXES = {}.compare_by_identity
+    TABLE_INDEXES_LOCK = Mutex.new
 
     # schema_tables by name, built once per schema: a full model listing asks once per model.
     def table_index(schema)
       return {} unless schema.is_a?(Hash)
 
       stamp = [ schema[:tables].is_a?(Hash) ? schema[:tables].size : 0, secondary_databases(schema).sum { |_, info| info[:tables].size } ]
-      stamped, index = TABLE_INDEXES[schema]
-      return index if stamped == stamp
+      TABLE_INDEXES_LOCK.synchronize do
+        stamped, index = TABLE_INDEXES[schema]
+        return index if stamped == stamp
 
-      index = schema_tables(schema).group_by { |_, table, _| table.to_s }
-      TABLE_INDEXES[schema] = [ stamp, index ]
-      index
+        TABLE_INDEXES.shift while TABLE_INDEXES.size >= 4
+        index = schema_tables(schema).group_by { |_, table, _| table.to_s }
+        TABLE_INDEXES[schema] = [ stamp, index ]
+        index
+      end
     end
 
     # Each database past the primary that the schema section read tables

@@ -107,12 +107,15 @@ RSpec.describe RailsAiContext::Payload do
     end
 
     # A full model listing asks once per model; scanning every table each time cost seconds on a big app.
-    it "answers a thousand models over a thousand tables in well under a second" do
+    it "lists a schema's tables once however many models ask" do
       big = { adapter: "postgresql", tables: (1..1000).to_h { |i| [ "t#{i}", { columns: [] } ] } }
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      (1..1000).each { |i| described_class.missing_table?(big, { table_name: "t#{i}" }) }
+      allow(described_class).to receive(:schema_tables).and_call_original
 
-      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.5
+      (1..1000).each { |i| described_class.missing_table?(big, { table_name: "t#{i}" }) }
+      GC.start
+      described_class.missing_table?(big, { table_name: "t1" })
+
+      expect(described_class).to have_received(:schema_tables).once
     end
 
     it "says nothing for a model on a connection of its own" do
