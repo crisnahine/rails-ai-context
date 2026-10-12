@@ -89,7 +89,7 @@ module RailsAiContext
       end
       # SQLite stores a definition as written, comments included.
       views = views&.transform_values { |definition| definition && SqlGate.comment_free(definition.to_s, family) }
-      { views: views, generated: family.generated_columns(connection) }
+      { views: views, generated: family.generated_columns(connection), index_tables: family.index_tables(connection) }
     end
     private_class_method :definitions_from
 
@@ -136,7 +136,8 @@ module RailsAiContext
 
     # relations: relation => its column names. generated: relation => { generated column => its expression }.
     # views: view => its definition, or nil where the family traces a result column to its table column.
-    def initialize(relations: {}, encrypted: [], views: nil, generated: {}, config: RailsAiContext.configuration)
+    # index_tables: table => [kind, the virtual table it belongs to], as DatabaseFamily::Family#index_tables answers.
+    def initialize(relations: {}, encrypted: [], views: nil, generated: {}, index_tables: {}, config: RailsAiContext.configuration)
       fold = self.class.method(:fold)
       @redacted = (Array(config.query_redacted_columns) + BUILT_IN_NAMES).to_set(&fold)
       @allowed = Array(config.query_allowed_columns).to_set(&fold)
@@ -149,6 +150,7 @@ module RailsAiContext
       flag_secret_columns(columns)
       # A generated column can read another one, so this repeats until it finds no more.
       flag_secret_columns(columns) while trace_generated(generated)
+      @unread_tables = unread_tables(index_tables)
       @refused_views = views ? refused_views(views) : {}
     end
 
@@ -177,6 +179,13 @@ module RailsAiContext
     def refused_view_in(text)
       down = self.class.fold(text)
       @refused_views.find { |view, _why| names?(down, view) }
+    end
+
+    # [table, why] for the first table the text names that is never read, or nil: the file's pages, a shadow
+    # table, and a full-text table or its vocabulary when the full-text table holds a secret column.
+    def unread_table_in(text)
+      down = self.class.fold(text)
+      @unread_tables.find { |table, _why| names?(down, table) }
     end
 
     # The first relation holding a secret column that the statement's text names, or nil.
@@ -248,11 +257,33 @@ module RailsAiContext
       end
     end
 
+    def unread_tables(index_tables)
+      index_tables.each_with_object({}) do |(table, (kind, owner)), unread|
+        secret = of_relation(owner).first
+        why = case kind
+        when :pages then "it returns the database file's raw pages, and every stored value is in them"
+        when :shadow
+          "it is a shadow table, where SQLite keeps what the virtual table `#{owner}` stores under other column names" \
+            "#{". Query `#{owner}`" unless secret}"
+        when :vocabulary
+          "it lists the words of the full-text table `#{owner}`, which holds the secret column `#{secret}`" if secret
+        when :full_text
+          if secret
+            "it is a full-text table that holds the secret column `#{secret}`, and a full-text search or function " \
+              "reads a column by its position, with no name written"
+          end
+        end
+        unread[self.class.fold(table)] = why if why
+      end
+    end
+
     def refusal_of(definition)
       if definition.strip.empty?
         "its definition could not be read, and this database holds secret columns" if @in_schema.any?
       elsif (column = named_in(definition))
         "its definition names the secret column `#{column}`"
+      elsif (table = @unread_tables.keys.find { |name| names?(definition, name) })
+        "its definition reads `#{table}`, which is not read"
       elsif definition.match?(WILDCARD) && (relation = @by_relation.keys.find { |name| names?(definition, name) })
         "its definition reads every column of `#{relation}`, which holds the secret column `#{@by_relation[relation].first}`"
       end

@@ -126,6 +126,38 @@ module RailsAiContext
         end
       end
 
+      # pragma_table_list, which types a shadow table, came with this version.
+      TYPED_TABLES = "3.37"
+      VIRTUAL_TABLES = %w[sqlite_master sqlite_temp_master].map { |catalog| "SELECT name, sql FROM #{catalog} WHERE type = 'table' AND rootpage = 0" }
+        .join(" UNION ALL ").freeze
+      INDEX_MODULE = /\bUSING\s+["'`\[]?(fts5vocab|fts4aux|fts[345])\b["'`\]]?(?:\s*\((.*)\))?/mi
+
+      # Modules that return the database file's pages or cells, whatever table they belong to.
+      PAGE_MODULES = %w[sqlite_dbpage sqlite_dbdata sqlite_dbptr].freeze
+
+      # Before pragma_table_list a shadow table is told by its name: any table that starts with a virtual table's.
+      def index_tables(conn)
+        virtual = conn.select_rows(VIRTUAL_TABLES).to_h
+        stored = if conn.database_version >= TYPED_TABLES then conn.select_values("SELECT name FROM pragma_table_list WHERE type = 'shadow'")
+        else conn.select_values("SELECT name FROM sqlite_master WHERE type = 'table' AND rootpage > 0")
+        end
+        found = stored.each_with_object(PAGE_MODULES.to_h { |name| [ name, [ :pages, nil ] ] }) do |name, tables|
+          owner = virtual.keys.select { |table| name.downcase.start_with?("#{table.downcase}_") }.max_by(&:size)
+          tables[name] = [ :shadow, owner ] if owner
+        end
+        virtual.each do |name, sql|
+          mod, args = sql.to_s.match(INDEX_MODULE)&.captures
+          next unless mod
+
+          # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
+          names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
+          found[name] = if mod.match?(/\Afts\d\z/i) then [ :full_text, name ]
+          else [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2] ]
+          end
+        end
+        found
+      end
+
       def table_sizes(conn)
         # dbstat lists every b-tree, indexes and SQLite internals too.
         app_tables = conn.select_values("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").to_set

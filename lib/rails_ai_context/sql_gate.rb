@@ -287,6 +287,9 @@ module RailsAiContext
       if (m = [ cleaned, SecretColumns.fold(cleaned) ].filter_map { |read| read.match(BLOCKED_RELATIONS) || read.match(BLOCKED_CATALOGS) }.first)
         return unfollowed_relation_refusal(m.captures.compact.first)
       end
+      table, why = @secrets.unread_table_in(cleaned)
+      return "Blocked: `#{table}` is not read: #{why}." if table
+
       if (refusal = setting_refusal(cleaned))
         return refusal
       end

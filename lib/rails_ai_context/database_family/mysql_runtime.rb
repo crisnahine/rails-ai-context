@@ -114,6 +114,10 @@ module RailsAiContext
       # Base tables only: a view has no rows or bytes of its own.
       BASE_TABLES = "FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'"
 
+      def index_tables(_conn)
+        {}
+      end
+
       def table_sizes(conn)
         conn.select_all("SELECT TABLE_NAME AS name, (DATA_LENGTH + INDEX_LENGTH) AS bytes #{BASE_TABLES}")
           .map { |r| { name: r["name"], bytes: r["bytes"].to_i } }

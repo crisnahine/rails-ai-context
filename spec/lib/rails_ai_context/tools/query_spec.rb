@@ -670,6 +670,98 @@ RSpec.describe RailsAiContext::Tools::Query do
 
   # Where there is no fork (Windows), a file-backed database gets no
   # timeout: the query runs in this process, and the answer says so.
+  describe "SQLite tables that hold another table's rows or words, on a file-backed database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:marker) { "MARKER7f3a" }
+    let(:conn) do
+      stub_const("QueryIndexTablesSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryIndexTablesSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QueryIndexTablesSpecRecord.connection.tap do |c|
+        [ "CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT, api_token TEXT)",
+          "INSERT INTO accounts VALUES (1, 'a@example.com', '#{marker}')",
+          "CREATE VIRTUAL TABLE docs USING fts5(title, api_token)",
+          "INSERT INTO docs VALUES ('hello', '#{marker}')",
+          "CREATE VIRTUAL TABLE docs_words USING fts5vocab(docs, row)",
+          "CREATE VIRTUAL TABLE notes USING fts5(title, body)",
+          "INSERT INTO notes VALUES ('plain', 'ordinary words')",
+          "CREATE VIRTUAL TABLE notes_words USING fts5vocab('notes', 'row')",
+          "CREATE TABLE notes_archive (id INTEGER, title TEXT)",
+          "INSERT INTO notes_archive VALUES (7, 'kept')",
+          "CREATE VIEW note_rows AS SELECT c1 AS body FROM notes_content",
+          "CREATE VIEW pages AS SELECT data FROM sqlite_dbpage" ].each { |sql| c.execute(sql) }
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryIndexTablesSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    def refused(sql, text)
+      expect(answer(sql)).to eq([ true, text ]), sql
+    end
+
+    it "never reads the database file's raw pages" do
+      [ "SELECT CAST(substr(data, instr(data, 'MARKER'), 20) AS TEXT) AS v FROM sqlite_dbpage WHERE instr(data, 'MARKER') > 0",
+        "SELECT pgno FROM SQLITE_DBPAGE('main')", "SELECT 'sqlite_dbpage' AS v" ].each do |sql|
+        refused(sql, "Blocked: `sqlite_dbpage` is not read: it returns the database file's raw pages, and every stored value is in them.")
+      end
+    end
+
+    it "never reads a shadow table, and names the virtual table to query" do
+      [ "SELECT * FROM notes_content", "SELECT c1 AS v FROM NOTES_CONTENT", "SELECT block FROM \"notes_data\"", "SELECT term FROM notes_idx" ].each do |sql|
+        table = sql[/notes_\w+/i].downcase
+        refused(sql, "Blocked: `#{table}` is not read: it is a shadow table, where SQLite keeps what the virtual table `notes` " \
+                     "stores under other column names. Query `notes`.")
+      end
+      refused("SELECT * FROM docs_content",
+              "Blocked: `docs_content` is not read: it is a shadow table, where SQLite keeps what the virtual table `docs` stores under other column names.")
+    end
+
+    it "refuses a view over a shadow table and over the raw pages" do
+      refused("SELECT body FROM note_rows", "Blocked: the view `note_rows` is not queried: its definition reads `notes_content`, which is not read. " \
+                                            "A view can rename a column past the redaction on SQLite, so query the tables it reads.")
+      expect(answer("SELECT * FROM pages").last).to start_with("Blocked: the view `pages` is not queried: its definition reads `sqlite_dbpage`")
+    end
+
+    it "refuses the vocabulary of a full-text table that holds a secret column, and the full-text table itself" do
+      refused("SELECT term FROM docs_words",
+              "Blocked: `docs_words` is not read: it lists the words of the full-text table `docs`, which holds the secret column `api_token`.")
+      [ "SELECT highlight(docs, 1, '', '') AS h FROM docs", "SELECT count(*) AS n FROM docs WHERE docs MATCH 'marker*'", "SELECT title FROM docs" ].each do |sql|
+        refused(sql, "Blocked: `docs` is not read: it is a full-text table that holds the secret column `api_token`, and a full-text " \
+                     "search or function reads a column by its position, with no name written.")
+      end
+    end
+
+    it "runs dbstat, a full-text table with no secret column, its vocabulary, and a table that only shares its prefix" do
+      { "SELECT name, sum(pgsize) AS bytes FROM dbstat GROUP BY name" => "accounts",
+        "SELECT title, body FROM notes WHERE notes MATCH 'ordinary'" => "ordinary words",
+        "SELECT highlight(notes, 1, '<', '>') AS h FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",
+        "SELECT term FROM notes_words ORDER BY term" => "ordinary",
+        "SELECT id, title FROM notes_archive" => "kept" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+    end
+
+    it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
+      allow(conn).to receive(:database_version).and_return(ActiveRecord::ConnectionAdapters::AbstractAdapter::Version.new("3.36.0"))
+      expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
+      expect(answer("SELECT id FROM notes_archive").last).to start_with("Blocked: `notes_archive` is not read: it is a shadow table")
+      expect(answer("SELECT id, email FROM accounts").first).to be(false)
+    end
+  end
+
   describe "SQLite on a file-backed database where the platform has no fork" do
     let(:dir) { Dir.mktmpdir }
     let(:conn) do
@@ -1031,10 +1123,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     it "escapes newlines in cell values" do
       columns = %w[id note]
       rows = [ [ 1, "line1\nline2" ] ]
-      mock_result = ActiveRecord::Result.new(columns, rows)
-
-      allow(ActiveRecord::Base.connection).to receive(:select_all).and_return(mock_result)
-      allow(ActiveRecord::Base.connection).to receive(:execute)
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+        .and_return(RailsAiContext::DatabaseFamily::Rows.new(columns, rows, false))
 
       result = described_class.call(sql: "SELECT id, note FROM notes", format: "csv")
       text = result.content.first[:text]

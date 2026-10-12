@@ -114,6 +114,12 @@ module RailsAiContext
         runtime.generated_columns(connection)
       end
 
+      # @return [Hash{String => Array(Symbol, String)}] table => [:pages, :shadow, :vocabulary or :full_text, the virtual
+      #   table it belongs to]: what holds another table's rows or words under other names
+      def index_tables(connection)
+        runtime.index_tables(connection)
+      end
+
       # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
       def table_sizes(connection)
         runtime.table_sizes(connection)

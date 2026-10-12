@@ -132,6 +132,10 @@ module RailsAiContext
         nil
       end
 
+      def index_tables(_conn)
+        {}
+      end
+
       def table_sizes(conn)
         Introspectors::PgPartitions.table_bytes(conn).sort_by { |r| [ -r[:bytes], r[:name] ] }
       end
