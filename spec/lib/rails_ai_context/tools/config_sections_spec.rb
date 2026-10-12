@@ -329,7 +329,7 @@ RSpec.describe "rails_get_config sections" do
       expect(long).to end_with(%(_rails_get_i18n is now `rails_get_config(section:"i18n", locale:"#{'x' * 80}... (5000 characters)")`; call that instead._))
 
       note = call("rails_get_i18n", { locale: "e`n" })[:content].first[:text].lines.last
-      expect(note).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n", locale:"e\\u0060n")`; call that instead._))
+      expect(note).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n")`, with the same `locale`; call that instead._))
     end
 
     it "is the command under tool_mode :cli" do
@@ -339,6 +339,8 @@ RSpec.describe "rails_get_config sections" do
       command = RailsAiContext::InstallMode.tool_command("config")
 
       expect(answer).to end_with("_rails_get_i18n is now `#{command} section=i18n locale=en`; call that instead._")
+      expect(RailsAiContext::CLI::ToolRunner.new("i18n", [ "--locale", "e`n" ]).run)
+        .to end_with("_rails_get_i18n is now `#{command} section=i18n`, with the same `locale`; call that instead._")
     end
   end
 

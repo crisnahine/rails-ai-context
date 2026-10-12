@@ -157,15 +157,13 @@ module RailsAiContext
         unknown_param_response(unknown, section.params.map(&:to_s)) if unknown.any?
       end
 
+      # A value is capped like every echo; one holding a backtick would end the code span, so it is named outside it.
       def self.retired_note(section, arguments)
-        read = arguments.slice(*section.params).map { |key, value| "#{key}:#{echoed_argument(value)}" }.join(", ")
+        outside, spanned = arguments.slice(*section.params).partition { |_, value| value.to_s.include?("`") }
+        read = spanned.map { |key, value| "#{key}:#{JSON.generate(value.is_a?(String) ? echo_input(value) : value)}" }.join(", ")
         call = pointer(section.tool_name, read)
-        cli_form("\n\n_#{section.tool_name} is now #{call}; call that instead._") if call
-      end
-
-      # A value as the note's code span can hold it: capped like every echo, with no backtick to end the span.
-      private_class_method def self.echoed_argument(value)
-        JSON.generate(value.is_a?(String) ? echo_input(value) : value).gsub("`", "\\u0060")
+        same = ", with the same #{outside.map { |key, _| "`#{key}`" }.join(' and ')}" if outside.any?
+        cli_form("\n\n_#{section.tool_name} is now #{call}#{same}; call that instead._") if call
       end
 
       # The renderer answers as a tool another tool called, so an answered call is recorded here.
