@@ -14,21 +14,25 @@ module RailsAiContext
       def read_only(conn, sql, timeout)
         raise Unsupported, IN_TRANSACTION if conn.transaction_open?
 
-        result = bounded(conn, timeout) { in_read_only_transaction(conn, sql) }
+        result = bounded(conn, timeout) { |session| in_read_only_transaction(conn, sql, session) }
         Rows.new(result.columns, result.rows, false)
       end
 
+      REPLACED = "the connection was replaced before the statement was sent, and the new session has no " \
+        "read-only transaction and no time limit, so the statement was not sent"
+
       # The statement limit does not cover SHOW, so lock_wait_timeout (whole seconds) ends a wait on a
       # metadata lock. Both session values are read first and put back after the block.
+      # Yields the id of the session that holds them.
       def bounded(conn, timeout)
         limit, value = if mariadb?(conn) then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
         else [ "max_execution_time", [ (timeout * 1000).to_i, 1 ].max ]
         end
         DatabaseFamily.bounding do
-          previous = conn.select_rows("SELECT @@SESSION.#{limit}, @@SESSION.lock_wait_timeout").first
+          previous = conn.select_rows("SELECT @@SESSION.#{limit}, @@SESSION.lock_wait_timeout, CONNECTION_ID()").first
           begin
             conn.execute("SET SESSION #{limit} = #{value}, lock_wait_timeout = #{[ timeout.ceil, 1 ].max}")
-            yield
+            yield previous[2]
           ensure
             DatabaseFamily.restore(conn, "SET SESSION #{limit} = #{previous[0]}, lock_wait_timeout = #{previous[1]}")
           end
@@ -37,10 +41,13 @@ module RailsAiContext
 
       # MySQL rejects SET TRANSACTION once a transaction is open, and Rails opens the lazy BEGIN
       # before the first statement in the block. Unscoped, it applies to the next transaction only.
-      def in_read_only_transaction(conn, sql)
+      def in_read_only_transaction(conn, sql, session)
         result = nil
         conn.execute("SET TRANSACTION READ ONLY")
         conn.transaction do
+          # Rails replaces a connection it lost before BEGIN, and a new session has neither guard.
+          raise ActiveRecord::ConnectionNotEstablished, REPLACED unless conn.select_value("SELECT CONNECTION_ID()").to_i == session.to_i
+
           result = conn.select_all(sql)
           raise ActiveRecord::Rollback
         end

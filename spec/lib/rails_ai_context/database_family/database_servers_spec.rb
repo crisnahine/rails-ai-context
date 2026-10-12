@@ -129,6 +129,27 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "sends no statement on a connection that was replaced after the session was guarded, and raises the lost connection" do
+      id = conn.select_value("SELECT CONNECTION_ID()")
+      sent = []
+      second_session(ENV.fetch(env)) do |other|
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+          sent << payload[:sql]
+          other.execute("KILL CONNECTION #{id}") if payload[:sql] == "SET TRANSACTION READ ONLY"
+        end
+        took = seconds do
+          expect { family.read_only(conn, "SELECT id FROM rac_server_rows WHERE SLEEP(3) = 0", timeout: 0.5) }
+            .to raise_error(ActiveRecord::ActiveRecordError) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+        end
+        expect(took).to be < 2
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+      expect(sent.grep(/SLEEP/)).to eq([])
+    ensure
+      RacServerSpecRecord.connection_pool.disconnect!
+    end
+
     it "refuses a guarded read inside a transaction that is already open, bounds a block of reads there, and leaves it open" do
       conn.transaction do
         conn.execute("INSERT INTO rac_server_rows VALUES (4)")

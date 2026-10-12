@@ -21,12 +21,13 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   let(:mysql_class) do
     Class.new do
       attr_reader :statements
-      attr_accessor :failure, :session_timeout
+      attr_accessor :failure, :session_timeout, :session
 
       def initialize(mariadb)
         @mariadb = mariadb
         @statements = []
         @session_timeout = 250
+        @session = 7
       end
 
       def adapter_name = "Mysql2"
@@ -43,7 +44,12 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       def select_rows(sql)
         @statements << sql
-        [ [ @session_timeout, 31_536_000 ] ]
+        [ [ @session_timeout, 31_536_000, 7 ] ]
+      end
+
+      def select_value(sql)
+        @statements << sql
+        @session
       end
 
       def transaction
@@ -83,9 +89,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       expect(rows.rows).to eq([ [ 1 ] ])
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout",
+        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout, CONNECTION_ID()",
         "SET SESSION max_execution_time = 2000, lock_wait_timeout = 2",
-        "SET TRANSACTION READ ONLY", "BEGIN", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
+        "SET TRANSACTION READ ONLY", "BEGIN", "SELECT CONNECTION_ID()", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
         "SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000"
       ])
     end
@@ -95,7 +101,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
       expect(answer).to eq(:read)
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout",
+        "SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout, CONNECTION_ID()",
         "SET SESSION max_execution_time = 400, lock_wait_timeout = 1", "SHOW FULL FIELDS FROM t",
         "SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000"
       ])
@@ -156,6 +162,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         expect(described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2).rows).to eq([ [ 1 ] ])
         expect(conn.statements.last).to eq("THROW AWAY")
       end
+    end
+
+    it "sends no statement when the session inside the transaction is another one, and raises the lost connection" do
+      conn.session = 8
+
+      expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }
+        .to raise_error(ActiveRecord::ConnectionNotEstablished, /the connection was replaced before the statement was sent/)
+      expect(conn.statements).not_to include("SELECT 1")
+      expect(conn.statements.last).to eq("SET SESSION max_execution_time = 250, lock_wait_timeout = 31536000")
     end
 
     it "refuses a guarded read inside a transaction that is already open, and sends nothing" do
@@ -221,9 +236,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       described_class::MYSQL.read_only(conn, "WITH t AS (SELECT 1) SELECT * FROM t", timeout: 2)
 
       expect(conn.statements).to eq([
-        "SELECT @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout",
+        "SELECT @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, CONNECTION_ID()",
         "SET SESSION max_statement_time = 2.0, lock_wait_timeout = 2",
-        "SET TRANSACTION READ ONLY", "BEGIN", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
+        "SET TRANSACTION READ ONLY", "BEGIN", "SELECT CONNECTION_ID()", "WITH t AS (SELECT 1) SELECT * FROM t", "ROLLBACK",
         "SET SESSION max_statement_time = 250, lock_wait_timeout = 31536000"
       ])
     end
