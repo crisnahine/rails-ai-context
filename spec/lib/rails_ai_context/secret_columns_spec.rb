@@ -272,8 +272,8 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "reads the family's view definitions and generated columns, once per run" do
       allow(runtime).to receive(:relation_columns).and_return("users" => %w[passwd])
-      allow(runtime).to receive(:view_definitions).with(conn).and_return("people" => "SELECT passwd AS p FROM users")
-      allow(runtime).to receive(:generated_columns).with(conn).and_return("users" => { "hidden" => "passwd" })
+      allow(runtime).to receive(:view_definitions).with(conn, %w[main temp]).and_return("people" => "SELECT passwd AS p FROM users")
+      allow(runtime).to receive(:generated_columns).with(conn, %w[main temp]).and_return("users" => { "hidden" => "passwd" })
 
       RailsAiContext::RunCache.around do
         2.times do
@@ -330,7 +330,7 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
-    it "reads the columns, the views and the generated columns in one statement each, and the virtual and shadow tables in two" do
+    it "lists the schemas, reads the columns, the views and the generated columns in one statement each, and the virtual and shadow tables in two" do
       sent = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
       begin
@@ -339,7 +339,7 @@ RSpec.describe RailsAiContext::SecretColumns do
         ActiveSupport::Notifications.unsubscribe(subscriber)
       end
 
-      expect(sent.size).to eq(5)
+      expect(sent.size).to eq(6)
       expect(runtime.relation_columns(conn)).to eq(conn.tables.sort.to_h { |table| [ table, conn.columns(table).map(&:name) ] })
     end
 

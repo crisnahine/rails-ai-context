@@ -50,6 +50,77 @@ RSpec.describe RailsAiContext::Tools::Query do
         answer(sql, **options).content.first[:text]
       end
 
+      describe "a table in another database of the server" do
+        def drop_others
+          conn.execute("DROP VIEW IF EXISTS rac_my_across")
+          %w[rac_my_other rac_my_third].each { |name| conn.execute("DROP DATABASE IF EXISTS #{name}") }
+        end
+
+        before do
+          drop_others
+          %w[rac_my_other rac_my_third].each { |name| conn.execute("CREATE DATABASE #{name}") }
+          conn.execute("CREATE TABLE rac_my_other.acc (id int, email varchar(50), session_token varchar(50), passwd varchar(50))")
+          conn.execute("INSERT INTO rac_my_other.acc VALUES (1, 'b@example.com', 'tok-value', 'pw2-value')")
+          conn.execute("CREATE TABLE rac_my_third.far (id int, far_token varchar(50))")
+          conn.execute("INSERT INTO rac_my_third.far VALUES (1, 'far-value')")
+          conn.execute("CREATE VIEW rac_my_other.v AS SELECT id, passwd AS p FROM rac_my_other.acc")
+          conn.execute("CREATE VIEW rac_my_other.chain AS SELECT far_token AS f FROM rac_my_third.far")
+          conn.execute("CREATE VIEW rac_my_across AS SELECT id, session_token AS t FROM rac_my_other.acc")
+        end
+
+        after { drop_others }
+
+        def refused(statements, start)
+          statements.each do |sql|
+            response = answer(sql)
+            expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with(start) ]), sql
+            expect(response.content.first[:text]).not_to include("tok-value", "pw2-value", "far-value"), sql
+          end
+        end
+
+        it "refuses a statement that names its secret column, as it does for a table of the connection's database" do
+          from = "FROM rac_my_other.acc"
+          refused([ "SELECT session_token AS x #{from}", "SELECT upper(session_token) #{from}", "SELECT concat(session_token, '') AS d #{from}",
+                    "SELECT d FROM (SELECT session_token AS d #{from}) s", "SELECT id #{from} WHERE session_token LIKE 'tok%'",
+                    "SELECT max(session_token) AS m #{from}", "SELECT id #{from} ORDER BY session_token", "SELECT (SELECT session_token #{from} LIMIT 1) AS d",
+                    "SELECT session_token AS x FROM `rac_my_other` . `acc`", "SELECT session_token AS x FROM rac_my_other/* c */.acc",
+                    "SELECT a.email, o.session_token AS d FROM rac_my_accounts a JOIN rac_my_other.acc o ON o.id = a.id" ],
+                  "Blocked: query references secret column `session_token`")
+          refused([ "SELECT passwd AS x #{from}" ], "Blocked: query references secret column `passwd`")
+          refused([ "SELECT * FROM (SELECT * #{from}) s", "SELECT s.id FROM (SELECT * #{from}) s WHERE s.email LIKE 'b%'" ], "Blocked: ")
+        end
+
+        it "refuses a view over it, in either database, and a view that leads to a third database" do
+          refused([ "SELECT * FROM rac_my_across", "SELECT t FROM rac_my_across" ],
+                  "Blocked: the view `rac_my_across` is not queried: its definition names the secret column `session_token`")
+          refused([ "SELECT * FROM rac_my_other.v", "SELECT upper(p) AS u FROM rac_my_other.v" ],
+                  "Blocked: the view `v` is not queried: its definition names the secret column `passwd`")
+          refused([ "SELECT * FROM rac_my_other.chain" ], "Blocked: the view `chain` is not queried: its definition names the secret column `far_token`")
+        end
+
+        it "filters its secret columns in place, runs a join that reads none, and shows a refused view's definition" do
+          listed = answer("SELECT * FROM rac_my_other.acc")
+          expect([ listed.error?, listed.content.first[:text] ]).to match([ false, a_string_including("b@example.com", "[FILTERED]") ])
+          expect(listed.content.first[:text]).not_to include("tok-value", "pw2-value")
+          joined = answer("SELECT a.email, o.email AS other FROM rac_my_accounts a JOIN rac_my_other.acc o ON o.id = a.id")
+          expect([ joined.error?, joined.content.first[:text] ]).to match([ false, a_string_including("a@example.com", "b@example.com") ])
+          expect(answer("SHOW CREATE VIEW rac_my_other.v").error?).to be(false)
+        end
+
+        it "reads the other database's columns in the same budget, and no system schema" do
+          sent = []
+          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+          answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
+          ActiveSupport::Notifications.unsubscribe(subscriber)
+
+          asked = sent.grep(/SCHEMATA/)
+          expect(asked.size).to eq(2)
+          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_other'\)/).size).to eq(3)
+          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/).size).to eq(3)
+          expect(sent.grep(/TABLE_SCHEMA IN \('information_schema'\)/)).to be_empty
+        end
+      end
+
       it "refuses every spelling of a locking read and sends none" do
         allow(runtime).to receive(:read_only).and_call_original
         [ "LOCK IN SHARE MODE", "FOR SHARE", "FOR UPDATE", "FOR UPDATE NOWAIT", "FOR UPDATE SKIP LOCKED", "FOR SHARE OF rac_my_accounts",

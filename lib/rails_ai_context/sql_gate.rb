@@ -342,11 +342,27 @@ module RailsAiContext
       end
 
       # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
-      view, why = @secrets.refused_view_in(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
+      view_refusal(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
+    end
+
+    def view_refusal(text)
+      view, why = @secrets.refused_view_in(text)
       return nil unless view
 
       "Blocked: the view `#{view}` is not queried: #{why}. A view can rename a column past the redaction " \
         "on #{@family.name}, so query the tables it reads."
+    end
+
+    # The plan names every relation a statement reads, through any view and in any schema.
+    def unread_relation_refusal(plan)
+      unknown = plan.relations.reject { |_schema, relation| @secrets.knows?(relation) }
+      return nil if unknown.empty?
+
+      @budget.spend { |left| @family.bounded(@connection, timeout: left) { @secrets.read_schemas(unknown.map(&:first)) } }
+      _schema, relation = unknown.find { |_, name| !@secrets.knows?(name) }
+      return nil unless relation
+
+      "Blocked: `#{relation}` is not queried: its columns could not be read, so rails_query cannot tell which of them are secret."
     end
 
     def unfollowed_relation_refusal(name)
@@ -605,6 +621,9 @@ module RailsAiContext
       return nil unless top
 
       plan = DatabaseFamily::PostgresqlPlan.new(top)
+      refusal = unread_relation_refusal(plan) || plan.aliases.each_value.lazy.filter_map { |relation| view_refusal(plan.name(relation)) }.first
+      return refusal if refusal
+
       raw = plan.nodes.flat_map { |node| plan.expressions(node) }
       outputs = []
       conds = []
@@ -629,7 +648,7 @@ module RailsAiContext
         return secret_setting_refusal(name)
       end
       if (rel = whole_row_leak(outputs + conds, plan.aliases))
-        return "Blocked: the query serialises a whole row of `#{rel}`, which carries every " \
+        return "Blocked: the query serialises a whole row of `#{plan.name(rel)}`, which carries every " \
           "column including the secret ones. Name the columns you need in the SELECT list."
       end
       if (col = secret_column_in_plan(outputs, conds))

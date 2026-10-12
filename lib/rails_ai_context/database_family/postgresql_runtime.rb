@@ -93,21 +93,51 @@ module RailsAiContext
         end
       end
 
-      # The tables Rails lists, in one read that takes no lock on any of them.
-      def relation_columns(conn)
-        DatabaseFamily.by_table(conn.select_rows(
-          "SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
-          "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND a.attnum > 0 " \
-          "AND NOT a.attisdropped AND n.nspname = ANY (current_schemas(false)) ORDER BY c.relname, a.attnum"
-        )).transform_values(&:flatten)
+      def unqualified_schemas(_conn)
+        []
       end
 
-      def view_definitions(_conn)
-        nil
+      # A bare name folds to lower case and a quoted one does not, so both spellings are asked for.
+      def schemas_named(conn, names)
+        asked = (names | names.map(&:downcase)).map { |name| conn.quote(name) }.join(", ")
+        conn.select_values(
+          "SELECT nspname FROM pg_namespace WHERE nspname IN (#{asked}) AND nspname !~ '^pg_' " \
+          "AND nspname <> 'information_schema' AND nspname <> ALL (current_schemas(false))"
+        )
+      end
+
+      def in_schemas(conn, schemas)
+        schemas.empty? ? "n.nspname = ANY (current_schemas(false))" : "n.nspname IN (#{schemas.map { |name| conn.quote(name) }.join(", ")})"
+      end
+
+      # Every relation that stores rows: tables, partitioned tables, materialized views and foreign tables.
+      # One read that takes no lock on any of them.
+      def relation_columns(conn, schemas = [])
+        rows = conn.select_rows(
+          "SELECT n.nspname, c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
+          "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'm', 'f') AND a.attnum > 0 " \
+          "AND NOT a.attisdropped AND #{in_schemas(conn, schemas)} ORDER BY c.relname, a.attnum"
+        )
+        rows.each_with_object({}) do |(schema, relation, column), found|
+          (found[relation] ||= []) << column
+          (found["#{schema}.#{relation}"] ||= []) << column
+        end
+      end
+
+      VIEWS = "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind"
+
+      # A materialized view stores its rows, so its result columns have no table column to be traced to. The
+      # views are read with it for what a materialized view built on one reads.
+      def view_definitions(conn, schemas = [])
+        DatabaseFamily.by_view(conn.select_rows("SELECT c.relname, pg_get_viewdef(c.oid) #{VIEWS} IN ('v', 'm') AND #{in_schemas(conn, schemas)}"))
+      end
+
+      def traced_views(conn, schemas = [])
+        conn.select_values("SELECT c.relname #{VIEWS} = 'v' AND #{in_schemas(conn, schemas)}")
       end
 
       # A stored generated column is a plain column to the plan, so its expression is read here.
-      def generated_columns(conn)
+      def generated_columns(conn, _schemas = [])
         return {} if conn.database_version < 12_00_00
 
         DatabaseFamily.by_table(conn.select_rows(
@@ -132,7 +162,7 @@ module RailsAiContext
         nil
       end
 
-      def index_tables(_conn)
+      def index_tables(_conn, _schemas = [])
         {}
       end
 

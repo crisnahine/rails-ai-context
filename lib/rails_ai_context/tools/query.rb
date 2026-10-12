@@ -138,7 +138,7 @@ module RailsAiContext
         # The statement has query_timeout to itself. Every other read the call sends shares a second one.
         timeout = config.query_timeout
         reads = SqlGate::Budget.new(timeout)
-        secrets = reads.spend { |left| family.bounded(connection, timeout: left) { SecretColumns.for(connection, context: context) } }
+        secrets = reads.spend { |left| family.bounded(connection, timeout: left) { SecretColumns.for(connection, context: context, statement: sql) } }
         verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, budget: reads).check(sql)
         return error_response(verdict.refusal) if verdict.refused?
 

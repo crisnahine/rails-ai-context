@@ -95,27 +95,47 @@ module RailsAiContext
         nil
       end
 
-      def relation_columns(conn)
-        DatabaseFamily.by_table(conn.select_rows(
-          "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
-          "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, p.cid"
-        )).transform_values(&:flatten)
+      # The attached databases. A statement reaches their tables with no schema named, as it does main's and temp's.
+      def unqualified_schemas(conn)
+        conn.select_rows("PRAGMA database_list").map { |_seq, name, _file| name } | OWN_SCHEMAS
       end
 
-      # The body only: the header names the view itself. A temporary view lives in its own catalogue.
-      def view_definitions(conn)
-        conn.select_rows(
-          "SELECT name, sql FROM sqlite_master WHERE type = 'view' UNION ALL SELECT name, sql FROM sqlite_temp_master WHERE type = 'view'"
-        ).to_h { |name, sql| [ name, sql.to_s.sub(/\A.*?\bAS\b/mi, "") ] }
+      def schemas_named(_conn, _names)
+        []
+      end
+
+      OWN_SCHEMAS = %w[main temp].freeze
+
+      # One SELECT for each schema, as one statement. Yields the schema as an identifier and as a string,
+      # which is how a pragma function takes it.
+      def across(schemas)
+        (schemas.empty? ? OWN_SCHEMAS : schemas).map { |schema| yield %("#{schema.gsub('"', '""')}"), "'#{schema.gsub("'", "''")}'" }.join(" UNION ALL ")
+      end
+
+      def relation_columns(conn, schemas = [])
+        DatabaseFamily.by_table(conn.select_rows(across(schemas) do |schema, name|
+          "SELECT m.name, p.name FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
+            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'"
+        end)).transform_values(&:flatten)
+      end
+
+      # The body only: the header names the view itself.
+      def view_definitions(conn, schemas = [])
+        rows = conn.select_rows(across(schemas) { |schema, _| "SELECT name, sql FROM #{schema}.sqlite_master WHERE type = 'view'" })
+        DatabaseFamily.by_view(rows.map { |name, sql| [ name, sql.to_s.sub(/\A.*?\bAS\b/mi, "") ] })
+      end
+
+      def traced_views(_conn, _schemas = [])
+        []
       end
 
       # SQLite keeps no expression per column, so each generated column answers its table's definition with one
       # mention of every column taken out: a column name still in it is one some expression reads.
-      def generated_columns(conn)
-        rows = conn.select_rows(
-          "SELECT m.name, p.name, p.hidden, m.sql FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
-          "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
-        )
+      def generated_columns(conn, schemas = [])
+        rows = conn.select_rows(across(schemas) do |schema, name|
+          "SELECT m.name, p.name, p.hidden, m.sql FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
+            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
+        end)
         DatabaseFamily.by_table(rows).each_with_object({}) do |(table, columns), found|
           generated = columns.filter_map { |name, hidden, _| name if GENERATED.include?(hidden.to_i) }
           next if generated.empty?
@@ -128,18 +148,17 @@ module RailsAiContext
 
       # pragma_table_list, which types a shadow table, came with this version.
       TYPED_TABLES = "3.37"
-      VIRTUAL_TABLES = %w[sqlite_master sqlite_temp_master].map { |catalog| "SELECT name, sql FROM #{catalog} WHERE type = 'table' AND rootpage = 0" }
-        .join(" UNION ALL ").freeze
       INDEX_MODULE = /\bUSING\s+["'`\[]?(fts5vocab|fts4aux|fts[345])\b["'`\]]?(?:\s*\((.*)\))?/mi
 
       # Modules that return the database file's pages or cells, whatever table they belong to.
       PAGE_MODULES = %w[sqlite_dbpage sqlite_dbdata sqlite_dbptr].freeze
 
       # Before pragma_table_list a shadow table is told by its name: any table that starts with a virtual table's.
-      def index_tables(conn)
-        virtual = conn.select_rows(VIRTUAL_TABLES).to_h
+      def index_tables(conn, schemas = [])
+        tables = ->(kept) { across(schemas) { |schema, _| "SELECT name, sql FROM #{schema}.sqlite_master WHERE type = 'table' AND rootpage #{kept}" } }
+        virtual = conn.select_rows(tables.call("= 0")).to_h
         stored = if conn.database_version >= TYPED_TABLES then conn.select_values("SELECT name FROM pragma_table_list WHERE type = 'shadow'")
-        else conn.select_values("SELECT name FROM sqlite_master WHERE type = 'table' AND rootpage > 0")
+        else conn.select_rows(tables.call("> 0")).map(&:first)
         end
         found = stored.each_with_object(PAGE_MODULES.to_h { |name| [ name, [ :pages, nil ] ] }) do |name, tables|
           owner = virtual.keys.select { |table| name.downcase.start_with?("#{table.downcase}_") }.max_by(&:size)

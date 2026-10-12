@@ -35,19 +35,29 @@ module RailsAiContext
     # A wildcard in a select list. `count(*)` reads no column, so it is left out.
     WILDCARD = /(?:\b(?:SELECT|DISTINCT|ALL)\b|[,.])\s*\*/i
 
-    # Cached per run and database: one schema read however many checks ask.
-    def self.for(connection, context: nil)
-      RunCache.fetch([ :secret_columns, database_key(connection) ]) do
+    # A name that stands before a dot, in any quotes: a schema, a table or an alias.
+    DOTTED = /(?:`((?:``|[^`])+)`|"((?:""|[^"])+)"|\[([^\]]+)\]|((?:[\p{Word}$]|[^\x00-\x7F])+))\s*\./
+
+    # How many times the schemas a statement and the view definitions name are followed into more view definitions.
+    ROUNDS = 3
+
+    # Cached per run and database: one schema read however many checks ask. With a statement, the schemas it
+    # names are read too, so the rule knows every relation the statement can reach.
+    def self.for(connection, context: nil, statement: nil)
+      secrets = RunCache.fetch([ :secret_columns, database_key(connection) ]) do
+        family = DatabaseFamily.of(connection)
+        schemas = family.known? ? family.unqualified_schemas(connection) : []
         # The context's schema is the primary's, so no other database falls back to it.
-        relations = relations_from(connection) || (relations_from(context) if primary?(connection))
+        relations = relations_from(connection, schemas) || (relations_from(context) if primary?(connection))
         unless relations
           raise Unreadable, "The columns of the #{connection.pool.db_config.name} database could not be read, so its secret " \
             "columns cannot be told and no query runs on it."
         end
 
-        relations = relations.merge(CATALOG_CREDENTIALS) if DatabaseFamily.of(connection).plan_checks?
-        new(relations: relations, encrypted: encrypted_from(context), **definitions_from(connection))
+        relations = relations.merge(CATALOG_CREDENTIALS) if family.plan_checks?
+        new(relations: relations, encrypted: encrypted_from(context), connection: connection, **definitions_from(connection, schemas))
       end
+      statement.to_s.strip.empty? ? secrets : secrets.cover(statement)
     end
 
     # A name or a statement as the databases compare names: case folded. MySQL reads a dotted capital I
@@ -75,12 +85,12 @@ module RailsAiContext
     private_class_method :primary?
 
     # What the database stores outside any statement: view definitions and generated column expressions.
-    def self.definitions_from(connection)
+    def self.definitions_from(connection, schemas)
       family = DatabaseFamily.of(connection)
       return {} unless family.known?
 
       views = begin
-        family.view_definitions(connection)
+        family.view_definitions(connection, schemas)
       rescue ActiveRecord::StatementInvalid => e
         raise if DatabaseFamily.timed_out?(e) || lost_connection?(e)
 
@@ -88,10 +98,10 @@ module RailsAiContext
         connection.views.to_h { |view| [ view, nil ] }
       end
       # SQLite stores a definition as written, comments included.
-      views = views&.transform_values { |definition| definition && SqlGate.comment_free(definition.to_s, family) }
-      { views: views, generated: family.generated_columns(connection), index_tables: family.index_tables(connection) }
+      views = views.transform_values { |definition| definition && SqlGate.comment_free(definition.to_s, family) }
+      { views: views, traced_views: family.traced_views(connection, schemas), generated: family.generated_columns(connection, schemas),
+        index_tables: family.index_tables(connection, schemas) }
     end
-    private_class_method :definitions_from
 
     def self.database_key(connection)
       db_config = connection.pool.db_config
@@ -103,12 +113,12 @@ module RailsAiContext
 
     # relation name => column names, from a live connection or a cached
     # context's schema; nil when neither can be read.
-    def self.relations_from(source)
+    def self.relations_from(source, schemas = [])
       if source.respond_to?(:adapter_name)
         family = DatabaseFamily.of(source)
         return nil unless family.known?
 
-        family.relation_columns(source).reject { |table, _columns| BOOKKEEPING_TABLES.include?(table.to_s.downcase) }
+        family.relation_columns(source, schemas).reject { |table, _columns| BOOKKEEPING_TABLES.include?(table.to_s.downcase) }
       else
         tables = source&.dig(:schema, :tables)
         return nil unless tables.is_a?(Hash)
@@ -124,7 +134,6 @@ module RailsAiContext
 
       nil
     end
-    private_class_method :relations_from
 
     def self.encrypted_from(context)
       models = context&.dig(:models)
@@ -135,23 +144,68 @@ module RailsAiContext
     private_class_method :encrypted_from
 
     # relations: relation => its column names. generated: relation => { generated column => its expression }.
-    # views: view => its definition, or nil where the family traces a result column to its table column.
+    # views: view => its definition, nil for one that cannot be read; nil when the database's views are not known.
+    # traced_views: the views that are queried whatever their definition names.
     # index_tables: table => [kind, the virtual table it belongs to], as DatabaseFamily::Family#index_tables answers.
-    def initialize(relations: {}, encrypted: [], views: nil, generated: {}, index_tables: {}, config: RailsAiContext.configuration)
+    # connection: where the relations of more schemas are read from; with none the rule knows what it was given.
+    def initialize(relations: {}, encrypted: [], views: nil, traced_views: [], generated: {}, index_tables: {}, connection: nil,
+                   config: RailsAiContext.configuration)
       fold = self.class.method(:fold)
       @redacted = (Array(config.query_redacted_columns) + BUILT_IN_NAMES).to_set(&fold)
       @allowed = Array(config.query_allowed_columns).to_set(&fold)
       @encrypted = Array(encrypted).to_set(&fold)
-      @generated = {}
-      columns = Hash.new { |hash, relation| hash[relation] = [] }
-      relations.each { |relation, names| columns[fold.call(relation)].concat(Array(names).map(&fold)) }
-      generated.each { |relation, expressions| columns[fold.call(relation)].concat(expressions.keys.map(&fold)) }
+      @connection = connection
+      @columns = Hash.new { |hash, relation| hash[relation] = [] }
+      @views = views && {}
+      @traced = []
+      @expressions = {}
+      @index_tables = {}
+      @asked = Set.new
+      @read = []
+      learn(relations: relations, views: views, traced_views: traced_views, generated: generated, index_tables: index_tables)
+    end
 
-      flag_secret_columns(columns)
-      # A generated column can read another one, so this repeats until it finds no more.
-      flag_secret_columns(columns) while trace_generated(generated)
-      @unread_tables = unread_tables(index_tables)
-      @refused_views = views ? refused_views(views) : {}
+    # Reads the schemas the statement names, and those the view definitions read so far name, into the rule.
+    # @raise [Unreadable] when view definitions still name new schemas after ROUNDS reads
+    def cover(statement)
+      return self unless @connection
+
+      family = DatabaseFamily.of(@connection)
+      statement = SqlGate.comment_free(statement, family)
+      (ROUNDS + 1).times do |round|
+        names = [ statement, *@views.to_h.values.compact ].flat_map { |text| dotted_names(text) }.to_set - @asked
+        @asked.merge(names)
+        found = family.schemas_named(@connection, names.to_a) - @read
+        return self if found.empty?
+        if round == ROUNDS
+          raise Unreadable, "The statement and the views of the databases it names lead to more databases than rails_query " \
+            "follows (#{ROUNDS} rounds), so the secret columns it could read cannot be told and it is not run."
+        end
+
+        read_schemas(found)
+      end
+      self
+    end
+
+    # Reads the relations, views and generated columns of more schemas into the rule.
+    # @raise [Unreadable] when a schema's columns cannot be read
+    def read_schemas(schemas)
+      schemas = schemas.compact.uniq - @read
+      return self if schemas.empty? || @connection.nil?
+
+      relations = self.class.relations_from(@connection, schemas)
+      unless relations
+        raise Unreadable, "The columns of #{schemas.map { |name| "`#{name}`" }.join(", ")} could not be read, so the secret columns " \
+          "there cannot be told and no query that reads it runs."
+      end
+      @read.concat(schemas)
+      learn(relations: relations, **self.class.definitions_from(@connection, schemas))
+      self
+    end
+
+    # Whether the relation's columns were read. A PostgreSQL relation is asked for as `schema.relation`.
+    def knows?(relation)
+      @columns.key?(self.class.fold(relation))
     end
 
     def secret?(name)
@@ -214,6 +268,32 @@ module RailsAiContext
     end
 
     private
+
+    def dotted_names(text)
+      text.scan(DOTTED).map { |found| found.compact.first.gsub(/([`"])\1/, '\1') }
+    end
+
+    def learn(relations:, views: nil, traced_views: [], generated: {}, index_tables: {})
+      fold = self.class.method(:fold)
+      relations.each { |relation, names| @columns[fold.call(relation)].concat(Array(names).map(&fold)) }
+      generated.each do |relation, expressions|
+        @columns[fold.call(relation)].concat(expressions.keys.map(&fold))
+        (@expressions[relation] ||= {}).merge!(expressions) { |_column, known, read| "#{known} #{read}" }
+      end
+      views&.each do |view, definition|
+        view = fold.call(view)
+        @views[view] = @views.key?(view) ? [ @views[view], definition ].then { |both| both.all? ? both.join("\n") : nil } : definition
+      end
+      @traced.concat(traced_views.map(&fold))
+      @index_tables.merge!(index_tables)
+
+      @generated = {}
+      flag_secret_columns(@columns)
+      # A generated column can read another one, so this repeats until it finds no more.
+      flag_secret_columns(@columns) while trace_generated(@expressions)
+      @unread_tables = unread_tables(@index_tables)
+      @refused_views = @views ? refused_views(@views).except(*@traced) : {}
+    end
 
     def flag_secret_columns(columns)
       @by_relation = columns.each_with_object({}) do |(relation, names), acc|

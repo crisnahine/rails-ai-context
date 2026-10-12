@@ -24,7 +24,7 @@ RSpec.describe RailsAiContext::Tools::Query do
   def fake_family(adapter_name)
     allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)
     [ RailsAiContext::DatabaseFamily::MysqlRuntime, RailsAiContext::DatabaseFamily::PostgresqlRuntime ].each do |runtime|
-      allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {})
+      allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {}, traced_views: [], schemas_named: [])
       allow(runtime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
       allow(runtime).to receive(:relation_columns) { |connection| RailsAiContext::DatabaseFamily::SqliteRuntime.relation_columns(connection) }
     end
@@ -759,6 +759,51 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
       expect(answer("SELECT id FROM notes_archive").last).to start_with("Blocked: `notes_archive` is not read: it is a shadow table")
       expect(answer("SELECT id, email FROM accounts").first).to be(false)
+    end
+  end
+
+  describe "SQLite tables in the temp schema and in an attached database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QuerySchemasSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QuerySchemasSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QuerySchemasSpecRecord.connection.tap do |c|
+        [ "CREATE TABLE notes (id INTEGER, body TEXT)", "INSERT INTO notes VALUES (1, 'kept')",
+          "ATTACH DATABASE '#{File.join(dir, "other.sqlite3")}' AS other",
+          "CREATE TABLE other.vault (id INTEGER, email TEXT, door_token TEXT)", "INSERT INTO other.vault VALUES (1, 'v@example.com', 'door-value')",
+          "CREATE TEMP TABLE scratch (id INTEGER, pin_token TEXT)", "INSERT INTO scratch VALUES (1, 'pin-value')",
+          "CREATE TEMP VIEW peek AS SELECT door_token AS d FROM other.vault" ].each { |sql| c.execute(sql) }
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QuerySchemasSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "refuses a statement that names a secret column of either, as it does for a table of the main database" do
+      { "SELECT door_token AS d FROM other.vault" => "door_token", "SELECT upper(door_token) AS d FROM vault" => "door_token",
+        "SELECT pin_token AS p FROM scratch" => "pin_token", "SELECT id FROM temp.scratch WHERE pin_token LIKE 'pin%'" => "pin_token" }.each do |sql, column|
+        expect(answer(sql)).to match([ true, a_string_starting_with("Blocked: query references secret column `#{column}`") ]), sql
+      end
+      expect(answer("SELECT * FROM peek")).to match([ true, a_string_starting_with("Blocked: the view `peek` is not queried: its definition names the secret column `door_token`") ])
+    end
+
+    it "filters a secret column of either in place, and runs a statement that reads none" do
+      expect(answer("SELECT * FROM other.vault")).to match([ false, a_string_including("v@example.com", "[FILTERED]") ])
+      expect(answer("SELECT * FROM other.vault").last).not_to include("door-value")
+      expect(answer("SELECT n.body, v.email FROM notes n JOIN other.vault v ON v.id = n.id")).to match([ false, a_string_including("kept", "v@example.com") ])
+      expect(answer("SELECT id FROM scratch")).to match([ false, a_string_including("| 1") ])
     end
   end
 

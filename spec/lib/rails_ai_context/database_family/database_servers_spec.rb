@@ -71,7 +71,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       listed = family.relation_columns(conn)
 
       expect(listed.fetch("rac_server_rows")).to eq(conn.columns("rac_server_rows").map(&:name))
-      expect(listed.keys).to match_array(conn.tables)
+      expect(listed.keys.grep_v(/\./)).to match_array(conn.tables)
     end
 
     it "sizes and counts base tables only" do
@@ -223,11 +223,20 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect { family.plan(conn, "SELECT nope FROM rac_server_rows", timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid)
     end
 
-    it "leaves views to the plan and reads generated column expressions" do
+    it "reads the views with the ones the plan traces named, a relation under its schema too, and generated column expressions" do
       conn.execute("ALTER TABLE rac_server_rows ADD COLUMN twice int GENERATED ALWAYS AS (id * 2) STORED")
+      conn.execute("CREATE MATERIALIZED VIEW rac_server_stored AS SELECT id AS n FROM rac_server_rows")
 
-      expect(family.view_definitions(conn)).to be_nil
+      expect(family.view_definitions(conn).transform_values(&:squish)).to include(
+        "rac_server_view" => "SELECT id FROM rac_server_rows;", "rac_server_stored" => "SELECT id AS n FROM rac_server_rows;"
+      )
+      expect(family.traced_views(conn)).to include("rac_server_view")
+      expect(family.traced_views(conn)).not_to include("rac_server_stored")
+      expect(family.relation_columns(conn).slice("rac_server_stored", "public.rac_server_stored", "public.rac_server_rows"))
+        .to eq("rac_server_stored" => %w[n], "public.rac_server_stored" => %w[n], "public.rac_server_rows" => %w[id twice])
       expect(family.generated_columns(conn).fetch("rac_server_rows")).to eq("twice" => "(id * 2)")
+    ensure
+      conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_server_stored")
     end
 
     it "plans without running" do
