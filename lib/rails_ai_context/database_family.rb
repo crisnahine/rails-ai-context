@@ -40,12 +40,20 @@ module RailsAiContext
         runtime.read_only(connection, sql, timeout)
       end
 
+      # Runs a block of reads beside the statement (the schema, a plan check) under the family's limit,
+      # so each statement in it ends at timeout seconds, a wait on a lock included.
+      # @raise [TimedOut, Unsupported]
+      def bounded(connection, timeout:, &reads)
+        runtime.bounded(connection, timeout, &reads)
+      end
+
       # @return [Hash] { scan_types:, warnings:, raw:, unbounded: }
       def explain(connection, sql, timeout:)
         runtime.explain(connection, sql, timeout)
       end
 
-      # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when planning fails
+      # @raise [TimedOut, ActiveRecord::StatementInvalid] when PostgreSQL cannot plan the statement
+      # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when the answer is no plan
       def plan(connection, sql, timeout:)
         runtime.plan(connection, sql, timeout)
       end
@@ -56,6 +64,22 @@ module RailsAiContext
       #   [] where the family cannot say
       def column_sources(connection, sql, plan:)
         runtime.column_sources(connection, sql, plan)
+      end
+
+      # @return [Hash{String => Array<String>}] table name => its column names, from one catalogue read
+      def relation_columns(connection)
+        runtime.relation_columns(connection)
+      end
+
+      # @return [Hash{String => String, nil}, nil] view name => the definition the database stores, nil for one it
+      #   will not show; nil where column_sources traces a view's columns to their table columns
+      def view_definitions(connection)
+        runtime.view_definitions(connection)
+      end
+
+      # @return [Hash{String => Hash{String => String}}] table name => { generated column => its expression }
+      def generated_columns(connection)
+        runtime.generated_columns(connection)
       end
 
       # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
@@ -100,8 +124,8 @@ module RailsAiContext
 
     DEFAULT_SUFFIX = " by database.yml default"
 
-    # 3024 MySQL max_execution_time, 1317 query interrupted, 1969 MariaDB max_statement_time.
-    TIMEOUT_CODES = [ 3024, 1317, 1969 ].freeze
+    # 3024 MySQL max_execution_time, 1317 query interrupted, 1969 MariaDB max_statement_time, 1205 lock_wait_timeout.
+    TIMEOUT_CODES = [ 3024, 1317, 1969, 1205 ].freeze
 
     module_function
 
@@ -133,6 +157,9 @@ module RailsAiContext
       return true if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
 
       cause = error.cause
+      # A SQLite read that waited out the connection's busy timeout. Rails 7.0 gives it no class of its own.
+      return true if defined?(SQLite3::BusyException) && cause.is_a?(SQLite3::BusyException)
+
       code = if cause.respond_to?(:error_number) then cause.error_number
       elsif cause.respond_to?(:error_code) then cause.error_code
       end

@@ -97,10 +97,8 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
-  # The database families against real database servers: the read-only
-  # transaction, the statement timeout and how each server reports it. Each URL
-  # runs spec/lib/rails_ai_context/database_family/database_servers_spec.rb
-  # once, and PostgreSQL also runs rails_query end to end.
+  # Each family and rails_query end to end on real database servers: only a server shows
+  # how it reports a timeout and what its read-only transaction lets through.
   database_servers:
     runs-on: ubuntu-latest
     strategy:
@@ -184,24 +182,24 @@ jobs:
       - name: MySQL (mysql2)
         env:
           RAC_TEST_MYSQL_URL: mysql2://root:rac@127.0.0.1:3306/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb
 
       - name: MySQL (Trilogy)
         if: matrix.rails != '7.0'
         env:
           RAC_TEST_MYSQL_URL: trilogy://root:rac@127.0.0.1:3306/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb
 
       - name: MariaDB (mysql2)
         env:
           RAC_TEST_MARIADB_URL: mysql2://root:rac@127.0.0.1:3307/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb
 
       - name: MariaDB (Trilogy)
         if: matrix.rails != '7.0'
         env:
           RAC_TEST_MARIADB_URL: trilogy://root:rac@127.0.0.1:3307/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb
 
   lint:
     runs-on: ubuntu-latest

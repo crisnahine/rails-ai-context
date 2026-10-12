@@ -3,31 +3,36 @@
 module RailsAiContext
   module DatabaseFamily
     # MySQL bounds a statement with the session max_execution_time, which also holds a WITH or EXPLAIN ANALYZE.
-    # MariaDB has no max_execution_time, so it scopes max_statement_time to the statement.
+    # MariaDB has no max_execution_time; its session max_statement_time does the same.
     module MysqlRuntime
       module_function
 
       def read_only(conn, sql, timeout)
-        result = DatabaseFamily.bounding do
-          if mariadb?(conn)
-            in_read_only_transaction(conn, "SET STATEMENT max_statement_time = #{[ timeout.to_f, 0.001 ].max} FOR #{sql}")
-          else
-            previous = conn.select_value("SELECT @@SESSION.max_execution_time").to_i
-            conn.execute("SET SESSION max_execution_time = #{[ (timeout * 1000).to_i, 1 ].max}")
-            begin
-              in_read_only_transaction(conn, sql)
-            ensure
-              restore_timeout(conn, previous)
-            end
-          end
-        end
+        result = bounded(conn, timeout) { in_read_only_transaction(conn, sql) }
         Rows.new(result.columns, result.rows, false)
       end
 
-      # A failed restore never replaces the statement's own error, and the connection it
+      # The statement limit does not cover SHOW, so lock_wait_timeout (whole seconds) ends a wait on a
+      # metadata lock. Both session values are read first and put back after the block.
+      def bounded(conn, timeout)
+        limit, value = if mariadb?(conn) then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
+        else [ "max_execution_time", [ (timeout * 1000).to_i, 1 ].max ]
+        end
+        DatabaseFamily.bounding do
+          previous = conn.select_rows("SELECT @@SESSION.#{limit}, @@SESSION.lock_wait_timeout").first
+          begin
+            conn.execute("SET SESSION #{limit} = #{value}, lock_wait_timeout = #{[ timeout.ceil, 1 ].max}")
+            yield
+          ensure
+            restore(conn, "SET SESSION #{limit} = #{previous[0]}, lock_wait_timeout = #{previous[1]}")
+          end
+        end
+      end
+
+      # A failed restore never replaces the block's own error, and the connection it
       # left with a short timeout leaves the pool so no later statement inherits it.
-      def restore_timeout(conn, previous)
-        conn.execute("SET SESSION max_execution_time = #{previous}")
+      def restore(conn, statement)
+        conn.execute(statement)
       rescue StandardError
         begin
           conn.respond_to?(:throw_away!) ? conn.throw_away! : conn.disconnect!
@@ -68,10 +73,13 @@ module RailsAiContext
           table = cols["table"]
           rows = cols["rows"].to_i
           extra = cols["Extra"].to_s
-          scans << { table: table, type: scan_label(cols["type"]), index: cols["key"] }
-          warnings << "Full table scan on #{table} (#{rows} rows)" if cols["type"] == "ALL" && rows > 1000
-          warnings << "Using filesort on #{table}" if extra.include?("filesort")
-          warnings << "Using temporary table on #{table}" if extra.include?("temporary")
+          # A row with no table ("No tables used") scans nothing.
+          if table
+            scans << { table: table, type: scan_label(cols["type"]), index: cols["key"] }
+            warnings << "Full table scan on #{table} (#{rows} rows)" if cols["type"] == "ALL" && rows > 1000
+            warnings << "Using filesort on #{table}" if extra.include?("filesort")
+            warnings << "Using temporary table on #{table}" if extra.include?("temporary")
+          end
           cols.map { |k, v| "#{k}: #{v}" }.join(", ")
         end
         { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n"), unbounded: false }
@@ -94,6 +102,26 @@ module RailsAiContext
 
       def plan(_conn, _sql, _timeout)
         nil
+      end
+
+      def relation_columns(conn)
+        conn.select_rows(
+          "SELECT c.TABLE_NAME, c.COLUMN_NAME FROM information_schema.COLUMNS c JOIN information_schema.TABLES t " \
+          "ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME " \
+          "WHERE c.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE' ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION"
+        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
+      end
+
+      # The definition is empty for a view the account may not SHOW.
+      def view_definitions(conn)
+        conn.select_rows("SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE()").to_h
+      end
+
+      def generated_columns(conn)
+        conn.select_rows(
+          "SELECT TABLE_NAME, COLUMN_NAME, GENERATION_EXPRESSION FROM information_schema.COLUMNS " \
+          "WHERE TABLE_SCHEMA = DATABASE() AND GENERATION_EXPRESSION <> ''"
+        ).each_with_object({}) { |(table, column, expression), found| (found[table] ||= {})[column] = expression }
       end
 
       # Base tables only: a view has no rows or bytes of its own.

@@ -20,6 +20,16 @@ RSpec.describe RailsAiContext::Tools::Query do
     RailsAiContext.configuration.query_allowed_columns = []
   end
 
+  # A faked adapter name would send the family's catalogue reads to this SQLite database.
+  def fake_family(adapter_name)
+    allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)
+    [ RailsAiContext::DatabaseFamily::MysqlRuntime, RailsAiContext::DatabaseFamily::PostgresqlRuntime ].each do |runtime|
+      allow(runtime).to receive_messages(view_definitions: {}, generated_columns: {})
+      allow(runtime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
+      allow(runtime).to receive(:relation_columns) { |connection| RailsAiContext::DatabaseFamily::SqliteRuntime.relation_columns(connection) }
+    end
+  end
+
   # The text asks for one row past the cap, so a result the cap cut can be
   # told from one that fit; the extra row is dropped.
   describe "the row limit in the text sent to the database" do
@@ -173,19 +183,28 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         expect(result.error?).to be true
         expect(result.content.first[:text]).to include("SQL error:")
-        expect(result.content.first[:text]).not_to include("Database not found")
+        expect(result.content.first[:text]).not_to include("cannot be reached")
       end
 
-      it "answers the family's timeout as the timeout" do
+      it "answers the family's timeout as an error" do
         allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
 
         result = described_class.call(sql: "SELECT SLEEP(60) FROM tags")
 
         expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
-        expect(result.error?).to be false
+        expect(result.error?).to be true
       end
 
-      it "flags an SQL error that mentions a timeout as an error, not a timeout" do
+      it "answers a timed out EXPLAIN as the same error" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
+
+        result = described_class.call(sql: "SELECT id FROM tags", explain: true)
+
+        expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
+        expect(result.error?).to be true
+      end
+
+      it "flags an SQL error that mentions a timeout as an SQL error" do
         allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
           .and_raise(ActiveRecord::StatementInvalid, "Mysql2::Error: Unknown column 'timeout' (maximum statement execution time exceeded)")
 
@@ -208,15 +227,31 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.content.first[:text]).to include("refuses the SQLServer adapter")
       end
 
-      it "still explains a database that does not exist" do
+      it "answers a primary no connection reaches as an error that names it" do
+        allow(ActiveRecord::Base.connection).to receive(:verify!)
+          .and_raise(ActiveRecord::ConnectionNotEstablished, "connection to server at 127.0.0.1, port 5432 failed")
+        result = described_class.call(sql: "SELECT 1")
+
+        expect(result.error?).to be true
+        expect(result.content.first[:text]).to eq("The primary database cannot be reached: connection to server at 127.0.0.1, " \
+          "port 5432 failed. Check the file its config/database.yml entry names.")
+      end
+
+      it "answers a connection lost during the statement as an error that names the database" do
         allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
-          .and_raise(ActiveRecord::StatementInvalid,
-                     %(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist))
+          .and_raise(ActiveRecord::ConnectionNotEstablished, "server closed the connection unexpectedly")
 
         result = described_class.call(sql: "SELECT 1")
 
-        expect(result.content.first[:text]).to include("Database not found")
-        expect(result.error?).to be false
+        expect(result.error?).to be true
+        expect(result.content.first[:text]).to eq("The primary database stopped answering during the query: server closed the connection unexpectedly")
+      end
+
+      it "reads a missing database named in an SQL error as the SQL error" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+          .and_raise(ActiveRecord::StatementInvalid, "Unknown database 'reports' in a cross-database read")
+
+        expect(described_class.call(sql: "SELECT 1").content.first[:text]).to start_with("SQL error: Unknown database 'reports'")
       end
 
       it "flags genuine SQL execution errors as error results" do
@@ -356,24 +391,39 @@ RSpec.describe RailsAiContext::Tools::Query do
         c.execute("INSERT INTO big WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2000) SELECT x FROM r")
       end
     end
-    let(:slow_sql) do
-      "SELECT count(*) AS n FROM big a, big b, (SELECT * FROM big LIMIT 100) c"
-    end
+    # Eight billion rows to count: it runs for hours, so nothing but the deadline's kill ends it.
+    # These examples read how the child ended and time nothing, since a busy machine wakes the parent late.
+    let(:slow_sql) { "SELECT count(*) AS n FROM big a, big b, big c" }
+    let(:reaped) { [] }
+    let(:killed) { Signal.list.fetch("KILL") }
 
-    before { allow(ActiveRecord::Base).to receive(:connection).and_return(conn) }
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(Process).to receive(:wait).and_wrap_original { |original, pid| original.call(pid).tap { reaped << $? } }
+    end
 
     after do
       QueryTimeoutSpecRecord.remove_connection
       FileUtils.rm_rf(dir)
     end
 
-    it "stops a long query at query_timeout with the timeout message" do
+    it "ends a query that would run for hours at query_timeout, by killing its process, and answers the timeout" do
       RailsAiContext.configuration.query_timeout = 1
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      text = described_class.call(sql: slow_sql).content.first[:text]
+      response = described_class.call(sql: slow_sql)
 
-      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 3
-      expect(text).to start_with("Query exceeded 1 second timeout")
+      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+      expect(response.error?).to be(true)
+      expect(reaped.map(&:termsig)).to eq([ killed ])
+    end
+
+    it "decides the deadline once, before the child starts, and waits no longer than what is left of it" do
+      waits = []
+      allow(IO).to receive(:select).and_wrap_original { |original, *args| waits << args.last; original.call(*args) }
+
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
+        .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+      expect(waits).to all(be_between(0, 1))
+      expect(waits).to eq(waits.sort.reverse)
     end
 
     it "returns the same rows as the in-process connection" do
@@ -422,11 +472,8 @@ RSpec.describe RailsAiContext::Tools::Query do
       allow(Process).to receive(:wait).and_wrap_original { |m, pid| pids << pid; m.call(pid) }
       allow(IO).to receive(:select).and_raise(IOError, "stream closed")
 
-      took = elapsed do
-        expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 5) }.to raise_error(IOError)
-      end
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 5) }.to raise_error(IOError)
 
-      expect(took).to be < 3
       expect { Process.kill(0, pids.first) }.to raise_error(Errno::ESRCH)
     end
 
@@ -518,7 +565,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         allow(IO).to receive(:pipe).and_wrap_original do |m|
           pipe = m.call
           sleepers << Process.fork do
-            sleep 4
+            sleep 600
             exit!(0)
           end
           pipe
@@ -532,20 +579,22 @@ RSpec.describe RailsAiContext::Tools::Query do
         end
       end
 
-      it "returns a fast result without waiting for that process" do
-        result = nil
-        took = elapsed { result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums ORDER BY n", timeout: 5) }
-
-        expect(result.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
-        expect(took).to be < 2
+      def still_running?(pid)
+        Process.waitpid(pid, Process::WNOHANG).nil?
       end
 
-      it "still stops a slow query at the deadline" do
-        took = elapsed do
-          expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
-            .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
-        end
-        expect(took).to be < 2
+      it "returns a fast result while that process still holds the pipe" do
+        result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums ORDER BY n", timeout: 5)
+
+        expect(result.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
+        expect(still_running?(sleepers.last)).to be(true)
+      end
+
+      it "still ends a slow query at the deadline, while that process still holds the pipe" do
+        expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
+          .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+        expect(reaped.map(&:termsig)).to eq([ killed ])
+        expect(still_running?(sleepers.last)).to be(true)
       end
     end
 
@@ -561,16 +610,15 @@ RSpec.describe RailsAiContext::Tools::Query do
         pipe
       end
 
-      fast = Thread.new { elapsed { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 2) } }
+      fast = Thread.new { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 600) }
       sleep 0.1
-      slow = Thread.new do
-        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 2)
-      rescue RailsAiContext::DatabaseFamily::TimedOut
-        nil
-      end
+      slow = Thread.new { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 600) }
 
-      expect(fast.value).to be < 1.5
-      slow.join
+      expect(fast.value.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
+      expect(slow).to be_alive
+    ensure
+      slow&.kill
+      slow&.join
     end
   end
 
@@ -625,9 +673,10 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "reads the schema once for the whole call" do
       allow(described_class).to receive(:cached_context).and_return({})
-      allow(ActiveRecord::Base.connection).to receive(:tables).and_call_original
+      runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
+      %i[relation_columns view_definitions generated_columns].each { |read| allow(runtime).to receive(read).and_call_original }
       RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1 AS n") }
-      expect(ActiveRecord::Base.connection).to have_received(:tables).once
+      %i[relation_columns view_definitions generated_columns].each { |read| expect(runtime).to have_received(read).once }
     end
   end
 
@@ -697,7 +746,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       expect(sent_to_the_database(sql)).to eq("SELECT 7 AS n # why\nLIMIT 101")
 
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      fake_family("Trilogy")
       sent = nil
       allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:read_only) { |_conn, text, _timeout|
         sent = text
@@ -846,7 +895,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
   describe "Trilogy adapter dispatch" do
     before do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      fake_family("Trilogy")
     end
 
     it "runs regular queries through the MySQL family" do
@@ -875,8 +924,9 @@ RSpec.describe RailsAiContext::Tools::Query do
     let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
 
     before do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
+      fake_family("PostGIS")
       allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ "[]" ] ]))
+      allow(runtime).to receive(:plan).and_return("Node Type" => "Result")
     end
 
     it "runs regular queries through the PostgreSQL family" do
@@ -1148,7 +1198,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "runs a literal holding a locking phrase on PostgreSQL" do
-      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostgreSQL")
+      fake_family("PostgreSQL")
       allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan).and_return("Node Type" => "Result")
       allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:column_sources).and_return([])
       allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[id], [ [ 4 ] ]))
@@ -1156,6 +1206,122 @@ RSpec.describe RailsAiContext::Tools::Query do
       response = described_class.call(sql: "SELECT id FROM orders WHERE notes LIKE '%ready for update%'")
       expect(response.error?).to be(false)
       expect(response.content.first[:text]).to include("| 4")
+    end
+  end
+
+  describe "a SQLite view or generated column that reads a secret column" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryViewSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryViewSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "views.sqlite3"))
+      QueryViewSpecRecord.connection.tap do |c|
+        c.execute("CREATE TABLE accounts (id INTEGER, email TEXT, passwd TEXT, " \
+          "shadow TEXT GENERATED ALWAYS AS (passwd) VIRTUAL, kept TEXT AS (passwd || '-kept') STORED, shout TEXT AS (upper(email)) VIRTUAL)")
+        c.execute("CREATE TABLE notes (id INTEGER, body TEXT, size INTEGER AS (length(body)) VIRTUAL)")
+        c.execute("INSERT INTO accounts (id, email, passwd) VALUES (1, 'a@example.com', 'pw-value')")
+        c.execute("INSERT INTO notes (id, body) VALUES (1, 'hello')")
+        c.execute("CREATE VIEW renamed AS SELECT id, passwd AS p1 FROM accounts")
+        c.execute("CREATE VIEW nested AS SELECT p1 AS p2 FROM renamed")
+        c.execute("CREATE VIEW everything (a, b, c, d, e, f) AS SELECT * FROM accounts")
+        c.execute("CREATE VIEW contacts AS SELECT id, email FROM accounts")
+      end
+    end
+    let(:context) { {} }
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return(context)
+    end
+
+    after do
+      QueryViewSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+    end
+
+    def text(sql)
+      answer(sql).content.first[:text]
+    end
+
+    it "refuses a view that renames a secret column, a view built on it, and a view that lists every column" do
+      {
+        "renamed" => "the view `renamed` is not queried: its definition names the sensitive column `passwd`",
+        "nested" => "the view `nested` is not queried: it reads the view `renamed`",
+        "everything" => "the view `everything` is not queried: its definition reads every column of `accounts`"
+      }.each do |view, reason|
+        response = answer("SELECT * FROM #{view}")
+        expect(response.error?).to be(true), view
+        expect(response.content.first[:text]).to include(reason, "on SQLite, so query the tables it reads")
+        expect(response.content.first[:text]).not_to include("pw-value")
+      end
+    end
+
+    it "runs a view that names no secret column" do
+      expect(text("SELECT * FROM contacts")).to include("a@example.com")
+    end
+
+    it "filters a generated column that reads a secret column, and refuses a statement naming it" do
+      everything = text("SELECT * FROM accounts")
+      expect(everything).to include("a@example.com", "[FILTERED]")
+      expect(everything).not_to include("pw-value")
+      expect(text("SELECT shadow AS s FROM accounts")).to include("`shadow` is a generated column")
+      expect(text("SELECT kept AS k FROM accounts")).to include("sensitive column `kept`")
+    end
+
+    it "returns a generated column of a table that holds no secret column" do
+      expect(text("SELECT size FROM notes")).to include("| 5")
+    end
+
+    it "releases a view and a generated column over a column the app allows" do
+      RailsAiContext.configuration.query_allowed_columns = %w[passwd shadow kept]
+      expect(text("SELECT * FROM renamed")).to include("pw-value")
+      expect(text("SELECT shadow FROM accounts")).to include("pw-value")
+    end
+
+    context "when a model declares the column with encrypts" do
+      let(:context) { { models: { "Account" => { encrypts: %w[passwd] } } } }
+
+      it "keeps the view refused and the generated column secret, whatever the app allows" do
+        RailsAiContext.configuration.query_allowed_columns = %w[passwd shadow kept]
+        expect(answer("SELECT * FROM renamed").error?).to be(true)
+        expect(answer("SELECT shadow FROM accounts").error?).to be(true)
+        expect(text("SELECT * FROM accounts")).not_to include("pw-value")
+      end
+    end
+  end
+
+  describe "a PostgreSQL statement whose plan cannot be read" do
+    let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
+
+    before do
+      fake_family("PostgreSQL")
+      allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[row], [ [ "secret-value" ] ]))
+    end
+
+    def answer(explain: false)
+      response = described_class.call(sql: "SELECT row_to_json(a) AS row FROM accounts a", explain: explain)
+      expect(response.error?).to be(true)
+      expect(runtime).not_to have_received(:read_only)
+      response.content.first[:text]
+    end
+
+    it "answers planning's timeout as the timeout and runs nothing" do
+      allow(runtime).to receive(:plan).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "canceling statement due to statement timeout")
+      expect(answer).to start_with("Query exceeded 5 second timeout")
+      expect(answer(explain: true)).to start_with("Query exceeded 5 second timeout")
+    end
+
+    it "answers planning's error as the SQL error and runs nothing" do
+      allow(runtime).to receive(:plan).and_raise(ActiveRecord::StatementInvalid, %(PG::UndefinedTable: ERROR:  relation "accounts" does not exist))
+      expect(answer).to start_with(%(SQL error: PG::UndefinedTable: ERROR:  relation "accounts" does not exist))
+    end
+
+    it "refuses the statement when planning answers no plan" do
+      allow(runtime).to receive(:plan).and_return(nil)
+      expect(answer).to include("its plan could not be read")
     end
   end
 
@@ -1179,6 +1345,43 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "is an error result when asked of a statement it cannot explain" do
       expect(described_class.call(sql: "SHOW tables", explain: true).error?).to be(true)
+    end
+  end
+
+  describe "a failed call on each surface" do
+    def cli(*args)
+      runner = RailsAiContext::CLI::ToolRunner.new("query", args)
+      [ runner.run, runner.error ]
+    end
+
+    def mcp(arguments)
+      result = RailsAiContext::Server.new(Rails.application).build.handle(
+        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_query", arguments: arguments } }
+      )[:result]
+      [ result[:content].first[:text], result[:isError] ]
+    end
+
+    it "answers a failing EXPLAIN with a non-zero exit on the CLI and isError over MCP" do
+      expect(cli("sql=SELECT nope FROM no_such_table", "explain=true")).to match([ a_string_starting_with("EXPLAIN failed:"), true ])
+      expect(mcp(sql: "SELECT nope FROM no_such_table", explain: true)).to match([ a_string_starting_with("EXPLAIN failed:"), true ])
+    end
+
+    it "answers a database no connection reaches the same way" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished, "refused")
+      unreachable = [ "The primary database cannot be reached: refused. Check the file its config/database.yml entry names.", true ]
+
+      expect(cli("sql=SELECT 1")).to eq(unreachable)
+      expect(mcp(sql: "SELECT 1")).to eq(unreachable)
+    end
+
+    it "answers a timeout the same way, with the same text, for a query and for its EXPLAIN" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
+      timeout = [ "Query exceeded 5 second timeout. Simplify the query or add indexes.", true ]
+
+      expect(cli("sql=SELECT id FROM users")).to eq(timeout)
+      expect(cli("sql=SELECT id FROM users", "explain=true")).to eq(timeout)
+      expect(mcp(sql: "SELECT id FROM users")).to eq(timeout)
+      expect(mcp(sql: "SELECT id FROM users", explain: true)).to eq(timeout)
     end
   end
 end

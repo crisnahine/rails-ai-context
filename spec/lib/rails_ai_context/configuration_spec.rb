@@ -103,6 +103,34 @@ RSpec.describe RailsAiContext::Configuration do
     expect(err).not_to include("method redefined")
   end
 
+  describe "#query_timeout=" do
+    it "raises on a value that is not a positive number" do
+      [ 0, -1, 0.0, "soon", nil, Float::INFINITY, Float::NAN, :fast ].each do |value|
+        expect { config.query_timeout = value }.to raise_error(ArgumentError, "query_timeout must be positive (got #{value})"), value.inspect
+      end
+      expect(config.query_timeout).to eq(5)
+    end
+
+    it "keeps a positive number as given, a fraction of a second too, and reads a numeric string" do
+      { 10 => 10, 0.5 => 0.5, 0.0004 => 0.0004, "3" => 3, "1.5" => 1.5 }.each do |given, kept|
+        config.query_timeout = given
+        expect(config.query_timeout).to eql(kept)
+      end
+    end
+
+    it "is reported by the YAML file the way its other bad values are, and keeps the default" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "rails_ai_context.yml")
+        File.write(path, "query_timeout: 0\nquery_row_limit: 50\n")
+        RailsAiContext.configuration = config
+
+        expect { described_class.load_from_yaml(path) }
+          .to output("[rails-ai-context] WARNING: #{path}: query_timeout: query_timeout must be positive (got 0). Keeping the default.\n").to_stderr
+        expect([ config.query_timeout, config.query_row_limit ]).to eq([ 5, 50 ])
+      end
+    end
+  end
+
   describe "#claude_max_lines=" do
     # A budget of zero or less has no reading that produces a file, and the
     # renderer answered it with the whole file under a "trimmed" note.

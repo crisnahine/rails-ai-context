@@ -245,9 +245,28 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(database_section.scan(/^\| (\w+) \|/).flatten).to eq(%w[Table users comments posts])
     end
 
+    it "reads table sizes, index usage and pending migrations under the family's limit, at query_timeout" do
+      RailsAiContext.configuration.query_timeout = 3
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:bounded).and_call_original
+
+      described_class.call(section: "database", detail: "full")
+
+      expect(RailsAiContext::DatabaseFamily::SqliteRuntime).to have_received(:bounded).with(ActiveRecord::Base.connection, 3).at_least(3).times
+    ensure
+      RailsAiContext.configuration.query_timeout = 5
+    end
+
+    it "leaves the table sizes out when their read times out, and still answers" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:table_sizes).and_raise(ActiveRecord::QueryCanceled, "stopped")
+
+      expect(database_section).to include("**Adapter:** SQLite")
+      expect(database_section).not_to include("### Table Sizes")
+    end
+
     it "asks the MySQL family on a Trilogy connection" do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
       allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:table_sizes).and_return([ { name: "products", bytes: 1024 } ])
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
 
       expect(database_section).to include("| products | 1 KB |")
     end

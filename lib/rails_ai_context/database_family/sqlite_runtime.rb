@@ -39,6 +39,12 @@ module RailsAiContext
         Rows.new(result.columns, result.rows, true)
       end
 
+      # These reads run on the app's own connection, where a wait on another writer ends at the
+      # connection's busy timeout (database.yml `timeout`; with none, a busy database fails at once).
+      def bounded(_conn, _timeout, &reads)
+        DatabaseFamily.bounding(&reads)
+      end
+
       def explain(conn, sql, timeout)
         result = read_only(conn, "EXPLAIN QUERY PLAN #{sql}", timeout)
         scans = []
@@ -66,6 +72,36 @@ module RailsAiContext
 
       def plan(_conn, _sql, _timeout)
         nil
+      end
+
+      def relation_columns(conn)
+        conn.select_rows(
+          "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
+          "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, p.cid"
+        ).each_with_object({}) { |(table, column), found| (found[table] ||= []) << column }
+      end
+
+      # The body only: the header names the view itself. A temporary view lives in its own catalogue.
+      def view_definitions(conn)
+        conn.select_rows(
+          "SELECT name, sql FROM sqlite_master WHERE type = 'view' UNION ALL SELECT name, sql FROM sqlite_temp_master WHERE type = 'view'"
+        ).to_h { |name, sql| [ name, sql.to_s.sub(/\A.*?\bAS\b/mi, "") ] }
+      end
+
+      # SQLite keeps no expression per column, so each generated column answers its table's definition with one
+      # mention of every column taken out: a column name still in it is one some expression reads.
+      def generated_columns(conn)
+        rows = conn.select_rows(
+          "SELECT m.name, m.sql, p.name, p.hidden FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p " \
+          "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
+        )
+        rows.group_by(&:first).each_with_object({}) do |(table, columns), found|
+          generated = columns.select { |column| column[3].to_i >= 2 }
+          next if generated.empty?
+
+          read = columns.reduce(columns.first[1].to_s) { |text, column| text.sub(/\b#{Regexp.escape(column[2])}\b/i, " ") }
+          found[table] = generated.to_h { |column| [ column[2], read ] }
+        end
       end
 
       def table_sizes(conn)
@@ -145,7 +181,7 @@ module RailsAiContext
         exit!(0)
       end
 
-      # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
+      # Read by length: any other process forked meanwhile holds a copy of the writer, so EOF may never come.
       def read_child_result(reader, deadline)
         size = read_before(reader, 8, deadline).unpack1("Q>")
         status, *rest = begin

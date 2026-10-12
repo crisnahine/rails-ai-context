@@ -8,6 +8,9 @@ RSpec.describe RailsAiContext::SqlGate do
       postgresql: RailsAiContext::DatabaseFamily::POSTGRESQL }
   end
   let(:relations) { {} }
+  let(:views) { nil }
+  let(:generated) { {} }
+  let(:encrypted) { [] }
   let(:connection) { double("connection", quote: nil, select_values: []) }
   let(:plan) { { "Node Type" => "Result" } }
 
@@ -21,12 +24,13 @@ RSpec.describe RailsAiContext::SqlGate do
     RailsAiContext.configuration.query_allowed_columns = []
     allow(connection).to receive(:quote) { |name| "'#{name}'" }
     allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan) { plan }
+    allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
   end
 
   after { RailsAiContext.configuration.query_allowed_columns = [] }
 
   def check(sql, family = :sqlite)
-    secrets = RailsAiContext::SecretColumns.new(relations: relations)
+    secrets = RailsAiContext::SecretColumns.new(relations: relations, views: views, generated: generated, encrypted: encrypted)
     described_class.new(family: families.fetch(family), secrets: secrets, connection: connection, timeout: 5).check(sql)
   end
 
@@ -181,12 +185,23 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "reads one inside a literal as data on PostgreSQL, whose read-only transaction refuses locking reads" do
-      expect(runs?("SELECT id FROM orders WHERE notes LIKE '%ready for update%'", :postgresql)).to be(true)
+    it "refuses every other spelling of a locking read on every family" do
+      [ "LOCK IN SHARE MODE", "lock  in\nshare mode", "LOCK IN SHARE MODE NOWAIT", "LOCK IN SHARE MODE WAIT 1", "FOR UPDATE NOWAIT",
+        "FOR UPDATE SKIP LOCKED", "FOR SHARE OF users", "FOR UPDATE WAIT 1", "FOR KEY SHARE" ].each do |lock|
+        %i[sqlite mysql postgresql].each do |family|
+          expect(refusal("SELECT id FROM users LIMIT 5 #{lock}", family)).to include("FOR UPDATE/SHARE"), "#{lock} on #{family}"
+        end
+      end
     end
 
-    it "reads the raw text on MySQL, whose read-only transaction allows FOR SHARE" do
+    it "reads one inside a literal as data on PostgreSQL, whose read-only transaction refuses locking reads" do
+      expect(runs?("SELECT id FROM orders WHERE notes LIKE '%ready for update%'", :postgresql)).to be(true)
+      expect(runs?("SELECT id FROM orders WHERE notes LIKE '%lock in share mode%'", :postgresql)).to be(true)
+    end
+
+    it "reads the raw text on MySQL, whose read-only transaction allows FOR SHARE and LOCK IN SHARE MODE" do
       expect(refusal("SELECT id FROM orders WHERE notes LIKE '%ready for share%'", :mysql)).to include("FOR UPDATE/SHARE")
+      expect(refusal("SELECT id FROM orders WHERE notes LIKE '%lock in share mode%'", :mysql)).to include("FOR UPDATE/SHARE")
     end
   end
 
@@ -280,9 +295,8 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(runs?("SELECT $t$ api_key $t$ AS v", :postgresql)).to be(true)
       end
 
-      it "refuses it when no plan could be obtained" do
-        allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan).and_raise(ActiveRecord::StatementInvalid, "boom")
-        expect(refusal(sql, :postgresql)).to include("the plan could not be obtained")
+      it "refuses it in a statement that has no plan" do
+        expect(refusal("SHOW 'api_key'", :postgresql)).to include("the plan could not be obtained")
       end
 
       it "still refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
@@ -291,6 +305,46 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(refusal(%(SELECT 1 AS "a'b", upper(api_key), 'x' FROM users), :postgresql)).to include("api_key")
         expect(refusal("SELECT id FROM t WHERE id = $1 AND api_key = $1", :postgresql)).to include("api_key")
       end
+    end
+  end
+
+  describe "a view the database cannot redact" do
+    let(:relations) { { "users" => %w[id email passwd] } }
+    let(:views) { { "people" => "SELECT id, passwd AS p1 FROM users", "emails" => "SELECT id, email FROM users" } }
+
+    it "refuses a statement that names it, by the view and the column, and points at the tables" do
+      %i[sqlite mysql].each do |family|
+        text = refusal("SELECT * FROM people", family)
+        expect(text).to start_with("Blocked: the view `people` is not queried: its definition names the sensitive column `passwd`."), family.to_s
+        expect(text).to include("A view can rename a column past the redaction on #{families.fetch(family).name}", "query the tables it reads")
+      end
+    end
+
+    it "refuses it in a join, a subquery and an EXPLAIN, and reads a literal as the raw text" do
+      [ "SELECT e.id FROM emails e JOIN people p ON p.id = e.id", "SELECT (SELECT p1 FROM people LIMIT 1) AS x",
+        "EXPLAIN SELECT * FROM people", "SELECT 'people' AS x" ].each { |sql| expect(refusal(sql)).to include("the view `people`"), sql }
+    end
+
+    it "runs a view that names no secret column, and the definition of a refused one" do
+      expect(runs?("SELECT * FROM emails")).to be(true)
+      expect(runs?("SHOW CREATE VIEW people", :mysql)).to be(true)
+    end
+  end
+
+  describe "a generated column that reads a secret column" do
+    let(:relations) { { "users" => %w[id email passwd tax_number] } }
+    let(:generated) { { "users" => { "shadow" => "`passwd`", "taxed" => "`tax_number`" } } }
+    let(:encrypted) { %w[tax_number] }
+
+    it "refuses a statement naming it and says how to release it" do
+      text = refusal("SELECT shadow FROM users")
+      expect(text).to include("sensitive column `shadow`", "`shadow` is a generated column that reads `passwd`")
+      expect(text).to include('add "shadow" to config.query_allowed_columns')
+    end
+
+    it "says one that reads an encrypts column is not released" do
+      expect(refusal("SELECT taxed FROM users"))
+        .to include("`taxed` is a generated column that reads `tax_number`", "config.query_allowed_columns does not release it")
     end
   end
 
@@ -387,7 +441,7 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "plans the statement a leading EXPLAIN ANALYZE would run" do
       refusal("EXPLAIN ANALYZE SELECT 1 AS x", :postgresql)
-      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", 5)
+      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", a_value_within(1).of(5))
     end
 
     it "plans nothing off PostgreSQL" do
@@ -397,6 +451,71 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "answers the plan with the verdict" do
       expect(check("SELECT 1 AS x", :postgresql).plan).to eq(plan)
+    end
+
+    describe "a plan that cannot be read" do
+      let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
+
+      it "refuses the statement when planning answers no plan" do
+        allow(runtime).to receive(:plan).and_return(nil)
+        [ "SELECT * FROM users", "WITH u AS (SELECT * FROM users) SELECT * FROM u", "EXPLAIN ANALYZE SELECT * FROM users" ].each do |sql|
+          expect(refusal(sql, :postgresql)).to include("its plan could not be read"), sql
+        end
+      end
+
+      it "raises planning's timeout and planning's SQL error for the caller to answer" do
+        allow(runtime).to receive(:plan).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
+        expect { check("SELECT row_to_json(u) FROM users u", :postgresql) }.to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+
+        allow(runtime).to receive(:plan).and_raise(ActiveRecord::StatementInvalid, "boom")
+        expect { check("SELECT nope FROM users", :postgresql) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+
+      it "raises an error from a plan check" do
+        allow(connection).to receive(:select_values).and_raise(ActiveRecord::StatementInvalid, "pg_proc unreadable")
+        allow(runtime).to receive(:plan).and_return({ "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] })
+        expect { check("SELECT nextval('s')", :postgresql) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+
+      it "gives the plan and the pg_proc lookup one timeout between them" do
+        allow(runtime).to receive(:plan) do
+          sleep 0.2
+          { "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] }
+        end
+        described_class.new(family: families.fetch(:postgresql), secrets: RailsAiContext::SecretColumns.new, connection: connection, timeout: 2)
+          .check("SELECT nextval('s')")
+
+        expect(runtime).to have_received(:plan).with(connection, "SELECT nextval('s')", a_value_within(0.1).of(2))
+        expect(runtime).to have_received(:bounded).with(connection, a_value_between(1, 1.8))
+      end
+
+      it "raises the timeout when the plan used all of it" do
+        allow(runtime).to receive(:plan) do
+          sleep 0.06
+          { "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] }
+        end
+        gate = described_class.new(family: families.fetch(:postgresql), secrets: RailsAiContext::SecretColumns.new, connection: connection, timeout: 0.05)
+
+        expect { gate.check("SELECT nextval('s')") }.to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+        expect(connection).not_to have_received(:select_values)
+      end
+
+      it "plans whatever a leading EXPLAIN would run, in either spelling of its options" do
+        [ "EXPLAIN VALUES (1)", "EXPLAIN (ANALYZE, VERBOSE) VALUES (1)", "EXPLAIN ANALYZE VERBOSE VALUES (1)" ].each { |sql| check(sql, :postgresql) }
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", a_value_within(1).of(5)).exactly(3).times
+
+        check("EXPLAIN (ANALYZE) (SELECT 1)", :postgresql)
+        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5))
+      end
+
+      # SHOW reads a setting and PostgreSQL has no DESCRIBE, so neither has a plan to read.
+      it "runs SHOW, DESCRIBE and DESC with no plan" do
+        [ "SHOW server_version", "DESCRIBE users", "DESC users" ].each do |sql|
+          verdict = check(sql, :postgresql)
+          expect([ verdict.refused?, verdict.plan ]).to eq([ false, nil ]), sql
+        end
+        expect(runtime).not_to have_received(:plan)
+      end
     end
   end
 end
