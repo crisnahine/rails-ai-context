@@ -59,12 +59,6 @@ module RailsAiContext
       found.key?("primary") ? "primary" : found.keys.first
     end
 
-    # The databases other than the primary that Rails dumps and migrates:
-    # HashConfig#database_tasks? skips a replica and database_tasks: false.
-    def task_secondaries(root)
-      databases(root).except(primary_name(root)).select { |_, entry| !entry["replica"] && entry.fetch("database_tasks", true) }
-    end
-
     # The primary database's settings.
     def primary(root)
       databases(root)[primary_name(root)]
@@ -108,24 +102,6 @@ module RailsAiContext
     # The named database's settings in the running environment, or nil.
     def entry(root, name)
       entry_in(databases(root), name)
-    end
-
-    # [environment, settings] from the first other environment that configures the database,
-    # the one whose tasks wrote its dump; nil when none does.
-    def elsewhere(root, name)
-      data = file(root)
-      return nil unless data
-
-      # A key with no config/environments file holds an anchor (`default: &default`), not an environment.
-      declared = Dir.glob(File.join(root.to_s, "config/environments/*.rb")).map { |path| File.basename(path, ".rb") }
-      data.each do |env_name, config|
-        next if env_name == RailsAiContext.environment_name
-        next if declared.any? && !declared.include?(env_name)
-
-        found = entry_in(databases_in(config), name)
-        return [ env_name, found ] if found.is_a?(Hash)
-      end
-      nil
     end
 
     def entry_in(found, name)

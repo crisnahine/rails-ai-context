@@ -93,6 +93,72 @@ RSpec.describe RailsAiContext::AppDatabases do
     end
   end
 
+  it "names an environment the app declares, never a key that only holds an anchor" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "config/environments"))
+      %w[development test production].each { |env| File.write(File.join(root, "config/environments/#{env}.rb"), "") }
+      File.write(File.join(root, "config/database.yml"), <<~YAML)
+        shared: &shared
+          primary: &primary
+            adapter: sqlite3
+            database: storage/app.sqlite3
+          queue:
+            adapter: sqlite3
+            database: storage/queue.sqlite3
+            migrations_paths: db/queue_migrate
+        development:
+          primary: *primary
+        test:
+          primary: *primary
+        production:
+          <<: *shared
+      YAML
+
+      queue = static(root).fetch("queue")
+
+      expect(queue.environment).to eq("production")
+      expect(queue.config["migrations_paths"]).to eq("db/queue_migrate")
+    end
+  end
+
+  describe "the one list" do
+    rules = {
+      "reads ActiveRecord's configurations" => /configs_for|\.configurations\b/,
+      "reads database.yml's databases" => /DatabaseYml\.(?:databases|file)\b|\bdatabases_in\b/,
+      "globs the dumps" => /\*_(?:schema|structure|#\{)/
+    }
+    offences = lambda do |source|
+      source.lines.each_with_index.filter_map do |line, index|
+        next if line.lstrip.start_with?("#")
+
+        rule = rules.find { |_, pattern| line.match?(pattern) }&.first
+        "#{index + 1} #{rule}: #{line.strip}" if rule
+      end
+    end
+
+    it "is built nowhere but in the app databases and database.yml's reader" do
+      root = File.expand_path("../../../lib", __dir__)
+      found = Dir.glob(File.join(root, "**", "*.rb")).sort.flat_map do |file|
+        next [] if file.end_with?("rails_ai_context/app_databases.rb", "rails_ai_context/database_yml.rb")
+
+        offences.call(File.read(file)).map { |offence| "#{file.delete_prefix("#{root}/")}:#{offence}" }
+      end
+      expect(found).to be_empty
+    end
+
+    it "catches each way a list is built" do
+      [
+        "ActiveRecord::Base.configurations.configs_for(env_name: Rails.env)",
+        "ActiveRecord::Base.configurations.configurations.map(&:name)",
+        "RailsAiContext::DatabaseYml.databases(root).keys",
+        "DatabaseYml.databases_in(config)",
+        'Dir.glob(File.join(root, "db", "*_schema.rb"))',
+        'Dir.glob(File.join(root, "db", "*_#{kind}.#{ext}"))'
+      ].each { |source| expect(offences.call(source)).not_to be_empty, source }
+      expect(offences.call('RailsAiContext::AppDatabases.for(root).secondaries')).to be_empty
+    end
+  end
+
   it "builds once per run" do
     RailsAiContext::RunCache.around do
       expect(described_class.for(fixture("rails8"))).to equal(described_class.for(fixture("rails8")))
