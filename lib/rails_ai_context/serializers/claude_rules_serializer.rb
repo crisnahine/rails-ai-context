@@ -214,8 +214,9 @@ module RailsAiContext
           assocs = (data[:associations] || []).size
           vals = (data[:validations] || []).size
           table = data[:table_name]
+          note = SectionFacts.table_note(Payload.section(context, :schema), data)
           line = "- #{name}"
-          line += " (table: #{table})" if table
+          line += note ? " (table #{note})" : (" (table: #{table})" if table).to_s
           line += " - #{count_phrase(assocs, "assoc")}, #{count_phrase(vals, "validation")}"
           lines << line
 

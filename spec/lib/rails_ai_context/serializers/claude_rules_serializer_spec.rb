@@ -220,6 +220,23 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       end
     end
 
+    # A live listing that lacks a model's table says so, as model_details and onboard do.
+    it "says a model's table is not found where the live database lacks it, in every rules file" do
+      missing = { schema: { adapter: "sqlite3", tables: { "posts" => { columns: [] } } },
+                  models: { "Post" => { table_name: "posts", associations: [] }, "Tag" => { table_name: "tags", associations: [] } } }
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        described_class.new(missing).call(dir)
+        RailsAiContext::Serializers::OpencodeRulesSerializer.new(missing).call(dir)
+        RailsAiContext::Serializers::CursorRulesSerializer.new(missing).call(dir)
+
+        expect(File.read(File.join(dir, ".claude", "rules", "rails-models.md"))).to include("- Tag (table `tags` not found)", "- Post (table: posts)")
+        expect(File.read(File.join(dir, "app", "models", "AGENTS.md"))).to include("- **Tag** (table `tags` not found)")
+        expect(Dir[File.join(dir, ".cursor", "rules", "*")].map { |f| File.read(f) }.join).to include("table: `tags` not found")
+      end
+      expect(RailsAiContext::Serializers::MarkdownSerializer.new(missing).call).to include("- Table: `tags` not found")
+    end
+
     it "includes paths: frontmatter on models rule" do
       Dir.mktmpdir do |dir|
         described_class.new(context).call(dir)

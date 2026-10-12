@@ -104,7 +104,8 @@ module RailsAiContext
           end
 
           assocs = (data[:associations] || []).size
-          lines << "- #{name} (#{count_phrase(assocs, "association")}, table: #{data[:table_name] || '?'})"
+          table = SectionFacts.table_note(Payload.section(context, :schema), data) || data[:table_name] || "?"
+          lines << "- #{name} (#{count_phrase(assocs, "association")}, table: #{table})"
           extras = model_extras_line(data)
           lines << extras if extras
         end

@@ -132,7 +132,10 @@ module RailsAiContext
           end
 
           assocs = SectionFacts.associations_list(data).join(", ")
-          lines << "- Table: `#{data[:table_name]}`" if data[:table_name]
+          note = SectionFacts.table_note(Payload.section(context, :schema), data)
+          if note || data[:table_name]
+            lines << "- Table: #{note || "`#{data[:table_name]}`"}"
+          end
           concerns = ConcernMembership.app_owned(data[:concerns], project_root)
           lines << "- Concerns: #{concerns.join(', ')}" if concerns.any?
           lines << "- Associations: #{assocs}" if assocs.present?

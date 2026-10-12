@@ -74,8 +74,9 @@ module RailsAiContext
 
           assocs = SectionFacts.associations_list(data).join(", ")
           vals = (data[:validations] || []).size
+          note = SectionFacts.table_note(Payload.section(context, :schema), data)
           line = "- **#{name}**"
-          line += " (table: #{data[:table_name]})" if data[:table_name]
+          line += note ? " (table #{note})" : (" (table: #{data[:table_name]})" if data[:table_name]).to_s
           line += " - #{assocs}" unless assocs.empty?
           line += " [#{vals}v]" if vals > 0
           lines << line
