@@ -50,6 +50,10 @@ RSpec.describe "rails_get_config sections" do
       expect(names & retired.values.map(&:tool_name)).to be_empty
     end
 
+    it "says what the env section holds" do
+      expect(RailsAiContext::Tools::GetConfig.description_value).to include("env (names of environment variables and credentials keys),")
+    end
+
     it "keeps the ten classes callable from Ruby, out of the registry" do
       retired.each_value do |tool|
         expect(tool).to be_abstract
@@ -324,14 +328,18 @@ RSpec.describe "rails_get_config sections" do
       expect(result[:content].first[:text]).to end_with('_rails_get_engines is now `rails_get_config(section:"engines")`; call that instead._')
     end
 
-    it "names a value over 80 characters, or one holding a backtick, after the call" do
-      [ "x" * 81, "e`n" ].each do |locale|
+    unsafe = [ "x" * 81, "e`n", "fr)", "fr(1)", "$(id)", 'f"r', "f'r", "f\\r", "f\nr", "f r", "" ]
+
+    it "names a value over 80 characters, or one holding a character outside letters, digits, _ . and -, after the call" do
+      unsafe.each do |locale|
         note = call("rails_get_i18n", { locale: locale })[:content].first[:text].lines.last
         expect(note).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n")`, with the same `locale`; call that instead._))
       end
 
-      kept = call("rails_get_i18n", { locale: "x" * 80 })[:content].first[:text].lines.last
-      expect(kept).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n", locale:"#{'x' * 80}")`; call that instead._))
+      [ "x" * 80, "pt-BR", "zh_CN.utf8" ].each do |locale|
+        kept = call("rails_get_i18n", { locale: locale })[:content].first[:text].lines.last
+        expect(kept).to eq(%(_rails_get_i18n is now `rails_get_config(section:"i18n", locale:"#{locale}")`; call that instead._))
+      end
     end
 
     it "keeps a short argument in the call beside a long one named after it" do
@@ -347,10 +355,12 @@ RSpec.describe "rails_get_config sections" do
       command = RailsAiContext::InstallMode.tool_command("config")
 
       expect(answer).to end_with("_rails_get_i18n is now `#{command} section=i18n locale=en`; call that instead._")
-      [ "e`n", "x" * 5_000 ].each do |locale|
+      (unsafe - [ "" ] + [ "x" * 5_000 ]).each do |locale|
         expect(RailsAiContext::CLI::ToolRunner.new("i18n", [ "--locale", locale ]).run)
           .to end_with("_rails_get_i18n is now `#{command} section=i18n`, with the same `locale`; call that instead._")
       end
+      expect(RailsAiContext::CLI::ToolRunner.new("i18n", [ "--locale", "pt-BR" ]).run)
+        .to end_with("_rails_get_i18n is now `#{command} section=i18n locale=pt-BR`; call that instead._")
       expect(RailsAiContext::CLI::ToolRunner.new("i18n", [ "--locale", "x" * 5_000, "--limit", "3" ]).run)
         .to end_with("_rails_get_i18n is now `#{command} section=i18n limit=3`, with the same `locale`; call that instead._")
     end

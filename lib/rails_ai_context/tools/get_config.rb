@@ -48,7 +48,7 @@ module RailsAiContext
         Section.new(name: "active_support", tool_name: "rails_get_active_support", params: [],
                     summary: "concerns, notifications, on_load hooks"),
         Section.new(name: "env", tool_name: "rails_get_env", params: %i[detail],
-                    summary: "environment variables and credentials keys, never values"),
+                    summary: "names of environment variables and credentials keys"),
         Section.new(name: "env_config", tool_name: "rails_get_env_config", params: %i[environment offset limit],
                     summary: "config/environments/*.rb per environment"),
         Section.new(name: "i18n", tool_name: "rails_get_i18n", params: %i[locale offset limit], summary: "locales, locale files, coverage")
@@ -157,9 +157,14 @@ module RailsAiContext
         unknown_param_response(unknown, section.params.map(&:to_s)) if unknown.any?
       end
 
-      # A value too long to echo whole, or holding a backtick that would end the code span, is named after the call.
+      # A value goes into the call only when it reads the same in a code span, an MCP call and a shell command.
+      CALL_SAFE = /\A[\w.-]+\z/
+
+      # Every other value, and one too long to echo whole, is named after the call.
       def self.retired_note(section, arguments)
-        outside, spanned = arguments.slice(*section.params).partition { |_, value| echo_input(value) != value.to_s || value.to_s.include?("`") }
+        spanned, outside = arguments.slice(*section.params).partition do |_, value|
+          value.is_a?(Integer) || value == true || value == false || (value.is_a?(String) && value.match?(CALL_SAFE) && echo_input(value) == value)
+        end
         read = spanned.map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", ")
         call = pointer(section.tool_name, read)
         same = ", with the same #{outside.map { |key, _| "`#{key}`" }.join(' and ')}" if outside.any?
