@@ -70,6 +70,12 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         .to eq(RailsAiContext::Tools::GetSchema)
     end
 
+    it "lists the name once, as tools/list does" do
+      expect(described_class.available_tools).to eq(RailsAiContext::Server.exposed_tools)
+      expect(described_class.available_tools.count { |t| t.tool_name == "rails_get_schema" }).to eq(1)
+      expect(described_class.tool_list.scan(/^  schema /).size).to eq(1)
+    end
+
     it "resolves to the custom tool once skip_tools names the built-in" do
       allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_schema" ])
 

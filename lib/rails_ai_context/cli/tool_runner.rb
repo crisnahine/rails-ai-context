@@ -82,13 +82,9 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Filtered tool list respecting skip_tools config.
-      # The MCP server's rule: skip_tools removes built-ins only, and a built-in
-      # comes before a custom tool of the same name, so skip_tools is how a
-      # custom tool replaces one.
+      # What the MCP server's tools/list answers with.
       def self.available_tools
-        skip = RailsAiContext.configuration.skip_tools
-        Server.builtin_tools.reject { |t| skip.include?(t.tool_name) } + Server.resolve_custom_tools
+        Server.exposed_tools
       end
 
       # Generate help for a specific tool from its input_schema.
@@ -145,26 +141,15 @@ module RailsAiContext
         tool_class.input_schema_value&.to_h || {}
       end
 
-      # The tool a name spells, loading that one class rather than all 45, in
-      # available_tools' order: an unskipped built-in, then a custom tool. A
+      # The tool a name spells, loading that one class rather than all 45. A
       # miss falls back to the full list, which also carries the suggestion.
       def direct_tool(name)
-        skip = RailsAiContext.configuration.skip_tools
         custom = Server.resolve_custom_tools
         [ name, "rails_#{name}", "rails_get_#{name}" ].each do |candidate|
-          found = (builtin_tool(candidate) unless skip.include?(candidate)) ||
-                  custom.find { |tool| tool.tool_name == candidate }
+          found = Server.served_tool(candidate, custom_tools: custom)
           return found if found
         end
         nil
-      end
-
-      def builtin_tool(tool_name)
-        const = tool_name.delete_prefix("rails_").split("_").map(&:capitalize).join
-        return nil unless const.match?(/\A[A-Z]\w*\z/) && Tools.const_defined?(const, false)
-
-        tool = Tools.const_get(const, false)
-        tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == tool_name
       end
 
       # Resolve tool name: tries short → medium → full form.

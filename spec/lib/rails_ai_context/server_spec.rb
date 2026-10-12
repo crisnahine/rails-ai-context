@@ -44,6 +44,42 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  # One tool by name, by the rule tools/list follows, without loading the
+  # other 44 classes.
+  describe ".served_tool" do
+    let(:config) { RailsAiContext::Configuration.new }
+    let(:custom) { double("MyApp::SchemaTool", tool_name: "rails_get_schema") }
+
+    it "answers the built-in, and nil for a name nothing serves" do
+      expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
+      expect(described_class.served_tool("rails_not_a_tool", config)).to be_nil
+      expect(described_class.served?("rails_get_schema", config)).to be(true)
+    end
+
+    it "keeps the built-in over a custom tool of the same name, as tools/list does" do
+      allow(described_class).to receive(:resolve_custom_tools).and_return([ custom ])
+
+      expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
+    end
+
+    it "answers nil for a skipped built-in, and the custom tool that takes its name" do
+      config.skip_tools = %w[rails_get_schema]
+      expect(described_class.served?("rails_get_schema", config)).to be(false)
+
+      allow(described_class).to receive(:resolve_custom_tools).and_return([ custom ])
+      expect(described_class.served_tool("rails_get_schema", config)).to eq(custom)
+    end
+
+    it "agrees with exposed_tools on every built-in" do
+      config.skip_tools = %w[rails_query rails_get_view]
+      exposed = described_class.exposed_tools(config)
+
+      described_class.builtin_tools.each do |tool|
+        expect(described_class.served_tool(tool.tool_name, config)).to eq(exposed.find { |t| t.tool_name == tool.tool_name })
+      end
+    end
+  end
+
   describe ".announced_name" do
     it "is config.server_name by default" do
       expect(described_class.announced_name).to eq(RailsAiContext.configuration.server_name)
