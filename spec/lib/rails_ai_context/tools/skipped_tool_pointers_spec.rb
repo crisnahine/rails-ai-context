@@ -4,11 +4,11 @@ require "spec_helper"
 
 # skip_tools takes a tool out of tools/list, so no answer may send the reader to it.
 RSpec.describe "Answers in an app whose skip_tools turns tools off" do
-  SKIPPED = %w[rails_search_code rails_get_schema rails_get_model_details rails_get_routes rails_read_logs rails_get_view].freeze
+  skipped = %w[rails_search_code rails_get_schema rails_get_model_details rails_get_routes rails_read_logs rails_get_view].freeze
 
   around do |example|
     saved = RailsAiContext.configuration.skip_tools
-    RailsAiContext.configuration.skip_tools = SKIPPED
+    RailsAiContext.configuration.skip_tools = skipped
     example.run
   ensure
     RailsAiContext.configuration.skip_tools = saved
@@ -19,7 +19,7 @@ RSpec.describe "Answers in an app whose skip_tools turns tools off" do
   end
 
   def calls_to_skipped(answer)
-    answer.scan(/\b(rails_\w+)\(/).flatten & SKIPPED
+    answer.scan(/\b(rails_\w+)\(/).flatten & RailsAiContext.configuration.skip_tools
   end
 
   it "numbers diagnose's fix steps without the ones pointing at a skipped tool" do

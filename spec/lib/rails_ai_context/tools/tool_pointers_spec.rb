@@ -7,7 +7,7 @@ require "prism"
 # which leaves it out when the app does not serve that tool. A call spelled
 # into a string skips that check and sends the reader to a tool tools/list lacks.
 RSpec.describe "Pointers to other tools in tool answers" do
-  TOOL_DECLARATIONS = %i[tool_name description guide_row].freeze
+  let(:declarations) { %i[tool_name description guide_row] }
 
   def raw_calls(source)
     root = Prism.parse(source).value
@@ -16,7 +16,7 @@ RSpec.describe "Pointers to other tools in tool answers" do
     walk = lambda do |node|
       next unless node.is_a?(Prism::Node)
 
-      if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.arguments && TOOL_DECLARATIONS.include?(node.name)
+      if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.arguments && declarations.include?(node.name)
         own << node.arguments.arguments.first.unescaped if node.name == :tool_name
         next
       end
