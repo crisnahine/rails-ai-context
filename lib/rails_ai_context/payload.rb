@@ -203,7 +203,7 @@ module RailsAiContext
 
       secondary = schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases].keys : []
       [ nil, *secondary ].filter_map do |db|
-        live = db.nil? && !parsed_schema?(schema) && DatabaseFamily.of(schema[:adapter].to_s).key == :postgresql
+        live = db.nil? && !parsed_schema?(schema) && DatabaseFamily.of(schema[:adapter].to_s).postgresql?
         shown, data = Introspectors::SchemaIntrospector.qualified_table(name.to_s, database: db&.to_s, live: live)
         # The fourth entry is the name the listing shows the table under, which its models read.
         [ db&.to_s, name.to_s, data, shown ] if data

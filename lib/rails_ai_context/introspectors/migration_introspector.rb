@@ -84,6 +84,8 @@ module RailsAiContext
           next if dirs == migrate_dir
 
           files = RailsAiContext::PendingMigrations.migration_files(dirs, root: root)
+          next if files.empty?
+
           format, dump = db.dump
           pending = RailsAiContext::PendingMigrations.for(migrate_dir: dirs, applied: RailsAiContext::SchemaVersion.recorded(format, dump), root: root)
           found[db.name] = {

@@ -148,15 +148,15 @@ module RailsAiContext
       end
 
       def sqlite?
-        family.key == :sqlite
+        family.sqlite?
       end
 
       def postgres?
-        family.key == :postgresql
+        family.postgresql?
       end
 
       def mysql?
-        RailsAiContext::DatabaseFamily.of(connection).key == :mysql
+        RailsAiContext::DatabaseFamily.of(connection).mysql?
       end
 
       def connection
@@ -736,7 +736,7 @@ module RailsAiContext
 
       def dump_lookup(database)
         adapter = SchemaConventions.database_adapter_for(app.root.to_s, database || "primary")
-        return if adapter && RailsAiContext::DatabaseFamily.of(adapter).key != :postgresql
+        return if adapter && !RailsAiContext::DatabaseFamily.of(adapter).postgresql?
 
         _, format, path = database ? secondary_dump_files.find { |name, _, _| name == database } : [ nil, *present_dump ]
         return unless path && File.exist?(path)

@@ -536,7 +536,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         { action: "change_type", table: "users", column: "email", type: "text" },
         { action: "add_column", table: "users", column: "phone", type: "string", options: "null: false" }
       ].each do |args|
-        it "gives #{args[:action]} advice that names no engine" do
+        it "gives #{args[:action]} advice that names no database" do
           text = described_class.call(**args).content.first[:text]
           expect(text).not_to match(/Postgre|MySQL|MariaDB|SQLite|concurrently|validate: false|foreign_key_checks/)
         end

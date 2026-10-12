@@ -2,7 +2,7 @@
 
 module RailsAiContext
   module Introspectors
-    # Approximate row counts per table from the database family; an engine with
+    # Approximate row counts per table from the database family; an adapter with
     # no family returns { skipped: true }.
     class DatabaseStatsIntrospector < Base
       extend StaticTier

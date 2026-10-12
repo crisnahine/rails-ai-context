@@ -58,7 +58,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
       threads = %w[queue cache queue cache].map do |name|
         Thread.new { Array.new(10) { list.fetch(name).with_connection { |conn| conn.select_value("SELECT name FROM marker") } }.uniq }
       end
-      # Bounded, so leases that block each other fail here rather than hang the suite.
+      # Bounded, so leases that block each other fail here within 30 seconds.
       answers = threads.map { |thread| thread.join(30)&.value }
       threads.each(&:kill)
 
@@ -97,7 +97,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
       path = File.join(@dir, "queue.sqlite3")
       list = databases("queue" => config(Rails.env, "queue", path))
 
-      expect { list.fetch("queue").with_connection { nil } }.to raise_error(ActiveRecord::NoDatabaseError, /#{Regexp.escape(path)}/)
+      expect { list.fetch("queue").with_connection { nil } }.to raise_error(RailsAiContext::AppDatabases::Missing, /queue database does not exist yet.*#{Regexp.escape(path)}/)
       expect(File.exist?(path)).to be(false)
     end
 
@@ -153,7 +153,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
 
       state = analytics(path).pending_migrations(migrations_dir)
 
-      expect(state[:error]).to be_a(ActiveRecord::NoDatabaseError)
+      expect(state[:error]).to be_a(RailsAiContext::AppDatabases::Missing)
       expect(File.exist?(path)).to be(false)
     end
 

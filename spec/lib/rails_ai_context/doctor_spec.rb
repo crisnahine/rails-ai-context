@@ -2438,7 +2438,7 @@ RSpec.describe RailsAiContext::Doctor do
       write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n    database: db/app.sqlite3\n")
       write("db/migrate/20240101000000_create_notes.rb", "class CreateNotes < ActiveRecord::Migration[7.1]\nend\n")
 
-      expect(app_doctor.send(:check_pending_migrations)).to be_nil
+      expect(app_doctor.run[:checks].map(&:name)).not_to include("Pending migrations", "Database")
       expect(File.exist?(File.join(@root, "db/app.sqlite3"))).to be(false)
     end
 

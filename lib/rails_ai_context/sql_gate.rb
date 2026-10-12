@@ -30,7 +30,7 @@ module RailsAiContext
 
     # SELECT-callable functions that read or write files or reach the network
     # through the database process. They pass a read-only transaction, since
-    # they are reads to the engine. COPY ... TO PROGRAM is not a SELECT, so the
+    # they are reads to the database. COPY ... TO PROGRAM is not a SELECT, so the
     # statement keywords refuse it first.
     BLOCKED_FUNCTIONS = /\b(
       pg_read_binary_file | pg_read_file |
@@ -45,10 +45,8 @@ module RailsAiContext
     # Checked before SELECT_INTO, which also matches, so the refusal names the disk write.
     BLOCKED_OUTPUT = /\bINTO\s+(OUTFILE|DUMPFILE)\b/i
 
-    # Session-effecting and administrative PostgreSQL functions: a read-only
-    # transaction lets them run and keep their effect on the pooled
-    # connection. This name list is the first layer; the plan's VOLATILE
-    # function check closes the rest of the family.
+    # PostgreSQL functions whose session or server effect outlives a read-only
+    # transaction. The plan's VOLATILE check refuses the ones not named here.
     BLOCKED_PG_ADMIN = /\b(
       pg_terminate_backend | pg_cancel_backend |
       pg_reload_conf | pg_rotate_logfile[a-z_]* |
@@ -72,11 +70,8 @@ module RailsAiContext
       master_pos_wait | source_pos_wait
     )\s*\(/ix
 
-    # VOLATILE built-ins known to only read. pg_proc marks a reader of live
-    # server state VOLATILE as well as a writer, so VOLATILE alone does not
-    # mean "changes state": random values, sleeps the timeout bounds, relation
-    # and database sizes, lock status, recovery and WAL position. Everything
-    # else the plan reports as VOLATILE is refused.
+    # VOLATILE built-ins that only read: pg_proc marks a reader of live server
+    # state VOLATILE too. Any other VOLATILE function in the plan is refused.
     PG_VOLATILE_ALLOWLIST = %w[
       random clock_timestamp gen_random_uuid timeofday uuid_generate_v4
       pg_sleep pg_sleep_for pg_sleep_until
@@ -138,8 +133,8 @@ module RailsAiContext
     # @param connection the connection the statement runs on, for the plan checks
     # @param timeout [Numeric] seconds, for planning
     def initialize(family:, secrets:, connection:, timeout:)
-      @mysql = family.key == :mysql
-      @postgres = family.key == :postgresql
+      @mysql = family.mysql?
+      @postgres = family.postgresql?
       @family = family
       @secrets = secrets
       @connection = connection
@@ -224,12 +219,15 @@ module RailsAiContext
       # An alias or an expression renames a column past the redaction that
       # reads output names, so a statement naming a secret column is refused whole.
       if (offending = @secrets.named_in(literal_free))
+        way_out = if @secrets.encrypted?(offending)
+          "A model declares `#{offending}` with `encrypts`, so config.query_allowed_columns does not release it."
+        else
+          "If `#{offending}` is not sensitive in your app, add \"#{offending}\" to config.query_allowed_columns in an initializer."
+        end
         "Blocked: query references sensitive column `#{offending}`. " \
           "Name the columns you need; `#{offending}` is sensitive and never " \
           "returned, and an alias or expression over it cannot be redacted after " \
-          "the query runs, so the whole query is refused. If `#{offending}` is not " \
-          "sensitive in your app, add \"#{offending}\" to config.query_allowed_columns " \
-          "in an initializer."
+          "the query runs, so the whole query is refused. #{way_out}"
       end
     end
 

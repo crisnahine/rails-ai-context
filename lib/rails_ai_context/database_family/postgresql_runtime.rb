@@ -13,7 +13,7 @@ module RailsAiContext
         DatabaseFamily.bounding do
           conn.transaction do
             conn.execute("SET TRANSACTION READ ONLY")
-            conn.execute("SET LOCAL statement_timeout = '#{(timeout * 1000).to_i}'")
+            conn.execute("SET LOCAL statement_timeout = '#{[ (timeout * 1000).to_i, 1 ].max}'")
             result = conn.select_all(sql)
             raise ActiveRecord::Rollback
           end

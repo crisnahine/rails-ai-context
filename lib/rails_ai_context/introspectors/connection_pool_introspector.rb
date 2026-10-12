@@ -64,7 +64,7 @@ module RailsAiContext
 
       def config_hash(cfg)
         # A booted entry is a db_config; a database.yml entry is the Hash itself.
-        cfg =cfg.configuration_hash if cfg.respond_to?(:configuration_hash)
+        cfg = cfg.configuration_hash if cfg.respond_to?(:configuration_hash)
         if cfg.is_a?(Hash)
           cfg.transform_keys(&:to_s)
         else
