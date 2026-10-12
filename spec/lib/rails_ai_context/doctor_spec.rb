@@ -220,7 +220,7 @@ RSpec.describe RailsAiContext::Doctor do
       it "runs a database task at the app's root, and names the files it reports from there" do
         doctor = described_class.new(Rails.application, from: inside)
         config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/x.sqlite3" })
-        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: RailsAiContext::AppDatabases::Missing.new("no") } ])
 
         expect(doctor.send(:check_pending_migrations)).to have_attributes(
           message: "the #{Rails.env} database storage/x.sqlite3 does not exist",
@@ -2260,7 +2260,7 @@ RSpec.describe RailsAiContext::Doctor do
 
         it "names a SQLite database the dummy app reads from its root under test/dummy" do
           config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/development.sqlite3" })
-          allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
+          allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: RailsAiContext::AppDatabases::Missing.new("no") } ])
 
           expect(doctor.send(:check_pending_migrations)).to have_attributes(
             message: "the #{Rails.env} database test/dummy/storage/development.sqlite3 does not exist",
@@ -2463,7 +2463,7 @@ RSpec.describe RailsAiContext::Doctor do
 
     # The pending row used to vanish with no database, so --strict passed.
     it "fails, naming a database that does not exist and the command that makes it" do
-      check = unreachable(ActiveRecord::NoDatabaseError.new("Database not found: shop_development"))
+      check = unreachable(RailsAiContext::AppDatabases::Missing.new("Database not found: shop_development"))
 
       expect(check).to have_attributes(name: "Database", status: :fail, message: "the #{Rails.env} database shop_development does not exist",
                                        fix: "Run `RAILS_ENV=#{Rails.env} bin/rails db:prepare`")
@@ -2484,7 +2484,7 @@ RSpec.describe RailsAiContext::Doctor do
     it "runs the task in the app, and names its settings from where it was typed" do
       above = described_class.new(RailsAiContext::StaticApp.new(@root), from: File.dirname(@root))
       allow(above).to receive(:database_states).and_return([
-        { name: "primary", config: database_named("primary", "shop_development"), error: ActiveRecord::NoDatabaseError.new("no") },
+        { name: "primary", config: database_named("primary", "shop_development"), error: RailsAiContext::AppDatabases::Missing.new("no") },
         { name: "queue", config: database_named("queue", "shop_queue"), error: ActiveRecord::ConnectionNotEstablished.new("refused") }
       ])
       app_dir = File.basename(@root)
@@ -2493,6 +2493,18 @@ RSpec.describe RailsAiContext::Doctor do
         "Run `cd #{app_dir} && RAILS_ENV=#{Rails.env} bin/rails db:prepare`; " \
         "Start the database server, or fix its settings in #{app_dir}/config/database.yml"
       )
+    end
+
+    # A test environment often keeps a secondary in memory, which only the app's own process holds.
+    it "leaves a database that lives in memory out of the databases it reads" do
+      memory = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "cache", { adapter: "sqlite3", database: ":memory:" })
+      list = RailsAiContext::AppDatabases.build(
+        environments: { Rails.env => { "primary" => ActiveRecord::Base.connection_db_config, "cache" => memory } },
+        current: Rails.env, root: Rails.root.to_s, dumps: []
+      )
+      allow(RailsAiContext::AppDatabases).to receive(:for).and_return(list)
+
+      expect(doctor.send(:database_states).map { |state| state[:name] }).to eq(%w[primary])
     end
   end
 end

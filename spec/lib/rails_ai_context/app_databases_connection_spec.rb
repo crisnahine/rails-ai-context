@@ -76,8 +76,42 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
 
       expect(list.fetch("cache").environments).to eq(%w[staging production])
       expect { list.fetch("cache").with_connection { nil } }
-        .to raise_error(RailsAiContext::AppDatabases::NotHere, "The cache database is configured in staging and production, " \
-                                                               "not in #{Rails.env}, so it cannot be reached from here.")
+        .to raise_error(RailsAiContext::AppDatabases::NotHere, "The cache database is configured in staging and production. " \
+                                                               "This process runs in #{Rails.env}, so it cannot be reached from here.")
+    end
+
+    it "refuses a database other than the primary that lives in memory, by name, before any connection" do
+      [ ":memory:", "file:queue?mode=memory&cache=shared", "file::memory:?cache=shared" ].each do |database|
+        list = databases("queue" => config(Rails.env, "queue", database))
+        expect(ActiveRecord::ConnectionAdapters::ConnectionHandler).not_to receive(:new)
+
+        expect { list.fetch("queue").with_connection { nil } }
+          .to raise_error(RailsAiContext::AppDatabases::InMemory, /\AThe queue database lives in memory/), database
+        expect(list.fetch("queue").pending_migrations[:error]).to be_a(RailsAiContext::AppDatabases::InMemory)
+      end
+    end
+
+    it "says the SQLite file a file: URI names is missing, without creating it" do
+      path = File.join(@dir, "queue.sqlite3")
+      list = databases("queue" => config(Rails.env, "queue", "file:#{path}?mode=rwc"))
+
+      expect { list.fetch("queue").with_connection { nil } }.to raise_error(RailsAiContext::AppDatabases::Missing, /queue database does not exist yet/)
+      expect(list.fetch("queue").pending_migrations[:error]).to be_a(RailsAiContext::AppDatabases::Missing)
+      expect(File.exist?(path)).to be(false)
+    end
+
+    it "reads the SQLite file a file: URI names when it is there" do
+      list = databases("queue" => config(Rails.env, "queue", "file:#{sqlite_file("queue")}?mode=rw"))
+
+      expect(list.fetch("queue").with_connection { |conn| conn.select_value("SELECT name FROM marker") }).to eq("queue")
+    end
+
+    it "names a database no connection reaches, and says what stopped it" do
+      list = databases("queue" => config(Rails.env, "queue", @dir))
+
+      expect { list.fetch("queue").verify! }
+        .to raise_error(RailsAiContext::AppDatabases::Unreachable, /\AThe queue database cannot be reached: .*unable to open database file/i)
+      expect(list.fetch(nil).verify!).to be_nil
     end
 
     it "refuses a database only a committed dump names" do
@@ -155,6 +189,18 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
 
       expect(state[:error]).to be_a(RailsAiContext::AppDatabases::Missing)
       expect(File.exist?(path)).to be(false)
+    end
+
+    # A server answers a database it does not hold with ActiveRecord::NoDatabaseError.
+    it "says a database its server does not hold is missing, as a SQLite file that is not there is" do
+      path = File.join(@dir, "analytics.sqlite3")
+      FileUtils.touch(path)
+      allow(RailsAiContext::MigrationStatus).to receive(:pending_on).and_raise(ActiveRecord::NoDatabaseError.new("no such database"))
+
+      state = analytics(path).pending_migrations(migrations_dir)
+
+      expect(state[:error]).to be_a(RailsAiContext::AppDatabases::Missing)
+      expect(state[:error].message).to eq("no such database")
     end
 
     # Rails 7.1+ wraps the driver's error; Rails 7.0's sqlite3 adapter hands

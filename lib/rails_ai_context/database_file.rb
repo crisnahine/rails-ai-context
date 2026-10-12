@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module RailsAiContext
   # A SQLite database is a file, and connecting to one that is not there
   # creates it: the driver opens a path it cannot find by making an empty
@@ -9,18 +11,46 @@ module RailsAiContext
   # seeds. So a SQLite database whose file is missing is said to be missing
   # before anything connects to it.
   module DatabaseFile
+    MEMORY = ":memory:"
+
     # The error a connection to db_config would meet if SQLite did not
-    # create the file, or nil: for a file that is there, for :memory: and a
-    # file: URI (SQLite's own to open), and for every other adapter.
+    # create the file, or nil: for a file that is there, for a database
+    # that lives in memory, and for every other adapter.
     def self.missing(db_config)
+      ActiveRecord::NoDatabaseError.db_error(db_config.database.to_s) if missing?(db_config)
+    end
+
+    def self.missing?(db_config)
+      path = path(db_config)
+      !path.nil? && !File.exist?(path)
+    end
+
+    # A SQLite database with no file: every connection to one opens a new, empty database.
+    def self.in_memory?(db_config)
+      return false unless DatabaseFamily.of(db_config).sqlite?
+
+      database = db_config.database.to_s
+      database == MEMORY || (database.start_with?("file:") && (uri_path(database) == MEMORY || database.match?(/[?&]mode=memory(?:&|#|\z)/)))
+    end
+
+    # The file a SQLite database is, or nil when it is none.
+    def self.path(db_config)
       return nil unless DatabaseFamily.of(db_config).sqlite?
 
       database = db_config.database.to_s
-      return nil if database.empty? || database == ":memory:" || database.start_with?("file:")
-      # Relative to Rails.root, as the adapter reads it.
-      return nil if File.exist?(File.expand_path(database, defined?(Rails.root) ? Rails.root : nil))
+      return nil if database.empty? || in_memory?(db_config)
+      # SQLite opens a URI's path from the working directory.
+      return File.expand_path(uri_path(database)) if database.start_with?("file:")
 
-      ActiveRecord::NoDatabaseError.db_error(database)
+      # Relative to Rails.root, as the adapter reads it.
+      File.expand_path(database, defined?(Rails.root) ? Rails.root : nil)
     end
+
+    # file:path, file:/path, file:///path and file://localhost/path, less the query and the fragment.
+    def self.uri_path(uri)
+      path = uri.delete_prefix("file:").sub(/[?#].*\z/m, "").sub(%r{\A//[^/]*}, "")
+      URI::DEFAULT_PARSER.unescape(path)
+    end
+    private_class_method :uri_path
   end
 end

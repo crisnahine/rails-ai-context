@@ -295,7 +295,7 @@ module RailsAiContext
         AppDatabases.for(app.root).here.select(&:tasks).map do |db|
           dirs = db.primary ? primary_migrate_dirs : db.migrate_dirs
           { name: db.name, config: db.config, **db.pending_migrations(dirs) }
-        end.reject { |state| state[:error].is_a?(AppDatabases::NotBooted) }
+        end.reject { |state| AppDatabases::NotBooted === state[:error] || AppDatabases::InMemory === state[:error] }
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "database_states")
       end
@@ -303,7 +303,7 @@ module RailsAiContext
 
     def unreachable_database_check(databases, pending)
       env = RailsAiContext.environment_name
-      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(ActiveRecord::NoDatabaseError) || db[:error].is_a?(AppDatabases::Missing) }
+      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(AppDatabases::Missing) }
       shown = ->(db) { databases.one? ? database_named(db[:config]) : "#{db[:name]} (#{database_named(db[:config])})" }
       said = []
       if missing.any?
