@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The repository tracks `CLAUDE.md`.** It points at `AGENTS.md`, and the
   gem ships it beside the `AGENTS.md` and `CONTEXT.md` it already shipped.
   The code is v5.34.0's.
+- **The glossary defines strong params and notable gems.** `CONTEXT.md` says
+  what makes a method strong params and which gems count as notable, and
+  ADR-0006 records why a strong params call is read as the method Ruby
+  would run.
 
 ## [5.34.0] - 2026-10-12
 
