@@ -76,15 +76,17 @@ module RailsAiContext
         secondary = Payload.app_databases(schema)
 
         sections = [ database_schema_text(schema[:tables], secondary.any? ? "primary" : nil) ]
-        secondary.each { |name, db| sections << database_schema_text(db[:tables], name, db[:note]) }
-        frameworks = Payload.framework_databases(schema).map { |name, db| SectionFacts.framework_database_text(name, db) }
+        secondary.each { |name, db| sections << database_schema_text(db[:tables], name, db[:note], Payload.named_scope_words(context, name)) }
+        frameworks = Payload.framework_databases(schema).map do |name, db|
+          SectionFacts.framework_database_text("#{name}#{Payload.named_database_mark(context, name)}", db)
+        end
         sections << "Framework databases, their tables not listed: #{frameworks.join('; ')}" if frameworks.any?
         sections.join("\n\n")
       end
 
-      def database_schema_text(tables, database = nil, note = nil)
+      def database_schema_text(tables, database = nil, note = nil, scope = nil)
         phrase = Introspectors::SchemaConventions.relations_phrase(tables)
-        lines = [ database ? "## Database Schema: #{database} (#{phrase})" : "## Database Schema (#{phrase})" ]
+        lines = [ database ? "## Database Schema: #{database} (#{[ scope, phrase ].compact.join(', ')})" : "## Database Schema (#{phrase})" ]
         lines << "_#{note}._" if note
         tables&.each do |name, data|
           lines << "### #{escape_markdown(name)}"

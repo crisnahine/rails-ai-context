@@ -67,6 +67,17 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(described_class.call(detail: "standard").content.first[:text]).to include("- **page_views** (analytics database)\n  add_index :page_views, :user_id")
     end
 
+    it "says a database it did not check is one only another environment configures" do
+      performance_data[:unchecked_databases] = [ { name: "warehouse", reason: "db/warehouse_schema.rb is not on disk" } ]
+      allow(described_class).to receive(:cached_context).and_return(
+        performance: performance_data, models: {},
+        multi_database: { databases: [ { name: "primary" }, { name: "warehouse", environments: %w[production] } ] }
+      )
+
+      expect(described_class.call(detail: "summary").content.first[:text])
+        .to include("**Not checked:** warehouse (production only, db/warehouse_schema.rb is not on disk)\n")
+    end
+
     it "says a finding's database is one only another environment configures" do
       performance_data[:missing_fk_indexes] << { table: "jobs", column: "batch_id", database: "queue", suggestion: "add_index :jobs, :batch_id" }
       allow(described_class).to receive(:cached_context).and_return(

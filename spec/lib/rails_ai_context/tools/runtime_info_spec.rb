@@ -269,6 +269,25 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(database_section).to include("| products | 1 KB |")
     end
 
+    it "says index usage is not available where the database family keeps none" do
+      expect(described_class.call(section: "database", detail: "full").content.first[:text])
+        .to include("_Index usage is not available for the SQLite database family._")
+
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:table_sizes).and_return([])
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
+
+      expect(described_class.call(section: "database", detail: "full").content.first[:text])
+        .to include("_Index usage is not available for the MySQL database family._")
+      expect(database_section).not_to include("Index usage")
+    end
+
+    it "says nothing of index usage when reading it failed" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:index_usage).and_raise(ActiveRecord::StatementInvalid, "boom")
+
+      expect(described_class.call(section: "database", detail: "full").content.first[:text]).not_to include("Index usage", "Index Usage")
+    end
+
     it "says table sizes and index usage are not available on an adapter with no family" do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
 

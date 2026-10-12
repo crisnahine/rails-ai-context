@@ -47,10 +47,13 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     it "closes the connection it opened to another database once the block returns" do
       list = databases("queue" => config(Rails.env, "queue", sqlite_file("queue")))
       pool = nil
+      handler = nil
+      allow(ActiveRecord::ConnectionAdapters::ConnectionHandler).to receive(:new).and_wrap_original { |build| handler = build.call }
 
       list.fetch("queue").with_connection { |conn| pool = conn.pool }
 
       expect(pool.stat[:connections]).to eq(0)
+      expect(handler.connection_pool_list).to be_empty
     end
 
     it "closes the connection it opened to another database when the block raises" do

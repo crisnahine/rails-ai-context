@@ -664,7 +664,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
       stub_databases("analytics" => { "database" => "x" }, "shard_one" => {}, "shard_two" => {})
       text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
-      expect(text).to include("`page_views` is in analytics, not the primary database",
+      expect(text).to include("`page_views` is in analytics: generate with `--database analytics`",
                               "**Run:** `bin/rails generate migration AddReferrerToPageViews referrer:string --database analytics`")
     end
 
@@ -702,7 +702,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
       stub_databases({}, { "primary" => {}, "shard_one" => { "migrations_paths" => "db/analytics_migrate" }, "shard_two" => { "migrations_paths" => "db/analytics_migrate" } })
       text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
-      expect(text).to include("`orders` is in shard_one and shard_two, which production configures and this environment does not, not the primary database: generate with `RAILS_ENV=production` and `--database shard_one` so the migration lands in db/analytics_migrate and production's `bin/rails db:migrate`",
+      expect(text).to include("`orders` is in shard_one and shard_two, which production configures and this environment does not: generate with `RAILS_ENV=production` and `--database shard_one` so the migration lands in db/analytics_migrate and production's `bin/rails db:migrate`",
                               "**Run:** `RAILS_ENV=production bin/rails generate migration RemoveTotalCentsFromOrders total_cents:integer --database shard_one`")
     end
 
@@ -718,8 +718,8 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
       text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
 
-      expect(text).to include("`orders` is in shard_one, which staging and production configure and this environment does not, " \
-                              "not the primary database: generate with `RAILS_ENV=staging` and `--database shard_one`")
+      expect(text).to include("`orders` is in shard_one, which staging and production configure and this environment does not: " \
+                              "generate with `RAILS_ENV=staging` and `--database shard_one`")
     end
 
     it "gives index advice for the family of the database that holds the table" do
