@@ -43,16 +43,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A view cannot rename a secret column past `rails_query`.** On MySQL,
   MariaDB and SQLite a view that selects a secret column under another name
   returned its values. A statement that names such a view is now refused with
-  the view and the column. So is a view built on it, a view that lists every
-  column of a table holding a secret column, and a view whose definition
-  cannot be read on a database that holds secret columns. A definition is read
-  with its comments taken out, and a view's name is matched whatever
-  characters it holds. `query_allowed_columns` releases a column by name as
-  before, and an `encrypts` column stays secret. PostgreSQL keeps filtering
-  the one column.
+  the view and the column. So is a view built on it, a view whose definition
+  has a wildcard and names a table that holds a secret column, and a view
+  whose definition cannot be read on a database that holds secret columns. A
+  definition is read with its comments taken out, and a view's name is matched
+  whatever characters it holds. `query_allowed_columns` releases a column by
+  name as before, and an `encrypts` column stays secret. On PostgreSQL a plain
+  view keeps the filter on the one column. A materialized view stores its
+  rows, so no result column of it is traced to a table column, and one whose
+  definition names a secret column returned it under another name. A
+  statement that reads such a materialized view is now refused, through a
+  view over it too.
 - **A generated column that reads a secret column is secret.** On every
   database family its values were returned under its own name. A statement
   that names it is now refused and its values come back `[FILTERED]`.
+- **The secret column rule knows every relation a statement reads.** It read
+  the columns of the connection's own database, or of the search path, and no
+  others. So a secret column of a table anywhere else came back under an
+  alias or through an expression. On MySQL and MariaDB the rule now reads
+  every database a statement or a view definition names. On PostgreSQL it
+  reads materialized views and foreign tables, every schema a statement or a
+  view definition names, and every relation the plan names. On SQLite it reads
+  the temp schema and every attached database. A relation whose columns
+  cannot be read is not queried.
+- **On PostgreSQL two aliases that differ only by case are two relations.**
+  The plan checks folded an alias to lower case, so a whole-row read of one
+  relation was taken for a read of the other. An alias is now read as the plan
+  prints it.
+- **On SQLite the database file's raw pages are not read.** `sqlite_dbpage`,
+  `sqlite_dbdata` and `sqlite_dbptr` return the file's pages and cells, and
+  every stored value is in them, secret columns included. A statement that
+  names one is now refused.
+- **On SQLite a shadow table of a virtual table is not read.** A virtual
+  table, such as a full-text one, keeps what it stores in shadow tables under
+  other column names, so a secret column's values came back from there. A
+  statement that names a shadow table is now refused, and the refusal names
+  the virtual table to query. Before SQLite 3.37 a table whose name starts
+  with a virtual table's name and an underscore is read as a shadow table.
+- **On SQLite a virtual table that holds a secret column is refused whole.**
+  A search or a function over a virtual table reads a column by its position,
+  with no name written, so it returned or confirmed a secret column's values.
+  A statement that names such a table is now refused. So is one that names an
+  `fts5vocab` or `fts4aux` table over it, which lists its words, and one that
+  names a view over any of these tables.
 - **`rails_query` also keeps nonce and initialization vector columns secret.**
   A column whose name holds `nonce`, or is `iv` or ends in `_iv`, is refused
   by name and filtered in results. `query_allowed_columns` releases one by
@@ -97,9 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SHOW ENGINE ... STATUS`, `SHOW PROFILE`, `SHOW PROFILES`,
   `SHOW OPEN TABLES`, `SHOW EXPLAIN FOR`, `SHOW ANALYZE FOR`,
   `SHOW USER_STATISTICS`, `SHOW CLIENT_STATISTICS` and the `SHOW WSREP_` forms
-  ran. Most of them tell of other sessions' statements, of replication hosts
-  and users, or of the rows a log holds. They now get the refusal
-  `SHOW PROCESSLIST` gets.
+  ran on MySQL and MariaDB. Most of them tell of other sessions' statements,
+  of replication hosts and users, or of the rows a log holds. They now get the
+  refusal `SHOW PROCESSLIST` gets.
 - **A function that returns a whole table as one value is refused.**
   PostgreSQL's `table_to_xml`, `schema_to_xml`, `database_to_xml` and the rest
   of the `_to_xml` family returned a table, its secret columns included, as
@@ -122,10 +155,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `column_statistics`, `column_stats`, `global_priv`, and in
   `information_schema` `INNODB_TRX`, `INNODB_LOCKS`, `INNODB_LOCK_WAITS`, the
   `INNODB_FT_` tables, `USER_STATISTICS`, `CLIENT_STATISTICS`, `PROFILING` and
-  `OPTIMIZER_TRACE`. On SQLite they include `sqlite_stat1`, `sqlite_stat3` and
-  `sqlite_stat4`. docs/SECURITY.md lists every name. A name refused as a bare
-  word is refused wherever it stands, so an app table called `slow_log` or
-  `processlist` is refused too.
+  `OPTIMIZER_TRACE`. On SQLite they include `sqlite_stat1`, `sqlite_stat3`,
+  `sqlite_stat4` and `sqlite_stmt`, which lists the connection's own
+  statements with their literals. docs/SECURITY.md lists every name. Each name
+  is refused on the database family that has it, wherever it stands in the
+  statement. So an app table called `slow_log` or `processlist` is refused on
+  MySQL and MariaDB.
 - **On PostgreSQL a role's password hash and its stored settings are secret
   columns.** `pg_authid.rolpassword` and `pg_db_role_setting.setconfig` were
   returned, also through the views PostgreSQL builds on them. Both names are
@@ -142,8 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting's plain name. `current_setting` runs only with the name written as
   one plain string, so the gate can read which setting it returns.
 - **`EXPLAIN FOR CONNECTION` is refused.** On MySQL and MariaDB it showed the
-  plan of the statement another session was running. It now gets the refusal
-  `SHOW PROCESSLIST` gets, also when it is written with `DESCRIBE` or `DESC`.
+  plan of the statement another session was running. It is now refused there,
+  also when it is written with `DESCRIBE` or `DESC`.
 - **A function called by a quoted name is refused.** The checks that read a
   function's name read it bare, so a function whose name was written in
   quotes, backticks or brackets passed them. A quoted name followed by a
@@ -168,8 +203,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way it bounds the query, a wait on a lock included. The query has
   `query_timeout` to itself. The schema read, the PostgreSQL plan with its
   function lookup, and the column trace share a second `query_timeout`, and each
-  is charged the time it ran. A read that runs out of time is the call's timeout
-  answer, so the statements of a call take about twice `query_timeout` at most.
+  is charged the time it ran. A read that runs out of time ends the call with an
+  error that names those reads, so the statements of a call take about twice
+  `query_timeout` at most.
   On MySQL and MariaDB a wait on a lock ends at `query_timeout` rounded up to a
   whole second, and `explain: true` is bounded while it waits on a lock too.
   `SHOW`, `DESCRIBE` and a plain `EXPLAIN` have that lock wait limit alone
@@ -190,13 +226,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no time limit, when the child's error message read like a missing function,
   module or collation, and text from the statement could reach that message. The
   choice is now made from which step failed in the child. A statement runs on
-  the app's own connection in three cases: an in-memory database, a platform
-  without `fork`, and a statement the child could not prepare. A statement that
-  fails while it runs is answered with its SQL error and is not run again. On
+  the app's own connection in four cases: an in-memory database, a platform
+  without `fork`, a statement the child could not prepare, and a transaction
+  open on the app's connection. A statement that fails while it runs in the
+  child is answered with its SQL error and is not run again. On
   the app's own connection a statement that returns rows slowly now ends a few
   rows after `query_timeout` passes, since an interrupt lands only between two
   rows. One long step still cannot be ended there, so the answer keeps its
   "without a time limit" note.
+- **On MySQL and MariaDB no statement runs on a connection Rails replaced.**
+  Rails reconnects a connection it lost before the transaction begins, and the
+  new session has no read-only transaction and no time limit. The statement is
+  now sent only on the session that holds both. On any other the answer is an
+  error that starts "The <name> database stopped answering during the query:"
+  and says the statement was not sent.
 - **`rails_query` holds `LIMIT ALL`, `LIMIT NULL` and a negative limit to the
   row cap.** The three mean no limit, and the query fetched every row before
   the cap cut the answer. They now read as no limit of the query's own and
@@ -324,7 +367,37 @@ Ten tools that each answered one section of the app's configuration leave
   column is refused.** It ran on 5.35.0 and returned what the view selected.
   The refusal names the view and the column. Query the tables the view reads,
   or list the column in `query_allowed_columns` when it holds no secret. An
-  `encrypts` column is not released that way.
+  `encrypts` column is not released that way. On PostgreSQL the same holds for
+  a materialized view.
+- **A secret column in another database or schema is refused by name.** A
+  statement that names a schema or database beside the connection's own, such
+  as `SELECT api_token AS t FROM other_db.users`, ran on 5.35.0. The rule now
+  reads the columns there, so the statement is refused. Name the other
+  columns, or list the name in `query_allowed_columns` when it holds no
+  secret. A statement whose views lead through more than three rounds of
+  further databases is not run.
+- **On SQLite a virtual table with a secret column, a shadow table and the
+  page modules are refused.** A query on a full-text table that holds a secret
+  column ran on 5.35.0. So did one on a shadow table of a virtual table, on an
+  `fts5vocab` table over it and on `sqlite_dbpage`. Keep the secret column out
+  of the virtual table, or query the table it was copied from. A shadow
+  table's refusal names the virtual table to query.
+- **On SQLite only the pragma functions that describe the schema or the file
+  run.** They are `pragma_table_info`, `pragma_table_xinfo`,
+  `pragma_table_list`, `pragma_index_list`, `pragma_index_info`,
+  `pragma_index_xinfo`, `pragma_foreign_key_list`, `pragma_foreign_key_check`,
+  `pragma_integrity_check`, `pragma_quick_check`, `pragma_user_version`,
+  `pragma_application_id`, `pragma_schema_version`, `pragma_page_size`,
+  `pragma_page_count`, `pragma_freelist_count`, `pragma_encoding`,
+  `pragma_auto_vacuum`, `pragma_journal_mode`, `pragma_compile_options` and
+  `pragma_pragma_list`. Every other `pragma_*` function ran on 5.35.0 and is
+  refused now, and so are `changes()`, `total_changes()` and
+  `last_insert_rowid()`. Read those values on the app's own connection, in
+  `bin/rails runner` or the console.
+- **A statement over 1,000,000 bytes is refused.** 5.35.0 took a statement of
+  any length. The text checks read the whole statement before the timeout
+  starts, so its length is bounded. Send a shorter statement: 100,000 ids in
+  an `IN` list are about 700,000 bytes.
 - **A generated column that reads a secret column is refused by name.** A
   query that names it ran on 5.35.0. Take it out of the query, or list its
   name in `query_allowed_columns` when it holds no secret.
@@ -337,18 +410,28 @@ Ten tools that each answered one section of the app's configuration leave
   `information_schema`: `SELECT table_name FROM information_schema.tables
   WHERE table_schema = DATABASE()`.
 - **`rails_query` no longer reads statistics, session and credential
-  relations.** A query on `pg_stat_activity`, `pg_stats`, `pg_settings`,
-  `information_schema.processlist`, `performance_schema`, `sys` or anything in
-  the `mysql` schema ran on 5.35.0 and is refused now. So is an app table that
-  carries one of the refused names, such as `slow_log`. Read those with the
-  database's own client.
+  relations.** A query on one ran on 5.35.0 and is refused now. Each name is
+  refused on the database family that has it. On PostgreSQL they are
+  `pg_stat_activity`, `pg_stats`, `pg_settings` and the other catalog names
+  docs/SECURITY.md lists. On MySQL and MariaDB they are `performance_schema`,
+  `processlist`, `general_log`, `slow_log`, `column_statistics`,
+  `column_stats`, `global_priv`, the listed `information_schema` tables and
+  anything under `mysql.` or `sys.`. On SQLite they are `sqlite_stat1`,
+  `sqlite_stat3`, `sqlite_stat4` and `sqlite_stmt`. A name is matched as a
+  whole word wherever it stands, inside a string literal too, so an app table
+  named `slow_log` is refused on MySQL and MariaDB. The `mysql` and `sys`
+  schemas are matched as a name before a dot, with string literals masked, so
+  `'mysql.com'` runs. An alias named `sys` or `mysql` before a dot is refused
+  there, and so is a double-quoted string that holds `mysql.`. Give such an
+  alias another name. Read the refused relations with the database's own
+  client.
 - **On PostgreSQL `SHOW ALL` and six settings are refused.** `SHOW ALL`,
   `SHOW "work_mem"` with quotes, and `SHOW` or `current_setting` of
   `primary_conninfo`, `ssl_passphrase_command`, `archive_command`,
   `restore_command`, `archive_cleanup_command` or `recovery_end_command` ran
   on 5.35.0. Show one setting by its plain name: `SHOW work_mem`, or
-  `current_setting('work_mem')`. A statement that holds one of the six names
-  anywhere is refused on every family.
+  `current_setting('work_mem')`. On PostgreSQL a statement that holds one of
+  the six names anywhere is refused.
 - **A function whose name is written in quotes cannot be called.**
   `SELECT "upper"('x')` ran on 5.35.0 and is refused now. Write the name
   without quotes. A function whose name needs quotes, such as a mixed-case one
@@ -370,9 +453,10 @@ Ten tools that each answered one section of the app's configuration leave
   refuses a value a parameter does not take" gives the answers. `--detail` alone
   still warns and falls back.
 - **Some CLI calls that exited 0 now exit 1.** Beside the refused values above,
-  they are a `rails_query` timeout, a database that cannot be reached, a failing
-  `explain: true`, a failed Brakeman scan in the bundle or outside it, a crash
-  inside a section of `rails_get_context`, `rails_diagnose` or
+  they are a `rails_query` timeout, a `rails_query` call the production guard
+  refuses, a database that cannot be reached, a failing `explain: true`, a
+  failed Brakeman scan in the bundle or outside it, a crash inside a section
+  of `rails_get_context`, `rails_diagnose` or
   `rails_review_changes`, and an unexpected failure in `rails_onboard`,
   `rails_diagnose`, `rails_generate_test`, `rails_review_changes`,
   `rails_runtime_info`, `rails_session_context`, `rails_get_context` or
@@ -436,11 +520,15 @@ Ten tools that each answered one section of the app's configuration leave
   family, `rails_runtime_info` says table sizes and index usage are not
   available for that adapter, and the database stats say the same of row
   estimates.
-- **`rails_query` reads the schema in three statements at most.** The secret
-  column rule read each table's columns with a statement of its own on every
-  call, about 1.5 seconds on a 300-table PostgreSQL schema and 2 seconds on
-  MySQL. One catalogue read per family now lists every table's columns, and
-  one each reads the view definitions and the generated columns.
+- **`rails_query` reads the schema in a few statements, whatever the number
+  of tables.** The secret column rule read each table's columns with a
+  statement of its own on every call, about 1.5 seconds on a 300-table
+  PostgreSQL schema and 2 seconds on MySQL. One catalogue read per family now
+  lists every table's columns, and one each reads the view definitions and
+  the generated columns. With the lookups beside them that is four statements
+  at most on MySQL and MariaDB, five on PostgreSQL and six on SQLite. A
+  statement or a view definition that names another schema or database adds
+  the reads of that one.
 - **`rails_get_service_pattern` says which files its count leaves out.** A
   listing that counts fewer services than the service directories hold Ruby
   files adds one line with the number left out and the kinds: base classes,
@@ -558,6 +646,14 @@ Ten tools that each answered one section of the app's configuration leave
 - **Migration advice counts rows only on the primary.** The row estimate comes
   from the primary database, so a table on another database is no longer given
   the primary's count.
+- **A `.rails-ai-context.yml` that holds no settings is reported and
+  ignored.** A file that holds a bare string, a list or a number crashed the
+  loader with a `NoMethodError`. It now warns on stderr that the file holds no
+  `key: value` settings, and reads nothing from it.
+- **Of two tools under a built-in's name the server keeps the built-in.** With
+  no `skip_tools` entry the warning said it kept the built-in, while MCP could
+  serve an app's `BaseTool` subclass under that name. The server now keeps the
+  gem's own tool, as the warning says and as the CLI runs.
 - **`tool --list` shows the tools the MCP server serves.** A custom tool that
   shares a built-in's name is listed once, and the CLI's single-tool lookup
   picks the tool the server serves while still loading only that tool's class.
@@ -620,6 +716,31 @@ Ten tools that each answered one section of the app's configuration leave
 - **A connection lost while a statement runs is answered as one.** On Rails
   7.1 and later the answer is an error that starts "The <name> database
   stopped answering during the query:".
+- **`rails_query` refused in production is an error.** With
+  `allow_query_in_production` off, the refusal came back as an ordinary answer
+  and the CLI exited 0. The text is the same, and it is now an error response
+  like the tool's other refusals.
+- **A locked SQLite database is answered as locked.** With another connection
+  holding the database, `rails_query` answered "Query exceeded 5 second
+  timeout" although nothing ran. It now answers "The database is locked by
+  another connection, so the query did not run. Run it again when the other
+  connection has finished." The query process waits on a lock for 80% of
+  `query_timeout` first.
+- **On SQLite a statement sent inside an open transaction reads that
+  transaction's rows.** It ran in the query process, which opens the file
+  itself, so it answered from committed rows alone. With a transaction open on
+  the app's connection the statement now runs on that connection, and the
+  answer carries the "ran without a time limit" note.
+- **On SQLite a pragma function no longer answers for the wrong connection.**
+  `pragma_foreign_keys`, `changes()` and their like answered for the
+  connection `rails_query` runs on, which is its own and has values the tool
+  set. They are now refused, and the Migration note lists the pragma functions
+  that run.
+- **On PostgreSQL a wildcard over a partitioned table is filtered in place.**
+  `SELECT *` over a partitioned table, or over an inheritance parent, was
+  refused with a reason about a CTE or subquery when the table holds a secret
+  column. It now runs with that column `[FILTERED]`. A whole-row read of such
+  a table stays refused, and the refusal names the first partition.
 - **A `rails_query` timeout is an error.** A query that ran past
   `query_timeout` came back as an ordinary answer. With the same text it is
   now an error response, for a query and for `explain: true`: the CLI exits
@@ -660,7 +781,12 @@ Ten tools that each answered one section of the app's configuration leave
 - **MySQL table sizes count base tables only.** The row estimates already did.
 - **An `explain: true` failure is an error.** A failing EXPLAIN, or one asked
   of a statement other than SELECT or WITH, came back as an ordinary answer.
-  The CLI now exits non-zero and an MCP client sees `isError`.
+  The CLI now exits non-zero and an MCP client sees `isError`. Asked of
+  another statement it answered "EXPLAIN only supports SELECT queries." and
+  now answers "`explain: true` takes a SELECT or WITH statement and explains
+  it.", with "The statement is already an EXPLAIN." in front when it is one.
+- **An SQL error no longer ends in a colon.** Rails ends an error's first line
+  with a colon where the statement follows, and `rails_query` printed it.
 - **`rails_query` runs a string literal that only reads like a refused
   phrase.** The `OR 1=1` check is gone: the caller writes the whole statement,
   so it protected nothing and refused `LIKE '%OR 1=1%'`. On PostgreSQL a

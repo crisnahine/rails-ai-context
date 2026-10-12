@@ -215,7 +215,7 @@ fits neither that shape nor the conventional one.
 - its name is secret to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the rest of its secret words);
 - it is a generated column whose expression reads a secret column.
 
-A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret. An `encrypts` column, and a generated column that reads one, is the exception: a statement that names it is still refused, and its values stay filtered. On MySQL, MariaDB and SQLite a statement is also refused when it names a view whose definition reads a secret column, or holds a `*` inside a subquery while it names a table with a secret column. [SECURITY.md](SECURITY.md#layer-4---secret-column-rejection) is the full statement of the rule, with how each check reads it and its stated limits.
+A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret. An `encrypts` column, and a generated column that reads one, is the exception: a statement that names it is still refused, and its values stay filtered. On MySQL, MariaDB and SQLite a statement is also refused when it names a view whose definition reads a secret column, or holds a `*` inside a subquery while it names a table with a secret column. On PostgreSQL the view rule holds for a materialized view. [SECURITY.md](SECURITY.md#layer-4---secret-column-rejection) is the full statement of the rule, with how each check reads it and its stated limits.
 
 ### Logs
 
