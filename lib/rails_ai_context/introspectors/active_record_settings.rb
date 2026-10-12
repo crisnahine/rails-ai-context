@@ -41,7 +41,7 @@ module RailsAiContext
       end
 
       def collect(settings, found)
-        settings.sort_by { |entry, _| entry[:location] }.each do |entry, name|
+        settings.sort_by.with_index { |(entry, _), i| [ entry[:location], i ] }.each do |entry, name|
           allowed = SETTINGS[name]
           next unless entry[:assignment] && allowed
 

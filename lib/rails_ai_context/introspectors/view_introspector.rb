@@ -184,7 +184,7 @@ module RailsAiContext
           end
         end
 
-        counts.sort_by { |_, v| -v }.to_h
+        counts.sort_by.with_index { |(_, v), i| [ -v, i ] }.to_h
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "detect_form_builders")
       end

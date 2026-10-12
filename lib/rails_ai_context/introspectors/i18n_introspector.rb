@@ -174,7 +174,7 @@ module RailsAiContext
                                  .map { |entry| entry.merge(spelling: :config) } +
                   walked[:i18n].select { |entry| I18N_AVAILABLE_LOCALES.include?(entry[:path]) }
                                .map { |entry| entry.merge(spelling: :i18n) }
-        entries.select { |entry| entry[:assignment] }.sort_by { |entry| entry[:location] }
+        entries.select { |entry| entry[:assignment] }.sort_by.with_index { |entry, i| [ entry[:location], i ] }
       end
 
       # One walk per config file for every i18n setting read from it, and none for

@@ -211,7 +211,7 @@ module RailsAiContext
           end
         end
 
-        { models: models.sort_by { |b| [ b[:model], b[:line] ] }, explicit: explicit }
+        { models: models.sort_by.with_index { |b, i| [ b[:model], b[:line], i ] }, explicit: explicit }
       rescue => e
         RailsAiContext.debug_fail(e, { models: [], explicit: [] }, label: "scan_broadcasts")
       end

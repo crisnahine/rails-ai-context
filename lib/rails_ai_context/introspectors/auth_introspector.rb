@@ -136,7 +136,7 @@ module RailsAiContext
               { file: relative, scope: scope_parts.join(", ") }
             end
           end
-        end.compact.sort_by { |h| h[:file] }
+        end.compact.sort_by.with_index { |h, i| [ h[:file], i ] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "scan_allow_unauthenticated_access")
       end
