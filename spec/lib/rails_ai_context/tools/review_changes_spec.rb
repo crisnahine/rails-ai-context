@@ -302,13 +302,13 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         write("log/development.log", "Started GET /\n")
         git("add", "-A")
         git("commit", "-q", "-m", "log")
-        write("log/development.log", "Started GET /\n  Authorization: Bearer abc123def456ghi\n  Authorization: Basic dXNlcjpwYXNz\n")
+        write("log/development.log", "Started GET /\n  Authorization: Bearer abc123def456ghi\n  Authorization: Basic dXNlcjpwYXNz\n  HTTP_AUTHORIZATION=Basic dXNlcjpw\n")
 
         text = described_class.call(ref: "HEAD").content.first[:text]
 
         expect(text).not_to include("abc123def456ghi")
-        expect(text).not_to include("dXNlcjpwYXNz")
-        expect(text).to include("+  Authorization: [FILTERED]")
+        expect(text).not_to include("dXNlcjpw")
+        expect(text).to include("+  Authorization: [FILTERED]", "+  HTTP_AUTHORIZATION=[FILTERED]")
       end
     end
 

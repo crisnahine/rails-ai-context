@@ -12,13 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A tracked log's diff hides its credentials.** `rails_review_changes`
   read a `.log` file's diff as source, which filters a Bearer or Basic value
   only at 16 characters, so a short one showed in clear. A log file shown as
-  a file, logrotate's dated and `.old` ones included, now gets what
-  `rails_read_logs` filters.
+  a file, logrotate's dated and `.old` ones and a `.log.bak` included, now
+  gets what `rails_read_logs` filters.
 - **A Digest or Token Authorization header is filtered with all its
   parameters.** A Digest header in a log kept its `response=` hash, also
   inside an inspected hash whose value escapes its quotes, and a Token
   header kept every parameter after `token=` (and came out as
   `Authorization: [FILTERED]]` when unquoted).
+- **An Authorization value after an unquoted name and `=` or `=>` is
+  filtered.** A log line from an env dump (`HTTP_AUTHORIZATION=Basic ...`)
+  or a debug line (`Authorization => Bearer ...`) kept a short credential in
+  clear, in `rails_read_logs` and in a tracked log's diff.
 
 ### Added
 

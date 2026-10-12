@@ -40,6 +40,7 @@ RSpec.describe RailsAiContext::Redaction do
       expect(redact("Authorization: Bearer abc123def456ghi", path: "log/production.log.1")).to eq("Authorization: [FILTERED]")
       expect(redact("Authorization: Bearer abc123", path: "log/production.log-20261001")).to eq("Authorization: [FILTERED]")
       expect(redact("Authorization: Bearer abc123", path: "log/production.log.old")).to eq("Authorization: [FILTERED]")
+      expect(redact("Authorization: Bearer abc123", path: "log/production.log.bak")).to eq("Authorization: [FILTERED]")
       expect(redact("Authorization: Bearer abc123", path: "log/production.log-2026-10-01")).to eq("Authorization: [FILTERED]")
     end
 
@@ -780,6 +781,13 @@ RSpec.describe RailsAiContext::Redaction do
   end
 
   describe ".redact_log_line" do
+    it "filters a short credential under an unquoted Authorization name, as an env dump or a debug line writes it" do
+      expect(described_class.redact_log_line("HTTP_AUTHORIZATION=Basic dXNlcjpw")).to eq("HTTP_AUTHORIZATION=[FILTERED]")
+      expect(described_class.redact_log_line("AUTHORIZATION=Bearer abc123")).to eq("AUTHORIZATION=[FILTERED]")
+      expect(described_class.redact_log_line("Authorization => Bearer abc123")).to eq("Authorization => [FILTERED]")
+      expect(described_class.redact_log_line("raise Authorization::UnauthorizedError")).to eq("raise Authorization::UnauthorizedError")
+    end
+
     it "filters a Token or Digest header's parameters whole, with no stray bracket" do
       expect(described_class.redact_log_line("Authorization: Token token=abc")).to eq("Authorization: [FILTERED]")
       expect(described_class.redact_log_line(%(Authorization: Token token="abc123", nonce="def456")))

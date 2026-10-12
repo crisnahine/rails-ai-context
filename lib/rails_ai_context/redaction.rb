@@ -17,8 +17,8 @@ module RailsAiContext
     PLACEHOLDER_NAMES = SafePath::PLACEHOLDER_SUFFIXES.map { |suffix| Regexp.escape(suffix.delete_prefix(".")) }.join("|")
     EXAMPLE_FILE = /\.(?:#{PLACEHOLDER_NAMES})\b/
     YAML_FILE = /\.ya?ml(?:\.(?:erb|#{PLACEHOLDER_NAMES}))*\z/
-    # A log, rotated ones included: Logger's development.log.0 and logrotate's .log-20261001, .log-2026-10-01 and .log.old.
-    LOG_FILE = /\.log(?:\.\d+|-\d{4}-?\d{2}-?\d{2}(?:-?\d{2})?|\.old)?\z/
+    # A log, rotated or kept ones included: Logger's development.log.0, logrotate's .log-20261001, .log-2026-10-01 and .log.old, and a .log.bak.
+    LOG_FILE = /\.log(?:\.\d+|-\d{4}-?\d{2}-?\d{2}(?:-?\d{2})?|\.old|\.bak)?\z/
 
     # Regex by design: these scrub vocabulary out of values already read from
     # the AST or a log file rather than parsing structure. A credential can
@@ -124,8 +124,9 @@ module RailsAiContext
       # scheme with it, however the line spells it: `Authorization: Basic ...`,
       # a quoted value, a hash or JSON key, Rack's `HTTP_AUTHORIZATION`.
       # Unquoted, the name needs the space a header has after its colon, so
-      # `Authorization::UnauthorizedError` is a class.
-      [ /(?:(?<quote>["'])(?:HTTP_(?:PROXY_)?|Proxy-|X-)?authorization\k<quote>\s*(?:=>|:|=(?!>))\s*|authorization:\s+)
+      # `Authorization::UnauthorizedError` is a class, or an `=` or `=>` as an
+      # env dump or a debug line writes it.
+      [ /(?:(?<quote>["'])(?:HTTP_(?:PROXY_)?|Proxy-|X-)?authorization\k<quote>\s*(?:=>|:|=(?!>))\s*|authorization(?::\s+|\s*(?:=>|=(?![=~>]))\s*))
          (?<value>(?!["']?\[FILTERED\])(?:"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'
            |(?:Token|Digest)\s+[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+)(?:,\s*[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+))*
            |(?:(?:Bearer|Basic|Token)\s+)?(?:\[FILTERED\]|="[^"]*"|[^\s"',;)\]}])+))/xi, :value ],
