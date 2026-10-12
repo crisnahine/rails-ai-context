@@ -12,7 +12,10 @@ require "logger"
 # ActiveSupport as a side effect before any of this code runs. In static
 # tier nothing boots Rails, so those methods are only defined by accident of
 # which introspector happens to run first. Requiring them here up front
-# makes both tiers behave the same regardless of load order.
+# makes both tiers behave the same regardless of load order. active_support
+# itself comes first, as Rails asks: on 7.1 array/conversions calls
+# ActiveSupport.deprecator while it loads.
+require "active_support"
 require "active_support/core_ext/string/inflections"
 require "active_support/core_ext/string/filters"
 require "active_support/core_ext/object/deep_dup"

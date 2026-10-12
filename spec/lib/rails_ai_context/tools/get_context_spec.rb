@@ -67,8 +67,10 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       RailsAiContext.configuration.skip_tools = %w[rails_get_controllers]
       expect(RailsAiContext::Tools::GetControllers).not_to receive(:call)
 
-      expect(answer(controller: "NopeController")).to start_with("Controller 'NopeController' not found.\nAvailable: ")
-      expect(answer(controller: "NopeController", action: "index")).to start_with("Controller 'NopeController' not found.\nAvailable: ")
+      # A "Did you mean" line may come between: the spell checker's reach differs across Ruby versions.
+      not_found = /\AController 'NopeController' not found\.\n(?:Did you mean[^\n]*\n)?Available: /
+      expect(answer(controller: "NopeController")).to match(not_found)
+      expect(answer(controller: "NopeController", action: "index")).to match(not_found)
       expect(answer(controller: "PostsController")).not_to include("not found.")
     end
 
