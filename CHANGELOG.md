@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An Authorization value after an unquoted name and `=` or `=>` is
   filtered.** A log line from an env dump (`HTTP_AUTHORIZATION=Basic ...`)
   or a debug line (`Authorization => Bearer ...`) kept a short credential in
-  clear, in `rails_read_logs` and in a tracked log's diff.
+  clear, in `rails_read_logs` and in a tracked log's diff. A switch's value
+  (`skip_authorization = true`) stays, and in a query string only the value
+  goes.
 
 ### Added
 
@@ -40,7 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The controller listing marks `permit!` and names a parent's strong
   params.** The listing marks `permit!` as the per-action view did, and
   strong params a parent controller in the app defines are listed with the
-  parent named, unless the controller defines a method of that name itself.
+  parent named, unless the controller defines an instance method of that
+  name itself.
 
 ### Changed
 
@@ -78,8 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defines, or a parent's, a concern's or Pundit's `*_params` or
   `permitted_*`, such as `permitted_attributes(@post)`, and Devise's
   `devise_parameter_sanitizer`), or a call given the whole params
-  (`PermittedAttributes::Enterprise.new(params).call`); a
-  `before_action` that writes into another one's params is not one. A method of any other
+  (`PermittedAttributes::Enterprise.new(params).call`); a `before_action`
+  that writes into another one's params is not one. A method of any other
   name counts only when it returns the permitted params themselves, through
   a local, an `if`, a `case` or an explicit `return`, so a helper that
   permits to build a URL, or to read one value, is left out. An action that
@@ -123,15 +126,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are both listed, and a modifier's condition is not listed as one.
 - **The static tier keeps a model whose parent comes from a gem.**
   `class Tag < ActsAsTaggableOn::Tag` was "Model 'Tag' not found". A class
-  in app/models on a parent the app does not define is now a model when the
-  schema holds a table it would read, one of the parent's names
-  (`ahoy_messages` for `EmailMessage < Ahoy::Message`) or its own, and,
-  with no schema to ask or another database's dump not on disk, when it
-  declares associations or scopes. Wherever the schema can be read, an
-  ActiveHash class that declares `has_many` stays out, and a class on a
-  framework class (`ActiveRecord::Relation`) is never one. The table comes from
-  the parent as Rails' single table inheritance decides, or a line says the
-  parent sets it.
+  in app/models on a parent the app does not define is now a model when a
+  database's dump holds a table it would read, one of the parent's names
+  (`ahoy_messages` for `EmailMessage < Ahoy::Message`) or its own, the
+  primary's first, and, with no schema to ask or another database's dump
+  not on disk, when it declares associations or scopes. Wherever the schema
+  can be read, an ActiveHash class that declares `has_many` stays out, and a
+  class on a framework class (`ActiveRecord::Relation`) is never one. The
+  table comes from the parent as Rails' single table inheritance decides, or
+  a line says the parent sets it.
 - **A filtered routes answer names the other paths an engine is mounted
   at.** An engine mounted three times showed only its first mount and that
   mount's helpers.
