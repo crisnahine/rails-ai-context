@@ -244,13 +244,16 @@ module RailsAiContext
         gem_dirs.any? { |dir| SafePath.contained?(real, dir) && !SafePath.contained?(real_root, dir) }
       end
 
+      # Asked once per file a scan walks, so a run resolves the paths once.
       def gem_dirs
         dirs = Gem.path.dup
         dirs << bundle_path if defined?(Bundler)
-        dirs.compact.filter_map do |dir|
-          File.realpath(dir)
-        rescue SystemCallError
-          nil
+        RunCache.fetch([ :gem_dirs, dirs ]) do
+          dirs.compact.filter_map do |dir|
+            File.realpath(dir)
+          rescue SystemCallError
+            nil
+          end
         end
       end
 
