@@ -504,6 +504,14 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("- `user_params` (requires: :user) permits: :name, preferences: [:color], tags: []")
     end
 
+    it "says a controller is another under a second name" do
+      stub_controllers({ "Login::GoogleController" => { actions: %w[new], filters: [], parent_class: "Login::OauthBaseController", alias_of: "Login::OAuth2Controller" } })
+
+      text = described_class.call(controller: "Login::GoogleController").content.first[:text]
+
+      expect(text).to include("**Alias of:** `Login::OAuth2Controller`, the same class under a second name")
+    end
+
     it "prints a computed nested filter as the source writes it" do
       params = [ { name: "user_params", requires: "user", permits: [ "locale" ], computed: { "settings_attributes" => "UserSettings.keys" } } ]
       stub_controllers({ "UsersController" => { actions: %w[update], filters: [], parent_class: "ApplicationController", strong_params: params } })

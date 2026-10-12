@@ -45,7 +45,7 @@ module RailsAiContext
           result[name] = details
         end
 
-        { controllers: inherit_class_declarations(fill_inherited_actions(inherit_api_controller(result))) }
+        { controllers: resolve_aliases(inherit_class_declarations(fill_inherited_actions(inherit_api_controller(result)))) }
       end
 
       # Static tier: every controller goes through the source-only extractor;
@@ -64,7 +64,7 @@ module RailsAiContext
         engine = PathResolver.bundle_engine_root(root)
         unread = Pathname.new(engine).relative_path_from(Pathname.new(File.expand_path(root))).to_s if engine
         {
-          controllers: inherit_class_declarations(fill_inherited_actions(inherit_api_controller(result))),
+          controllers: resolve_aliases(inherit_class_declarations(fill_inherited_actions(inherit_api_controller(result)))),
           note: "Parsed statically from app/controllers (app not booted)#{"; the engine at #{unread} is not read unbooted" if unread}",
           unread_engine: unread
         }.compact
@@ -269,6 +269,9 @@ module RailsAiContext
       def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
+        if (targets = alias_targets(source, path_name))
+          return [ path_name, { alias_of: targets, file: record.file } ]
+        end
         # A *_controller.rb that declares only a module is a mixin controllers extend.
         return nil if !DeclaredConstant.declares_class?(source, path_name: path_name) && DeclaredConstant.declared_module_names(source).any?
         return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source, path_name)
@@ -277,6 +280,34 @@ module RailsAiContext
         return [ name, { error: unloaded, file: record.file } ] if unloaded
 
         [ name, extract_details_from_source(record, name, source) ]
+      end
+
+      # `GoogleController = OAuth2Controller`: the file names another controller, which Ruby looks
+      # up from the innermost module outward; the candidates in that order.
+      def alias_targets(source, path_name)
+        tree = AstCache.parse_string(source)&.value or return nil
+        DeclaredConstant.constants(tree, assignments: true).each do |name, node, nesting|
+          next unless (node.is_a?(Prism::ConstantWriteNode) || node.is_a?(Prism::ConstantPathWriteNode)) && name.casecmp?(path_name)
+          next unless node.value.is_a?(Prism::ConstantReadNode) || node.value.is_a?(Prism::ConstantPathNode)
+
+          target = node.value.slice
+          return [ target.delete_prefix("::") ] if target.start_with?("::")
+
+          return [ *nesting.map { |scope| "#{scope}::#{target}" }, target ]
+        end
+        nil
+      end
+
+      # An alias reads as the controller it names, so a route to it finds that controller's actions.
+      def resolve_aliases(result)
+        result.each do |name, entry|
+          next unless entry.is_a?(Hash) && entry[:alias_of].is_a?(Array)
+
+          target = entry[:alias_of].find { |candidate| result.key?(candidate) } || entry[:alias_of].last
+          details = result[target]
+          own = details.is_a?(Hash) && !details[:alias_of] ? details : { file: entry[:file] }
+          result[name] = own.merge(alias_of: target)
+        end
       end
 
       # A file not named *_controller.rb is a controller only if it subclasses one: a mixin,

@@ -57,6 +57,30 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # Canvas routes login/google to `module Login; GoogleController = OAuth2Controller; end`.
+    describe "a *_controller.rb that names another controller" do
+      let(:dir) { File.join(Rails.root, "app/controllers/alias_login") }
+
+      before do
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "oauth2_controller.rb"), "module AliasLogin\n  class OAuth2Controller < ApplicationController\n    def new; end\n  end\nend\n")
+        File.write(File.join(dir, "google_controller.rb"), "module AliasLogin\n  GoogleController = OAuth2Controller\nend\n")
+      end
+
+      after do
+        FileUtils.rm_rf(dir)
+        Object.send(:remove_const, :AliasLogin) if defined?(AliasLogin)
+      end
+
+      it "is listed as an alias of that controller, with its actions, booted and static" do
+        [ result, introspector.static_call ].each do |answer|
+          google = answer[:controllers]["AliasLogin::GoogleController"]
+          expect(google).to include(alias_of: "AliasLogin::OAuth2Controller")
+          expect(google[:actions]).to eq([ "new" ])
+        end
+      end
+    end
+
     describe "a *_controller.rb that declares only a module" do
       let(:mixin) { File.join(Rails.root, "app/controllers/listing_scope_controller.rb") }
 

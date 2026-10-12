@@ -584,6 +584,7 @@ module RailsAiContext
 
       private_class_method def self.format_controller(name, info, ctx)
         lines = [ "# #{name}", "" ]
+        lines << "**Alias of:** `#{info[:alias_of]}`, the same class under a second name" if info[:alias_of]
         lines << "**Parent:** `#{resolved_parent(name, info, ctx)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         formats = formats_phrase(info, ctx, name)
