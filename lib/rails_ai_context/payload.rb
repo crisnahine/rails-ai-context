@@ -128,6 +128,11 @@ module RailsAiContext
       database[:dump_only] ? " (committed dump only)" : ""
     end
 
+    # The same mark for a database known by its database.yml name.
+    def named_database_scope(context, name)
+      database_scope(list(context, :multi_database, :databases).grep(Hash).find { |database| database[:name].to_s == name.to_s })
+    end
+
     # Each database past the primary that the schema section read tables
     # for, by its database.yml name.
     def secondary_databases(schema)

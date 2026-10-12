@@ -123,6 +123,17 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       })
     end
 
+    it "marks a database another environment configures, as every other surface does" do
+      configured = [ { name: "primary", adapter: "postgresql" }, { name: "analytics", adapter: "sqlite3", environments: [ "production" ] },
+                     { name: "queue", adapter: "sqlite3", environments: %w[staging production] }, { name: "cache", adapter: "sqlite3" } ]
+      allow(described_class).to receive(:cached_context).and_return({ app_name: "Metrics", models: {}, schema: schema, multi_database: { databases: configured } })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("plus the analytics database (production only) on SQLite (2 tables).")
+      expect(text).to include("databases of their own: queue (staging and production), cache.\n")
+    end
+
     it "counts every database the app's dumps declare and names the framework's in one line" do
       text = described_class.call(detail: "standard").content.first[:text]
 

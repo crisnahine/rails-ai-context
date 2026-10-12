@@ -105,7 +105,7 @@ RSpec.describe "the ActiveSupport core extensions the gem calls" do
         out, status = cli(@dir, "tool", "onboard", "--detail", detail)
 
         expect(status.exitstatus).to eq(0), out
-        expect(out).to include("Solid Cache keeps its tables in a database of its own: cache.")
+        expect(out).to include("Solid Cache keeps its tables in a database of its own: cache (staging and production).")
         expect(out).not_to match(/error|undefined method/i)
       end
     end
