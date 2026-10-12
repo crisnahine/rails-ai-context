@@ -34,6 +34,12 @@ RSpec.describe RailsAiContext::Redaction do
       expect(redact(%(secret_key_base: "0f0f0f0f"), path: "config/x.yml")).to eq(%(secret_key_base: "[FILTERED]"))
     end
 
+    it "filters a log file's line as rails_read_logs does, a rotated log's too" do
+      expect(redact("Authorization: Basic dXNlcjpwYXNz")).to eq("Authorization: Basic dXNlcjpwYXNz")
+      expect(redact("Authorization: Basic dXNlcjpwYXNz", path: "log/development.log")).to eq("Authorization: [FILTERED]")
+      expect(redact("Authorization: Bearer abc123def456ghi", path: "log/production.log.1")).to eq("Authorization: [FILTERED]")
+    end
+
     # A secret need not mix letters and digits; under a secret-named key a
     # plain literal is filtered unless it is clearly something else.
     # A setter on a receiver is the Rails way to set most secrets, and the name

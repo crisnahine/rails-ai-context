@@ -17,6 +17,8 @@ module RailsAiContext
     PLACEHOLDER_NAMES = SafePath::PLACEHOLDER_SUFFIXES.map { |suffix| Regexp.escape(suffix.delete_prefix(".")) }.join("|")
     EXAMPLE_FILE = /\.(?:#{PLACEHOLDER_NAMES})\b/
     YAML_FILE = /\.ya?ml(?:\.(?:erb|#{PLACEHOLDER_NAMES}))*\z/
+    # A log, rotated ones included, as rails_read_logs lists them.
+    LOG_FILE = /\.log(?:\.\d+)?\z/
 
     # Regex by design: these scrub vocabulary out of values already read from
     # the AST or a log file rather than parsing structure. A credential can
@@ -277,6 +279,9 @@ module RailsAiContext
         result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
         result = CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) }
         result = scheme_credentials(result)
+        # A log shown as a file (a tracked log's diff) gets what rails_read_logs filters too.
+        return redact_log_line(result) if path.to_s.match?(LOG_FILE)
+
         path.to_s.match?(YAML_FILE) && !locale ? yaml_scalar(result, example) : result
       end
 

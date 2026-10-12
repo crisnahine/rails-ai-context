@@ -290,6 +290,19 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         expect(text).to include(%(-API_TOKEN = "[FILTERED]"), %(+API_TOKEN = ENV.fetch("API_TOKEN")))
         expect(text).not_to include(token)
       end
+
+      it "filters a tracked log's short Bearer and Basic credentials as rails_read_logs does" do
+        write("log/development.log", "Started GET /\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "log")
+        write("log/development.log", "Started GET /\n  Authorization: Bearer abc123def456ghi\n  Authorization: Basic dXNlcjpwYXNz\n")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).not_to include("abc123def456ghi")
+        expect(text).not_to include("dXNlcjpwYXNz")
+        expect(text).to include("+  Authorization: [FILTERED]")
+      end
     end
 
     # Only `create_table :sym` and `add_column :sym, ...` were read, so a
