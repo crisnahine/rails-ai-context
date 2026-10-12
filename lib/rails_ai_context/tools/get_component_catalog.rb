@@ -66,12 +66,11 @@ module RailsAiContext
               note = api_only_note("app/components", dir: "app/components")
               return text_response(note) if note
 
-              return text_response(
-                "No components found in app/components/.\n\n" \
-                "This app may use ERB partials instead of ViewComponent/Phlex. Try:\n" \
-                "- `rails_get_partial_interface(partial:\"shared/partial_name\")` - partial locals contract + usage\n" \
-                "- `rails_get_view(controller:\"name\")` - view templates with partial/Stimulus references"
-              )
+              tries = [ pointer("rails_get_partial_interface", %(partial:"shared/partial_name"), "- partial locals contract + usage"),
+                        pointer("rails_get_view", %(controller:"name"), "- view templates with partial/Stimulus references") ].compact
+              text = "No components found in app/components/."
+              text += "\n\nThis app may use ERB partials instead of ViewComponent/Phlex. Try:\n#{tries.map { |t| "- #{t}" }.join("\n")}" if tries.any?
+              return text_response(text)
             end
             text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit, bases: data[:bases]))
           end

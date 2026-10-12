@@ -225,7 +225,7 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML) |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of every list and of the `_Next:` hints other tools end with, and a call that names it anyway - from the CLI, rake or an MCP client - says it is turned off here |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files, and no other tool's answer points at it: the hint that would name it is left out. A custom tool with the same name takes its place. A call that names a skipped tool anyway - from the CLI, rake, an MCP client or `rails_get_context(include:)` - says it is turned off here |
 
 ### Output
 

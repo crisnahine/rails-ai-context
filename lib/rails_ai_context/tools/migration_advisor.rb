@@ -821,7 +821,8 @@ module RailsAiContext
           end
           return [ "", "## Code that names `#{column}`", "", "_No line in app/, lib/ or config/ names it._" ] if found.empty?
 
-          more = found.size > MENTION_CAP ? [ "- _...and #{found.size - MENTION_CAP} more; `rails_search_code(pattern:\"#{column}\", exact_match:true)` lists them all_" ] : []
+          search = pointer("rails_search_code", %(pattern:"#{column}", exact_match:true), "lists them all")
+          more = found.size > MENTION_CAP ? [ "- _...and #{found.size - MENTION_CAP} more#{"; #{search}" if search}_" ] : []
           [ "", "## Code that names `#{column}` (#{count_phrase(found.size, "line")})", "" ] + found.first(MENTION_CAP) + more
         rescue => e
           RailsAiContext.debug_fail(e, [], label: "column_mention_lines")
