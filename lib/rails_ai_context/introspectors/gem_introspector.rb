@@ -184,7 +184,7 @@ module RailsAiContext
       IN_APP_GEMS = %w[
         action_policy activeadmin administrate alba apipie-rails avo bullet carrierwave clearance cocoon cssbundling-rails
         datadog delayed_job devise devise-jwt doorkeeper factory_bot_rails falcon figaro flipper good_job grape graphql
-        hotwire-native-rails importmap-rails inertia_rails jbuilder jsbundling-rails jsonapi-serializer kredis lockbox
+        hotwire-native-rails importmap-rails inertia_rails jbuilder jsbundling-rails jsonapi-serializer kaminari kredis lockbox
         lookbook madmin mission_control-jobs mongoid motor-admin neighbor newrelic_rpm noticed omniauth paper_trail pg_search
         propshaft pundit rack-attack react-rails rodauth-rails rolify rspec-rails rswag-api rswag-ui sentry-rails sidekiq
         simple_form skylight solid_cable solid_cache solid_errors solid_queue sorcery stimulus-rails
