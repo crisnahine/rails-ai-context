@@ -78,6 +78,21 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
       expect(@took).to be < 2
     end
+
+    it "bounds a statement when the timeout is zero or under a millisecond" do
+      [ 0, 0.0004 ].each do |timeout|
+        expect { family.read_only(conn, "SELECT id FROM rac_server_rows WHERE SLEEP(1) = 0", timeout: timeout) }
+          .to raise_error(described_class::TimedOut), timeout.to_s
+      end
+    end
+
+    it "reads the view definitions and generated column expressions the rule checks" do
+      conn.execute("ALTER TABLE rac_server_rows ADD COLUMN twice int AS (id * 2) VIRTUAL")
+
+      expect(family.view_definitions(conn).fetch("rac_server_view")).to match(/select .*rac_server_rows.*id/i)
+      expect(family.generated_columns(conn).fetch("rac_server_rows").keys).to eq([ "twice" ])
+      expect(family.generated_columns(conn).dig("rac_server_rows", "twice")).to match(/id.*\*.*2/)
+    end
   end
 
   describe "PostgreSQL", skip: server("RAC_TEST_PG_URL") do
@@ -95,8 +110,21 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(@took).to be < 2
     end
 
-    it "bounds a statement when the timeout is zero" do
-      expect { family.read_only(conn, "SELECT pg_sleep(1)", timeout: 0) }.to raise_error(described_class::TimedOut)
+    it "bounds a statement when the timeout is zero or under a millisecond" do
+      [ 0, 0.0004 ].each do |timeout|
+        expect { family.read_only(conn, "SELECT pg_sleep(1)", timeout: timeout) }.to raise_error(described_class::TimedOut), timeout.to_s
+      end
+    end
+
+    it "raises planning's SQL error" do
+      expect { family.plan(conn, "SELECT nope FROM rac_server_rows", timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid)
+    end
+
+    it "leaves views to the plan and reads generated column expressions" do
+      conn.execute("ALTER TABLE rac_server_rows ADD COLUMN twice int GENERATED ALWAYS AS (id * 2) STORED")
+
+      expect(family.view_definitions(conn)).to be_nil
+      expect(family.generated_columns(conn).fetch("rac_server_rows")).to eq("twice" => "(id * 2)")
     end
 
     it "plans without running" do

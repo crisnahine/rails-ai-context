@@ -1333,4 +1333,33 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(described_class.call(sql: "SHOW tables", explain: true).error?).to be(true)
     end
   end
+
+  describe "a failed call on each surface" do
+    def cli(*args)
+      runner = RailsAiContext::CLI::ToolRunner.new("query", args)
+      [ runner.run, runner.error ]
+    end
+
+    def mcp(arguments)
+      result = RailsAiContext::Server.new(Rails.application).build.handle(
+        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_query", arguments: arguments } }
+      )[:result]
+      [ result[:content].first[:text], result[:isError] ]
+    end
+
+    it "answers a failing EXPLAIN with a non-zero exit on the CLI and isError over MCP" do
+      expect(cli("sql=SELECT nope FROM no_such_table", "explain=true")).to match([ a_string_starting_with("EXPLAIN failed:"), true ])
+      expect(mcp(sql: "SELECT nope FROM no_such_table", explain: true)).to match([ a_string_starting_with("EXPLAIN failed:"), true ])
+    end
+
+    it "answers a timeout the same way, with the same text, for a query and for its EXPLAIN" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
+      timeout = [ "Query exceeded 5 second timeout. Simplify the query or add indexes.", true ]
+
+      expect(cli("sql=SELECT id FROM users")).to eq(timeout)
+      expect(cli("sql=SELECT id FROM users", "explain=true")).to eq(timeout)
+      expect(mcp(sql: "SELECT id FROM users")).to eq(timeout)
+      expect(mcp(sql: "SELECT id FROM users", explain: true)).to eq(timeout)
+    end
+  end
 end
