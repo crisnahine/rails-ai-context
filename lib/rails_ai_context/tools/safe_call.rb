@@ -37,10 +37,6 @@ module RailsAiContext
         # have its note consumed by the inner one.
         discarded = discarded_detail(kwargs)
         kwargs = listify_arrays(normalize_detail(kwargs))
-        # Before the call reads anything: an edit since the last call drops
-        # the caches and reloads the app's code (see the method).
-        RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
-
         answer = -> { answer_call(discarded) { super(**kwargs) } }
 
         # Only the call the client made is its query. A composite tool answers
@@ -49,6 +45,9 @@ module RailsAiContext
         # first inner call took the outer one's params with it.
         return answer.call if Thread.current[:rails_ai_context_call]
 
+        # Before the call reads anything: an edit since the last call drops
+        # the caches and reloads the app's code (see the method).
+        RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
         Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
         begin
           answer.call

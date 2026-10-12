@@ -59,15 +59,24 @@ module RailsAiContext
     # entry cannot take down every tool invocation. A run resolves them once,
     # so a skipped entry is warned about once.
     def self.resolve_custom_tools(config = RailsAiContext.configuration)
-      RunCache.fetch(custom_tools_key(config)) { load_custom_tools(config) }
+      key = custom_tools_key(config)
+      given_key, given = Thread.current[GIVEN_CUSTOM_TOOLS]
+      return given if given_key == key
+
+      RunCache.fetch(key) { load_custom_tools(config) }
     end
 
+    GIVEN_CUSTOM_TOOLS = :rails_ai_context_given_custom_tools
+    private_constant :GIVEN_CUSTOM_TOOLS
+
     # A run that reads these as the custom tools: the list its caller already resolved.
+    # Held beside the run, since a tool call empties the run once it has checked the files.
     def self.with_custom_tools(tools, config = RailsAiContext.configuration)
-      RunCache.around do
-        RunCache.fetch(custom_tools_key(config)) { tools }
-        yield
-      end
+      outer = Thread.current[GIVEN_CUSTOM_TOOLS]
+      Thread.current[GIVEN_CUSTOM_TOOLS] = [ custom_tools_key(config), tools ]
+      RunCache.around { yield }
+    ensure
+      Thread.current[GIVEN_CUSTOM_TOOLS] = outer
     end
 
     def self.custom_tools_key(config)

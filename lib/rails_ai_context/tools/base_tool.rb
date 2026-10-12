@@ -262,7 +262,9 @@ module RailsAiContext
         # 30 at 10,000 files. Only a check that began after a call did can
         # stand in for that call's own, so two calls one after the other each
         # check, and concurrent calls wait for one check together. A tool
-        # another tool calls is part of the first call and asks nothing.
+        # another tool calls is part of the first call, and SafeCall asks
+        # nothing for it. What a run already open read is dropped with the
+        # check, since it may be from before the edit.
         #
         # Outside SHARED_CACHE's mutex, unlike the TTL walk: a code reload
         # waits for running calls to finish, and they may be waiting on it.
@@ -273,10 +275,10 @@ module RailsAiContext
         # notes the files whose reload Bootsnap answers with their code from
         # before the last write.
         def refresh_if_files_changed!
-          return if RunCache.active?
+          return unless FILE_CHECK[:snapshot]
 
           snapshot = await_check(Process.clock_gettime(Process::CLOCK_MONOTONIC))
-          return unless snapshot
+          return RunCache.clear unless snapshot
 
           begin
             changed = snapshot.changed?
@@ -288,6 +290,7 @@ module RailsAiContext
               FILE_CHECK[:running] = nil
               FILE_CHECK[:done].broadcast
             end
+            RunCache.clear
           end
         rescue StandardError => e
           RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
