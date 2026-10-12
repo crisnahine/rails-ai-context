@@ -38,6 +38,8 @@ RSpec.describe RailsAiContext::Redaction do
       expect(redact("Authorization: Basic dXNlcjpwYXNz")).to eq("Authorization: Basic dXNlcjpwYXNz")
       expect(redact("Authorization: Basic dXNlcjpwYXNz", path: "log/development.log")).to eq("Authorization: [FILTERED]")
       expect(redact("Authorization: Bearer abc123def456ghi", path: "log/production.log.1")).to eq("Authorization: [FILTERED]")
+      expect(redact("Authorization: Bearer abc123", path: "log/production.log-20261001")).to eq("Authorization: [FILTERED]")
+      expect(redact("Authorization: Bearer abc123", path: "log/production.log.old")).to eq("Authorization: [FILTERED]")
     end
 
     # A secret need not mix letters and digits; under a secret-named key a
@@ -777,6 +779,12 @@ RSpec.describe RailsAiContext::Redaction do
   end
 
   describe ".redact_log_line" do
+    it "filters a Token header's parameters whole, with no stray bracket" do
+      expect(described_class.redact_log_line("Authorization: Token token=abc")).to eq("Authorization: [FILTERED]")
+      expect(described_class.redact_log_line(%(Authorization: Token token="abc123", realm="api")))
+        .to eq(%(Authorization: [FILTERED], realm="api"))
+    end
+
     it "filters a password confirmation in request parameters" do
       line = %(Parameters: {"password"=>"hunter2x", "password_confirmation"=>"hunter2x"})
 
