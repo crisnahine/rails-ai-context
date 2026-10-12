@@ -2,7 +2,7 @@
 
 Status: accepted
 
-`rails_query` promises two guards the database itself enforces: a read-only transaction and a statement timeout. Each database server spells both differently, and some cannot give one at all, so the tool runs a statement only where it knows the spelling. A **database family** is that knowledge: one per kind of database, chosen once from the connection, and the only place a database's read-only and timeout rules live.
+`rails_query` promises two guards the database itself enforces: a read-only transaction and a statement timeout. Each database server spells both differently, and some cannot give one at all, so the tool runs a statement only where it knows the spelling. A **database family** is that knowledge: one per kind of database, read from the adapter's name in the database's configuration before any connection opens, and the only place a database's read-only and timeout rules live.
 
 ## Decision
 

@@ -1848,6 +1848,7 @@ config.max_tool_response_chars = 60_000
 ### Models not detected
 
 - Models must descend from `ActiveRecord::Base`, through `ApplicationRecord` or any other base class. Without a boot they must also sit in a model directory (`app/models/`, or a pack's or engine's)
+- A file in a `concerns/` directory of a model root is a model when the class its path names has a model superclass. A concern module that holds an inner class stays a concern. Without a boot, such a class is not listed when its superclass is a gem's own record base. The booted tier resolves it through the loaded class
 - Excluded models: `ApplicationRecord`, `ActiveStorage::*`, `ActionText::*`, `ActionMailbox::*`
 - Add custom exclusions: `config.excluded_models += %w[InternalModel]`
 

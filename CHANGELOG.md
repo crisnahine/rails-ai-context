@@ -14,11 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MySQL and SQLite it ran the statement with the text checks alone, with no
   read-only transaction and no timeout. It now answers with the adapter's
   name, and it opens no connection to do so.
-- **MySQL bounds every `rails_query` statement.** The `MAX_EXECUTION_TIME`
-  hint bound only a statement that starts with SELECT, so one that starts with
-  WITH or EXPLAIN ANALYZE ran with no time limit. The session's
-  `max_execution_time` now bounds every statement and is put back after it,
-  also when the statement fails.
+- **MySQL bounds a statement that starts with WITH or EXPLAIN ANALYZE.** The
+  `MAX_EXECUTION_TIME` hint bound only a statement that starts with SELECT, so
+  one that starts with WITH or EXPLAIN ANALYZE ran with no time limit. The
+  session's `max_execution_time` now bounds those too and is put back after the
+  statement, also when the statement fails. It does not cover `EXPLAIN` or
+  `SHOW`, where a wait on a lock ends at the session's `lock_wait_timeout`.
 - **`rails_query` keeps a column secret when `Redaction`'s secret words name
   it.** Columns such as `passwd`, `salt`, `credentials` and `pepper` were
   returned by `rails_query` while log and config redaction filtered those
@@ -105,8 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one XML value. A call to one is now refused by name.
 - **Relations that hold sampled values, other sessions' statements or stored
   credentials are not read.** No check on a column's name applies to what they
-  hold, so a query on one ran and returned it. A statement that names one is
-  now refused. On PostgreSQL they are `pg_stats`, `pg_stats_ext`,
+  hold, so a query on one ran and returned it. A statement that names one is now
+  refused. On PostgreSQL they include `pg_stats`, `pg_stats_ext`,
   `pg_statistic`, `pg_statistic_ext`, `pg_largeobject`, `pg_stat_activity` and
   the functions it reads through, `pg_stat_statements`,
   `pg_prepared_statements`, `pg_cursors`, `pg_authid`, `pg_shadow`,
@@ -114,15 +115,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pg_subscription`, `pg_foreign_server`, `pg_foreign_data_wrapper`,
   `pg_foreign_table`, `pg_settings`, `pg_show_all_settings()`,
   `pg_show_all_file_settings()`, `pg_hba_file_rules` and
-  `pg_ident_file_mappings`. There the plan is checked too, so a view over one
-  of them is refused, the `information_schema` views of user mappings and
-  foreign servers among them. On MySQL and MariaDB they are the whole `mysql`
-  schema, `performance_schema`, `sys`, `general_log`, `slow_log`,
+  `pg_ident_file_mappings`. There the plan is checked too, so a view over one of
+  them is refused, the `information_schema` views of user mappings and foreign
+  servers among them. On MySQL and MariaDB they include the whole `mysql`
+  schema, `performance_schema`, `sys`, `processlist`, `general_log`, `slow_log`,
   `column_statistics`, `column_stats`, `global_priv`, and in
-  `information_schema` `PROCESSLIST`, `INNODB_TRX`, `INNODB_LOCKS`,
-  `INNODB_LOCK_WAITS`, the `INNODB_FT_` tables, `USER_STATISTICS`,
-  `CLIENT_STATISTICS`, `PROFILING` and `OPTIMIZER_TRACE`. On SQLite they are
-  `sqlite_stat1`, `sqlite_stat3` and `sqlite_stat4`.
+  `information_schema` `INNODB_TRX`, `INNODB_LOCKS`, `INNODB_LOCK_WAITS`, the
+  `INNODB_FT_` tables, `USER_STATISTICS`, `CLIENT_STATISTICS`, `PROFILING` and
+  `OPTIMIZER_TRACE`. On SQLite they include `sqlite_stat1`, `sqlite_stat3` and
+  `sqlite_stat4`. docs/SECURITY.md lists every name. A name refused as a bare
+  word is refused wherever it stands, so an app table called `slow_log` or
+  `processlist` is refused too.
 - **On PostgreSQL a role's password hash and its stored settings are secret
   columns.** `pg_authid.rolpassword` and `pg_db_role_setting.setconfig` were
   returned, also through the views PostgreSQL builds on them. Both names are
@@ -158,20 +161,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read, so a secret column of that table could come back under another name.
   Such a column is now filtered when its table holds a secret column. When the
   table cannot be told either, it is filtered when any table does.
-- **Every statement a `rails_query` call sends has a time limit on PostgreSQL,
-  MySQL and MariaDB.** The reads a call makes beside the query, such as the
-  schema read behind the secret column rule, had no time limit, so a call
-  against a table another session had locked waited until the lock went. Each
-  family now bounds those reads the way it bounds the query, a wait on a lock
-  included. The query has `query_timeout` to itself. The schema read, the
-  PostgreSQL plan with its function lookup, and the column trace share a
-  second `query_timeout`, and each is charged the time it ran. A read that
-  runs out of time is the call's timeout answer, so the statements of a call
-  take about twice `query_timeout` at most. On MySQL and MariaDB a wait on a
-  lock ends at `query_timeout` rounded up to a whole second, and
-  `explain: true` is bounded while it waits on a lock too. On SQLite those
-  reads run on the app's own connection with no statement limit, and a wait on
-  another writer ends at that connection's busy timeout.
+- **The reads a `rails_query` call makes beside the query have a time limit on
+  PostgreSQL, MySQL and MariaDB.** Those reads, such as the schema read behind
+  the secret column rule, had no time limit, so a call against a table another
+  session had locked waited until the lock went. Each family now bounds them the
+  way it bounds the query, a wait on a lock included. The query has
+  `query_timeout` to itself. The schema read, the PostgreSQL plan with its
+  function lookup, and the column trace share a second `query_timeout`, and each
+  is charged the time it ran. A read that runs out of time is the call's timeout
+  answer, so the statements of a call take about twice `query_timeout` at most.
+  On MySQL and MariaDB a wait on a lock ends at `query_timeout` rounded up to a
+  whole second, and `explain: true` is bounded while it waits on a lock too.
+  `SHOW`, `DESCRIBE` and a plain `EXPLAIN` have that lock wait limit alone
+  there, since the statement limit does not cover them. On SQLite those reads
+  run on the app's own connection with no statement limit, and a wait on another
+  writer ends at that connection's busy timeout.
 - **`rails_runtime_info` reads table sizes, index usage and pending migrations
   under `query_timeout` on PostgreSQL, MySQL and MariaDB.** They had no time
   limit, so a locked table held the answer until the lock went. Each read now
@@ -180,16 +184,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PostgreSQL and MySQL it rounded to zero, which turns the statement limit
   off. PostgreSQL, MySQL and MariaDB now bound the statement at one
   millisecond.
-- **SQLite runs a statement on the app's own connection only when the query
-  process could not prepare it.** `rails_query` runs a SQLite statement in a
-  child process that it ends at `query_timeout`. It ran the statement again on
-  the app's own connection, with no time limit, when the child's error message
-  read like a missing function, module or collation, and text from the
-  statement could reach that message. The choice is now made from which step
-  failed in the child. A statement that fails while it runs is answered with
-  its SQL error and is not run again. On the app's own connection a statement
-  that returns rows slowly now ends at `query_timeout`. One long step still
-  cannot be ended there, so the answer keeps its "without a time limit" note.
+- **SQLite no longer chooses the app's own connection from an error message.**
+  `rails_query` runs a SQLite statement in a child process that it ends at
+  `query_timeout`. It ran the statement again on the app's own connection, with
+  no time limit, when the child's error message read like a missing function,
+  module or collation, and text from the statement could reach that message. The
+  choice is now made from which step failed in the child. A statement runs on
+  the app's own connection in three cases: an in-memory database, a platform
+  without `fork`, and a statement the child could not prepare. A statement that
+  fails while it runs is answered with its SQL error and is not run again. On
+  the app's own connection a statement that returns rows slowly now ends a few
+  rows after `query_timeout` passes, since an interrupt lands only between two
+  rows. One long step still cannot be ended there, so the answer keeps its
+  "without a time limit" note.
 - **`rails_query` holds `LIMIT ALL`, `LIMIT NULL` and a negative limit to the
   row cap.** The three mean no limit, and the query fetched every row before
   the cap cut the answer. They now read as no limit of the query's own and
@@ -238,19 +245,23 @@ Ten tools that each answered one section of the app's configuration leave
   the one-paragraph overview `quick` gave.
 - **`tools/list` is smaller.** Measured as the JSON of every tool's
   definition, it was 47,802 characters (about 11,950 tokens at four characters
-  per token) and is now 41,280 characters (about 10,320 tokens).
+  per token) and is now 41,275 characters (about 10,320 tokens).
 
 ### Migration notes
 
 - **Old names keep working where a name is typed.** The CLI resolves `gems`,
-  `rails_get_gems`, `frontend_stack` and every other old short and full name
-  to its section, and `--json` reports `rails_get_config`. A call to a retired
+  `rails_get_gems`, `frontend_stack` and every other old short and full name to
+  its section, and `--json` reports `rails_get_config`. A call to a retired
   name, from the CLI or over MCP, is answered from its section and ends with a
   line naming the call to make instead. That line is the command under
   `tool_mode: :cli` and the MCP call under `:mcp`, and it carries only the
-  arguments the section reads. An argument value over 80 characters, or one
-  that holds a backtick, is left out of the call and named after it. Update
-  saved prompts to the new call: `rails_get_gems(category:"auth")` becomes
+  arguments the section reads. A value goes into the call when it is a number, a
+  boolean, or at most 80 characters of letters, digits, `_`, `.` and `-`. Any
+  other value is named after the call, as in "_rails_get_i18n is now
+  `rails_get_config(section:"i18n")`, with the same `locale`; call that
+  instead._" `rails_session_context(mark:)` takes a retired name too, and
+  records it as `rails_get_config` with its section. Update saved prompts to the
+  new call: `rails_get_gems(category:"auth")` becomes
   `rails_get_config(section:"gems", category:"auth")`.
 - **`skip_tools` keeps its meaning.** An old tool name turns its section off,
   so an app that skipped `rails_get_env` still keeps the `env` section off.
@@ -300,11 +311,15 @@ Ten tools that each answered one section of the app's configuration leave
   that names one is refused, and the refusal says the allowed list does not
   release it. Its values come back `[FILTERED]` under `SELECT *`. Take the
   column out of the query.
-- **`rails_query` refuses more column names.** A column named `salt`,
-  `passwd`, `credentials`, `pepper`, `authentication_string`, `rolpassword` or
+- **`rails_query` refuses more column names.** A column named `salt`, `passwd`,
+  `credentials`, `pepper`, `authentication_string`, `rolpassword` or
   `setconfig`, one whose name holds `nonce`, and one named `iv` or ending in
-  `_iv` is refused by name and comes back `[FILTERED]` under `SELECT *`. To
-  read one that holds no secret, list its name in `query_allowed_columns`.
+  `_iv` is refused by name and comes back `[FILTERED]` under `SELECT *`. Each of
+  `salt`, `passwd`, `credentials` and `pepper` counts as a whole name and as one
+  part of a name split at its underscores. So `salt_rounds`, `aws_credentials`
+  and `pepper_spray` are refused, and `salty`, `basalt` and `peppermint` are
+  not. To read one that holds no secret, list its name in
+  `query_allowed_columns`.
 - **On MySQL, MariaDB and SQLite a query over a view that reads a secret
   column is refused.** It ran on 5.35.0 and returned what the view selected.
   The refusal names the view and the column. Query the tables the view reads,
@@ -348,17 +363,20 @@ Ten tools that each answered one section of the app's configuration leave
   default of 5 seconds is kept. In 5.35.0 zero turned the timeout off on
   PostgreSQL and MySQL. Set a larger number for a slow query. A fraction of a
   second is allowed.
-- **The CLI refuses a value a parameter cannot take.** `--format xml` on
-  `schema` and `--limit abc` answered in 5.35.0 with a warning on stderr and
-  the parameter's default. Each now exits 1 and names what the parameter
-  takes. `--detail` alone still warns and falls back.
-- **Some CLI calls that exited 0 now exit 1.** Beside the refused values
-  above, they are a `rails_query` timeout, a database that cannot be reached,
-  a failing `explain: true`, a failed Brakeman scan, and an unexpected failure
-  in `rails_onboard`, `rails_diagnose`, `rails_generate_test`,
-  `rails_review_changes`, `rails_runtime_info`, `rails_session_context`,
-  `rails_get_context` or `rails_search_code`. Over MCP the same answers carry
-  `isError`.
+- **A CLI call with a value its parameter cannot take exits 1.** `--format xml`
+  on `schema`, `--limit abc` and `--no-limit` exited 0 in 5.35.0, the first two
+  with a warning on stderr and the parameter's default. A script that leaned on
+  the fallback has to pass a value the parameter takes. The Fixed entry "The CLI
+  refuses a value a parameter does not take" gives the answers. `--detail` alone
+  still warns and falls back.
+- **Some CLI calls that exited 0 now exit 1.** Beside the refused values above,
+  they are a `rails_query` timeout, a database that cannot be reached, a failing
+  `explain: true`, a failed Brakeman scan in the bundle or outside it, a crash
+  inside a section of `rails_get_context`, `rails_diagnose` or
+  `rails_review_changes`, and an unexpected failure in `rails_onboard`,
+  `rails_diagnose`, `rails_generate_test`, `rails_review_changes`,
+  `rails_runtime_info`, `rails_session_context`, `rails_get_context` or
+  `rails_search_code`. Over MCP the same answers carry `isError`.
 - **Regenerate the context files.** Run `rails ai:context` or
   `rails-ai-context context` so the tool guide and tables name the new call.
 
@@ -387,11 +405,11 @@ Ten tools that each answered one section of the app's configuration leave
 - **`rails_runtime_info` checks `database` whatever the `section`.** A name it
   cannot reach is an error for every section, and a section that does not read
   `database` says so.
-- **A database no connection reaches is named, with what stopped the
-  connection and what to do.** The advice is to create it when its server does
-  not hold it, and to start the server or fix its settings otherwise. For a
-  named database that is an error for the call. With none, the Database
-  section says so about the primary and the other sections still answer.
+- **`rails_runtime_info` names a database no connection reaches.** It says what
+  stopped the connection and what to do, as the `rails_query` answer under Fixed
+  does. For a named database that is an error for the call. With none, the
+  Database section says so about the primary and the other sections still
+  answer.
 - **A database whose adapter gem is not in the bundle is named with the gem to
   add.** The answer reads "The <name> database cannot be reached: its
   <adapter> adapter did not load. Add the <gem> gem to the Gemfile and run
@@ -407,6 +425,10 @@ Ten tools that each answered one section of the app's configuration leave
   exists only inside the process that created it, and a new connection would
   open an empty one. `rails ai:doctor` and `rails_runtime_info` leave such a
   database out of their pending migrations check.
+- **`.ai-context.json` carries `primary_name` where the primary has another
+  name.** The key sits in the `multi_database` section and holds the primary's
+  `config/database.yml` name. An app whose primary is named `primary` has no
+  such key.
 
 ### Changed
 
@@ -445,10 +467,24 @@ Ten tools that each answered one section of the app's configuration leave
   text, so the CLI exited 0. They now answer as every other tool does:
   `isError: true` over MCP, exit 1 from the CLI, and a text that starts "Tool
   <name> failed:".
-- **A failed Brakeman scan is an error result.** `rails_security_scan`
-  answered "Brakeman scan failed: ..." as an ordinary answer, an unknown check
-  name included. The text is the same, and it now carries `isError` over MCP
-  and exits 1 from the CLI.
+- **A crash inside a section of a composite answer makes the answer an error.**
+  `rails_get_context`, `rails_diagnose` and `rails_review_changes` build their
+  sections from other tools. When one of those raised an exception, the answer
+  was ordinary text and the CLI exited 0. It is now an error response on both
+  surfaces. The text keeps every section, and the crashed one reads "Tool <name>
+  failed: <Class>: <message>". A section that answers an error for another
+  reason, such as a refusal or a failed Brakeman run, stays a section of an
+  ordinary answer.
+- **A stack overflow or a `SecurityError` in a tool is an error response.**
+  Either one ended the stdio server and printed a backtrace on the CLI. The
+  answer is now an error such as "Tool <name> failed: SystemStackError: stack
+  level too deep", and the server keeps running.
+- **A failed Brakeman scan is an error result.** `rails_security_scan` answered
+  "Brakeman scan failed: ..." as an ordinary answer, an unknown check name
+  included. The text is the same, and it now carries `isError` over MCP and
+  exits 1 from the CLI. A brakeman run from outside the bundle that started and
+  failed is an error too, with the text it had. One that could not start stays
+  an ordinary answer.
 - **`serve --transport http` starts on rack 2 with rackup 1.x.** It stopped
   with "uninitialized constant Rackup::Handler" on an app that pins rack below
   3 and bundles the rackup gem.
@@ -462,6 +498,10 @@ Ten tools that each answered one section of the app's configuration leave
   own: cache."
 - **`rails_runtime_info` names a Solid Cache store "SolidCache::Store".** The
   cache section's Store line read "Store".
+- **`rails_runtime_info` says when a database family has no index usage.** At
+  full detail on MySQL, MariaDB and SQLite it printed nothing where PostgreSQL
+  lists index usage. It now says "_Index usage is not available for the MySQL
+  database family._", or SQLite.
 - **`rails_runtime_info` reads pending migrations in every database configured
   here.** It said "all up to date" while another database had pending
   migrations. The line now names the databases it read, as in "**Migrations:**
@@ -479,22 +519,38 @@ Ten tools that each answered one section of the app's configuration leave
   lock advice took the primary's database family for a table another database
   holds. It now takes the family of the database that holds the table.
 - **Every surface names the same databases.** On a default Rails 8 app, where
-  the running environment configures only the primary and production
-  configures queue, cache and cable, the schema section, the multi-database
-  section, the stack overview and the model listing now all name the four
-  databases. The migrations section names each one whose migrations
-  directories hold files. A database only other environments configure is
-  marked with every one of them, "(production only)" or "(staging and
-  production)", and one only a committed dump names is marked "(committed dump
-  only)". The `rails_get_schema` Secondary databases line carries the same
-  mark as the generated files, and so does each database `rails_onboard`
-  names.
+  the running environment configures only the primary and production configures
+  queue, cache and cable, the schema section, the multi-database section, the
+  stack overview and the model listing now all name the four databases. The
+  migrations section names each one whose migrations directories hold files. A
+  database only other environments configure is marked with every one of them,
+  "(production only)" or "(staging and production)", and one only a committed
+  dump names is marked "(committed dump only)". The mark is on every line that
+  names such a database: the `rails_get_schema` Secondary databases line, each
+  database `rails_onboard` names, the performance check's "Not checked" line,
+  the Database, Migrations and Databases lines of the compact generated files,
+  and the headings of the full generated file and of the schema rules file, as
+  in "## cache (production only, SQLite, 1 table)".
+- **An app whose first database is not named `primary` is read by its own
+  names.** Where another database is the one named `primary`, the generated
+  files called both of them primary. They now name the first database by its own
+  name, as in "## Database Schema: animals (2 tables)". Migration advice for a
+  table the database named `primary` holds gave no `--database`, and now carries
+  `--database primary`.
+- **A `replica` entry is read as Rails reads it.** `replica: "yes"`, or any
+  other value Ruby counts as true, marks a replica. The static tier took `true`
+  alone.
 - **The static tier reads an environment whose whole value is a URL.** A
   `config/database.yml` environment written as one URL string was left out. It
   is now read as that environment's one database.
 - **A secondary dump too large to read is named.** It keeps an entry in the
   schema section that gives the reason, and a database whose migrations are
   replayed instead no longer has its existing dump called missing.
+- **`rails_onboard` says when a database's dump was not read.** For a secondary
+  whose dump is too large to read it said "(0 tables)" and counted the database
+  in its summary. It now says "plus the warehouse database (tables not read)",
+  and the summary reads "5 tables in 2 databases, the warehouse database not
+  read". The unread database is left out of both counts.
 - **The performance check covers every database.** Missing indexes and counter
   caches are checked in each database's dump, a finding outside the primary
   names its database, and a database it could not read is listed under "Not
@@ -514,34 +570,53 @@ Ten tools that each answered one section of the app's configuration leave
   `rails-ai-context tool schema --format xml` warned on stderr and answered in
   the default format with exit 0, and so did `--limit abc` on a parameter that
   takes an integer. Each now exits 1 and names what the parameter takes: the
-  listed values, "an integer", or "true or false" for a boolean. An empty
-  `--limit=` is refused too. A `--detail` level a tool does not have still
-  falls back to the default with a warning, since every level answers the same
-  question.
+  listed values, "an integer", "a string", "an array", or "true or false" for a
+  boolean. An empty `--limit=` is refused too. So is `--no-<param>` on a
+  parameter that is no boolean, which passed `false` to the tool: `--no-limit`
+  answers "**Error:** `--no-limit` is not a valid `limit`. Valid: an integer".
+  A `--detail` level a tool does not have still falls back to the default with
+  a warning, since every level answers the same question.
+- **`tool <name> --help` describes the tool the app serves.** Help read no
+  configuration, so `tool config --help` said "Default: app." in an app that
+  turned the `app` section off. Inside an app, or with `--app-path`, help now
+  reads `.rails-ai-context.yml` without booting. A tool or section `skip_tools`
+  turned off is answered as turned off at exit 1, and `tool config --help` says
+  "Required: the app section is turned off in this app." when `app` is off.
+  Outside an app the output is unchanged. A `skip_tools` set in an initializer
+  is not seen without a boot.
 - **A call to a skipped tool shows in instrumentation.** Over MCP it left the
   `rails_ai_context.tools.call` payload with no tool name and no error. The
   payload now carries `tool_name` and `error: :tool_skipped`.
-- **A model class in a `concerns` directory is listed.** A class with a model
-  superclass in a `concerns` directory of a model root was missing from the
-  static tier's models, and from the booted listing until something loaded it.
-  It is now listed under the constant its file declares, the mixins beside it
-  stay out, and `rails_validate` gives its file the model checks.
+- **A model class in a `concerns` directory is listed.** A file in a `concerns`
+  directory of a model root holds a model when the class its path names has a
+  model superclass. Such a class was missing from the static tier's models, and
+  from the booted listing until something loaded it. It is now listed under the
+  constant its file declares. A concern module that holds an inner class stays a
+  concern, the mixins beside it stay out, and `rails_validate` gives the model's
+  file the model checks. On the static tier a class whose superclass is a gem's
+  own record base is not listed.
 - **`rails_get_context(include:)` lists all twelve keys it takes.** It also
   names a key it does not take, and a key given twice, in any capitalisation,
   runs once.
+- **`rails_get_context` says what is not there with a tool turned off.** With
+  `rails_get_controllers` in `skip_tools`, an `action` the controller does not
+  have is answered "Action 'nope' not found in PostsController. Available:
+  create, destroy, ...". With `rails_analyze_feature` in `skip_tools`, a
+  `feature` keyword that only model names hold is answered "The model names that
+  hold 'comment': Comment."
 - **The performance check finds a `has_paper_trail` model's unindexed versions
   table on the static tier.** paper_trail adds `has_many :versions, as: :item`
   when the app boots, so only the booted tier reported
   `add_index :versions, [:item_type, :item_id]`. The static tier now reads the
   macro, and the versions class its options name (`versions: { class_name: ...
   }`), so both tiers give the same finding.
-- **A database `rails_query` cannot reach is an error that names it.** A
-  server that was down, or a database its server does not hold, came back as
-  an ordinary answer headed "Database unavailable" or "Database not found",
-  with no database named and advice to try `RAILS_ENV=test`. With or without
-  `database`, the answer is now an error that names the database and says what
-  to do: start its server or fix its `config/database.yml` entry, or run
-  `bin/rails db:create`.
+- **A database `rails_query` cannot reach is an error that names it.** A server
+  that was down, or a database its server does not hold, came back as an
+  ordinary answer headed "Database unavailable" or "Database not found", with no
+  database named and advice to try `RAILS_ENV=test`. With or without `database`,
+  the answer is now an error that names the database, says what stopped the
+  connection and says what to do: start its server or fix its
+  `config/database.yml` entry, or run `bin/rails db:create`.
 - **A connection lost while a statement runs is answered as one.** On Rails
   7.1 and later the answer is an error that starts "The <name> database
   stopped answering during the query:".
@@ -566,7 +641,7 @@ Ten tools that each answered one section of the app's configuration leave
   `count(id)`, `max(id)` and `EXISTS (SELECT 1 ...)` in its place. An
   aggregate over a secret column, a whole row and `count(users)` stay refused.
 - **On PostgreSQL a quoted mixed-case secret column is filtered in place.**
-  `SELECT *` over a table with a secret column such as `"Salt"` was refused
+  `SELECT *` over a table with a secret column such as `"ApiToken"` was refused
   whole, where a lowercase one is filtered.
 - **CSV output with no rows is the header row.** `format: "csv"` answered a
   query that returned no rows with the sentence the table format prints.

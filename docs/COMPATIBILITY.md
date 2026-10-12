@@ -279,11 +279,11 @@ Proof sources:
    and 4.0, each through the standalone and in-Gemfile installs, the rake
    tasks and all 45 of that release's tools over MCP stdio; a Rails 8.1 app
    reached through a symlinked path, as macOS spells its temporary folders; a
-   Rails 8.1 and a
-   Rails 7.0 app mounting the engine, six clients calling while a model
-   changed every 0.3 seconds; the pre-commit hook installed and run by real
-   commits in an app's own repository, a monorepo's folder and a submodule;
-   and the unit suite and the E2E harness on Linux, macOS and Windows.
+   Rails 8.1 and a Rails 7.0 app mounting the engine, six clients calling
+   while a model changed every 0.3 seconds; the pre-commit hook installed and
+   run by real commits in an app's own repository, a monorepo's folder and a
+   submodule; and the unit suite and the E2E harness on Linux, macOS and
+   Windows.
    In the v5.34.0 release QA: the 21 apps of the v5.33.0 acceptance run
    (Mastodon, OpenProject, Discourse, Canvas, Forem, Whitehall, Consul, Open
    Food Network, Diaspora, Errbit, Huginn, Plots2, a private app and the small
@@ -343,9 +343,9 @@ Proof sources:
 
 `rails_query`, `rails_runtime_info` and the row estimates run on three
 database families: PostgreSQL (with PostGIS), MySQL (mysql2 and Trilogy, with
-MariaDB) and SQLite. `rails_query` refuses any other adapter (SQL Server, Oracle,
-CockroachDB) by name before sending a statement, and the table sizes, row
-estimates and index usage say they are not available there. CI's
+MariaDB) and SQLite. `rails_query` refuses any other adapter (SQL Server,
+Oracle, CockroachDB) by name before sending a statement, and the table sizes,
+row estimates and index usage say they are not available there. CI's
 `database_servers` job runs the families against PostgreSQL 16, MySQL 8.0 and
 8.4 and MariaDB 10.6 and 11.4 on Rails 8.0, through mysql2 and Trilogy. It also
 runs PostgreSQL 16 with MySQL 8.0 and MariaDB 10.6 on Rails 7.0, which has no

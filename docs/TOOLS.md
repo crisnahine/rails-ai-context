@@ -133,14 +133,19 @@ Composite context: schema + model + controller + routes + views for a resource. 
 | `feature` | string | - | Feature keyword (e.g., `post`) |
 | `include` | array | - | Extra context to add: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks`, `tests`, `config`, `gems`, `security`. A key is read in any capitalisation, and a key given twice runs once |
 
-A model, controller or feature keyword the app does not have is answered as not found, with the closest name where there is one. An include whose tool `skip_tools` turns off is answered by saying so, and that tool does not run. An unexpected failure is an error response that starts "Tool rails_get_context failed:".
+A model, controller or feature keyword the app does not have is answered as not found, with the closest name where there is one. An `action` the controller does not have is answered "Action 'nope' not found in PostsController. Available: create, destroy, ...", also when `skip_tools` lists `rails_get_controllers`. With `rails_analyze_feature` turned off, a `feature` keyword that only model names hold is answered with them: "The model names that hold 'comment': Comment." An include whose tool `skip_tools` turns off is answered by saying so, and that tool does not run.
+
+An unexpected failure is an error response that starts "Tool rails_get_context failed:". A crash inside one section is an error response too: `isError` over MCP and exit 1 on the CLI. The text keeps every section, and the crashed one reads "Tool <name> failed: <Class>: <message>". A section that answers an error for another reason, such as a refusal or a failed Brakeman run, stays a section of an ordinary answer. `rails_diagnose` and `rails_review_changes` answer a crashed section the same way.
 
 ### `rails_onboard`
 
 Narrative app walkthrough for getting up to speed. The stack line counts the
 tables of every database the app's own schema dumps declare, as
 `rails_get_schema` reads them; the databases Rails 8 gives Solid Queue, Solid
-Cache and Solid Cable get one line, without their tables. It ends with the app's custom
+Cache and Solid Cable get one line, without their tables. A database whose
+dump was not read is named with "(tables not read)" and left out of the table
+count, and the summary says so: "5 tables in 2 databases, the warehouse
+database not read". It ends with the app's custom
 rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its arguments,
 description and file: the first 15 at `standard`, every one at `full`.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
@@ -168,7 +173,10 @@ The other databases are listed after the primary's tables: every database any
 environment in `config/database.yml` configures, so a Rails 8 app's queue,
 cache and cable dumps are read even where only production configures them,
 then any committed dump no environment names. A dump too large to read, or
-holding no tables, is named with the reason.
+holding no tables, is named with the reason. A secondary's dump is read from
+its own path, else from the other format's file under its name
+(`db/queue_schema.rb` or `db/queue_structure.sql`), whatever `database_tasks`
+or `schema_format` says.
 
 Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
 with the column, so a lookup on it alone can use one; `[unique]` means a unique
@@ -415,7 +423,7 @@ JavaScript (`.js`, `.mjs`, `.cjs`) is parsed by `node --check` as the module sys
 
 ### `rails_security_scan`
 
-Brakeman static analysis: SQL injection, XSS, mass assignment, command injection. A scan that fails, on an unknown check name for one, answers "Brakeman scan failed: ..." as an error response: `isError` over MCP and exit 1 on the CLI.
+Brakeman static analysis: SQL injection, XSS, mass assignment, command injection. A scan that fails, on an unknown check name for one, answers "Brakeman scan failed: ..." as an error response: `isError` over MCP and exit 1 on the CLI. A brakeman run from outside the bundle that started and failed is an error response too. One that could not start is an ordinary answer.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -429,7 +437,9 @@ Brakeman static analysis: SQL injection, XSS, mass assignment, command injection
 > bundle and says so: the installed gem's own `bin/brakeman`, run by the app's
 > Ruby, not whatever `brakeman` is on PATH. When no scan can run, the answer
 > says which case it is: brakeman is nowhere on the machine, or it is
-> installed and produced no report.
+> installed and produced no report. For the second it quotes what brakeman
+> said, or says "it wrote no report and printed nothing" or "its report could
+> not be read".
 
 ### `rails_performance_check`
 
@@ -456,9 +466,13 @@ the render passes as a literal (`show_seller: false`) is not read. ERB and
 jbuilder are read; Haml and Slim templates are not, and neither are serializers.
 
 Missing indexes and counter caches are checked in every database's dump, and a
-finding outside the primary names its database. A database whose tables could
-not be read (`schema_dump: false`, `database_tasks: false`, a dump not on disk
-or over `max_schema_file_size`) is listed under **Not checked** with the reason.
+finding outside the primary names its database. A dump on disk under a
+database's name is read whatever `database_tasks` or `schema_dump` says. A
+database whose tables could not be read is listed under **Not checked** with
+the reason: its dump is not on disk or is over `max_schema_file_size`, or its
+`config/database.yml` entry turns `database_tasks` or `schema_dump` off and no
+dump is on disk. A database another environment configures carries its mark:
+`**Not checked:** warehouse (production only, db/warehouse_schema.rb is not on disk)`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -474,7 +488,7 @@ or over `max_schema_file_size`) is listed under **Not checked** with the reason.
 
 ### `rails_get_config`
 
-The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and a call to an old name is answered from its section with a note naming the new call and the arguments the section reads. Under `tool_mode: :cli` the note is the command. An argument value over 80 characters, or one that holds a backtick, is left out of the note's call and named after it. A parameter the asked section does not read is named in the answer as ignored.
+The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and a call to an old name is answered from its section with a note naming the new call and the arguments the section reads. Under `tool_mode: :cli` the note is the command. A value goes into the note's call when it is a number, a boolean, or at most 80 characters of letters, digits, `_`, `.` and `-`. Any other value is named after the call: "_rails_get_i18n is now `rails_get_config(section:"i18n")`, with the same `locale`; call that instead._" A parameter the asked section does not read is named in the answer as ignored.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -689,7 +703,6 @@ estimate, so a table on another database has no count and the warning says
 `app/`, `lib/` and `config/` that name the column, the code the change breaks.
 Index and lock advice follows the database family of the database that holds
 the table.
-change breaks.
 
 It refuses a `table`, `type` or `new_name` longer than 256 characters, a
 `column` that long outside `create_table`, and `options` longer than 1,024
@@ -718,7 +731,7 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 ### `rails_query`
 
-Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded secret columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
+Safe read-only SQL with layered security: the SQL gate, a PostgreSQL plan check (whole-row leaks, expanded secret columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
 
 It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. So is a database no connection reaches, which the answer names with what to do about it.
 
@@ -743,7 +756,7 @@ On MySQL, MariaDB and SQLite a statement that names a view whose definition name
 - A SQLite database whose file is not there is an error, with or without `database`. The message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.
 - A SQLite database other than the primary that lives in memory (`:memory:`, or a `file:` URI with `mode=memory`) is refused by name. It exists only inside the process that created it, and a new connection would open an empty one.
 - A database whose columns cannot be read is not queried. The answer is "The columns of the <name> database could not be read, so its secret columns cannot be told and no query runs on it."
-- When a statement or an `explain: true` fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
+- When a statement or an `explain: true` fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use. The pointer is built from the schema dumps, so a table on a database with no dump gets none.
 
 Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.
 
@@ -800,7 +813,7 @@ Each diff passes through the redaction every tool's source does, read as the fil
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
 
-Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter.
+Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On MySQL, MariaDB and SQLite the full detail says "_Index usage is not available for the MySQL database family._", or SQLite. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter.
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there. Solid Cache's stats are read from its database, so when that is a SQLite file that is not there, the cache section says the database does not exist yet and creates nothing.
 
@@ -821,7 +834,7 @@ Session-aware context tracking across tool calls within a conversation. Pass `ac
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `action` | enum | - | `status` (queried tools with timestamps), `summary` (short recap), `reset` (clear this conversation's record) |
-| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken |
+| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken. A retired name such as `get_gems` is recorded as `rails_get_config` with its section |
 
 Each conversation has its own record: over HTTP, one server process serves every client, and each client's `Mcp-Session-Id` keeps its calls, and its `reset`, to itself. A tool that answers by calling others (`rails_get_context`, `rails_diagnose`, `rails_review_changes`) is recorded as the one call the client made.
 

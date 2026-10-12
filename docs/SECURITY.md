@@ -165,10 +165,11 @@ function, virtual-table module, collation, temporary table or encryption key onl
 the app's own connection has. That case is told from which step failed in the
 child, and the error's text is not read. A statement the child prepared and that
 fails while it runs is answered with its SQL error and is not run again. On the
-app's own connection a statement that returns rows slowly ends at `query_timeout`
-with the timeout answer. One long step cannot be ended there: the sqlite3 driver
-holds the interpreter lock while a statement steps, and an interrupt lands only
-between two rows. So the table and EXPLAIN answers of such a run say it ran
+app's own connection a statement that returns rows slowly ends with the timeout
+answer a few rows after `query_timeout` passes. The sqlite3 driver holds the
+interpreter lock while a statement steps, and an interrupt lands only between
+two rows, so the end comes late by the time those rows take. One long step
+cannot be ended there at all. So the table and EXPLAIN answers of such a run say it ran
 without a time limit. CSV output stays plain data.
 
 On sqlite3 1.x a query fails at its timeout, with the statement-timeout error,

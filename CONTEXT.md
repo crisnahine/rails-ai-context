@@ -110,10 +110,10 @@ counted. The engines section, and the static routes section, hold the mounts
 parsed from the route files.
 
 Distinct from a **Rails engine**, which is a `Rails::Engine` subclass whether
-or not anything mounts it, and which `rails_get_config(section:"engines")` lists separately under
-its loaded classes. The record key is `engine:` for the same reason the section
-key is `mounted_engines:` - it predates the widening, and what it holds is the
-mounted app's constant, engine or not.
+or not anything mounts it, and which `rails_get_config(section:"engines")`
+lists separately under its loaded classes. The record key is `engine:` for the
+same reason the section key is `mounted_engines:` - it predates the widening,
+and what it holds is the mounted app's constant, engine or not.
 
 ## Interaction filter
 

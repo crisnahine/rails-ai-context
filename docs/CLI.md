@@ -111,6 +111,15 @@ suggested: `tool gemz` answers "Unknown tool 'gemz'. Did you mean 'gems'?". A
 bare word after an old name gets that section's flag: `tool gems auth` answers
 "'auth' is not a flag - did you mean '--category auth'?".
 
+Inside an app, or with `--app-path`, `tool <name> --help` describes the tool
+that app serves. It reads `.rails-ai-context.yml` and boots nothing. A tool or
+section `skip_tools` turned off answers "rails_get_env is turned off in this
+app: skip_tools lists it ..." and exits 1. With the `app` section off,
+`tool config --help` marks `section` required and says "Required: the app
+section is turned off in this app." A `skip_tools` set in an initializer is
+not seen, since help boots nothing. Outside an app help describes the gem's
+own tools.
+
 #### Exit status
 
 `tool` exits 0 when the tool answered and 1 when it could not. A required
@@ -134,9 +143,12 @@ question you did not ask. `config --section bogus` exits 1 the same way, and
 its answer names the sections that are on in this app. A value of the wrong
 type is refused too: `--limit abc` on `search_code` answers
 "**Error:** `abc` is not a valid `limit`. Valid: an integer", a boolean takes
-`true` or `false`, and an empty `--limit=` is refused. One value falls back to
-the tool's own default with a warning on stderr: a `--detail` level the tool
-does not have, since every level answers the same question.
+`true` or `false`, and an empty `--limit=` is refused. So is `--no-<param>` on
+a parameter that is no boolean: `--no-limit` answers
+"**Error:** `--no-limit` is not a valid `limit`. Valid: an integer", and a
+string or an array parameter says "a string" or "an array". One value falls
+back to the tool's own default with a warning on stderr: a `--detail` level
+the tool does not have, since every level answers the same question.
 
 ### The static tier and `--no-boot`
 

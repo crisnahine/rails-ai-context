@@ -278,7 +278,7 @@ The SQL gate refuses write statements, file and admin functions and secret colum
 
 What a string literal holds decides some of these:
 - A write keyword or a semicolon inside a string (`WHERE note = 'please insert coin'`, `'a; b'`) is data on every database, and the query runs
-- A secret column's name, `FOR UPDATE` / `FOR SHARE` or `UNION` inside a string is data on PostgreSQL only. On MySQL and SQLite the raw text decides and the query is refused, since no later check there would catch a quote the masking misread
+- A secret column's name, `FOR UPDATE` / `FOR SHARE` or `UNION` inside a string is data on PostgreSQL only. On MySQL, MariaDB and SQLite the raw text decides and the query is refused, since no later check there would catch a quote the masking misread
 - A file or network function (`pg_read_file`, `LOAD_FILE`), `INTO OUTFILE` / `INTO DUMPFILE`, a refused `SHOW` form (`SHOW GRANTS`) and a relation that is not read (`pg_stats`, `slow_log`) are refused wherever they stand, inside a string too
 - A session or administrative function (`pg_terminate_backend`, `GET_LOCK`) is refused wherever its call stands, so `'pg_terminate_backend(1)'` inside a string is refused too. Its bare name inside a string is data
 - A `#` starts a comment on MySQL only, and only outside a quoted string
@@ -317,7 +317,7 @@ A function called by a quoted name (`"upper"('x')`, `` `sleep`(0) ``) is refused
 
 ### "The columns of the <name> database could not be read"
 
-The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is one catalogue query per database family, so an account that cannot read the catalogue cannot use `rails_query`.
+The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is three statements at most, so an account that cannot read the catalogue cannot use `rails_query`.
 
 ### "Column values show [FILTERED]"
 
