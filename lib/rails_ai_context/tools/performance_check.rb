@@ -74,7 +74,8 @@ module RailsAiContext
           lines << ""
           unchecked = Array(data[:unchecked_databases])
           if unchecked.any?
-            lines << "**Not checked:** #{unchecked.map { |db| "#{db[:name]} (#{db[:reason]})" }.join(', ')}"
+            said = unchecked.map { |db| "#{db[:name]} (#{[ Payload.named_scope_words(cached_context, db[:name]), db[:reason] ].compact.join(', ')})" }
+            lines << "**Not checked:** #{said.join(', ')}"
             lines << ""
           end
 

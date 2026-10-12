@@ -229,6 +229,15 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(helper.full_preset_stack_lines).to include("- Databases: 3 (primary, queue (production only), archive (committed dump only))")
     end
 
+    it "counts the unnamed databases this environment does not configure" do
+      databases = [ { name: "primary" }, { name: "analytics" }, { name: "cache", environments: %w[production] }, { name: "local" },
+                    { name: "queue", environments: %w[production] }, { name: "archive", dump_only: true } ]
+      helper = test_class.new({ multi_database: { databases: databases } })
+
+      expect(helper.full_preset_stack_lines)
+        .to include("- Databases: 6 (primary, analytics, cache (production only), ...3 more, 2 of them not configured in this environment)")
+    end
+
     it "names every environment that configures a database" do
       databases = [ { name: "primary" }, { name: "cache", environments: %w[staging production] } ]
       helper = test_class.new({ multi_database: { databases: databases } })

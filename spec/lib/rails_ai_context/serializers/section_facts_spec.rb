@@ -90,6 +90,17 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.migrations_line(ctx)).to eq("- Migrations: 3 total; analytics: 4 total")
     end
 
+    it "marks each database only another environment configures, in both lines" do
+      ctx[:schema][:secondary_databases]["cache"] = { tables: {}, total_tables: 0, dump: "db/cache_schema.rb" }
+      ctx[:multi_database][:databases] = [ { name: "primary" }, { name: "analytics", adapter: "sqlite3", environments: %w[production] }, { name: "reporting", dump_only: true },
+                                           { name: "queue", environments: %w[staging production] }, { name: "cache", environments: %w[production] } ]
+
+      expect(described_class.database_line(ctx))
+        .to eq("- Database: PostgreSQL - 3 tables; analytics (production only): SQLite - 3 tables; reporting (committed dump only): 1 table; " \
+               "queue (staging and production): Solid Queue (2 tables); cache (production only): db/cache_schema.rb declares no tables")
+      expect(described_class.migrations_line(ctx)).to eq("- Migrations: 3 total, 0 pending; analytics (production only): 4 total, 1 pending")
+    end
+
     it "reads a single-database app as before" do
       single = { schema: { adapter: "postgresql", total_tables: 3, tables: {} }, migrations: { total: 3, pending: [] } }
 

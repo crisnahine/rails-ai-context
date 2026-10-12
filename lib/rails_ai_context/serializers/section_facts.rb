@@ -41,11 +41,12 @@ module RailsAiContext
 
         parts = [ "#{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}" ]
         Payload.secondary_databases(schema).each do |name, db|
-          next parts << "#{name}: #{empty_database_text(db)}" if db[:tables].empty?
+          label = "#{name}#{Payload.named_database_mark(ctx, name)}"
+          next parts << "#{label}: #{empty_database_text(db)}" if db[:tables].empty?
 
           tables = CountPhrase.call(db[:total_tables].to_i, "table")
           adapter = SchemaAdapter.secondary_label(ctx, name, db)
-          parts << (framework_database_text(name, db) || "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}")
+          parts << (framework_database_text(label, db) || "#{label}: #{adapter ? "#{adapter} - #{tables}" : tables}")
         end
         "- Database: #{parts.join('; ')}"
       end
@@ -74,7 +75,7 @@ module RailsAiContext
         pending = Payload.pending_migrations(ctx) if migrations.key?(:pending)
         parts = [ migration_counts(migrations[:total], pending) ]
         secondary = migrations[:secondary_databases].is_a?(Hash) ? migrations[:secondary_databases] : {}
-        secondary.each { |name, db| parts << "#{name}: #{migration_counts(db[:total], db[:pending])}" }
+        secondary.each { |name, db| parts << "#{name}#{Payload.named_database_mark(ctx, name)}: #{migration_counts(db[:total], db[:pending])}" }
         "- Migrations: #{parts.join('; ')}"
       end
 
