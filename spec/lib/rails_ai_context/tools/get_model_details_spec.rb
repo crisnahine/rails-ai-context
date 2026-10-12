@@ -1391,6 +1391,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # The primary's dump cannot say a table in another database's dump is missing.
+  it "keeps a gem-parent model whose table another database holds" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(%w[app/models db config].map { |d| File.join(dir, d) })
+      dbs = "  primary:\n    adapter: postgresql\n    database: app\n  analytics:\n    adapter: postgresql\n    database: analytics\n"
+      File.write(File.join(dir, "config", "database.yml"), "development:\n#{dbs}test:\n#{dbs}")
+      File.write(File.join(dir, "db", "schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "users" do |t|\n    t.string "name"\n  end\nend\n))
+      File.write(File.join(dir, "db", "analytics_schema.rb"), %(ActiveRecord::Schema[7.1].define(version: 1) do\n  create_table "page_views" do |t|\n    t.bigint "user_id"\n  end\nend\n))
+      File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < Ahoy::Event\n  connects_to database: { writing: :analytics }\n  belongs_to :user\nend\n")
+      models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+      expect(models.keys).to include("PageView")
+    end
+  end
+
   it "names a declaration a condition holds back, apart from the counted ones" do
     described_class.reset_cache!
     allow(described_class).to receive(:cached_context).and_return(

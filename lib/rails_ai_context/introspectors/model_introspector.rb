@@ -310,14 +310,16 @@ module RailsAiContext
 
       # A parent the app does not define (a gem's `ActsAsTaggableOn::Tag`) is an ActiveRecord
       # base when the schema holds a table it gives the class (ActiveHash declares has_many too);
-      # with no schema to ask, when the class declares associations or scopes on it.
+      # with no schema to ask, or another database's dump that may hold it, when the class
+      # declares associations or scopes on it.
       def outside_model_base?(class_name, candidates)
         candidate = candidates[class_name]
         return false unless candidate[:path]
 
         if SchemaReader.for(app.root).tables.any?
           own = candidate[:table_name] || own_table_name(class_name, candidates)
-          return outside_parent_tables(class_name, candidates, own, outside_parent(class_name, candidates)).any?
+          return true if outside_parent_tables(class_name, candidates, own, outside_parent(class_name, candidates)).any?
+          return false if SchemaDumpPath.secondaries(app.root).empty?
         end
 
         data = sti_base_source(candidate[:path])
