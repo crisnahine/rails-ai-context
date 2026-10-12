@@ -96,16 +96,20 @@ module RailsAiContext
         # If nothing was discovered, return a clean "no match" with real suggestions
         has_content = lines.any? { |l| l.start_with?("## ") || l.start_with?("### ") }
         unless has_content
-          model_names = Payload.models(ctx).keys.map(&:to_s).sort.first(10)
-          hint = if model_names.any?
-            "\n\nTry one of your model names: #{model_names.join(', ')}"
-          else
-            "\n\nThis app has no models yet, so there are no feature names to suggest."
-          end
-          return text_response("No matches found for '#{echo_input(feature)}'. No models, controllers, routes, services, or views match this keyword.#{hint}")
+          return text_response("No matches found for '#{echo_input(feature)}'. No models, controllers, routes, services, or views match this keyword.#{model_names_hint(ctx)}")
         end
 
         text_response(lines.join("\n"))
+      end
+
+      # The names a keyword that matched nothing could have been.
+      def self.model_names_hint(ctx)
+        model_names = Payload.models(ctx).keys.map(&:to_s).sort.first(10)
+        if model_names.any?
+          "\n\nTry one of your model names: #{model_names.join(', ')}"
+        else
+          "\n\nThis app has no models yet, so there are no feature names to suggest."
+        end
       end
 
       class << self
