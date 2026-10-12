@@ -97,6 +97,13 @@ RSpec.describe RailsAiContext::SchemaAdapter do
       expect(described_class.label(context)).to eq("MySQL by database.yml default")
     end
 
+    # The label is written back into the payload, so a surface reads it as the observed adapter.
+    it "keeps the default mark on a label it is handed back" do
+      expect(described_class.label({ schema: { adapter: "PostgreSQL by database.yml default" } })).to eq("PostgreSQL by database.yml default")
+      expect(described_class.display("postgis by database.yml default")).to eq("PostgreSQL by database.yml default")
+      expect(described_class.display("postgis")).to eq("PostgreSQL")
+    end
+
     # The schema tool's Adapter line has room for the reason; a sentence
     # mid-paragraph does not.
     it "adds the reason where a surface has room for it" do

@@ -83,7 +83,7 @@ module RailsAiContext
       settings = entry(root, name)
       settings = {} unless settings.is_a?(Hash)
       known = adapter(name, settings).first
-      return [ [ "public", false ] ] if known && !known.start_with?("postg")
+      return [ [ "public", false ] ] if known && !DatabaseFamily.of(known).postgresql?
 
       settings = settings.merge(url_settings(name, settings["url"]))
       # postgresql_adapter.rb:984 (8.1), :865 (7.0): schema_order is the older name.

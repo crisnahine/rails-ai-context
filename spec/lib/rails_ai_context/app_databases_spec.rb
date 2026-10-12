@@ -25,10 +25,9 @@ RSpec.describe RailsAiContext::AppDatabases do
     ENV["RAILS_ENV"] = previous.last
   end
 
-  def entry(root, name, environment: "test", here: true, primary: false, replica: false, tasks: true, adapter: nil,
-            family: RailsAiContext::DatabaseFamily.of(adapter), dump: nil, migrate_dirs: [ "db/migrate" ], adapter_default: false,
-            environments: [ environment ].compact)
-    { name: name, environment: environment, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks, adapter: adapter,
+  def entry(root, name, environments: %w[test], here: true, primary: false, replica: false, tasks: true, adapter: nil,
+            family: RailsAiContext::DatabaseFamily.of(adapter), dump: nil, migrate_dirs: [ "db/migrate" ], adapter_default: false)
+    { name: name, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks, adapter: adapter,
       adapter_default: adapter_default, family: family, dump: dump && [ dump.first, File.join(root, dump.last) ],
       migrate_dirs: migrate_dirs.map { |dir| File.join(root, dir) } }
   end
@@ -47,7 +46,8 @@ RSpec.describe RailsAiContext::AppDatabases do
   it_behaves_like "the same list on both tiers", "rails8", lambda { |root|
     [ entry(root, "primary", primary: true, adapter: "sqlite3", dump: [ :ruby, "db/schema.rb" ], environments: %w[development test production]),
       *%w[cache queue cable].map do |db|
-        entry(root, db, environment: "production", here: false, adapter: "sqlite3", dump: [ :ruby, "db/#{db}_schema.rb" ], migrate_dirs: [])
+        entry(root, db, environments: %w[production], here: false, adapter: "sqlite3", dump: [ :ruby, "db/#{db}_schema.rb" ],
+                        migrate_dirs: db == "queue" ? [ "db/queue_migrate" ] : [])
       end ]
   }
 
@@ -63,7 +63,7 @@ RSpec.describe RailsAiContext::AppDatabases do
   it_behaves_like "the same list on both tiers", "no_tasks", lambda { |root|
     [ entry(root, "primary", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ], environments: %w[test production]),
       entry(root, "legacy", tasks: false, adapter: "mysql2"),
-      entry(root, "warehouse", environment: "production", here: false, tasks: false, adapter: "postgresql") ]
+      entry(root, "warehouse", environments: %w[production], here: false, tasks: false, adapter: "postgresql") ]
   }
 
   it_behaves_like "the same list on both tiers", "no_dump", lambda { |root|
@@ -73,7 +73,7 @@ RSpec.describe RailsAiContext::AppDatabases do
 
   it_behaves_like "the same list on both tiers", "orphan_dump", lambda { |root|
     [ entry(root, "primary", primary: true, adapter: "sqlite3", dump: [ :ruby, "db/schema.rb" ]),
-      entry(root, "archive", environment: nil, here: false, dump: [ :ruby, "db/archive_schema.rb" ], migrate_dirs: [ "db/archive_migrate" ]) ]
+      entry(root, "archive", environments: [], here: false, dump: [ :ruby, "db/archive_schema.rb" ], migrate_dirs: [ "db/archive_migrate" ]) ]
   }
 
   describe "the list's readers" do
@@ -82,7 +82,7 @@ RSpec.describe RailsAiContext::AppDatabases do
     it "answers the primary for no name and names the known ones for an unknown name" do
       expect(list.fetch(nil).name).to eq("primary")
       expect(list.fetch("").name).to eq("primary")
-      expect(list.fetch("queue").environment).to eq("production")
+      expect(list.fetch("queue").environments).to eq(%w[production])
       expect { list.fetch("qeue") }.to raise_error(described_class::UnknownDatabase, /qeue.*primary, cache, queue, cable/)
     end
 
@@ -95,7 +95,7 @@ RSpec.describe RailsAiContext::AppDatabases do
     end
   end
 
-  it "names an environment the app declares, never a key that only holds an anchor" do
+  it "names the environments the app declares and leaves out a key that only holds an anchor" do
     Dir.mktmpdir do |root|
       FileUtils.mkdir_p(File.join(root, "config/environments"))
       %w[development test production].each { |env| File.write(File.join(root, "config/environments/#{env}.rb"), "") }
@@ -118,7 +118,6 @@ RSpec.describe RailsAiContext::AppDatabases do
 
       queue = static(root).fetch("queue")
 
-      expect(queue.environment).to eq("production")
       expect(queue.environments).to eq(%w[production])
       expect(queue.config["migrations_paths"]).to eq("db/queue_migrate")
     end
@@ -145,6 +144,18 @@ RSpec.describe RailsAiContext::AppDatabases do
     expect(list.secondaries.map(&:name)).to eq(%w[queue])
     expect { list.fetch("warehouse").with_connection { nil } }
       .to raise_error(described_class::NotHere, /warehouse database is configured in production/)
+  end
+
+  it "leaves out another environment's primary that carries a different name" do
+    list = described_class.build(
+      environments: {
+        "test" => { "primary" => { "adapter" => "sqlite3" } },
+        "production" => { "main" => { "adapter" => "postgresql" }, "queue" => { "adapter" => "postgresql" } }
+      },
+      current: "test", root: Dir.tmpdir, dumps: []
+    )
+
+    expect(list.map { |db| [ db.name, db.primary, db.here ] }).to eq([ [ "primary", true, true ], [ "queue", false, false ] ])
   end
 
   describe "the one list" do

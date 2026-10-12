@@ -11,6 +11,8 @@ module RailsAiContext
     class NotHere < Error; end
     class NotBooted < Error; end
     class Missing < Error; end
+    class InMemory < Error; end
+    class Unreachable < Error; end
 
     # The owner of a pool leased for another database. Rails names a pool by its owner.
     class LeaseOwner
@@ -23,11 +25,15 @@ module RailsAiContext
       end
     end
 
-    # environment: the first that configures it; environments: every one, in file order.
-    Database = Data.define(:name, :environment, :environments, :here, :primary, :replica, :tasks, :adapter, :adapter_default,
+    # environments: every one that configures it, in file order.
+    Database = Data.define(:name, :environments, :here, :primary, :replica, :tasks, :adapter, :adapter_default,
                            :family, :dump, :migrate_dirs, :config) do
+      # Raises Unreachable, naming the database, when no connection to it answers.
       def with_connection(&block)
-        with_pool { |pool| pool.with_connection(&block) }
+        with_pool do |pool|
+          AppDatabases.answering(name, family) { pool.with_connection(&:verify!) }
+          pool.with_connection(&block)
+        end
       end
 
       # Raises unless this process can lease the database. Connects to nothing.
@@ -35,7 +41,11 @@ module RailsAiContext
         raise NotHere, not_here_message unless here
         raise NotBooted, "The #{name} database needs the booted app to connect, and this is the static tier." if RailsAiContext.static_tier? || !config.respond_to?(:configuration_hash)
 
-        AppDatabases.present!(name, primary ? ActiveRecord::Base.connection_db_config : config)
+        return AppDatabases.present!(name, ActiveRecord::Base.connection_db_config) if primary
+        # A lease would open a new, empty database beside the one the app's own process holds.
+        raise InMemory, in_memory_message if DatabaseFile.in_memory?(config)
+
+        AppDatabases.present!(name, config)
       end
 
       # The primary is the app's own pool. Any other database gets a handler of its own
@@ -58,18 +68,25 @@ module RailsAiContext
           pool.with_connection(&:verify!)
           { pending: MigrationStatus.pending_on(pool, dirs) }
         end
+      rescue ActiveRecord::NoDatabaseError => e
+        { error: Missing.new(e.message) }
       rescue StandardError => e
         { error: e }
       end
 
       private
 
+      def in_memory_message
+        "The #{name} database lives in memory, inside the process that created it. " \
+          "A connection from here would open a new, empty database, so it cannot be read."
+      end
+
       def not_here_message
         if environments.empty?
           "The #{name} database is only a committed dump: no environment in config/database.yml configures it, so there is nothing to connect to."
         else
-          "The #{name} database is configured in #{AppDatabases.environment_phrase(environments)}, " \
-            "not in #{RailsAiContext.environment_name}, so it cannot be reached from here."
+          "The #{name} database is configured in #{AppDatabases.environment_phrase(environments)}. " \
+            "This process runs in #{RailsAiContext.environment_name}, so it cannot be reached from here."
         end
       end
     end
@@ -137,12 +154,26 @@ module RailsAiContext
 
       own = ActiveRecord::Base.connection_db_config
       present!(own.name, own)
+      answering(own.name, DatabaseFamily.of(own)) { ActiveRecord::Base.connection.verify! }
       yield ActiveRecord::Base.connection
+    end
+
+    # Runs the block that connects. What stops it is Unreachable, naming the database, with advice that fits.
+    def answering(name, family)
+      yield
+    rescue Error
+      raise
+    rescue StandardError => e
+      advice = if family.sqlite? then "Check the file its config/database.yml entry names."
+      elsif e.is_a?(ActiveRecord::NoDatabaseError) then "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
+      else "Start its server, or fix its settings in config/database.yml."
+      end
+      raise Unreachable, "The #{name} database cannot be reached: #{e.message.lines.first.to_s.strip.chomp(".")}. #{advice}"
     end
 
     # Connecting to a SQLite file that is not there would create it, so this raises first.
     def present!(name, db_config)
-      return unless DatabaseFile.missing(db_config)
+      return unless DatabaseFile.missing?(db_config)
 
       raise Missing, "The #{name} database does not exist yet: its SQLite file #{db_config.database} is not there, " \
         "and nothing was created. Run `bin/rails db:prepare` to create it."
@@ -166,7 +197,7 @@ module RailsAiContext
       primary_name = DatabaseYml.primary_name_in(own)
       configured = ->(name) { environments.select { |_, found| found.key?(name) }.keys }
       own.each do |name, value|
-        listed << database(root, current, name, value, here: true, primary: name == primary_name, environments: configured.call(name))
+        listed << database(root, name, value, here: true, primary: name == primary_name, environments: configured.call(name))
       end
 
       environments.each do |env_name, found|
@@ -180,7 +211,7 @@ module RailsAiContext
           # Another environment's first database is its primary under another name, which this app already lists.
           next if name == other_primary && !is_primary
 
-          listed << database(root, env_name, name, value, here: false, primary: is_primary, environments: configured.call(name))
+          listed << database(root, name, value, here: false, primary: is_primary, environments: configured.call(name))
         end
       end
 
@@ -196,12 +227,12 @@ module RailsAiContext
       List.new(listed)
     end
 
-    def database(root, env_name, name, value, here:, primary:, environments:)
+    def database(root, name, value, here:, primary:, environments:)
       settings = settings_of(value)
       adapter, from_default = value.respond_to?(:adapter) ? [ value.adapter, false ] : DatabaseYml.adapter(name, settings)
       replica = settings["replica"] == true
       tasks = tasks?(settings)
-      Database.new(name: name, environment: env_name, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks,
+      Database.new(name: name, environments: environments, here: here, primary: primary, replica: replica, tasks: tasks,
                    adapter: adapter, adapter_default: from_default, family: DatabaseFamily.of(adapter),
                    dump: (primary ? primary_dump(root) : Introspectors::SchemaDumpPath.secondary(root, name, settings) if tasks),
                    migrate_dirs: Introspectors::MigrationReplay.configured_dirs(root, settings) || [ File.join(root, "db", "migrate") ],
@@ -209,7 +240,7 @@ module RailsAiContext
     end
 
     def orphan(root, name, format, path)
-      Database.new(name: name, environment: nil, environments: [], here: false, primary: false, replica: false, tasks: true,
+      Database.new(name: name, environments: [], here: false, primary: false, replica: false, tasks: true,
                    adapter: nil, adapter_default: false, family: DatabaseFamily.of(nil), dump: [ format, path ],
                    migrate_dirs: [ File.join(root, "db", "#{name}_migrate") ], config: nil)
     end
@@ -248,7 +279,7 @@ module RailsAiContext
       environments
     end
 
-    # A key with no config/environments file holds an anchor (`default: &default`), not an environment.
+    # An environment has a config/environments file. Any other key holds an anchor (`default: &default`).
     def declared(root, environments)
       files = Dir.glob(File.join(root, "config/environments/*.rb")).map { |path| File.basename(path, ".rb") }
       return environments if files.empty?
