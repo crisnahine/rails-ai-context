@@ -132,6 +132,21 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "reads a class file in the top-level concerns with kind :models, under its bare constant" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/concerns/trackable.rb" => "module Trackable\nend\n",
+        "app/models/concerns/edition_link.rb" => "class EditionLink < ApplicationRecord\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.each(dir, kind: :models).map(&:path_name)).to eq([ "EditionLink" ])
+      expect(described_class.classes(dir, kind: :models).map(&:first)).to eq([ "EditionLink" ])
+    end
+  end
+
   it "keeps a class outside app/models whose chain reaches a model base through another such class" do
     Dir.mktmpdir do |dir|
       {

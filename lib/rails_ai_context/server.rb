@@ -56,8 +56,26 @@ module RailsAiContext
     # are not autoloadable while config/initializers run, so referencing the
     # constant there aborts boot - a string name defers resolution to here,
     # where autoloading is ready. Invalid entries are warn-skipped so one bad
-    # entry cannot take down every tool invocation.
+    # entry cannot take down every tool invocation. A run resolves them once,
+    # so a skipped entry is warned about once.
     def self.resolve_custom_tools(config = RailsAiContext.configuration)
+      RunCache.fetch(custom_tools_key(config)) { load_custom_tools(config) }
+    end
+
+    # A run that reads these as the custom tools: the list its caller already resolved.
+    def self.with_custom_tools(tools, config = RailsAiContext.configuration)
+      RunCache.around do
+        RunCache.fetch(custom_tools_key(config)) { tools }
+        yield
+      end
+    end
+
+    def self.custom_tools_key(config)
+      [ :custom_tools, config.custom_tools.dup ]
+    end
+    private_class_method :custom_tools_key
+
+    def self.load_custom_tools(config)
       config.custom_tools.filter_map do |entry|
         tool = entry
         if tool.is_a?(String)
@@ -99,6 +117,7 @@ module RailsAiContext
         end
       end
     end
+    private_class_method :load_custom_tools
 
     # The built-in tools skip_tools turned off, a retired config section's name
     # among them unless a custom tool took rails_get_config's place.
@@ -279,6 +298,7 @@ module RailsAiContext
 
       server = SdkServer.new(
         skipped_tools: self.class.skipped_tools(config, custom_tools: validated_custom_tools),
+        custom_tools: validated_custom_tools,
         name: self.class.announced_name(config),
         version: config.server_version,
         instructions: self.class.instructions,
@@ -334,30 +354,39 @@ module RailsAiContext
     # before the skip, a model's guess - and the SDK answered "Tool not
     # found", a protocol error most clients never show the model.
     class SdkServer < MCP::Server
-      def initialize(skipped_tools: [], **options)
+      def initialize(skipped_tools: [], custom_tools: [], **options)
         @skipped_tools = skipped_tools
+        @custom_tools = custom_tools
         super(**options)
       end
 
       private
 
-      def call_tool(request, ...)
-        name = request[:name]
-        return super if tools.key?(name)
-        return MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h if @skipped_tools.include?(name)
+      # The call reads the custom tools this server was built with, resolved once.
+      def call_tool(request, *rest, **options, &block)
+        Server.with_custom_tools(@custom_tools) do
+          name = request[:name]
+          next super(request, *rest, **options, &block) if tools.key?(name)
+          next MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h if @skipped_tools.include?(name)
 
-        section = Tools::GetConfig.retired_section(name)
-        return retired_call(request, section, ...) if section && tools["rails_get_config"].equal?(Tools::GetConfig)
+          section = Tools::GetConfig.retired_section(name)
+          next retired_call(request, section, *rest, **options, &block) if section && tools["rails_get_config"].equal?(Tools::GetConfig)
 
-        add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
-        raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
-                                                   error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
+          add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
+          raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
+                                                     error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
+        end
       end
 
-      # A tool that became a config section, answered from it with the call to make instead.
+      # A tool that became a config section, answered from it with the call to make instead; a refusal ends as it is.
       def retired_call(request, section, ...)
         arguments = (request[:arguments] || {}).transform_keys(&:to_sym).except(:section)
+        refusal = Tools::GetConfig.retired_refusal(section, arguments)
+        return refusal.to_h if refusal
+
         result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section.name)), ...)
+        return result if result[:isError]
+
         result.merge(content: Tools::SafeCall.noted(result[:content], Tools::GetConfig.retired_note(section, arguments)))
       end
     end

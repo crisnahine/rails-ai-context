@@ -488,6 +488,8 @@ The app's configuration, one section per call. `section` picks it; the default, 
 
 With `app` off, `section` is required: the published schema marks it required, the description says so, and a call with no `section` is answered with the sections that are on.
 
+A `section` the tool does not have, or one `skip_tools` turned off, is refused with the sections that are on. A call to an old name that sends a parameter no section reads is refused with that section's own parameters, and a refused call to an old name carries no note about the new call.
+
 A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name. The ten sections go with the built-in, so a retired name such as `rails_get_gems` is then an unknown tool.
 
 #### `app` (default)

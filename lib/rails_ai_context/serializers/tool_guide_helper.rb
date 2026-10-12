@@ -82,12 +82,11 @@ module RailsAiContext
         exposed_tools.size
       end
 
-      # Whether the server serves the tool. The guide names no other: a step,
-      # rule or pointer whose tool skip_tools removed is left out, or said
-      # without it, so nothing sends the AI to a tool tools/list lacks.
+      # Whether the server serves the gem's own tool under this name. A step, rule or pointer
+      # carries that tool's arguments, so it is left out for a skipped tool and for a custom one in its place.
       def served?(mcp_name)
         @served_tool_names ||= exposed_tools.to_set { |tool| RailsAiContext::Server.tool_label(tool) }
-        @served_tool_names.include?(mcp_name)
+        @served_tool_names.include?(mcp_name) && exposed_tools.include?(RailsAiContext::Tools::BaseTool.tool_class(mcp_name))
       end
 
       # The named tools the server serves, each as tool_ref gives it.
@@ -180,9 +179,20 @@ module RailsAiContext
       end
 
       def detail_tool_names
-        exposed_tools
-          .select { |tool| tool.input_schema_value.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
-          .map { |tool| name = RailsAiContext::Server.tool_label(tool); "`#{tool_mode == :cli ? RailsAiContext::CLI::ToolRunner.short_name(name) : name}`" }
+        taking = exposed_tools.select { |tool| tool.input_schema_value.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
+        taking.map do |tool|
+          name = RailsAiContext::Server.tool_label(tool)
+          name = RailsAiContext::CLI::ToolRunner.short_name(name) if tool_mode == :cli
+          "`#{name}`#{detail_sections_note(tool)}"
+        end
+      end
+
+      # rails_get_config reads `detail` in some sections, and its default one answers that it does not.
+      def detail_sections_note(tool)
+        return nil unless tool.equal?(RailsAiContext::Tools::GetConfig)
+
+        names = tool.sections_on.select { |section| section.params.include?(:detail) }.map(&:name)
+        " (section#{"s" if names.size > 1}: #{names.join(", ")})"
       end
 
       def tools_power_tool_section

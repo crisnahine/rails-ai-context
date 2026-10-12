@@ -3,9 +3,8 @@
 require "spec_helper"
 require "prism"
 
-# An answer that names another tool's call writes it through BaseTool.pointer,
-# which leaves it out when the app does not serve that tool. A call spelled
-# into a string skips that check and sends the reader to a tool tools/list lacks.
+# BaseTool.pointer leaves out a call to a tool the app does not serve; a call
+# spelled into an answer string sends the reader to a tool tools/list lacks.
 RSpec.describe "Pointers to other tools in tool answers" do
   let(:declarations) { %i[tool_name description guide_row] }
 
@@ -45,6 +44,53 @@ RSpec.describe "Pointers to other tools in tool answers" do
     root = File.expand_path("../../../../lib/rails_ai_context/tools", __dir__)
     offenders = Dir[File.join(root, "*.rb")].sort.flat_map do |path|
       raw_calls(File.read(path)).map { |name, line| "#{File.basename(path)}:#{line} #{name}" }
+    end
+
+    expect(offenders).to be_empty
+  end
+
+  # [tool name, source of the other arguments, line] of each pointer call that names its tool.
+  def pointer_calls(source)
+    found = []
+    walk = lambda do |node|
+      next unless node.is_a?(Prism::Node)
+
+      first, *rest = node.arguments&.arguments.to_a if node.is_a?(Prism::CallNode) && node.name == :pointer
+      found << [ first.unescaped, rest.map(&:slice).join(", "), node.location.start_line ] if first.is_a?(Prism::StringNode)
+      node.compact_child_nodes.each { |child| walk.call(child) }
+    end
+    walk.call(Prism.parse(source).value)
+    found
+  end
+
+  # A section has one way into a pointer, its retired name, which is where the served check reads it.
+  def wrong_pointers(source)
+    known = RailsAiContext::Tools::BaseTool.registered_tools.map(&:tool_name) + RailsAiContext::Tools::GetConfig::SECTIONS.map(&:tool_name)
+    pointer_calls(source).filter_map do |name, arguments, line|
+      next [ line, "#{name} is not a tool" ] unless known.include?(name)
+
+      [ line, "a section goes by its retired name" ] if name == "rails_get_config" && arguments.include?("section:")
+    end
+  end
+
+  it "finds a pointer that spells a config section into its arguments, or names no tool" do
+    source = <<~'RUBY'
+      pointer("rails_get_config", 'section:"gems"')
+      pointer("rails_get_config", %(section:"#{name}", detail:"full"), "for more")
+      pointer("rails_get_gems", 'category:"auth"')
+      pointer("rails_get_config")
+      pointer("rails_get_nothing")
+      pointer(name, 'section:"gems"')
+    RUBY
+
+    expect(wrong_pointers(source)).to eq([ [ 1, "a section goes by its retired name" ], [ 2, "a section goes by its retired name" ],
+                                           [ 5, "rails_get_nothing is not a tool" ] ])
+  end
+
+  it "finds none in the gem" do
+    root = File.expand_path("../../../../lib", __dir__)
+    offenders = Dir[File.join(root, "**", "*.rb")].sort.flat_map do |path|
+      wrong_pointers(File.read(path)).map { |line, why| "#{path.delete_prefix("#{root}/")}:#{line} #{why}" }
     end
 
     expect(offenders).to be_empty

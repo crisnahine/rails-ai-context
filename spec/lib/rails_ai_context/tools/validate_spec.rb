@@ -763,6 +763,25 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
+  describe "a model class in app/models/concerns" do
+    it "gets the model checks" do
+      previous_root = RailsAiContext.configuration.app_root
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "edition_link.rb"), "class EditionLink < ApplicationRecord\n  has_many :invites\nend\n")
+        RailsAiContext.configuration.app_root = dir
+
+        text = described_class.call(files: [ "app/models/concerns/edition_link.rb" ], level: "rails").content.first[:text]
+
+        expect(text).to include("has_many :invites - missing :dependent option")
+      end
+    ensure
+      RailsAiContext.configuration.app_root = previous_root
+    end
+  end
+
   describe "has_many inside a block the model may not run" do
     it "leaves the association out of the :dependent check" do
       previous_root = RailsAiContext.configuration.app_root

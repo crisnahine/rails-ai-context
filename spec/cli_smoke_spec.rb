@@ -127,7 +127,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
   # `--environment`; the list is a constant, so it has to match the schemas.
   it "names exactly the built-in tools that declare an environment parameter" do
     source = File.read(File.expand_path("../exe/rails-ai-context", __dir__))
-    listed = source[/ENVIRONMENT_PARAM_TOOLS = %w\[([^\]]*)\]/, 1].to_s.split
+    listed = source[/ENVIRONMENT_FILTER_OWNERS = %w\[([^\]]*)\]/, 1].to_s.split
     config = RailsAiContext::Tools::GetConfig
     declared = RailsAiContext::Server.builtin_tools
       .select { |tool| tool != config && (tool.input_schema_value&.to_h || {}).fetch(:properties, {}).key?(:environment) }

@@ -235,7 +235,7 @@ What decides whether `rails_query` runs a statement: the checks on its text, and
 
 ## Served tool
 
-A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at. A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, and the **config sections** go with the built-in.
+A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at. An answer or a guide step names or runs a tool only when the app serves the gem's own tool under that name: a custom tool in a built-in's place is listed, and nothing gives it the built-in's arguments. A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, and the **config sections** go with the built-in.
 
 ## Config section
 

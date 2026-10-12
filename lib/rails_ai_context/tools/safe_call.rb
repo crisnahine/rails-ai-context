@@ -57,7 +57,23 @@ module RailsAiContext
         end
       end
 
+      def unknown_param_response(unknown, known = published_params)
+        lines = unknown.map do |name|
+          suggestion = RailsAiContext::Tools::BaseTool.find_closest_match(name, known)
+          suggestion ? "'#{name}' - did you mean '#{suggestion}'?" : "'#{name}'"
+        end
+        valid = known.any? ? "Valid params: #{known.join(', ')}" : "This tool takes no params."
+        text = "Unknown param#{"s" if unknown.size > 1}: #{lines.join(', ')}\n#{valid}"
+        MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+      end
+
       private
+
+      # The parameters tools/list shows, which for rails_get_config leaves out those of a section turned off.
+      def published_params
+        schema = respond_to?(:input_schema_value) ? input_schema_value : input_schema
+        (schema&.to_h&.dig(:properties) || {}).keys.map(&:to_s)
+      end
 
       def answer_call(discarded)
         # Held across the tool body: a reload another call runs must not
@@ -103,17 +119,6 @@ module RailsAiContext
         RailsAiContext::Tools::BaseTool.unknown_param_names(kwargs.keys, properties)
       end
 
-      def unknown_param_response(unknown)
-        known = (input_schema.to_h[:properties] || {}).keys.map(&:to_s)
-        lines = unknown.map do |name|
-          suggestion = RailsAiContext::Tools::BaseTool.find_closest_match(name, known)
-          suggestion ? "'#{name}' - did you mean '#{suggestion}'?" : "'#{name}'"
-        end
-        valid = known.any? ? "Valid params: #{known.join(', ')}" : "This tool takes no params."
-        text = "Unknown param#{"s" if unknown.size > 1}: #{lines.join(', ')}\n#{valid}"
-        MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
-      end
-
       # A string where the schema declares an array is a list of one, and a
       # comma-separated one is the list the CLI documents (`a.rb,b.rb`): an MCP
       # client can send either, and review_changes answered a string with
@@ -131,6 +136,9 @@ module RailsAiContext
 
       def failure_response(error)
         label = respond_to?(:tool_name) ? tool_name : name
+        # A section renderer answers inside rails_get_config, the tool the caller named.
+        section = RailsAiContext::Tools::GetConfig.retired_section(label)
+        label = "rails_get_config (section #{section.name})" if section && section.renderer.equal?(self)
         origin = portable_origin(Array(error.backtrace).first.to_s)
         text = +"Tool #{label} failed: #{error.class}: #{error.message.to_s.lines.first&.strip}\n"
         text << "At: #{origin}\n" unless origin.empty?

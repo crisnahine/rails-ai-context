@@ -224,9 +224,10 @@ module RailsAiContext
 
             next if mixin_path?(record.path_name.underscore, source)
 
-            declarations = DeclaredConstant.declarations(source, path_name: record.path_name)
-            declaration = DeclaredConstant.declaration_for(declarations, record.path_name)
-            class_name = declaration&.name || record.path_name
+            path_name = concerns_root_name(record.path_name)
+            declarations = DeclaredConstant.declarations(source, path_name: path_name)
+            declaration = DeclaredConstant.declaration_for(declarations, path_name)
+            class_name = declaration&.name || path_name
             # Two files can declare one class (an app reopening a model to add methods);
             # the one that names a superclass defines the model.
             previous = found[class_name]
@@ -245,7 +246,7 @@ module RailsAiContext
           rescue => e
             # The file is known here whatever failed, and a consumer with none
             # derives app/models/<name>.rb, which a pack model does not have.
-            found[record.path_name] = { error: e.message, file: record.file }.compact
+            found[concerns_root_name(record.path_name)] = { error: e.message, file: record.file }.compact
           end
         end
       end
@@ -550,16 +551,18 @@ module RailsAiContext
           source.match?(/^[^\S\n]*primary_abstract_class\b/)
       end
 
-      # `concerns/` under app/models is the Zeitwerk root for mixins: it does
-      # not namespace its files, so the path is not their name. A nested
-      # concerns/ is an ordinary namespace - OpenProject fills one with mixins,
-      # but a class declared there is a model like any other.
+      # A file under any concerns/ that declares no class. One that declares a
+      # class may be a model: Whitehall keeps one in app/models/concerns itself.
       def mixin_path?(relative, source)
-        segments = relative.split("/")
-        return false unless segments.include?("concerns")
-        return true if segments.first == "concerns"
+        return false unless relative.split("/").include?("concerns")
 
-        !DeclaredConstant.declares_class?(source, path_name: relative.camelize)
+        !DeclaredConstant.declares_class?(source, path_name: concerns_root_name(relative.camelize))
+      end
+
+      # `concerns/` directly under app/models is an autoload root of its own,
+      # so its files carry no `Concerns::` in their constants.
+      def concerns_root_name(path_name)
+        path_name.delete_prefix("Concerns::")
       end
 
       # A class whose file is inside an installed gem (PaperTrail::Version) is
@@ -598,13 +601,12 @@ module RailsAiContext
         @outside_model_dirs = Set.new
         # Concerns stay in: a nested concerns directory is a namespace, so a
         # class declared under one is a model and constantize sorts the mixins
-        # out. A top-level `app/models/concerns` is an autoload root instead,
-        # so its files declare no `Concerns::` prefix and that path name never
-        # constantizes.
+        # out. Under the top-level one only a file that declares a class is read on.
         SourceScan.model_paths(app.root, base_model: model_base_check).each do |record|
-          next if record.path_name.start_with?("Concerns::")
-          next if known.include?(record.path_name)
-          next if config.excluded_models.include?(record.path_name)
+          path_name = concerns_root_name(record.path_name)
+          next if known.include?(path_name)
+          next if config.excluded_models.include?(path_name)
+          next if path_name != record.path_name && mixin_path?(record.path_name.underscore, model_source(record.path).to_s)
 
           # The path does not name the class: an app inflection only changes
           # case, so activitypub/activity.rb camelizes to a constant the app
@@ -612,7 +614,7 @@ module RailsAiContext
           # load. A root pushed under a namespace declares a prefix the path
           # lacks. Read only where the camelized name is not already loaded, so
           # a booted run does not parse every model file to learn nothing.
-          class_name = DeclaredConstant.named(model_source(record.path).to_s, record.path_name)
+          class_name = DeclaredConstant.named(model_source(record.path).to_s, path_name)
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
 
@@ -2244,6 +2246,8 @@ module RailsAiContext
 
               source = model_source(path)
               next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
+
+              relative = relative.delete_prefix("concerns/")
 
               # The static tier never loads the app's inflector, so camelizing alone
               # would invent `Activitypub::` for an app that declares `ActivityPub::`.
