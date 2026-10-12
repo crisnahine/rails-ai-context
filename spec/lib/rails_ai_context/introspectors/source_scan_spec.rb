@@ -147,6 +147,22 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "reads a model class in another root's concerns directory, under the constant its file declares" do
+    Dir.mktmpdir do |dir|
+      {
+        "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.eager_load_paths << Rails.root.join(\"enterprise/app/models\")\n  end\nend\n",
+        "app/domain/concerns/ledger_entry.rb" => "class LedgerEntry < ApplicationRecord\nend\n",
+        "app/domain/concerns/billable.rb" => "module Billable\nend\n",
+        "enterprise/app/models/concerns/audit_row.rb" => "module Concerns\n  class AuditRow < ApplicationRecord\n  end\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.classes(dir, kind: :models).map(&:first)).to contain_exactly("LedgerEntry", "Concerns::AuditRow")
+    end
+  end
+
   it "keeps a class outside app/models whose chain reaches a model base through another such class" do
     Dir.mktmpdir do |dir|
       {
