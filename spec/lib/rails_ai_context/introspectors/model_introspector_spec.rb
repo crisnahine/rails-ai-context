@@ -2186,10 +2186,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
-  # `concerns/` under app/models is the Zeitwerk root for mixins, and an app
-  # may also nest one anywhere - OpenProject has app/models/queries/operators/
-  # concerns. A class declared in either is a model like any other, and
-  # dropping it by directory name loses it.
+  # An app may nest a concerns/ anywhere (OpenProject has app/models/queries/operators/concerns),
+  # and a file there named for a class is a model candidate like any other.
   describe "models under a concerns directory" do
     def models_in(files)
       Dir.mktmpdir do |dir|
@@ -5782,6 +5780,44 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(models.keys).to eq([ "EditionLink" ])
         expect(models["EditionLink"]).to include(file: "app/models/concerns/edition_link.rb", table_name: "posts")
+      end
+    end
+
+    def mixins_app(dir)
+      concerns_app(dir)
+      File.write(File.join(dir, "app", "models", "concerns", "authenticatable.rb"), <<~RUBY)
+        module Authenticatable
+          extend ActiveSupport::Concern
+          class InvalidToken < StandardError; end
+          class Session < ApplicationRecord; end
+          included do
+            has_secure_password
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "concerns", "noted.rb"), "# Not under module Concerns.\nmodule Noted\nend\n")
+    end
+
+    it "leaves out a concern that holds an inner class and a mixin whose comment names a Concerns module, on the static tier" do
+      Dir.mktmpdir do |dir|
+        mixins_app(dir)
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call.keys).to eq([ "EditionLink" ])
+      end
+    end
+
+    it "leaves the same two files out on the booted tier" do
+      Dir.mktmpdir do |dir|
+        mixins_app(dir)
+        link = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "EditionLink"
+        end
+        stub_const("EditionLink", link)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to eq([ "EditionLink" ])
       end
     end
 
