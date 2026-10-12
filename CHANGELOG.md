@@ -140,6 +140,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `change_table(:t) { |t| t.change ... }` could apply its `t.change` before
   the block opened and lose it, and on Windows it did. A route with many
   paths drew them in the same unordered way.
+- **Ties keep their order in every list.** Where two entries sort equal, the
+  answer depended on the platform's sort: `onboard`'s key flows and
+  `rails_get_conventions`' key directories could name different controllers
+  and folders, `rails_validate` named a different five Brakeman warnings,
+  `rails_search_docs` a different top five, and helpers, tables, queues,
+  N+1 risks, security warnings, SQLite table stats, shared examples and a
+  session's queries came out shuffled. A one-line `create_table` in
+  schema.rb after a `# Could not dump table` comment gave its columns to
+  the wrong table.
 
 ## [5.33.0] - 2026-10-11
 
