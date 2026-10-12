@@ -166,6 +166,35 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       end
     end
 
+    context "with queues holding the same number of jobs" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app/jobs"))
+        File.write(File.join(tmpdir, "app/jobs/application_job.rb"), "class ApplicationJob < ActiveJob::Base\nend\n")
+        (1..24).each do |i|
+          queue = format("q%02d", i)
+          (1..(i.even? ? 2 : 1)).each do |j|
+            File.write(File.join(tmpdir, "app/jobs/#{queue}_j#{j}_job.rb"),
+                       "class #{queue.capitalize}J#{j}Job < ApplicationJob\n  queue_as :#{queue}\n  def perform; end\nend\n")
+          end
+        end
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "lists them in job name order" do
+        text = described_class.call.content.first[:text]
+        evens = (2..24).step(2).map { |i| format("q%02d(2)", i) }
+        odds = (1..23).step(2).map { |i| format("q%02d(1)", i) }
+
+        expect(text).to include("**Queues:** #{(evens + odds).join(", ")}\n")
+      end
+    end
+
     context "with a delayed_job app whose models use handle_asynchronously" do
       let(:tmpdir) { Dir.mktmpdir }
 

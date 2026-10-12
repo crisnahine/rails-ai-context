@@ -417,7 +417,7 @@ module RailsAiContext
         # Queue summary
         # An unresolved base has no queue the scan can claim, so it is counted apart.
         queues = job_data.map { |j| j[:queue] || (j[:unknown_base] ? "unknown" : "default") }
-                         .tally.sort_by { |_, c| -c }
+                         .tally.sort_by.with_index { |(_, c), i| [ -c, i ] }
         if queues.any?
           queue_str = queues.map { |q, c| "#{q}(#{c})" }.join(", ")
           lines << "**Queues:** #{queue_str}"
