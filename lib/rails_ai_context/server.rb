@@ -518,13 +518,18 @@ module RailsAiContext
       RailsAiContext.debug_fail(e, nil, label: "stop_http")
     end
 
+    # rack 3 keeps its handlers in the rackup gem. rack 2 keeps them itself,
+    # with or without rackup 1.x, which loads and defines only its version.
     def default_rack_handler
-      require "rackup"
-      Rackup::Handler.default
-    rescue LoadError
-      # Fallback for older rack without rackup gem
+      begin
+        require "rackup"
+      rescue LoadError
+        nil
+      end
+      return ::Rackup::Handler.default if defined?(::Rackup::Handler)
+
       require "rack/handler"
-      Rack::Handler.default
+      ::Rack::Handler.default
     end
 
     # MCP sessions live in this process's memory, so a forked worker cannot
