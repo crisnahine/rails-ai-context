@@ -760,5 +760,19 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       expect(seen[:debug]).to be_nil
       expect(ENV.fetch("DEBUG", nil)).to eq("1")
     end
+
+    it "reports the first five warnings of the best confidence in brakeman's order" do
+      warning = Struct.new(:warning_type, :confidence, :confidence_name, :file, :line, :message, keyword_init: true)
+      file = Struct.new(:relative)
+      warnings = (1..24).map do |i|
+        confidence = (i % 3 == 1) ? 1 : 0
+        warning.new(warning_type: "Remote Code Execution", confidence: confidence, confidence_name: %w[High Medium][confidence],
+                    file: file.new("app/models/m#{i % 3}.rb"), line: i, message: format("rce %02d", i))
+      end
+      allow(Brakeman).to receive(:run).and_return(Struct.new(:filtered_warnings).new(warnings))
+
+      found = described_class.check_brakeman_security([ "app/models" ])
+      expect(found.values.flatten.map { |line| line[/rce \d\d/] }).to eq([ "rce 02", "rce 03", "rce 05", "rce 06", "rce 08" ])
+    end
   end
 end

@@ -1043,7 +1043,7 @@ module RailsAiContext
         # directory, and then every warning under it is that entry's.
         normalized = files.to_h { |f| [ f.delete_prefix("/"), f ] }
         found = {}
-        warnings.sort_by(&:confidence).each do |warning|
+        warnings.sort_by.with_index { |w, i| [ w.confidence, i ] }.each do |warning|
           path = warning.file.relative
           owner = normalized.find { |name, _| path == name || path.start_with?(name) }&.last
           next unless owner
