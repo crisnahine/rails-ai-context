@@ -91,8 +91,10 @@ module RailsAiContext
       # of another's.
       # A plain Hash, not one with a default block: a default block writes on
       # lookup, so merely reading a session's history created it. `dropped`
-      # counts, per session, the queries its record no longer keeps.
-      SESSION_CONTEXT = { mutex: Mutex.new, queries: {}, dropped: {} }
+      # counts, per session, the queries its record no longer keeps. `asked`
+      # numbers queries in the order first asked, which a timestamp cannot
+      # tell apart within one second.
+      SESSION_CONTEXT = { mutex: Mutex.new, queries: {}, dropped: {}, asked: 0 }
 
       DEFAULT_SESSION = :default
 
@@ -352,6 +354,7 @@ module RailsAiContext
                 tool: tool_name.to_s,
                 params: params,
                 call_count: 1,
+                asked: SESSION_CONTEXT[:asked] += 1,
                 timestamp: Time.now.iso8601,
                 summary: summary
               }

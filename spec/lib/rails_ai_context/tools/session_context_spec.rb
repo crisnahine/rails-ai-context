@@ -49,6 +49,16 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(text).to include("users")
     end
 
+    it "lists queries asked within one second in the order they were first asked" do
+      base = RailsAiContext::Tools::BaseTool
+      allow(Time).to receive(:now).and_return(Time.at(1_700_000_000))
+      (1..24).each { |i| base.session_record("rails_get_schema", format("q%02d", i)) }
+      (1..24).step(3) { |i| base.session_record("rails_get_schema", format("q%02d", i)) }
+
+      text = described_class.call(action: "status").content.first[:text]
+      expect(text.scan(/q\d\d/)).to eq((1..24).map { |i| format("q%02d", i) })
+    end
+
     it "returns compressed summary" do
       described_class.call(mark: "get_schema:users")
       described_class.call(mark: "get_model_details:User")

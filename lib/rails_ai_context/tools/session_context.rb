@@ -106,7 +106,7 @@ module RailsAiContext
           lines << "| Tool | Params | When |"
           lines << "|------|--------|------|"
 
-          queries.sort_by { |q| q[:timestamp] }.each do |q|
+          queries.sort_by { |q| q[:asked] }.each do |q|
             ago = time_ago(q[:last_timestamp] || q[:timestamp])
             params_str = q[:params].is_a?(Hash) ? q[:params].map { |k, v| "#{k}:#{v}" }.join(", ") : q[:params].to_s
             params_display = params_str.empty? ? "-" : params_str.truncate(40)
