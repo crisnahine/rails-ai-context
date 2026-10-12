@@ -4,9 +4,8 @@ require "set"
 require "strscan"
 
 module RailsAiContext
-  # Decides whether rails_query runs a statement: the checks on its text, and
-  # on PostgreSQL the checks on its plan. The read-only transaction behind it
-  # is the second guard, never the only one (ADR-0008).
+  # Decides whether rails_query runs a statement: checks on its text, and on PostgreSQL on its plan.
+  # The read-only transaction behind it is a second guard (ADR-0008).
   class SqlGate
     # sql: the comment-free text to run, or nil with the refusal. plan: the
     # PostgreSQL plan the checks read, for the result redaction to reuse.
@@ -28,10 +27,8 @@ module RailsAiContext
     MULTI_STATEMENT  = /;\s*\S/
     ALLOWED_PREFIX   = /\A\s*(SELECT|WITH|SHOW|EXPLAIN|DESCRIBE|DESC)\b/i
 
-    # SELECT-callable functions that read or write files or reach the network
-    # through the database process. They pass a read-only transaction, since
-    # they are reads to the database. COPY ... TO PROGRAM is not a SELECT, so the
-    # statement keywords refuse it first.
+    # SELECT-callable functions that reach files or the network through the database process.
+    # To the database they are reads, so a read-only transaction lets them through.
     BLOCKED_FUNCTIONS = /\b(
       pg_read_binary_file | pg_read_file |
       pg_ls_dir | pg_ls_logdir | pg_ls_tmpdir | pg_ls_waldir | pg_ls_archive_statusdir |
@@ -62,9 +59,8 @@ module RailsAiContext
       pg_import_system_collations
     )\s*\(/ix
 
-    # GET_LOCK leaves a named lock held on the pooled connection, which a later
-    # caller inherits; source/master_pos_wait block on replication. MySQL has no
-    # volatility catalogue like pg_proc, so these are a name list.
+    # GET_LOCK leaves a named lock on the pooled connection for a later caller to inherit, and the
+    # pos_wait functions block on replication. MySQL has no volatility catalogue, so these are named.
     BLOCKED_MYSQL_SESSION = /\b(
       get_lock | release_lock | release_all_locks | is_free_lock | is_used_lock |
       master_pos_wait | source_pos_wait
@@ -83,18 +79,15 @@ module RailsAiContext
       pg_last_wal_receive_lsn pg_last_wal_replay_lsn pg_last_xact_replay_timestamp
     ].freeze
 
-    # A column-alias list renames the columns a wildcard produced, so the names
-    # redaction reads no longer name the secret columns underneath. Bare
-    # identifiers only: a type modifier carries digits, a record function's
-    # list carries types, and a single alias renames nothing else.
+    # A column-alias list renames the columns a wildcard produced, past the redaction that reads names.
+    # Bare identifiers only: a type modifier carries digits and a record function's list carries types.
     ALIAS_IDENT     = /[A-Za-z_]\w*/
     ALIAS_IDENT_LIST = /#{ALIAS_IDENT}(?:\s*,\s*#{ALIAS_IDENT})+/
     CTE_ALIAS_LIST = /#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)\s*AS\s*\(/i
     DERIVED_ALIAS_LIST = /\bAS\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i
     TABLE_ALIAS_LIST = /\b(?:FROM|JOIN)\s+#{ALIAS_IDENT}(?:\.#{ALIAS_IDENT})?\s+#{ALIAS_IDENT}\s*\(\s*#{ALIAS_IDENT_LIST}\s*\)/i
 
-    # A UNION takes its column names from its first SELECT, so rows of another
-    # table come out under those names, past the redaction that reads them.
+    # A UNION names its columns after its first SELECT, so another table's rows leave under those names.
     # INTERSECT and EXCEPT return only rows of their first SELECT, so they stay.
     SET_UNION = /\bUNION\b/i
 
@@ -105,9 +98,8 @@ module RailsAiContext
     DOLLAR_QUOTED = /(?<![\p{Word}$])\$(\p{Word}*)\$.*?\$\1\$/m
     UNQUOTED = /[^'"`$\/\-#*]+/
 
-    # PostgreSQL string literals, matched so they can be emptied; a
-    # double-quoted identifier is matched so it is skipped whole, since a quote
-    # inside one (`AS "a'b"`) would otherwise open a literal.
+    # PostgreSQL string literals, matched so they can be emptied. A double-quoted identifier is
+    # matched so it is skipped whole: a quote inside one (`AS "a'b"`) would open a literal.
     PG_TEXT_LITERAL = /
       (?<ident>"(?:""|[^"])*")
       | \$(?<tag>(?:[A-Za-z_]\w*)?)\$.*?\$\k<tag>\$
@@ -133,10 +125,7 @@ module RailsAiContext
     NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
     EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
 
-    # @param family [DatabaseFamily::Family] decides the lexing and whether the plan checks run
-    # @param secrets [SecretColumns]
-    # @param connection the connection the statement runs on, for the plan checks
-    # @param timeout [Numeric] seconds, for planning
+    # family decides the lexing and whether the plan checks run; connection and timeout are for planning.
     def initialize(family:, secrets:, connection:, timeout:)
       @mysql = family.mysql?
       @postgres = family.postgresql?
@@ -179,13 +168,12 @@ module RailsAiContext
       end
 
       cleaned = comment_free(sql).squeeze(" ")
-      # Statement checks read quote-masked text, so `LIKE '%update%'` or a `;`
-      # in a `$$ ... $$` body is data. A disk write (INTO OUTFILE) and the
+      # Statement checks read quote-masked text, so `LIKE '%update%'` is data. A disk write and the
       # file functions stay on the raw text: no read-only transaction stops them.
       masked = mask_quoted(cleaned)
       return "Blocked: multiple statements (no semicolons)" if masked.match?(MULTI_STATEMENT)
-      # PostgreSQL's read-only transaction refuses a locking read, so a literal
-      # there is data; MySQL's lets FOR SHARE through, so the raw text decides.
+      # PostgreSQL's read-only transaction refuses a locking read, so a literal there is data.
+      # MySQL's runs FOR SHARE and LOCK IN SHARE MODE, so there the raw text decides.
       return "Blocked: locking read (FOR UPDATE/SHARE or LOCK IN SHARE MODE clause)" if (@postgres ? masked : cleaned).match?(BLOCKED_CLAUSES)
       return "Blocked: sensitive SHOW command" if cleaned.match?(BLOCKED_SHOWS)
       return "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" if cleaned.match?(BLOCKED_OUTPUT)
@@ -210,9 +198,8 @@ module RailsAiContext
           "Name the columns you want in the SELECT list instead."
       end
 
-      # On PostgreSQL a literal is data, since the plan checks read the query
-      # itself. MySQL's quote modes and SQLite's t.'col' identifiers could fool
-      # a masker, so there the raw text decides.
+      # On PostgreSQL a literal is data, since the plan checks read the query itself. MySQL's quote
+      # modes and SQLite's t.'col' identifiers could fool a masker, so there the raw text decides.
       literal_free = @postgres ? mask_sql_literals(cleaned) : cleaned
 
       if literal_free.match?(SET_UNION)
@@ -260,10 +247,8 @@ module RailsAiContext
         "the query runs, so the whole query is refused. #{way_out}"
     end
 
-    # Comments out, everything else as written: this is the text that runs.
-    # A quoted span is copied whole, so a comment marker inside one is data.
-    # Only MySQL has a hash comment, a `--` that needs a space after it, and
-    # `/*! ... */` content it runs. PostgreSQL has dollar quoting.
+    # The text that runs: comments out, a quoted span copied whole. Only MySQL has a hash comment,
+    # a `--` that needs a space after it and `/*! ... */` content it runs; PostgreSQL has dollar quoting.
     def comment_free(sql)
       # fixed_anchor, so the dollar quote's lookbehind sees the text before the pointer.
       scanner = StringScanner.new(sql, fixed_anchor: true)
@@ -321,9 +306,8 @@ module RailsAiContext
       text.gsub(PG_TEXT_LITERAL) { Regexp.last_match[:ident] || "''" }
     end
 
-    # A list on a VALUES body renames no table column, so it is left alone.
-    # Parentheses are balanced on the masked text, so one inside a literal
-    # does not move a body's bounds.
+    # A list on a VALUES body renames no table column, so it is left alone. Parentheses are
+    # balanced on the masked text, where one inside a literal cannot move a body's bounds.
     def renaming_alias_list?(cleaned, masked)
       return true if cleaned.match?(TABLE_ALIAS_LIST)
 
@@ -391,9 +375,8 @@ module RailsAiContext
       end
     end
 
-    # A secret name that passed the text check only because it sat inside a
-    # literal runs only when the plan was obtained and cleared the checks, so
-    # a masker fooled by a quote trick is never the only gate.
+    # A secret name the text check passed as a literal runs only when a plan cleared the checks,
+    # so the plan backs a masker that a quote trick fooled.
     def unvouched_literal_refusal(text, plan)
       return nil unless @postgres
 
@@ -419,9 +402,8 @@ module RailsAiContext
       nil
     end
 
-    # A secret column anywhere but a plain pass-through output. The text check
-    # already refused any statement naming one, so a name here came from a
-    # wildcard, a row reference the planner expanded, or a view.
+    # A secret column anywhere but a plain pass-through output. The text check refused any statement
+    # naming one, so a name here came from a wildcard, an expanded row reference or a view.
     def secret_column_in_plan(outputs, conds)
       secret = @secrets.in_schema
       return nil if secret.empty?
@@ -436,9 +418,8 @@ module RailsAiContext
       nil
     end
 
-    # A secret base column some node passes through but the top node does not
-    # name (a MATERIALIZED CTE, a subquery scan, a set operation), so result
-    # redaction by position cannot pin it.
+    # A secret base column some node passes through and the top node leaves unnamed (a MATERIALIZED
+    # CTE, a subquery scan, a set operation), where redaction by position cannot pin it.
     def laundered_secret_column(plan)
       top = secret_base_columns(plan, plan.output)
       plan.nodes.each do |node|

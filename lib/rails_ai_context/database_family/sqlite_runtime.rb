@@ -167,7 +167,7 @@ module RailsAiContext
         exit!(0)
       end
 
-      # Read by length, not to EOF: any other process forked meanwhile holds a copy of the writer.
+      # Read by length: any other process forked meanwhile holds a copy of the writer, so EOF may never come.
       def read_child_result(reader, deadline)
         size = read_before(reader, 8, deadline).unpack1("Q>")
         status, *rest = begin

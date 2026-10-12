@@ -53,9 +53,8 @@ module RailsAiContext
 
       HARD_ROW_CAP = 1000
 
-      # SHOW/DESCRIBE/EXPLAIN return schema metadata, never application rows:
-      # a LIMIT appended to them is a syntax error, and MySQL's DESCRIBE has a
-      # column named "Key" that name redaction would filter into uselessness.
+      # SHOW/DESCRIBE/EXPLAIN return schema metadata: a LIMIT appended to them is a syntax error,
+      # and name redaction would filter the "Key" column of MySQL's DESCRIBE.
       SCHEMA_METADATA_PREFIX = /\A\s*(SHOW|DESCRIBE|DESC|EXPLAIN)\b/i
 
       # The session record is echoed back to the model; a full query body can
@@ -237,10 +236,8 @@ module RailsAiContext
         error_response("EXPLAIN failed: #{clean_error_message(e.message)}")
       end
 
-      # ── Row limit enforcement (Layer 3) ─────────────────────────────
-      # The query's own limit ends the statement. A LIMIT anywhere else belongs
-      # to a subquery or a string literal and is left as written. LIMIT ALL,
-      # LIMIT NULL (PostgreSQL) and a negative limit (SQLite) are no limit at all.
+      # The query's own limit ends the statement; a LIMIT anywhere else belongs to a subquery or a literal.
+      # LIMIT ALL, LIMIT NULL (PostgreSQL) and a negative limit (SQLite) are no limit at all.
       TRAILING_LIMIT = /\bLIMIT\s+(?:(\d+)\s*,\s*)?(\d+|ALL|NULL|-\s*\d+)(\s+OFFSET\s+\d+)?\s*;?\s*\z/i
       TRAILING_FETCH = /\bFETCH\s+(FIRST|NEXT)\s+(\d+)(\s+ROWS?\s+ONLY)\s*;?\s*\z/i
 
@@ -291,7 +288,6 @@ module RailsAiContext
         ResultProxy.new(result.columns, result.rows.first(cap), unbounded, true)
       end
 
-      # ── Column redaction (Layer 4) ──────────────────────────────────
       # A column is filtered when its output name or the table column it reads is secret. A source
       # whose column could not be read is filtered when its relation, or any relation, holds a secret.
       private_class_method def self.redact_results(result, secrets, sources)
@@ -326,7 +322,6 @@ module RailsAiContext
         ResultProxy.new(result.columns, rows)
       end
 
-      # ── Output formatting ───────────────────────────────────────────
       private_class_method def self.format_table(result)
         columns = result.columns
         rows = result.rows
