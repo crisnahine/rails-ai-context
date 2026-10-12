@@ -22,7 +22,7 @@ module RailsAiContext
     # SHOW CREATE TABLE / VIEW print a definition; every other SHOW CREATE is
     # refused by the CREATE keyword - SHOW CREATE USER prints credential hashes.
     SHOW_CREATE_DEFINITION = /\A\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\b/i
-    BLOCKED_CLAUSES  = /\bFOR\s+(UPDATE|SHARE|NO\s+KEY\s+UPDATE)\b/i
+    BLOCKED_CLAUSES  = /\bFOR\s+(?:UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b|\bLOCK\s+IN\s+SHARE\s+MODE\b/i
     BLOCKED_SHOWS    = /\bSHOW\s+(GRANTS|PROCESSLIST|BINLOG|SLAVE|MASTER|REPLICAS)\b/i
     SELECT_INTO      = /\bSELECT\b[^;]*\bINTO\b/i
     MULTI_STATEMENT  = /;\s*\S/
@@ -186,7 +186,7 @@ module RailsAiContext
       return "Blocked: multiple statements (no semicolons)" if masked.match?(MULTI_STATEMENT)
       # PostgreSQL's read-only transaction refuses a locking read, so a literal
       # there is data; MySQL's lets FOR SHARE through, so the raw text decides.
-      return "Blocked: FOR UPDATE/SHARE clause" if (@postgres ? masked : cleaned).match?(BLOCKED_CLAUSES)
+      return "Blocked: locking read (FOR UPDATE/SHARE or LOCK IN SHARE MODE clause)" if (@postgres ? masked : cleaned).match?(BLOCKED_CLAUSES)
       return "Blocked: sensitive SHOW command" if cleaned.match?(BLOCKED_SHOWS)
       return "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" if cleaned.match?(BLOCKED_OUTPUT)
       return "Blocked: SELECT INTO creates a table" if masked.match?(SELECT_INTO)

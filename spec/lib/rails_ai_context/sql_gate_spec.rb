@@ -181,12 +181,23 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "reads one inside a literal as data on PostgreSQL, whose read-only transaction refuses locking reads" do
-      expect(runs?("SELECT id FROM orders WHERE notes LIKE '%ready for update%'", :postgresql)).to be(true)
+    it "refuses every other spelling of a locking read on every family" do
+      [ "LOCK IN SHARE MODE", "lock  in\nshare mode", "LOCK IN SHARE MODE NOWAIT", "LOCK IN SHARE MODE WAIT 1", "FOR UPDATE NOWAIT",
+        "FOR UPDATE SKIP LOCKED", "FOR SHARE OF users", "FOR UPDATE WAIT 1", "FOR KEY SHARE" ].each do |lock|
+        %i[sqlite mysql postgresql].each do |family|
+          expect(refusal("SELECT id FROM users LIMIT 5 #{lock}", family)).to include("FOR UPDATE/SHARE"), "#{lock} on #{family}"
+        end
+      end
     end
 
-    it "reads the raw text on MySQL, whose read-only transaction allows FOR SHARE" do
+    it "reads one inside a literal as data on PostgreSQL, whose read-only transaction refuses locking reads" do
+      expect(runs?("SELECT id FROM orders WHERE notes LIKE '%ready for update%'", :postgresql)).to be(true)
+      expect(runs?("SELECT id FROM orders WHERE notes LIKE '%lock in share mode%'", :postgresql)).to be(true)
+    end
+
+    it "reads the raw text on MySQL, whose read-only transaction allows FOR SHARE and LOCK IN SHARE MODE" do
       expect(refusal("SELECT id FROM orders WHERE notes LIKE '%ready for share%'", :mysql)).to include("FOR UPDATE/SHARE")
+      expect(refusal("SELECT id FROM orders WHERE notes LIKE '%lock in share mode%'", :mysql)).to include("FOR UPDATE/SHARE")
     end
   end
 
