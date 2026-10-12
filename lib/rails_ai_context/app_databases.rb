@@ -86,14 +86,11 @@ module RailsAiContext
 
       # { pending: [{ version:, name: }, ...] } read through the lease, or { error: exception }.
       def pending_migrations(dirs = migrate_dirs)
-        with_pool do |pool|
-          pool.with_connection do |connection|
-            AppDatabases.reaching(name, adapter) { connection.verify! }
-            { pending: AppDatabases.bounded(connection) { MigrationStatus.pending_on(pool, dirs) } }
-          end
-        end
+        with_connection { |connection| { pending: AppDatabases.bounded(connection) { MigrationStatus.pending_on(connection.pool, dirs) } } }
       rescue ActiveRecord::NoDatabaseError => e
         { error: Missing.new(e.message) }
+      rescue Unreachable => e
+        { error: e.cause.is_a?(ActiveRecord::NoDatabaseError) ? Missing.new(e.cause.message) : e }
       rescue StandardError => e
         { error: e }
       end

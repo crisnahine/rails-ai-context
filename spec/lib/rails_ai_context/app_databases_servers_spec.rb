@@ -28,15 +28,22 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     listener.addr[1]
   end
 
-  def leased_through_proxy(env, extra = {})
-    url = URI.parse(ENV.fetch(env))
-    settings = { adapter: url.scheme, host: "127.0.0.1", port: proxy_to(url.host, url.port || 3306), username: url.user,
-                 password: url.password, database: url.path.delete_prefix("/") }.merge(extra)
-    silent = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "silent", settings)
+  def leased(name, settings)
+    other = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, name, settings)
     RailsAiContext::AppDatabases.build(
-      environments: { Rails.env => { "primary" => ActiveRecord::Base.connection_db_config, "silent" => silent } },
+      environments: { Rails.env => { "primary" => ActiveRecord::Base.connection_db_config, name => other } },
       current: Rails.env, root: Dir.tmpdir, dumps: []
-    ).fetch("silent")
+    ).fetch(name)
+  end
+
+  def settings_of(env)
+    url = URI.parse(ENV.fetch(env))
+    { adapter: url.scheme, host: url.host, port: url.port || 3306, username: url.user, password: url.password, database: url.path.delete_prefix("/") }
+  end
+
+  def leased_through_proxy(env, extra = {})
+    settings = settings_of(env)
+    leased("silent", settings.merge(host: "127.0.0.1", port: proxy_to(settings[:host], settings[:port])).merge(extra))
   end
 
   # [the error the read ended with, seconds it took]; nil when it was still waiting after `limit` seconds.
@@ -68,13 +75,20 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     @sockets&.each { |socket| socket.close unless socket.closed? }
   end
 
-  shared_examples "a lease no silent server holds" do |env|
+  shared_examples "a leased database server" do |env|
     # Twice query_timeout and a margin of five seconds: seven here.
     it "ends a read on a server that stops answering, when the entry sets no read_timeout" do
       error, took = read_after_silence(leased_through_proxy(env), limit: 30)
 
       expect(error).to be_a(ActiveRecord::ActiveRecordError)
       expect(took).to be_between(5, 20)
+    end
+
+    it "says a database the server does not hold is missing when its pending migrations are asked for" do
+      absent = leased("absent", settings_of(env).merge(database: "rac_no_such_database"))
+
+      expect(absent.pending_migrations[:error]).to be_a(RailsAiContext::AppDatabases::Missing)
+      expect { absent.with_connection { nil } }.to raise_error(RailsAiContext::AppDatabases::Unreachable, /Run `bin\/rails db:create`/)
     end
 
     it "keeps the read_timeout an entry sets" do
@@ -86,10 +100,10 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
   end
 
   describe "MySQL", skip: server("RAC_TEST_MYSQL_URL") do
-    it_behaves_like "a lease no silent server holds", "RAC_TEST_MYSQL_URL"
+    it_behaves_like "a leased database server", "RAC_TEST_MYSQL_URL"
   end
 
   describe "MariaDB", skip: server("RAC_TEST_MARIADB_URL") do
-    it_behaves_like "a lease no silent server holds", "RAC_TEST_MARIADB_URL"
+    it_behaves_like "a leased database server", "RAC_TEST_MARIADB_URL"
   end
 end
