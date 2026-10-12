@@ -72,6 +72,11 @@ module RailsAiContext
 
           lines << "**Total issues found:** #{filtered_count}"
           lines << ""
+          unchecked = Array(data[:unchecked_databases])
+          if unchecked.any?
+            lines << "**Not checked:** #{unchecked.map { |db| "#{db[:name]} (#{db[:reason]})" }.join(', ')}"
+            lines << ""
+          end
 
           if RailsAiContext::DetailLevel.summary?(detail)
             kept.each do |name, items|
@@ -172,7 +177,7 @@ module RailsAiContext
           lines = [ "## #{title} (#{filtered.size})", "" ]
 
           filtered.each do |item|
-            lines << "- **#{item[:model] || item[:table] || "Unknown"}**"
+            lines << "- **#{item[:model] || item[:table] || "Unknown"}**#{" (#{item[:database]} database)" if item[:database]}"
             lines << "  #{item[:suggestion]}" if item[:suggestion]
             if RailsAiContext::DetailLevel.full?(detail)
               lines << "  Controller: #{item[:controller]}" if item[:controller]
