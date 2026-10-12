@@ -114,6 +114,16 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(medium_pos).to be < low_pos
     end
 
+    it "keeps N+1 risks of one level in the order they were found" do
+      performance_data[:n_plus_one_risks] = (1..24).map do |i|
+        { model: format("M%02d", i), association: "things", risk: %w[high medium low][i % 3] }
+      end
+
+      text = described_class.call(category: "n_plus_one").content.first[:text]
+      expected = [ 0, 1, 2 ].flat_map { |r| (1..24).select { |i| i % 3 == r }.map { |i| format("M%02d", i) } }
+      expect(text.scan(/\*\*(M\d\d)\*\*/).flatten).to eq(expected)
+    end
+
     it "shows association name with model in N+1 section" do
       response = described_class.call(category: "n_plus_one")
       text = response.content.first[:text]

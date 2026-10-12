@@ -137,7 +137,7 @@ module RailsAiContext
           return [] if filtered.empty?
 
           # Sort by risk: high → medium → low
-          sorted = filtered.sort_by { |i| RISK_ORDER[i[:risk].to_s] || 99 }
+          sorted = filtered.sort_by.with_index { |item, i| [ RISK_ORDER[item[:risk].to_s] || 99, i ] }
 
           lines = [ "## N+1 Query Risks (#{sorted.size})#{risk_summary_counts(sorted)}", "" ]
 
