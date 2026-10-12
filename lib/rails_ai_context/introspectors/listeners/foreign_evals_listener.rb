@@ -6,8 +6,6 @@ module RailsAiContext
       # The blocks a class body evaluates on another receiver (`translation_class.class_eval do`),
       # each with the source of every outermost call, by the line it starts on.
       class ForeignEvalsListener < BaseListener
-        Block = Struct.new(:receiver, :lines, :span, :calls)
-
         def initialize
           super
           @def_depth = 0
@@ -15,7 +13,7 @@ module RailsAiContext
           @conditions = []
         end
 
-        # A modifier's condition (`validates :x unless Rails.env.test?`) is not a declaration.
+        # An if or unless condition (`validates :x unless Rails.env.test?`) is not a declaration.
         def on_if_node_enter(node)
           @conditions << node.predicate.location
         end
@@ -37,7 +35,7 @@ module RailsAiContext
           return unless @def_depth.zero? && CallSiteExpansion.foreign_eval?(node)
 
           body = node.block.location
-          block = Block.new(node.receiver.slice, body.start_line..body.end_line, node.location.length, {})
+          block = { receiver: node.receiver.slice, lines: body.start_line..body.end_line, span: node.location.length, calls: {} }
           @results << block
           @open << [ node, block ]
         end
@@ -52,7 +50,7 @@ module RailsAiContext
         def record(block, node)
           return if @conditions.any? { |condition| node.location.start_offset.between?(condition.start_offset, condition.end_offset - 1) }
 
-          calls = (block.calls[node.location.start_line] ||= [])
+          calls = (block[:calls][node.location.start_line] ||= [])
           return if calls.any? { |call| call[:range].cover?(node.location.start_offset) }
 
           calls << { range: node.location.start_offset...node.location.end_offset, source: CallSiteExpansion.call_source(node) }

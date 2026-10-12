@@ -151,15 +151,15 @@ module RailsAiContext
 
           [ key, found.reject do |entry|
             line = entry.is_a?(Hash) && entry[:location]
-            block = line && blocks.select { |candidate| candidate.lines.cover?(line) }.min_by(&:span)
+            block = line && blocks.select { |candidate| candidate[:lines].cover?(line) }.min_by { |candidate| candidate[:span] }
             next false unless block
 
             lines[line] ||= [ block, entry[:text].to_s ]
           end ]
         end
         foreign = lines.sort.flat_map do |line, (block, text)|
-          sources = Array(block.calls[line]).map { |call| call[:source] }
-          (sources.empty? ? [ text ] : sources).map { |source| { declaration: source, receiver: block.receiver, location: line } }
+          sources = Array(block[:calls][line]).map { |call| call[:source] }
+          (sources.empty? ? [ text ] : sources).map { |source| { declaration: source, receiver: block[:receiver], location: line } }
         end
         kept.merge(foreign: foreign)
       end
