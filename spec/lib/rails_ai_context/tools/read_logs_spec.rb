@@ -5,6 +5,15 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::ReadLogs do
   let(:log_dir) { File.join(Rails.root, "log") }
 
+  # test.log is the booted app's own log, which later specs read: put it back as it was.
+  around do |example|
+    path = File.join(Rails.root, "log", "test.log")
+    saved = File.binread(path) if File.exist?(path)
+    example.run
+  ensure
+    saved ? File.binwrite(path, saved) : FileUtils.rm_f(path)
+  end
+
   before do
     FileUtils.mkdir_p(log_dir)
     File.write(File.join(log_dir, "test.log"), <<~LOG)
@@ -20,7 +29,6 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
   end
 
   after do
-    FileUtils.rm_f(File.join(log_dir, "test.log"))
     FileUtils.rm_f(File.join(log_dir, "json.log"))
     FileUtils.rm_f(File.join(log_dir, "empty.log"))
   end
