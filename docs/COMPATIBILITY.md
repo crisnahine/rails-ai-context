@@ -296,6 +296,13 @@ Proof sources:
    In the v5.34.1 release QA: the gem built from the release commit and its
    file list read, and the unit suite and the E2E harness on Linux, macOS and
    Windows; the code is v5.34.0's.
+   In the v5.35.0 release QA: every copy-paste prompt in `docs/PROMPTS.md`
+   pasted into Claude Code (`claude -p`) and Codex CLI (`codex exec`) and the
+   result checked on disk, 40 scenarios in fresh Rails 8.1 apps, an app that
+   cannot boot, a mountable engine, a Docker container and a copy of a
+   private production app; each AI tool's MCP config started the way its
+   client starts it; and the unit suite and the E2E harness on Linux, macOS
+   and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

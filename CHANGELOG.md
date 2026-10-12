@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.35.0] - 2026-10-12
+
+### Added
+
+- **Copy-paste prompts.** `docs/PROMPTS.md` holds a prompt for every way
+  to set the gem up, change it, upgrade it, fix it and remove it, plus
+  prompts for daily work. Paste one into Claude Code, Cursor, GitHub
+  Copilot, OpenCode or Codex CLI and it runs the install in its own shell.
+  Prompts cover the Gemfile and standalone installs, the three setups, a
+  team, a folder of apps, a private setup, a try-out, HTTP, Ruby in Docker
+  and MCP clients the gem writes no config for.
+- **Every install question has a flag.** `init` and the install generator
+  take `--tools claude,cursor` (or `all`), `--mcp`, `--cli`, `--prune`, and `init`
+  takes `--defaults` too; the generator also takes `--hook`. With them an AI
+  tool or a script runs the install to the end with nobody at the keyboard.
+  A flag the install cannot read, such as a tool name it does not know,
+  `--cli` with `--mcp-only`, or a flag the generator does not have, stops it
+  with exit status 1 before anything is written. Only `--prune` removes
+  files: a dropped tool's, the gem's MCP entries on a switch to the CLI
+  setup, the generated context files on a switch to the MCP-only setup, and
+  legacy files.
+  ADR-0007 records the design.
+- **`rails-ai-context uninstall`.** It removes each AI tool's context files
+  and MCP entries, `.rails-ai-context.yml`, `.ai-context.json`, the
+  initializer, the `.gitignore` lines and the pre-commit hook it installed,
+  and keeps what you wrote: your lines in a shared `CLAUDE.md`, other
+  servers in an MCP config, a hook you changed. It names a
+  `mount RailsAiContext::Engine` line instead of editing routes, works in a
+  folder of apps, and needs no boot.
+- **`rails-ai-context mcp-entry`.** It prints a server entry for an MCP
+  client the gem writes no config for (Claude Desktop, Windsurf, Zed, a
+  JetBrains IDE), with the Ruby binary, the executable and the app by their
+  full paths and the gem environment beside them, so it starts from
+  whatever folder the client uses.
+
+### Changed
+
+- **A re-run's default is what the app has.** An empty answer, or
+  `--defaults`, on a re-run keeps the recorded AI tools and setup. It used
+  to take all five tools and the MCP setup, so running the install again to
+  repair a CLI or MCP-only install switched it. A first install's defaults
+  are unchanged, and `--mcp` names the MCP setup outright. In a folder of
+  apps that recorded different setups, `--defaults` asks for a setup flag
+  instead of picking one.
+- **Switching to the MCP-only setup offers to remove the generated context
+  files.** Nothing refreshes them once the install writes none, so they
+  went stale; the question lists them, `--prune` answers yes, and the lines
+  you wrote stay.
+- **The install summary names each AI tool's next step.** It said the MCP
+  config was "auto-detected on project open" with "no manual config
+  needed", but every tool holds a project's server back until you approve
+  it (Claude Code), turn it on (Cursor), trust the folder (VS Code, Codex
+  CLI) or restart (OpenCode). The summary now says which, per tool.
+
 ## [5.34.1] - 2026-10-12
 
 ### Changed
