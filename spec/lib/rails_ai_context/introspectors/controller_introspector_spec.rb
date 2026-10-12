@@ -714,6 +714,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         def clean_logo_params
           organisation_params.delete(:logo_cache)
         end
+
+        def digest_params
+          params_digest
+        end
+
+        def keys_params
+          unpermitted_keys
+        end
       RUBY
 
       found = introspector.send(:extract_strong_params, source)
