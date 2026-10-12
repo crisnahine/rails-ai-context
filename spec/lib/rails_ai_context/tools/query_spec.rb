@@ -72,7 +72,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(sent("SELECT * FROM (SELECT id FROM t LIMIT 500) q")).to eq("SELECT * FROM (SELECT id FROM t LIMIT 500) q\nLIMIT 101")
     end
 
-    # A second LIMIT would be a syntax error on a query that ran before.
+    # A second LIMIT would be a syntax error.
     it "sends a limit it cannot rewrite as written" do
       [ "SELECT * FROM t LIMIT 1+1", "SELECT * FROM t LIMIT (2)", "SELECT * FROM t FETCH FIRST 5 ROWS WITH TIES" ].each do |sql|
         expect(sent(sql)).to eq(sql)
@@ -225,6 +225,52 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         expect(result.error?).to be true
         expect(result.content.first[:text]).to include("refuses the SQLServer adapter")
+      end
+
+      it "refuses an adapter with no family from the configuration, before the connection is verified or sent anything" do
+        config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", adapter: "sqlserver", database: "app")
+        allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(config)
+        conn = ActiveRecord::Base.connection
+        %i[verify! active? execute select_all select_value select_rows exec_query columns tables transaction].each do |sent|
+          allow(conn).to receive(sent).and_raise("#{sent} reached the database")
+        end
+
+        result = described_class.call(sql: "SELECT 1 AS x")
+
+        expect(result.error?).to be true
+        expect(result.content.first[:text]).to start_with("rails_query refuses the sqlserver adapter").and end_with("No statement was sent.")
+      end
+
+      if defined?(ActiveRecord::ConnectionFailed)
+        it "answers a connection the server dropped as the database that stopped answering, from the statement and from a read beside it" do
+          dropped = ActiveRecord::ConnectionFailed.new("server has gone away")
+          stopped = "The primary database stopped answering during the query: server has gone away"
+          runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
+
+          allow(runtime).to receive(:read_only).and_raise(dropped)
+          [ {}, { explain: true } ].each do |options|
+            result = described_class.call(sql: "SELECT 1", **options)
+            expect([ result.content.first[:text], result.error? ]).to eq([ stopped, true ]), options.to_s
+          end
+
+          allow(runtime).to receive(:relation_columns).and_raise(dropped)
+          result = RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1") }
+          expect([ result.content.first[:text], result.error? ]).to eq([ stopped, true ])
+        end
+      end
+
+      it "refuses every statement when the database's columns cannot be read, and sends none" do
+        runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
+        allow(described_class).to receive(:cached_context).and_return({})
+        allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "catalogue unreadable")
+        allow(runtime).to receive(:read_only).and_call_original
+
+        result = RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1 AS x") }
+
+        expect(result.error?).to be true
+        expect(result.content.first[:text])
+          .to eq("The columns of the primary database could not be read, so its secret columns cannot be told and no query runs on it.")
+        expect(runtime).not_to have_received(:read_only)
       end
 
       it "answers a primary no connection reaches as an error that names it" do
@@ -701,7 +747,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         response = described_class.call(sql: sql)
         text = response.content.first[:text]
         expect(response.error?).to be(true), sql
-        expect(text).to include("sensitive column `secret`", "config.query_allowed_columns does not release it")
+        expect(text).to include("secret column `secret`", "config.query_allowed_columns does not release it")
         expect(text).not_to include("| 7", "add \"secret\"")
       end
     end
@@ -712,10 +758,10 @@ RSpec.describe RailsAiContext::Tools::Query do
       described_class.call(sql: sql, **opts).content.first[:text]
     end
 
-    it "refuses a sensitive column that follows a comment marker in a string literal" do
+    it "refuses a secret column that follows a comment marker in a string literal" do
       text = answer("SELECT '--' AS m, api_key AS x FROM (SELECT 'leak' AS api_key) t")
 
-      expect(text).to include("sensitive column `api_key`")
+      expect(text).to include("secret column `api_key`")
       expect(text).not_to include("leak")
     end
 
@@ -960,7 +1006,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).not_to include("[FILTERED]")
     end
 
-    it "still redacts sensitive columns for plain SELECT queries" do
+    it "still redacts secret columns for plain SELECT queries" do
       # "cache_key" ends with the generic sensitive suffix "key" but isn't in
       # the pre-execution textual blocklist, so it reaches post-execution
       # redaction rather than being rejected outright - unlike DESCRIBE's
@@ -976,6 +1022,12 @@ RSpec.describe RailsAiContext::Tools::Query do
   end
 
   describe "CSV format" do
+    it "answers the header row alone when the query returns no rows" do
+      result = described_class.call(sql: "SELECT 1 AS a, 'x' AS \"b,c\" WHERE 1 = 0", format: "csv")
+      expect(result.content.first[:text]).to eq(%(a,"b,c"))
+      expect(described_class.call(sql: "SELECT 1 AS a WHERE 1 = 0").content.first[:text]).to start_with("_Query returned 0 rows._")
+    end
+
     it "escapes newlines in cell values" do
       columns = %w[id note]
       rows = [ [ 1, "line1\nline2" ] ]
@@ -1067,6 +1119,80 @@ RSpec.describe RailsAiContext::Tools::Query do
       text = answer("SELECT n FROM big", limit: 7)
       expect(text).to include("7 rows returned")
       expect(text).to include("7 rows shown; the query returned more")
+    end
+  end
+
+  describe "a result column SQLite renamed as a duplicate" do
+    it "is filtered by the name before the :N suffix" do
+      allow(described_class).to receive(:cached_context).and_return(models: { "Thing" => { encrypts: %w[ssn] } })
+      result = ActiveRecord::Result.new(%w[id passwd:1 api_key:12 ssn:2 note:1 ratio:x], [ [ 1, "pw-value", "key-value", "ssn-value", "kept", "3:4" ] ])
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_return(result)
+
+      %w[table csv].each do |format|
+        text = RailsAiContext::RunCache.around { described_class.call(sql: "SELECT * FROM t", format: format) }.content.first[:text]
+        expect(text).to include("kept", "3:4")
+        expect(text).not_to include("pw-value", "key-value", "ssn-value")
+        expect(text.scan("[FILTERED]").size).to eq(3)
+      end
+    end
+  end
+
+  describe "the timeouts of one call" do
+    let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }
+
+    def timed(sql = "SELECT 41 + 1 AS answer")
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started ]
+    end
+
+    it "answers its row when the context took longer than the timeout to build, and builds it outside the guarded reads" do
+      RailsAiContext.configuration.query_timeout = 0.3
+      guarded = false
+      built_guarded = nil
+      allow(runtime).to receive(:bounded).and_wrap_original do |original, *args, &reads|
+        guarded = true
+        original.call(*args, &reads)
+      ensure
+        guarded = false
+      end
+      allow(described_class).to receive(:cached_context) do
+        built_guarded = guarded
+        sleep 0.5
+        {}
+      end
+
+      response, = timed
+
+      expect(response.error?).to be(false)
+      expect(response.content.first[:text]).to include("| 42")
+      expect(built_guarded).to be(false)
+    end
+
+    it "keeps the rows of a statement that used most of its timeout after reads that used most of theirs" do
+      RailsAiContext.configuration.query_timeout = 1
+      allow(described_class).to receive(:cached_context).and_return({})
+      allow(runtime).to receive(:relation_columns).and_wrap_original { |original, conn| sleep(0.6) && original.call(conn) }
+      allow(runtime).to receive(:read_only).and_wrap_original { |original, *args| sleep(0.6) && original.call(*args) }
+
+      response, took = timed
+
+      expect(response.error?).to be(false)
+      expect(response.content.first[:text]).to include("| 42")
+      expect(runtime).to have_received(:read_only).with(anything, anything, 1)
+      expect(took).to be_between(1.2, 2.2)
+    end
+
+    it "answers the timeout when the reads beside the statement used all of theirs" do
+      RailsAiContext.configuration.query_timeout = 0.3
+      allow(described_class).to receive(:cached_context).and_return({})
+      allow(runtime).to receive(:relation_columns).and_wrap_original { |original, conn| sleep(0.4) && original.call(conn) }
+
+      response, took = timed
+
+      expect(response.error?).to be(true)
+      expect(response.content.first[:text]).to start_with("Query exceeded 0.3 second timeout")
+      expect(took).to be < 1.2
     end
   end
 
@@ -1188,9 +1314,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
-  # The only statements refused before the SQL gate that it runs: two string
-  # literals. Every other refusal stands (sql_gate_spec).
-  describe "statements refused before that now run" do
+  describe "a literal that reads like an injection or a locking clause" do
     it "runs a literal holding OR 1=1" do
       response = described_class.call(sql: "SELECT 'a' AS v WHERE 'x' LIKE '%OR 1=1%' OR 1 = 1")
       expect(response.error?).to be(false)
@@ -1248,7 +1372,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "refuses a view that renames a secret column, a view built on it, and a view that lists every column" do
       {
-        "renamed" => "the view `renamed` is not queried: its definition names the sensitive column `passwd`",
+        "renamed" => "the view `renamed` is not queried: its definition names the secret column `passwd`",
         "nested" => "the view `nested` is not queried: it reads the view `renamed`",
         "everything" => "the view `everything` is not queried: its definition reads every column of `accounts`"
       }.each do |view, reason|
@@ -1263,12 +1387,77 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text("SELECT * FROM contacts")).to include("a@example.com")
     end
 
+    it "refuses a view whose definition holds a comment before its wildcard, and one named with a dollar or a quote" do
+      conn.execute("CREATE VIEW lined (a, b, c, d, e, f) AS SELECT -- note\n * FROM accounts")
+      conn.execute("CREATE VIEW blocked (a, b, c, d, e, f) AS SELECT /* note */ * FROM accounts")
+      conn.execute(%(CREATE VIEW "v$" (a, b) AS SELECT id, passwd FROM accounts))
+      conn.execute(%(CREATE VIEW "two  words" (a, b) AS SELECT id, passwd FROM accounts))
+      conn.execute(%(CREATE VIEW "quo""ted" (a, b) AS SELECT id, passwd FROM accounts))
+
+      [ "SELECT * FROM lined", "SELECT * FROM blocked", "SELECT * FROM v$", %(SELECT * FROM "v$"), %(SELECT * FROM "two  words"),
+        "SELECT * FROM [two  words]", %(SELECT * FROM "quo""ted") ].each do |sql|
+        response = answer(sql)
+        expect(response.error?).to be(true), sql
+        expect(response.content.first[:text]).to start_with("Blocked: the view `"), sql
+        expect(response.content.first[:text]).not_to include("pw-value"), sql
+      end
+    end
+
+    it "refuses a column-alias list in every spelling SQLite reads, and returns no secret value" do
+      body = "(SELECT * FROM accounts)"
+      lists = [ "(a, b, c, d, e, f)", '("a", "b", "c", "d", "e", "f")', "(`a`, `b`, `c`, `d`, `e`, `f`)", "([a], [b], [c], [d], [e], [f])",
+                "('a', 'b', 'c', 'd', 'e', 'f')", "(\u00e9, \u00fc, \u00f1, \u00e5, \u00f8, \u00e7)", "(\u{1F600}, b, c, d, e, f)",
+                "(a\u00a0b, b, c, d, e, f)", '(a, "b", `c`, [d], \'e\', f)', '("a""x", b, c, d, e, f)' ]
+      statements = lists.flat_map do |list|
+        [ "AS", "AS MATERIALIZED", "AS NOT MATERIALIZED", "as\nmaterialized" ].map { |as| "WITH t #{list} #{as} #{body} SELECT * FROM t" }
+      end
+      statements += [
+        %(WITH "t" (a, b, c, d, e, f) AS #{body} SELECT * FROM "t"), "WITH [t] (a, b, c, d, e, f) AS #{body} SELECT * FROM [t]",
+        "WITH 't' (a, b, c, d, e, f) AS #{body} SELECT * FROM 't'", "WITH key (a, b, c, d, e, f) AS #{body} SELECT * FROM key",
+        "WITH t(a,b,c,d,e,f)AS(SELECT*FROM accounts)SELECT*FROM t", "WITH RECURSIVE t(a, b, c, d, e, f) AS #{body} SELECT * FROM t",
+        "WITH x AS (SELECT 1 AS one), t(a, b, c, d, e, f) AS #{body} SELECT * FROM t",
+        "WITH t /* x */ (a, b, c, d, e, f) -- y\n AS /* z */ #{body} SELECT * FROM t",
+        "WITH t(a, b, c, d, e, f) AS (WITH u AS #{body} SELECT * FROM u) SELECT * FROM t",
+        "SELECT * FROM (WITH t(a, b, c, d, e, f) AS #{body} SELECT * FROM t) x",
+        "WITH t(a) AS (SELECT passwd_only.* FROM (SELECT 1) x, single passwd_only) SELECT * FROM t"
+      ]
+      conn.execute("CREATE TABLE single (passwd TEXT)")
+      conn.execute("INSERT INTO single VALUES ('pw-value')")
+
+      statements.each do |sql|
+        response = answer(sql)
+        expect(response.error?).to be(true), sql
+        expect(response.content.first[:text]).to start_with("Blocked: a column-alias list"), sql
+      end
+      expect(text("WITH v(id, name) AS (VALUES (1, 'a'), (2, 'b')) SELECT * FROM v")).to include("2 rows returned")
+    end
+
+    it "refuses a wildcard inside a subquery over a table that holds a secret column, by the table and the column" do
+      [ "SELECT (1, 'a@example.com', 'pw-valud', 'x', 'y', 'z') < (SELECT * FROM accounts) AS o",
+        "SELECT (1, 'a@example.com', 'pw-valud', 'x', 'y', 'z') < (SELECT accounts.* FROM accounts) AS o",
+        "SELECT * FROM (SELECT * FROM accounts a JOIN accounts b ON 1)", "SELECT * FROM (SELECT * FROM accounts) x",
+        "WITH x AS (SELECT * FROM accounts) SELECT * FROM x", "SELECT id FROM notes WHERE 'pw' IN (SELECT a.* FROM accounts a)" ].each do |sql|
+        response = answer(sql)
+        expect(response.error?).to be(true), sql
+        expect(response.content.first[:text]).to start_with(
+          "Blocked: a `*` inside a subquery reads every column of `accounts`, which holds the secret column `passwd`. On SQLite"
+        ).and(end_with("so name the columns in the subquery.")), sql
+      end
+    end
+
+    it "runs a wildcard at the top, in EXISTS, in count(*) and in a subquery over a table with no secret column" do
+      expect(text("SELECT * FROM accounts a JOIN accounts b ON 1")).to include("a@example.com").and(satisfy { |t| !t.include?("pw-value") })
+      expect(text("SELECT EXISTS (SELECT * FROM accounts) AS found, (SELECT count(*) FROM accounts) AS n")).to include("| 1     | 1 |")
+      expect(text("SELECT * FROM (SELECT * FROM notes) n")).to include("hello")
+      expect(text("WITH n AS (SELECT * FROM notes) SELECT * FROM n")).to include("hello")
+    end
+
     it "filters a generated column that reads a secret column, and refuses a statement naming it" do
       everything = text("SELECT * FROM accounts")
       expect(everything).to include("a@example.com", "[FILTERED]")
       expect(everything).not_to include("pw-value")
       expect(text("SELECT shadow AS s FROM accounts")).to include("`shadow` is a generated column")
-      expect(text("SELECT kept AS k FROM accounts")).to include("sensitive column `kept`")
+      expect(text("SELECT kept AS k FROM accounts")).to include("secret column `kept`")
     end
 
     it "returns a generated column of a table that holds no secret column" do

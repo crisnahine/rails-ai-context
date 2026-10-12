@@ -14,7 +14,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       def drop
         %w[rac_my_nested rac_my_renamed rac_my_everything rac_my_contacts].each { |view| conn.execute("DROP VIEW IF EXISTS #{view}") }
-        conn.execute("DROP TABLE IF EXISTS rac_my_accounts")
+        %w[rac_my_accounts rac_my_plain].each { |table| conn.execute("DROP TABLE IF EXISTS #{table}") }
       end
 
       before do
@@ -63,15 +63,88 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       it "refuses a view that renames a secret column, a view built on it, and a view of every column" do
         {
-          "rac_my_renamed" => "the view `rac_my_renamed` is not queried: its definition names the sensitive column `passwd`",
+          "rac_my_renamed" => "the view `rac_my_renamed` is not queried: its definition names the secret column `passwd`",
           "rac_my_nested" => "the view `rac_my_nested` is not queried: it reads the view `rac_my_renamed`",
-          "rac_my_everything" => "the view `rac_my_everything` is not queried: its definition names the sensitive column `passwd`"
+          "rac_my_everything" => "the view `rac_my_everything` is not queried: its definition names the secret column `passwd`"
         }.each do |view, reason|
           response = answer("SELECT * FROM #{view}")
           expect(response.error?).to be(true), view
           expect(response.content.first[:text]).to include(reason, "on MySQL, so query the tables it reads")
           expect(response.content.first[:text]).not_to include("pw-value")
         end
+      end
+
+      def refused(statements, start)
+        allow(runtime).to receive(:read_only).and_call_original
+        statements.each do |sql|
+          response = answer(sql)
+          expect(response.error?).to be(true), sql
+          expect(response.content.first[:text]).to start_with(start), sql
+        end
+        expect(runtime).not_to have_received(:read_only)
+      end
+
+      it "refuses a column-alias list in every spelling the server reads" do
+        body = "(SELECT * FROM rac_my_accounts)"
+        refused([
+          "SELECT * FROM #{body} AS t (a, b, c, d, e, f)", "SELECT * FROM #{body} t (a, b, c, d, e, f)", "SELECT * FROM #{body}t(a,b,c,d,e,f)",
+          "SELECT * FROM #{body} `t` (`a`, `b`, `c`, `d`, `e`, `f`)", "SELECT * FROM #{body} any (a, b, c, d, e, f)",
+          "SELECT * FROM #{body} ilike (a, b, c, d, e, f)", "SELECT * FROM #{body} AS \u00e9 (\u00e9, b, c, d, e, f)",
+          "SELECT * FROM (TABLE rac_my_accounts) AS t (a, b, c, d, e, f)", "SELECT * FROM (#{body}) t (a, b, c, d, e, f)",
+          "SELECT * FROM rac_my_contacts, LATERAL #{body} AS t (a, b, c, d, e, f)", "SELECT * FROM rac_my_contacts, LATERAL #{body} t (a, b, c, d, e, f)",
+          "WITH t (a, b, c, d, e, f) AS #{body} SELECT * FROM t", "WITH t (`a`, `b`, `c`, `d`, `e`, `f`) AS #{body} SELECT * FROM t",
+          "WITH `t` (a, b, c, d, e, f) AS (TABLE rac_my_accounts) SELECT * FROM t", "WITH t (\u00e9, b, c, d, e, f) AS #{body} SELECT * FROM t",
+          "WITH t(a,b,c,d,e,f)AS(SELECT*FROM rac_my_accounts)SELECT*FROM t", "WITH t /*!(a, b, c, d, e, f)*/ AS #{body} SELECT * FROM t",
+          "WITH t (a, b, c, d, e, f) # note\n AS #{body} SELECT * FROM t", "WITH RECURSIVE t (a, b, c, d, e, f) AS #{body} SELECT * FROM t"
+        ], "Blocked: a column-alias list")
+        expect(text("SELECT * FROM (VALUES ROW(1, 'a')) AS v (id, name)")).not_to start_with("Blocked: a column-alias list")
+      end
+
+      it "refuses a wildcard inside a subquery over a table that holds a secret column" do
+        guess = "(1, 'a@example.com', 'pw-valud', 'x', 'y', 'z')"
+        refused([
+          "SELECT #{guess} < (SELECT * FROM rac_my_accounts) AS o", "SELECT ROW#{guess} < (SELECT DISTINCTROW * FROM rac_my_accounts) AS o",
+          "SELECT #{guess} < (SELECT SQL_NO_CACHE rac_my_accounts.* FROM rac_my_accounts) AS o", "SELECT #{guess} < (TABLE rac_my_accounts) AS o",
+          "SELECT 1 FROM rac_my_contacts WHERE #{guess} IN (TABLE rac_my_accounts)", "SELECT * FROM (SELECT * FROM rac_my_accounts) x",
+          "SELECT * FROM (TABLE rac_my_accounts) x", "WITH x AS (SELECT * FROM rac_my_accounts) SELECT * FROM x"
+        ], "Blocked: a `*` inside a subquery reads every column of `rac_my_accounts`, which holds the secret column `passwd`. On MySQL")
+        expect(text("SELECT EXISTS (SELECT * FROM rac_my_accounts) AS found, (SELECT count(*) FROM rac_my_accounts) AS n")).to include("| 1     | 1 |")
+      end
+
+      it "filters both columns of a name a join returns twice, and has no derived table of duplicate names" do
+        twice = text("SELECT * FROM rac_my_accounts a JOIN rac_my_accounts b ON 1 = 1")
+        expect(twice).to include("a@example.com")
+        expect(twice).not_to include("pw-value")
+        conn.execute("CREATE TABLE rac_my_plain (id int, note varchar(10))")
+        expect(text("SELECT * FROM (SELECT * FROM rac_my_plain a JOIN rac_my_plain b ON 1 = 1) x")).to start_with("SQL error:").and include("Duplicate column name")
+      ensure
+        conn.execute("DROP TABLE IF EXISTS rac_my_plain")
+      end
+
+      it "refuses a secret column named with a letter the server folds to a plain one" do
+        conn.execute("ALTER TABLE rac_my_accounts ADD COLUMN api_key varchar(20)")
+        conn.execute("UPDATE rac_my_accounts SET api_key = 'key-value'")
+        [ "SELECT ap\u0130_key AS x FROM rac_my_accounts", "SELECT api_\u212Aey AS x FROM rac_my_accounts" ].each do |sql|
+          # MariaDB folds neither letter, so there the statement names no column at all.
+          expect(conn.select_value(sql)).to eq("key-value") unless conn.mariadb?
+          expect(text(sql)).to start_with("Blocked: query references secret column `api_key`")
+        end
+      end
+
+      it "refuses a WHERE clause on SHOW and sends nothing, and runs SHOW with a LIKE" do
+        RailsAiContext.configuration.query_timeout = 1
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        refused([ "SHOW TABLES WHERE SLEEP(4) = 0", "SHOW COLUMNS FROM rac_my_accounts WHERE SLEEP(4) = 0", "SHOW STATUS WHERE SLEEP(4) = 0" ],
+                "Blocked: SHOW with a WHERE clause is not run")
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        expect(text("SHOW TABLES LIKE 'rac_my_acc%'")).to include("rac_my_accounts")
+        expect(text("SHOW COLUMNS FROM rac_my_accounts LIKE 'ema%'")).to include("email")
+      end
+
+      it "refuses other sessions' statements, replication state and the stored password hashes" do
+        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS" ], "Blocked: sensitive SHOW command")
+        refused([ "SELECT * FROM information_schema.processlist", "SELECT * FROM performance_schema.threads" ], "Blocked: `")
+        expect(text("SELECT authentication_string AS a FROM mysql.user LIMIT 1")).to start_with("Blocked: query references secret column")
       end
 
       it "runs a view that names no secret column, and shows a refused view's definition" do

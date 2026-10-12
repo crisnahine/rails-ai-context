@@ -5,9 +5,10 @@ module RailsAiContext
     # A PostgreSQL EXPLAIN (VERBOSE, FORMAT JSON) plan, read for the relations
     # and base columns its expressions name.
     class PostgresqlPlan
-      # A plain qualified Var. A quoted or spaced alias (a set operation's
-      # "*SELECT* 1") never matches, so only a real relation's column is read.
-      BASE_VAR = /\A"?([A-Za-z_]\w*)"?\.([A-Za-z_]\w*)\z/
+      # A plain qualified Var, either part bare or quoted. A set operation's "*SELECT* 1"
+      # is no relation's alias, so only a real relation's column is read.
+      NAME = /(?:([A-Za-z_]\w*)|"((?:""|[^"])+)")/
+      BASE_VAR = /\A#{NAME}\.#{NAME}\z/
 
       attr_reader :nodes, :aliases
 
@@ -31,8 +32,8 @@ module RailsAiContext
       # @return [Array(String, String), nil] [relation, column], downcased, for a plain Var of a base relation
       def base_column(expr)
         m = expr.to_s.strip.match(BASE_VAR) or return nil
-        rel = aliases[m[1].downcase]
-        rel ? [ rel, m[2].downcase ] : nil
+        rel = aliases[(m[1] || m[2].gsub('""', '"')).downcase]
+        rel ? [ rel, (m[3] || m[4].gsub('""', '"')).downcase ] : nil
       end
 
       private

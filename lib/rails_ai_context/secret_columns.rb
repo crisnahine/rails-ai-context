@@ -6,15 +6,8 @@ module RailsAiContext
   # The columns rails_query never returns and whose names a statement may not
   # mention, for one connection's schema. Built once per connection and run.
   class SecretColumns
-    # Matched whether or not the name is a real column, so the check holds with no
-    # connection. `config.query_allowed_columns` releases a name that only looks secret.
-    BUILT_IN_NAMES = %w[
-      password_digest password_hash encrypted_password
-      password_reset_token confirmation_token unlock_token
-      remember_token reset_password_token api_key api_secret
-      access_token refresh_token jti otp_secret session_data
-      secret_key secret private_key
-    ].freeze
+    # The schema of a database could not be read, so its secret columns cannot be told.
+    class Unreadable < RailsAiContext::Error; end
 
     DEFAULT_REDACTED_COLUMNS = %w[
       password_digest encrypted_password password_hash
@@ -23,10 +16,16 @@ module RailsAiContext
       api_key api_secret access_token refresh_token jti
     ].freeze
 
+    # Matched whether or not the name is a real column, so the check holds with no
+    # connection. `config.query_allowed_columns` releases a name that only looks secret.
+    BUILT_IN_NAMES = (DEFAULT_REDACTED_COLUMNS + %w[
+      password_reset_token remember_token secret private_key authentication_string
+    ]).freeze
+
     HEURISTIC_SUFFIXES = %w[password secret token key digest hash].freeze
 
-    # Rails' own bookkeeping tables. ar_internal_metadata.key ends in "key", and
-    # counting it refused every statement whose text held the word "key".
+    # Rails' own bookkeeping tables. ar_internal_metadata.key ends in "key": counted,
+    # it would refuse every statement whose text holds the word "key".
     BOOKKEEPING_TABLES = %w[ar_internal_metadata schema_migrations].freeze
 
     # A wildcard in a select list. `count(*)` reads no column, so it is left out.
@@ -36,9 +35,33 @@ module RailsAiContext
     def self.for(connection, context: nil)
       RunCache.fetch([ :secret_columns, database_key(connection) ]) do
         # The context's schema is the primary's, so no other database falls back to it.
-        relations = relations_from(connection) || (relations_from(context) if primary?(connection)) || {}
+        relations = relations_from(connection) || (relations_from(context) if primary?(connection))
+        unless relations
+          raise Unreadable, "The columns of the #{connection.pool.db_config.name} database could not be read, so its secret " \
+            "columns cannot be told and no query runs on it."
+        end
+
         new(relations: relations, encrypted: encrypted_from(context), **definitions_from(connection))
       end
+    end
+
+    # A name or a statement as the databases compare names: case folded. MySQL reads a dotted capital I
+    # as i, where Ruby's downcase keeps the dot as a combining mark.
+    def self.fold(text)
+      text.to_s.downcase.delete("\u0307")
+    end
+
+    # Matches the name as a whole identifier, whatever characters it holds and however it is quoted.
+    # The gate reads text with its runs of spaces squeezed, so the name's are squeezed too.
+    def self.identifier(name)
+      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``") ].uniq.map { |spelling| Regexp.escape(spelling.squeeze(" ")) }
+      /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
+    end
+
+    # A connection the server dropped is the caller's to answer, so it is no reason to fall back.
+    def self.lost_connection?(error)
+      error.is_a?(ActiveRecord::ConnectionNotEstablished) ||
+        (defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed))
     end
 
     def self.primary?(connection)
@@ -54,11 +77,13 @@ module RailsAiContext
       views = begin
         family.view_definitions(connection)
       rescue ActiveRecord::StatementInvalid => e
-        raise if DatabaseFamily.timed_out?(e)
+        raise if DatabaseFamily.timed_out?(e) || lost_connection?(e)
 
         # Named with no definition, so each one is refused as unreadable.
         connection.views.to_h { |view| [ view, nil ] }
       end
+      # SQLite stores a definition as written, comments included.
+      views = views&.transform_values { |definition| definition && SqlGate.comment_free(definition.to_s, family) }
       { views: views, generated: family.generated_columns(connection) }
     end
     private_class_method :definitions_from
@@ -90,7 +115,7 @@ module RailsAiContext
       end
     rescue StandardError => e
       # A read the timeout ended is the call's timeout, so it is no reason to fall back.
-      raise if e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e)
+      raise if lost_connection?(e) || (e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e))
 
       nil
     end
@@ -107,22 +132,23 @@ module RailsAiContext
     # relations: relation => its column names. generated: relation => { generated column => its expression }.
     # views: view => its definition, or nil where the family traces a result column to its table column.
     def initialize(relations: {}, encrypted: [], views: nil, generated: {}, config: RailsAiContext.configuration)
-      @redacted = (Array(config.query_redacted_columns) + BUILT_IN_NAMES).to_set { |c| c.to_s.downcase }
-      @allowed = Array(config.query_allowed_columns).to_set { |c| c.to_s.downcase }
-      @encrypted = Array(encrypted).to_set { |c| c.to_s.downcase }
+      fold = self.class.method(:fold)
+      @redacted = (Array(config.query_redacted_columns) + BUILT_IN_NAMES).to_set(&fold)
+      @allowed = Array(config.query_allowed_columns).to_set(&fold)
+      @encrypted = Array(encrypted).to_set(&fold)
       @generated = {}
       columns = Hash.new { |hash, relation| hash[relation] = [] }
-      relations.each { |relation, names| columns[relation.to_s.downcase].concat(Array(names).map { |c| c.to_s.downcase }) }
-      generated.each { |relation, expressions| columns[relation.to_s.downcase].concat(expressions.keys.map { |c| c.to_s.downcase }) }
+      relations.each { |relation, names| columns[fold.call(relation)].concat(Array(names).map(&fold)) }
+      generated.each { |relation, expressions| columns[fold.call(relation)].concat(expressions.keys.map(&fold)) }
 
-      index(columns)
+      flag_secret_columns(columns)
       # A generated column can read another one, so this repeats until it finds no more.
-      index(columns) while derive(generated)
-      @refused_views = views ? refuse(views) : {}
+      flag_secret_columns(columns) while trace_generated(generated)
+      @refused_views = views ? refused_views(views) : {}
     end
 
     def secret?(name)
-      down = name.to_s.downcase
+      down = self.class.fold(name)
       return false if down.empty?
       return true if encrypted?(down)
       return false if @allowed.include?(down)
@@ -132,26 +158,32 @@ module RailsAiContext
 
     # True for an `encrypts` column and for a generated column that reads one: neither is released by name.
     def encrypted?(name)
-      down = name.to_s.downcase
+      down = self.class.fold(name)
       @encrypted.include?(down) || (@generated.key?(down) && encrypted?(@generated[down]))
     end
 
     # @return [String, nil] the secret column a generated column's expression reads
     def generated_from(name)
-      @generated[name.to_s.downcase]
+      @generated[self.class.fold(name)]
     end
 
     # [view, why] for the first refused view the text names, or nil. A view's definition renames a
     # column outside the statement, where no check on the statement reads it.
     def refused_view_in(text)
-      down = text.to_s.downcase
+      down = self.class.fold(text)
       @refused_views.find { |view, _why| names?(down, view) }
+    end
+
+    # The first relation holding a secret column that the statement's text names, or nil.
+    def relation_named_in(text)
+      down = self.class.fold(text)
+      @by_relation.each_key.find { |relation| names?(down, relation) }
     end
 
     # The first secret name the statement's text names, or nil. Case-insensitive
     # and word-bounded, so a table or alias that merely holds a secret word passes.
     def named_in(text)
-      down = text.to_s.downcase
+      down = self.class.fold(text)
       @named.each { |name, pattern| return name if down.match?(pattern) }
       nil
     end
@@ -160,30 +192,30 @@ module RailsAiContext
     attr_reader :in_schema
 
     def of_relation(relation)
-      @by_relation.fetch(relation.to_s.downcase, [])
+      @by_relation.fetch(self.class.fold(relation), [])
     end
 
     def relation_secret?(relation)
-      @by_relation.key?(relation.to_s.downcase)
+      @by_relation.key?(self.class.fold(relation))
     end
 
     private
 
-    def index(columns)
+    def flag_secret_columns(columns)
       @by_relation = columns.each_with_object({}) do |(relation, names), acc|
         flagged = names.uniq.select { |c| secret?(c) }
         acc[relation] = flagged unless flagged.empty?
       end
       @in_schema = @by_relation.values.flatten.uniq.freeze
-      @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, /\b#{Regexp.escape(c)}\b/ ] }
+      @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, self.class.identifier(c) ] }
     end
 
     # Whether another generated column was found to read a secret column.
-    def derive(generated)
+    def trace_generated(generated)
       found = false
       generated.each_value do |expressions|
         expressions.each do |column, expression|
-          column = column.to_s.downcase
+          column = self.class.fold(column)
           next if @generated.key?(column)
 
           source = named_in(expression)
@@ -197,8 +229,8 @@ module RailsAiContext
     end
 
     # view name => why it is refused, followed through views built on refused views.
-    def refuse(views)
-      views = views.to_h { |view, definition| [ view.to_s.downcase, definition.to_s.downcase ] }
+    def refused_views(views)
+      views = views.to_h { |view, definition| [ self.class.fold(view), self.class.fold(definition) ] }
       refused = views.transform_values { |definition| refusal_of(definition) }.compact
       loop do
         nested = views.filter_map do |view, definition|
@@ -213,16 +245,16 @@ module RailsAiContext
 
     def refusal_of(definition)
       if definition.strip.empty?
-        "its definition could not be read, and this database holds sensitive columns" if @in_schema.any?
+        "its definition could not be read, and this database holds secret columns" if @in_schema.any?
       elsif (column = named_in(definition))
-        "its definition names the sensitive column `#{column}`"
+        "its definition names the secret column `#{column}`"
       elsif definition.match?(WILDCARD) && (relation = @by_relation.keys.find { |name| names?(definition, name) })
-        "its definition reads every column of `#{relation}`, which holds the sensitive column `#{@by_relation[relation].first}`"
+        "its definition reads every column of `#{relation}`, which holds the secret column `#{@by_relation[relation].first}`"
       end
     end
 
-    def names?(down, word)
-      down.match?(/\b#{Regexp.escape(word)}\b/)
+    def names?(down, name)
+      down.match?(self.class.identifier(name))
     end
 
     def heuristic?(down)

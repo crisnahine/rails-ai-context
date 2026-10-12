@@ -55,6 +55,83 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     expect(text).to include("[FILTERED]")
   end
 
+  def refused(statements, start)
+    statements.each do |sql|
+      response = run(sql)
+      expect(response.error?).to be(true), sql
+      expect(response.content.first[:text]).to start_with(start), sql
+      expect(response.content.first[:text]).not_to include("salt-value", "token-value"), sql
+    end
+  end
+
+  it "refuses a column-alias list in every spelling the server reads" do
+    body = "(SELECT * FROM rac_pg_accounts)"
+    refused([
+      "SELECT * FROM rac_pg_accounts AS t (a, b, c, d, e)", "SELECT * FROM rac_pg_accounts t (a, b, c, d, e)", "SELECT * FROM rac_pg_accounts t (a)",
+      %(SELECT * FROM "rac_pg_accounts" "T" ("A", "b", c, d, e)), "SELECT * FROM public.rac_pg_accounts t (a, b, c, d, e)",
+      "SELECT * FROM ONLY rac_pg_accounts t (a, b, c, d, e)", "SELECT * FROM rac_pg_accounts * t (a, b, c, d, e)",
+      "SELECT * FROM #{body} AS t (a, b, c, d, e)", "SELECT * FROM #{body} t (a, b, c, d, e)", "SELECT * FROM #{body}t(a,b,c,d,e)",
+      "SELECT * FROM (TABLE rac_pg_accounts) t (a, b, c, d, e)", "SELECT * FROM generate_series(1, 1) g, LATERAL #{body} t (a, b, c, d, e)",
+      "SELECT * FROM (rac_pg_accounts a CROSS JOIN generate_series(1, 1) g) AS j (a, b, c, d, e, f)",
+      "WITH t (a, b, c, d, e) AS #{body} SELECT * FROM t", %(WITH t ("a", "b", "c", "d", "e") AS #{body} SELECT * FROM t),
+      %(WITH t (U&"a", b, c, d, e) AS #{body} SELECT * FROM t), "WITH t (\u00e9, b, c, d, e) AS #{body} SELECT * FROM t",
+      "WITH t (a, b, c, d, e) AS MATERIALIZED #{body} SELECT * FROM t", "WITH t (a, b, c, d, e) AS NOT MATERIALIZED #{body} SELECT * FROM t",
+      "WITH t(a,b,c,d,e)AS(SELECT*FROM rac_pg_accounts)SELECT*FROM t", "WITH RECURSIVE t (a, b, c, d, e) AS #{body} SELECT * FROM t"
+    ], "Blocked: a column-alias list")
+  end
+
+  it "filters a secret column under a column-alias list the text check does not read" do
+    [ "SELECT * FROM generate_series(1, 1) g, rac_pg_accounts t (a, b, c, d, e)",
+      "SELECT * FROM (rac_pg_accounts a CROSS JOIN generate_series(1, 1) g) j (a, b, c, d, e, f)" ].each do |sql|
+      text = run(sql).content.first[:text]
+      expect(text).to include("a@example.com", "[FILTERED]"), sql
+      expect(text).not_to include("salt-value", "token-value"), sql
+    end
+  end
+
+  it "refuses a whole row and a compared row under a quoted alias" do
+    refused([ %(SELECT row_to_json("X y") FROM rac_pg_accounts "X y"), %(SELECT "T" FROM rac_pg_accounts AS "T"),
+              %(SELECT "X y"::text FROM rac_pg_accounts "X y"), %(SELECT id FROM rac_pg_accounts "X y" ORDER BY "X y") ],
+            "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+    refused([ %(SELECT (1, 'a@example.com', 'salt-valud', 'x', 'y') < (SELECT * FROM rac_pg_accounts AS "X y") AS o) ],
+            "Blocked: the query passes the secret column `salt` through")
+  end
+
+  it "filters a quoted mixed-case secret column in place, and refuses what would rename or compare it" do
+    conn.execute("DROP TABLE IF EXISTS rac_pg_mixed")
+    conn.execute(%(CREATE TABLE rac_pg_mixed (id int, email text, "Salt" text)))
+    conn.execute("INSERT INTO rac_pg_mixed VALUES (1, 'a@example.com', 'salt-value')")
+
+    [ "SELECT * FROM rac_pg_mixed", "SELECT m.* FROM rac_pg_mixed m", "SELECT * FROM (SELECT * FROM rac_pg_mixed OFFSET 0) x" ].each do |sql|
+      response = run(sql)
+      expect(response.error?).to be(false), sql
+      expect(response.content.first[:text]).to include("a@example.com", "[FILTERED]"), sql
+      expect(response.content.first[:text]).not_to include("salt-value"), sql
+    end
+    refused([ %(SELECT "Salt" AS x FROM rac_pg_mixed), "SELECT (1, 'a@example.com', 'salt-valud') < (SELECT * FROM rac_pg_mixed) AS o",
+              "SELECT row_to_json(m) FROM rac_pg_mixed m", "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_mixed) SELECT * FROM c" ], "Blocked: ")
+  ensure
+    conn.execute("DROP TABLE IF EXISTS rac_pg_mixed")
+  end
+
+  it "filters both columns of a name a join returns twice, at the top and through a subquery" do
+    [ "SELECT * FROM rac_pg_accounts a JOIN rac_pg_accounts b ON true",
+      "SELECT * FROM (SELECT * FROM rac_pg_accounts a JOIN rac_pg_accounts b ON true) x" ].each do |sql|
+      text = run(sql).content.first[:text]
+      expect(text).to include("a@example.com"), sql
+      expect(text).not_to include("salt-value", "token-value"), sql
+    end
+  end
+
+  it "refuses a function that returns a whole table, and the statistics and other sessions' statements, however named" do
+    conn.execute("ANALYZE rac_pg_accounts")
+    refused([ "SELECT table_to_xml('rac_pg_accounts', true, false, '')", "SELECT query_to_xml('select * from rac_pg_accounts', true, false, '')" ],
+            "Blocked: function ")
+    refused([ "SELECT * FROM pg_stats WHERE tablename = 'rac_pg_accounts'", "SELECT stavalues1 FROM pg_statistic",
+              %(SELECT * FROM U&"pg\\005Fstats" WHERE tablename = 'rac_pg_accounts'), "SELECT query FROM pg_stat_activity",
+              %(SELECT query FROM U&"pg\\005Fstat\\005Factivity") ], "Blocked: `")
+  end
+
   it "reads the schema once for the whole call" do
     runtime = RailsAiContext::DatabaseFamily::PostgresqlRuntime
     allow(runtime).to receive(:relation_columns).and_call_original

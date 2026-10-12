@@ -1283,7 +1283,7 @@ RSpec.describe RailsAiContext::Redaction do
     # A filtered value's offset was counted from the line's start, once per match.
     # The bound is what a backtracking pattern could never meet, with room for a
     # slow CI runner (a macOS one took 2.1 seconds where Linux takes under one).
-    it "reads a 1 MB run of dashed words or header keys in seconds, not minutes, in a log and in source", :cpu_timed do
+    it "reads a 1 MB run of dashed words or header keys in seconds, in a log and in source", :cpu_timed do
       [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x"),
         %("Authorization"=>"x", ) * 50_000, "#{'a_' * 250_000}#{'a1' * 250_000}password=x",
         "--password 1a " * 75_000, "#{'aToken' * 170_000}x", %("api_token": { "value": "x" }, ) * 30_000,

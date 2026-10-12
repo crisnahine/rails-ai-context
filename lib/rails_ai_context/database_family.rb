@@ -34,6 +34,40 @@ module RailsAiContext
         sqlite? ? "integer" : "bigint"
       end
 
+      # A statement is checked against its plan before it runs, and a result column is traced to its table column.
+      def plan_checks?
+        postgresql?
+      end
+
+      # The read-only transaction refuses FOR UPDATE and FOR SHARE itself.
+      def refuses_locking_reads?
+        postgresql?
+      end
+
+      # Every string literal in a statement can be told from its identifiers.
+      def masks_literals?
+        postgresql?
+      end
+
+      def dollar_quoting?
+        postgresql?
+      end
+
+      # `/*! ... */` holds text the database runs.
+      def executable_comments?
+        mysql?
+      end
+
+      # A backslash escapes the next character in every string.
+      def backslash_escapes?
+        mysql?
+      end
+
+      # @return [Regexp] a comment that runs to the end of its line: `#` too, and `--` only before a space, on MySQL
+      def line_comment
+        mysql? ? /--(?=\s|\z)[^\n]*|#[^\n]*/ : /--[^\n]*/
+      end
+
       # @return [Rows] run in a read-only transaction, bounded by timeout seconds
       # @raise [TimedOut, Unsupported]
       def read_only(connection, sql, timeout:)

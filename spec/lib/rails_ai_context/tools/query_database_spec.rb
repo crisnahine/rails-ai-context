@@ -106,6 +106,42 @@ RSpec.describe "the database argument" do
         .to include('The users table is on the primary database: run the query again with database: "primary".')
     end
 
+    it "names the database that holds a table an EXPLAIN did not find" do
+      allow(RailsAiContext::Tools::Query).to receive(:cached_context)
+        .and_return(schema: { tables: { "users" => {} }, secondary_databases: { "queue" => { tables: { "jobs" => {} } } } })
+
+      response = query(sql: "SELECT name FROM jobs", explain: true)
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to start_with("EXPLAIN failed:")
+        .and include("no such table: jobs", 'The jobs table is on the queue database: run the query again with database: "queue".')
+    end
+
+    it "refuses a named database whose adapter has no family, before any connection to it is opened" do
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                       "legacy" => { adapter: "sqlserver", database: "legacy", host: "127.0.0.1" } }
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+      opened = false
+      allow_any_instance_of(ActiveRecord::ConnectionAdapters::ConnectionHandler).to receive(:establish_connection) { opened = true and raise("opened") }
+
+      response = query(sql: "SELECT 1", database: "legacy")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to start_with("rails_query refuses the sqlserver adapter").and end_with("No statement was sent.")
+      expect(opened).to be(false)
+    end
+
+    it "refuses every statement on a named database whose columns cannot be read, by its name" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "catalogue unreadable")
+
+      response = RailsAiContext::RunCache.around { query(sql: "SELECT name FROM jobs", database: "queue") }
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to eq("The columns of the queue database could not be read, so its secret columns cannot be told and no query runs on it.")
+    end
+
     it "answers a named database no connection reaches as an error that names it" do
       allow_any_instance_of(ActiveRecord::ConnectionAdapters::SQLite3Adapter).to receive(:verify!)
         .and_raise(ActiveRecord::ConnectionNotEstablished, "connection refused")
