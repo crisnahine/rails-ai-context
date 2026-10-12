@@ -226,7 +226,7 @@ module RailsAiContext
         end
 
         def no_migrations_line(db)
-          reason = db.replica ? "it is a replica" : "its database.yml entry sets `database_tasks: false`"
+          reason = db.replica ? "it is a replica" : "its database.yml entry turns `database_tasks` off"
           [ "", "_Rails runs no migrations on #{db.name}: #{reason}._" ]
         end
 

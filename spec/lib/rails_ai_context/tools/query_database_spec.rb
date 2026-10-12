@@ -217,7 +217,7 @@ RSpec.describe "the database argument" do
 
       answer = text(runtime(section: "database"))
 
-      expect(answer).to include("_Rails runs no migrations on primary: its database.yml entry sets `database_tasks: false`._")
+      expect(answer).to include("_Rails runs no migrations on primary: its database.yml entry turns `database_tasks` off._")
       expect(answer).not_to include("up to date", "Pending")
     end
 
@@ -283,7 +283,7 @@ RSpec.describe "the database argument" do
 
       answer = text(runtime(section: "database", database: "legacy"))
 
-      expect(answer).to include("## Database: legacy", "_Rails runs no migrations on legacy: its database.yml entry sets `database_tasks: false`._")
+      expect(answer).to include("## Database: legacy", "_Rails runs no migrations on legacy: its database.yml entry turns `database_tasks` off._")
       expect(answer).not_to include("CreateJobs", "Pending migrations", "up to date")
     end
 
