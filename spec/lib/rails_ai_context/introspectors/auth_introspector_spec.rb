@@ -320,6 +320,13 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
         expect(policies.uniq.size).to eq(policies.size)
       end
 
+      it "leaves out a file that declares only a module" do
+        File.write(File.join(policies_dir, "authorizer.rb"), "module Authorizer\n  def self.for(user) = user\nend\n")
+
+        expect(result[:authorization][:policies]).not_to include("Authorizer")
+        expect(result[:authorization][:policies]).to include("CollectionPolicy")
+      end
+
       it "handles a namespace nested more than one level deep" do
         FileUtils.mkdir_p(File.join(policies_dir, "admin", "reports"))
         File.write(File.join(policies_dir, "admin", "reports", "note_policy.rb"), "class Admin::Reports::NotePolicy; end")

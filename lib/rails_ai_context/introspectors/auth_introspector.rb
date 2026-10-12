@@ -170,14 +170,9 @@ module RailsAiContext
 
         policies_dir = File.join(root, "app/policies")
         if Dir.exist?(policies_dir)
-          # Named from the path relative to app/policies, not the basename:
-          # Zeitwerk makes admin/collection_policy.rb `Admin::CollectionPolicy`,
-          # and demodulizing it collided with the top-level policy of the same
-          # base name, so one name was listed twice and the other class could
-          # not be reached from the context at all.
-          policies = FileWalk.glob(policies_dir, "**/*.rb", root: root).map do |f|
-            f.sub("#{policies_dir}/", "").delete_suffix(".rb").camelize
-          end.sort
+          # Each class by its full name, so admin/collection_policy.rb stays apart from
+          # collection_policy.rb; a file that declares only a module is a mixin, not a policy.
+          policies = SourceScan.classes(root, kind: "app/policies").map(&:first).sort
           key = if gem_present?("pundit") then :pundit
           elsif gem_present?("action_policy") then :action_policy
           else :policies
