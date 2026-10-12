@@ -70,11 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*_params` now counts when it calls `permit`, `permit!` or `expect` on
   params (directly, through a local, on each item a block walks, or on
   `ActionController::Parameters.new`), or when what it returns comes from
-  `super`, another strong params method (one this file defines, or a
-  parent's, a concern's or Pundit's `*_params` and `permitted_*`), or a
-  class given params (`permitted_attributes(@post)`, `super.merge(...)`,
-  `PermittedAttributes::Enterprise.new(params).call`); a `before_action`
-  that writes into another one's params is not one. A method of any other
+  `super` (`super.merge(...)`), another strong params method (one this file
+  defines, or a parent's, a concern's or Pundit's `*_params` or
+  `permitted_*`, such as `permitted_attributes(@post)`), or a call given the
+  whole params (`PermittedAttributes::Enterprise.new(params).call`); a
+  `before_action` that writes into another one's params is not one. A method of any other
   name counts only when it returns the permitted params themselves, through
   a local, an `if`, a `case` or an explicit `return`, so a helper that
   permits to build a URL, or to read one value, is left out. An action that

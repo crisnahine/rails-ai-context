@@ -151,8 +151,8 @@ module RailsAiContext
         Outcome.new(tier: :booted, reason: nil, messages: messages)
       end
 
-      # Splices the stripped load paths back, minus what a completed Bundler.setup pinned (a default
-      # gem included, whose path is never on $LOAD_PATH); one a raised setup marked loaded is spliced too.
+      # Splices the stripped load paths back, minus what a completed Bundler.setup pinned, default gems included.
+      # A setup that raised part way marked gems loaded without their paths, so those are spliced too.
       def self.require_gem_without_app!
         preboot_gem_specs.each do |name, spec|
           loaded = Gem.loaded_specs[name]
