@@ -161,12 +161,15 @@ jobs:
     env:
       BUNDLE_GEMFILE: gemfiles/database_servers.gemfile
       RAILS_VERSION: ${{ matrix.rails || '8.0' }}
+      # MariaDB's client library signs in to MySQL and to MariaDB. The MySQL client from 9.0 on
+      # cannot sign in to MariaDB, so mysql2 is not built against whichever client the image ships.
+      BUNDLE_BUILD__MYSQL2: --with-mysql-config=/usr/bin/mariadb_config
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install the MySQL client library mysql2 builds against
-        run: sudo apt-get update && sudo apt-get install -y libmysqlclient-dev
+      - name: Install the client library mysql2 builds against
+        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
