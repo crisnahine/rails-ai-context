@@ -74,6 +74,26 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(answer(controller: "PostsController")).not_to include("not found.")
     end
 
+    it "is answered as an action that was not found, with the actions the controller has" do
+      with_tool = answer(controller: "PostsController", action: "nope")
+      RailsAiContext.configuration.skip_tools = %w[rails_get_controllers]
+      expect(RailsAiContext::Tools::GetControllers).not_to receive(:call)
+
+      expect(with_tool).to start_with("Action 'nope' not found in PostsController. Available: create, destroy, edit, index")
+      expect(answer(controller: "PostsController", action: "nope")).to start_with(with_tool.lines.first.chomp)
+      expect(answer(controller: "posts", action: "nope")).to start_with(with_tool.lines.first.chomp)
+      expect(answer(controller: "PostsController", action: "INDEX")).not_to include("not found")
+    end
+
+    it "names the models a feature keyword matched when the tools that describe them are off" do
+      RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature rails_get_schema]
+
+      text = answer(feature: "comment")
+
+      expect(text).to start_with("The model names that hold 'comment': Comment")
+      expect(text).not_to include("No model or controller name holds this keyword")
+    end
+
     it "is answered as a feature that matched nothing, with model names to try" do
       RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature]
       expect(RailsAiContext::Tools::AnalyzeFeature).not_to receive(:call)
