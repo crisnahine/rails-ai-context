@@ -210,7 +210,19 @@ Ten tools that each answered one section of the app's configuration leave
 - **No answer points at a tool the app turned off.** Every pointer to
   another tool, in `_Next:` hints, fix steps, recovery lines and lists,
   goes through one helper, and a tool `skip_tools` names is left out with
-  its hint.
+  its hint. A custom tool in a built-in's place is left out the same way,
+  since a hint carries the built-in's arguments.
+- **The CLI refuses a value a parameter does not take.**
+  `rails-ai-context tool schema --format xml` warned on stderr and answered
+  in the default format with exit 0. It now exits 1 and names the values the
+  parameter takes, as a required parameter already did. A `--detail` level
+  a tool does not have still falls back to the default with a warning, since
+  every level answers the same question.
+- **A model class in `app/models/concerns` is listed.** A class with a model
+  superclass in a file directly under `app/models/concerns/` was missing
+  from the static tier's models, and from the booted listing until
+  something loaded it. It is now listed under its bare constant, the mixins
+  beside it stay out, and `rails_validate` gives its file the model checks.
 - **`rails_get_context(include:)`** lists all twelve keys it takes and
   names a key it does not take.
 - **A SQLite database whose file is not there is refused by name.**

@@ -55,7 +55,7 @@ module RailsAiContext
       ].freeze
 
       def self.section_named(name)
-        SECTIONS.find { |section| section.name == name.to_s }
+        SECTIONS.find { |section| section.name == name.to_s.downcase }
       end
 
       # The section a retired tool name stands for, or nil.
@@ -82,10 +82,11 @@ module RailsAiContext
 
       # The schema over the given sections: a parameter none of them reads is
       # left out, and `section` is required once app, its default, is not among them.
-      def self.schema_for(sections)
+      def self.schema_for(sections, any_section: false)
         default = sections.any?(&:app?)
         about = default ? "Default: app." : "Required: the app section is turned off in this app."
         properties = { section: { type: "string", enum: sections.map(&:name), description: "Which section to answer. #{about}" } }
+        properties[:section].delete(:enum) if any_section
         PARAM_SCHEMAS.each do |param, (schema, text)|
           readers = sections.select { |section| section.params.include?(param) }
           next if readers.empty?
@@ -101,9 +102,9 @@ module RailsAiContext
         "Get the app's configuration, one section per call. section#{' (required)' if sections.none?(&:app?)}: #{listed.join(', ')}."
       end
 
-      # The full schema validates a call, so one naming an off section still
-      # reaches the turned-off answer; tools/list publishes only the sections that are on.
-      input_schema(schema_for(SECTIONS))
+      # The schema that validates a call takes any section and every parameter, so `call` gives
+      # the one refusal for a section that is off or unknown; tools/list publishes the sections that are on.
+      input_schema(schema_for(SECTIONS, any_section: true))
       description(description_for(SECTIONS))
 
       def self.input_schema(*args)
@@ -142,10 +143,9 @@ module RailsAiContext
 
       def self.call(section: nil, detail: nil, category: nil, offset: nil, limit: nil, environment: nil, locale: nil, server_context: nil)
         asked = section_named(section.nil? ? "app" : section)
-        unless asked
-          return error_response("`section` does not take '#{echo_input(section)}'. It takes: #{SECTIONS.map(&:name).join(', ')}.")
-        end
-        return error_response(section.nil? ? section_required_message : asked.off_message) unless asked.on?
+        on = sections_on.map(&:name).join(", ")
+        return error_response("`section` does not take '#{echo_input(section)}'. It takes: #{on}.") unless asked
+        return error_response(section.nil? ? section_required_message : "#{asked.off_message} The sections that are on: #{on}.") unless asked.on?
 
         given = { detail: detail, category: category, offset: offset, limit: limit, environment: environment, locale: locale }.compact
         response = asked.app? ? app_section : render(asked, given)
@@ -153,9 +153,15 @@ module RailsAiContext
       end
 
       # A retired name's answer: its section's, ending with the call to make
-      # instead, which carries the arguments the section reads.
+      # instead, which carries the arguments the section reads. A refusal ends as it is.
       def self.with_retired_note(response, section, arguments)
-        append_note(response, retired_note(section, arguments))
+        response.error? ? response : append_note(response, retired_note(section, arguments))
+      end
+
+      # The refusal of a parameter no section reads in a retired name's call, naming its own section's; or nil.
+      def self.retired_refusal(section, arguments)
+        unknown = unknown_param_names(arguments.keys, input_schema.to_h[:properties])
+        unknown_param_response(unknown, section.params.map(&:to_s)) if unknown.any?
       end
 
       def self.retired_note(section, arguments)

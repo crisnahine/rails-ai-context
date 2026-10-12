@@ -115,11 +115,14 @@ tool looked for and did not find, a search with no matches, a directory the
 booted app and is run with `--no-boot` (`query`, `runtime_info`) prints
 `[UNAVAILABLE]` with the reason and also exits 0.
 
-A value the schema cannot hold - `--detail bogus` where the parameter takes
-`summary`, `standard` or `full`, or `--limit abc` where it takes an integer -
-is warned about on stderr and the tool's own default is used. A required
-parameter has no default, so a value outside its list (`--action bogus` on
-`migration_advisor`) exits 1.
+A value outside a parameter's list (`--format xml` on `schema`,
+`--action bogus` on `migration_advisor`) exits 1 and names the values the
+parameter takes. The tool is not run, since any other value would answer a
+question you did not ask. `config --section bogus` exits 1 the same way, and
+its answer names the sections that are on in this app. Two values fall back
+to the tool's own default with a warning on stderr: a `--detail` level the
+tool does not have, since every level answers the same question, and
+`--limit abc` where the parameter takes an integer.
 
 ### The static tier and `--no-boot`
 

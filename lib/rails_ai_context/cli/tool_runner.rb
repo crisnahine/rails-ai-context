@@ -31,7 +31,7 @@ module RailsAiContext
         @environment = environment
         @error = false
         @missing_required = false
-        @invalid_required = []
+        @refused = []
         @out_of_type = {}
         # How each param was typed, so a suggestion uses the same form.
         @flag_spellings = {}
@@ -47,7 +47,7 @@ module RailsAiContext
             kwargs = build_kwargs
             schema = tool_schema
             validate_kwargs!(kwargs, schema)
-            next extract_output(invalid_required_response) if @invalid_required.any?
+            next extract_output(refusal_response) if @refused.any?
 
             response = tool_class.call(**kwargs)
             response = Tools::GetConfig.with_retired_note(response, @retired, kwargs) if @retired
@@ -359,8 +359,15 @@ module RailsAiContext
       end
 
       def valid_params_line
-        keys = (tool_schema[:properties] || {}).keys.map(&:to_s)
+        keys = offered_params
         keys.any? ? "Valid params: #{keys.join(', ')}" : "This tool takes no params."
+      end
+
+      # The parameters to name to the caller: the ones tools/list shows, or a retired name's own section's.
+      def offered_params
+        return @retired.params.map(&:to_s) if @retired
+
+        (tool_class.input_schema_value&.to_h || {}).fetch(:properties, {}).keys.map(&:to_s)
       end
 
       def stray_argument_message(arg)
@@ -418,12 +425,12 @@ module RailsAiContext
       # Validate kwargs against the tool's input_schema.
       # For missing required params: strip empty values so the tool's own guards
       # can return a friendly response (matching MCP behavior).
-      # For invalid enums: strip the bad value and let the tool use its default.
+      # For a value outside an enum: refuse the call, except `detail`, which falls back with a warning.
       # For unknown params: raise InvalidArgumentError with closest-match suggestion.
       def validate_kwargs!(kwargs, schema)
         properties = schema[:properties] || {}
         required = (schema[:required] || []).map(&:to_s)
-        known_keys = properties.keys.map(&:to_s)
+        known_keys = offered_params
 
         # Check for unknown params and raise a helpful error with suggestions.
         # server_context is always allowed (internal MCP param).
@@ -460,9 +467,8 @@ module RailsAiContext
         end
 
         # Check enum constraints - downcase before comparing for case-insensitive match.
-        # If invalid, strip the param so the tool uses its default behavior; a
-        # required one has no default, so the call answers with the error itself
-        # rather than letting the tool report the value as missing.
+        # A value outside the list would answer another question than the one asked, so the
+        # call is refused. Every `detail` level answers the same question, so that one falls back.
         kwargs.each do |key, value|
           prop = properties[key]
           next unless prop&.dig(:enum)
@@ -476,20 +482,19 @@ module RailsAiContext
             kwargs[key] = matched
           else
             valid = prop[:enum].join(", ")
-            if required.include?(key.to_s)
-              @invalid_required << "**Error:** `#{value}` is not a valid `#{key}`. Valid: #{valid}"
-              @missing_required = true
-            else
+            if key == :detail
               $stderr.puts "Warning: '#{value}' is not a valid value for #{key}. Valid: #{valid}. Using default."
               kwargs.delete(key)
+            else
+              @refused << "**Error:** `#{value}` is not a valid `#{key}`. Valid: #{valid}"
             end
           end
         end
       end
 
       # Through the tool's own wrapper when it has one, so the static-tier banner rides along.
-      def invalid_required_response
-        text = @invalid_required.join("\n")
+      def refusal_response
+        text = @refused.join("\n")
         return tool_class.text_response(text) if tool_class <= Tools::BaseTool
 
         MCP::Tool::Response.new([ { type: "text", text: text } ])
@@ -507,7 +512,7 @@ module RailsAiContext
       # reported failure (isError), so callers can set a non-zero exit code.
       def extract_output(response)
         text = response.content.first&.dig(:text) || ""
-        @error = @missing_required || (response.respond_to?(:error?) && response.error?)
+        @error = @missing_required || @refused.any? || (response.respond_to?(:error?) && response.error?)
         if json_mode
           require "json"
           JSON.pretty_generate(tool: tool_class.tool_name, output: text, error: @error)

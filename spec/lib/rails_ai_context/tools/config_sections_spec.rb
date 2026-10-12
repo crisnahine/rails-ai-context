@@ -162,6 +162,56 @@ RSpec.describe "rails_get_config sections" do
     end
   end
 
+  describe "a refusal" do
+    let(:config) { RailsAiContext.configuration }
+
+    def call(name, arguments = {})
+      RailsAiContext::Server.new(Rails.application).build.handle(
+        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
+      )[:result]
+    end
+
+    def refusal(name, arguments = {})
+      result = call(name, arguments)
+      expect(result[:isError]).to be(true)
+      result[:content].first[:text]
+    end
+
+    it "names only the sections that are on, for an unknown section and for one turned off" do
+      config.skip_tools = %w[rails_get_env rails_get_gems]
+      on = "app, frontend, api, engines, conventions, autoload, active_support, env_config, i18n"
+
+      expect(refusal("rails_get_config", { section: "routes" })).to eq("`section` does not take 'routes'. It takes: #{on}.")
+      expect(refusal("rails_get_config", { section: "env" }))
+        .to start_with("The `env` section of rails_get_config is turned off").and end_with("The sections that are on: #{on}.")
+    end
+
+    it "lists the published parameters for an unknown one" do
+      config.skip_tools = %w[rails_get_gems rails_get_i18n rails_get_env_config]
+
+      expect(refusal("rails_get_config", { bogus: 1 })).to eq("Unknown param: 'bogus'\nValid params: section, detail")
+    end
+
+    it "lists a retired name's own parameters, with no call to make instead" do
+      expect(refusal("rails_get_gems", { categry: "auth" }))
+        .to eq("Unknown param: 'categry' - did you mean 'category'?\nValid params: category, offset, limit")
+      expect(refusal("rails_get_engines", { bogus: 1 })).to eq("Unknown param: 'bogus'\nThis tool takes no params.")
+
+      expect { RailsAiContext::CLI::ToolRunner.new("gems", [ "--categry", "auth" ]).run }.to raise_error(
+        RailsAiContext::CLI::ToolRunner::InvalidArgumentError,
+        "Unknown param:\n  '--categry' - did you mean '--category'?\nValid params: category, offset, limit"
+      )
+    end
+
+    it "names rails_get_config and the section when the section's renderer fails" do
+      allow(RailsAiContext::Tools::GetEngines).to receive(:cached_context).and_raise(RuntimeError, "boom")
+
+      expect(refusal("rails_get_config", { section: "engines" })).to start_with("Tool rails_get_config (section engines) failed: RuntimeError: boom")
+      expect(refusal("rails_get_engines")).to start_with("Tool rails_get_config (section engines) failed:")
+      expect(refusal("rails_get_engines")).not_to include("call that instead")
+    end
+  end
+
   describe "the pointer helper" do
     it "renders a retired name as its section call, and nothing when the section is off" do
       expect(RailsAiContext::Tools::BaseTool.pointer("rails_get_env_config", 'environment:"..."', "shows options."))
