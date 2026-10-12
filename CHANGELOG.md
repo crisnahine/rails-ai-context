@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A tracked log's diff hides its credentials.** `rails_review_changes`
+  read a `.log` file's diff as source, which filters a Bearer or Basic value
+  only at 16 characters, so a short one showed in clear. A log file shown as
+  a file, logrotate's dated and `.old` ones included, now gets what
+  `rails_read_logs` filters.
+
 ### Added
 
 - **A static model answer names the plugin patch modules it did not
@@ -18,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the app's, its code roots' or its in-repo gems' `lib` is now named in one
   `[UNAVAILABLE]` line, the way `rails_get_controllers` names an included
   module it did not read.
+- **`rails_get_model_details` names each `has_attached_file` attachment
+  under Macros.**
+- **The controller listing marks `permit!` and names a parent's strong
+  params.** The listing marks `permit!` as the per-action view did, and
+  strong params a parent controller in the app defines are listed with the
+  parent named.
 
 ### Changed
 
@@ -28,29 +42,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pulls it in) and `jwt` for an app that only has it through oauth2 and
   googleauth. A notable gem now counts when the Gemfile names it, when a
   gemspec or path gem the Gemfile pulls in depends on it, when it is a Rails
-  engine another gem brings in, or, for a framework `rails` pulls in, when
+  engine or OmniAuth that another gem brings in (gds-sso mounts OmniAuth in
+  the app), or, for a framework `rails` pulls in, when
   config/application.rb loads it (`rails/all`, its railtie, or a
-  `config.<framework>` line).
+  `config.<framework>` line). Rails 6's `sprockets-rails` is one of those
+  frameworks.
 - **Static routes leave out a block from a routing method they cannot read,
   and say so.** A route drawn inside a method the app defines (a helper
   that wraps `scope(path: "api/v1", module: "api/v1")`, versionist's
   `api_version`) was drawn at the top level, so `rails_get_routes` gave a
   two-route controller seven routes it does not have and gave the namespaced
   controller none. Such a block is now counted among the constructs not
-  expanded, and a controller with no route says one may come from them.
-  Rails' and Devise's blocks that draw in place (`constraints`, `defaults`,
-  `devise_scope`, `authenticate`, route_translator's `localized`, ...) are
-  drawn as before, and Rails' `nested` block is drawn under its parent's
-  path.
+  expanded, and a controller with no route says one may be missing behind
+  them. Rails' and Devise's blocks that draw in place (`constraints`,
+  `defaults`, `devise_scope`, `authenticate`, route_translator's
+  `localized`, ...) are drawn as before, and Rails' `nested` block is drawn
+  under its parent's path.
+- **Strong params are the methods that permit on params.** Any `def
+  *_params` was listed, so a method that builds associations counted while
+  `article_params_json`, which calls `permit`, did not. A strong-params
+  method now calls `permit`, `permit!` or `expect` on params, on a local
+  that holds them, or on `ActionController::Parameters.new`, whatever its
+  name. An action that permits inline is left out, a public `*_params`
+  helper is kept, and `permit!` on a `slice` lists the keys it slices.
 
 ### Fixed
 
 - **A primary key's function default shows.** `id: :uuid, default: -> {
   "gen_random_uuid()" }` on a `create_table` line gave the `id` row an empty
   Default in `rails_get_schema` and `rails_get_model_details`, booted and
-  static, which reads as "no default". The booted tier now reads the
-  column's `default_function`, and schema.rb, structure.sql and the
-  migration replay give the key the default its line declares.
+  static, which reads as "no default". The booted tier now reads a column's
+  `default_function`, leaving out only a serial column's own sequence as
+  the dump does, and schema.rb, structure.sql and the migration replay give
+  the key the default its line declares.
 - **Two bare `validates_with` lines are both listed.** The second one was
   dropped because the two shared a dedup key with no validator class in it.
 - **A `validates_with` class a concern nests is listed once.** The source
@@ -59,60 +83,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation count was one too high.
 - **A model whose table the database lacks is not marked verified.**
   `rails_get_model_details` printed `[VERIFIED]` and `**Table:** \`tags\``
-  for a model with no `tags` table, and `onboard` named the table too. Both
-  now say the table is not found, as `rails_get_schema` does.
+  for a model with no `tags` table, and `onboard` and the context files
+  named the table too. Each now says `` `tags` not found `` where a live
+  listing lacks the table. A database read from its dump, a secondary one
+  included, is not taken at its word, since a dump can leave out a view.
 - **Callbacks on a chain a library defines are listed.** Paperclip's
   `before_file_validate` and `after_post_process` were missing from
   `rails_get_model_details` and `rails_get_callbacks`, booted too, because
   only Active Record's own callback names were read. A call on a chain the
   booted model really has, or one `define_model_callbacks` in the same file
-  declares, is now listed, and `rails_get_model_details` names each
-  `has_attached_file` attachment under Macros.
+  declares, is now listed.
 - **A macro inside `translation_class.class_eval` is not the model's own.**
   It is listed under "Declared on another class", as one in a concern's
-  `translation_class.instance_eval` already was.
+  `translation_class.instance_eval` already was, and two declared on one
+  line are both listed.
 - **The static tier keeps a model whose parent comes from a gem.**
   `class Tag < ActsAsTaggableOn::Tag` was "Model 'Tag' not found". A class
-  in app/models on a parent the app does not define is now a model when it
-  declares associations or scopes, and its table comes from the parent, as
-  Rails' single table inheritance decides: the one of the parent's names the
-  schema holds (`ahoy_messages` for `EmailMessage < Ahoy::Message`), or a
-  line saying the parent sets it.
-- **Strong params are the methods that permit on params.** Any `def
-  *_params` was listed, so a method that builds associations counted while
-  `article_params_json`, which calls `permit`, did not. A strong-params
-  method now calls `permit`, `permit!` or `expect` on params, whatever its
-  name, outside the controller's own actions; the listing marks `permit!` as
-  the per-action view did; and strong params a parent controller in the app
-  defines are listed with the parent named.
+  in app/models on a parent the app does not define is now a model when the
+  schema holds a table it would read, one of the parent's names
+  (`ahoy_messages` for `EmailMessage < Ahoy::Message`) or its own, and,
+  with no schema to ask, when it declares associations or scopes. An
+  ActiveHash class that declares `has_many` stays out. The table comes from
+  the parent as Rails' single table inheritance decides, or a line says the
+  parent sets it.
 - **A filtered routes answer names the other paths an engine is mounted
   at.** An engine mounted three times showed only its first mount and that
   mount's helpers.
 - **Migration replay applies `change_column`'s options.** `null:`,
   `default:`, `limit:`, `precision:` and `scale:` given to `change_column`
-  were dropped, so a column relaxed to `null: true` stayed NOT NULL, and the
-  replay now records the sizes a migration declares on every column. A
-  type-only `change_column` keeps null and default on PostgreSQL and MySQL
-  and resets them on SQLite, as each adapter does.
+  were dropped, so a column relaxed to `null: true` stayed NOT NULL. The
+  replay now records the sizes a migration declares as the dump writes
+  them: an integer limit picks smallint or bigint on PostgreSQL and MySQL,
+  and a size the dump leaves out stays out. A type-only `change_column`
+  keeps null and default on PostgreSQL and MySQL and resets them on SQLite,
+  as each adapter does.
 - **Migration replay keeps a partial index's condition.** A Symbol
   `where: :schedule_manually` and the `where:` of a `t.references ...,
   index: { where: ... }` were dropped, so a partial index read as a full one.
+  An index's `using:`, `order:`, `opclass:` and the rest are kept too.
 - **A gem installed under the app root is not the app's code.** With the
   bundle in vendor/bundle, `onboard` listed a gem's ActiveJob class
   (`Chewy::Strategy::ActiveJob::Worker`) as the app's background job.
-- **The engine eager loads in an app with an `AI` acronym.** With
+- **The engine works in an app with an `AI` or `MCP` acronym.** With
   `inflect.acronym "AI"`, Zeitwerk expected
   `RailsAIContext::McpController` from the gem's controller, so
   `bin/rails zeitwerk:check` and any eager load failed once the gem was in
-  the Gemfile.
+  the Gemfile, and the mounted endpoint answered 404. The controller is now
+  kept out of the app's loader and routed as a class.
 - **`rails ai:context` runs in an app with its own top-level
   `print_result`.** The gem's rake helpers were top-level methods guarded by
   `unless defined?`, so an app's `print_result` in lib/tasks ran instead and
   the task aborted. They now live in a module.
 - **A byte-size label does not depend on the app's I18n.**
   `rails_read_logs` threw its whole answer away when an app's I18n backend
-  raised after a failed boot (Discourse's queries the database), and
-  `rails_runtime_info` and `rails_get_test_info` could do the same.
+  raised after a failed boot (Discourse's backend queries the database),
+  and `rails_runtime_info` and `rails_get_test_info` could do the same.
 - **The static fallback loads after a Bundler.setup that failed part way.**
   An app that activates a gem before `bundler/setup` (Consul's
   `require "sassc-embedded"`) at a version its lock does not pin made
@@ -120,10 +145,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the load paths, so the standalone CLI and `serve` died with `cannot load
   such file -- active_support/core_ext/string/inflections` instead of
   serving static answers.
-- **A tracked log's diff hides its credentials.** `rails_review_changes`
-  read a `.log` file's diff as source, which filters a Bearer or Basic value
-  only at 16 characters, so a short one showed in clear. A log file shown as
-  a file now gets what `rails_read_logs` filters.
 - **The controller count is the app's own, the same from rake and from the
   generator.** A gem's controller was listed whenever something had loaded
   it, which flipflop's dashboard does in a generator boot and not in a rake
@@ -131,10 +152,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "(97)" and `ai:doctor` called the files stale. A `*_controller.rb` that
   declares only a module was listed as a controller too.
 - **A module in app/policies is not a policy.** `onboard` counted
-  `module Authorizer` among the Pundit policies.
+  `module Authorizer`, which nests a helper class, among the Pundit
+  policies. A policy is now the class its file is named for.
 - **`rails_review_changes` does not count the install's context files as
   code.** `app/models/AGENTS.md` was "1 model" and
   `app/controllers/AGENTS.md` "1 controller".
+- **A Token header is filtered whole.** `Authorization: Token token=abc` in
+  a log came out as `Authorization: [FILTERED]]`, and a quoted
+  `token="..."` left its parameters after the filter.
 - **Statements on one line replay in source order on every platform.** Ruby's
   sort is not stable, so with a dozen statements in a migration a one-line
   `change_table(:t) { |t| t.change ... }` could apply its `t.change` before
@@ -146,9 +171,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and folders, `rails_validate` named a different five Brakeman warnings,
   `rails_search_docs` a different top five, and helpers, tables, queues,
   N+1 risks, security warnings, SQLite table stats, shared examples and a
-  session's queries came out shuffled. A one-line `create_table` in
-  schema.rb after a `# Could not dump table` comment gave its columns to
-  the wrong table.
+  session's queries came out shuffled. A one-line `create_table` in a
+  schema.rb that also holds a `# Could not dump table` comment gave its
+  columns to the wrong table.
 
 ## [5.33.0] - 2026-10-11
 
