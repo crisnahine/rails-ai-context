@@ -41,9 +41,11 @@ module RailsAiContext
 
         if mark
           tool, params = parse_mark(mark)
-          known = known_tool_name(tool)
+          known, section = known_tool(tool)
           return error_response(unknown_mark_message(tool)) unless known
 
+          # A recorded call's parameters run in name order, and `section` follows every other a section reads.
+          params = [ params, "section:#{section.name}" ].reject(&:empty?).join(",") if section
           session_record(known, params)
           return text_response("Marked `#{known}` with params `#{echo_input(params)}` as queried.")
         end
@@ -72,21 +74,26 @@ module RailsAiContext
         end
 
         # The tool a mark names, spelled the way the server names it, so a
-        # mark and the call it stands for are one entry. Takes the short forms
-        # the CLI takes (`schema`, `get_schema`). An empty or unknown name
-        # recorded a query nothing could ever have answered.
-        def known_tool_name(name)
+        # mark and the call it stands for are one entry, and the config section
+        # a retired name stands for. Takes the short forms the CLI takes.
+        def known_tool(name)
           return nil if name.to_s.empty?
 
+          candidates = RailsAiContext::CLI::ToolRunner.candidate_names(name)
           tools = RailsAiContext::Server.exposed_tools.map(&:tool_name)
-          RailsAiContext::CLI::ToolRunner.candidate_names(name).find { |candidate| tools.include?(candidate) }
+          found = candidates.find { |candidate| tools.include?(candidate) }
+          return [ found, nil ] if found
+
+          section = candidates.filter_map { |candidate| GetConfig.retired_section(candidate) }.find(&:served?)
+          [ "rails_get_config", section ] if section
         end
 
         def unknown_mark_message(name)
           usage = "Pass `tool:params`, e.g. `get_schema:users`."
           return "`mark` names no tool. #{usage}" if name.to_s.empty?
 
-          short_names = RailsAiContext::Server.exposed_tools.map { |t| RailsAiContext::CLI::ToolRunner.short_name(t.tool_name) }
+          names = RailsAiContext::Server.exposed_tools.map(&:tool_name) | RailsAiContext::Server.retired_names
+          short_names = names.map { |tool_name| RailsAiContext::CLI::ToolRunner.short_name(tool_name) }
           suggestion = find_closest_match(name, short_names)
           "Unknown tool '#{echo_input(name)}' in `mark`.#{" Did you mean '#{suggestion}'?" if suggestion} #{usage}"
         end
