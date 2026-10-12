@@ -44,6 +44,52 @@ module RailsAiContext
         nil
       end
 
+      # The described statement's ftable/ftablecol, then the plan's top Output,
+      # which also sees through a view, CTE or subquery that renamed a column.
+      def column_sources(conn, sql, plan)
+        described_sources(conn, sql) + planned_sources(plan)
+      end
+
+      def described_sources(conn, sql)
+        raw = conn.raw_connection
+        stmt = "rac_prov_#{Process.pid}_#{rand(1 << 30)}"
+        begin
+          raw.prepare(stmt, sql)
+          desc = raw.describe_prepared(stmt)
+        ensure
+          raw.exec("DEALLOCATE #{stmt}") rescue nil
+        end
+
+        names = {}
+        desc.nfields.times.filter_map do |i|
+          oid = desc.ftable(i).to_i
+          col = desc.ftablecol(i).to_i
+          next if oid.zero? || col.zero?
+
+          name = (names[oid] ||= attribute_names(conn, oid))[col]
+          [ i, name ] if name
+        end
+      rescue StandardError
+        []
+      end
+
+      def planned_sources(plan)
+        return [] unless plan
+
+        read = PostgresqlPlan.new(plan)
+        read.output.each_with_index.filter_map do |expr, i|
+          _, col = read.base_column(expr)
+          [ i, col ] if col
+        end
+      end
+
+      # attnum => column name for one relation oid.
+      def attribute_names(conn, oid)
+        conn.select_rows(
+          "SELECT attnum, attname FROM pg_attribute WHERE attrelid = #{oid.to_i} AND attnum > 0 AND NOT attisdropped"
+        ).to_h { |num, name| [ num.to_i, name.to_s ] }
+      end
+
       def table_sizes(conn)
         Introspectors::PgPartitions.table_bytes(conn).sort_by { |r| [ -r[:bytes], r[:name] ] }
       end

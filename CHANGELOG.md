@@ -121,8 +121,28 @@ Ten tools that each answered one section of the app's configuration leave
   are now refused by name and filtered in results, as log and config
   redaction already treated those words, so a column name is secret in every
   tool or in none.
+- **`rails_query` holds `LIMIT ALL`, `LIMIT NULL` and a negative limit to
+  the row cap.** The three mean no limit, and the query fetched every row
+  before the cap cut the answer. They now read as no limit of the query's own
+  and fetch one row past the cap, with the note that rows were held back.
+- **An `explain: true` failure is an error.** A failing EXPLAIN, or one asked
+  of a statement other than SELECT or WITH, came back as an ordinary answer;
+  the CLI now exits non-zero and an MCP client sees `isError`.
+- **`rails_query` runs a string literal that only reads like a refused
+  phrase.** The `OR 1=1` check is gone: the caller writes the whole
+  statement, so it protected nothing and refused `LIKE '%OR 1=1%'`. On
+  PostgreSQL a locking clause is read with literals masked, since its
+  read-only transaction refuses a locking read, so `'%ready for update%'`
+  runs there. MySQL's read-only transaction allows `FOR SHARE`, so there and
+  on SQLite the raw text still decides.
 
 ### Changed
+
+- **The SQL gate decides what `rails_query` runs.** It reads the
+  comment-free statement once and answers the text to run or a refusal with
+  the reason: every text check, and on PostgreSQL the plan checks.
+  `rails_query` is a short handler over the gate, the database family and the
+  secret column rule.
 
 - **One rule decides which columns `rails_query` keeps secret.** The text
   check, the PostgreSQL plan checks, provenance redaction and result

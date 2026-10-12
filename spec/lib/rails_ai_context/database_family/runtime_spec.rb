@@ -186,6 +186,21 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     expect([ described_class::TimedOut, described_class::Unsupported ]).to all(be < RailsAiContext::Error)
   end
 
+  describe "#column_sources" do
+    it "names no source column on SQLite and MySQL" do
+      expect(described_class::SQLITE.column_sources(nil, "SELECT 1", plan: nil)).to eq([])
+      expect(described_class::MYSQL.column_sources(nil, "SELECT 1", plan: nil)).to eq([])
+    end
+
+    it "reads PostgreSQL's top plan Output by position, past any rename" do
+      plan = { "Node Type" => "Hash Join", "Output" => [ "p.title", "u.api_token", '"*SELECT* 1".t', "upper(u.email)" ],
+               "Plans" => [ { "Relation Name" => "posts", "Alias" => "p" }, { "Relation Name" => "users", "Alias" => "u" } ] }
+
+      expect(described_class::POSTGRESQL.column_sources(untouchable, "SELECT ...", plan: plan))
+        .to eq([ [ 0, "title" ], [ 1, "api_token" ] ])
+    end
+  end
+
   describe "an engine with no family" do
     let(:family) { described_class.of(untouchable) }
 

@@ -99,6 +99,10 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(family.plan(conn, "SELECT id FROM rac_engine_rows", timeout: 5)).to include("Node Type" => "Seq Scan")
     end
 
+    it "traces a renamed result column to its table column" do
+      expect(family.column_sources(conn, "SELECT 1 AS one, id AS n FROM rac_engine_rows", plan: nil)).to eq([ [ 1, "id" ] ])
+    end
+
     it "reports index usage" do
       expect(family.index_usage(conn)).to be_an(Array)
     end

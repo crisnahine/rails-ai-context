@@ -59,4 +59,23 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     run("SELECT * FROM rac_pg_accounts")
     expect(conn).to have_received(:tables).once
   end
+
+  it "runs a locking phrase inside a literal and refuses the clause itself" do
+    expect(run("SELECT id FROM rac_pg_accounts WHERE email LIKE '%ready for update%'").error?).to be(false)
+    expect(run("SELECT id FROM rac_pg_accounts FOR UPDATE").content.first[:text]).to include("FOR UPDATE/SHARE")
+  end
+
+  it "holds LIMIT ALL and LIMIT NULL to the row limit in the statement it sends" do
+    sent = []
+    allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:read_only).and_wrap_original { |m, c, sql, t| sent << sql; m.call(c, sql, t) }
+    %w[ALL NULL].each do |no_limit|
+      text = described_class.call(sql: "SELECT g FROM generate_series(1, 5) g LIMIT #{no_limit}", limit: 2).content.first[:text]
+      expect(text).to include("2 rows returned").and include("2 rows shown; the query returned more")
+    end
+    expect(sent.grep(/\ASELECT/)).to eq([ "SELECT g FROM generate_series(1, 5) g LIMIT 3" ] * 2)
+  end
+
+  it "flags a failing EXPLAIN as an error" do
+    expect(described_class.call(sql: "SELECT nope FROM rac_pg_accounts", explain: true).error?).to be(true)
+  end
 end

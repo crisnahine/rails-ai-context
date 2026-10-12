@@ -89,6 +89,10 @@ module RailsAiContext
         end
       end
 
+      def column_sources(_conn, _sql, _plan)
+        []
+      end
+
       def plan(_conn, _sql, _timeout)
         nil
       end

@@ -39,6 +39,12 @@ module RailsAiContext
         runtime.plan(connection, sql, timeout)
       end
 
+      # @param plan [Hash, nil] the statement's plan, when one was read already
+      # @return [Array<Array(Integer, String)>] [result column index, the table column it reads]; [] where the engine cannot say
+      def column_sources(connection, sql, plan:)
+        runtime.column_sources(connection, sql, plan)
+      end
+
       # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the engine has none
       def table_sizes(connection)
         runtime.table_sizes(connection)

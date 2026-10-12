@@ -60,6 +60,10 @@ module RailsAiContext
         { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n"), unbounded: result.unbounded }
       end
 
+      def column_sources(_conn, _sql, _plan)
+        []
+      end
+
       def plan(_conn, _sql, _timeout)
         nil
       end
