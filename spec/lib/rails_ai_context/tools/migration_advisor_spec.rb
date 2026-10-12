@@ -647,6 +647,14 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).not_to include("does not exist on")
     end
 
+    # The app databases a test app lists: the running environment's, then production's.
+    def stub_databases(here, production = {})
+      root = Rails.root.to_s
+      environments = { RailsAiContext.environment_name => { "primary" => { "adapter" => "postgresql" } }.merge(here), "production" => production }
+      list = RailsAiContext::AppDatabases.build(environments: environments, current: RailsAiContext.environment_name, root: root, dumps: [])
+      allow(RailsAiContext::AppDatabases).to receive(:for).and_return(list)
+    end
+
     def shard_context
       tables = { tables: { "orders" => { columns: [ { name: "total_cents", type: "integer" } ] } } }
       { models: {}, schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [] } } }, "shard_one" => tables, "shard_two" => tables } } }
@@ -654,7 +662,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
     it "generates the migration into the database that holds the table" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
-      allow(RailsAiContext::DatabaseYml).to receive(:entry).and_return({ "database" => "x" })
+      stub_databases("analytics" => { "database" => "x" }, "shard_one" => {}, "shard_two" => {})
       text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
       expect(text).to include("`page_views` is in analytics, not the primary database",
                               "**Run:** `bin/rails generate migration AddReferrerToPageViews referrer:string --database analytics`")
@@ -662,7 +670,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
     it "names every database a table is in, and one command when they share migrations_paths" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
-      allow(RailsAiContext::DatabaseYml).to receive(:entry).and_return({ "migrations_paths" => "db/shard_migrate" })
+      stub_databases("analytics" => {}, "shard_one" => { "migrations_paths" => "db/shard_migrate" }, "shard_two" => { "migrations_paths" => "db/shard_migrate" })
       text = described_class.call(action: "add_index", table: "orders", column: "total_cents").content.first[:text]
       expect(text).to include("`orders` is in shard_one and shard_two", "`--database shard_one`")
       expect(text).not_to include("once per database")
@@ -683,7 +691,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
     it "gives no command for a dump whose database no environment configures" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
-      allow(RailsAiContext::DatabaseYml).to receive_messages(entry: nil, elsewhere: nil)
+      stub_databases({})
       text = described_class.call(action: "add_column", table: "page_views", column: "referrer", type: "string").content.first[:text]
       expect(text).to include("`page_views` is in the analytics dump, which no environment in config/database.yml configures")
       expect(text).not_to include("--database analytics")
@@ -692,15 +700,26 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
     it "generates under the environment that configures a database the running one does not" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
-      allow(RailsAiContext::DatabaseYml).to receive_messages(entry: nil, elsewhere: [ "production", { "migrations_paths" => "db/analytics_migrate" } ])
+      stub_databases({}, { "primary" => {}, "shard_one" => { "migrations_paths" => "db/analytics_migrate" }, "shard_two" => { "migrations_paths" => "db/analytics_migrate" } })
       text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
       expect(text).to include("`orders` is in shard_one and shard_two, which production configures and this environment does not, not the primary database: generate with `RAILS_ENV=production` and `--database shard_one` so the migration lands in db/analytics_migrate and production's `bin/rails db:migrate`",
                               "**Run:** `RAILS_ENV=production bin/rails generate migration RemoveTotalCentsFromOrders total_cents:integer --database shard_one`")
     end
 
+    # The database's statistics are the primary's, so they say nothing about a table on another database.
+    it "does not count a secondary database's rows from the primary's statistics" do
+      context = shard_context.merge(database_stats: { tables: [ { table: "page_views", approximate_rows: 12 } ] })
+      allow(described_class).to receive(:cached_context).and_return(context)
+      stub_databases("analytics" => {})
+
+      text = described_class.call(action: "add_column", table: "page_views", column: "sku", type: "string", options: "null: false").content.first[:text]
+      expect(text).to include("**Warning:** `null: false` without a default fails if `page_views` holds any rows")
+      expect(text).not_to include("12 rows")
+    end
+
     it "asks for one migration per database when their migrations_paths differ" do
       allow(described_class).to receive(:cached_context).and_return(shard_context)
-      allow(RailsAiContext::DatabaseYml).to receive(:entry) { |_, name| { "migrations_paths" => "db/#{name}_migrate" } }
+      stub_databases("shard_one" => { "migrations_paths" => "db/shard_one_migrate" }, "shard_two" => { "migrations_paths" => "db/shard_two_migrate" })
       text = described_class.call(action: "remove_column", table: "orders", column: "total_cents").content.first[:text]
       expect(text).to include("generate it once per database: `--database shard_one`, `--database shard_two`")
     end

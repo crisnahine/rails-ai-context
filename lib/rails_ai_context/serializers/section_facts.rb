@@ -41,6 +41,9 @@ module RailsAiContext
 
         parts = [ "#{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}" ]
         Payload.secondary_databases(schema).each do |name, db|
+          # A dump too large to read, or one holding nothing, leaves the entry without tables.
+          next parts << "#{name}: tables not read" if db[:tables].empty?
+
           tables = CountPhrase.call(db[:total_tables].to_i, "table")
           adapter = SchemaAdapter.secondary_label(ctx, name, db)
           parts << (framework_database_text(name, db) || "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}")

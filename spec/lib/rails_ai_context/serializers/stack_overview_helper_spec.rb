@@ -222,6 +222,13 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(helper.full_preset_stack_lines).to include("- Databases: 5 (primary, analytics, cache, ...2 more)")
     end
 
+    it "says which databases only another environment configures" do
+      databases = [ { name: "primary" }, { name: "queue", environment: "production" }, { name: "archive", dump_only: true } ]
+      helper = test_class.new({ multi_database: { databases: databases } })
+
+      expect(helper.full_preset_stack_lines).to include("- Databases: 3 (primary, queue (production only), archive (committed dump only))")
+    end
+
     it "skips sections that have errors" do
       ctx = {
         auth: { error: "not available" },

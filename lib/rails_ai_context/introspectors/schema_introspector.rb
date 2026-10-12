@@ -596,31 +596,39 @@ module RailsAiContext
         @secondary_database_dumps ||= read_secondary_database_dumps
       end
 
-      # [name, format, path] for each secondary database's dump on disk, the configured first.
-      def secondary_dump_files
-        primary = dump_candidates.map(&:last)
-        configured = SchemaDumpPath.secondaries(app.root).map { |name, (format, path)| [ name, format, path ] }
-        taken = primary + configured.map(&:last)
-        globbed = SchemaDumpPath::FILE_NAMES.flat_map do |format, file|
-          kind, ext = file.split(".")
-          Dir.glob(File.join(app.root.to_s, "db", "*_#{kind}.#{ext}")).sort
-            .reject { |path| taken.include?(path) }
-            .map { |path| [ File.basename(path, ".#{ext}").delete_suffix("_#{kind}"), format, path ] }
-        end
-        (configured + globbed).reject { |_, _, path| primary.include?(path) || !File.exist?(path) }
+      def app_databases
+        RailsAiContext::AppDatabases.for(app.root)
       end
 
-      def read_secondary_database_dumps
-        dumps = secondary_dump_files.each_with_object({}) do |(name, format, path), found|
-          next if found.key?(name)
+      # [name, format, path] for each other database's dump on disk, in the app databases' order.
+      def secondary_dump_files
+        primary = dump_candidates.map(&:last)
+        app_databases.filter_map do |db|
+          format, path = db.dump
+          [ db.name, format, path ] if path && !db.primary && !primary.include?(path) && File.exist?(path)
+        end
+      end
 
+      # A dump too large to read, or holding no tables, keeps an entry that says so.
+      def read_secondary_database_dumps
+        unread = {}
+        dumps = secondary_dump_files.each_with_object({}) do |(name, format, path), found|
           parsed = parse_dump(format, path)
-          next if parsed[:tables].blank?
+          if parsed[:tables].blank?
+            unread[name] = [ path, parsed[:error]&.delete_prefix("#{relative_dump_path(path)} ") || "declares no tables" ]
+            next
+          end
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
           found[name] = parsed.merge(database_files(path, migrate_dir_for_dump(path)))
         end
-        replay_secondary_migrations(dumps)
+        replay_secondary_migrations(dumps, unread)
+        unread.each do |name, (path, state)|
+          dumps[name] ||= { tables: {}, total_tables: 0, note: "#{relative_dump_path(path)} #{state}, so its tables are not listed" }
+                          .merge(database_files(path, migrate_dir_for_dump(path)))
+        end
+        names = app_databases.names
+        dumps.sort_by { |name, _| names.index(name) || names.size }.to_h
       end
 
       # Where a secondary database's schema lives, app-relative, so a rule
@@ -630,22 +638,25 @@ module RailsAiContext
         { dump: (relative_dump_path(dump) if dump), migrations_paths: (dirs if dirs.any?) }.compact
       end
 
-      # A database whose dump is not written yet answers from its own migrations_paths.
-      def replay_secondary_migrations(dumps)
-        RailsAiContext::DatabaseYml.task_secondaries(app.root).each do |name, entry|
-          next if dumps.key?(name)
+      # A database whose dump gives no tables answers from its own migrations_paths.
+      def replay_secondary_migrations(dumps, unread)
+        app_databases.secondaries.each do |db|
+          name = db.name
+          dirs = db.migrate_dirs
+          next if dumps.key?(name) || dirs.empty? || dirs == [ migrations_dir ]
 
-          dirs = MigrationReplay.configured_dirs(app.root.to_s, entry) or next
           pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, database: name)
           tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s,
                                                 adapter: SchemaConventions.database_adapter_for(app.root.to_s, name))
           next if tables.empty?
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
-          _, dump = SchemaDumpPath.secondaries(app.root)[name]
+          _, dump = db.dump
+          path, state = unread[name]
+          said = path ? "#{relative_dump_path(path)} #{state}" : "no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"}"
           dumps[name] = {
             adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
-            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"})"
+            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, #{said})"
           }.merge(database_files(dump, dirs))
         end
         dumps

@@ -1328,6 +1328,48 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    describe "a secondary dump that gives no tables" do
+      let(:database_yml) do
+        <<~YAML
+          #{RailsAiContext.environment_name}:
+            primary:
+              adapter: sqlite3
+              database: db/dev.sqlite3
+            queue:
+              adapter: sqlite3
+              database: db/queue.sqlite3
+              migrations_paths: db/queue_migrate
+        YAML
+      end
+      let(:queue_dump) { "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"solid_queue_jobs\" do |t|\n    t.string \"queue_name\"\n  end\nend\n" }
+
+      it "names a dump too large to read, with the reason" do
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => database_yml, "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\nend\n",
+                         "db/migrate/20240101000000_create_posts.rb" => create_posts, "db/queue_schema.rb" => queue_dump)
+          allow(RailsAiContext.configuration).to receive(:max_schema_file_size).and_return(60)
+
+          queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
+
+          expect(queue).to include(tables: {}, total_tables: 0, dump: "db/queue_schema.rb")
+          expect(queue[:note]).to eq("db/queue_schema.rb too large (#{queue_dump.bytesize} bytes, over max_schema_file_size), so its tables are not listed")
+        end
+      end
+
+      it "says what the dump holds when the migrations answer instead" do
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => database_yml, "db/migrate/20240101000000_create_posts.rb" => create_posts,
+                         "db/queue_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\nend\n",
+                         "db/queue_migrate/20240101000000_create_jobs.rb" => create_posts.sub("CreatePosts", "CreateJobs").sub(":posts", ":jobs"))
+
+          queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
+
+          expect(queue[:tables].keys).to eq([ "jobs" ])
+          expect(queue[:note]).to end_with("(no DB connection, db/queue_schema.rb declares no tables)")
+        end
+      end
+    end
+
     it "lists no replica or database_tasks: false entry as a database of its own" do
       Dir.mktmpdir do |dir|
         write_app(dir, "config/database.yml" => <<~YAML,
@@ -1353,7 +1395,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:secondary_databases].keys).to eq([ "analytics" ])
-        expect(RailsAiContext::Introspectors::SchemaDumpPath.secondaries(dir).keys).to eq([ "analytics" ])
+        expect(RailsAiContext::AppDatabases.for(dir).secondaries.map(&:name)).to eq([ "analytics" ])
       end
     end
 

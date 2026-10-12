@@ -391,7 +391,7 @@ module RailsAiContext
       # The tables every other database's dump holds; nil when one of them is not on disk to read.
       def secondary_dump_tables
         RunCache.fetch([ :secondary_dump_tables, app.root.to_s ]) do
-          SchemaDumpPath.secondaries(app.root).values.each_with_object(Set.new) do |(format, path), tables|
+          AppDatabases.for(app.root).reject(&:primary).filter_map(&:dump).each_with_object(Set.new) do |(format, path), tables|
             break nil unless File.exist?(path)
 
             found = format == :ruby ? SchemaReader.new(path).tables : StructureSqlReader.parse(SafeFile.read(path).to_s)[:tables]

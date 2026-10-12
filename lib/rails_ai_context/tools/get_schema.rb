@@ -444,6 +444,8 @@ module RailsAiContext
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
+          next lines << "- **#{name}**: #{db[:note]}" if db[:tables].blank?
+
           pending = Array(db[:pending_migrations])
           pending_text = pending.any? ? "; pending migrations: #{pending_phrase(pending)}" : ""
           lines << "- **#{name}**: #{Introspectors::SchemaConventions.relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"

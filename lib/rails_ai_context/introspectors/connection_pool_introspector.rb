@@ -23,10 +23,9 @@ module RailsAiContext
       private
 
       def extract_databases
-        configs = ActiveRecord::Base.configurations.configs_for(env_name: Rails.env, include_hidden: true)
-        configs.map do |cfg|
-          entry = { name: cfg.name, adapter: cfg.adapter }
-          entry[:replica] = !!cfg.replica? if cfg.respond_to?(:replica?)
+        RailsAiContext::AppDatabases.for(root).here.map do |db|
+          cfg = db.config
+          entry = { name: db.name, adapter: db.adapter, replica: db.replica }
           entry[:role]    = cfg.role.to_s if cfg.respond_to?(:role) && cfg.role
 
           pool_config = extract_pool_config(cfg)
@@ -36,7 +35,7 @@ module RailsAiContext
           entry[:adapter_options] = adapter_opts if adapter_opts.any?
           entry
         rescue => e
-          RailsAiContext.debug_fail(e, { name: cfg.name, error: e.message }, label: "extract_databases entry")
+          RailsAiContext.debug_fail(e, { name: db.name, error: e.message }, label: "extract_databases entry")
         end
       end
 
@@ -64,10 +63,10 @@ module RailsAiContext
       end
 
       def config_hash(cfg)
-        # Hash-config adapters expose a :configuration_hash. Fall back to
-        # individual accessors for hurdle-adapters that predate that API.
-        if cfg.respond_to?(:configuration_hash) && cfg.configuration_hash.is_a?(Hash)
-          cfg.configuration_hash.transform_keys(&:to_s)
+        # A booted entry is a db_config; a database.yml entry is the Hash itself.
+        cfg =cfg.configuration_hash if cfg.respond_to?(:configuration_hash)
+        if cfg.is_a?(Hash)
+          cfg.transform_keys(&:to_s)
         else
           {}
         end
