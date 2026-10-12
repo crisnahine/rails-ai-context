@@ -122,6 +122,19 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    it "goes by the last section named, as the tool does" do
+      Dir.mktmpdir do |dir|
+        env_app(dir)
+        run = ->(*sections) { `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool config #{sections.join(' ')} --environment prod --no-boot 2>&1` }
+
+        filtered = run.call("--section app", "--section=env_config")
+        expect(filtered).to include("_Current: **development**"), filtered
+        expect(filtered).to include("## prod")
+
+        expect(run.call("--section env_config", "section=app")).not_to include("_Current: **development**")
+      end
+    end
+
     # Set through the child's environment, not a `VAR=value` prefix, which
     # cmd.exe, the shell backticks run on Windows, reads as a command.
     it "still reads RAILS_ENV from the environment variable" do
@@ -372,6 +385,42 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(out).to start_with("rails_get_gems - runs the `gems` section of rails_get_config")
         expect(out).to include("--category")
         expect(out).not_to include("--locale")
+      end
+    end
+
+    # The app's configuration file is read with no boot, so the help is for the tool that app serves.
+    describe "of a tool, in an app whose configuration file turns sections off" do
+      def app_with(dir, skip_tools)
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "module HelpApp\n  class Application < Rails::Application\n  end\nend\n")
+        File.write(File.join(dir, ".rails-ai-context.yml"), { "skip_tools" => skip_tools }.to_yaml)
+      end
+
+      it "says the section is required when app is off, and the default when it is on" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, %w[rails_get_env])
+          expect(`cd #{dir} && ruby -I #{lib} #{exe} tool config --help 2>&1`).to include("Default: app.")
+
+          app_with(dir, %w[rails_get_config])
+          out = `cd #{dir} && ruby -I #{lib} #{exe} tool config --help 2>&1`
+          expect($?.exitstatus).to eq(0), out
+          expect(out).to include("Required: the app section is turned off in this app.")
+          expect(out).not_to include("Default: app.")
+        end
+      end
+
+      it "offers no help for a section the file turns off, from the app or through --app-path" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, %w[rails_get_env])
+
+          [ "cd #{dir} && ruby -I #{lib} #{exe} tool env --help", "ruby -I #{lib} #{exe} tool env --help --app-path #{dir}" ].each do |command|
+            out = `#{command} 2>&1`
+
+            expect($?.exitstatus).to eq(1), out
+            expect(out).to include("rails_get_env is turned off in this app: skip_tools lists it")
+          end
+          expect(`cd #{dir} && ruby -I #{lib} #{exe} tool gems --help 2>&1`).to start_with("rails_get_gems - runs the `gems` section")
+        end
       end
     end
 
