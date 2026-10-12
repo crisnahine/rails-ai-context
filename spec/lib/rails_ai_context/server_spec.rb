@@ -317,6 +317,18 @@ RSpec.describe RailsAiContext::Server do
         RailsAiContext.configuration.skip_tools = []
       end
 
+      it "answers rails_onboard at summary with the overview, and the retired quick with the valid levels" do
+        call = ->(detail) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_onboard", arguments: { detail: detail } } }) }
+
+        summary = call.call("summary")[:result]
+        expect(summary[:isError]).to be_falsey
+        expect(summary[:content].first[:text]).not_to include("## ")
+
+        quick = call.call("quick")[:result]
+        expect(quick[:isError]).to be true
+        expect(quick[:content].first[:text]).to include('not one of: ["summary", "standard", "full"]')
+      end
+
       # The SDK named only the guess.
       it "answers a name no tool has with the nearest tools, or with every tool" do
         call = ->(name) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: {} } }) }

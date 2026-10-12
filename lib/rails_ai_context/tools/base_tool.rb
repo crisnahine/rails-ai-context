@@ -983,8 +983,7 @@ module RailsAiContext
 
         # Whether this tool's `detail` is DetailLevel's, read off the schema it
         # already publishes rather than a second list someone has to keep in
-        # step. `rails_onboard` spells its own levels (quick/standard/full) and
-        # is deliberately not covered.
+        # step. A custom tool that spells its own levels is left alone.
         def detail_param?
           return @detail_param if defined?(@detail_param)
 

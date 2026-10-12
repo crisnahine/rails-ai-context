@@ -7,15 +7,13 @@ module RailsAiContext
       description "Get a narrative walkthrough of the Rails application - stack, data model, authentication, key flows, " \
         "background jobs, frontend, testing, getting started instructions, and the app's custom rake tasks, generators and Railties. " \
         "Use when: first encountering a project, onboarding a new developer, or orienting an AI agent. " \
-        "Key params: detail (quick/standard/full)."
+        "Key params: detail (summary/standard/full)."
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: %w[quick standard full],
-            description: "Detail level. quick: 1-paragraph overview. standard: structured walkthrough (default). full: all subsystems included."
-          }
+          detail: RailsAiContext::DetailLevel.schema(
+            "Detail level. summary: 1-paragraph overview. standard: structured walkthrough (default). full: all subsystems included."
+          )
         }
       )
 
@@ -41,9 +39,9 @@ module RailsAiContext
         ctx = cached_context
 
         body = case detail
-        when "quick"
-          compose_quick(ctx)
-        when "full"
+        when RailsAiContext::DetailLevel::SUMMARY
+          compose_summary(ctx)
+        when RailsAiContext::DetailLevel::FULL
           compose_full(ctx)
         else
           compose_standard(ctx)
@@ -56,9 +54,9 @@ module RailsAiContext
       class << self
         private
 
-        # ── Quick: single paragraph ──────────────────────────────────────
+        # ── Summary: single paragraph ──────────────────────────────────────
 
-        def compose_quick(ctx)
+        def compose_summary(ctx)
           app = ctx[:app_name] || "This Rails app"
 
           ruby = ruby_phrase(ctx)

@@ -524,6 +524,12 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         .to output(/not a valid value for limit.*integer/i).to_stderr
     end
 
+    it "names the valid levels when onboard is asked for the retired quick level" do
+      runner = described_class.new("onboard", [ "--detail", "quick" ])
+      expect { runner.run }
+        .to output(/'quick' is not a valid value for detail\. Valid: summary, standard, full\. Using default\./).to_stderr
+    end
+
     it "drops the non-numeric integer rather than coercing it to zero" do
       runner = described_class.new("search_code", [ "--pattern", "def", "--limit", "abc" ])
       allow($stderr).to receive(:puts)
