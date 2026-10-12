@@ -135,7 +135,7 @@ module RailsAiContext
         runtime.generated_columns(connection, schemas)
       end
 
-      # @return [Hash{String => Array(Symbol, String)}] table => [:pages, :shadow, :vocabulary or :full_text, the virtual
+      # @return [Hash{String => Array(Symbol, String)}] table => [:pages, :shadow, :vocabulary or :virtual, the virtual
       #   table it belongs to]: what holds another table's rows or words under other names
       def index_tables(connection, schemas = [])
         runtime.index_tables(connection, schemas)

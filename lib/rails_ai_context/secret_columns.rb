@@ -236,7 +236,7 @@ module RailsAiContext
     end
 
     # [table, why] for the first table the text names that is never read, or nil: the file's pages, a shadow
-    # table, and a full-text table or its vocabulary when the full-text table holds a secret column.
+    # table, and a virtual table or its vocabulary when the virtual table holds a secret column.
     def unread_table_in(text)
       down = self.class.fold(text)
       @unread_tables.find { |table, _why| names?(down, table) }
@@ -347,10 +347,10 @@ module RailsAiContext
             "#{". Query `#{owner}`" unless secret}"
         when :vocabulary
           "it lists the words of the full-text table `#{owner}`, which holds the secret column `#{secret}`" if secret
-        when :full_text
+        when :virtual
           if secret
-            "it is a full-text table that holds the secret column `#{secret}`, and a full-text search or function " \
-              "reads a column by its position, with no name written"
+            "it is a virtual table that holds the secret column `#{secret}`, and a search or a function over a virtual " \
+              "table reads a column by its position, with no name written"
           end
         end
         unread[self.class.fold(table)] = why if why

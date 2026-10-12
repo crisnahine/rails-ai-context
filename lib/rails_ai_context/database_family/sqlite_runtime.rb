@@ -148,7 +148,7 @@ module RailsAiContext
 
       # pragma_table_list, which types a shadow table, came with this version.
       TYPED_TABLES = "3.37"
-      INDEX_MODULE = /\bUSING\s+["'`\[]?(fts5vocab|fts4aux|fts[345])\b["'`\]]?(?:\s*\((.*)\))?/mi
+      VOCABULARY = /\bUSING\s+["'`\[]?(fts5vocab|fts4aux)\b["'`\]]?\s*\((.*)\)/mi
 
       # Modules that return the database file's pages or cells, whatever table they belong to.
       PAGE_MODULES = %w[sqlite_dbpage sqlite_dbdata sqlite_dbptr].freeze
@@ -165,14 +165,10 @@ module RailsAiContext
           tables[name] = [ :shadow, owner ] if owner
         end
         virtual.each do |name, sql|
-          mod, args = sql.to_s.match(INDEX_MODULE)&.captures
-          next unless mod
-
+          mod, args = sql.to_s.match(VOCABULARY)&.captures
           # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
           names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
-          found[name] = if mod.match?(/\Afts\d\z/i) then [ :full_text, name ]
-          else [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2] ]
-          end
+          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2] ] : [ :virtual, name ]
         end
         found
       end

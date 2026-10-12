@@ -734,12 +734,13 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT * FROM pages").last).to start_with("Blocked: the view `pages` is not queried: its definition reads `sqlite_dbpage`")
     end
 
-    it "refuses the vocabulary of a full-text table that holds a secret column, and the full-text table itself" do
+    it "refuses the vocabulary of a virtual table that holds a secret column, and the virtual table whole" do
       refused("SELECT term FROM docs_words",
               "Blocked: `docs_words` is not read: it lists the words of the full-text table `docs`, which holds the secret column `api_token`.")
-      [ "SELECT highlight(docs, 1, '', '') AS h FROM docs", "SELECT count(*) AS n FROM docs WHERE docs MATCH 'marker*'", "SELECT title FROM docs" ].each do |sql|
-        refused(sql, "Blocked: `docs` is not read: it is a full-text table that holds the secret column `api_token`, and a full-text " \
-                     "search or function reads a column by its position, with no name written.")
+      [ "SELECT highlight(docs, 1, '', '') AS h FROM docs", "SELECT snippet(docs, 1, '', '', '', 8) AS s FROM docs",
+        "SELECT count(*) AS n FROM docs WHERE docs MATCH 'marker*'", "SELECT title FROM docs" ].each do |sql|
+        refused(sql, "Blocked: `docs` is not read: it is a virtual table that holds the secret column `api_token`, and a search or a " \
+                     "function over a virtual table reads a column by its position, with no name written.")
       end
     end
 
@@ -747,6 +748,8 @@ RSpec.describe RailsAiContext::Tools::Query do
       { "SELECT name, sum(pgsize) AS bytes FROM dbstat GROUP BY name" => "accounts",
         "SELECT title, body FROM notes WHERE notes MATCH 'ordinary'" => "ordinary words",
         "SELECT highlight(notes, 1, '<', '>') AS h FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",
+        "SELECT snippet(notes, 1, '<', '>', '', 8) AS s FROM notes WHERE notes MATCH 'words'" => "ordinary <words>",
+        "SELECT title FROM notes" => "plain",
         "SELECT term FROM notes_words ORDER BY term" => "ordinary",
         "SELECT id, title FROM notes_archive" => "kept" }.each do |sql, value|
         failed, text = answer(sql)
