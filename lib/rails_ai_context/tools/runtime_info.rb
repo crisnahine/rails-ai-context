@@ -36,7 +36,8 @@ module RailsAiContext
         if (refusal = static_tier_refusal("Live runtime state"))
           return refusal
         end
-        AppDatabases.for(rails_app.root).fetch(database).reachable! unless database.to_s.empty?
+        named = !database.to_s.empty?
+        AppDatabases.for(rails_app.root).fetch(database).verify! if named
 
         lines = [ "# Runtime Info", "" ]
 
@@ -53,9 +54,9 @@ module RailsAiContext
         end
 
         if lines.size <= 2
-          lines << "_No runtime data available. Ensure the app has a database connection._"
+          lines << "_No runtime data available: no section had anything to show._"
         end
-        if section && section != "database" && !database.to_s.empty?
+        if section && section != "database" && named
           lines << "_The #{section} section does not read `database`, so #{database} was not used._"
         end
 
@@ -135,7 +136,7 @@ module RailsAiContext
             lines << "_#{count_phrase(sizes.size - shown, "more table")}..._" if sizes.size > shown
           end
 
-          lines.concat(pending_migration_lines)
+          lines.concat(database.to_s.empty? ? pending_migration_lines : own_pending_migration_lines(database))
 
           # Index usage (full detail only)
           if RailsAiContext::DetailLevel.full?(detail)
@@ -194,6 +195,21 @@ module RailsAiContext
           lines << "" << "_Pending migrations could not be read for #{unread.join(', ')}._" if unread.any?
           lines << "" << "**Migrations:** all up to date in #{databases.map(&:name).join(', ')}" if pending.empty? && unread.empty?
           lines
+        end
+
+        # A named database's own, or why Rails keeps none for it.
+        def own_pending_migration_lines(name)
+          db = AppDatabases.for(rails_app.root).fetch(name)
+          unless db.tasks
+            reason = db.replica ? "it is a replica" : "its database.yml entry sets `database_tasks: false`"
+            return [ "", "_Rails runs no migrations on #{db.name}: #{reason}._" ]
+          end
+
+          pending = db.pending_migrations(db.primary ? RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root) : db.migrate_dirs)[:pending]
+          return [ "", "_Pending migrations could not be read for #{db.name}._" ] unless pending
+          return [ "", "**Migrations:** all up to date" ] if pending.empty?
+
+          [ "", "**Pending migrations:** #{pending.size}", *pending.map { |m| "- #{m[:version]} #{m[:name]}" } ]
         end
 
         def gather_index_usage(conn, family)
