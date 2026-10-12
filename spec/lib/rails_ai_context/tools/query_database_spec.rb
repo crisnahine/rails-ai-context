@@ -207,6 +207,16 @@ RSpec.describe "the database argument" do
       end
     end
 
+    it "says the primary cannot be reached in the database section, and still answers the other sections" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished.new("Connection refused"))
+
+      response = runtime
+      answer = text(response)
+
+      expect(response.error?).to be(false)
+      expect(answer).to include("## Database\n\n_Not available: The primary database cannot be reached: Connection refused. ", "## Cache")
+    end
+
     it "refuses a named database that lives in memory" do
       with_database("queue", { adapter: "sqlite3", database: ":memory:" })
 

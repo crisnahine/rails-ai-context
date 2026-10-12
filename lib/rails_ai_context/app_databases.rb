@@ -28,8 +28,12 @@ module RailsAiContext
     # environments: every one that configures it, in file order.
     Database = Data.define(:name, :environments, :here, :primary, :replica, :tasks, :adapter, :adapter_default,
                            :family, :dump, :migrate_dirs, :config) do
+      # Raises Unreachable, naming the database, when no connection to it answers.
       def with_connection(&block)
-        with_pool { |pool| pool.with_connection(&block) }
+        with_pool do |pool|
+          AppDatabases.answering(name, family) { pool.with_connection(&:verify!) }
+          pool.with_connection(&block)
+        end
       end
 
       # Raises unless this process can lease the database. Connects to nothing.
@@ -70,27 +74,11 @@ module RailsAiContext
         { error: e }
       end
 
-      # Raises Unreachable, naming the database, unless a connection to it answers.
-      def verify!
-        with_connection(&:verify!)
-        nil
-      rescue Error
-        raise
-      rescue StandardError => e
-        raise Unreachable, "The #{name} database cannot be reached: #{e.message.lines.first.to_s.strip.chomp(".")}. #{unreachable_advice}"
-      end
-
       private
 
       def in_memory_message
         "The #{name} database lives in memory, inside the process that created it. " \
           "A connection from here would open a new, empty database, so it cannot be read."
-      end
-
-      def unreachable_advice
-        return "Check the file its config/database.yml entry names." if family.sqlite?
-
-        "Start its server, or fix its settings in config/database.yml."
       end
 
       def not_here_message
@@ -166,7 +154,21 @@ module RailsAiContext
 
       own = ActiveRecord::Base.connection_db_config
       present!(own.name, own)
+      answering(own.name, DatabaseFamily.of(own)) { ActiveRecord::Base.connection.verify! }
       yield ActiveRecord::Base.connection
+    end
+
+    # Runs the block that connects. What stops it is Unreachable, naming the database, with advice that fits.
+    def answering(name, family)
+      yield
+    rescue Error
+      raise
+    rescue StandardError => e
+      advice = if family.sqlite? then "Check the file its config/database.yml entry names."
+      elsif e.is_a?(ActiveRecord::NoDatabaseError) then "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
+      else "Start its server, or fix its settings in config/database.yml."
+      end
+      raise Unreachable, "The #{name} database cannot be reached: #{e.message.lines.first.to_s.strip.chomp(".")}. #{advice}"
     end
 
     # Connecting to a SQLite file that is not there would create it, so this raises first.

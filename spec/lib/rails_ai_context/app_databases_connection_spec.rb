@@ -109,9 +109,57 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     it "names a database no connection reaches, and says what stopped it" do
       list = databases("queue" => config(Rails.env, "queue", @dir))
 
-      expect { list.fetch("queue").verify! }
-        .to raise_error(RailsAiContext::AppDatabases::Unreachable, /\AThe queue database cannot be reached: .*unable to open database file/i)
-      expect(list.fetch(nil).verify!).to be_nil
+      expect { list.fetch("queue").with_connection { raise "the block ran" } }
+        .to raise_error(RailsAiContext::AppDatabases::Unreachable,
+                        /\AThe queue database cannot be reached: .*unable to open database file.*\. Check the file its config\/database.yml entry names\.\z/i)
+    end
+
+    # No server adapter is in this bundle, so the pool's connection raises what a server would.
+    def stub_connection_error(error)
+      allow_any_instance_of(ActiveRecord::ConnectionAdapters::SQLite3Adapter).to receive(:verify!).and_raise(error)
+    end
+
+    def server_database(name)
+      RailsAiContext::AppDatabases::Database.new(**databases(name => config(Rails.env, name, sqlite_file(name))).fetch(name).to_h,
+                                                 family: RailsAiContext::DatabaseFamily::POSTGRESQL)
+    end
+
+    it "says to start the server of a database nothing answers for" do
+      stub_connection_error(ActiveRecord::ConnectionNotEstablished.new("connection to server at \"127.0.0.1\", port 5999 failed: Connection refused\n\tIs the server running?"))
+
+      expect { server_database("queue").with_connection { raise "the block ran" } }.to raise_error(
+        RailsAiContext::AppDatabases::Unreachable,
+        'The queue database cannot be reached: connection to server at "127.0.0.1", port 5999 failed: Connection refused. ' \
+        "Start its server, or fix its settings in config/database.yml."
+      )
+    end
+
+    it "says to create a database its server does not hold" do
+      stub_connection_error(ActiveRecord::NoDatabaseError.new("We could not find your database: shop_queue."))
+
+      expect { server_database("queue").with_connection { raise "the block ran" } }.to raise_error(
+        RailsAiContext::AppDatabases::Unreachable,
+        "The queue database cannot be reached: We could not find your database: shop_queue. " \
+        "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
+      )
+    end
+
+    it "names the primary when the app's own connection does not answer, with or without its name" do
+      stub_connection_error(ActiveRecord::ConnectionNotEstablished.new("refused"))
+      allow(RailsAiContext::AppDatabases).to receive(:for).and_return(databases)
+
+      [ nil, "primary" ].each do |name|
+        expect { RailsAiContext::AppDatabases.lease(@dir, name) { raise "the block ran" } }
+          .to raise_error(RailsAiContext::AppDatabases::Unreachable, /\AThe primary database cannot be reached: refused\. /), name.inspect
+      end
+    end
+
+    it "hands an error the block raises back as it is" do
+      list = databases("queue" => config(Rails.env, "queue", sqlite_file("queue")))
+
+      expect { list.fetch("queue").with_connection { |conn| conn.select_value("SELECT nope FROM marker") } }.to raise_error(ActiveRecord::StatementInvalid)
+      expect { RailsAiContext::AppDatabases.lease(@dir, nil) { raise ActiveRecord::ConnectionNotEstablished, "mid-query" } }
+        .to raise_error(ActiveRecord::ConnectionNotEstablished, "mid-query")
     end
 
     it "refuses a database only a committed dump names" do

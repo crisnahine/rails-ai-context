@@ -141,8 +141,12 @@ Ten tools that each answered one section of the app's configuration leave
   a table another database holds names that database.
   `rails_runtime_info` checks the name whatever the `section`: a name it
   cannot reach is an error for every section, and a section that does not
-  read `database` says so. A named database whose server does not answer is
-  an error that names it and says what stopped the connection. Under a named
+  read `database` says so.
+  A database no connection reaches is named, with what stopped the
+  connection and what to do: create it when its server does not hold it,
+  start the server or fix its settings otherwise. For a named database that
+  is an error for the call; with none, the Database section says so about
+  the primary and the other sections still answer. Under a named
   database the Database section shows that database's own pending
   migrations, and for a replica or a database with `database_tasks: false`
   it says Rails runs none on it.

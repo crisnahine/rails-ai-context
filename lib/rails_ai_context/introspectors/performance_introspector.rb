@@ -107,7 +107,7 @@ module RailsAiContext
           ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
-            tree: TREE_LISTENER,
+            column_macros: COLUMN_MACRO_LISTENER,
             mixins: Listeners::MixinsListener,
             counter_culture: -> { Listeners::GenericMacroListener.new(:counter_culture) }
           })
@@ -144,22 +144,24 @@ module RailsAiContext
         end
       end
 
-      # Gem macros that declare a parent key, with the option that renames it.
-      # ponytail: a fixed list; a gem outside it declares keys the static walk cannot see.
+      # Tree gem macros, which declare a parent key, with the option that renames it.
       TREE_MACROS = { acts_as_tree: :foreign_key, acts_as_nested_set: :parent_column,
                       has_closure_tree: :parent_column_name }.freeze
       # paper_trail adds `has_many :versions, as: :item` when the app boots.
       VERSIONS_MACRO = :has_paper_trail
-      TREE_LISTENER = -> { Listeners::GenericMacroListener.new(*TREE_MACROS.keys, VERSIONS_MACRO) }
-      TREE_CONCERN_LISTENERS = { tree: TREE_LISTENER, mixins: Listeners::MixinsListener }.freeze
+      # Gem macros that declare a column.
+      # ponytail: a fixed list; a gem outside it declares columns the static walk cannot see.
+      COLUMN_MACROS = [ *TREE_MACROS.keys, VERSIONS_MACRO ].freeze
+      COLUMN_MACRO_LISTENER = -> { Listeners::GenericMacroListener.new(*COLUMN_MACROS) }
+      COLUMN_MACRO_CONCERN_LISTENERS = { column_macros: COLUMN_MACRO_LISTENER, mixins: Listeners::MixinsListener }.freeze
 
       # The [table, column] a gem macro declares, in the model or its concerns.
       # The models section cannot carry it statically: the macro is a gem's.
       def macro_columns(ast, class_name)
-        collected = ConcernMacros.collect(root, ast[:mixins], keys: %i[tree], prefer: "model",
+        collected = ConcernMacros.collect(root, ast[:mixins], keys: %i[column_macros], prefer: "model",
                                           within: class_name, cache: (@concern_cache ||= {}),
-                                          listeners: TREE_CONCERN_LISTENERS).collected
-        (ast[:tree] + Array(collected[:tree])).map do |macro|
+                                          listeners: COLUMN_MACRO_CONCERN_LISTENERS).collected
+        (ast[:column_macros] + Array(collected[:column_macros])).map do |macro|
           options = macro[:options] || {}
           next [ versions_table(options, class_name), "item_id" ] if macro[:macro] == VERSIONS_MACRO
 

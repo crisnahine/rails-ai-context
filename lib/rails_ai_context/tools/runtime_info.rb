@@ -37,7 +37,7 @@ module RailsAiContext
           return refusal
         end
         named = !database.to_s.empty?
-        AppDatabases.for(rails_app.root).fetch(database).verify! if named
+        AppDatabases.lease(rails_app.root, database) { nil } if named
 
         lines = [ "# Runtime Info", "" ]
 
@@ -104,7 +104,9 @@ module RailsAiContext
           return [ "## Database", "", "_ActiveRecord not available._", "" ] unless defined?(ActiveRecord::Base)
 
           AppDatabases.lease(rails_app.root, database) { |conn| database_lines(conn, detail, database) }
-        rescue AppDatabases::Missing => e
+        rescue AppDatabases::Missing, AppDatabases::Unreachable => e
+          raise unless database.to_s.empty?
+
           [ "## Database", "", "_Not available: #{e.message}_", "" ]
         rescue AppDatabases::Error
           raise
@@ -281,7 +283,7 @@ module RailsAiContext
             AppDatabases.present!(config.name, config)
           end
           nil
-        rescue AppDatabases::Missing => e
+        rescue AppDatabases::Missing, AppDatabases::Unreachable => e
           e.message
         end
 
