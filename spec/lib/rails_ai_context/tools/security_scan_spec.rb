@@ -103,6 +103,28 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text.index("Mass Assignment")).to be < text.index("Unmaintained Dependency")
       end
 
+      it "keeps brakeman's order for warnings on one line" do
+        report["warnings"] = (1..24).map do |i|
+          { "warning_type" => "Remote Code Execution", "message" => format("CVE-2020-%04d", i), "file" => "Gemfile.lock",
+            "line" => 7, "confidence" => "High", "code" => nil, "cwe_id" => [ 94 ] }
+        end
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text.scan(/CVE-2020-\d+/).uniq).to eq((1..24).map { |i| format("CVE-2020-%04d", i) })
+      end
+
+      it "lists types with the same count in brakeman's order" do
+        report["warnings"] = (1..24).flat_map do |i|
+          [ { "warning_type" => format("Type%02d", i), "message" => "m", "file" => "app/x.rb", "line" => i,
+              "confidence" => "Medium", "code" => nil, "cwe_id" => [ 1 ] } ] * (i % 3 == 0 ? 2 : 1)
+        end
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        doubles = (3..24).step(3).map { |i| format("Type%02d: 2", i) }
+        singles = (1..24).reject { |i| (i % 3).zero? }.map { |i| format("Type%02d: 1", i) }
+        expect(text.scan(/Type\d\d: \d/)).to eq(doubles + singles)
+      end
+
       it "says which brakeman answered and where it ran from" do
         text = described_class.call.content.first[:text]
 

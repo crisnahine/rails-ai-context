@@ -108,7 +108,7 @@ module RailsAiContext
           end
         end
 
-        warnings = warnings.sort_by { |w| [ w.confidence, w.file.relative, w.line || 0 ] }
+        warnings = warnings.sort_by.with_index { |w, i| [ w.confidence, w.file.relative, w.line || 0, i ] }
 
         format_response(warnings, checks_run, detail, files, source_note)
       end
@@ -502,7 +502,7 @@ module RailsAiContext
         end
         lines << ""
         lines << "## By Type"
-        by_type.sort_by { |_, ws| -ws.size }.each do |type, ws|
+        by_type.sort_by.with_index { |(_, ws), i| [ -ws.size, i ] }.each do |type, ws|
           lines << "- #{type}: #{ws.size}"
         end
         lines << "" << "_Use `detail:\"standard\"` for file locations, or `detail:\"full\"` for code and remediation._"
