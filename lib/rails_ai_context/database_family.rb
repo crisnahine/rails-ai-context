@@ -7,6 +7,9 @@ module RailsAiContext
     # A statement ran past the timeout it was given.
     class TimedOut < RailsAiContext::Error; end
 
+    # Another connection holds a lock on the database, so the statement did not run.
+    class Busy < RailsAiContext::Error; end
+
     # The read cannot be guarded (an adapter with no family, a MySQL transaction already open), so nothing was sent.
     class Unsupported < RailsAiContext::Error; end
 
@@ -213,10 +216,13 @@ module RailsAiContext
       rows.group_by(&:first).transform_values { |found| found.map(&:last).then { |texts| texts.all? ? texts.join("\n") : nil } }
     end
 
-    # Runs the block and raises TimedOut for a database's timeout. Message text is never read.
+    BUSY = "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished."
+
+    # Runs the block and raises TimedOut for a database's timeout, Busy for a locked SQLite database. Message text is never read.
     def bounding
       yield
     rescue ActiveRecord::StatementInvalid => e
+      raise Busy, BUSY if busy?(e)
       raise TimedOut, e.message if timed_out?(e)
 
       raise
@@ -240,6 +246,12 @@ module RailsAiContext
         (defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed))
     end
 
+    # A SQLite read that found the database locked, at once or after the connection's busy timeout.
+    # Rails 7.0 gives it no class of its own.
+    def busy?(error)
+      defined?(SQLite3::BusyException) && error.cause.is_a?(SQLite3::BusyException)
+    end
+
     def timed_out?(error)
       # A connection the server dropped is a QueryAborted on Rails 7.1 and later, and it is no timeout.
       return false if defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed)
@@ -248,9 +260,6 @@ module RailsAiContext
       return true if error.is_a?(ActiveRecord::LockWaitTimeout)
 
       cause = error.cause
-      # A SQLite read that waited out the connection's busy timeout. Rails 7.0 gives it no class of its own.
-      return true if defined?(SQLite3::BusyException) && cause.is_a?(SQLite3::BusyException)
-
       code = if cause.respond_to?(:error_number) then cause.error_number
       elsif cause.respond_to?(:error_code) then cause.error_code
       end

@@ -350,7 +350,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   end
 
   describe "a block of reads on SQLite" do
-    it "answers what the block answers, and raises a read that waited out the busy timeout as the timeout" do
+    it "answers what the block answers, and raises a read of a database another connection has locked as busy, which is no timeout" do
       conn = double("connection")
       busy = begin
         begin
@@ -363,7 +363,9 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
 
       expect(described_class::SQLITE.bounded(conn, timeout: 1) { :read }).to eq(:read)
-      expect { described_class::SQLITE.bounded(conn, timeout: 1) { raise busy } }.to raise_error(described_class::TimedOut)
+      expect { described_class::SQLITE.bounded(conn, timeout: 1) { raise busy } }
+        .to raise_error(described_class::Busy) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+      expect(described_class.timed_out?(busy)).to be(false)
     end
   end
 

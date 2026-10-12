@@ -32,7 +32,7 @@ module RailsAiContext
           return Rows.new(result.columns, result.rows, false) if result
         end
 
-        result = on_app_connection(conn, sql, deadline)
+        result = DatabaseFamily.bounding { on_app_connection(conn, sql, deadline) }
         Rows.new(result.columns, result.rows, true)
       end
 
@@ -263,12 +263,16 @@ module RailsAiContext
         reader.close
         payload = begin
           db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
-          db.busy_timeout = (timeout * 1000).to_i
+          # Under the deadline, so a database that stays locked is answered as locked before the parent stops waiting.
+          db.busy_timeout = (timeout * 800).to_i
           stmt = db.prepare(sql)
           [ :ok, stmt.columns, stmt.to_a ]
         rescue => e
           # Which step failed is the child's own fact; the message can hold text from the statement.
-          [ db && !stmt && !e.is_a?(SQLite3::BusyException) ? :unprepared : :error, "#{e.class}: #{e.message}" ]
+          status = if e.is_a?(SQLite3::BusyException) then :busy
+          else db && !stmt ? :unprepared : :error
+          end
+          [ status, "#{e.class}: #{e.message}" ]
         end
         bytes = Marshal.dump(payload)
         writer.write([ bytes.bytesize ].pack("Q>"), bytes)
@@ -286,6 +290,7 @@ module RailsAiContext
         rescue ArgumentError, TypeError
           raise ActiveRecord::StatementInvalid, "the SQLite query process exited without a result"
         end
+        raise Busy, BUSY if status == :busy
         raise ActiveRecord::StatementInvalid, rest.first if status == :error
         return nil if status == :unprepared
 

@@ -383,6 +383,20 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect { described_class.for(conn, context: {}) }.to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
     end
 
+    it "raises the same way when the generated columns, the virtual tables or the list of views cannot be read" do
+      failed = ActiveRecord::StatementInvalid.new("SQLite3::IOException: disk I/O error")
+      [ :generated_columns, :index_tables ].each do |read|
+        allow(runtime).to receive(read).and_raise(failed)
+        expect { described_class.for(conn, context: context) }.to raise_error(
+          described_class::Unreadable, "The columns of the primary database could not be read, so its secret columns cannot be told and no query runs on it."
+        ), read.to_s
+        allow(runtime).to receive(read).and_call_original
+      end
+      allow(runtime).to receive(:view_definitions).and_raise(failed)
+      allow(conn).to receive(:views).and_raise(failed)
+      expect { described_class.for(conn, context: context) }.to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
+    end
+
     it "raises for the primary when the connection cannot be read and the context's schema lists no table" do
       allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
       expect { described_class.for(conn, context: { schema: { tables: {} } }) }

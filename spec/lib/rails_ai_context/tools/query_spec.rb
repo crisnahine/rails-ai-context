@@ -338,11 +338,10 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     context "production environment guard" do
-      it "blocks in production by default" do
+      it "blocks in production by default, as an error" do
         allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
         result = described_class.call(sql: "SELECT 1")
-        text = result.content.first[:text]
-        expect(text).to include("disabled in production")
+        expect([ result.error?, result.content.first[:text] ]).to match([ true, a_string_including("disabled in production") ])
       end
 
       it "allows in production when config overrides" do
@@ -560,6 +559,28 @@ RSpec.describe RailsAiContext::Tools::Query do
       result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 5)
       expect(result.rows).to eq([ [ 4 ] ])
     ensure
+      writer&.close
+    end
+
+    it "answers a database another process keeps locked as locked, from the reads before the statement and from the child" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        $stdout.puts "locked"
+        $stdout.flush
+        sleep 30
+      RUBY
+      expect(writer.gets).to eq("locked\n")
+
+      response = described_class.call(sql: "SELECT count(*) AS n FROM nums")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished." ]
+      )
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 1) }
+        .to raise_error(RailsAiContext::DatabaseFamily::Busy)
+    ensure
+      Process.kill(:KILL, writer.pid) if writer
       writer&.close
     end
 
@@ -1028,10 +1049,21 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).to include("full table scan").or include("SCAN")
     end
 
-    it "rejects non-SELECT queries with explain" do
-      result = described_class.call(sql: "SHOW tables", explain: true)
-      text = result.content.first[:text]
-      expect(text).to include("EXPLAIN only supports SELECT")
+    it "says what explain takes for a statement that is no SELECT, and that an EXPLAIN is one already" do
+      expect(described_class.call(sql: "SHOW tables", explain: true).content.first[:text])
+        .to eq("`explain: true` takes a SELECT or WITH statement and explains it.")
+      [ "EXPLAIN SELECT 1 AS test", "explain query plan SELECT 1 AS test" ].each do |sql|
+        response = described_class.call(sql: sql, explain: true)
+        expect([ response.error?, response.content.first[:text] ]).to eq(
+          [ true, "The statement is already an EXPLAIN. `explain: true` takes a SELECT or WITH statement and explains it." ]
+        ), sql
+      end
+    end
+
+    it "ends an SQL error where the database's message ends, with no colon after it" do
+      expect(described_class.call(sql: "SELECT id FROM no_such_table").content.first[:text]).to eq("SQL error: SQLite3::SQLException: no such table: no_such_table")
+      expect(described_class.call(sql: "SELECT id FROM no_such_table", explain: true).content.first[:text])
+        .to eq("EXPLAIN failed: SQLite3::SQLException: no such table: no_such_table")
     end
 
     it "does not apply row limit to EXPLAIN output" do
@@ -1735,6 +1767,37 @@ RSpec.describe RailsAiContext::Tools::Query do
         { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_query", arguments: arguments } }
       )[:result]
       [ result[:content].first[:text], result[:isError] ]
+    end
+
+    it "answers the production guard with a non-zero exit on the CLI and isError over MCP" do
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
+      guard = [ "rails_query is disabled in production for data privacy. Set config.allow_query_in_production = true to override.", true ]
+
+      expect(cli("sql=SELECT 1")).to eq(guard)
+      expect(mcp(sql: "SELECT 1")).to eq(guard)
+    end
+
+    it "answers a locked SQLite database as locked, with no word of a timeout, for a query and for its EXPLAIN" do
+      busy = begin
+        begin
+          raise SQLite3::BusyException, "database is locked"
+        rescue SQLite3::BusyException
+          raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
+        end
+      rescue ActiveRecord::StatementInvalid => e
+        e
+      end
+      locked = [ "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished.", true ]
+
+      allow(ActiveRecord::Base.connection).to receive(:select_all).and_wrap_original do |original, sql, *rest, **options|
+        sql.to_s.match?(/FROM users/) ? raise(busy) : original.call(sql, *rest, **options)
+      end
+      expect(cli("sql=SELECT id FROM users")).to eq(locked)
+      expect(cli("sql=SELECT id FROM users", "explain=true")).to eq(locked)
+      expect(mcp(sql: "SELECT id FROM users")).to eq(locked)
+
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:relation_columns).and_raise(busy)
+      expect(mcp(sql: "SELECT 1 AS one")).to eq(locked)
     end
 
     it "answers a failing EXPLAIN with a non-zero exit on the CLI and isError over MCP" do

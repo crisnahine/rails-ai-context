@@ -71,7 +71,7 @@ module RailsAiContext
         end
 
         unless config.allow_query_in_production || rails_env_name != "production"
-          return text_response(
+          return error_response(
             "rails_query is disabled in production for data privacy. " \
             "Set config.allow_query_in_production = true to override."
           )
@@ -92,7 +92,7 @@ module RailsAiContext
         return no_family_response(family) if family && !family.known?
 
         AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain, database) }
-      rescue AppDatabases::Error, SecretColumns::Unreadable => e
+      rescue AppDatabases::Error, SecretColumns::Unreadable, DatabaseFamily::Busy => e
         error_response(e.message)
       rescue ActiveRecord::ConnectionNotEstablished => e
         # The lease checked the connection answers, so this one was lost while the statement ran.
@@ -238,7 +238,10 @@ module RailsAiContext
       end
 
       private_class_method def self.explain_response(family, connection, sql, timeout, database)
-        return error_response("EXPLAIN only supports SELECT queries.") unless sql.match?(/\A\s*(SELECT|WITH)\b/i)
+        unless sql.match?(/\A\s*(SELECT|WITH)\b/i)
+          return error_response("#{"The statement is already an EXPLAIN. " if sql.match?(/\A\s*EXPLAIN\b/i)}" \
+            "`explain: true` takes a SELECT or WITH statement and explains it.")
+        end
 
         parsed = family.explain(connection, sql, timeout: timeout)
 
@@ -459,8 +462,8 @@ module RailsAiContext
       end
 
       private_class_method def self.clean_error_message(message)
-        # Remove internal Ruby traces and framework noise
-        message.lines.first&.strip || message.strip
+        # The first line only. Rails ends it with a colon where the statement follows on the next.
+        (message.lines.first || message).strip.delete_suffix(":")
       end
 
       # Quacks like ActiveRecord::Result for redacted output, for a SQLite query

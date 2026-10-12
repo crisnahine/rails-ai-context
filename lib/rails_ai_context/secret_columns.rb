@@ -49,10 +49,7 @@ module RailsAiContext
         schemas = family.known? ? family.unqualified_schemas(connection) : []
         # The context's schema is the primary's, so no other database falls back to it.
         relations = relations_from(connection, schemas) || (relations_from(context) if primary?(connection))
-        unless relations
-          raise Unreadable, "The columns of the #{connection.pool.db_config.name} database could not be read, so its secret " \
-            "columns cannot be told and no query runs on it."
-        end
+        raise unreadable(connection) unless relations
 
         relations = relations.merge(CATALOG_CREDENTIALS) if family.plan_checks?
         new(relations: relations, encrypted: encrypted_from(context), connection: connection, **definitions_from(connection, schemas))
@@ -73,6 +70,19 @@ module RailsAiContext
       /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
     end
 
+    def self.unreadable(connection)
+      Unreadable.new("The columns of the #{connection.pool.db_config.name} database could not be read, so its secret " \
+        "columns cannot be told and no query runs on it.")
+    end
+    private_class_method :unreadable
+
+    # An error that is the call's own answer, so no other read stands in for the one that raised it.
+    def self.answered?(error)
+      DatabaseFamily.lost_connection?(error) ||
+        (error.is_a?(ActiveRecord::StatementInvalid) && (DatabaseFamily.timed_out?(error) || DatabaseFamily.busy?(error)))
+    end
+    private_class_method :answered?
+
     def self.primary?(connection)
       connection.pool.db_config.name == ActiveRecord::Base.connection_db_config.name
     end
@@ -86,7 +96,7 @@ module RailsAiContext
       views = begin
         family.view_definitions(connection, schemas)
       rescue ActiveRecord::StatementInvalid => e
-        raise if DatabaseFamily.timed_out?(e) || DatabaseFamily.lost_connection?(e)
+        raise if answered?(e)
 
         # Named with no definition, so each one is refused as unreadable.
         connection.views.to_h { |view| [ view, nil ] }
@@ -95,6 +105,10 @@ module RailsAiContext
       views = views.transform_values { |definition| definition && SqlGate.comment_free(definition.to_s, family) }
       { views: views, traced_views: family.traced_views(connection, schemas), generated: family.generated_columns(connection, schemas),
         index_tables: family.index_tables(connection, schemas) }
+    rescue ActiveRecord::StatementInvalid => e
+      raise if answered?(e)
+
+      raise unreadable(connection)
     end
 
     def self.database_key(connection)
@@ -124,7 +138,7 @@ module RailsAiContext
       end
     rescue StandardError => e
       # A read the timeout ended is the call's timeout, so it is no reason to fall back.
-      raise if DatabaseFamily.lost_connection?(e) || (e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e))
+      raise if answered?(e)
 
       nil
     end
