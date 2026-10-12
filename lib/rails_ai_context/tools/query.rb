@@ -91,19 +91,34 @@ module RailsAiContext
         AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain) }
       rescue AppDatabases::Error => e
         error_response(e.message)
-      rescue ActiveRecord::ConnectionNotEstablished, ActiveRecord::NoDatabaseError => e
-        text_response("Database unavailable: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Check `config/database.yml` for correct host/port/credentials\n- Try `RAILS_ENV=test` if the development DB is remote\n- Run `bin/rails db:create` if the database doesn't exist yet")
+      rescue ActiveRecord::ConnectionNotEstablished => e
+        unreachable_response(database, e, "cannot be reached", [
+          "Check %s for the host, port and credentials", "Start the database server if it is not running"
+        ])
       rescue DatabaseFamily::TimedOut
-        text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
+        error_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
-        # Only a missing DATABASE: PostgreSQL words a missing column and table the same way, and those are SQL errors.
-        if e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
-          text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
+        if e.is_a?(ActiveRecord::NoDatabaseError) || e.message.match?(MISSING_DATABASE)
+          unreachable_response(database, e, "was not found on its server", [
+            "Run `bin/rails db:create` or `bin/rails db:prepare` to create it", "Check the database name in %s"
+          ])
         else
           error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
         end
       rescue => e
         error_response("Query failed: #{clean_error_message(e.message)}")
+      end
+
+      # Only a missing DATABASE: PostgreSQL words a missing column and table the same way, and those are SQL errors.
+      MISSING_DATABASE = /database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i
+
+      private_class_method def self.unreachable_response(database, error, what, advice)
+        named = !database.to_s.empty?
+        name = named ? database.to_s : ActiveRecord::Base.connection_db_config.name
+        advice += [ "Try `RAILS_ENV=test` if the development database is remote" ] unless named
+        entry = "the `#{name}` entry of `config/database.yml`"
+        error_response("The #{name} database #{what}: #{clean_error_message(error.message)}\n\n" \
+          "**Troubleshooting:**\n#{advice.map { |line| "- #{format(line, entry)}" }.join("\n")}")
       end
 
       private_class_method def self.answer(connection, sql, limit, format, explain)

@@ -173,19 +173,28 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         expect(result.error?).to be true
         expect(result.content.first[:text]).to include("SQL error:")
-        expect(result.content.first[:text]).not_to include("Database not found")
+        expect(result.content.first[:text]).not_to include("was not found on its server")
       end
 
-      it "answers the family's timeout as the timeout" do
+      it "answers the family's timeout as an error" do
         allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
 
         result = described_class.call(sql: "SELECT SLEEP(60) FROM tags")
 
         expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
-        expect(result.error?).to be false
+        expect(result.error?).to be true
       end
 
-      it "flags an SQL error that mentions a timeout as an error, not a timeout" do
+      it "answers a timed out EXPLAIN as the same error" do
+        allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
+
+        result = described_class.call(sql: "SELECT id FROM tags", explain: true)
+
+        expect(result.content.first[:text]).to start_with("Query exceeded 5 second timeout")
+        expect(result.error?).to be true
+      end
+
+      it "flags an SQL error that mentions a timeout as an SQL error" do
         allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
           .and_raise(ActiveRecord::StatementInvalid, "Mysql2::Error: Unknown column 'timeout' (maximum statement execution time exceeded)")
 
@@ -208,15 +217,33 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.content.first[:text]).to include("refuses the SQLServer adapter")
       end
 
-      it "still explains a database that does not exist" do
+      [
+        ActiveRecord::StatementInvalid.new(%(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist)),
+        ActiveRecord::NoDatabaseError.new("Unknown database 'racfix_nope'")
+      ].each do |missing|
+        it "answers a database its server does not have as an error that names it (#{missing.class.name.demodulize})" do
+          allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only).and_raise(missing)
+
+          result = described_class.call(sql: "SELECT 1")
+          text = result.content.first[:text]
+
+          expect(result.error?).to be true
+          expect(text).to start_with("The primary database was not found on its server:").and include("racfix_nope")
+          expect(text).to include("`bin/rails db:create`", "the `primary` entry of `config/database.yml`", "RAILS_ENV=test")
+        end
+      end
+
+      it "answers a server that cannot be reached as an error that names the database" do
         allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
-          .and_raise(ActiveRecord::StatementInvalid,
-                     %(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist))
+          .and_raise(ActiveRecord::ConnectionNotEstablished, "connection to server at 127.0.0.1, port 5432 failed")
 
         result = described_class.call(sql: "SELECT 1")
+        text = result.content.first[:text]
 
-        expect(result.content.first[:text]).to include("Database not found")
-        expect(result.error?).to be false
+        expect(result.error?).to be true
+        expect(text).to start_with("The primary database cannot be reached: connection to server at 127.0.0.1")
+        expect(text).to include("the `primary` entry of `config/database.yml`", "RAILS_ENV=test")
+        expect(text).not_to include("db:create")
       end
 
       it "flags genuine SQL execution errors as error results" do
@@ -877,6 +904,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     before do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
       allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ "[]" ] ]))
+      allow(runtime).to receive(:plan).and_return("Node Type" => "Result")
     end
 
     it "runs regular queries through the PostgreSQL family" do
@@ -1156,6 +1184,38 @@ RSpec.describe RailsAiContext::Tools::Query do
       response = described_class.call(sql: "SELECT id FROM orders WHERE notes LIKE '%ready for update%'")
       expect(response.error?).to be(false)
       expect(response.content.first[:text]).to include("| 4")
+    end
+  end
+
+  describe "a PostgreSQL statement whose plan cannot be read" do
+    let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
+
+    before do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostgreSQL")
+      allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[row], [ [ "secret-value" ] ]))
+    end
+
+    def answer(explain: false)
+      response = described_class.call(sql: "SELECT row_to_json(a) AS row FROM accounts a", explain: explain)
+      expect(response.error?).to be(true)
+      expect(runtime).not_to have_received(:read_only)
+      response.content.first[:text]
+    end
+
+    it "answers planning's timeout as the timeout and runs nothing" do
+      allow(runtime).to receive(:plan).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "canceling statement due to statement timeout")
+      expect(answer).to start_with("Query exceeded 5 second timeout")
+      expect(answer(explain: true)).to start_with("Query exceeded 5 second timeout")
+    end
+
+    it "answers planning's error as the SQL error and runs nothing" do
+      allow(runtime).to receive(:plan).and_raise(ActiveRecord::StatementInvalid, %(PG::UndefinedTable: ERROR:  relation "accounts" does not exist))
+      expect(answer).to start_with(%(SQL error: PG::UndefinedTable: ERROR:  relation "accounts" does not exist))
+    end
+
+    it "refuses the statement when planning answers no plan" do
+      allow(runtime).to receive(:plan).and_return(nil)
+      expect(answer).to include("its plan could not be read")
     end
   end
 

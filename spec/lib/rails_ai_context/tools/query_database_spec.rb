@@ -105,6 +105,29 @@ RSpec.describe "the database argument" do
       expect(text(query(sql: "SELECT id FROM users", database: "queue")))
         .to include('The users table is on the primary database: run the query again with database: "primary".')
     end
+
+    it "answers a named database whose server cannot be reached as an error that names it" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+        .and_raise(ActiveRecord::ConnectionNotEstablished, "connection refused")
+
+      response = query(sql: "SELECT 1", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to start_with("The queue database cannot be reached: connection refused").and include("the `queue` entry")
+      expect(text(response)).not_to include("RAILS_ENV=test")
+    end
+
+    it "answers a named database its server does not have as an error that names it" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+        .and_raise(ActiveRecord::NoDatabaseError, "Unknown database 'app_queue'")
+
+      response = query(sql: "SELECT 1", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to start_with("The queue database was not found on its server: Unknown database 'app_queue'")
+      expect(text(response)).to include("`bin/rails db:create`", "the `queue` entry")
+      expect(text(response)).not_to include("RAILS_ENV=test")
+    end
   end
 
   describe "rails_runtime_info" do
