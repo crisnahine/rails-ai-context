@@ -746,8 +746,8 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
 
-      # A *_params method that hands the whole params to another class (`PermittedAttributes::Enterprise.new(params)`),
-      # or returns another strong-params method, permits through it; in source order with the rest.
+      # A *_params method that returns what another class makes of the whole params
+      # (`PermittedAttributes::Enterprise.new(params).call`), or another strong-params method, permits through it.
       def add_delegating_params(tree, param_methods)
         found = param_methods.to_set { |entry| entry[:name] }
         candidates = AstWalk.each(tree).grep(Prism::DefNode).select { |d| d.name.end_with?("_params") && !found.include?(d.name.to_s) }
@@ -764,12 +764,14 @@ module RailsAiContext
       end
 
       def delegates_params?(body, found)
-        return false unless body
-
-        AstWalk.each(body).grep(Prism::CallNode).any? do |call|
-          (call.arguments&.arguments || []).any? { |arg| arg.is_a?(Prism::CallNode) && arg.name == :params && arg.receiver.nil? && arg.arguments.nil? } ||
+        returned_calls(body).any? do |call|
+          (call.arguments&.arguments || []).any? { |arg| bare_params?(arg) } ||
             (call.receiver.nil? && call.arguments.nil? && found.include?(call.name.to_s))
         end
+      end
+
+      def bare_params?(node)
+        node.is_a?(Prism::CallNode) && node.name == :params && node.receiver.nil? && node.arguments.nil?
       end
 
       # A strong-params method is one that filters params, whatever it is named.
@@ -807,21 +809,26 @@ module RailsAiContext
         end
       end
 
-      # Whether the method's last expression, the value it assigns, or a branch's last, is a chain through `call`.
       def returned?(body, call)
+        returned_calls(body).any? { |node| node.equal?(call) }
+      end
+
+      # The calls in the chain a method returns: its last expression, the value that assigns, or
+      # each branch's last, followed through receivers (`params.require(:x).permit(:a).to_h`).
+      def returned_calls(body)
         body = body.statements if body.is_a?(Prism::BeginNode) || body.is_a?(Prism::ElseNode)
         node = body.is_a?(Prism::StatementsNode) ? body.body.last : body
         node = node.value while node.respond_to?(:value) && node.class.name.end_with?("WriteNode")
         case node
-        when Prism::IfNode then return [ node.statements, node.subsequent ].any? { |branch| branch && returned?(branch, call) }
-        when Prism::UnlessNode then return [ node.statements, node.else_clause ].any? { |branch| branch && returned?(branch, call) }
+        when Prism::IfNode then return [ node.statements, node.subsequent ].compact.flat_map { |branch| returned_calls(branch) }
+        when Prism::UnlessNode then return [ node.statements, node.else_clause ].compact.flat_map { |branch| returned_calls(branch) }
         end
+        calls = []
         while node.is_a?(Prism::CallNode)
-          return true if node.equal?(call)
-
+          calls << node
           node = node.receiver
         end
-        false
+        calls
       end
 
       # Locals a method assigns from params (`attrs = params.require(:user)`), by name, to the value assigned.
@@ -861,8 +868,7 @@ module RailsAiContext
       # `params.slice(:a, :b).permit!` lets through only the keys it slices (none read when they are
       # computed); nil when nothing in the chain slices.
       def sliced_keys(call, locals)
-        receiver = call.receiver
-        receiver = locals[receiver.name] if receiver.is_a?(Prism::LocalVariableReadNode)
+        receiver = through_local(call.receiver, locals)
         return nil unless receiver.is_a?(Prism::CallNode)
         return sliced_keys(receiver, locals) unless receiver.name == :slice
 
@@ -871,9 +877,13 @@ module RailsAiContext
         keys.size == args.size ? keys : []
       end
 
+      # A local the method assigned from params reads as the value it holds.
+      def through_local(node, locals)
+        node.is_a?(Prism::LocalVariableReadNode) ? locals[node.name] : node
+      end
+
       def find_require_in_chain(node, locals = {})
-        receiver = node.receiver
-        receiver = locals[receiver.name] if receiver.is_a?(Prism::LocalVariableReadNode)
+        receiver = through_local(node.receiver, locals)
         return nil unless receiver.is_a?(Prism::CallNode)
         return receiver if receiver.name == :require
         find_require_in_chain(receiver, locals)
@@ -900,7 +910,7 @@ module RailsAiContext
                 fields = permit_value(val)
                 fields.any? ? nested[key] = fields : (val.is_a?(Prism::HashNode) ? hashes : arrays) << key
               else
-                computed[key] = computed_filter(val)
+                computed[key] = filter_source(val)
               end
             end
           when Prism::AssocSplatNode
@@ -918,7 +928,7 @@ module RailsAiContext
       end
 
       # A key's value always filters a nested hash or array, so one computed at run time is kept as written.
-      def computed_filter(node)
+      def filter_source(node)
         node.slice.gsub(/\s*\n\s*/, " ")
       end
 
@@ -947,7 +957,7 @@ module RailsAiContext
                 collect_expect_array(assoc.value, key, permits, nested, arrays, hashes, computed)
               else
                 result[:requires] ||= key
-                computed[key] = computed_filter(assoc.value)
+                computed[key] = filter_source(assoc.value)
               end
             end
           end
@@ -981,7 +991,7 @@ module RailsAiContext
                 fields = permit_value(inner.value)
                 fields.any? ? nested[inner_key] = fields : hashes << inner_key
               else
-                computed[inner_key] = computed_filter(inner.value)
+                computed[inner_key] = filter_source(inner.value)
               end
             end
           end

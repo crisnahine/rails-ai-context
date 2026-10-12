@@ -561,6 +561,16 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         def search_params
           SearchForm.new(params[:q])
         end
+
+        def log_params
+          permitted_resource_params
+          { safe: true }
+        end
+
+        def audit_params
+          AuditLog.write(params)
+          { safe: true }
+        end
       RUBY
 
       expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "enterprise_params" }, { name: "permitted_resource_params" } ])
