@@ -395,7 +395,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "reads a MySQL text column's size as schema.rb writes it" do
         column = double(name: "body", type: :text, null: true, default: nil, default_function: nil, limit: 16_777_215, precision: nil,
                         scale: nil, comment: nil, collation: nil, sql_type: "mediumtext", array?: false)
-        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false))
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2"))
 
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
@@ -404,7 +404,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "takes a MySQL table's own collation, read once for every table" do
         column = double(name: "name", type: :string, null: true, default: nil, default_function: nil, limit: nil, precision: nil,
                         scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
-        connection = double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false)
+        connection = double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2")
         allow(connection).to receive(:select_rows).once
           .and_return([ [ "userxroles", "utf8mb4_bin" ], [ "user_roles", "utf8mb4_0900_ai_ci" ] ])
         allow(introspector).to receive(:connection).and_return(connection)
@@ -418,7 +418,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           double(name: name, type: type, null: true, default: nil, default_function: nil, limit: nil, precision: nil,
                  scale: nil, comment: nil, collation: nil, sql_type: sql_type, array?: false)
         end
-        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: columns, native_database_types: {}, mariadb?: false))
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: columns, native_database_types: {}, adapter_name: "Mysql2"))
 
         expect(introspector.send(:extract_columns, "pa_v_shapes").map { |c| c[:type] }).to eq([ "enum('a','b')", "set('x','y')", "timestamp" ])
       end

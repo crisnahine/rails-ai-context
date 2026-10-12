@@ -7,9 +7,6 @@ module RailsAiContext
     module PgPartitions
       module_function
 
-      # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
-      POSTGRES_ADAPTER = /postg/i
-
       # Scoped the way connection.tables is.
       NAMES_SQL = <<~SQL.squish.freeze
         SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -19,7 +16,7 @@ module RailsAiContext
       def names(conn)
         # relispartition arrived with partitions in 10; querying it before then
         # fails, and a failed query aborts any open transaction.
-        return [] unless conn.adapter_name.match?(POSTGRES_ADAPTER) && conn.database_version >= 10_00_00
+        return [] unless RailsAiContext::DatabaseFamily.of(conn).key == :postgresql && conn.database_version >= 10_00_00
 
         conn.select_values(NAMES_SQL)
       rescue => e

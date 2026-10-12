@@ -143,17 +143,20 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, "unknown", label: "adapter_name")
       end
 
+      def family
+        RailsAiContext::DatabaseFamily.of(adapter_name)
+      end
+
       def sqlite?
-        adapter_name.to_s.match?(/sqlite/i)
+        family.key == :sqlite
       end
 
       def postgres?
-        adapter_name.to_s.match?(/postg/i)
+        family.key == :postgresql
       end
 
-      # Every MySQL adapter inherits mariadb? from AbstractMysqlAdapter.
       def mysql?
-        connection.respond_to?(:mariadb?)
+        RailsAiContext::DatabaseFamily.of(connection).key == :mysql
       end
 
       def connection
@@ -722,7 +725,7 @@ module RailsAiContext
 
       def dump_lookup(database)
         adapter = SchemaConventions.database_adapter_for(app.root.to_s, database || "primary")
-        return if adapter && !adapter.start_with?("postg")
+        return if adapter && RailsAiContext::DatabaseFamily.of(adapter).key != :postgresql
 
         _, format, path = database ? secondary_dump_files.find { |name, _, _| name == database } : [ nil, *present_dump ]
         return unless path && File.exist?(path)

@@ -153,23 +153,15 @@ module RailsAiContext
         # introspector, which also skips them).
         INTERNAL_TABLES = %w[schema_migrations ar_internal_metadata].freeze
 
-        # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
-        # "Trilogy", not "Mysql2") - matching only /mysql/ silently drops
-        # table sizes for every Trilogy app.
-        MYSQL_ADAPTER = /mysql|trilogy/i
-
-        # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
-        POSTGRES_ADAPTER = /postg/i
-
         def gather_table_sizes(conn, adapter)
           rows =
-            case adapter
-            when POSTGRES_ADAPTER
+            case DatabaseFamily.of(adapter).key
+            when :postgresql
               Introspectors::PgPartitions.table_bytes(conn).sort_by { |r| [ -r[:bytes], r[:name] ] }
-            when MYSQL_ADAPTER
+            when :mysql
               sql = "SELECT table_name AS name, (data_length + index_length) AS bytes FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() ORDER BY bytes DESC"
               conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
-            when /sqlite/
+            when :sqlite
               gather_sqlite_table_sizes(conn)
             end
           return nil unless rows
@@ -211,8 +203,8 @@ module RailsAiContext
         end
 
         def gather_index_usage(conn, adapter)
-          case adapter
-          when POSTGRES_ADAPTER
+          case DatabaseFamily.of(adapter).key
+          when :postgresql
             Introspectors::PgPartitions.index_stats(conn).sort_by { |i| [ i[:scans], i[:table], i[:index] ] }
           else
             nil

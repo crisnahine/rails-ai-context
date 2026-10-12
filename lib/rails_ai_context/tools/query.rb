@@ -212,16 +212,6 @@ module RailsAiContext
 
       HARD_ROW_CAP = 1000
 
-      # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
-      # "Trilogy", not "Mysql2") - every dispatch that branches on adapter
-      # name to apply the MySQL safety/parsing path must match both, or
-      # Trilogy apps silently fall through to the "unknown adapter" path
-      # with no READ ONLY transaction and no statement timeout.
-      MYSQL_ADAPTER = /mysql|trilogy/i
-
-      # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
-      POSTGRES_ADAPTER = /postg/i
-
       # SHOW/DESCRIBE/EXPLAIN return schema metadata (a table's column list,
       # an EXPLAIN plan), never application data rows. Two consequences:
       #   1. They're inherently bounded - appending `LIMIT n` to them is
@@ -479,7 +469,7 @@ module RailsAiContext
       end
 
       private_class_method def self.mysql_dialect?
-        ActiveRecord::Base.connection_db_config.adapter.to_s.match?(MYSQL_ADAPTER)
+        DatabaseFamily.of(ActiveRecord::Base.connection_db_config).key == :mysql
       rescue ActiveRecord::ActiveRecordError
         false
       end
@@ -763,12 +753,12 @@ module RailsAiContext
       # EXPLAIN goes through the adapter wrappers too (READ ONLY, timeout): EXPLAIN ANALYZE runs
       # the plan, so `explain: true` must not hold a connection past query_timeout.
       private_class_method def self.run_guarded(conn, adapter, sql, timeout)
-        case adapter
-        when POSTGRES_ADAPTER
+        case DatabaseFamily.of(adapter).key
+        when :postgresql
           execute_postgresql(conn, sql, timeout)
-        when MYSQL_ADAPTER
+        when :mysql
           execute_mysql(conn, sql, timeout)
-        when /sqlite/
+        when :sqlite
           execute_sqlite(conn, sql, timeout)
         else
           # Unknown adapter -- rely on Layer 1 regex validation only
@@ -1277,7 +1267,7 @@ module RailsAiContext
       end
 
       private_class_method def self.postgres_adapter?
-        ActiveRecord::Base.connection.adapter_name.to_s.match?(POSTGRES_ADAPTER)
+        DatabaseFamily.of(ActiveRecord::Base.connection).key == :postgresql
       rescue StandardError
         false
       end
@@ -1334,16 +1324,16 @@ module RailsAiContext
         conn = ActiveRecord::Base.connection
         adapter = conn.adapter_name.downcase
 
-        explain_sql, parser = case adapter
-        when POSTGRES_ADAPTER
+        explain_sql, parser = case DatabaseFamily.of(adapter).key
+        when :postgresql
           [ "EXPLAIN (FORMAT JSON, ANALYZE) #{sql}", :parse_pg_explain ]
-        when MYSQL_ADAPTER
+        when :mysql
           # MySQL 8.3+ and 9.x default explain_format to TREE, which
           # parse_mysql_explain can't read (it expects the classic
           # table/type/key/rows/Extra columns). Force TRADITIONAL explicitly
           # so parsing works regardless of the server's default.
           [ "EXPLAIN FORMAT=TRADITIONAL #{sql}", :parse_mysql_explain ]
-        when /sqlite/
+        when :sqlite
           [ "EXPLAIN QUERY PLAN #{sql}", :parse_sqlite_explain ]
         else
           [ "EXPLAIN #{sql}", :parse_generic_explain ]
