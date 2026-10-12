@@ -383,6 +383,12 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect { described_class.for(conn, context: {}) }.to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
     end
 
+    it "raises for the primary when the connection cannot be read and the context's schema lists no table" do
+      allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
+      expect { described_class.for(conn, context: { schema: { tables: {} } }) }
+        .to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
+    end
+
     it "raises a lost connection, from the columns and from the view definitions, with no fallback" do
       lost = [ ActiveRecord::ConnectionNotEstablished.new("server closed the connection") ]
       lost << ActiveRecord::ConnectionFailed.new("server has gone away") if defined?(ActiveRecord::ConnectionFailed)

@@ -121,7 +121,7 @@ module RailsAiContext
         family.relation_columns(source, schemas).reject { |table, _columns| BOOKKEEPING_TABLES.include?(table.to_s.downcase) }
       else
         tables = source&.dig(:schema, :tables)
-        return nil unless tables.is_a?(Hash)
+        return nil unless tables.is_a?(Hash) && tables.any?
 
         tables.each_with_object({}) do |(table, data), acc|
           next if BOOKKEEPING_TABLES.include?(table.to_s.downcase)
