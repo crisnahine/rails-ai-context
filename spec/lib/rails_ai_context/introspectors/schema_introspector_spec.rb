@@ -378,6 +378,20 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           .to eq([ { name: "tags", type: "string", null: true, default: '["a", "b c"]', array: true } ])
       end
 
+      # PostgreSQL's dumper writes a function default, and leaves out only a serial column's own sequence.
+      it "shows a function default as schema.rb does, a sequence default unless the column is serial" do
+        columns = [ [ "id", "nextval('things_id_seq'::regclass)", true ], [ "code", "nextval('codes_seq'::regclass)", false ],
+                    [ "token", "gen_random_uuid()", false ] ].map do |name, function, serial|
+          double(name: name, type: :integer, null: false, default: nil, default_function: function, limit: nil, precision: nil,
+                 scale: nil, comment: nil, collation: nil, sql_type: "integer", array?: false, serial?: serial)
+        end
+        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: columns, native_database_types: {}))
+
+        defaults = introspector.send(:extract_columns, "things").to_h { |c| [ c[:name], c[:default] ] }
+
+        expect(defaults).to eq("id" => nil, "code" => %q(-> { "nextval('codes_seq'::regclass)" }), "token" => %q(-> { "gen_random_uuid()" }))
+      end
+
       it "reads a MySQL text column's size as schema.rb writes it" do
         column = double(name: "body", type: :text, null: true, default: nil, default_function: nil, limit: 16_777_215, precision: nil,
                         scale: nil, comment: nil, collation: nil, sql_type: "mediumtext", array?: false)

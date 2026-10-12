@@ -338,7 +338,8 @@ module RailsAiContext
           if col.respond_to?(:virtual?) && col.virtual?
             entry[:generated] = (col.default_function || declared_generated(table, col.name)).to_s
             entry[:stored] = stored_generated?(col)
-          elsif col.default.nil? && col.default_function && !col.default_function.start_with?("nextval(")
+          # PostgreSQL's dumper leaves out only a serial column's own sequence (schema_expression, 7.0 to 8.1).
+          elsif col.default.nil? && col.default_function && !(col.respond_to?(:serial?) && col.serial?)
             entry[:default] = "-> { #{col.default_function.inspect} }"
           end
           entry[:enum_type] = col.sql_type.to_s if col.type == :enum
