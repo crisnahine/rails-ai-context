@@ -37,8 +37,23 @@ module RailsAiContext
     # AppDatabases::Database#pending_migrations leases the pool.
     def self.pending_on(pool, migrate_dir)
       dirs = Array(migrate_dir).select { |dir| Dir.exist?(dir) }
-      dirs.empty? ? [] : pending_in(migration_context(dirs, pool), dirs)
+      return [] if dirs.empty?
+      # Rails 7.0's schema_migration is a model that finds its pool through the app's handler, where a leased pool is not.
+      return PendingMigrations.for(migrate_dir: dirs, applied: applied_versions(pool.connection)) if rails70?(pool)
+
+      pending_in(migration_context(dirs, pool), dirs)
     end
+
+    def self.rails70?(pool)
+      !pool.respond_to?(:schema_migration) && !pool.connection.respond_to?(:internal_metadata)
+    end
+    private_class_method :rails70?
+
+    def self.applied_versions(connection)
+      table = ActiveRecord::Base.schema_migrations_table_name
+      connection.table_exists?(table) ? connection.select_values("SELECT version FROM #{connection.quote_table_name(table)}") : []
+    end
+    private_class_method :applied_versions
 
     def self.pending_in(context, dirs)
       applied = context.get_all_versions

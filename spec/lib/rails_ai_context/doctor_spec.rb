@@ -2433,6 +2433,15 @@ RSpec.describe RailsAiContext::Doctor do
       expect(File.exist?(File.join(@root, "db/analytics.sqlite3"))).to be(false)
     end
 
+    # Its database.yml is read as text, and the booted app's connection is another app's.
+    it "skips the check for an app that is not the booted one, and connects to none of its databases" do
+      write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n    database: db/app.sqlite3\n")
+      write("db/migrate/20240101000000_create_notes.rb", "class CreateNotes < ActiveRecord::Migration[7.1]\nend\n")
+
+      expect(app_doctor.send(:check_pending_migrations)).to be_nil
+      expect(File.exist?(File.join(@root, "db/app.sqlite3"))).to be(false)
+    end
+
     # A Windows path is absolute from its drive letter on, and read as
     # relative it was named from where doctor was typed.
     it "names a SQLite file given by a Windows path as database.yml gives it" do
