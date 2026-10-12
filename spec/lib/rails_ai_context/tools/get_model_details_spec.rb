@@ -1415,6 +1415,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
 
       expect(models.keys).to include("PageView")
+      expect(models["PageView"][:table_name]).to eq("page_views")
       expect(models.keys).not_to include("Country")
     end
   end

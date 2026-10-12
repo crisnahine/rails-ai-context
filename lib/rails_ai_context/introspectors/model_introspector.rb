@@ -377,7 +377,8 @@ module RailsAiContext
       # schema picks among its names, plus the class's own for a parent that is abstract.
       def outside_parent_tables(class_name, candidates, own, parent)
         reader = SchemaReader.for(app.root)
-        outside_parent_names(class_name, candidates, own, parent).select { |table| reader.table?(table) }
+        secondary = secondary_dump_tables || Set.new
+        outside_parent_names(class_name, candidates, own, parent).select { |table| reader.table?(table) || secondary.include?(table) }
       end
 
       def outside_parent_names(class_name, candidates, own, parent)
