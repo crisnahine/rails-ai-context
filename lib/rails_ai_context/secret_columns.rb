@@ -19,8 +19,12 @@ module RailsAiContext
     # Matched whether or not the name is a real column, so the check holds with no
     # connection. `config.query_allowed_columns` releases a name that only looks secret.
     BUILT_IN_NAMES = (DEFAULT_REDACTED_COLUMNS + %w[
-      password_reset_token remember_token secret private_key authentication_string
+      password_reset_token remember_token secret private_key authentication_string rolpassword setconfig
     ]).freeze
+
+    # PostgreSQL catalog columns that hold a stored credential: a role's password hash, and the settings
+    # stored for a role or a database. pg_roles, pg_user and pg_shadow are views over them.
+    CATALOG_CREDENTIALS = { "pg_authid" => %w[rolpassword], "pg_db_role_setting" => %w[setconfig] }.freeze
 
     HEURISTIC_SUFFIXES = %w[password secret token key digest hash].freeze
 
@@ -41,6 +45,7 @@ module RailsAiContext
             "columns cannot be told and no query runs on it."
         end
 
+        relations = relations.merge(CATALOG_CREDENTIALS) if DatabaseFamily.of(connection).plan_checks?
         new(relations: relations, encrypted: encrypted_from(context), **definitions_from(connection))
       end
     end

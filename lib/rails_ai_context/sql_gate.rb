@@ -71,9 +71,25 @@ module RailsAiContext
       pg_stats(?:_ext(?:_exprs)?)? | pg_statistic(?:_ext(?:_data)?)? | pg_largeobject |
       pg_stat_activity | pg_stat_get_activity | pg_stat_get_backend_activity |
       pg_stat_statements | pg_prepared_statements | pg_cursors |
+      pg_user_mappings? | user_mapping_options | pg_subscription |
+      pg_foreign_server | pg_foreign_data_wrapper | pg_foreign_table |
+      pg_settings | pg_show_all_settings | pg_show_all_file_settings | pg_hba_file_rules | pg_ident_file_mappings |
       sqlite_stat[134] | column_statistics | column_stats | global_priv |
       processlist | performance_schema | general_log | slow_log
-    )\b|(sys)`?\s*\.)/ix
+    )\b|(sys|mysql)[`"]?\s*\.|
+      information_schema[`"]?\s*\.\s*[`"]?(innodb_trx | innodb_lock\w* | innodb_ft_\w+ |
+        user_statistics | client_statistics | profiling | optimizer_trace)\b)/ix
+
+    # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
+    # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
+    BLOCKED_CATALOGS = /\b(pg_authid|pg_shadow|pg_db_role_setting)\b/i
+
+    # PostgreSQL settings whose value can be a connection string with its password, or a command line.
+    SECRET_SETTINGS = /\b(primary_conninfo|ssl_passphrase_command|archive_command|restore_command|archive_cleanup_command|recovery_end_command)\b/i
+    # A call is matched with the name it reads when that name is one plain string, and with none otherwise.
+    SETTING_CALL = /\bcurrent_setting\s*\((?:\s*'([^'\\]*)'\s*(?=[,)]))?/i
+    PLAN_SETTING_CALL = /\bcurrent_setting\((?:'((?:''|[^'])*)'::text(?=[,)]))?/
+    SHOWN_SETTING = /\A\s*SHOW\b(.*?);?\s*\z/mi
 
     # Checked before SELECT_INTO, which also matches, so the refusal names the disk write.
     BLOCKED_OUTPUT = /\bINTO\s+(OUTFILE|DUMPFILE)\b/i
@@ -193,7 +209,7 @@ module RailsAiContext
           "the plan shows which columns a query returns, so no query runs without one.")
       end
 
-      refusal = plan_refusal(plan) || unvouched_literal_refusal(text, plan)
+      refusal = plan_refusal(plan, text) || unvouched_literal_refusal(text, plan)
       refusal ? refuse(refusal) : Verdict.new(sql: text, refusal: nil, plan: plan)
     end
 
@@ -265,11 +281,14 @@ module RailsAiContext
         return "Blocked: dangerous function #{m[0]} (filesystem/network primitive)"
       end
       if (m = cleaned.match(BLOCKED_DUMPS))
-        return "Blocked: function #{m[1]} returns a whole table as one value, secret columns included. " \
-          "SELECT the columns you need from the table itself."
+        return dump_refusal(m[1])
       end
-      if (m = cleaned.match(BLOCKED_RELATIONS))
-        return unfollowed_relation_refusal(m[1] || m[2])
+      # Matched again as MySQL folds a name, so a letter it reads as a plain one names the same relation.
+      if (m = [ cleaned, SecretColumns.fold(cleaned) ].filter_map { |read| read.match(BLOCKED_RELATIONS) || read.match(BLOCKED_CATALOGS) }.first)
+        return unfollowed_relation_refusal(m.captures.compact.first)
+      end
+      if (refusal = setting_refusal(cleaned))
+        return refusal
       end
       if (m = cleaned.match(BLOCKED_PG_ADMIN))
         return "Blocked: administrative function #{m[0].sub(/\s*\(\z/, "")} has a session or server-wide " \
@@ -286,6 +305,10 @@ module RailsAiContext
         return "Blocked: a column-alias list (e.g. `t(a, b, c)`) renames the columns a " \
           "wildcard returns, so secret columns would leave under harmless names. " \
           "Name the columns you want in the SELECT list instead."
+      end
+      if quoted_call?(tokens)
+        return "Blocked: a quoted name is followed by a parenthesis, the way a function is called. rails_query reads " \
+          "a function's name to decide whether it runs, so write the name without quotes."
       end
 
       # On PostgreSQL a literal is data, since the plan checks read the query itself. MySQL's quote
@@ -325,7 +348,50 @@ module RailsAiContext
 
     def unfollowed_relation_refusal(name)
       "Blocked: `#{name}` is not read. It holds values sampled from other tables, other sessions' statements " \
-        "or stored credentials, and rails_query cannot tell which of them are secret."
+        "or stored credentials, and rails_query cannot tell which of them are secret." \
+        "#{" To read one setting, run SHOW with its name." if name.match?(/settings/i)}"
+    end
+
+    def dump_refusal(function)
+      "Blocked: function #{function} returns a whole table as one value, secret columns included. " \
+        "SELECT the columns you need from the table itself."
+    end
+
+    # A setting is read by SHOW and by current_setting. SHOW has no plan, so on PostgreSQL its name is read
+    # here and has to be plain: a quoted name can spell any setting.
+    def setting_refusal(cleaned)
+      if (m = cleaned.match(SECRET_SETTINGS))
+        return secret_setting_refusal(m[1])
+      end
+
+      called = cleaned.to_enum(:scan, SETTING_CALL).map { Regexp.last_match[1] }
+      return unread_setting_name_refusal if called.include?(nil)
+
+      shown = cleaned.match(SHOWN_SETTING)&.then { |m| m[1].strip } if @family.plan_checks?
+      if shown && !shown.match?(/\A[\w. ]+\z/)
+        return "Blocked: SHOW takes a setting's plain name on PostgreSQL, with no quotes around it, for example `SHOW work_mem`."
+      end
+      if shown&.casecmp?("ALL")
+        return "Blocked: SHOW ALL is not run. It lists every setting, the ones that can hold a password among them. " \
+          "SHOW one setting by its name."
+      end
+
+      secret = (called + [ shown ]).compact.find { |name| secret_setting?(name) }
+      secret_setting_refusal(secret) if secret
+    end
+
+    # An app's own setting (`app.jwt_secret`) is told by its name, as a column is.
+    def secret_setting?(name)
+      name.match?(SECRET_SETTINGS) || name.split(/[.\s]+/).any? { |part| @secrets.secret?(part) }
+    end
+
+    def secret_setting_refusal(name)
+      "Blocked: the setting `#{name}` is not read. It can hold a password, a key or a command line that carries one."
+    end
+
+    def unread_setting_name_refusal
+      "Blocked: current_setting runs only with the setting's name written as one plain string, " \
+        "for example `current_setting('work_mem')`, so that rails_query can read which setting it returns."
     end
 
     # An alias or an expression renames a column past the redaction that
@@ -496,6 +562,14 @@ module RailsAiContext
       token[0] == :quoted || (token[0] == :word && !NO_ALIAS.include?(token[1].upcase))
     end
 
+    # A quoted name can spell any function, past every check that reads a function's name.
+    def quoted_call?(tokens)
+      tokens.each_index.any? do |i|
+        following = i + (word?(tokens[i + 1], "UESCAPE") ? 3 : 1)
+        tokens[i][0] == :quoted && tokens[following] == [ :punct, "(" ]
+      end
+    end
+
     def subquery_at?(tokens, open)
       following = tokens[open + 1]
       following == [ :punct, "(" ] || SUBQUERY_START.any? { |start| word?(following, start) }
@@ -524,21 +598,32 @@ module RailsAiContext
       end
     end
 
-    def plan_refusal(top)
+    def plan_refusal(top, text)
       return nil unless top
 
       plan = DatabaseFamily::PostgresqlPlan.new(top)
+      raw = plan.nodes.flat_map { |node| plan.expressions(node) }
       outputs = []
       conds = []
       plan.nodes.each do |node|
         outputs.concat(Array(node["Output"]).map { |e| e.to_s.gsub(PLAN_LITERAL, "''") })
         PLAN_COND_KEYS.each { |k| conds.concat(Array(node[k]).map { |e| e.to_s.gsub(PLAN_LITERAL, "''") }) }
       end
+      # EXPLAIN prints no row of a VALUES list and no LIMIT, so the functions the text names are read too.
+      called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text) ])
 
-      # A view or an escaped name reaches one the text check did not see.
-      sources = plan.nodes.flat_map { |node| node.values_at("Relation Name", "Function Name") }.compact
+      # A view reaches a relation or a function the text check did not see.
+      sources = plan.nodes.flat_map { |node| node.values_at("Relation Name", "Function Name") }.compact + called.to_a
       if (name = sources.find { |source| source.match?(/\A#{BLOCKED_RELATIONS}\z/) })
         return unfollowed_relation_refusal(name)
+      end
+      if (name = called.find { |function| "#{function}(".match?(/\A#{BLOCKED_DUMPS}\z/) })
+        return dump_refusal(name)
+      end
+      settings = raw.flat_map { |expr| expr.to_enum(:scan, PLAN_SETTING_CALL).map { Regexp.last_match[1] } }
+      return unread_setting_name_refusal if settings.include?(nil)
+      if (name = settings.find { |setting| secret_setting?(setting) })
+        return secret_setting_refusal(name)
       end
       if (rel = whole_row_leak(outputs + conds, plan.aliases))
         return "Blocked: the query serialises a whole row of `#{rel}`, which carries every " \
@@ -554,7 +639,7 @@ module RailsAiContext
           "or set operation whose output the tool cannot map to a column, so it could leave " \
           "unredacted. Name the other columns you need; `#{col}` is never returned."
       end
-      if (fn = volatile_function(outputs + conds))
+      if (fn = volatile_function(called))
         "Blocked: function #{fn} is VOLATILE (pg_proc.provolatile = 'v') and not on " \
           "rails_query's list of read-only VOLATILE functions, so it is not run. Some VOLATILE " \
           "functions change server or session state in ways a read-only transaction does not " \
@@ -635,10 +720,12 @@ module RailsAiContext
       end.to_set
     end
 
-    def volatile_function(exprs)
-      names = Set.new
-      exprs.each { |expr| expr.scan(/([A-Za-z_]\w*)\s*\(/) { |(fn)| names << fn.downcase } }
-      names.subtract(PG_VOLATILE_ALLOWLIST)
+    def function_names(exprs)
+      exprs.each_with_object(Set.new) { |expr, names| expr.scan(/([A-Za-z_]\w*)\s*\(/) { |(fn)| names << fn.downcase } }
+    end
+
+    def volatile_function(called)
+      names = called - PG_VOLATILE_ALLOWLIST
       return nil if names.empty?
 
       quoted = names.map { |n| @connection.quote(n) }.join(", ")

@@ -161,6 +161,56 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
               %(SELECT query FROM U&"pg\\005Fstat\\005Factivity") ], "Blocked: `")
   end
 
+  it "refuses the relations that hold stored credentials, by name and through a view over them" do
+    refused(%w[pg_user_mapping pg_user_mappings pg_subscription pg_authid pg_shadow pg_db_role_setting pg_foreign_server pg_hba_file_rules
+               pg_ident_file_mappings information_schema.user_mapping_options].map { |name| "SELECT * FROM #{name}" }, "Blocked: `")
+    refused([ "SELECT * FROM information_schema.user_mappings", "SELECT * FROM pg_stat_subscription", "SELECT * FROM information_schema.foreign_servers",
+              %(SELECT * FROM U&"pg\\005Fuser\\005Fmappings") ], "Blocked: `")
+  end
+
+  it "filters a role's password hash and stored settings, refuses an expression over them, and runs the views that leave them out" do
+    [ "SELECT usename, upper(passwd) AS p FROM pg_shadow", %(SELECT rolname, upper(rolpassword) AS p FROM U&"pg\\005Fauthid"),
+      "SELECT rolname, array_to_string(rolconfig, ',') AS c FROM pg_roles", %(SELECT a FROM U&"pg\\005Fauthid" a) ].each do |sql|
+      expect(run(sql).error?).to be(true), sql
+    end
+    hash = conn.select_value("SELECT rolpassword FROM pg_authid WHERE rolname = current_user")
+    [ %(SELECT * FROM U&"pg\\005Fauthid"), %(SELECT * FROM (SELECT * FROM U&"pg\\005Fshadow" OFFSET 0) x) ].each do |sql|
+      text = run(sql).content.first[:text]
+      expect(text).to include("[FILTERED]"), sql
+      expect(text).not_to include(hash), sql
+    end
+    expect(run("SELECT rolname, rolconfig FROM pg_roles WHERE rolname = current_user").content.first[:text]).to include("| [FILTERED] |")
+
+    [ "SELECT rolname FROM pg_roles", "SELECT * FROM pg_roles", "SELECT count(*) FROM pg_roles", "SELECT usename FROM pg_user",
+      "SELECT schema_name FROM information_schema.schemata", "SELECT d.datname, r.rolname FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba" ].each do |sql|
+      response = run(sql)
+      expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+    end
+  end
+
+  it "refuses every way to list the settings, and the settings that can hold a password" do
+    refused([ "SELECT name, setting FROM pg_settings", "SELECT * FROM pg_show_all_settings()", "SELECT * FROM pg_file_settings",
+              "SELECT * FROM pg_show_all_file_settings()", %(SELECT "pg_show_all_settings"()) ], "Blocked: ")
+    refused([ "SHOW ALL" ], "Blocked: SHOW ALL is not run")
+    refused([ %(SHOW "work_mem"), %(SHOW U&"primary\\005Fconninfo") ], "Blocked: SHOW takes a setting's plain name")
+    refused([ "SHOW primary_conninfo", %(SHOW "primary_conninfo"), "SHOW ssl_passphrase_command", "SHOW archive_command", "SELECT current_setting('primary_conninfo')",
+              "SELECT current_setting('restore_command', true) AS c" ], "Blocked: the setting `")
+    refused([ "SELECT current_setting('primary' || '_conninfo') AS x", "SELECT current_setting(column1) FROM (VALUES ('work_mem')) v",
+              "SELECT * FROM (VALUES (current_setting('primary' || '_conninfo')), ('x')) v" ], "Blocked: current_setting runs only with")
+    expect(run("SHOW server_version").content.first[:text]).to include(conn.select_value("SHOW server_version"))
+    expect(run("SHOW TIME ZONE").error?).to be(false)
+    expect(run("SELECT current_setting('work_mem') AS m").content.first[:text]).to include(conn.select_value("SHOW work_mem"))
+  end
+
+  it "refuses a function called by a quoted name, and one the plan prints no expression for" do
+    refused([ %(SELECT "table_to_xml"('rac_pg_accounts', true, false, '')), %(SELECT U&"table\\005Fto\\005Fxml"('rac_pg_accounts', true, false, '')),
+              %(SELECT U&"table!005Fto!005Fxml" UESCAPE '!' ('rac_pg_accounts', true, false, '')), %(SELECT "upper"('x')),
+              %(SELECT (U&"pg\\005Fstat\\005Fget\\005Factivity"(NULL)).query),
+              %(SELECT * FROM (VALUES ("table_to_xml"('rac_pg_accounts', true, false, '')), (NULL)) v) ], "Blocked: a quoted name is followed by a parenthesis")
+    refused([ "SELECT * FROM (VALUES (lo_get(0)), (NULL)) v", "SELECT 1 AS one LIMIT (SELECT length(lo_get(0)))" ], "Blocked: function lo_get is VOLATILE")
+    expect(run(%(SELECT count("id") AS n FROM "rac_pg_accounts" WHERE "id" IN (1, 2))).content.first[:text]).to include("| 1 |")
+  end
+
   it "reads the schema once for the whole call" do
     runtime = RailsAiContext::DatabaseFamily::PostgresqlRuntime
     allow(runtime).to receive(:relation_columns).and_call_original
