@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only at 16 characters, so a short one showed in clear. A log file shown as
   a file, logrotate's dated and `.old` ones included, now gets what
   `rails_read_logs` filters.
+- **A Digest or Token Authorization header is filtered with all its
+  parameters.** A Digest header in a log kept its `response=` hash, and a
+  Token header kept every parameter after `token=` (and came out as
+  `Authorization: [FILTERED]]` when unquoted).
 
 ### Added
 
@@ -46,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the app), or, for a framework `rails` pulls in, when
   config/application.rb loads it (`rails/all`, its railtie, or a
   `config.<framework>` line). Rails 6's `sprockets-rails` is one of those
-  frameworks.
+  frameworks; on Rails 7 and later a gem that pulls it in loads it, so it
+  counts.
 - **Static routes leave out a block from a routing method they cannot read,
   and say so.** A route drawn inside a method the app defines (a helper
   that wraps `scope(path: "api/v1", module: "api/v1")`, versionist's
@@ -54,21 +59,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two-route controller seven routes it does not have and gave the namespaced
   controller none. Such a block is now counted among the constructs not
   expanded, and a controller with no route says one may be missing behind
-  them. Rails' and Devise's blocks that draw in place (`constraints`,
-  `defaults`, `devise_scope`, `authenticate`, route_translator's
-  `localized`, ...) are drawn as before, and Rails' `nested` block is drawn
-  under its parent's path.
-- **Strong params are the methods that permit on params.** Any `def
+  them. Blocks that draw in place are drawn as before: Rails'
+  `constraints` and `defaults`, Devise's `devise_scope` and
+  `authenticate`, and route_translator's `localized`; Rails' `nested` block
+  is drawn under its parent's path.
+- **Strong params are the methods that return permitted params.** Any `def
   *_params` was listed, so a method that builds associations counted while
-  `article_params_json`, which calls `permit`, did not. A strong-params
-  method now calls `permit`, `permit!` or `expect` on params, on a local
-  that holds them, or on `ActionController::Parameters.new`. A method named
-  `*_params` counts too when it hands params to another class
-  (`PermittedAttributes::Enterprise.new(params)`) or returns another strong
-  params method; one of any other name only when it returns what it
-  permits, so a helper that permits to build a URL is left out. An action
-  that permits inline is left out, a public `*_params` helper is kept,
-  `permit!` on a `slice` lists the keys it slices, and a computed filter
+  `article_params_json`, which calls `permit`, did not. A method named
+  `*_params` now counts when it calls `permit`, `permit!` or `expect` on
+  params (directly, through a local, or on `ActionController::Parameters.new`),
+  or when what it returns comes from another method or class given params
+  (`permitted_attributes(@post)`, `super.merge(...)`, a parent's
+  `base_params`, `PermittedAttributes::Enterprise.new(params).call`). A
+  method of any other name counts only when it returns what it permits,
+  through a local, an `if`, a `case` or an explicit `return`, so a helper
+  that permits to build a URL is left out. An action that permits inline is
+  left out, a public `*_params` helper is kept, `permit!` on a `slice` lists
+  the keys it slices, and a computed filter
   (`settings_attributes: UserSettings.keys`) is shown as written, not as a
   scalar.
 
@@ -101,14 +108,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares, is now listed.
 - **A macro inside `translation_class.class_eval` is not the model's own.**
   It is listed under "Declared on another class", as one in a concern's
-  `translation_class.instance_eval` already was, and two declared on one
-  line are both listed.
+  `translation_class.instance_eval` already was; two declared on one line
+  are both listed, and a modifier's condition is not listed as one.
 - **The static tier keeps a model whose parent comes from a gem.**
   `class Tag < ActsAsTaggableOn::Tag` was "Model 'Tag' not found". A class
   in app/models on a parent the app does not define is now a model when the
   schema holds a table it would read, one of the parent's names
   (`ahoy_messages` for `EmailMessage < Ahoy::Message`) or its own, and,
-  with no schema to ask, when it declares associations or scopes. An
+  with no schema to ask or another database's dump that may hold the
+  table, when it declares associations or scopes. An
   ActiveHash class that declares `has_many` stays out. The table comes from
   the parent as Rails' single table inheritance decides, or a line says the
   parent sets it.
@@ -120,7 +128,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were dropped, so a column relaxed to `null: true` stayed NOT NULL. The
   replay now records the sizes a migration declares as the dump writes
   them: an integer limit picks smallint or bigint on PostgreSQL and MySQL,
-  and a size the dump leaves out stays out. A type-only `change_column`
+  a datetime keeps any precision but the default 6, MySQL sizes a text or
+  blob by its limit, and a size the dump leaves out stays out. A type-only
+  `change_column`
   keeps null and default on PostgreSQL and MySQL and resets them on SQLite,
   as each adapter does.
 - **Migration replay keeps a partial index's condition.** A Symbol
@@ -130,12 +140,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A gem installed under the app root is not the app's code.** With the
   bundle in vendor/bundle, `onboard` listed a gem's ActiveJob class
   (`Chewy::Strategy::ActiveJob::Worker`) as the app's background job.
-- **The engine works in an app with an `AI` or `MCP` acronym.** With
-  `inflect.acronym "AI"`, Zeitwerk expected
-  `RailsAIContext::McpController` from the gem's controller, so
+- **The engine works in an app with an `AI` or `MCP` acronym.** The app's
+  loader and router camelize with the app's inflections: `inflect.acronym
+  "AI"` made Zeitwerk expect `RailsAIContext::McpController` and
+  `inflect.acronym "MCP"` `RailsAiContext::MCPController`, so
   `bin/rails zeitwerk:check` and any eager load failed once the gem was in
   the Gemfile, and the mounted endpoint answered 404. The controller is now
-  kept out of the app's loader and routed as a class.
+  kept out of the app's loader and routed as a class, which
+  `bin/rails routes` shows as an inline handler.
 - **`rails ai:context` runs in an app with its own top-level
   `print_result`.** The gem's rake helpers were top-level methods guarded by
   `unless defined?`, so an app's `print_result` in lib/tasks ran instead and
@@ -165,9 +177,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rails_review_changes` does not count the install's context files as
   code.** `app/models/AGENTS.md` was "1 model" and
   `app/controllers/AGENTS.md` "1 controller".
-- **A Token header is filtered whole.** `Authorization: Token token=abc` in
-  a log came out as `Authorization: [FILTERED]]`, and a quoted
-  `token="..."` left its parameters after the filter.
 - **Statements on one line replay in source order on every platform.** Ruby's
   sort is not stable, so with a dozen statements in a migration a one-line
   `change_table(:t) { |t| t.change ... }` could apply its `t.change` before
