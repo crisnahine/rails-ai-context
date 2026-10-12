@@ -104,11 +104,11 @@ module RailsAiContext
 
       # The schema that validates a call takes any section and every parameter, so `call` gives
       # the one refusal for a section that is off or unknown; tools/list publishes the sections that are on.
-      input_schema(schema_for(SECTIONS, any_section: true))
+      VALIDATING_SCHEMA = ArgumentSchema.new(schema_for(SECTIONS, any_section: true))
       description(description_for(SECTIONS))
 
       def self.input_schema(*args)
-        args.empty? ? @input_schema_value : super
+        args.empty? ? VALIDATING_SCHEMA : super
       end
 
       def self.input_schema_value
@@ -119,31 +119,24 @@ module RailsAiContext
         description_for(sections_on)
       end
 
-      guide_row(order: 20, mcp: "rails_get_config", summary: "")
-
       # The row calls the default section, or the first one on when app is off.
-      def self.guide_row(**args)
-        row = super
-        return row unless args.empty? && row
-
+      def self.guide_row
         app, others = sections_on.partition(&:app?)
         names = others.map(&:name).join(", ")
         summary = [ ("App config (database, auth, assets, cache, queue)" if app.any?),
                     ("`section` picks #{app.any? ? 'another' : 'one'}: #{names}" unless names.empty?) ].compact.join("; ")
-        row.dup.tap do |copy|
-          copy.summary = summary
-          next if app.any? || others.empty?
-
-          copy.mcp = %(rails_get_config(section:"#{others.first.name}"))
-          copy.cli_args = "section=#{others.first.name}"
-        end
+        first = others.first unless app.any?
+        GuideRow.new(order: 20, mcp: first ? %(rails_get_config(section:"#{first.name}")) : "rails_get_config",
+                     cli_args: ("section=#{first.name}" if first), summary: summary)
       end
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(section: nil, detail: nil, category: nil, offset: nil, limit: nil, environment: nil, locale: nil, server_context: nil)
-        asked = section_named(section.nil? ? "app" : section)
         on = sections_on.map(&:name).join(", ")
+        return error_response(RailsAiContext::Server.skipped_tool_message(tool_name)) if on.empty?
+
+        asked = section_named(section.nil? ? "app" : section)
         return error_response("`section` does not take '#{echo_input(section)}'. It takes: #{on}.") unless asked
         return error_response(section.nil? ? section_required_message : "#{asked.off_message} The sections that are on: #{on}.") unless asked.on?
 
@@ -165,14 +158,19 @@ module RailsAiContext
       end
 
       def self.retired_note(section, arguments)
-        read = arguments.slice(*section.params).map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", ")
+        read = arguments.slice(*section.params).map { |key, value| "#{key}:#{echoed_argument(value)}" }.join(", ")
         call = pointer(section.tool_name, read)
         cli_form("\n\n_#{section.tool_name} is now #{call}; call that instead._") if call
       end
 
-      # The renderer answers as a tool another tool called, so the call is recorded here.
+      # A value as the note's code span can hold it: capped like every echo, with no backtick to end the span.
+      private_class_method def self.echoed_argument(value)
+        JSON.generate(value.is_a?(String) ? echo_input(value) : value).gsub("`", "\\u0060")
+      end
+
+      # The renderer answers as a tool another tool called, so an answered call is recorded here.
       private_class_method def self.render(section, given)
-        section.renderer.call(**given.slice(*section.params)).tap { |response| record_call(response_text(response)) }
+        section.renderer.call(**given.slice(*section.params)).tap { |response| record_call(response_text(response)) unless response.error? }
       end
 
       private_class_method def self.section_required_message
@@ -183,7 +181,7 @@ module RailsAiContext
       # Only a detail the caller sent is normalized, so a section that does
       # not read it can say so.
       def self.normalize_detail(kwargs)
-        kwargs.key?(:detail) ? super : kwargs
+        kwargs[:detail].nil? ? kwargs : super
       end
 
       private_class_method def self.unread_note(section, unread)
