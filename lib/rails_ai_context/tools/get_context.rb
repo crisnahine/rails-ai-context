@@ -4,6 +4,22 @@ module RailsAiContext
   module Tools
     class GetContext < BaseTool
       tool_name "rails_get_context"
+
+      # Each include key and the call it bundles, run only when the app serves that tool.
+      INCLUDE_MAP = {
+        "stimulus"    => [ "rails_get_stimulus", { detail: "standard" } ],
+        "turbo"       => [ "rails_get_turbo_map", { detail: "standard" } ],
+        "services"    => [ "rails_get_service_pattern", { detail: "standard" } ],
+        "jobs"        => [ "rails_get_job_pattern", { detail: "standard" } ],
+        "conventions" => [ "rails_get_conventions", {} ],
+        "helpers"     => [ "rails_get_helper_methods", { detail: "standard" } ],
+        "env"         => [ "rails_get_env", { detail: "summary" } ],
+        "callbacks"   => [ "rails_get_callbacks", { detail: "standard" } ],
+        "tests"       => [ "rails_get_test_info", { detail: "full" } ],
+        "config"      => [ "rails_get_config", {} ],
+        "gems"        => [ "rails_get_gems", {} ],
+        "security"    => [ "rails_security_scan", { detail: "summary" } ]
+      }.freeze
       description "Get cross-layer context in a single call - combines schema, model, controller, routes, views, stimulus, and tests. " \
         "Use when: you need full context for implementing a feature or modifying an action. " \
         "Specify controller:\"PostsController\" action:\"create\" to get everything for that action in one call."
@@ -29,7 +45,7 @@ module RailsAiContext
           include: {
             type: "array",
             items: { type: "string" },
-            description: "Additional context to bundle: 'stimulus', 'turbo', 'services', 'jobs', 'conventions', 'helpers', 'env', 'callbacks'. Appends these to any mode."
+            description: "Additional context to bundle: #{INCLUDE_MAP.keys.map { |key| "'#{key}'" }.join(', ')}. Appends these to any mode."
           }
         }
       )
@@ -72,7 +88,7 @@ module RailsAiContext
         lines = []
 
         # Controller + action source + private methods + instance vars
-        ctrl_result = GetControllers.call(controller: controller_name, action: action_name)
+        ctrl_result = compose(GetControllers, controller: controller_name, action: action_name)
         lines << response_text(ctrl_result)
 
         # Infer model from controller
@@ -80,13 +96,13 @@ module RailsAiContext
         model_name = snake.split("/").last.singularize.camelize
 
         # Model details
-        model_result = GetModelDetails.call(model: model_name)
+        model_result = compose(GetModelDetails, model: model_name)
         unless empty?(model_result)
           lines << "" << "---" << "" << response_text(model_result)
         end
 
         # Routes for this controller
-        route_result = GetRoutes.call(controller: snake)
+        route_result = compose(GetRoutes, controller: snake)
         unless empty?(route_result)
           lines << "" << "---" << ""
           lines << response_text(route_result)
@@ -153,13 +169,13 @@ module RailsAiContext
       # @return [Array(MCP::Tool::Response, String, nil)] the view section and
       #   a note naming the directory it came from
       private_class_method def self.controller_views(snake)
-        namespaced = GetView.call(controller: snake, detail: "standard")
+        namespaced = compose(GetView, controller: snake, detail: "standard")
         return [ namespaced, "_Views from `app/views/#{snake}`._" ] unless empty?(namespaced)
 
         basename = snake.to_s.split("/").last
         return [ namespaced, nil ] if basename.nil? || basename == snake
 
-        flat = GetView.call(controller: basename, detail: "standard")
+        flat = compose(GetView, controller: basename, detail: "standard")
         return [ namespaced, nil ] if empty?(flat)
 
         [ flat, "_No templates under `app/views/#{snake}`; these are `app/views/#{basename}`, which Rails resolves for this controller only if it sets its own view path._" ]
@@ -266,13 +282,13 @@ module RailsAiContext
       private_class_method def self.controller_context(controller_name)
         lines = []
 
-        ctrl_result = GetControllers.call(controller: controller_name)
+        ctrl_result = compose(GetControllers, controller: controller_name)
         lines << response_text(ctrl_result)
 
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
 
         # Routes for this controller
-        route_result = GetRoutes.call(controller: snake)
+        route_result = compose(GetRoutes, controller: snake)
         unless empty?(route_result)
           lines << "" << "---" << "" << response_text(route_result)
         end
@@ -294,22 +310,23 @@ module RailsAiContext
 
         resolved_name = key || model_name
 
-        model_result = GetModelDetails.call(model: resolved_name)
+        model_result = compose(GetModelDetails, model: resolved_name)
 
-        # If model not found, fail fast - don't leak partial results from sub-tools
-        return response_text(model_result) if empty?(model_result)
+        # If model not found, fail fast - don't leak partial results from sub-tools.
+        # A model the app has still gets its schema and tests when model details is turned off.
+        return response_text(model_result) if empty?(model_result) && (key.nil? || RailsAiContext::Server.served?("rails_get_model_details"))
 
         lines << response_text(model_result)
 
         if key && models[key][:table_name]
-          schema_result = GetSchema.call(table: models[key][:table_name])
+          schema_result = compose(GetSchema, table: models[key][:table_name])
           unless empty?(schema_result)
             lines << "" << "---" << "" << response_text(schema_result)
           end
         end
 
         # Tests for this model
-        test_result = GetTestInfo.call(model: resolved_name, detail: "standard")
+        test_result = compose(GetTestInfo, model: resolved_name, detail: "standard")
         unless empty?(test_result)
           lines << "" << "---" << "" << response_text(test_result)
         end
@@ -319,28 +336,23 @@ module RailsAiContext
         "Error assembling context: #{e.message}"
       end
 
-      INCLUDE_MAP = {
-        "stimulus"    => -> { GetStimulus.call(detail: "standard") },
-        "turbo"       => -> { GetTurboMap.call(detail: "standard") },
-        "services"    => -> { GetServicePattern.call(detail: "standard") },
-        "jobs"        => -> { GetJobPattern.call(detail: "standard") },
-        "conventions" => -> { GetConventions.call },
-        "helpers"     => -> { GetHelperMethods.call(detail: "standard") },
-        "env"         => -> { GetEnv.call(detail: "summary") },
-        "callbacks"   => -> { GetCallbacks.call(detail: "standard") },
-        "tests"       => -> { GetTestInfo.call(detail: "full") },
-        "config"      => -> { GetConfig.call },
-        "gems"        => -> { GetGems.call },
-        "security"    => -> { SecurityScan.call(detail: "summary") }
-      }.freeze
-
       private_class_method def self.append_includes(includes)
         extra = +""
         includes.each do |key|
-          handler = INCLUDE_MAP[key.to_s.downcase]
-          next unless handler
+          name, args = INCLUDE_MAP[key.to_s.downcase]
+          unless name
+            extra << "\n\n---\n\n_`include` does not take '#{echo_input(key)}'. It takes: #{INCLUDE_MAP.keys.join(', ')}._"
+            next
+          end
+
+          tool = RailsAiContext::Server.served_tool(name)
+          unless tool
+            extra << "\n\n---\n\n_#{RailsAiContext::Server.skipped_tool_message(name)}_"
+            next
+          end
+
           begin
-            extra << "\n\n---\n\n" << response_text(handler.call)
+            extra << "\n\n---\n\n" << response_text(tool.call(**args))
           rescue => e
             extra << "\n\n---\n\n_Error loading #{key}: #{e.message}_"
           end
@@ -350,7 +362,7 @@ module RailsAiContext
 
       private_class_method def self.feature_context(feature_name)
         # Start with full-stack feature analysis
-        analyze_result = AnalyzeFeature.call(feature: feature_name)
+        analyze_result = compose(AnalyzeFeature, feature: feature_name)
         lines = [ response_text(analyze_result) ]
 
         # Enrich with schema columns for matching models
@@ -364,7 +376,7 @@ module RailsAiContext
             table_name = models[model_name][:table_name]
             next unless table_name
             matched_tables << table_name
-            schema_result = GetSchema.call(table: table_name)
+            schema_result = compose(GetSchema, table: table_name)
             unless empty?(schema_result)
               lines << "" << "---" << "" << response_text(schema_result)
             end
@@ -396,7 +408,7 @@ module RailsAiContext
       rescue => e
         # Fall back to plain analyze_feature on error
         RailsAiContext.debug_fail(e, label: "feature_context")
-        response_text(AnalyzeFeature.call(feature: feature_name))
+        response_text(compose(AnalyzeFeature, feature: feature_name))
       end
     end
   end

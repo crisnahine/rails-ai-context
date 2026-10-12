@@ -139,6 +139,28 @@ module RailsAiContext
       merge_tools(active_tools(config), resolve_custom_tools(config), warn: false)
     end
 
+    # The tool exposed_tools serves under this name, or nil, loading only
+    # that tool's class: an unskipped built-in, then the first custom tool.
+    # A caller trying several names passes the custom tools it resolved once.
+    def self.served_tool(name, config = RailsAiContext.configuration, custom_tools: nil)
+      name = name.to_s
+      builtin = builtin_tool(name) unless config.skip_tools.include?(name)
+      builtin || (custom_tools || resolve_custom_tools(config)).find { |tool| tool_label(tool) == name }
+    end
+
+    def self.served?(name, config = RailsAiContext.configuration)
+      !served_tool(name, config).nil?
+    end
+
+    def self.builtin_tool(name)
+      const = name.delete_prefix("rails_").split("_").map(&:capitalize).join
+      return nil unless const.match?(/\A[A-Z]\w*\z/) && Tools.const_defined?(const, false)
+
+      tool = Tools.const_get(const, false)
+      tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
+    end
+    private_class_method :builtin_tool
+
     def self.active_tools(config)
       tools = builtin_tools
       skip = config.skip_tools

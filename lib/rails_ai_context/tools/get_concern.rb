@@ -230,7 +230,8 @@ module RailsAiContext
             lines << "" << "_No model or concern in app/models wires this validator._"
           end
 
-          lines << "" << "_Next: `rails_search_code(pattern:\"#{name.demodulize.camelize}\")` for every use_"
+          hint = next_hint(pointer("rails_search_code", %(pattern:"#{name.demodulize.camelize}"), "for every use"))
+          lines << "" << hint if hint
           return text_response(lines.join("\n"))
         end
 
@@ -244,15 +245,15 @@ module RailsAiContext
         end
 
         # Cross-reference hints
-        lines << ""
-        case concern_type
+        hint = case concern_type
         when "model"
-          lines << "_Next: `rails_get_model_details(model:\"ModelName\")` for models using this concern_"
+          next_hint(pointer("rails_get_model_details", %(model:"ModelName"), "for models using this concern"))
         when "controller"
-          lines << "_Next: `rails_get_controllers(controller:\"ControllerName\")` for controllers using this concern_"
+          next_hint(pointer("rails_get_controllers", %(controller:"ControllerName"), "for controllers using this concern"))
         else
-          lines << "_Next: `rails_search_code(pattern:\"include #{name.demodulize.camelize}\")` for everything using this concern_"
+          next_hint(pointer("rails_search_code", %(pattern:"include #{name.demodulize.camelize}"), "for everything using this concern"))
         end
+        lines << "" << hint if hint
 
         text_response(lines.join("\n"))
       end

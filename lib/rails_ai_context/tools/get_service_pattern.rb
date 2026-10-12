@@ -182,12 +182,12 @@ module RailsAiContext
           end
         end
         if scan_truncated
-          lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}; " \
-                        "run `rails_search_code(pattern:\"#{class_name}\")` for the rest._"
+          search = pointer("rails_search_code", %(pattern:"#{class_name}"))
+          lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}#{"; run #{search} for the rest" if search}._"
         end
 
-        # Cross-reference hints
-        lines << "" << "_Next: `rails_search_code(pattern:\"#{class_name}\")` for all references_"
+        hint = next_hint(pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
+        lines << "" << hint if hint
 
         text_response(lines.join("\n"))
       end

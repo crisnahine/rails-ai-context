@@ -106,7 +106,7 @@ module RailsAiContext
           key = fuzzy_find_key(models.keys, model_name)
           unless key
             return not_found_response("Model", model_name, models.keys.sort,
-              recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+              recovery_tool: pointer("rails_get_model_details", %(detail:"summary"), "to see all models")&.then { |call| "Call #{call}" })
           end
 
           data = models[key]
@@ -512,7 +512,7 @@ module RailsAiContext
           ctrl_class = RailsAiContext::Payload.find_controller(cached_context, ctrl_name)
           if known.any? && ctrl_class.nil?
             return not_found_response("Controller", ctrl_name, known.keys.sort,
-              recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
+              recovery_tool: pointer("rails_get_controllers", %(detail:"summary"), "to see all controllers")&.then { |call| "Call #{call}" })
           end
 
           ctrl_class ||= ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
@@ -1673,7 +1673,7 @@ module RailsAiContext
             key = fuzzy_find_key(models.keys, model_name)
             unless key
               return not_found_response("Model", model_name, models.keys.sort,
-                recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+                recovery_tool: pointer("rails_get_model_details", %(detail:"summary"), "to see all models")&.then { |call| "Call #{call}" })
             end
             RailsAiContext::Payload.controller_for_route_key(cached_context, key.to_s.underscore.pluralize)&.first
           end
