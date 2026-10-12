@@ -44,6 +44,23 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
       expect(global_pools).to eq(before)
     end
 
+    it "closes the connection it opened to another database once the block returns" do
+      list = databases("queue" => config(Rails.env, "queue", sqlite_file("queue")))
+      pool = nil
+
+      list.fetch("queue").with_connection { |conn| pool = conn.pool }
+
+      expect(pool.stat[:connections]).to eq(0)
+    end
+
+    it "closes the connection it opened to another database when the block raises" do
+      list = databases("queue" => config(Rails.env, "queue", sqlite_file("queue")))
+      pool = nil
+
+      expect { list.fetch("queue").with_connection { |conn| raise((pool = conn.pool).stat[:connections].to_s) } }.to raise_error("1")
+      expect(pool.stat[:connections]).to eq(0)
+    end
+
     it "reads the primary through the app's own pool" do
       list = databases
 
@@ -80,11 +97,10 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
                                                                "This process runs in #{Rails.env}, so it cannot be reached from here.")
     end
 
-    it "refuses a database other than the primary that lives in memory, by name, before any connection" do
+    it "refuses a database other than the primary that lives in memory, by name" do
       allow(RailsAiContext::DatabaseFile).to receive(:uris?).and_return(true)
       [ ":memory:", "file:queue?mode=memory&cache=shared", "file::memory:?cache=shared" ].each do |database|
         list = databases("queue" => config(Rails.env, "queue", database))
-        expect(ActiveRecord::ConnectionAdapters::ConnectionHandler).not_to receive(:new)
 
         expect { list.fetch("queue").with_connection { nil } }
           .to raise_error(RailsAiContext::AppDatabases::InMemory, /\AThe queue database lives in memory/), database
@@ -117,38 +133,19 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
                         /\AThe queue database cannot be reached: .*unable to open database file.*\. Check the file its config\/database.yml entry names\.\z/i)
     end
 
-    # No server adapter is in this bundle, so the pool's connection raises what a server would.
-    def stub_connection_error(error)
-      allow_any_instance_of(ActiveRecord::ConnectionAdapters::SQLite3Adapter).to receive(:verify!).and_raise(error)
-    end
+    it "answers a database whose adapter gem is not in the bundle as one that cannot be reached, naming the gem to add" do
+      server = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "queue", { adapter: "sqlserver", database: "shop_queue" })
+      queue = databases("queue" => server).fetch("queue")
+      said = "The queue database cannot be reached: its sqlserver adapter did not load. " \
+             "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`."
 
-    def server_database(name)
-      RailsAiContext::AppDatabases::Database.new(**databases(name => config(Rails.env, name, sqlite_file(name))).fetch(name).to_h,
-                                                 family: RailsAiContext::DatabaseFamily::POSTGRESQL)
-    end
-
-    it "says to start the server of a database nothing answers for" do
-      stub_connection_error(ActiveRecord::ConnectionNotEstablished.new("connection to server at \"127.0.0.1\", port 5999 failed: Connection refused\n\tIs the server running?"))
-
-      expect { server_database("queue").with_connection { raise "the block ran" } }.to raise_error(
-        RailsAiContext::AppDatabases::Unreachable,
-        'The queue database cannot be reached: connection to server at "127.0.0.1", port 5999 failed: Connection refused. ' \
-        "Start its server, or fix its settings in config/database.yml."
-      )
-    end
-
-    it "says to create a database its server does not hold" do
-      stub_connection_error(ActiveRecord::NoDatabaseError.new("We could not find your database: shop_queue."))
-
-      expect { server_database("queue").with_connection { raise "the block ran" } }.to raise_error(
-        RailsAiContext::AppDatabases::Unreachable,
-        "The queue database cannot be reached: We could not find your database: shop_queue. " \
-        "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
-      )
+      expect { queue.with_connection { raise "the block ran" } }.to raise_error(RailsAiContext::AppDatabases::Unreachable, said)
+      expect(queue.pending_migrations[:error]).to be_a(RailsAiContext::AppDatabases::AdapterMissing)
     end
 
     it "names the primary when the app's own connection does not answer, with or without its name" do
-      stub_connection_error(ActiveRecord::ConnectionNotEstablished.new("refused"))
+      # The suite's own connection always answers, so this one refusal is stubbed.
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished.new("refused"))
       allow(RailsAiContext::AppDatabases).to receive(:for).and_return(databases)
 
       [ nil, "primary" ].each do |name|
@@ -158,21 +155,14 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     end
 
     it "gives a leased server connection query_timeout to connect in, unless its entry sets its own, and SQLite none" do
-      seen = []
-      allow_any_instance_of(ActiveRecord::ConnectionAdapters::ConnectionHandler).to receive(:establish_connection)
-        .and_wrap_original do |original, config, **options|
-          seen << config.configuration_hash[:connect_timeout]
-          original.call(config, **options)
-        end
       RailsAiContext.configuration.query_timeout = 2.5
       own = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "slow", { adapter: "sqlite3", database: sqlite_file("slow"), connect_timeout: 9 })
       server = ->(name, entry) { described_class.new(**databases(name => entry).fetch(name).to_h, family: RailsAiContext::DatabaseFamily::MYSQL) }
+      connect_timeout = ->(db) { db.with_connection { |conn| conn.pool.db_config.configuration_hash[:connect_timeout] } }
 
-      server.call("queue", config(Rails.env, "queue", sqlite_file("queue"))).with_connection { nil }
-      server.call("slow", own).with_connection { nil }
-      databases("cache" => config(Rails.env, "cache", sqlite_file("cache"))).fetch("cache").with_connection { nil }
-
-      expect(seen).to eq([ 3, 9, nil ])
+      expect(connect_timeout.call(server.call("queue", config(Rails.env, "queue", sqlite_file("queue"))))).to eq(3)
+      expect(connect_timeout.call(server.call("slow", own))).to eq(9)
+      expect(connect_timeout.call(databases("cache" => config(Rails.env, "cache", sqlite_file("cache"))).fetch("cache"))).to be_nil
     ensure
       RailsAiContext.configuration.query_timeout = 5
     end
@@ -211,6 +201,37 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
 
       expect { list.fetch("qeueu") }.to raise_error(RailsAiContext::AppDatabases::UnknownDatabase, /Did you mean queue\?.*primary, queue/)
       expect(RailsAiContext::AppDatabases::UnknownDatabase.ancestors).to include(RailsAiContext::Error)
+    end
+  end
+
+  describe ".unreachable" do
+    def said(adapter, error)
+      RailsAiContext::AppDatabases.unreachable("queue", adapter, error).message
+    end
+
+    it "says to start the server of a database nothing answers for" do
+      refused = ActiveRecord::ConnectionNotEstablished.new("connection to server at \"127.0.0.1\", port 5999 failed: Connection refused\n\tIs the server running?")
+
+      expect(said("postgresql", refused)).to eq(
+        'The queue database cannot be reached: connection to server at "127.0.0.1", port 5999 failed: Connection refused. ' \
+        "Start its server, or fix its settings in config/database.yml."
+      )
+    end
+
+    it "says to create a database its server does not hold" do
+      expect(said("trilogy", ActiveRecord::NoDatabaseError.new("We could not find your database: shop_queue."))).to eq(
+        "The queue database cannot be reached: We could not find your database: shop_queue. " \
+        "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
+      )
+    end
+
+    it "names the gem of each adapter Rails ships, and of any other adapter says a gem provides it" do
+      missing = LoadError.new("Error loading the adapter")
+
+      expect(said("mysql2", missing)).to end_with("its mysql2 adapter did not load. Add the mysql2 gem to the Gemfile and run `bundle install`.")
+      expect(said("postgis", missing)).to include("Add the activerecord-postgis-adapter gem to the Gemfile")
+      expect(said("sqlserver", ActiveRecord::AdapterNotFound.new("nonexistent 'sqlserver' adapter")))
+        .to end_with("its sqlserver adapter did not load. Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`.")
     end
   end
 

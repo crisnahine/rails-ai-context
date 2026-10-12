@@ -12,7 +12,19 @@ module RailsAiContext
     class NotBooted < Error; end
     class Missing < Error; end
     class InMemory < Error; end
-    class Unreachable < Error; end
+
+    # reason: what stopped the connection. advice: what to do about it.
+    class Unreachable < Error
+      attr_reader :reason, :advice
+
+      def initialize(name, reason, advice)
+        @reason = reason
+        @advice = advice
+        super("The #{name} database cannot be reached: #{reason}. #{advice}")
+      end
+    end
+
+    class AdapterMissing < Unreachable; end
 
     # The owner of a pool leased for another database. Rails names a pool by its owner.
     class LeaseOwner
@@ -31,7 +43,7 @@ module RailsAiContext
       # Raises Unreachable, naming the database, when no connection to it answers.
       def with_connection(&block)
         with_pool do |pool|
-          AppDatabases.answering(name, family) { pool.with_connection(&:verify!) }
+          AppDatabases.reaching(name, adapter) { pool.with_connection(&:verify!) }
           pool.with_connection(&block)
         end
       end
@@ -56,7 +68,7 @@ module RailsAiContext
 
         handler = ActiveRecord::ConnectionAdapters::ConnectionHandler.new
         begin
-          yield handler.establish_connection(connecting_in_time, owner_name: LeaseOwner)
+          yield AppDatabases.reaching(name, adapter) { handler.establish_connection(connecting_in_time, owner_name: LeaseOwner) }
         ensure
           handler.remove_connection_pool(LeaseOwner.name)
         end
@@ -66,9 +78,8 @@ module RailsAiContext
       def pending_migrations(dirs = migrate_dirs)
         with_pool do |pool|
           pool.with_connection do |connection|
-            connection.verify!
-            read = -> { { pending: MigrationStatus.pending_on(pool, dirs) } }
-            family.known? ? family.bounded(connection, timeout: RailsAiContext.configuration.query_timeout, &read) : read.call
+            AppDatabases.reaching(name, adapter) { connection.verify! }
+            { pending: AppDatabases.bounded(connection) { MigrationStatus.pending_on(pool, dirs) } }
           end
         end
       rescue ActiveRecord::NoDatabaseError => e
@@ -154,6 +165,8 @@ module RailsAiContext
     end
 
     DUMP_GLOBS = { ruby: "*_schema.rb", sql: "*_structure.sql" }.freeze
+    ADAPTER_GEMS = { "postgresql" => "the pg gem", "postgis" => "the activerecord-postgis-adapter gem", "mysql2" => "the mysql2 gem",
+                     "trilogy" => "the trilogy gem", "sqlite3" => "the sqlite3 gem" }.freeze
 
     module_function
 
@@ -168,21 +181,37 @@ module RailsAiContext
 
       own = ActiveRecord::Base.connection_db_config
       present!(own.name, own)
-      answering(own.name, DatabaseFamily.of(own)) { ActiveRecord::Base.connection.verify! }
+      reaching(own.name, own.adapter) { ActiveRecord::Base.connection.verify! }
       yield ActiveRecord::Base.connection
     end
 
-    # Runs the block that connects. What stops it is Unreachable, naming the database, with advice that fits.
-    def answering(name, family)
+    # Runs the block that connects. What stops it is raised as Unreachable.
+    def reaching(name, adapter)
       yield
     rescue Error
       raise
-    rescue StandardError => e
-      advice = if family.sqlite? then "Check the file its config/database.yml entry names."
-      elsif e.is_a?(ActiveRecord::NoDatabaseError) then "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
+    rescue StandardError, LoadError => e
+      raise unreachable(name, adapter, e)
+    end
+
+    # Names the database a connection did not reach, says what stopped it, and gives advice that fits.
+    def unreachable(name, adapter, error)
+      if error.is_a?(LoadError) || error.is_a?(ActiveRecord::AdapterNotFound)
+        gem = ADAPTER_GEMS.fetch(adapter.to_s) { "the gem that provides the #{adapter} adapter" }
+        return AdapterMissing.new(name, "its #{adapter} adapter did not load", "Add #{gem} to the Gemfile and run `bundle install`.")
+      end
+
+      advice = if DatabaseFamily.of(adapter).sqlite? then "Check the file its config/database.yml entry names."
+      elsif error.is_a?(ActiveRecord::NoDatabaseError) then "Run `bin/rails db:create` or `bin/rails db:prepare` to create it."
       else "Start its server, or fix its settings in config/database.yml."
       end
-      raise Unreachable, "The #{name} database cannot be reached: #{e.message.lines.first.to_s.strip.chomp(".")}. #{advice}"
+      Unreachable.new(name, error.message.lines.first.to_s.strip.chomp("."), advice)
+    end
+
+    # A read that ends at query_timeout, so a locked table cannot hold the answer. A family with no limit runs it as it is.
+    def bounded(connection, &read)
+      family = DatabaseFamily.of(connection)
+      family.known? ? family.bounded(connection, timeout: RailsAiContext.configuration.query_timeout, &read) : read.call
     end
 
     # Connecting to a SQLite file that is not there would create it, so this raises first.
