@@ -293,6 +293,9 @@ Proof sources:
    mounted HTTP endpoint and stdio, and the standalone CLI; an app that loads
    a gem before `bundler/setup`; and the unit suite and the E2E harness on
    Linux, macOS and Windows.
+   In the v5.34.1 release QA: the gem built from the release commit and its
+   file list read, and the unit suite and the E2E harness on Linux, macOS and
+   Windows; the code is v5.34.0's.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
