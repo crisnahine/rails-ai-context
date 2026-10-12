@@ -213,19 +213,19 @@ A message a user pastes into their AI tool so the AI tool installs, changes, rem
 
 ## Database family
 
-The kind of engine a database is, as far as running a statement on it goes: PostgreSQL (PostGIS too), MySQL (Trilogy and MariaDB too) or SQLite. Each family knows how its engine opens a read-only transaction, bounds a statement in time, explains a plan and reports table sizes; anything else is no family, and a tool that needs one refuses or says the answer is not available, naming the adapter. `DatabaseFamily` is the one answer, from a connection, a database.yml adapter or a dump's dialect. ADR-0008 records why a family is claimed by name.
+What a database is by its adapter's name, as far as running a statement on it goes: PostgreSQL (PostGIS too), MySQL (Trilogy and MariaDB too) or SQLite. Each family knows how its database opens a read-only transaction, bounds a statement in time, explains a plan and reports table sizes; anything else is no family, and a tool that needs one refuses or says the answer is not available, naming the adapter. `DatabaseFamily` is the one answer, from a connection, a database.yml adapter or a dump's dialect. ADR-0008 records why a family is claimed by name.
 
 Not "engine", which this glossary keeps for Rails engines and **mounted apps**, and not "adapter", which is ActiveRecord's class for one driver.
 
 ## App database
 
-A database the app has in any environment: one database.yml configures for the running environment, one only another environment configures (Rails 8's queue, cache and cable outside production), or one only a committed dump names. `AppDatabases` lists them once per run, the primary first, and each knows the environment its entry came from, its **database family**, its dump and its migrations. Every surface that asks "which databases" reads this list, so the schema section, the models and the migrations cannot disagree about one app.
+A database the app has in any environment: one database.yml configures for the running environment, one only another environment configures (Rails 8's queue, cache and cable outside production, and a replica or a database with `database_tasks: false` too), or one only a committed dump names. `AppDatabases` lists them once per run, the primary first, and each knows the environment its entry came from, its **database family**, its dump and its migrations. Every surface that asks "which databases" reads this list, so the schema section, the models and the migrations cannot disagree about one app.
 
-A tool that needs a connection reaches an App database configured here and nothing else: asked for one that only production configures, it says so. Not the **environment** (one named Rails environment), and not a shard, which is one database's copy under another name.
+A tool that needs a connection reaches an App database configured here and nothing else: asked for one that only production configures, it says so. A SQLite database whose file is not there is refused by name before anything connects, since connecting would create the file. Not the **environment** (one named Rails environment), and not a shard, which is one database's copy under another name.
 
 ## Secret column
 
-A column whose values `rails_query` never returns, and whose name a statement may not mention: one the app lists in `query_redacted_columns`, an `encrypts` column, a built-in secret name, a name the result heuristic flags, or a name `Redaction`'s secret words cover, unless the app allows it by name in `query_allowed_columns` (an `encrypts` column stays secret even then). `SecretColumns` decides for every check in the tool, from one read of the schema.
+A column whose values `rails_query` never returns, and whose name a statement may not mention: one the app lists in `query_redacted_columns`, an `encrypts` column, a built-in secret name, a name the result heuristic flags, or a name `Redaction`'s secret words cover, unless the app allows it by name in `query_allowed_columns`. An `encrypts` column is secret whatever that list holds: a statement that names it is refused, and its values come back filtered. `SecretColumns` decides for every check in the tool, from one read of the schema of the database the statement runs on. Only the primary falls back to the cached context's schema when its tables cannot be read.
 
 Not redaction itself: `Redaction` scrubs secret values out of text (logs, config, source). The two share the vocabulary, so a word added to one is secret in both.
 
@@ -235,8 +235,8 @@ What decides whether `rails_query` runs a statement: the checks on its text, and
 
 ## Served tool
 
-A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at.
+A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at. A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, and the **config sections** go with the built-in.
 
 ## Config section
 
-One part of the app's configuration that `rails_get_config` answers by `section`: `app` (the default: database, auth, assets, cache, queue, Action Cable, initializers, middleware), `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env` (the **process environment**), `env_config` (the **environment config**) and `i18n`. Ten of them were tools of their own; their names still reach their section from the CLI and the MCP server, and `skip_tools` lists them to turn a section off. ADR-0010.
+One part of the app's configuration that `rails_get_config` answers by `section`: `app` (the default: database, auth, assets, cache, queue, Action Cable, initializers, middleware), `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env` (the **process environment**), `env_config` (the **environment config**) and `i18n`. Ten of them were tools of their own; their names still reach their section from the CLI and the MCP server, and `skip_tools` lists them to turn a section off. With `app` off, a call has to name its `section`. ADR-0010.

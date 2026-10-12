@@ -274,7 +274,7 @@ config.allow_query_in_production = true
 
 ### "Blocked: contains INSERT" and other "Blocked:" messages
 
-The SQL gate refuses write statements, file and admin functions and secret column names, and the message names what it hit. Ensure you're only running SELECT queries.
+The SQL gate refuses write statements, file and admin functions and secret column names, and the message names what it hit. Only read statements run: SELECT, WITH, SHOW, EXPLAIN and DESCRIBE.
 
 Common false positives:
 - A blocked keyword inside a string (`WHERE note = 'please insert coin'`) → the validator matches words, not SQL structure, so the query is refused

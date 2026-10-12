@@ -29,7 +29,7 @@ The `rails_query` tool uses a 4-layer security model:
 
 ```mermaid
 flowchart LR
-    Q[SQL Query] --> L1{Layer 1\nRegex Validation}
+    Q[SQL Query] --> L1{Layer 1\nSQL gate}
     L1 -->|"Blocked:\nINSERT, DROP,\nUNION SELECT..."| R1[Rejected]
     L1 -->|SELECT only| L2{Layer 2\nDatabase Read-Only}
     L2 -->|"SET TRANSACTION\nREAD ONLY\n+ timeout"| L3{Layer 3\nRow Limit}
@@ -45,7 +45,7 @@ flowchart LR
     style L4 fill:#9b59b6,stroke:#8e44ad,color:#fff
 ```
 
-### Layer 1 - SQL validation (regex-based)
+### Layer 1 - The SQL gate: statement checks
 
 Before any query reaches the database, the SQL gate (`RailsAiContext::SqlGate`) reads it once and answers either the text to run or a refusal with the reason. It holds every check in this layer and, on PostgreSQL, the plan checks of Layer 1b. Comments and quotes are read the way the connection's database family reads them:
 
@@ -62,7 +62,7 @@ Before any query reaches the database, the SQL gate (`RailsAiContext::SqlGate`) 
 - **Blocks sensitive column references**: see Layer 4 - a query whose text names a sensitive column, directly or through an alias or expression, is refused before execution
 - **Allows only**: SELECT, WITH, SHOW, EXPLAIN, DESCRIBE, DESC. `SHOW CREATE TABLE` and `SHOW CREATE VIEW` are allowed so schema can be inspected; every other `SHOW CREATE` (`USER`, whose output includes credential hashes, `DATABASE`, `FUNCTION`, …) keeps its `CREATE` and is refused. A returned definition is passed through secret redaction before it is shown, so a credential embedded in it - a FEDERATED table's `CONNECTION='mysql://user:pass@host/db'` - comes back as `mysql://[FILTERED]@host/db`
 
-### Layer 1b - PostgreSQL semantic analysis (planning only)
+### Layer 1b - The SQL gate: PostgreSQL plan checks (planning only)
 
 The textual layer cannot see a whole-row serialisation (`SELECT row_to_json(u.*) FROM users u`) or an admin function introduced through a view, because no sensitive column name appears in the query. On PostgreSQL, before the query runs, the tool plans it with `EXPLAIN (VERBOSE, FORMAT JSON)` inside the same read-only transaction - planning only, nothing executes, not even a VOLATILE function (the planner does not fold one). The plan is refused when it:
 
@@ -75,7 +75,7 @@ A whole-row read of a relation with no sensitive column (`row_to_json(posts.*)`)
 
 ### Layer 2 - Database-level read-only
 
-After validation, the query runs through its database family, which knows how its engine spells a read-only transaction and a statement timeout:
+After validation, the query runs through its database family, which knows how its database spells a read-only transaction and a statement timeout:
 
 | Family | Mechanism | A timeout arrives as |
 |:-------|:----------|:---------------------|
@@ -84,11 +84,15 @@ After validation, the query runs through its database family, which knows how it
 | MariaDB | `SET TRANSACTION READ ONLY` + `SET STATEMENT max_statement_time = <seconds> FOR <statement>` (MariaDB has no `max_execution_time` and ignores MySQL's hint) | native code 1969 |
 | SQLite | A read-only connection in a child process, killed at timeout | the gem's own timeout |
 
-The MySQL session variable bounds a statement that starts with `WITH` or `EXPLAIN ANALYZE` too; the `MAX_EXECUTION_TIME` hint bound only the outermost `SELECT`, so it is not used. A timeout is read from the error's class or the engine's native code, never from the message, so an SQL error about a column named `timeout` is reported as an SQL error.
+The MySQL session variable bounds a statement that starts with `WITH` or `EXPLAIN ANALYZE` too; the `MAX_EXECUTION_TIME` hint binds only the outermost `SELECT`, so it is not used. On PostgreSQL the timeout is one millisecond at least, so a `query_timeout` of zero still bounds the statement. A timeout is read from the error's class or the database's native code, never from the message, so an SQL error about a column named `timeout` is reported as an SQL error.
 
 On PostgreSQL and MySQL the query executes inside a transaction, then rolls back (even if it could write, it can't). MySQL's read-only transaction still lets `FOR SHARE`, `LOCK IN SHARE MODE` and `INTO` through, so the Layer 1 checks stay on every family.
 
-An engine with no family (SQL Server, Oracle, CockroachDB and any other adapter) is refused: `rails_query` answers with the adapter's name and sends it no statement, because it cannot give that engine a read-only transaction and a timeout it has verified. CockroachDB's adapter is built on PostgreSQL's, but the family is chosen by adapter name, never by class ancestry, so it is refused too.
+An adapter with no family (SQL Server, Oracle, CockroachDB and any other) is refused: `rails_query` answers with the adapter's name and sends no statement, because it cannot give that database a read-only transaction and a timeout it has verified. CockroachDB's adapter is built on PostgreSQL's, but the family is chosen by adapter name, never by class ancestry, so it is refused too.
+
+A SQLite database whose file is not there is refused by name before anything
+connects, with or without a `database` argument, since connecting would create
+the file. The answer names `bin/rails db:prepare`.
 
 A SQLite query runs in-process under `PRAGMA query_only = ON`, with no time
 limit, for an in-memory database, on a platform without `fork`, or when it
@@ -120,14 +124,14 @@ A query that names a sensitive column is **rejected before execution**, not reda
 - a name the heuristic catches: it ends in `password`, `secret`, `token`, `key`, `digest` or `hash`, or contains `password`, `secret` or `token`;
 - a name the shared log and config redaction treats as secret (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the rest of its secret words), so a word added there is secret here too
 
-minus anything in `config.query_allowed_columns`. An `encrypts` column's values stay `[FILTERED]` even when its name is allowed.
+minus anything in `config.query_allowed_columns`. An `encrypts` column is the exception: it is sensitive whatever that list holds. A query that names it is refused, the refusal says the allowed list does not release it, and its values stay `[FILTERED]`.
 
 **Default redacted patterns:** `password_digest`, `encrypted_password`, `password_hash`, `reset_password_token`, `confirmation_token`, `unlock_token`, `otp_secret`, `session_data`, `secret_key`, `api_key`, `api_secret`, `access_token`, `refresh_token`, `jti`. Those are the defaults of `config.query_redacted_columns`. The fixed built-in list adds `password_reset_token`, `remember_token`, `secret` and `private_key`.
 
 The pre-execution refusal matches on two things, case-insensitive and word-bounded:
 
 - **the fixed names above**, on every adapter whether or not they are real columns, so the check holds even with no connection;
-- **every real column of your schema that the rule flags** - read from the live connection, falling back to the cached schema. This catches an app-specific column the heuristic flags (`api_token`, `auth_token`) through any alias or expression, not only an exact configured name. Rails' own bookkeeping tables (`ar_internal_metadata`, `schema_migrations`) are left out: their columns are never secrets, and `ar_internal_metadata.key` ends in "key", so counting it refused every query whose text held the word "key".
+- **every real column of your schema that the rule flags** - read from the connection the query runs on, so a database named with `database` is checked against its own columns. Only the primary falls back to the cached schema. This catches an app-specific column the heuristic flags (`api_token`, `auth_token`) through any alias or expression. Rails' own bookkeeping tables (`ar_internal_metadata`, `schema_migrations`) are left out: their columns are never secrets, and `ar_internal_metadata.key` ends in "key", so counting it refused every query whose text held the word "key".
 
 So `SELECT password_digest AS pd FROM users`, `SELECT upper(api_token) FROM users` and `SELECT (SELECT api_token FROM users LIMIT 1) AS leaked` are all refused: post-execution redaction reads the output column names, which the caller controls through aliases and expressions, so it cannot be relied on. A table or alias that merely contains a sensitive word (a `tokens` table) does not trip the check - only a real column name does. `SELECT *` stays allowed, and its sensitive columns are redacted in the result.
 
@@ -142,8 +146,8 @@ config.query_allowed_columns = %w[secret]
 Results are redacted as well: a returned column comes back as `[FILTERED]` when the sensitivity rule flags its **output name**, and on PostgreSQL when its origin is a sensitive base column - either by **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) or by the **plan's top-node `Output`**, whose i-th expression is result column i. The plan path catches a view (or inlined CTE/subquery/join) that renamed a sensitive column to a harmless name: `CREATE VIEW user_tokens AS SELECT id, api_token AS t FROM users; SELECT t FROM user_tokens` returns `t` as `[FILTERED]`. `SHOW`, `DESCRIBE` and `EXPLAIN` output skips column-name redaction; the one exception is `SHOW CREATE TABLE` / `SHOW CREATE VIEW`, whose definition text is run through the shared secret redaction so a credential embedded in it is filtered.
 
 The exemption covers the results too: an allowed name comes back unredacted. A
-column declared with `encrypts` stays `[FILTERED]` either way - an encrypted-at-rest
-attribute is never meant to be read back raw.
+column declared with `encrypts` is refused by name and stays `[FILTERED]` either
+way: an encrypted-at-rest attribute is never meant to be read back raw.
 
 ### Environment guard
 
@@ -256,7 +260,7 @@ never above the git root and never outside a git repository). Only `package.json
 lockfiles and the presence of a bundler config (`vite.config.*` and similar) are
 read there, plus a configured entry's `tsconfig.json` and the configs it extends
 inside that same directory. Sensitive patterns and symlink containment apply relative to that
-directory, and frontend_stack names it in its answer.
+directory, and the `frontend` section of `rails_get_config` names it in its answer.
 
 ### The bundle config/boot.rb declares
 

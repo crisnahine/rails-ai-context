@@ -154,7 +154,7 @@ Switch any time with the [change the setup](docs/PROMPTS.md#change-the-setup) pr
 graph TD
     A["Your Rails app\nmodels + schema + routes + controllers + views + jobs"] -->|"40 introspectors"| B
     B["rails-ai-context\nPrism AST · cached · confidence-tagged\nstatic tier when the app can't boot"]
-    B --> C["MCP server\nstdio / HTTP\n45 tools · 5 templates · 9 resources"]
+    B --> C["MCP server\nstdio / HTTP\n35 tools · 5 templates · 9 resources"]
     B --> D["CLI\nrake / Thor\nsame 35 tools"]
     B --> E["Context files\nCLAUDE.md · .cursor/rules/ · .github/instructions/ · AGENTS.md"]
 
@@ -177,9 +177,9 @@ Every tool is read-only and answers from your app.
 | Understand | `analyze_feature`, `get_context`, `onboard` |
 | Schema and models | `get_schema`, `get_model_details`, `get_callbacks`, `get_concern` |
 | Controllers and routes | `get_controllers`, `get_routes` |
-| Views and frontend | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map`, `get_frontend_stack` |
+| Views and frontend | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map` |
 | Testing and quality | `get_test_info`, `generate_test`, `validate`, `security_scan`, `performance_check` |
-| App config and services | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_i18n`, `get_mailers`, `get_engines`, `get_autoload`, `get_active_support`, `get_env_config` |
+| App config and services | `get_config` (sections: app, gems, frontend, api, engines, conventions, autoload, active_support, env, env_config, i18n), `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_mailers` |
 | Data and debugging | `dependency_graph`, `migration_advisor`, `search_docs`, `query`, `read_logs`, `diagnose`, `review_changes`, `runtime_info`, `session_context` |
 
 Four worth knowing on day one:

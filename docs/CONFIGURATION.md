@@ -177,7 +177,7 @@ filter either runs or is struck through.
 | `max_validate_files` | Integer | `50` | Maximum files for validation |
 | `search_extensions` | Array | `nil` | Narrows the Ruby fallback to these extensions. Unset, the fallback searches every non-hidden, non-binary file, as ripgrep does, so both backends return the same lines |
 | `concern_paths` | Array | `nil` (discovers `app/concerns` and `app/*/concerns`) | Paths to scan for concerns. Setting it replaces discovery, so it can narrow as well as widen |
-| `frontend_paths` | Array | `nil` (auto-detect) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for its package.json, lockfiles and bundler config, plus its tsconfig.json and the configs it extends inside that directory, and frontend_stack names it |
+| `frontend_paths` | Array | `nil` (auto-detect) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for its package.json, lockfiles and bundler config, plus its tsconfig.json and the configs it extends inside that directory, and the `frontend` section of `rails_get_config` names it |
 | `extra_app_paths` | Array | `[]` | Extra directories under the app root to treat as application code |
 
 Directories that carry their own Rails tree - `plugins/*`, `modules/*`,
@@ -202,10 +202,10 @@ fits neither that shape nor the conventional one.
 | `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
 | `query_row_limit` | Integer | `100` | 1 to 1000 | Maximum rows returned |
 | `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected, on top of a fixed built-in list (see [SECURITY.md](SECURITY.md)) |
-| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list and from `query_redacted_columns` |
+| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list and from `query_redacted_columns`. It does not release an `encrypts` column |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
-`rails_query` treats a column as secret when its name is in `query_redacted_columns` or the built-in list, an `encrypts` declaration covers it, it ends in `password`, `secret`, `token`, `key`, `digest` or `hash` (or contains `password`, `secret` or `token`), or it is a secret name to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the like). A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret, except an `encrypts` column, whose values stay filtered. See [SECURITY.md](SECURITY.md) for how each check reads the rule.
+`rails_query` treats a column as secret when its name is in `query_redacted_columns` or the built-in list, an `encrypts` declaration covers it, it ends in `password`, `secret`, `token`, `key`, `digest` or `hash` (or contains `password`, `secret` or `token`), or it is a secret name to the gem's log and config redaction (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the like). A statement that names a secret column is refused, and a secret column's values come back as `[FILTERED]`. A name in `query_allowed_columns` is not secret, except an `encrypts` column: a statement that names it is still refused, and its values stay filtered. See [SECURITY.md](SECURITY.md) for how each check reads the rule.
 
 ### Logs
 
@@ -226,8 +226,8 @@ its exact name blocks it; see [SECURITY.md](SECURITY.md).
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML) |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files, and no other tool's answer points at it: the hint that would name it is left out. A custom tool with the same name takes its place. A call that names a skipped tool anyway - from the CLI, rake, an MCP client or `rails_get_context(include:)` - says it is turned off here. The ten tools that became `rails_get_config` sections still go here by their old names: `rails_get_env` turns the `env` section off, `rails_get_config` turns off only `app`, and the tool leaves `tools/list` once all eleven are listed |
+| `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML). A custom tool takes a built-in's name only when `skip_tools` lists that built-in. One that reuses the old name of a `rails_get_config` section (`rails_get_gems`) is served as its own tool, and the gem's own hints still mean the built-in section: they print `rails_get_config(section:"gems")` |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`). A skipped tool is left out of `tools/list`, `tool --list`, the tool guide and the context files, and no other tool's answer points at it: the hint that would name it is left out. A custom tool with the same name takes its place. A call that names a skipped tool anyway - from the CLI, rake, an MCP client or `rails_get_context(include:)` - says it is turned off here. The ten tools that became `rails_get_config` sections still go here by their old names: `rails_get_env` turns the `env` section off, `rails_get_config` turns off only `app`, and the tool leaves `tools/list` once all eleven are listed. With `app` off, `section` is required. Listing `rails_get_config` while a custom tool has that name gives the custom tool the built-in's place: the ten sections go with the built-in, and a call to an old name such as `rails_get_gems` is then an unknown tool |
 
 ### Output
 

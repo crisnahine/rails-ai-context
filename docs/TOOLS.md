@@ -472,7 +472,7 @@ or over `max_schema_file_size`) is listed under **Not checked** with the reason.
 
 ### `rails_get_config`
 
-The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and an MCP call to an old name is answered from its section with a note naming the new call. A parameter the asked section does not read is named in the answer as ignored.
+The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and a call to an old name is answered from its section with a note naming the new call and the arguments the section reads. Under `tool_mode: :cli` the note is the command. A parameter the asked section does not read is named in the answer as ignored.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -485,6 +485,10 @@ The app's configuration, one section per call. `section` picks it; the default, 
 | `limit` | integer | `50` | Read by `gems`, `env_config`, `i18n`. Max entries to return |
 
 `skip_tools` turns one section off by its old tool's name (`rails_get_env` turns `env` off); `rails_get_config` turns off `app` alone. The tool leaves `tools/list` only when every section is off.
+
+With `app` off, `section` is required: the published schema marks it required, the description says so, and a call with no `section` is answered with the sections that are on.
+
+A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name. The ten sections go with the built-in, so a retired name such as `rails_get_gems` is then an unknown tool.
 
 #### `app` (default)
 
@@ -706,7 +710,7 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
 
-It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other engine it answers with the adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout; any other database error is an SQL error.
+It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. On PostgreSQL a `query_timeout` of zero still bounds the statement, at one millisecond. A statement that runs past `query_timeout` is answered as a timeout; any other database error is an SQL error.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -714,15 +718,15 @@ It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-o
 | `limit` | integer | `100` | Maximum rows to return (hard cap: 1000) |
 | `format` | enum | `table` | `table`, `csv` |
 | `explain` | boolean | `false` | Show query plan instead of results |
-| `database` | string | the primary | The app database to query, by its `config/database.yml` name (`queue`, `cache`). The secret column rule and the engine are that database's |
+| `database` | string | the primary | The app database to query, by its `config/database.yml` name (`queue`, `cache`). The secret column rule and the database family are that database's |
 
-`database` is checked when the tool runs, against the databases the app has then. A name the app does not have is answered with the closest one and every name it has. A database only another environment configures is answered with the environments that do, and one that only a committed dump names is answered as such. A SQLite file that is not there is said to be missing, and is not created. When a statement fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
+`database` is checked when the tool runs, against the databases the app has then. A name the app does not have is answered with the closest one and every name it has. A database only another environment configures, a replica and one with `database_tasks: false` included, is answered with the environments that do, and one that only a committed dump names is answered as such. On the static tier a `database` argument is refused: the answer says the database needs the booted app to connect. A SQLite database whose file is not there is refused by name, with or without `database`: nothing is created, and the answer names `bin/rails db:prepare`. When a statement fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use.
 
 Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.
 
 > Disabled in production by default.
 
-> Name the columns you need. A query that references a sensitive column (directly, or through an alias or expression), serialises a whole row, carries a column-alias list that renames a wildcard (a `VALUES`-body list such as `(VALUES (1,'a')) AS v(id, name)` is allowed - it renames no table column), uses UNION, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its sensitive columns come back `[FILTERED]`. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed and their definition text is secret-redacted; other `SHOW CREATE` forms are refused. In the default format a definition is shown whole, as the DDL in a fenced code block with its line breaks kept (a view's character set and collation follow as `name: value` lines); `csv` returns it as one quoted field. When the row limit holds rows back - only when the query really returned more than the cap - the answer says so in every format.
+> Name the columns you need. A query that references a sensitive column (directly, or through an alias or expression; an `encrypts` column also when `query_allowed_columns` lists it), serialises a whole row, carries a column-alias list that renames a wildcard (a `VALUES`-body list such as `(VALUES (1,'a')) AS v(id, name)` is allowed - it renames no table column), uses UNION, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its sensitive columns come back `[FILTERED]`. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed and their definition text is secret-redacted; other `SHOW CREATE` forms are refused. In the default format a definition is shown whole, as the DDL in a fenced code block with its line breaks kept (a view's character set and collation follow as `name: value` lines); `csv` returns it as one quoted field. When the row limit holds rows back - only when the query really returned more than the cap - the answer says so in every format.
 
 > **Cell rendering by format.** A `markdown` table cell shows `NULL` as `_NULL_`, escapes a pipe (`a\|b`) so it cannot end the cell, renders a line break as the two characters `\n` so it cannot end the row, and shortens a value over 100 characters to `…` (a `SHOW CREATE` definition is not a table cell, so it is never shortened). A `csv` cell is the value itself: `NULL` is an empty field, nothing is escaped beyond RFC 4180 quoting (a field holding a comma, a quote or a line break is wrapped in quotes with its quotes doubled), and nothing is truncated - so a line break stays a real line break inside the quoted field. Binary (non-text) data shows as `[BLOB]` in both.
 
@@ -773,7 +777,7 @@ Each diff passes through the redaction every tool's source does, read as the fil
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
 
-Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On an engine with no database family the database section says table sizes and index usage are not available for that adapter.
+Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter.
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there.
 
@@ -781,9 +785,9 @@ The pool and the cache are read inside the MCP server process, and the answer sa
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 | `section` | enum | - | One section only: `database`, `cache`, `jobs`, `connections` |
-| `database` | string | the primary | The app database whose adapter, table sizes and index usage the database section shows, named and checked as `rails_query`'s `database` is |
+| `database` | string | the primary | The app database whose adapter, table sizes and index usage the database section shows, named and checked as `rails_query`'s `database` is, whatever the `section`. A section that does not read it says so |
 
-Pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`, so "all up to date" means all of them. The connections section is always about the app's own pools.
+Pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`, so "all up to date" means all of them. The connections section is always about the app's own pools. A SQLite database whose file is not there is named in the database section as not available, and is not created.
 
 ### `rails_session_context`
 

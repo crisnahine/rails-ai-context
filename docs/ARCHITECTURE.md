@@ -30,7 +30,7 @@ graph TD
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
-        engine --> R["Tool Registry\n45 tools auto-discovered via inherited\n+ custom_tools - skip_tools = active tools"]
+        engine --> R["Tool Registry\n35 tools auto-discovered via inherited\n+ custom_tools - skip_tools = active tools"]
     end
 
     R --> MCP
@@ -128,6 +128,13 @@ Two more answer a question a tool asks:
 - **PendingMigrations** - which migration files are not in the applied set, from one derivation both the schema and migrations sections read
 - **ActionFilters** - which filters apply to a controller or to one of its actions: own, inherited, skipped. `skipped` holds unconditional skips only; a skip carrying `if:`/`unless:` leaves the filter in `own` or `inherited` with the condition on the record. Every controller surface reads its filter line from here, so no two answers can disagree
 
+Four more answer for the app's databases and for what `rails_query` runs on them:
+
+- **DatabaseFamily** - what a database is by its adapter's name: PostgreSQL (PostGIS too), MySQL (Trilogy and MariaDB too) or SQLite, else no family. A family owns its read-only transaction, its statement timeout, EXPLAIN, table sizes, row estimates and index usage. A runtime call on no family raises before anything reaches the database
+- **AppDatabases** - every database the app has, listed once per run: the primary, the rest of the running environment's, those only another environment configures, then dumps no environment claims. Both tiers build it through one builder. It also leases a connection to a database configured here, through a connection handler of its own for the call
+- **SecretColumns** - which columns `rails_query` never returns and a statement may not name, from one read of the leased database's schema. An `encrypts` column is secret whatever `query_allowed_columns` lists
+- **SqlGate** - whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It answers the comment-free text to run or a refusal with the reason
+
 ### AST Engine
 
 **Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
@@ -145,6 +152,7 @@ Auto-registration via Ruby's `inherited` hook:
 2. Subclass is appended to `@descendants` (protected by `@registry_mutex`)
 3. `BaseTool.registered_tools` eager-loads all tool files and returns non-abstract classes
 4. `BaseTool` itself is marked `abstract!` - excluded from the registry
+5. The ten classes that render a `rails_get_config` section call `section_renderer!`. `rails_get_config` calls them, so they stay out of the registry and are still callable from Ruby
 
 **Deadlock-free design**: `eager_load!` walks `Tools.constants` and `const_get`s each one without holding the mutex, because `const_get` triggers Zeitwerk autoloading which calls `inherited`, which takes the mutex itself.
 

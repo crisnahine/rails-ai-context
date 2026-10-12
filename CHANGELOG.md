@@ -31,16 +31,18 @@ Ten tools that each answered one section of the app's configuration leave
   the one-paragraph overview `quick` gave.
 - **`tools/list` is smaller:** measured as the JSON of every tool's
   definition, 47,795 characters (about 11,950 tokens at four characters per
-  token) before and 40,931 characters (about 10,230 tokens) after.
+  token) before and 41,280 characters (about 10,320 tokens) after.
 
 ### Migration notes
 
 - **Old names keep working where a name is typed.** The CLI resolves
   `gems`, `rails_get_gems`, `frontend_stack` and every other old short and
   full name to its section, and `--json` reports `rails_get_config`. A call
-  to a retired name, from the CLI or over MCP, is answered from its section,
-  with a line naming the call to make instead. Update saved
-  prompts to the new call: `rails_get_gems(category:"auth")` becomes
+  to a retired name, from the CLI or over MCP, is answered from its section
+  and ends with a line naming the call to make instead. That line is the
+  command under `tool_mode: :cli` and the MCP call under `:mcp`, and it
+  carries only the arguments the section reads. Update saved prompts to the
+  new call: `rails_get_gems(category:"auth")` becomes
   `rails_get_config(section:"gems", category:"auth")`.
 - **`skip_tools` keeps its meaning.** An old tool name turns its section
   off, so an app that skipped `rails_get_env` still keeps the `env` section
@@ -49,20 +51,75 @@ Ten tools that each answered one section of the app's configuration leave
   parameters only it reads and the guide row; a call that names it anyway is
   told it is turned off. The tool leaves `tools/list` only when all eleven
   names are listed.
+- **With the `app` section off, `section` is required.** `app` is the
+  default, so once `skip_tools` lists `rails_get_config` the published
+  schema marks `section` required and the description says so. A call with
+  no `section` is answered with the sections that are on, and the guide row
+  shows a call to the first of them.
+- **A custom `rails_get_config` still replaces the built-in.** An app that
+  lists `rails_get_config` in `skip_tools` and registers a custom tool with
+  that name gets the custom tool in the built-in's place. The ten sections
+  go with the built-in, so a retired name such as `rails_get_gems` is then
+  an unknown tool, and no answer points at a section.
+- **A custom tool that reuses a retired name is served as its own tool.** A
+  custom `rails_get_gems` answers a call to that name. The gem's own hints
+  still mean the built-in section, and they print it as
+  `rails_get_config(section:"gems")`.
 - **Ruby callers are unchanged.** `RailsAiContext::Tools::GetGems.call` and
   the other nine classes still answer; they are out of the MCP registry, so
   `Tools::BaseTool.registered_tools` no longer lists them. The test helper's
   `execute_tool("rails_get_gems")` still finds the class.
 - **`rails_get_context(include:)`** takes the same keys; `config`, `gems`,
   `env` and `conventions` now run as `rails_get_config` sections.
+- **The session context names `rails_get_config`.** A section call is
+  recorded as `rails_get_config` with its section, also when a retired name
+  made the call.
 - **CLI `--environment`:** after `config --section env_config` it is the
   section's filter, as it is after `env_config`; after any other section it
   sets `RAILS_ENV`.
 - **`rails_onboard(detail:"quick")` becomes `detail:"summary"`.** Over MCP
   a `quick` call is refused with the three valid levels; the CLI's
   `--detail quick` warns with them and answers at `standard`.
+- **Apps on SQL Server, Oracle or CockroachDB lose `rails_query`.** It
+  answers with the adapter's name and runs nothing (ADR-0008). It ran there
+  with no read-only transaction and no timeout, and on SQL Server and Oracle
+  its row cap appended a `LIMIT` those databases do not read. Add
+  `rails_query` to `skip_tools` to take it out of `tools/list`.
+  `rails_runtime_info` still answers, and says table sizes, row estimates
+  and index usage are not available for the adapter.
 - **Regenerate the context files** (`rails ai:context` or
   `rails-ai-context context`) so the tool guide and tables name the new call.
+
+### Security
+
+- **`rails_query` sends no statement to an adapter with no database
+  family.** On SQL Server, Oracle, CockroachDB and any other adapter outside
+  PostgreSQL, MySQL and SQLite it ran the statement with the text checks
+  alone, with no read-only transaction and no timeout. It now answers with
+  the adapter's name and runs nothing.
+- **MySQL bounds every `rails_query` statement.** The `MAX_EXECUTION_TIME`
+  hint bound only a statement that starts with SELECT, so one that starts
+  with WITH or EXPLAIN ANALYZE ran with no time limit. The session's
+  `max_execution_time` now bounds every statement and is put back after it,
+  also when the statement fails.
+- **`rails_query` keeps a column secret when `Redaction`'s secret words name
+  it.** Columns such as `passwd`, `salt`, `credentials` and `pepper` were
+  returned by `rails_query` while log and config redaction filtered those
+  words. They are now refused by name and filtered in results, so a column
+  name is secret in every tool or in none.
+- **An `encrypts` column stays secret when `query_allowed_columns` lists
+  it.** The statement check let an allowed name through, and on MySQL and
+  SQLite a query that gave the column an alias returned the stored value.
+  The check now refuses the name on every database family, and the refusal
+  says the allowed list does not release it.
+- **`skip_tools` holds inside composite answers.**
+  `rails_get_context(include:)` ran `rails_security_scan` and the
+  environment listing when `skip_tools` listed them. An include whose tool
+  is turned off is now answered by saying so, and that tool does not run.
+  `rails_get_context`, `rails_diagnose` and `rails_review_changes` build
+  every other section the same way: from a built-in tool only when the app
+  serves it. A section left out is named in one line at the end of the
+  answer.
 
 ### Added
 
@@ -70,11 +127,46 @@ Ten tools that each answered one section of the app's configuration leave
   take an app database's name from `config/database.yml`, checked when the
   tool runs; with none they read the primary as before. Another database is
   reached through a connection handler of its own for the call, so the app's
-  pools are untouched and two calls at once never share a pool. A misspelled
-  name is answered with the closest one; a database only another environment
-  configures, one only a dump names, the static tier and a missing SQLite
-  file are each refused with the reason. A query that misses a table another
-  database holds names that database.
+  pools are untouched and two calls at once never share a pool. Its secret
+  columns come from its own schema, never the primary's. A misspelled name
+  is answered with the closest one. A database only another environment
+  configures, a replica and one with `database_tasks: false` included, is
+  answered with the environment that configures it. One only a dump names
+  and the static tier are each refused with the reason. A query that misses
+  a table another database holds names that database.
+  `rails_runtime_info` checks the name whatever the `section`, and says so
+  when the asked section does not read `database`.
+
+### Changed
+
+- **The SQL gate decides what `rails_query` runs.** It reads the
+  comment-free statement once and answers the text to run or a refusal with
+  the reason: every text check, and on PostgreSQL the plan checks.
+  `rails_query` is a short handler over the gate, the database family and the
+  secret column rule.
+- **One rule decides which columns `rails_query` keeps secret.** The text
+  check, the PostgreSQL plan checks, provenance redaction and result
+  redaction ask the same rule, which reads the schema once per connection and
+  call. `query_redacted_columns` and `query_allowed_columns` keep their
+  meaning.
+- **Statistics say when an adapter has none.** On an adapter with no
+  database family, `rails_runtime_info` and the row estimates say table
+  sizes, row estimates and index usage are not available for that adapter.
+- **Each database family owns its database's reads.** The read-only
+  transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
+  plan, table sizes, row estimates and index usage live in one place per
+  family, which `rails_query`, `rails_runtime_info` and the database stats
+  ask.
+- **One answer to which database an app runs.** The connection, a
+  database.yml adapter, a URL scheme, a display label and a dump's dialect
+  all go through one database family (PostgreSQL, MySQL or SQLite). An
+  adapter the gem does not know, such as SQL Server, Oracle or CockroachDB,
+  is no family.
+- **One list of the app's databases.** Both tiers build it through one
+  builder, the primary first, then the rest of the running environment's,
+  then those only another environment configures, then dumps no environment
+  names. The schema, multi-database, connection pool and migrations
+  sections, doctor, migration advice and the performance check all read it.
 
 ### Fixed
 
@@ -84,21 +176,21 @@ Ten tools that each answered one section of the app's configuration leave
 - **A database configured in several other environments names them all.**
   A cache database that staging and production both configure read
   "(staging only)"; it now reads "(staging and production)".
-
 - **A booted MySQL app reads "MySQL".** A connection on mysql2 or Trilogy
   showed its driver name in the generated context and in `rails_runtime_info`;
   it now reads "MySQL" there, as the static tier already said. PostGIS reads
   "PostgreSQL".
-- **Migration advice for an undecided database names no engine.** When the
-  app's database is one of two candidates, `rails_migration_advisor` no
+- **Migration advice for an undecided database names no database.** When
+  the app's database is one of two candidates, `rails_migration_advisor` no
   longer gives PostgreSQL and MySQL advice at once.
 - **Every surface names the same databases.** On a default Rails 8 app,
   where the running environment configures only the primary and production
   configures queue, cache and cable, the schema section, the multi-database
-  section, the stack overview, the model listing and the migrations section
-  now all name the four databases. A database only another environment
-  configures is marked "(production only)", and one only a committed dump
-  names "(committed dump only)".
+  section, the stack overview and the model listing now all name the four
+  databases. The migrations section names each one whose migrations
+  directories hold files. A database only another environment configures is
+  marked "(production only)", and one only a committed dump names
+  "(committed dump only)".
 - **A secondary dump too large to read is named.** It keeps an entry in the
   schema section that gives the reason, and a database whose migrations are
   replayed instead no longer has its existing dump called missing.
@@ -116,30 +208,21 @@ Ten tools that each answered one section of the app's configuration leave
 - **No answer points at a tool the app turned off.** Every pointer to
   another tool, in `_Next:` hints, fix steps, recovery lines and lists,
   goes through one helper, and a tool `skip_tools` names is left out with
-  its hint. A spec fails on a tool call written straight into an answer.
-- **`rails_get_context(include:)`** lists all twelve keys it takes, names
-  a key it does not take, and answers an include whose tool `skip_tools`
-  turned off by saying so, without running that tool.
-- **Composite answers run only served tools.** `rails_get_context`,
-  `rails_diagnose` and `rails_review_changes` build each section from a
-  tool only when the app serves it. A section whose tool `skip_tools`
-  turned off is left out, and the answer names those tools in one line.
-
-- **MySQL bounds every `rails_query` statement.** The `MAX_EXECUTION_TIME`
-  hint bound only a statement that starts with SELECT; one that starts with
-  WITH or EXPLAIN ANALYZE ran with no time limit. The session's
-  `max_execution_time` now bounds every statement and is put back after it,
-  also when the statement fails.
-- **A timeout is a timeout, and nothing else is.** `rails_query` read any
-  SQL error that mentioned "timeout" as a timeout, so an unknown column named
-  `timeout` came back as one. A timeout is now read from the error's class or
-  the engine's native code, and MariaDB's 1969 counts.
+  its hint.
+- **`rails_get_context(include:)`** lists all twelve keys it takes and
+  names a key it does not take.
+- **A SQLite database whose file is not there is refused by name.**
+  `rails_query` and `rails_runtime_info` name the database and
+  `bin/rails db:prepare`, with or without `database`, and create nothing. A
+  query on it created an empty file.
+- **PostgreSQL bounds a statement when `query_timeout` is zero.** Zero, or
+  a value under a millisecond, turned the statement timeout off. The
+  statement is now bounded at one millisecond.
+- **Only a timeout is reported as a timeout.** `rails_query` read any SQL
+  error that mentioned "timeout" as a timeout, so an unknown column named
+  `timeout` came back as one. A timeout is now read from the error's class
+  or the database's native code, and MariaDB's 1969 counts.
 - **MySQL table sizes count base tables only**, as the row estimates do.
-- **`rails_query` treats a column as secret when `Redaction`'s secret words
-  name it.** Columns such as `passwd`, `salt`, `credentials` and `pepper`
-  are now refused by name and filtered in results, as log and config
-  redaction already treated those words, so a column name is secret in every
-  tool or in none.
 - **`rails_query` holds `LIMIT ALL`, `LIMIT NULL` and a negative limit to
   the row cap.** The three mean no limit, and the query fetched every row
   before the cap cut the answer. They now read as no limit of the query's own
@@ -154,40 +237,6 @@ Ten tools that each answered one section of the app's configuration leave
   read-only transaction refuses a locking read, so `'%ready for update%'`
   runs there. MySQL's read-only transaction allows `FOR SHARE`, so there and
   on SQLite the raw text still decides.
-
-### Changed
-
-- **The SQL gate decides what `rails_query` runs.** It reads the
-  comment-free statement once and answers the text to run or a refusal with
-  the reason: every text check, and on PostgreSQL the plan checks.
-  `rails_query` is a short handler over the gate, the database family and the
-  secret column rule.
-
-- **One rule decides which columns `rails_query` keeps secret.** The text
-  check, the PostgreSQL plan checks, provenance redaction and result
-  redaction ask the same rule, which reads the schema once per connection and
-  call. `query_redacted_columns` and `query_allowed_columns` keep their
-  meaning, and an `encrypts` column stays filtered even when allowed.
-- **`rails_query` refuses an engine it cannot guard.** On an adapter with no
-  database family (SQL Server, Oracle, CockroachDB) it answers with the
-  adapter's name and sends no statement, where before it ran the query with
-  the text checks alone. `rails_runtime_info` and the row estimates say table
-  sizes, row estimates and index usage are not available for that adapter.
-- **Each database family owns its engine's reads.** The read-only
-  transaction, the statement timeout, EXPLAIN and its summary, the PostgreSQL
-  plan, table sizes, row estimates and index usage live in one place per
-  family, which `rails_query`, `rails_runtime_info` and the database stats
-  ask.
-- **One answer to which database an app runs.** The connection, a
-  database.yml adapter, a URL scheme, a display label and a dump's dialect
-  all go through one database family (PostgreSQL, MySQL or SQLite). An
-  adapter the gem does not know, such as SQL Server, Oracle or CockroachDB,
-  is no family.
-- **One list of the app's databases.** Both tiers build it through one
-  builder, the primary first, then the rest of the running environment's,
-  then those only another environment configures, then dumps no environment
-  names. The schema, multi-database, connection pool and migrations
-  sections, doctor, migration advice and the performance check all read it.
 
 ## [5.35.0] - 2026-10-12
 

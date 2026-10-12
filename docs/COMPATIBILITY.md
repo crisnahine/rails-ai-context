@@ -336,17 +336,20 @@ Proof sources:
    with no scaffold, no models, no controllers beyond
    `ApplicationController`, no routes beyond root.
 10. `spec/e2e/massive_app_spec.rb` - `schema`, `model_details`, and `routes`
-    (plus `context`, `onboard`, `analyze_feature`, `get_turbo_map`, `get_env`)
+    (plus `context`, `onboard`, `analyze_feature`, `get_turbo_map` and the
+    `env` section of `get_config`)
     sampled against 500 generated models/tables under a 180-second cap.
 
 `rails_query`, `rails_runtime_info` and the row estimates run on three
 database families: PostgreSQL (with PostGIS), MySQL (mysql2 and Trilogy, with
-MariaDB) and SQLite. `rails_query` refuses any other engine (SQL Server, Oracle,
-CockroachDB) by its adapter's name before sending it a statement, and the table
-sizes, row estimates and index usage say they are not available there. CI's
-`engines` job runs the families against PostgreSQL 16, MySQL 8.0 and 8.4
-(mysql2 and Trilogy) and MariaDB 10.6 and 11.4 (mysql2 and Trilogy); see
-[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-engines).
+MariaDB) and SQLite. `rails_query` refuses any other adapter (SQL Server, Oracle,
+CockroachDB) by name before sending a statement, and the table sizes, row
+estimates and index usage say they are not available there. CI's
+`database_servers` job runs the families against PostgreSQL 16, MySQL 8.0 and
+8.4 and MariaDB 10.6 and 11.4 on Rails 8.0, through mysql2 and Trilogy. It also
+runs PostgreSQL 16 with MySQL 8.0 and MariaDB 10.6 on Rails 7.0, which has no
+Trilogy adapter, and with MySQL 8.4 and MariaDB 11.4 on Rails 8.1; see
+[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-servers).
 
 Postgres itself - live query safety (read-only transactions, the
 `BLOCKED_FUNCTIONS` guard against `pg_read_file`/`dblink`/`COPY ... PROGRAM`,

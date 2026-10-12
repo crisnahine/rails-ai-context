@@ -586,7 +586,7 @@ Returns the app's configuration, one section per call. `section` picks it: `app`
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `section` | string | Which section. Default: `app`. |
+| `section` | string | Which section. Default: `app`. Required when `skip_tools` turns `app` off. |
 | `detail` | string | `summary` / `standard` (default) / `full`. Read by `frontend`, `api` and `env`. For `env`, summary is env var names only, standard groups them by source with external services, full adds per-file locations, Dockerfile vars and credentials keys. |
 | `category` | string | Read by `gems`: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` (default). |
 | `environment` | string | Read by `env_config`: one environment, by exact name. |
@@ -1413,7 +1413,7 @@ end
 | `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g. `%w[rails_security_scan]`) |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g. `%w[rails_security_scan]`). A custom tool with a skipped built-in's name takes its place, `rails_get_config` with its sections included |
 | `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP primary + CLI fallback) or `:cli` (CLI only, no MCP server needed) |
 | `ai_tools` | Array | `nil` (all) | AI tools to generate context for: `%i[claude cursor copilot opencode codex]`. Selected during install. |
 | `excluded_models` | Array | internal Rails models | Models to skip |
@@ -1454,7 +1454,7 @@ end
 | `query_timeout` | Integer | `5` | `rails_query` statement timeout in seconds |
 | `query_row_limit` | Integer | `100` | Max rows `rails_query` returns (1 to 1000) |
 | `query_redacted_columns` | Array | `password_digest`, `encrypted_password`, tokens, etc. | Column names `rails_query` refuses: a query naming one is rejected before it runs, and a returned column of that name comes back `[FILTERED]` |
-| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in sensitive list |
+| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in sensitive list. It does not release an `encrypts` column |
 | `allow_query_in_production` | Boolean | `false` | Allow `rails_query` in production |
 | `log_lines` | Integer | `50` | Default number of lines `rails_read_logs` tails |
 | `instrumentation_include_arguments` | Boolean | `false` | Forward raw tool arguments in `ActiveSupport::Notifications` events |

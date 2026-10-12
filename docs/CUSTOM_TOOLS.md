@@ -210,6 +210,10 @@ RailsAiContext.configure do |config|
 end
 ```
 
+A custom `rails_get_config` listed in `skip_tools` replaces the built-in with its sections: the old names such as `rails_get_gems` then reach nothing, and no answer points at a section.
+
+A custom tool may also reuse one of those old names with the built-in left on. It is served as its own tool. The gem's own hints still mean the built-in section and print it as `rails_get_config(section:"gems")`.
+
 ## Tips
 
 - Custom tools have access to the full Rails environment - ActiveRecord, services, mailers, etc.

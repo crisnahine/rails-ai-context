@@ -9,7 +9,7 @@ module RailsAiContext
         "plus the keys config/application.rb sets for every environment (config.x included) and the keys each config_for YAML file gives. " \
         "Use when: comparing development vs production behavior, debugging env-specific bugs, or checking what a custom environment changes. " \
         "Filter with environment:\"production\". Omit for all environments. " \
-        "For environment variables and ENV[] usage, use rails_get_env instead."
+        "For environment variables and ENV[] usage, use rails_get_config(section:\"env\") instead."
 
       input_schema(
         properties: {
