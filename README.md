@@ -4,9 +4,9 @@
 
 *Give your AI coding assistant ground truth about your Rails app*
 
-[![Gem Version](https://img.shields.io/gem/v/rails-ai-context?style=flat-square&color=brightgreen)](https://rubygems.org/gems/rails-ai-context)
-[![Downloads](https://img.shields.io/gem/dt/rails-ai-context?style=flat-square&color=blue)](https://rubygems.org/gems/rails-ai-context)
-[![CI](https://img.shields.io/github/actions/workflow/status/crisnahine/rails-ai-context/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Gem Version](https://img.shields.io/gem/v/rails-ai-context?style=flat-square&color=brightgreen&cacheSeconds=21600)](https://rubygems.org/gems/rails-ai-context)
+[![Downloads](https://img.shields.io/gem/dt/rails-ai-context?style=flat-square&color=blue&cacheSeconds=21600)](https://rubygems.org/gems/rails-ai-context)
+[![CI](https://github.com/crisnahine/rails-ai-context/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/crisnahine/rails-ai-context/actions/workflows/ci.yml)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green?style=flat-square)](https://registry.modelcontextprotocol.io)
 [![Ruby](https://img.shields.io/badge/Ruby-3.1_to_4.0-CC342D?style=flat-square&logo=ruby&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.0_to_8.1-CC0000?style=flat-square&logo=rubyonrails&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
