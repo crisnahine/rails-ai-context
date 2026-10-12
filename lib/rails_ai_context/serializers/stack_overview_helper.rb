@@ -86,7 +86,10 @@ module RailsAiContext
           db_names = db_list.map { |d| d.is_a?(Hash) ? "#{d[:name]}#{Payload.database_mark(d)}" : d }
           # The names it leaves out are counted, as the mounted apps' are.
           shown = db_names.first(DATABASES_SHOWN)
-          shown << "...#{db_names.size - DATABASES_SHOWN} more" if db_names.size > DATABASES_SHOWN
+          if db_names.size > DATABASES_SHOWN
+            elsewhere = db_list.drop(DATABASES_SHOWN).count { |d| Payload.scope_words(d) }
+            shown << "...#{db_names.size - DATABASES_SHOWN} more#{", #{elsewhere} of them not configured in this environment" if elsewhere > 0}"
+          end
           lines << "- Databases: #{db_list.size} (#{shown.join(', ')})"
         end
 
