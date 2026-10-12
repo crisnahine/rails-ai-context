@@ -99,6 +99,25 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
             "Blocked: the query passes the secret column `salt` through")
   end
 
+  it "refuses a whole row under an alias that differs from another alias by case alone" do
+    conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+    conn.execute("CREATE TABLE rac_pg_plain (id int)")
+    conn.execute("INSERT INTO rac_pg_plain VALUES (1)")
+    twins = %(FROM rac_pg_accounts t LEFT JOIN rac_pg_plain "T" ON true)
+
+    refused([ "SELECT row_to_json(t) AS j #{twins}", "SELECT t::text AS j #{twins}", "SELECT (t.*)::text AS j #{twins}",
+              %(SELECT row_to_json(rac_pg_accounts) AS j FROM rac_pg_accounts LEFT JOIN rac_pg_plain "RAC_PG_ACCOUNTS" ON true),
+              "SELECT EXISTS (SELECT 1 #{twins} WHERE t::text LIKE '%token-v%') AS e",
+              "SELECT j.v FROM generate_series(1, 1) g, LATERAL (SELECT row_to_json(t) AS v #{twins}) j",
+              "SELECT (SELECT t::text #{twins} LIMIT 1) AS v", "SELECT t.id #{twins} WHERE t >= t", "SELECT t.id #{twins} ORDER BY t",
+              "SELECT t.id #{twins} WHERE t::text LIKE '%token-v%'" ],
+            "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+    response = run(%(SELECT row_to_json("T") AS j #{twins}))
+    expect([ response.error?, response.content.first[:text].include?('{"id":1}') ]).to eq([ false, true ])
+  ensure
+    conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+  end
+
   it "runs a subquery that reads no secret column of a table that holds one" do
     { "SELECT (SELECT count(*) FROM rac_pg_accounts) AS n" => "| 1 |", "SELECT (SELECT count(id) FROM rac_pg_accounts) AS n" => "| 1 |",
       "SELECT exists (SELECT 1 FROM rac_pg_accounts) AS n" => "| true |", "SELECT (SELECT max(id) FROM rac_pg_accounts) AS n" => "| 1 |",

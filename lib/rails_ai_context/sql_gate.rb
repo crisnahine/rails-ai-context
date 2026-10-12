@@ -671,7 +671,7 @@ module RailsAiContext
       exprs.each do |expr|
         expr.scan(/(?:([A-Za-z_]\w*)|"((?:""|[^"])+)")\.\*/) do |bare, quoted|
           al = bare || quoted.gsub('""', '"')
-          rel = aliases[al.downcase]
+          rel = aliases[al]
           return rel if rel && @secrets.relation_secret?(rel)
           return (rel || al) if rel.nil? && any_secret
         end

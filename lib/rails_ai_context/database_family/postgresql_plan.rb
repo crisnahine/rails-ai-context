@@ -21,9 +21,10 @@ module RailsAiContext
         @parents = {}.compare_by_identity
         collect(top)
         # The alias defaults to the relation name when the query gave none, which is how `users.*` resolves.
+        # Keyed as EXPLAIN prints it: `t` and "T" are two aliases.
         @aliases = @nodes.each_with_object({}) do |node, map|
           rel = node["Relation Name"] or next
-          map[(node["Alias"] || rel).to_s.downcase] = rel.to_s.downcase
+          map[(node["Alias"] || rel).to_s] = rel.to_s.downcase
         end
       end
 
@@ -35,7 +36,7 @@ module RailsAiContext
       # @return [Array(String, String), nil] [relation, column], downcased, for a plain Var of a base relation
       def base_column(expr)
         m = expr.to_s.strip.match(BASE_VAR) or return nil
-        rel = aliases[(m[1] || m[2].gsub('""', '"')).downcase]
+        rel = aliases[m[1] || m[2].gsub('""', '"')]
         rel ? [ rel, (m[3] || m[4].gsub('""', '"')).downcase ] : nil
       end
 
