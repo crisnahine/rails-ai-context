@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **One served tool set.** `tool --list` shows exactly what the MCP
+  server's `tools/list` shows, so a custom tool sharing a built-in's name
+  is listed once, and the CLI's single-tool lookup picks the same tool the
+  server serves while still loading only that tool's class.
+- **No answer points at a tool the app turned off.** Every pointer to
+  another tool, in `_Next:` hints, fix steps, recovery lines and lists,
+  goes through one helper, and a tool `skip_tools` names is left out with
+  its hint. A spec fails on a tool call written straight into an answer.
+- **`rails_get_context(include:)`** lists all twelve keys it takes, names
+  a key it does not take, and answers an include whose tool `skip_tools`
+  turned off by saying so, without running that tool.
+
 ## [5.35.0] - 2026-10-12
 
 ### Added
