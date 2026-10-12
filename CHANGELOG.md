@@ -116,9 +116,19 @@ Ten tools that each answered one section of the app's configuration leave
   `timeout` came back as one. A timeout is now read from the error's class or
   the engine's native code, and MariaDB's 1969 counts.
 - **MySQL table sizes count base tables only**, as the row estimates do.
+- **`rails_query` treats a column as secret when `Redaction`'s secret words
+  name it.** Columns such as `passwd`, `salt`, `credentials` and `pepper`
+  are now refused by name and filtered in results, as log and config
+  redaction already treated those words, so a column name is secret in every
+  tool or in none.
 
 ### Changed
 
+- **One rule decides which columns `rails_query` keeps secret.** The text
+  check, the PostgreSQL plan checks, provenance redaction and result
+  redaction ask the same rule, which reads the schema once per connection and
+  call. `query_redacted_columns` and `query_allowed_columns` keep their
+  meaning, and an `encrypts` column stays filtered even when allowed.
 - **`rails_query` refuses an engine it cannot guard.** On an adapter with no
   database family (SQL Server, Oracle, CockroachDB) it answers with the
   adapter's name and sends no statement, where before it ran the query with

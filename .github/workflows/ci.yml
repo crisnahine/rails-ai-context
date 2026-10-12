@@ -99,7 +99,8 @@ jobs:
 
   # The database families against real engines: the read-only transaction,
   # the statement timeout and how each engine reports it. Each URL runs
-  # spec/lib/rails_ai_context/database_family/engines_spec.rb once.
+  # spec/lib/rails_ai_context/database_family/engines_spec.rb once, and
+  # PostgreSQL also runs rails_query end to end.
   engines:
     runs-on: ubuntu-latest
     strategy:
@@ -169,7 +170,7 @@ jobs:
       - name: PostgreSQL
         env:
           RAC_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/engines_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb
 
       - name: MySQL (mysql2)
         env:

@@ -966,6 +966,31 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "names Redaction's secret words cover" do
+    it "redacts a result column named by one" do
+      text = described_class.call(sql: "SELECT 1 AS passwd, 2 AS salt, 3 AS credentials, 4 AS pepper, 5 AS n").content.first[:text]
+      expect(text.scan("[FILTERED]").size).to eq(4)
+      expect(text).to include("| 5")
+    end
+
+    it "refuses a statement naming a real column one covers" do
+      conn = ActiveRecord::Base.connection
+      conn.create_table(:rac_signing_keys, force: true) { |t| t.string :salt }
+      response = described_class.call(sql: "SELECT upper(salt) AS s FROM rac_signing_keys")
+      expect(response.error?).to be(true)
+      expect(response.content.first[:text]).to include("`salt`")
+    ensure
+      conn.drop_table(:rac_signing_keys, if_exists: true)
+    end
+
+    it "reads the schema once for the whole call" do
+      allow(described_class).to receive(:cached_context).and_return({})
+      allow(ActiveRecord::Base.connection).to receive(:tables).and_call_original
+      RailsAiContext::RunCache.around { described_class.call(sql: "SELECT 1 AS n") }
+      expect(ActiveRecord::Base.connection).to have_received(:tables).once
+    end
+  end
+
   describe "query_allowed_columns in result redaction" do
     before { RailsAiContext.configuration.query_allowed_columns = %w[secret api_secret] }
     after { RailsAiContext.configuration.query_allowed_columns = [] }
@@ -1551,8 +1576,9 @@ RSpec.describe RailsAiContext::Tools::Query do
     # set is stubbed to one an app would have - the heuristic catches api_token
     # / auth_token, which the fixed name list does not.
     before do
-      allow(described_class).to receive(:real_column_names)
-        .and_return(Set.new(%w[id email name api_token auth_token]))
+      allow(described_class).to receive(:secret_columns) do
+        RailsAiContext::SecretColumns.new(relations: { "users" => %w[id email name api_token auth_token] })
+      end
     end
 
     it "blocks a schema column caught only by the heuristic, through an alias" do
@@ -1589,8 +1615,9 @@ RSpec.describe RailsAiContext::Tools::Query do
 
   describe "a table or alias that merely contains a sensitive word" do
     before do
-      allow(described_class).to receive(:real_column_names)
-        .and_return(Set.new(%w[id name api_token]))
+      allow(described_class).to receive(:secret_columns) do
+        RailsAiContext::SecretColumns.new(relations: { "users" => %w[id name api_token] })
+      end
     end
 
     it "is not a sensitive column reference" do
@@ -1600,33 +1627,12 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
-  describe ".sensitive_column?" do
-    it "flags names the heuristic catches" do
-      %w[password_digest api_token auth_token remember_token user_secret signing_key sha_hash].each do |c|
-        expect(described_class.sensitive_column?(c)).to be(true), "expected #{c} sensitive"
-      end
-    end
-
-    it "does not flag ordinary columns" do
-      %w[id email name status ssn created_at user_id lock_version].each do |c|
-        expect(described_class.sensitive_column?(c)).to be(false), "expected #{c} not sensitive"
-      end
-    end
-
-    it "exempts an allowed name" do
-      RailsAiContext.configuration.query_allowed_columns = %w[api_token]
-      expect(described_class.sensitive_column?("api_token")).to be false
-    ensure
-      RailsAiContext.configuration.query_allowed_columns = []
-    end
-  end
-
   describe "Rails bookkeeping tables are never sensitive" do
     # ar_internal_metadata.key ends in "key"; leaving it in the sensitive set
     # refused every query whose text held the word "key" (a column, a JSON key,
     # a LIKE pattern). These tables are excluded on every adapter.
     before do
-      allow(described_class).to receive(:columns_from_connection).and_return(nil)
+      allow(ActiveRecord::Base.connection).to receive(:tables).and_raise(ActiveRecord::StatementInvalid, "unreadable")
       allow(described_class).to receive(:cached_context).and_return(
         schema: { tables: {
           "ar_internal_metadata" => { columns: [ { name: "key" }, { name: "value" } ] },
@@ -1636,20 +1642,9 @@ RSpec.describe RailsAiContext::Tools::Query do
       )
     end
 
-    it "leaves their columns out of the real column set" do
-      cols = described_class.send(:real_column_names)
-      expect(cols).to include("api_token")
-      expect(cols).not_to include("key")
-      expect(cols).not_to include("version")
-    end
-
     it "does not refuse a query naming a bookkeeping column" do
       valid, = described_class.validate_sql("SELECT key, value FROM ar_internal_metadata")
       expect(valid).to be true
-    end
-
-    it "leaves them out of the per-relation map the plan check reads" do
-      expect(described_class.send(:relation_sensitive_columns)).not_to have_key("ar_internal_metadata")
     end
   end
 
@@ -1704,7 +1699,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "the plan check ignores a sensitive word inside a plan literal" do
-      allow(described_class).to receive(:schema_sensitive_columns).and_return(%w[api_token])
+      allow(described_class).to receive(:secret_columns)
+        .and_return(RailsAiContext::SecretColumns.new(relations: { "users" => %w[api_token] }))
       exprs = described_class.send(:plan_expressions, [ { "Filter" => [ "(body ~~ '%api_token%'::text)" ] } ])
       expect(described_class.send(:sensitive_column_in_plan, exprs)).to be_nil
     end
@@ -1738,10 +1734,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     let(:aliases) { { "u" => "users", "p" => "posts" } }
 
     before do
-      allow(described_class).to receive(:relation_sensitive_columns)
-        .and_return("users" => %w[password_digest api_token])
-      allow(described_class).to receive(:schema_sensitive_columns)
-        .and_return(%w[password_digest api_token])
+      allow(described_class).to receive(:secret_columns)
+        .and_return(RailsAiContext::SecretColumns.new(relations: { "users" => %w[id password_digest api_token], "posts" => %w[id] }))
     end
 
     it "flags a whole-row reference to a sensitive relation" do
@@ -1781,8 +1775,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     let(:aliases) { { "users" => "users", "u" => "users", "p" => "posts" } }
 
     before do
-      allow(described_class).to receive(:relation_sensitive_columns)
-        .and_return("users" => %w[api_token password_digest])
+      allow(described_class).to receive(:secret_columns)
+        .and_return(RailsAiContext::SecretColumns.new(relations: { "users" => %w[id api_token password_digest] }))
     end
 
     describe ".base_var" do

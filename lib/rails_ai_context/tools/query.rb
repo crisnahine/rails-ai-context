@@ -179,18 +179,9 @@ module RailsAiContext
       #   SELECT md5(session_data) FROM sessions       -- column name becomes "md5"
       #
       # Post-execution redaction operates on the column names the DB returns,
-      # which the caller controls via aliases and expressions. The only
-      # defense that works is to reject queries that TEXTUALLY reference
-      # any sensitive column, before execution. This list is frozen, so an app
-      # whose own column merely looks sensitive exempts it by name through
-      # `config.query_allowed_columns`.
-      SENSITIVE_COLUMN_SUFFIXES = %w[
-        password_digest password_hash encrypted_password
-        password_reset_token confirmation_token unlock_token
-        remember_token reset_password_token api_key api_secret
-        access_token refresh_token jti otp_secret session_data
-        secret_key secret private_key
-      ].freeze
+      # which the caller controls via aliases and expressions, so a query that
+      # TEXTUALLY names a secret column (SecretColumns#named_in) is refused before
+      # execution.
 
       # SQL injection tautology patterns: OR 1=1, OR true, OR ''='', etc.
       TAUTOLOGY_PATTERNS = [
@@ -585,7 +576,7 @@ module RailsAiContext
         # so it cannot survive `SELECT password_digest AS x` or `upper(api_token)`.
         # On PostgreSQL the match runs on literal-masked text; `.call` then makes
         # the plan vouch for anything that passed only because of that masking.
-        if (offending = references_sensitive_column?(postgres ? mask_sql_literals(cleaned) : cleaned))
+        if (offending = secret_columns.named_in(postgres ? mask_sql_literals(cleaned) : cleaned))
           return [ false,
             "Blocked: query references sensitive column `#{offending}`. " \
             "Name the columns you need; `#{offending}` is sensitive and never " \
@@ -618,134 +609,15 @@ module RailsAiContext
         text.gsub(PG_TEXT_LITERAL) { Regexp.last_match[:ident] || "''" }
       end
 
-      # Returns the first sensitive column name the SQL names, or nil. Two rules,
-      # one predicate (sensitive_column?):
-      #   * a fixed name list - config.query_redacted_columns and
-      #     SENSITIVE_COLUMN_SUFFIXES - matched on every adapter whether or not
-      #     the name is a real column, so the oracle holds with no connection;
-      #   * every REAL column of the app's schema that the predicate flags
-      #     (an `api_token` the heuristic catches, an `encrypts` column), so an
-      #     app-specific sensitive column is caught through an alias or an
-      #     expression too.
-      # The match is case-insensitive and word-bounded, so a table or alias that
-      # merely contains "token" does not trip it - only a real column name does.
-      def self.references_sensitive_column?(cleaned_sql)
-        down = cleaned_sql.downcase
-        blocked_column_names.each do |col|
-          next if col.empty?
-          return col if down.match?(/\b#{Regexp.escape(col)}\b/)
+      # The secret column rule for the connection the query runs on, one schema
+      # read per run.
+      private_class_method def self.secret_columns
+        connection = begin
+          ActiveRecord::Base.connection
+        rescue StandardError
+          nil
         end
-        nil
-      end
-
-      # The names the textual pre-check refuses: the fixed list, plus the real
-      # sensitive columns of the schema, minus the app's allowed columns.
-      private_class_method def self.blocked_column_names
-        fixed = Array(config.query_redacted_columns).map { |c| c.to_s.downcase } +
-                SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)
-        (fixed + schema_sensitive_columns.to_a).uniq - allowed_columns.to_a
-      end
-
-      # The real columns of the live schema the sensitivity rule flags. Read from
-      # the connection (cached per run), falling back to the cached context, so a
-      # column caught only by the result heuristic (`api_token`, `auth_token`) is
-      # refused through any alias or expression before the query runs.
-      private_class_method def self.schema_sensitive_columns
-        real_column_names.select { |name| sensitive_column?(name) }
-      end
-
-      # Rails' own bookkeeping tables, on every adapter. Their columns
-      # (schema_migrations.version, ar_internal_metadata.key/value) are never
-      # secrets, and ar_internal_metadata.key ends in "key", so leaving them in
-      # the sensitive-column set refused every query whose text held the word
-      # "key" - a column, a JSON key, a `LIKE '%key%'`. A `SELECT *` from one
-      # still goes through output-name redaction, as before.
-      BOOKKEEPING_TABLES = %w[ar_internal_metadata schema_migrations].freeze
-
-      private_class_method def self.bookkeeping_table?(name)
-        BOOKKEEPING_TABLES.include?(name.to_s.downcase)
-      end
-
-      # Every real column name of the app's schema, downcased. The live
-      # connection first (its own schema cache), the cached introspection as a
-      # fallback. Memoised for the run; nothing here raising fails the query.
-      private_class_method def self.real_column_names
-        RailsAiContext::RunCache.fetch([ :query_real_columns ]) do
-          columns_from_connection || columns_from_context || Set.new
-        end
-      end
-
-      private_class_method def self.columns_from_connection
-        conn = ActiveRecord::Base.connection
-        names = Set.new
-        conn.tables.each do |t|
-          next if bookkeeping_table?(t)
-          conn.columns(t).each { |c| names << c.name.to_s.downcase }
-        end
-        names
-      rescue StandardError
-        nil
-      end
-
-      private_class_method def self.columns_from_context
-        tables = cached_context&.dig(:schema, :tables)
-        return nil unless tables.is_a?(Hash)
-
-        names = Set.new
-        tables.each do |table, data|
-          next if bookkeeping_table?(table)
-          Array(data.is_a?(Hash) && data[:columns]).each do |col|
-            name = col.is_a?(Hash) ? col[:name] : col
-            names << name.to_s.downcase if name
-          end
-        end
-        names
-      rescue StandardError
-        nil
-      end
-
-      # One sensitivity rule, read by the textual pre-check, the PostgreSQL plan
-      # check and result redaction alike: a column is sensitive when it is a
-      # configured or built-in redacted name, an `encrypts` column, or matches
-      # the result heuristic - unless the app allows it by name.
-      def self.sensitive_column?(name)
-        down = name.to_s.downcase
-        return false if down.empty? || allowed_columns.include?(down)
-
-        redacted_name_set.include?(down) ||
-          encrypted_column_set.include?(down) ||
-          sensitive_by_heuristic?(down)
-      end
-
-      # Ends with a secret-ish suffix, or carries one of the broad secret words.
-      # The same heuristic result redaction has always used on output names.
-      SENSITIVE_SUFFIXES = %w[password secret token key digest hash].freeze
-      private_class_method def self.sensitive_by_heuristic?(down)
-        down.end_with?(*SENSITIVE_SUFFIXES) || down.match?(/password|secret|token/)
-      end
-
-      private_class_method def self.redacted_name_set
-        (Array(config.query_redacted_columns).map { |c| c.to_s.downcase } +
-          SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)).to_set
-      end
-
-      # Columns an `encrypts` declaration covers, from the cached introspection.
-      private_class_method def self.encrypted_column_set
-        set = Set.new
-        models = cached_context&.dig(:models)
-        if models.is_a?(Hash)
-          models.each_value do |data|
-            next unless data.is_a?(Hash)
-            Array(data[:encrypts]).each { |col| set << col.to_s.downcase }
-          end
-        end
-        set
-      end
-
-      # An app whose own column merely looks sensitive (oauth_applications.secret)
-      # exempts it by name, from the pre-query check and from result redaction alike.
-      private_class_method def self.allowed_columns
-        Array(config.query_allowed_columns).to_set { |c| c.to_s.downcase }
+        RailsAiContext::SecretColumns.for(connection, context: cached_context)
       end
 
       # ── Database-level execution (Layer 2) ──────────────────────────
@@ -834,10 +706,11 @@ module RailsAiContext
       private_class_method def self.unvouched_literal_refusal(sql, postgres)
         return nil unless postgres
 
-        offending = references_sensitive_column?(sql) or return nil
+        secrets = secret_columns
+        offending = secrets.named_in(sql) or return nil
         # A real identifier (still there after masking) is validate_sql's to
         # refuse; reaching here with one would mean masking let it slip - refuse.
-        return nil if references_sensitive_column?(mask_sql_literals(sql)).nil? &&
+        return nil if secrets.named_in(mask_sql_literals(sql)).nil? &&
                       pg_plan(sql, config.query_timeout)
 
         "Blocked: query references sensitive column `#{offending}`. It is read as data " \
@@ -875,9 +748,10 @@ module RailsAiContext
         collect_plan_nodes(plan, nodes)
         aliases = plan_alias_map(nodes)
         width = result.columns.length
+        secrets = secret_columns
         (0...[ width, output.length ].min).select do |i|
           rel, col = base_var(output[i], aliases)
-          rel && relation_has_sensitive_column?(rel, col)
+          rel && secrets.of_relation(rel).include?(col)
         end
       rescue StandardError
         []
@@ -891,10 +765,6 @@ module RailsAiContext
         m = expr.to_s.strip.match(BASE_VAR) or return nil
         rel = aliases[m[1].downcase]
         rel ? [ rel, m[2].downcase ] : nil
-      end
-
-      private_class_method def self.relation_has_sensitive_column?(relation, column)
-        Array(relation_sensitive_columns[relation]).include?(column)
       end
 
       # The sensitive base column (if any) the plan reads as a plain pass-through
@@ -913,9 +783,10 @@ module RailsAiContext
       # The "rel.col" of each Output entry that is a plain Var of a sensitive
       # base column.
       private_class_method def self.sensitive_base_vars(output, aliases)
+        secrets = secret_columns
         output.filter_map do |expr|
           rel, col = base_var(expr, aliases)
-          "#{rel}.#{col}" if rel && relation_has_sensitive_column?(rel, col)
+          "#{rel}.#{col}" if rel && secrets.of_relation(rel).include?(col)
         end.to_set
       end
 
@@ -979,11 +850,12 @@ module RailsAiContext
       # column. An unresolved alias is refused only when some relation in the
       # plan is sensitive, so a whole-row read of a non-sensitive table is fine.
       private_class_method def self.whole_row_leak(exprs, aliases)
-        any_sensitive = aliases.values.any? { |rel| sensitive_relation?(rel) }
+        secrets = secret_columns
+        any_sensitive = aliases.values.any? { |rel| secrets.relation_secret?(rel) }
         exprs[:all].each do |expr|
           expr.to_s.scan(/([A-Za-z_]\w*)\.\*/) do |(al)|
             rel = aliases[al.downcase]
-            return rel if rel && sensitive_relation?(rel)
+            return rel if rel && secrets.relation_secret?(rel)
             return (rel || al) if rel.nil? && any_sensitive
           end
         end
@@ -996,7 +868,7 @@ module RailsAiContext
       # reference the planner expanded, or a view - never from a column the
       # caller asked for by name.
       private_class_method def self.sensitive_column_in_plan(exprs)
-        sensitive = schema_sensitive_columns.to_a
+        sensitive = secret_columns.in_schema
         return nil if sensitive.empty?
 
         # Conditions and keys are never a pass-through: any sensitive name is a leak (or an oracle).
@@ -1038,52 +910,6 @@ module RailsAiContext
         volatile.first
       end
 
-      private_class_method def self.sensitive_relation?(relation)
-        relation_sensitive_columns.key?(relation.to_s.downcase)
-      end
-
-      # relation name (downcased) => its sensitive column names, for relations
-      # that have at least one. Live connection first, cached context as a
-      # fallback, memoised for the run.
-      private_class_method def self.relation_sensitive_columns
-        RailsAiContext::RunCache.fetch([ :query_relation_sensitive ]) do
-          by_relation = relation_columns
-          by_relation.each_with_object({}) do |(rel, cols), acc|
-            flagged = cols.select { |c| sensitive_column?(c) }
-            acc[rel] = flagged unless flagged.empty?
-          end
-        end
-      end
-
-      private_class_method def self.relation_columns
-        from_connection_relation_columns || from_context_relation_columns || {}
-      end
-
-      private_class_method def self.from_connection_relation_columns
-        conn = ActiveRecord::Base.connection
-        conn.tables.each_with_object({}) do |t, acc|
-          next if bookkeeping_table?(t)
-          acc[t.to_s.downcase] = conn.columns(t).map { |c| c.name.to_s.downcase }
-        end
-      rescue StandardError
-        nil
-      end
-
-      private_class_method def self.from_context_relation_columns
-        tables = cached_context&.dig(:schema, :tables)
-        return nil unless tables.is_a?(Hash)
-
-        tables.each_with_object({}) do |(name, data), acc|
-          next if bookkeeping_table?(name)
-          cols = Array(data.is_a?(Hash) && data[:columns]).map do |col|
-            (col.is_a?(Hash) ? col[:name] : col).to_s.downcase
-          end
-          acc[name.to_s.downcase] = cols
-        end
-      rescue StandardError
-        nil
-      end
-
       private_class_method def self.postgres_adapter?
         DatabaseFamily.of(ActiveRecord::Base.connection).key == :postgresql
       rescue StandardError
@@ -1106,6 +932,7 @@ module RailsAiContext
           raw.exec("DEALLOCATE #{stmt}") rescue nil
         end
 
+        secrets = secret_columns
         oid_columns = {}
         indices = []
         desc.nfields.times do |i|
@@ -1115,7 +942,7 @@ module RailsAiContext
 
           names = (oid_columns[oid] ||= attribute_names_for(conn, oid))
           name = names[col.to_i]
-          indices << i if name && sensitive_column?(name)
+          indices << i if name && (secrets.secret?(name) || secrets.encrypted?(name))
         end
         indices
       rescue StandardError
@@ -1223,23 +1050,18 @@ module RailsAiContext
       end
 
       # ── Column redaction (Layer 4) ──────────────────────────────────
-      # Redact a column by the one sensitivity rule applied to its OUTPUT name,
+      # Redact a column by the secret column rule applied to its OUTPUT name,
       # plus any index flagged by provenance (PostgreSQL maps the output column
-      # to its base column, so a sensitive column reaches [FILTERED] whatever
-      # name it was given). The name rule keeps the apps-only exemption via
-      # sensitive_column?, which subtracts config.query_allowed_columns.
+      # to its base column, so a secret column reaches [FILTERED] whatever
+      # name it was given). An `encrypts` column is filtered even when the app
+      # allows its name: an encrypted-at-rest attribute is never read back raw.
       private_class_method def self.redact_results(result, provenance_indices = [])
         columns = result.columns
         rows = result.rows
-
-        # An `encrypts` column is filtered even when the app allows its name:
-        # an encrypted-at-rest attribute is never meant to be read back raw.
-        encrypted = encrypted_column_set
+        secrets = secret_columns
 
         redacted_indices = columns.each_index.select do |i|
-          provenance_indices.include?(i) ||
-            encrypted.include?(columns[i].to_s.downcase) ||
-            sensitive_column?(columns[i])
+          provenance_indices.include?(i) || secrets.secret?(columns[i]) || secrets.encrypted?(columns[i])
         end
 
         return result if redacted_indices.empty?

@@ -118,9 +118,10 @@ A query that names a sensitive column is **rejected before execution**, not reda
 
 - in `config.query_redacted_columns`, or the fixed built-in list;
 - an `encrypts` column of one of your models;
-- a name the heuristic catches: it ends in `password`, `secret`, `token`, `key`, `digest` or `hash`, or contains `password`, `secret` or `token`
+- a name the heuristic catches: it ends in `password`, `secret`, `token`, `key`, `digest` or `hash`, or contains `password`, `secret` or `token`;
+- a name the shared log and config redaction treats as secret (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the rest of its secret words), so a word added there is secret here too
 
-minus anything in `config.query_allowed_columns`.
+minus anything in `config.query_allowed_columns`. An `encrypts` column's values stay `[FILTERED]` even when its name is allowed.
 
 **Default redacted patterns:** `password_digest`, `encrypted_password`, `password_hash`, `reset_password_token`, `confirmation_token`, `unlock_token`, `otp_secret`, `session_data`, `secret_key`, `api_key`, `api_secret`, `access_token`, `refresh_token`, `jti`. Those are the defaults of `config.query_redacted_columns`. The fixed built-in list adds `password_reset_token`, `remember_token`, `secret` and `private_key`.
 
