@@ -1637,8 +1637,8 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     ])
   end
 
-  # A declared size reads as the dump writes it: an integer limit picks smallint or bigint on
-  # PostgreSQL and MySQL, a string's 255 is MySQL's default, and a time type's precision is left out.
+  # A declared size reads as the dump writes it: an integer limit picks smallint or bigint on PostgreSQL
+  # and MySQL, a string's 255 is MySQL's default, a datetime's 6 is the default, and MySQL sizes text by limit.
   describe "declared sizes" do
     def sizes(adapter)
       Dir.mktmpdir do |dir|
@@ -1651,14 +1651,17 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             t.string :code, limit: 2
             t.string :name, limit: 255
             t.datetime :seen_at, precision: 6
+            t.datetime :at3, precision: 3
+            t.time :t2, precision: 2
             t.decimal :price, precision: 10, scale: 2
             t.text :body, limit: 16777215
+            t.binary :blob, limit: 1024
           end
           add_column :widgets, :later, :integer, limit: 8
           change_column :widgets, :normal, :integer, limit: 8
         RUBY
         described_class.tables(dir, pk_type: "bigint", adapter: adapter)["widgets"][:columns]
-          .drop(1).to_h { |c| [ c[:name], [ c[:type], c.slice(:limit, :precision, :scale) ] ] }
+          .drop(1).to_h { |c| [ c[:name], [ c[:type], c.slice(:limit, :precision, :scale, :size) ] ] }
       end
     end
 
@@ -1666,7 +1669,8 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(sizes("postgresql")).to eq(
         "tiny" => [ "integer", { limit: 2 } ], "small" => [ "integer", { limit: 2 } ], "normal" => [ "bigint", {} ],
         "big" => [ "bigint", {} ], "code" => [ "string", { limit: 2 } ], "name" => [ "string", { limit: 255 } ],
-        "seen_at" => [ "datetime", {} ], "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", {} ],
+        "seen_at" => [ "datetime", {} ], "at3" => [ "datetime", { precision: 3 } ], "t2" => [ "time", { precision: 2 } ],
+        "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", {} ], "blob" => [ "binary", {} ],
         "later" => [ "bigint", {} ]
       )
     end
@@ -1675,8 +1679,9 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(sizes("mysql2")).to eq(
         "tiny" => [ "integer", { limit: 1 } ], "small" => [ "integer", { limit: 2 } ], "normal" => [ "bigint", {} ],
         "big" => [ "bigint", {} ], "code" => [ "string", { limit: 2 } ], "name" => [ "string", {} ],
-        "seen_at" => [ "datetime", {} ], "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", {} ],
-        "later" => [ "bigint", {} ]
+        "seen_at" => [ "datetime", {} ], "at3" => [ "datetime", { precision: 3 } ], "t2" => [ "time", { precision: 2 } ],
+        "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", { size: "medium" } ],
+        "blob" => [ "binary", { limit: 1024 } ], "later" => [ "bigint", {} ]
       )
     end
 

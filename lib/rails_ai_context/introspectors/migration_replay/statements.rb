@@ -114,9 +114,7 @@ module RailsAiContext
         POSTGRES_ADAPTER = /postg/i
         MYSQL_ADAPTER = /mysql|trilogy/i
 
-        # A declared type and its sizes as the dump writes them (each adapter's type_to_sql and the
-        # dumper's native limits, 7.0 to 8.1): an integer limit picks smallint or bigint on PostgreSQL
-        # and MySQL, 255 is MySQL's string default, and a time type's default precision moved in 7.0.
+        # A declared type and its sizes as the dump writes them (each adapter's type_to_sql and schema_precision, 7.0 to 8.1).
         def dumped_type(type, options, adapter)
           sizes = options.slice(:limit, :precision, :scale).select { |_, value| value.is_a?(Integer) }
           limit = sizes[:limit]
@@ -124,8 +122,26 @@ module RailsAiContext
           when "decimal", "numeric" then [ type, sizes.slice(:precision, :scale) ]
           when "string" then [ type, adapter.to_s.match?(MYSQL_ADAPTER) && limit == 255 ? {} : sizes.slice(:limit) ]
           when "integer" then dumped_integer(limit, adapter)
+          when "datetime", "timestamp" then [ type, sizes[:precision] == 6 ? {} : sizes.slice(:precision) ]
+          when "time" then [ type, sizes.slice(:precision) ]
+          when "text", "binary" then [ type, dumped_blob_size(type.to_s, limit, adapter) ]
           else [ type, {} ]
           end
+        end
+
+        # PostgreSQL's text and bytea take no limit; MySQL picks tiny to long by it (a binary under 4 KB
+        # is a varbinary that keeps it); SQLite keeps it as declared.
+        def dumped_blob_size(type, limit, adapter)
+          return {} if limit.nil? || adapter.to_s.match?(POSTGRES_ADAPTER)
+          return { limit: limit } unless adapter.to_s.match?(MYSQL_ADAPTER) && !(type == "binary" && limit <= 0xfff)
+
+          size = case limit
+          when 0..0xff then "tiny"
+          when 0x100..0xffff then nil
+          when 0x10000..0xffffff then "medium"
+          else "long"
+          end
+          size ? { size: size } : {}
         end
 
         def dumped_integer(limit, adapter)
