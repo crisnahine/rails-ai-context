@@ -81,7 +81,7 @@ RSpec.describe RailsAiContext::Install::Uninstall do
 
     it "go when an earlier release wrote the note with a Unicode dash, and when the file ends without a newline" do
       app
-      write(".gitignore", "*.log\n\n# rails-ai-context (JSON cache — markdown files should be committed)\n.ai-context.json")
+      write(".gitignore", "*.log\n\n# rails-ai-context (JSON cache \u2014 markdown files should be committed)\n.ai-context.json")
 
       expect(uninstall).to be(true)
 
