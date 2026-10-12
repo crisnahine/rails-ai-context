@@ -94,7 +94,7 @@ module RailsAiContext
           { topic: topic, score: score }
         end
 
-        scored.sort_by! { |s| -s[:score] }
+        scored = scored.sort_by.with_index { |s, i| [ -s[:score], i ] }
         results = scored.first(limit)
 
         if results.empty?

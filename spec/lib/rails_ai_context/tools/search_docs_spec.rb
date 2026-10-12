@@ -286,6 +286,19 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
       expect(text).to include("Active Record Callbacks")
     end
 
+    it "keeps index order among topics with the same score" do
+      topics = (1..24).map do |i|
+        { "id" => format("guide_%02d", i), "title" => format("Guide %02d", i), "summary" => i.even? ? "About widgets." : "",
+          "source" => "rails", "keywords" => %w[widgets] }
+      end
+      allow(RailsAiContext::SafeFile).to receive(:read).with(described_class::INDEX_PATH).and_return(JSON.generate("topics" => topics))
+
+      text = described_class.call(query: "widgets", limit: 20).content.first[:text]
+      evens = (2..24).step(2).map { |i| format("Guide %02d", i) }
+      odds = (1..23).step(2).map { |i| format("Guide %02d", i) }
+      expect(text.scan(/Guide \d\d/).uniq).to eq((evens + odds).first(20))
+    end
+
     it "retries after transient index load failure" do
       # First call: simulate a parse error
       described_class.instance_variable_set(:@docs_index, nil)
