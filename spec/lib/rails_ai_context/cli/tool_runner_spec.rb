@@ -575,8 +575,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(runner.error).to eq(false)
     end
 
-    # `--limit abc` silently became 0, and then the default: either way the
-    # tool answered a question nobody asked, at exit 0.
+    # Coerced to 0 or to the default, the value answers a question nobody asked.
     it "refuses a value of another type than the parameter's, naming the type, without running the tool" do
       expect(RailsAiContext::Tools::SearchCode).not_to receive(:call)
 
@@ -587,6 +586,37 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         expect(answer).to start_with("**Error:** `abc` is not a valid `limit`. Valid: an integer")
         expect(runner.error).to eq(true)
       end
+    end
+
+    it "refuses --no- on a parameter that is no boolean, naming its type, without running the tool" do
+      expect(RailsAiContext::Tools::SearchCode).not_to receive(:call)
+      expect(RailsAiContext::Tools::GetSchema).not_to receive(:call)
+
+      {
+        [ "search_code", [ "--pattern", "def", "--no-limit" ] ] => "**Error:** `--no-limit` is not a valid `limit`. Valid: an integer",
+        [ "schema", [ "--no-table" ] ] => "**Error:** `--no-table` is not a valid `table`. Valid: a string",
+        [ "validate", [ "--no-files" ] ] => "**Error:** `--no-files` is not a valid `files`. Valid: an array",
+        [ "search_code", [ "--pattern", "def", "--no-match-type" ] ] =>
+          "**Error:** `--no-match-type` is not a valid `match_type`. Valid: any, definition, class, call, trace"
+      }.each do |(tool, args), refusal|
+        runner = described_class.new(tool, args)
+
+        expect(runner.run).to start_with(refusal)
+        expect(runner.error).to eq(true)
+      end
+    end
+
+    it "falls back with a warning for --no-detail, as for any other detail it cannot take" do
+      runner = described_class.new("routes", [ "--no-detail" ])
+
+      expect { runner.run }.to output(/'false' is not a valid value for detail\. Valid: summary, standard, full\. Using default\./).to_stderr
+      expect(runner.error).to eq(false)
+    end
+
+    it "still names an unknown parameter typed with --no-" do
+      runner = described_class.new("schema", [ "--no-tabel" ])
+
+      expect { runner.run }.to raise_error(described_class::InvalidArgumentError, /'--no-tabel' - did you mean '--table'\?/)
     end
 
     it "refuses a word that is no boolean for a boolean parameter" do

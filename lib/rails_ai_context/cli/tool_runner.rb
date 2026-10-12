@@ -251,7 +251,10 @@ module RailsAiContext
           if arg.start_with?("--no-")
             key = arg.sub("--no-", "").tr("-", "_").to_sym
             @flag_spellings[key] = arg
-            result[key] = false
+            type = properties.dig(key, :type)
+            # Only a boolean has a false; an unknown flag passes through for the unknown-param message.
+            @out_of_type[key] = arg if type && type != "boolean" && key != :detail
+            result[key] = @out_of_type.key?(key) ? nil : false
             i += 1
           elsif arg.start_with?("--")
             if arg.include?("=")
@@ -450,7 +453,7 @@ module RailsAiContext
 
         @out_of_type.each do |key, raw|
           type = properties.dig(key, :type)
-          refuse(key, raw, type == "boolean" ? "true or false" : "#{article(type)} #{type}")
+          refuse(key, raw, type == "boolean" ? "true or false" : properties.dig(key, :enum)&.join(", ") || "#{article(type)} #{type}")
           kwargs.delete(key)
         end
 
@@ -467,9 +470,8 @@ module RailsAiContext
           @missing_required = true
         end
 
-        # Check enum constraints - downcase before comparing for case-insensitive match.
-        # A value outside the list would answer another question than the one asked, so the
-        # call is refused. Every `detail` level answers the same question, so that one falls back.
+        # A value outside the list answers another question, so the call is refused;
+        # every `detail` level answers the same one, so that falls back.
         kwargs.each do |key, value|
           prop = properties[key]
           next unless prop&.dig(:enum)
