@@ -5,13 +5,13 @@ require "prism"
 
 RSpec.describe RailsAiContext::DatabaseFamily do
   describe ".of" do
-    {
+    spellings = {
       # Live adapter_name values.
       "PostgreSQL" => :postgresql, "PostGIS" => :postgresql, "Mysql2" => :mysql, "Trilogy" => :mysql, "SQLite" => :sqlite,
       # database.yml adapters.
       "postgresql" => :postgresql, "postgis" => :postgresql, "mysql2" => :mysql, "trilogy" => :mysql, "sqlite3" => :sqlite,
       # URL schemes.
-      "postgres" => :postgresql, "mysql" => :mysql, "sqlite" => :sqlite,
+      "postgres" => :postgresql, "mysql" => :mysql, "sqlite" => :sqlite, "mariadb" => :mysql,
       # Display labels, including a database.yml default.
       "MySQL" => :mysql, "PostgreSQL by database.yml default" => :postgresql, "SQLite by database.yml default" => :sqlite,
       # Dump dialects.
@@ -21,10 +21,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       "cockroachdb" => :unknown, "CockroachDB" => :unknown, "jdbcpostgresql" => :unknown, "static_parse" => :unknown,
       "unknown" => :unknown, "" => :unknown, nil => :unknown,
       "PostgreSQL or MySQL" => :unknown, "MySQL or SQLite, database.yml does not say which" => :unknown
-    }.each do |source, key|
+    }
+    spellings.each do |source, key|
       it "classifies #{source.inspect} as #{key}" do
         expect(described_class.of(source).key).to eq(key)
       end
+    end
+
+    it "has a row above for every name the family knows" do
+      expect(spellings.keys.grep(String)).to include(*described_class::NAMES.keys)
     end
 
     it "reads a connection's adapter_name and a db_config's adapter" do
@@ -71,16 +76,18 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     # A `sqlite_` table prefix and a URL scheme name no adapter.
     database = %r{postg(?!\w*://)|mysql(?!\w*://)|trilogy|sqlite(?!_|\w*://)|maria}i
     rules = {
-      "tests a database name" => /\.match\?|=~|!~|\.start_with\?|\.end_with\?|==|!=|\.eql\?|\.casecmp/,
-      "tests an adapter name against a list" => /\A(?=.*\badapter)(?=.*\.include\?)/,
+      "tests a database name" => /\.match\?|=~|!~|\.start_with\?|\.end_with\?|\.include\?|==|!=|\.eql\?|\.casecmp/,
       "switches on a database name" => /^\s*when\s+(?:\/|"|')/,
       "keeps a database name pattern" => /\b[A-Z_]*(?:ADAPTER|DIALECT)[A-Z_]*\s*=\s*(?:\/|%r)/
     }
     # Only a database name inside a string or a pattern counts. A family key such as :mysql is the answer the family gave.
     offences = lambda do |source|
       lines = source.lines
+      symbols = false
       named = Prism.lex(source).value.filter_map do |token, _|
-        token.location.start_line if token.type == :STRING_CONTENT && token.value.match?(database)
+        # The words of a %i[] list are family keys too.
+        symbols = token.value.match?(/\A%i/i) if token.type.start_with?("PERCENT_") || token.type == :STRING_END
+        token.location.start_line if token.type == :STRING_CONTENT && !symbols && token.value.match?(database)
       end
       named.uniq.filter_map do |number|
         rule = rules.find { |_, pattern| lines[number - 1].match?(pattern) }&.first
@@ -107,11 +114,19 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         "mysql = name =~ /mysql|trilogy/",
         'lite = settings["kind"] == "sqlite3"',
         '%w[mysql2 trilogy].include?(adapter)',
+        'name.include?("mysql")',
+        'return :pg if kind.start_with?("postg")',
+        "label.match?(/sqlite/)",
+        'found = "mysql2" == kind',
+        "maria = text =~ /maria/",
         "case adapter\nwhen /sqlite/ then 1\nend",
+        "case kind\nwhen \"mysql2\", \"trilogy\" then 1\nend",
+        "case label.downcase\n  when 'postgresql' then 1\nend",
         'MYSQL_ADAPTER = /mysql|trilogy/i'
       ].each { |source| expect(offences.call(source)).not_to be_empty, source }
       [
         'x = family(adapter) == :mysql if type == "string"',
+        "created = %i[mysql sqlite].include?(dialect) ? [] : found",
         'next if dialect == :sqlite && shown.start_with?("sqlite_")',
         'if name.start_with?("postgres://", "mysql://", "sqlite://")'
       ].each { |source| expect(offences.call(source)).to be_empty, source }

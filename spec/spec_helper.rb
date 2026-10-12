@@ -8,6 +8,23 @@ end
 
 require "rails_ai_context"
 
+# The standard library the specs name. Which of it Rails loads by itself differs by version.
+require "digest"
+require "did_you_mean"
+require "fileutils"
+require "ipaddr"
+require "json"
+require "net/http"
+require "open3"
+require "pathname"
+require "prism"
+require "rbconfig"
+require "securerandom"
+require "socket"
+require "stringio"
+require "time"
+require "tmpdir"
+
 # Rails 8 draws routes on first use, which loads the controllers and runs their load hooks:
 # inside an example that hides ActiveRecord, that first use raises NameError.
 Rails.application.reload_routes_unless_loaded if Rails.application.respond_to?(:reload_routes_unless_loaded)

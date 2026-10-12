@@ -19,7 +19,7 @@ RSpec.describe "the standard library the shipped code names" do
       Psych: "psych", FileUtils: "fileutils", Open3: "open3", Digest: "digest", Shellwords: "shellwords",
       Pathname: "pathname", Tempfile: "tempfile", URI: "uri", Net: "net/http", CSV: "csv", StringIO: "stringio",
       Timeout: "timeout", ERB: "erb", OpenSSL: "openssl", Base64: "base64", Benchmark: "benchmark",
-      Logger: "logger", DidYouMean: "did_you_mean", Socket: "socket", TCPSocket: "socket", Etc: "etc",
+      Logger: "logger", DidYouMean: "did_you_mean", Socket: "socket", TCPSocket: "socket", TCPServer: "socket", Etc: "etc",
       Zlib: "zlib", RbConfig: "rbconfig", Ripper: "ripper", Prism: "prism", IRB: "irb", PP: "pp",
       Monitor: "monitor", Singleton: "singleton", Forwardable: "forwardable", StringScanner: "strscan",
       Find: "find", IPAddr: "ipaddr", BigDecimal: "bigdecimal", OpenStruct: "ostruct"
@@ -166,6 +166,19 @@ RSpec.describe "the standard library the shipped code names" do
     loaded = scan(read(entry))[:features]
     strict = install_path + [ exe ]
     files = Dir[File.join(root, "lib/**/*.{rb,rake}")].map { |file| file.delete_prefix("#{root}/") }.sort - strict
+
+    expect(files.size).to be > 100
+    offenders = files.flat_map { |path| report(path, read(path), loaded) }
+    expect(offenders).to be_empty, offenders.join("\n")
+  end
+
+  # A spec file runs after spec_helper, the support files and the entry file. What Rails happens
+  # to load besides differs by version, so it does not count.
+  it "is required by the spec file that names it, by spec_helper or by the entry file" do
+    helpers = [ "spec/spec_helper.rb" ] + Dir[File.join(root, "spec/support/**/*.rb")].map { |file| file.delete_prefix("#{root}/") }
+    loaded = scan(read(entry))[:features] + helpers.flat_map { |path| scan(read(path))[:features] }
+    files = Dir[File.join(root, "spec/**/*.rb")].map { |file| file.delete_prefix("#{root}/") }.sort
+    files.reject! { |path| path.start_with?("spec/internal/", "spec/fixtures/") }
 
     expect(files.size).to be > 100
     offenders = files.flat_map { |path| report(path, read(path), loaded) }
