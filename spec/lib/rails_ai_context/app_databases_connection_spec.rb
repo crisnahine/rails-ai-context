@@ -98,7 +98,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     end
 
     it "refuses a database other than the primary that lives in memory, by name" do
-      allow(RailsAiContext::DatabaseFile).to receive(:uris?).and_return(true)
+      allow(RailsAiContext::DatabaseFile).to receive(:sqlite_reads_uris?).and_return(true)
       [ ":memory:", "file:queue?mode=memory&cache=shared", "file::memory:?cache=shared" ].each do |database|
         list = databases("queue" => config(Rails.env, "queue", database))
 
@@ -118,7 +118,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     end
 
     it "reads the SQLite file a file: URI names when it is there" do
-      skip "this SQLite reads no URIs" unless RailsAiContext::DatabaseFile.uris?
+      skip "this SQLite reads no URIs" unless RailsAiContext::DatabaseFile.sqlite_reads_uris?
 
       list = databases("queue" => config(Rails.env, "queue", "file:#{sqlite_file("queue")}?mode=rw"))
 
@@ -154,17 +154,30 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
       end
     end
 
-    it "gives a leased server connection query_timeout to connect in, unless its entry sets its own, and SQLite none" do
-      RailsAiContext.configuration.query_timeout = 2.5
-      own = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "slow", { adapter: "sqlite3", database: sqlite_file("slow"), connect_timeout: 9 })
-      server = ->(name, entry) { described_class.new(**databases(name => entry).fetch(name).to_h, family: RailsAiContext::DatabaseFamily::MYSQL) }
-      connect_timeout = ->(db) { db.with_connection { |conn| conn.pool.db_config.configuration_hash[:connect_timeout] } }
+    # The limits a lease connects with, read from the pool it leased. No server adapter is in this
+    # bundle, so a SQLite file stands under each family.
+    def limits(family, entry)
+      database = described_class.new(**databases("leased" => entry).fetch("leased").to_h, family: family)
+      database.with_connection { |conn| conn.pool.db_config.configuration_hash.slice(:connect_timeout, :read_timeout) }
+    end
 
-      expect(connect_timeout.call(server.call("queue", config(Rails.env, "queue", sqlite_file("queue"))))).to eq(3)
-      expect(connect_timeout.call(server.call("slow", own))).to eq(9)
-      expect(connect_timeout.call(databases("cache" => config(Rails.env, "cache", sqlite_file("cache"))).fetch("cache"))).to be_nil
+    def entry(extra = {})
+      ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "leased", { adapter: "sqlite3", database: (@leased ||= sqlite_file("leased")) }.merge(extra))
+    end
+
+    it "gives a leased server connection query_timeout to connect in, a MySQL one a read limit above twice that, and SQLite neither" do
+      RailsAiContext.configuration.query_timeout = 2.5
+
+      expect(limits(RailsAiContext::DatabaseFamily::MYSQL, entry)).to eq(connect_timeout: 3, read_timeout: 10)
+      expect(limits(RailsAiContext::DatabaseFamily::POSTGRESQL, entry)).to eq(connect_timeout: 3)
+      expect(limits(RailsAiContext::DatabaseFamily::SQLITE, entry)).to eq({})
     ensure
       RailsAiContext.configuration.query_timeout = 5
+    end
+
+    it "keeps each limit an entry sets for itself" do
+      expect(limits(RailsAiContext::DatabaseFamily::MYSQL, entry(connect_timeout: 9))).to eq(connect_timeout: 9, read_timeout: 15)
+      expect(limits(RailsAiContext::DatabaseFamily::MYSQL, entry(read_timeout: 1))).to eq(connect_timeout: 5, read_timeout: 1)
     end
 
     it "hands an error the block raises back as it is" do

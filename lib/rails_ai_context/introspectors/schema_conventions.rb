@@ -199,11 +199,11 @@ module RailsAiContext
         RailsAiContext::DatabaseFamily.of(database_adapter_for(root, database)).implicit_pk_type
       end
 
-      # One app database's adapter. A database only another environment configures (Rails 8's queue
+      # One app database's adapter, the primary's for no name. A database only another environment configures (Rails 8's queue
       # outside production) takes that environment's; one only a dump names, the primary's.
       def database_adapter_for(root, db_name)
         databases = RailsAiContext::AppDatabases.for(root)
-        found = db_name == "primary" ? databases.primary : databases[db_name]
+        found = databases.of_dump_name(db_name)
         found&.config ? found.adapter : databases.primary&.adapter
       end
 

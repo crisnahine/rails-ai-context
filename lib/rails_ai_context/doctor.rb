@@ -350,10 +350,7 @@ module RailsAiContext
     # the app's root, as the adapter reads it, named from where doctor was typed.
     def database_named(db_config)
       name = db_config.database.to_s
-      return name unless DatabaseFamily.of(db_config).sqlite? && !name.empty? && name != ":memory:" &&
-        !name.start_with?("file:") && !SafePath.absolute?(name)
-
-      typed_path(File.expand_path(name, app.root.to_s))
+      DatabaseFile.root_relative?(db_config) ? typed_path(File.expand_path(name, app.root.to_s)) : name
     end
 
     # The primary's migrations directories, and in an engine's test/dummy

@@ -13,9 +13,8 @@ module RailsAiContext
   module DatabaseFile
     MEMORY = ":memory:"
 
-    # The error a connection to db_config would meet if SQLite did not
-    # create the file, or nil: for a file that is there, for a database
-    # that lives in memory, and for every other adapter.
+    # The error a connection would meet if SQLite did not create the file. nil for a file
+    # that is there, a database in memory and every other adapter.
     def self.missing(db_config)
       ActiveRecord::NoDatabaseError.db_error(db_config.database.to_s) if missing?(db_config)
     end
@@ -34,7 +33,7 @@ module RailsAiContext
     end
 
     # Whether this SQLite build reads a `file:` name as a URI. One compiled without USE_URI opens it as a plain file name.
-    def self.uris?
+    def self.sqlite_reads_uris?
       return @uris if defined?(@uris)
       return true unless defined?(SQLite3::Database)
 
@@ -47,9 +46,16 @@ module RailsAiContext
     end
 
     def self.uri?(database)
-      database.start_with?("file:") && uris?
+      database.start_with?("file:") && sqlite_reads_uris?
     end
     private_class_method :uri?
+
+    # A SQLite file name the adapter reads from the app's root. SQLite itself opens a `file:` name.
+    def self.root_relative?(db_config)
+      database = db_config.database.to_s
+      DatabaseFamily.of(db_config).sqlite? && !database.empty? && !in_memory?(db_config) &&
+        !database.start_with?("file:") && !SafePath.absolute?(database)
+    end
 
     # The file a SQLite database is, or nil when it is none.
     def self.path(db_config)

@@ -2769,9 +2769,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     it "types a configured primary dump's implicit key by the primary database's adapter" do
-      yml = "#{RailsAiContext.environment_name}:\n  queue:\n    adapter: sqlite3\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n"
+      yml = "#{RailsAiContext.environment_name}:\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n  queue:\n    adapter: sqlite3\n"
       static_with({ "config/database.yml" => yml, "db/main.rb" => one_table_rb.call("widgets") }) do |result, _|
         expect(result[:tables]["widgets"][:columns].first).to include(name: "id", type: "bigint")
+      end
+    end
+
+    # ActiveRecord::Base connects to an environment's first database, so that one is the primary.
+    it "reads a database named primary that is not its environment's first as another database, typed by its own adapter" do
+      yml = "#{RailsAiContext.environment_name}:\n  queue:\n    adapter: sqlite3\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n"
+      files = { "config/database.yml" => yml, "db/main.rb" => one_table_rb.call("widgets"), "db/schema.rb" => one_table_rb.call("jobs") }
+      static_with(files) do |result, _|
+        expect(result[:tables]["jobs"][:columns].first).to include(name: "id", type: "integer")
+        expect(result[:secondary_databases]["primary"][:tables]["widgets"][:columns].first).to include(name: "id", type: "bigint")
       end
     end
 

@@ -604,8 +604,8 @@ module RailsAiContext
       def secondary_dump_files
         primary = dump_candidates.map(&:last)
         app_databases.filter_map do |db|
-          format, path = db.dump
-          [ db.name, format, path ] if path && !db.primary && !primary.include?(path) && File.exist?(path)
+          path = db.dump&.path
+          [ db.name, db.dump.format, path ] if path && !db.primary && !primary.include?(path) && File.exist?(path)
         end
       end
 
@@ -651,7 +651,7 @@ module RailsAiContext
           next if tables.empty?
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
-          _, dump = db.dump
+          dump = db.dump&.path
           path, state = unread[name]
           said = path ? "#{relative_dump_path(path)} #{state}" : "no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"}"
           dumps[name] = {
@@ -735,7 +735,7 @@ module RailsAiContext
       end
 
       def dump_lookup(database)
-        adapter = SchemaConventions.database_adapter_for(app.root.to_s, database || "primary")
+        adapter = SchemaConventions.database_adapter_for(app.root.to_s, database)
         return if adapter && !RailsAiContext::DatabaseFamily.of(adapter).postgresql?
 
         _, format, path = database ? secondary_dump_files.find { |name, _, _| name == database } : [ nil, *present_dump ]
@@ -892,7 +892,7 @@ module RailsAiContext
       def parse_migrations
         pk_type = SchemaConventions.implicit_pk_type(app.root.to_s)
         replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s,
-                                            adapter: SchemaConventions.database_adapter_for(app.root.to_s, "primary"))
+                                            adapter: SchemaConventions.database_adapter_for(app.root.to_s, nil))
         tables = replayed.tables
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
 

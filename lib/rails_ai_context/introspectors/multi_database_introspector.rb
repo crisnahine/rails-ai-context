@@ -15,7 +15,7 @@ module RailsAiContext
         dbs = discover_databases
         {
           databases: dbs,
-          replicas: dbs.select { |d| d[:replica] }.map { |d| { name: d[:name], adapter: d[:adapter] } },
+          replicas: dbs.select { |d| d[:replica] }.map { |d| d.slice(:name, :adapter, :environments) },
           sharding: detect_sharding,
           model_connections: detect_model_connections,
           multi_db: dbs.size > 1

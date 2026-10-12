@@ -372,8 +372,8 @@ module RailsAiContext
         env = Rails.configuration.database_configuration&.dig(Rails.env) rescue nil
         return nil unless env.is_a?(Hash)
 
-        # A multi-database environment nests one block per database; primary is the app's own.
-        adapter = env["adapter"] || (env["primary"] || env.values.find { |v| v.is_a?(Hash) })&.dig("adapter")
+        # A multi-database environment nests one block per database; the first is the app's own.
+        adapter = env["adapter"] || env.values.find { |v| v.is_a?(Hash) }&.dig("adapter")
         adapter && SchemaAdapter.display(adapter.to_s)
       end
 

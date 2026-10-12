@@ -168,6 +168,13 @@ module RailsAiContext
           " (#{item[:controller]}#{action}#{view})"
         end
 
+        # " (queue database)", and where only another environment configures it, " (queue database, production only)".
+        def database_tag(name)
+          return "" unless name
+
+          " (#{[ "#{name} database", Payload.named_scope_words(cached_context, name) ].compact.join(", ")})"
+        end
+
         def render_section(title, items, model_filter, detail)
           return [] unless items&.any?
 
@@ -177,7 +184,7 @@ module RailsAiContext
           lines = [ "## #{title} (#{filtered.size})", "" ]
 
           filtered.each do |item|
-            lines << "- **#{item[:model] || item[:table] || "Unknown"}**#{" (#{item[:database]} database)" if item[:database]}"
+            lines << "- **#{item[:model] || item[:table] || "Unknown"}**#{database_tag(item[:database])}"
             lines << "  #{item[:suggestion]}" if item[:suggestion]
             if RailsAiContext::DetailLevel.full?(detail)
               lines << "  Controller: #{item[:controller]}" if item[:controller]

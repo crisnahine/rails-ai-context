@@ -28,10 +28,10 @@ module RailsAiContext
           entry = { name: db.name, adapter: db.adapter, replica: db.replica }
           entry[:role]    = cfg.role.to_s if cfg.respond_to?(:role) && cfg.role
 
-          pool_config = extract_pool_config(cfg)
+          pool_config = extract_pool_config(db.settings)
           entry[:pool_config] = pool_config if pool_config.any?
 
-          adapter_opts = extract_adapter_options(cfg)
+          adapter_opts = extract_adapter_options(db.settings)
           entry[:adapter_options] = adapter_opts if adapter_opts.any?
           entry
         rescue => e
@@ -47,31 +47,17 @@ module RailsAiContext
         sslmode encoding collation timezone
       ].freeze
 
-      def extract_pool_config(cfg)
-        hash = config_hash(cfg)
+      def extract_pool_config(hash)
         POOL_KEYS.each_with_object({}) do |key, out|
           out[key.to_sym] = hash[key] if hash.key?(key)
         end
       end
 
-      def extract_adapter_options(cfg)
-        hash = config_hash(cfg)
+      def extract_adapter_options(hash)
         ADAPTER_KEYS.each_with_object({}) do |key, out|
           next unless hash.key?(key)
           out[key.to_sym] = serializable(hash[key])
         end
-      end
-
-      def config_hash(cfg)
-        # A booted entry is a db_config; a database.yml entry is the Hash itself.
-        cfg = cfg.configuration_hash if cfg.respond_to?(:configuration_hash)
-        if cfg.is_a?(Hash)
-          cfg.transform_keys(&:to_s)
-        else
-          {}
-        end
-      rescue => e
-        RailsAiContext.debug_fail(e, {}, label: "config_hash")
       end
 
       def serializable(value)
