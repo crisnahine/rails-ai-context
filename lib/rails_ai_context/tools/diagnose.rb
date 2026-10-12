@@ -227,7 +227,7 @@ module RailsAiContext
           lines.concat(next_steps)
         end
 
-        output = lines.join("\n")
+        output = lines.join("\n").rstrip
 
         # Final safety cap: if total output still exceeds limit, hard-truncate
         if output.length > MAX_TOTAL_OUTPUT

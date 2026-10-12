@@ -26,6 +26,17 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("Suggested Fix")
     end
 
+    it "ends on its last line whichever section that is" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        fix_last = described_class.call(error: "Zlib::DataError: boom").content.first[:text]
+        expect(fix_last).to include("## Suggested Fix")
+        expect(fix_last).not_to include("## Next Steps")
+        expect(fix_last).not_to match(/\s\z/)
+      end
+    end
+
     it "says nothing about git, and nothing on stderr, outside a repository" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
