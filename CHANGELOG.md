@@ -113,6 +113,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rails_read_logs` threw its whole answer away when an app's I18n backend
   raised after a failed boot (Discourse's queries the database), and
   `rails_runtime_info` and `rails_get_test_info` could do the same.
+- **The static fallback loads after a Bundler.setup that failed part way.**
+  An app that activates a gem before `bundler/setup` (Consul's
+  `require "sassc-embedded"`) at a version its lock does not pin made
+  Bundler raise after it had marked activesupport loaded but before it added
+  the load paths, so the standalone CLI and `serve` died with `cannot load
+  such file -- active_support/core_ext/string/inflections` instead of
+  serving static answers.
+- **A tracked log's diff hides its credentials.** `rails_review_changes`
+  read a `.log` file's diff as source, which filters a Bearer or Basic value
+  only at 16 characters, so a short one showed in clear. A log file shown as
+  a file now gets what `rails_read_logs` filters.
+- **The controller count is the app's own, the same from rake and from the
+  generator.** A gem's controller was listed whenever something had loaded
+  it, which flipflop's dashboard does in a generator boot and not in a rake
+  one, so the install wrote "Controllers (99)" and `rails ai:context` wrote
+  "(97)" and `ai:doctor` called the files stale. A `*_controller.rb` that
+  declares only a module was listed as a controller too.
+- **A module in app/policies is not a policy.** `onboard` counted
+  `module Authorizer` among the Pundit policies.
+- **`rails_review_changes` does not count the install's context files as
+  code.** `app/models/AGENTS.md` was "1 model" and
+  `app/controllers/AGENTS.md` "1 controller".
+- **Statements on one line replay in source order on every platform.** Ruby's
+  sort is not stable, so with a dozen statements in a migration a one-line
+  `change_table(:t) { |t| t.change ... }` could apply its `t.change` before
+  the block opened and lose it, and on Windows it did. A route with many
+  paths drew them in the same unordered way.
 
 ## [5.33.0] - 2026-10-11
 
