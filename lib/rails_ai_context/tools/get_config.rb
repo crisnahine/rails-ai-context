@@ -49,7 +49,7 @@ module RailsAiContext
         [ "i18n", "rails_get_i18n", %i[locale offset limit], "locales, locale files, coverage" ]
       ].map { |name, tool, params, summary| Section.new(name: name, tool_name: tool, params: params, summary: summary) }.freeze
 
-      def self.section(name)
+      def self.section_named(name)
         SECTIONS.find { |section| section.name == name.to_s }
       end
 
@@ -136,7 +136,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(section: nil, detail: nil, category: nil, offset: nil, limit: nil, environment: nil, locale: nil, server_context: nil)
-        asked = section(section.nil? ? "app" : section)
+        asked = section_named(section.nil? ? "app" : section)
         unless asked
           return error_response("`section` does not take '#{echo_input(section)}'. It takes: #{SECTIONS.map(&:name).join(', ')}.")
         end
@@ -148,7 +148,7 @@ module RailsAiContext
       end
 
       def self.section_off_message(name)
-        section(name).off_message
+        section_named(name).off_message
       end
 
       # A retired name's answer: its section's, ending with the call to make

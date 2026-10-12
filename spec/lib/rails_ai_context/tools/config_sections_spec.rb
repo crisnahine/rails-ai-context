@@ -312,7 +312,7 @@ RSpec.describe "rails_get_config sections" do
 
     def expect_facts(rows)
       rows.each do |section, arguments, *facts|
-        retired = RailsAiContext::Tools::GetConfig.section(section).tool_name
+        retired = RailsAiContext::Tools::GetConfig.section_named(section).tool_name
         [ answer("rails_get_config", arguments.merge(section: section)), answer(retired, arguments) ].each do |text|
           expect(text).to include(*facts), "section #{section} with #{arguments.inspect}"
         end

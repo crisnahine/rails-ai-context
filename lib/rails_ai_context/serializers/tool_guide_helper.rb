@@ -149,7 +149,7 @@ module RailsAiContext
 
       # A rails_get_config section named once in prose, or nil when skip_tools turned it off.
       def section_ref(section)
-        return nil unless RailsAiContext::Tools::GetConfig.section(section).served?
+        return nil unless RailsAiContext::Tools::GetConfig.section_named(section).served?
 
         tool_ref("rails_get_config", %(section:"#{section}"), "section=#{section}")
       end

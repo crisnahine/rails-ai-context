@@ -1073,7 +1073,7 @@ module RailsAiContext
         def pointer(name, args = nil, purpose = nil)
           section = GetConfig.retired_section(name)
           args = [ %(section:"#{section.name}"), args ].compact.reject(&:empty?).join(", ") if section
-          section ||= GetConfig.section(args.to_s[/\bsection:"(\w+)"/, 1] || "app") if name == "rails_get_config"
+          section ||= GetConfig.section_named(args.to_s[/\bsection:"(\w+)"/, 1] || "app") if name == "rails_get_config"
           return nil unless section ? section.served? : RailsAiContext::Server.served?(name)
 
           [ "`#{section ? 'rails_get_config' : name}(#{args})`", purpose ].compact.join(" ")
