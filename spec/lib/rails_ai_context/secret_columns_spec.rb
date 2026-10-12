@@ -185,10 +185,10 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(refused({ "v$" => definition }, "SELECT * FROM v$x")).to be_nil
     end
 
-    it "refuses a view that reads every column of a relation holding a secret column" do
+    it "refuses a view whose definition has a wildcard and names a relation holding a secret column" do
       [ "SELECT * FROM users", "SELECT u.* FROM users u", "SELECT DISTINCT * FROM users", "SELECT id, * FROM users" ].each do |definition|
         expect(refused({ "everyone" => definition }, "SELECT * FROM everyone"))
-          .to eq([ "everyone", "its definition reads every column of `users`, which holds the secret column `passwd`" ]), definition
+          .to eq([ "everyone", "its definition has a wildcard and names `users`, which holds the secret column `passwd`" ]), definition
       end
     end
 
@@ -272,8 +272,8 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "reads the family's view definitions and generated columns, once per run" do
       allow(runtime).to receive(:relation_columns).and_return("users" => %w[passwd])
-      allow(runtime).to receive(:view_definitions).with(conn).and_return("people" => "SELECT passwd AS p FROM users")
-      allow(runtime).to receive(:generated_columns).with(conn).and_return("users" => { "hidden" => "passwd" })
+      allow(runtime).to receive(:view_definitions).with(conn, %w[main temp]).and_return("people" => "SELECT passwd AS p FROM users")
+      allow(runtime).to receive(:generated_columns).with(conn, %w[main temp]).and_return("users" => { "hidden" => "passwd" })
 
       RailsAiContext::RunCache.around do
         2.times do
@@ -301,8 +301,8 @@ RSpec.describe RailsAiContext::SecretColumns do
       )
       secrets = described_class.for(conn, context: context)
 
-      expect(secrets.refused_view_in("SELECT * FROM lined")&.last).to start_with("its definition reads every column of `users`")
-      expect(secrets.refused_view_in("SELECT * FROM blocked")&.last).to start_with("its definition reads every column of `users`")
+      expect(secrets.refused_view_in("SELECT * FROM lined")&.last).to start_with("its definition has a wildcard and names `users`")
+      expect(secrets.refused_view_in("SELECT * FROM blocked")&.last).to start_with("its definition has a wildcard and names `users`")
       expect(secrets.refused_view_in("SELECT * FROM plain")).to be_nil
     end
 
@@ -321,7 +321,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     it "keeps one answer per database within a run" do
-      allow(runtime).to receive_messages(relation_columns: {}, view_definitions: {}, generated_columns: {})
+      allow(runtime).to receive_messages(unqualified_schemas: [], relation_columns: {}, view_definitions: {}, generated_columns: {}, index_tables: {})
       other = conn.dup
       allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       RailsAiContext::RunCache.around do
@@ -330,7 +330,7 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
-    it "reads the columns, the views and the generated columns in one statement each" do
+    it "lists the schemas, reads the columns, the views and the generated columns in one statement each, and the virtual and shadow tables in two" do
       sent = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
       begin
@@ -339,7 +339,7 @@ RSpec.describe RailsAiContext::SecretColumns do
         ActiveSupport::Notifications.unsubscribe(subscriber)
       end
 
-      expect(sent.size).to eq(3)
+      expect(sent.size).to eq(6)
       expect(runtime.relation_columns(conn)).to eq(conn.tables.sort.to_h { |table| [ table, conn.columns(table).map(&:name) ] })
     end
 
@@ -381,6 +381,26 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "raises for the primary when neither the connection nor the context holds its tables" do
       allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
       expect { described_class.for(conn, context: {}) }.to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
+    end
+
+    it "raises the same way when the generated columns, the virtual tables or the list of views cannot be read" do
+      failed = ActiveRecord::StatementInvalid.new("SQLite3::IOException: disk I/O error")
+      [ :generated_columns, :index_tables ].each do |read|
+        allow(runtime).to receive(read).and_raise(failed)
+        expect { described_class.for(conn, context: context) }.to raise_error(
+          described_class::Unreadable, "The columns of the primary database could not be read, so its secret columns cannot be told and no query runs on it."
+        ), read.to_s
+        allow(runtime).to receive(read).and_call_original
+      end
+      allow(runtime).to receive(:view_definitions).and_raise(failed)
+      allow(conn).to receive(:views).and_raise(failed)
+      expect { described_class.for(conn, context: context) }.to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
+    end
+
+    it "raises for the primary when the connection cannot be read and the context's schema lists no table" do
+      allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
+      expect { described_class.for(conn, context: { schema: { tables: {} } }) }
+        .to raise_error(described_class::Unreadable, /\AThe columns of the primary database/)
     end
 
     it "raises a lost connection, from the columns and from the view definitions, with no fallback" do

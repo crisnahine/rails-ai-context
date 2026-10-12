@@ -529,7 +529,7 @@ module RailsAiContext
     # A fraction of a second is kept as given: each database family rounds it up to the least it can bound.
     def query_timeout=(value)
       number = value.is_a?(String) ? Integer(value, exception: false) || Float(value, exception: false) : value
-      unless number.is_a?(Numeric) && number.positive? && number.finite?
+      unless number.is_a?(Numeric) && number.real? && number.positive? && number.finite?
         raise ArgumentError, "query_timeout must be positive (got #{value})"
       end
 

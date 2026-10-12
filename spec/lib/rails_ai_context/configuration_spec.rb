@@ -105,7 +105,7 @@ RSpec.describe RailsAiContext::Configuration do
 
   describe "#query_timeout=" do
     it "raises on a value that is not a positive number" do
-      [ 0, -1, 0.0, "soon", nil, Float::INFINITY, Float::NAN, :fast ].each do |value|
+      [ 0, -1, 0.0, "soon", nil, Float::INFINITY, Float::NAN, :fast, Complex(2, 0), Complex(2, 1) ].each do |value|
         expect { config.query_timeout = value }.to raise_error(ArgumentError, "query_timeout must be positive (got #{value})"), value.inspect
       end
       expect(config.query_timeout).to eq(5)

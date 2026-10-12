@@ -9,7 +9,6 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     ENV[env] ? false : "set #{env} to run this family against a real database server"
   end
 
-
   let(:conn) { RacServerSpecRecord.connection }
   let(:family) { described_class.of(conn) }
 
@@ -71,7 +70,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       listed = family.relation_columns(conn)
 
       expect(listed.fetch("rac_server_rows")).to eq(conn.columns("rac_server_rows").map(&:name))
-      expect(listed.keys).to match_array(conn.tables)
+      expect(listed.keys.grep_v(/\./)).to match_array(conn.tables)
     end
 
     it "sizes and counts base tables only" do
@@ -129,6 +128,27 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "sends no statement on a connection that was replaced after the session was guarded, and raises the lost connection" do
+      id = conn.select_value("SELECT CONNECTION_ID()")
+      sent = []
+      second_session(ENV.fetch(env)) do |other|
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+          sent << payload[:sql]
+          other.execute("KILL CONNECTION #{id}") if payload[:sql] == "SET TRANSACTION READ ONLY"
+        end
+        took = seconds do
+          expect { family.read_only(conn, "SELECT id FROM rac_server_rows WHERE SLEEP(3) = 0", timeout: 0.5) }
+            .to raise_error(ActiveRecord::ActiveRecordError) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+        end
+        expect(took).to be < 2
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+      expect(sent.grep(/SLEEP/)).to eq([])
+    ensure
+      RacServerSpecRecord.connection_pool.disconnect!
+    end
+
     it "refuses a guarded read inside a transaction that is already open, bounds a block of reads there, and leaves it open" do
       conn.transaction do
         conn.execute("INSERT INTO rac_server_rows VALUES (4)")
@@ -184,6 +204,17 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "raises the timeout when the trace of a result column to its table column waits on a lock" do
+      sql = "SELECT * FROM (SELECT * FROM rac_server_view OFFSET 0) x"
+      plan = family.plan(conn, sql, timeout: 5)
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
+
+        expect { family.bounded(conn, timeout: 0.3) { family.column_sources(conn, sql, plan: plan) } }.to raise_error(described_class::TimedOut)
+      end
+    end
+
     it "reads a lock wait the session's own lock_timeout ended as the timeout" do
       conn.execute("SET lock_timeout = '200ms'")
       second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
@@ -223,11 +254,20 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect { family.plan(conn, "SELECT nope FROM rac_server_rows", timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid)
     end
 
-    it "leaves views to the plan and reads generated column expressions" do
+    it "reads the views with the ones the plan traces named, a relation under its schema too, and generated column expressions" do
       conn.execute("ALTER TABLE rac_server_rows ADD COLUMN twice int GENERATED ALWAYS AS (id * 2) STORED")
+      conn.execute("CREATE MATERIALIZED VIEW rac_server_stored AS SELECT id AS n FROM rac_server_rows")
 
-      expect(family.view_definitions(conn)).to be_nil
+      expect(family.view_definitions(conn).transform_values(&:squish)).to include(
+        "rac_server_view" => "SELECT id FROM rac_server_rows;", "rac_server_stored" => "SELECT id AS n FROM rac_server_rows;"
+      )
+      expect(family.traced_views(conn)).to include("rac_server_view")
+      expect(family.traced_views(conn)).not_to include("rac_server_stored")
+      expect(family.relation_columns(conn).slice("rac_server_stored", "public.rac_server_stored", "public.rac_server_rows"))
+        .to eq("rac_server_stored" => %w[n], "public.rac_server_stored" => %w[n], "public.rac_server_rows" => %w[id twice])
       expect(family.generated_columns(conn).fetch("rac_server_rows")).to eq("twice" => "(id * 2)")
+    ensure
+      conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_server_stored")
     end
 
     it "plans without running" do

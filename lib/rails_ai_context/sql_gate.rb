@@ -21,10 +21,14 @@ module RailsAiContext
         @left = seconds
       end
 
+      def spent?
+        !@left.positive?
+      end
+
       # Runs the block with the seconds left.
       # @raise [DatabaseFamily::TimedOut] when earlier reads used them all
       def spend
-        raise DatabaseFamily::TimedOut, "the reads beside the statement used the whole timeout" unless @left.positive?
+        raise DatabaseFamily::TimedOut, "the reads beside the statement used the whole timeout" if spent?
 
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         yield @left
@@ -33,6 +37,10 @@ module RailsAiContext
       end
     end
 
+    # The checks read a megabyte in two seconds at the slowest (a nest of parentheses, a run of dollar signs), and
+    # the longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB.
+    MAX_BYTES = 1_000_000
+
     # REPLACE is the MySQL statement; `replace(` is the string function every
     # database has, so a REPLACE followed by an opening parenthesis is let be.
     BLOCKED_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|SET|COPY|MERGE|REPLACE(?!\s*\())\b/i
@@ -40,49 +48,68 @@ module RailsAiContext
     # refused by the CREATE keyword - SHOW CREATE USER prints credential hashes.
     SHOW_CREATE_DEFINITION = /\A\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\b/i
     BLOCKED_CLAUSES  = /\bFOR\s+(?:UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b|\bLOCK\s+IN\s+SHARE\s+MODE\b/i
+    # The lists below hold each name under the family that has it, so a name is refused where it can be read.
+
     # Other sessions' statements, replication hosts and users, and the row data a log holds.
-    # EXPLAIN FOR CONNECTION shows the plan of the statement another session is running.
-    BLOCKED_SHOWS    = /\bSHOW\s+(?:(?:FULL|ALL)\s+)?(?:GRANTS|PROCESSLIST|BINLOG|BINARY|RELAYLOG|SLAVES?|MASTER|REPLICAS?|ENGINE|
-      PROFILES?|OPEN\s+TABLES|EXPLAIN|ANALYZE|USER_STATISTICS|CLIENT_STATISTICS|WSREP_\w+)\b|\bFOR\s+CONNECTION\b/ix
+    BLOCKED_SHOWS = { mysql: /\bSHOW\s+(?:(?:FULL|ALL)\s+)?(?:GRANTS|PROCESSLIST|BINLOG|BINARY|RELAYLOG|SLAVES?|MASTER|REPLICAS?|ENGINE|
+      PROFILES?|OPEN\s+TABLES|EXPLAIN|ANALYZE|USER_STATISTICS|CLIENT_STATISTICS|WSREP_\w+)\b/ix }.freeze
+    # The plan of the statement another session is running.
+    CONNECTION_PLAN = { mysql: /\A\s*(?:EXPLAIN|DESCRIBE|DESC)\b.*\bFOR\s+CONNECTION\b/mi }.freeze
     # A SHOW filter runs an expression for each row, and MySQL's statement timeout holds SELECT only.
     SHOW_WHERE       = /\A\s*SHOW\b.*\bWHERE\b/mi
-    SELECT_INTO      = /\bSELECT\b[^;]*\bINTO\b/i
     MULTI_STATEMENT  = /;\s*\S/
     ALLOWED_PREFIX   = /\A\s*(SELECT|WITH|SHOW|EXPLAIN|DESCRIBE|DESC)\b/i
 
     # SELECT-callable functions that reach files or the network through the database process.
     # To the database they are reads, so a read-only transaction lets them through.
-    BLOCKED_FUNCTIONS = /\b(
-      pg_read_binary_file | pg_read_file |
-      pg_ls_dir | pg_ls_logdir | pg_ls_tmpdir | pg_ls_waldir | pg_ls_archive_statusdir |
-      pg_stat_file | pg_file_settings | pg_current_logfile |
-      lo_import | lo_export |
-      dblink[a-z_]* |
-      LOAD\s+DATA |
-      load_file | load_extension
-    )\b/ix
+    BLOCKED_FUNCTIONS = {
+      postgresql: /\b(
+        pg_read_binary_file | pg_read_file |
+        pg_ls_dir | pg_ls_logdir | pg_ls_tmpdir | pg_ls_waldir | pg_ls_archive_statusdir |
+        pg_stat_file | pg_current_logfile |
+        lo_import | lo_export |
+        dblink[a-z_]*
+      )\b/ix,
+      mysql: /\b(LOAD\s+DATA | load_file)\b/ix,
+      sqlite: /\b(load_extension)\b/i
+    }.freeze
 
     # PostgreSQL functions that return a whole table as one value, its secret columns included.
-    BLOCKED_DUMPS = /\b((?:query|table|schema|database|cursor)_to_xml(?:schema|_and_xmlschema)?)\s*\(/i
+    BLOCKED_DUMPS = { postgresql: /\b((?:query|table|schema|database|cursor)_to_xml(?:schema|_and_xmlschema)?)\s*\(/i }.freeze
 
     # Relations that hold values sampled from other tables' columns, other sessions' statements or stored
     # credentials, where no check on a column's name applies.
-    BLOCKED_RELATIONS = /\b(?:(
-      pg_stats(?:_ext(?:_exprs)?)? | pg_statistic(?:_ext(?:_data)?)? | pg_largeobject |
-      pg_stat_activity | pg_stat_get_activity | pg_stat_get_backend_activity |
-      pg_stat_statements | pg_prepared_statements | pg_cursors |
-      pg_user_mappings? | user_mapping_options | pg_subscription |
-      pg_foreign_server | pg_foreign_data_wrapper | pg_foreign_table |
-      pg_settings | pg_show_all_settings | pg_show_all_file_settings | pg_hba_file_rules | pg_ident_file_mappings |
-      sqlite_stat[134] | column_statistics | column_stats | global_priv |
-      processlist | performance_schema | general_log | slow_log
-    )\b|(sys|mysql)[`"]?\s*\.|
-      information_schema[`"]?\s*\.\s*[`"]?(innodb_trx | innodb_lock\w* | innodb_ft_\w+ |
-        user_statistics | client_statistics | profiling | optimizer_trace)\b)/ix
+    BLOCKED_RELATIONS = {
+      postgresql: /\b(
+        pg_stats(?:_ext(?:_exprs)?)? | pg_statistic(?:_ext(?:_data)?)? | pg_largeobject |
+        pg_stat_activity | pg_stat_get_activity | pg_stat_get_backend_activity |
+        pg_stat_statements | pg_prepared_statements | pg_cursors |
+        pg_user_mappings? | user_mapping_options | pg_subscription |
+        pg_foreign_server | pg_foreign_data_wrapper | pg_foreign_table |
+        pg_settings | pg_file_settings | pg_show_all_settings | pg_show_all_file_settings | pg_hba_file_rules | pg_ident_file_mappings
+      )\b/ix,
+      mysql: /\b(?:(column_statistics | column_stats | global_priv | processlist | performance_schema | general_log | slow_log)\b|
+        information_schema[`"]?\s*\.\s*[`"]?(innodb_trx | innodb_lock\w* | innodb_ft_\w+ |
+          user_statistics | client_statistics | profiling | optimizer_trace)\b)/ix,
+      sqlite: /\b(sqlite_stat[134] | sqlite_stmt)\b/ix
+    }.freeze
+
+    # MySQL's own schemas, read with string literals masked. An alias cannot be told from a schema without a
+    # parser, so an alias of either name is refused with them.
+    SYSTEM_SCHEMAS = { mysql: /\b(sys|mysql)[`"]?\s*\./i }.freeze
+
+    # The SQLite pragma functions that describe the schema or the database file. Every other one, and the
+    # counters under it, answer for the connection that runs the statement, which is rails_query's own.
+    SQLITE_FILE_PRAGMAS = %w[
+      table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check
+      integrity_check quick_check user_version application_id schema_version page_size page_count freelist_count
+      encoding auto_vacuum journal_mode compile_options pragma_list
+    ].to_set.freeze
+    SQLITE_CONNECTION_STATE = /\bpragma_(\w+)|\b(changes|total_changes|last_insert_rowid)\s*\(/i
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
-    BLOCKED_CATALOGS = /\b(pg_authid|pg_shadow|pg_db_role_setting)\b/i
+    BLOCKED_CATALOGS = { postgresql: /\b(#{(SecretColumns::CATALOG_CREDENTIALS.keys + %w[pg_shadow]).join("|")})\b/i }.freeze
 
     # PostgreSQL settings whose value can be a connection string with its password, or a command line.
     SECRET_SETTINGS = /\b(primary_conninfo|ssl_passphrase_command|archive_command|restore_command|archive_cleanup_command|recovery_end_command)\b/i
@@ -91,12 +118,12 @@ module RailsAiContext
     PLAN_SETTING_CALL = /\bcurrent_setting\((?:'((?:''|[^'])*)'::text(?=[,)]))?/
     SHOWN_SETTING = /\A\s*SHOW\b(.*?);?\s*\z/mi
 
-    # Checked before SELECT_INTO, which also matches, so the refusal names the disk write.
+    # Checked before the SELECT INTO check, which also matches, so the refusal names the disk write.
     BLOCKED_OUTPUT = /\bINTO\s+(OUTFILE|DUMPFILE)\b/i
 
     # PostgreSQL functions whose session or server effect outlives a read-only
     # transaction. The plan's VOLATILE check refuses the ones not named here.
-    BLOCKED_PG_ADMIN = /\b(
+    BLOCKED_ADMIN = { postgresql: /\b(
       pg_terminate_backend | pg_cancel_backend |
       pg_reload_conf | pg_rotate_logfile[a-z_]* |
       pg_stat_reset[a-z_]* |
@@ -109,14 +136,14 @@ module RailsAiContext
       pg_xlog_replay_pause | pg_xlog_replay_resume |
       pg_notify | set_config | txid_current[a-z_]* | pg_current_xact_id[a-z_]* |
       pg_import_system_collations
-    )\s*\(/ix
+    )\s*\(/ix }.freeze
 
     # GET_LOCK leaves a named lock on the pooled connection for a later caller to inherit, and the
     # pos_wait functions block on replication. MySQL has no volatility catalogue, so these are named.
-    BLOCKED_MYSQL_SESSION = /\b(
+    BLOCKED_SESSION = { mysql: /\b(
       get_lock | release_lock | release_all_locks | is_free_lock | is_used_lock |
       master_pos_wait | source_pos_wait
-    )\s*\(/ix
+    )\s*\(/ix }.freeze
 
     # VOLATILE built-ins that only read: pg_proc marks a reader of live server
     # state VOLATILE too. Any other VOLATILE function in the plan is refused.
@@ -148,23 +175,17 @@ module RailsAiContext
     # INTERSECT and EXCEPT return only rows of their first SELECT, so they stay.
     SET_UNION = /\bUNION\b/i
 
-    QUOTED = /'[^']*'?|"[^"]*"?|`[^`]*`?/m
+    # A quoted span by the quote that opens it. A doubled quote stays inside the span.
+    PLAIN_SPAN = { "'" => /'(?:''|[^'])*'?/m, '"' => /"(?:""|[^"])*"?/m, "`" => /`(?:``|[^`])*`?/m }.freeze
+    # A backslash escapes the next character: every MySQL string, and a PostgreSQL E'...' one.
+    ESCAPED_SPAN = { "'" => /'(?:\\.|''|[^'\\])*'?/m, '"' => /"(?:\\.|""|[^"\\])*"?/m }.freeze
+    # The quote of an E'...' string: the E stands right before it, as a word of its own.
+    E_QUOTE = /(?<=(?<![\p{Word}$]|[^\x00-\x7F])[eE])'/
     # SQLite reads [name] as an identifier.
     BRACKETED = /\[[^\]\n]*\]/
-    # A backslash escapes the next character: every MySQL string, and a PostgreSQL E'...' one.
-    ESCAPED_STRING = /'(?:\\.|[^'\\])*'?/m
-    MYSQL_QUOTED = /#{ESCAPED_STRING}|"(?:\\.|[^"\\])*"?|`[^`]*`?/m
     DOLLAR_QUOTED = /(?<![\p{Word}$])\$(\p{Word}*)\$.*?\$\1\$/m
-    UNQUOTED = /[^'"`$\/\-#*]+/
-
-    # PostgreSQL string literals, matched so they can be emptied. A double-quoted identifier is
-    # matched so it is skipped whole: a quote inside one (`AS "a'b"`) would open a literal.
-    PG_TEXT_LITERAL = /
-      (?<ident>"(?:""|[^"])*")
-      | \$(?<tag>(?:[A-Za-z_]\w*)?)\$.*?\$\k<tag>\$
-      | [eE]'(?:\\.|''|[^'])*'
-      | (?:[uU]&|[bBxX])?'(?:''|[^'])*'
-    /mx
+    DOLLAR_TAG = /(?<![\p{Word}$])\$\p{Word}*\$/
+    UNQUOTED = /[^'"`$\/\-#*\[]+/
 
     # A constant in a plan expression. PostgreSQL's deparser always doubles
     # quotes and never emits an E'' string, so this matches one exactly.
@@ -185,6 +206,23 @@ module RailsAiContext
     NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
     EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
 
+    # A statement's text under a pointer. A lookbehind sees the text before the pointer, and where each dollar
+    # tag last stands is read in one pass: a search for its closer from every opener is quadratic.
+    class Scanner < StringScanner
+      def initialize(text)
+        super(text, fixed_anchor: true)
+      end
+
+      # Whether the dollar tag at the pointer stands again after itself, to close the quote it opens.
+      def closed?(tag)
+        @last ||= {}.tap do |last|
+          tags = StringScanner.new(string)
+          last["$#{tags[1]}"] = tags.pos - 1 while tags.skip_until(/\$(?=(\p{Word}*\$))/)
+        end
+        @last.fetch(tag, -1) >= pos + tag.bytesize
+      end
+    end
+
     # family decides the lexing and whether the plan checks run. budget is the seconds the reads the
     # gate sends (the plan, the pg_proc lookup) share with the caller's other reads.
     def initialize(family:, secrets:, connection:, budget:)
@@ -196,6 +234,9 @@ module RailsAiContext
 
     def check(sql)
       return refuse("SQL query is required.") if sql.nil? || sql.strip.empty?
+      if sql.bytesize > MAX_BYTES
+        return refuse("Blocked: the statement is #{sql.bytesize} bytes long, and rails_query checks a statement of #{MAX_BYTES} bytes at most.")
+      end
 
       if (refusal = text_refusal(sql))
         return refuse(refusal)
@@ -215,13 +256,12 @@ module RailsAiContext
 
     # The text with its comments out and every quoted span copied whole, as the family reads them.
     def self.comment_free(sql, family)
-      # fixed_anchor, so the dollar quote's lookbehind sees the text before the pointer.
-      scanner = StringScanner.new(sql, fixed_anchor: true)
+      scanner = Scanner.new(sql)
       out = +""
       executable = false
 
       until scanner.eos?
-        if (span = scanner.scan(quoted_at(out, scanner, family)) || (family.dollar_quoting? && scanner.scan(DOLLAR_QUOTED)) || scanner.scan(UNQUOTED))
+        if (span = quoted(scanner, family)&.last || scanner.scan(UNQUOTED))
           out << span
         elsif family.executable_comments? && scanner.scan(/\/\*!\d*/)
           # Its content stays for the checks to read: `SELECT /*!50000 LOAD_FILE(...) */`.
@@ -230,7 +270,7 @@ module RailsAiContext
         elsif executable && scanner.scan(/\*\//)
           executable = false
           out << " "
-        elsif scanner.scan(/\/\*.*?(?:\*\/|\z)/m) || scanner.scan(family.line_comment)
+        elsif comment(scanner, family)
           out << " "
         else
           out << scanner.getch
@@ -240,11 +280,23 @@ module RailsAiContext
       out.strip
     end
 
-    def self.quoted_at(out, scanner, family)
-      if family.backslash_escapes? then MYSQL_QUOTED
-      elsif out.match?(/(?<![\p{Word}$])[eE]\z/) && scanner.check(/'/) then ESCAPED_STRING
-      else QUOTED
+    # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
+    # brackets: whether [name] quotes a name in this text.
+    def self.quoted(scanner, family, brackets: family.sqlite?)
+      case scanner.peek(1)
+      when "'" then [ :string, scanner.scan(family.backslash_escapes? || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
+      when '"' then [ :quoted, scanner.scan(family.backslash_escapes? ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
+      when "`" then [ :quoted, scanner.scan(PLAIN_SPAN["`"]) ]
+      when "[" then brackets && (span = scanner.scan(BRACKETED)) ? [ :quoted, span ] : nil
+      when "$"
+        tag = scanner.check(DOLLAR_TAG) if family.dollar_quoting?
+        [ :string, scanner.scan(DOLLAR_QUOTED) ] if tag && scanner.closed?(tag)
       end
+    end
+
+    # The comment that opens where the scanner stands, as the family reads it, or nil.
+    def self.comment(scanner, family)
+      scanner.scan(/\/\*.*?(?:\*\/|\z)/m) || scanner.scan(family.line_comment)
     end
 
     private
@@ -255,7 +307,7 @@ module RailsAiContext
 
     def text_refusal(sql)
       # Read on the raw text too, in case a novel comment form defeats the stripping.
-      if (m = sql.match(BLOCKED_FUNCTIONS))
+      if (m = listed(BLOCKED_FUNCTIONS, sql))
         return "Blocked: dangerous function #{m[0]} (filesystem/network primitive)"
       end
 
@@ -268,34 +320,50 @@ module RailsAiContext
       # MySQL's runs FOR SHARE and LOCK IN SHARE MODE, so there the raw text decides.
       locking = @family.refuses_locking_reads? ? masked : cleaned
       return "Blocked: locking read (FOR UPDATE/SHARE or LOCK IN SHARE MODE clause)" if locking.match?(BLOCKED_CLAUSES)
-      return "Blocked: sensitive SHOW command" if cleaned.match?(BLOCKED_SHOWS)
+      return "Blocked: sensitive SHOW command" if listed(BLOCKED_SHOWS, cleaned)
+      if listed(CONNECTION_PLAN, masked)
+        return "Blocked: EXPLAIN FOR CONNECTION is not run. It shows the plan of the statement another session is running."
+      end
       if masked.match?(SHOW_WHERE)
         return "Blocked: SHOW with a WHERE clause is not run, because MySQL's statement timeout does not hold it. " \
           "SHOW ... LIKE runs. For any other filter, SELECT from information_schema, " \
           "for example `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()`."
       end
       return "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" if cleaned.match?(BLOCKED_OUTPUT)
-      return "Blocked: SELECT INTO creates a table" if masked.match?(SELECT_INTO)
+      # No second statement is left by here, so an INTO after a SELECT belongs to it.
+      select = masked.index(/\bSELECT\b/i)
+      return "Blocked: SELECT INTO creates a table" if select && masked.rindex(/\bINTO\b/i).to_i > select
 
-      if (m = cleaned.match(BLOCKED_FUNCTIONS))
+      if (m = listed(BLOCKED_FUNCTIONS, cleaned))
         return "Blocked: dangerous function #{m[0]} (filesystem/network primitive)"
       end
-      if (m = cleaned.match(BLOCKED_DUMPS))
+      if (m = listed(BLOCKED_DUMPS, cleaned))
         return dump_refusal(m[1])
       end
       # Matched again as MySQL folds a name, so a letter it reads as a plain one names the same relation.
-      if (m = [ cleaned, SecretColumns.fold(cleaned) ].filter_map { |read| read.match(BLOCKED_RELATIONS) || read.match(BLOCKED_CATALOGS) }.first)
-        return unfollowed_relation_refusal(m.captures.compact.first)
+      if (m = [ cleaned, SecretColumns.fold(cleaned) ].filter_map { |read| listed(BLOCKED_RELATIONS, read) || listed(BLOCKED_CATALOGS, read) }.first)
+        return never_read_refusal(m.captures.compact.first)
       end
+      if (m = listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, :string)))
+        return "#{never_read_refusal(m[1])} A name before a dot is read as that schema, so an alias named `#{m[1]}` needs another name."
+      end
+      table, why = @secrets.unread_table_in(cleaned)
+      return "Blocked: `#{table}` is not read: #{why}." if table
+      if (state = connection_state(cleaned))
+        return "Blocked: `#{state}` tells of the connection that runs it. rails_query runs a statement on a connection of its own and " \
+          "sets some of that connection's values itself, so the answer would not be the app's. A pragma function that describes the " \
+          "schema or the database file runs, for example `pragma_table_info`."
+      end
+
       if (refusal = setting_refusal(cleaned))
         return refusal
       end
-      if (m = cleaned.match(BLOCKED_PG_ADMIN))
+      if (m = listed(BLOCKED_ADMIN, cleaned))
         return "Blocked: administrative function #{m[0].sub(/\s*\(\z/, "")} has a session or server-wide " \
           "effect that a read-only transaction does not prevent. rails_query runs " \
           "read-only queries for inspection; it will not run server-control functions."
       end
-      if (m = cleaned.match(BLOCKED_MYSQL_SESSION))
+      if (m = listed(BLOCKED_SESSION, cleaned))
         return "Blocked: session function #{m[0].sub(/\s*\(\z/, "")} leaves state (a named lock) on the pooled " \
           "connection after the query returns. rails_query will not run it."
       end
@@ -331,25 +399,61 @@ module RailsAiContext
         return secret_column_refusal(offending)
       end
 
-      # With no plan to read, a value a subquery's wildcard returns can be compared or renamed unseen.
-      if !@family.plan_checks? && subquery_wildcard?(tokens) && (relation = @secrets.relation_named_in(cleaned))
-        return "Blocked: a `*` inside a subquery reads every column of `#{relation}`, which holds the secret column " \
-          "`#{@secrets.of_relation(relation).first}`. On #{@family.name} a value read that way can be compared or " \
+      # With no plan to read, a value a subquery's wildcard returns can be compared or renamed unseen. Which
+      # relation the wildcard reads is not told without a parser, so the rule is the two together.
+      wildcard = subquery_wildcard(tokens) unless @family.plan_checks?
+      if wildcard && (relation = @secrets.relation_named_in(names_text(tokens)))
+        holds = "is not run in a statement that names `#{relation}`, which holds the secret column `#{@secrets.of_relation(relation).first}`."
+        return "Blocked: `TABLE` inside a subquery #{holds} `TABLE t` reads every column of `t`, and on #{@family.name} a value read that " \
+          "way can be compared or renamed past the redaction, so SELECT the columns you need in the subquery." if wildcard == :table
+
+        return "Blocked: a `*` inside a subquery #{holds} On #{@family.name} a value read through such a wildcard can be compared or " \
           "renamed past the redaction, so name the columns in the subquery."
       end
 
       # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
-      view, why = @secrets.refused_view_in(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
+      view_refusal(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
+    end
+
+    def view_refusal(text)
+      view, why = @secrets.refused_view_in(text)
       return nil unless view
 
       "Blocked: the view `#{view}` is not queried: #{why}. A view can rename a column past the redaction " \
         "on #{@family.name}, so query the tables it reads."
     end
 
-    def unfollowed_relation_refusal(name)
+    # The plan names every relation a statement reads, through any view and in any schema.
+    def unread_relation_refusal(plan)
+      unknown = plan.relations.reject { |_schema, relation| @secrets.knows?(relation) }
+      return nil if unknown.empty?
+
+      @budget.spend { |left| @family.bounded(@connection, timeout: left) { @secrets.read_schemas(unknown.map(&:first)) } }
+      _schema, relation = unknown.find { |_, name| !@secrets.knows?(name) }
+      return nil unless relation
+
+      "Blocked: `#{relation}` is not queried: its columns could not be read, so rails_query cannot tell which of them are secret."
+    end
+
+    # The family's own part of a list, matched against the text.
+    def listed(list, text)
+      list[@family.key]&.match(text)
+    end
+
+    def never_read_refusal(name)
       "Blocked: `#{name}` is not read. It holds values sampled from other tables, other sessions' statements " \
         "or stored credentials, and rails_query cannot tell which of them are secret." \
         "#{" To read one setting, run SHOW with its name." if name.match?(/settings/i)}"
+    end
+
+    def connection_state(cleaned)
+      return nil unless @family.sqlite?
+
+      cleaned.to_enum(:scan, SQLITE_CONNECTION_STATE).filter_map do
+        pragma, counter = Regexp.last_match.captures
+        name = counter&.downcase || ("pragma_#{pragma.downcase}" unless SQLITE_FILE_PRAGMAS.include?(pragma.downcase))
+        name unless name.nil? || @secrets.knows?(name)
+      end.first
     end
 
     def dump_refusal(function)
@@ -360,6 +464,8 @@ module RailsAiContext
     # A setting is read by SHOW and by current_setting. SHOW has no plan, so on PostgreSQL its name is read
     # here and has to be plain: a quoted name can spell any setting.
     def setting_refusal(cleaned)
+      return nil unless @family.postgresql?
+
       if (m = cleaned.match(SECRET_SETTINGS))
         return secret_setting_refusal(m[1])
       end
@@ -367,7 +473,7 @@ module RailsAiContext
       called = cleaned.to_enum(:scan, SETTING_CALL).map { Regexp.last_match[1] }
       return unread_setting_name_refusal if called.include?(nil)
 
-      shown = cleaned.match(SHOWN_SETTING)&.then { |m| m[1].strip } if @family.plan_checks?
+      shown = cleaned.match(SHOWN_SETTING)&.then { |m| m[1].strip }
       if shown && !shown.match?(/\A[\w. ]+\z/)
         return "Blocked: SHOW takes a setting's plain name on PostgreSQL, with no quotes around it, for example `SHOW work_mem`."
       end
@@ -419,20 +525,15 @@ module RailsAiContext
       self.class.comment_free(sql, @family)
     end
 
-    # Every quoted and dollar-quoted span blanked to spaces of the same
-    # length, so a check reads structure only and positions still line up.
-    def mask_quoted(text)
-      scanner = StringScanner.new(text, fixed_anchor: true)
+    # Every quoted and dollar-quoted span blanked to spaces of the same length, so a check reads structure
+    # only and positions still line up. only: the one kind to blank, :string or :quoted.
+    def mask_quoted(text, only = nil)
+      scanner = Scanner.new(text)
       out = +""
 
       until scanner.eos?
-        if (span = scanner.scan(self.class.quoted_at(out, scanner, @family)) || (@family.dollar_quoting? && scanner.scan(DOLLAR_QUOTED)))
-          out << (" " * span.length)
-        elsif (span = scanner.scan(UNQUOTED))
-          out << span
-        else
-          out << scanner.getch
-        end
+        kind, span = self.class.quoted(scanner, @family)
+        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : only.nil? || kind == only ? " " * span.length : span)
       end
 
       out
@@ -441,39 +542,35 @@ module RailsAiContext
     # [kind, text] for each token of comment-free text: :word (bare, a keyword or a name), :quoted (a name in
     # double quotes, backticks or brackets), :string, :number, or :punct, one character.
     def tokens(text)
-      scanner = StringScanner.new(text, fixed_anchor: true)
+      scanner = Scanner.new(text)
       found = []
-      word_end = nil
       until scanner.eos?
         next if scanner.skip(/\s+/) || scanner.skip(/[uU]&(?=["'])/)
 
-        open = scanner.peek(1)
-        if [ "'", '"', "`" ].include?(open)
-          # PostgreSQL's E'...' takes backslash escapes: the E is the word that ends where the quote opens.
-          after_e = found.last&.then { |kind, word| kind == :word && word.casecmp?("e") } && word_end == scanner.pos
-          found << [ open == "'" ? :string : :quoted, quoted_span(scanner, open, after_e) ]
-        elsif (span = scanner.scan(BRACKETED)) then found << [ :quoted, span ]
-        elsif @family.dollar_quoting? && (span = scanner.scan(DOLLAR_QUOTED)) then found << [ :string, span ]
-        elsif (span = scanner.scan(BARE_WORD))
-          found << [ span.match?(NUMBER) ? :number : :word, span ]
-          word_end = scanner.pos
-        else found << [ :punct, scanner.getch ]
-        end
+        # A bracketed name is read on every family: an alias list is told by its shape, whatever quotes its names.
+        found << (self.class.quoted(scanner, @family, brackets: true) ||
+          scanner.scan(BARE_WORD)&.then { |span| [ span.match?(NUMBER) ? :number : :word, span ] } || [ :punct, scanner.getch ])
       end
       found
     end
 
-    # One quoted token. A doubled quote inside it scans as a second span right after the first.
-    def quoted_span(scanner, open, after_e)
-      escaped = open != "`" && (@family.backslash_escapes? || (open == "'" && after_e))
-      pattern = escaped ? /#{open}(?:\\.|[^#{open}\\])*#{open}?/m : /#{open}[^#{open}]*#{open}?/m
-      span = scanner.scan(pattern)
-      span << scanner.scan(pattern) while span.length > 1 && span.end_with?(open) && scanner.peek(1) == open
-      span
-    end
-
+    # PostgreSQL's string literals emptied, with the E, B, X or U& that stands before one. A quoted name stays.
     def mask_sql_literals(text)
-      text.gsub(PG_TEXT_LITERAL) { Regexp.last_match[:ident] || "''" }
+      scanner = Scanner.new(text)
+      out = +""
+
+      until scanner.eos?
+        kind, span = self.class.quoted(scanner, @family)
+        if kind == :string
+          out.chop! if out.end_with?("&")
+          out.chop! if out.end_with?(*%w[e E b B x X u U]) && !out.byteslice(-2, 1).to_s.match?(/[\w$\x80-\xFF]/n)
+          out << "''"
+        else
+          out << (span || scanner.scan(UNQUOTED) || scanner.getch)
+        end
+      end
+
+      out
     end
 
     # A column-alias list renames the columns a wildcard produced, past the redaction that reads names.
@@ -504,11 +601,16 @@ module RailsAiContext
     # The kinds of the names between the parentheses, or nil when they hold anything but names and commas.
     # A type modifier holds numbers and a record function's list holds types, so neither is one.
     def name_list_kinds(tokens, open, close)
-      inner = tokens[(open + 1)...close]
-      return nil unless inner.size.odd?
-      return nil unless inner.each_slice(2).all? { |name, comma| %i[word quoted string].include?(name[0]) && [ nil, [ :punct, "," ] ].include?(comma) }
+      return nil unless (close - open).even?
 
-      inner.each_slice(2).map { |name, _| name[0] }.uniq
+      # Read in place and left at the first token that is no name: a copy for each parenthesis of a deep nest is quadratic.
+      kinds = []
+      (open + 1).step(close - 1, 2) do |i|
+        return nil unless %i[word quoted string].include?(tokens[i][0]) && (i + 1 == close || tokens[i + 1] == [ :punct, "," ])
+
+        kinds << tokens[i][0]
+      end
+      kinds.uniq
     end
 
     # name (a, b) AS [NOT] [MATERIALIZED] (body). SQLite takes a string for a name here.
@@ -582,26 +684,42 @@ module RailsAiContext
       tokens[(open + 2)...close].none? { |token| ROW_SOURCES.any? { |source| word?(token, source) } }
     end
 
-    # A select-list wildcard, or MySQL's `TABLE t`, inside parentheses. `count(*)` reads no column and
-    # EXISTS returns none, so both are left alone.
-    def subquery_wildcard?(tokens)
+    # :star for a select-list wildcard inside parentheses, :table for MySQL's `TABLE t` there, else nil.
+    # `count(*)` reads no column and EXISTS returns none, so both are left alone.
+    def subquery_wildcard(tokens)
       enclosing = []
-      tokens.each_with_index.any? do |token, i|
+      tokens.each_with_index do |token, i|
         enclosing << i if token == [ :punct, "(" ]
         enclosing.pop if token == [ :punct, ")" ]
-        next false if enclosing.empty? || (enclosing.last.positive? && word?(tokens[enclosing.last - 1], "EXISTS"))
+        next if enclosing.empty? || (enclosing.last.positive? && word?(tokens[enclosing.last - 1], "EXISTS"))
 
         following = tokens[i + 1]
         star = token == [ :punct, "*" ] && (following.nil? || [ ",", ")" ].include?(following[1]) || word?(following, "FROM")) &&
           !(tokens[i - 1] == [ :punct, "(" ] && following == [ :punct, ")" ])
-        star || (word?(token, "TABLE") && tokens[i - 1] != [ :punct, "." ])
+        return :star if star
+        return :table if word?(token, "TABLE") && tokens[i - 1] != [ :punct, "." ]
       end
+      nil
+    end
+
+    # The statement with each string that can only be data emptied. MySQL reads no string as a name. SQLite
+    # reads one as a name where no string can stand: after FROM, JOIN, TABLE or a comma, and beside a dot.
+    def names_text(tokens)
+      tokens.each_with_index.map do |(kind, text), i|
+        before = tokens[i - 1] if i.positive?
+        named = kind != :string || (@family.sqlite? && (%w[FROM JOIN TABLE].any? { |word| word?(before, word) } ||
+          [ before, tokens[i + 1] ].include?([ :punct, "." ]) || before == [ :punct, "," ]))
+        named ? text : "''"
+      end.join(" ")
     end
 
     def plan_refusal(top, text)
       return nil unless top
 
       plan = DatabaseFamily::PostgresqlPlan.new(top)
+      refusal = unread_relation_refusal(plan) || plan.relation_names.lazy.filter_map { |relation| view_refusal(relation) }.first
+      return refusal if refusal
+
       raw = plan.nodes.flat_map { |node| plan.expressions(node) }
       outputs = []
       conds = []
@@ -614,10 +732,10 @@ module RailsAiContext
 
       # A view reaches a relation or a function the text check did not see.
       sources = plan.nodes.flat_map { |node| node.values_at("Relation Name", "Function Name") }.compact + called.to_a
-      if (name = sources.find { |source| source.match?(/\A#{BLOCKED_RELATIONS}\z/) })
-        return unfollowed_relation_refusal(name)
+      if (name = sources.find { |source| source.match?(/\A#{BLOCKED_RELATIONS.fetch(:postgresql)}\z/) })
+        return never_read_refusal(name)
       end
-      if (name = called.find { |function| "#{function}(".match?(/\A#{BLOCKED_DUMPS}\z/) })
+      if (name = called.find { |function| "#{function}(".match?(/\A#{BLOCKED_DUMPS.fetch(:postgresql)}\z/) })
         return dump_refusal(name)
       end
       settings = raw.flat_map { |expr| expr.to_enum(:scan, PLAN_SETTING_CALL).map { Regexp.last_match[1] } }
@@ -626,7 +744,7 @@ module RailsAiContext
         return secret_setting_refusal(name)
       end
       if (rel = whole_row_leak(outputs + conds, plan.aliases))
-        return "Blocked: the query serialises a whole row of `#{rel}`, which carries every " \
+        return "Blocked: the query serialises a whole row of `#{plan.name(rel)}`, which carries every " \
           "column including the secret ones. Name the columns you need in the SELECT list."
       end
       if (col = secret_column_in_plan(outputs, conds))
@@ -668,7 +786,7 @@ module RailsAiContext
       exprs.each do |expr|
         expr.scan(/(?:([A-Za-z_]\w*)|"((?:""|[^"])+)")\.\*/) do |bare, quoted|
           al = bare || quoted.gsub('""', '"')
-          rel = aliases[al.downcase]
+          rel = aliases[al]
           return rel if rel && @secrets.relation_secret?(rel)
           return (rel || al) if rel.nil? && any_secret
         end
@@ -692,9 +810,8 @@ module RailsAiContext
       nil
     end
 
-    # A secret base column some node passes through and the top node leaves unnamed (a MATERIALIZED
-    # CTE, a subquery scan, a set operation), where redaction by position cannot pin it. A column
-    # handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
+    # A secret base column some node passes through and the top node leaves unnamed, so redaction by position cannot
+    # pin it. A column handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
     def laundered_secret_column(plan)
       top = secret_base_columns(plan, plan.output)
       plan.nodes.each do |node|

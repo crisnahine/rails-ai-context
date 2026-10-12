@@ -12,6 +12,10 @@ module RailsAiContext
       # Nodes whose every read of a child's column is an expression of their own that names it.
       READS_BY_NAME = [ "Aggregate", "Hash Join", "Merge Join", "Nested Loop" ].freeze
 
+      # Catalogs and TOAST tables: the never-read list and the catalog credentials hold what is secret there.
+      SYSTEM_SCHEMA = /\A(?:pg_catalog|information_schema|pg_toast(?:_temp_\d+)?)\z/
+
+      # aliases: alias => the relation it names, as `schema.relation` where the plan gives a schema that is no system one.
       attr_reader :nodes, :aliases
 
       # @param top [Hash] the plan's top node, as Family#plan returns it
@@ -21,21 +25,46 @@ module RailsAiContext
         @parents = {}.compare_by_identity
         collect(top)
         # The alias defaults to the relation name when the query gave none, which is how `users.*` resolves.
+        # Keyed as EXPLAIN prints it: `t` and "T" are two aliases.
+        @names = {}
         @aliases = @nodes.each_with_object({}) do |node, map|
           rel = node["Relation Name"] or next
-          map[(node["Alias"] || rel).to_s.downcase] = rel.to_s.downcase
+          key = [ (node["Schema"] unless node["Schema"].to_s.match?(SYSTEM_SCHEMA)), rel ].compact.join(".").downcase
+          @names[key] = rel.to_s.downcase
+          map[(node["Alias"] || rel).to_s] = key
         end
+        @members = {}.compare_by_identity
+        @nodes.each { |node| read_members(node) }
+      end
+
+      # @return [Array<String>] every relation the plan reads, by its own name
+      def relation_names
+        @names.values.uniq
+      end
+
+      # The relation's own name, with no schema, for an answer.
+      def name(relation)
+        @names.fetch(relation, relation)
+      end
+
+      # @return [Array<Array(String, String)>] [schema, `schema.relation`] for each relation the plan reads
+      #   outside the system schemas
+      def relations
+        @nodes.filter_map do |node|
+          schema = node["Schema"]
+          [ schema, "#{schema}.#{node["Relation Name"]}".downcase ] if schema && node["Relation Name"] && !schema.match?(SYSTEM_SCHEMA)
+        end.uniq
       end
 
       # The top node's Output: its i-th entry is result column i, with any sort or group key past the result width.
       def output
-        Array(@top["Output"])
+        Array(@top["Output"] || @members[@top])
       end
 
       # @return [Array(String, String), nil] [relation, column], downcased, for a plain Var of a base relation
       def base_column(expr)
         m = expr.to_s.strip.match(BASE_VAR) or return nil
-        rel = aliases[(m[1] || m[2].gsub('""', '"')).downcase]
+        rel = aliases[m[1] || m[2].gsub('""', '"')]
         rel ? [ rel, (m[3] || m[4].gsub('""', '"')).downcase ] : nil
       end
 
@@ -52,6 +81,22 @@ module RailsAiContext
       end
 
       private
+
+      # An Append over partitions, or over a parent and its children, prints no Output: its members `name_1`, `name_2`
+      # hand up the same columns in the same places. They are read as one relation, the first, also under `name`.
+      def read_members(node)
+        return if node.key?("Output") || ![ "Append", "Merge Append" ].include?(node["Node Type"])
+
+        members = Array(node["Plans"])
+        shared = members.map { |member| member["Alias"].to_s[/\A(.+)_\d+\z/m, 1] if member["Relation Name"] }.uniq
+        columns = members.map { |member| Array(member["Output"]).map { |expr| expr.to_s.match(BASE_VAR)&.then { |m| m[3] || m[4] } } }.uniq
+        return unless shared.size == 1 && shared.first && columns.size == 1 && columns.first.all?
+
+        first = @aliases[members.first["Alias"]]
+        members.each { |member| @aliases[member["Alias"]] = first }
+        @aliases[shared.first] ||= first
+        @members[node] = Array(members.first["Output"])
+      end
 
       def collect(node, parent = nil)
         return unless node.is_a?(Hash)

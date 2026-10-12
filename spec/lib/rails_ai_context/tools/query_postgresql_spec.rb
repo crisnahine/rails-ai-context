@@ -99,6 +99,148 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
             "Blocked: the query passes the secret column `salt` through")
   end
 
+  it "refuses a whole row under an alias that differs from another alias by case alone" do
+    conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+    conn.execute("CREATE TABLE rac_pg_plain (id int)")
+    conn.execute("INSERT INTO rac_pg_plain VALUES (1)")
+    twins = %(FROM rac_pg_accounts t LEFT JOIN rac_pg_plain "T" ON true)
+
+    refused([ "SELECT row_to_json(t) AS j #{twins}", "SELECT t::text AS j #{twins}", "SELECT (t.*)::text AS j #{twins}",
+              %(SELECT row_to_json(rac_pg_accounts) AS j FROM rac_pg_accounts LEFT JOIN rac_pg_plain "RAC_PG_ACCOUNTS" ON true),
+              "SELECT EXISTS (SELECT 1 #{twins} WHERE t::text LIKE '%token-v%') AS e",
+              "SELECT j.v FROM generate_series(1, 1) g, LATERAL (SELECT row_to_json(t) AS v #{twins}) j",
+              "SELECT (SELECT t::text #{twins} LIMIT 1) AS v", "SELECT t.id #{twins} WHERE t >= t", "SELECT t.id #{twins} ORDER BY t",
+              "SELECT t.id #{twins} WHERE t::text LIKE '%token-v%'" ],
+            "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+    response = run(%(SELECT row_to_json("T") AS j #{twins}))
+    expect([ response.error?, response.content.first[:text].include?('{"id":1}') ]).to eq([ false, true ])
+  ensure
+    conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+  end
+
+  describe "a relation outside the search path" do
+    before do
+      conn.execute("DROP SCHEMA IF EXISTS rac_pg_audit CASCADE")
+      conn.execute("CREATE SCHEMA rac_pg_audit")
+      conn.execute("CREATE TABLE rac_pg_audit.ledger (id int, email text, door_token text)")
+      conn.execute("INSERT INTO rac_pg_audit.ledger VALUES (1, 'ledger@example.com', 'token-value')")
+      conn.execute("CREATE VIEW rac_pg_audit.renamed AS SELECT id, door_token AS d FROM rac_pg_audit.ledger")
+      conn.execute("CREATE VIEW rac_pg_reach AS SELECT id, door_token AS d FROM rac_pg_audit.ledger")
+    end
+
+    after do
+      conn.execute("DROP VIEW IF EXISTS rac_pg_reach")
+      conn.execute("DROP SCHEMA IF EXISTS rac_pg_audit CASCADE")
+    end
+
+    it "refuses a statement that names its secret column, as it does for a table of the search path" do
+      from = "FROM rac_pg_audit.ledger"
+      refused([ "SELECT upper(door_token) #{from}", "SELECT door_token AS d #{from}", "SELECT door_token || '' AS d #{from}",
+                "SELECT d FROM (SELECT door_token AS d #{from}) s", "WITH c AS (SELECT door_token AS d #{from}) SELECT d FROM c",
+                "SELECT id #{from} WHERE door_token LIKE 'token%'", "SELECT max(door_token) AS m #{from}", "SELECT id #{from} ORDER BY door_token",
+                "SELECT (SELECT door_token #{from} LIMIT 1) AS d", %(SELECT door_token AS d FROM "rac_pg_audit" . "ledger"),
+                "SELECT door_token AS d FROM RAC_PG_AUDIT.ledger" ],
+              "Blocked: query references secret column `door_token`")
+    end
+
+    it "refuses its whole row and what a view or a set operation would carry past the redaction" do
+      refused([ "SELECT row_to_json(l) FROM rac_pg_audit.ledger l", "SELECT l FROM rac_pg_audit.ledger l", "SELECT l::text FROM rac_pg_audit.ledger l" ],
+              "Blocked: the query serialises a whole row of `ledger`")
+      refused([ "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_audit.renamed) SELECT * FROM c", "SELECT * FROM rac_pg_audit.renamed EXCEPT SELECT 0, ''",
+                "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_reach) SELECT * FROM c", "SELECT * FROM rac_pg_reach EXCEPT SELECT 0, ''" ],
+              "Blocked: the query passes the secret column `door_token` through")
+    end
+
+    it "filters its secret column in place, and runs a join that reads none" do
+      [ "SELECT * FROM rac_pg_audit.ledger", "SELECT * FROM rac_pg_audit.renamed", "SELECT * FROM rac_pg_reach",
+        "SELECT * FROM (SELECT * FROM rac_pg_audit.ledger OFFSET 0) s" ].each do |sql|
+        response = run(sql)
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text]).to include("[FILTERED]"), sql
+        expect(response.content.first[:text]).not_to include("token-value"), sql
+      end
+      joined = run("SELECT a.email, l.email AS other FROM rac_pg_accounts a JOIN rac_pg_audit.ledger l ON l.id = a.id")
+      expect([ joined.error?, joined.content.first[:text] ]).to match([ false, a_string_including("a@example.com", "ledger@example.com") ])
+    end
+
+    it "refuses a relation whose columns cannot be read" do
+      allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:relation_columns).and_wrap_original do |original, c, schemas = []|
+        schemas.empty? ? original.call(c, schemas) : {}
+      end
+      response = run("SELECT * FROM rac_pg_reach")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "Blocked: `rac_pg_audit.ledger` is not queried: its columns could not be read, so rails_query cannot tell which of them are secret." ]
+      )
+    end
+  end
+
+  describe "a materialized view" do
+    before do
+      conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_pg_stored_nested, rac_pg_stored_plain, rac_pg_stored CASCADE")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_stored AS SELECT id, salt AS pd FROM rac_pg_accounts")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_stored_nested AS SELECT harmless AS h FROM rac_pg_renamed")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_stored_plain AS SELECT id, email FROM rac_pg_accounts")
+      conn.execute("CREATE VIEW rac_pg_over_stored AS SELECT pd AS x FROM rac_pg_stored")
+    end
+
+    after { conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_pg_stored_nested, rac_pg_stored_plain, rac_pg_stored CASCADE") }
+
+    it "is refused when its definition names a secret column, by the view and the column, through a view over it too" do
+      refused([ "SELECT pd FROM rac_pg_stored", "SELECT * FROM rac_pg_stored", "SELECT upper(pd) FROM rac_pg_stored", "SELECT row_to_json(m) FROM rac_pg_stored m",
+                "SELECT m::text FROM rac_pg_stored m", "SELECT id FROM rac_pg_stored WHERE pd LIKE 'salt%'", "SELECT * FROM rac_pg_over_stored" ],
+              "Blocked: the view `rac_pg_stored` is not queried: its definition names the secret column `salt`. " \
+              "A view can rename a column past the redaction on PostgreSQL, so query the tables it reads.")
+      refused([ "SELECT h FROM rac_pg_stored_nested" ],
+              "Blocked: the view `rac_pg_stored_nested` is not queried: it reads the view `rac_pg_renamed`: its definition names the secret column `salt`.")
+    end
+
+    it "runs when its definition names none, and a view the plan traces still runs" do
+      [ "SELECT * FROM rac_pg_stored_plain", "SELECT * FROM rac_pg_renamed" ].each do |sql|
+        response = run(sql)
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text]).not_to include("salt-value"), sql
+      end
+    end
+  end
+
+  describe "a partitioned table and an inheritance parent that hold a secret column" do
+    before do
+      conn.execute("DROP TABLE IF EXISTS rac_pg_parts, rac_pg_parent CASCADE")
+      conn.execute("CREATE TABLE rac_pg_parts (id int, email text, salt text) PARTITION BY RANGE (id)")
+      conn.execute("CREATE TABLE rac_pg_parts_a PARTITION OF rac_pg_parts FOR VALUES FROM (0) TO (10)")
+      conn.execute("CREATE TABLE rac_pg_parts_b PARTITION OF rac_pg_parts FOR VALUES FROM (10) TO (20)")
+      conn.execute("INSERT INTO rac_pg_parts VALUES (1, 'p1@example.com', 'salt-value'), (11, 'p2@example.com', 'salt-value')")
+      conn.execute("CREATE TABLE rac_pg_parent (id int, email text, salt text)")
+      conn.execute("CREATE TABLE rac_pg_child (extra text) INHERITS (rac_pg_parent)")
+      conn.execute("INSERT INTO rac_pg_parent VALUES (1, 'p1@example.com', 'salt-value')")
+      conn.execute("INSERT INTO rac_pg_child VALUES (11, 'p2@example.com', 'salt-value', 'x')")
+    end
+
+    after { conn.execute("DROP TABLE IF EXISTS rac_pg_parts, rac_pg_parent CASCADE") }
+
+    it "filters the secret column in place, with every partition read, with one pruned, sorted and limited" do
+      { "SELECT * FROM rac_pg_parts" => 2, "SELECT * FROM rac_pg_parts WHERE id < 5" => 1, "SELECT * FROM rac_pg_parts ORDER BY id LIMIT 5" => 2,
+        "SELECT x.* FROM rac_pg_parts x WHERE x.id < 15 ORDER BY 1 DESC" => 2, "SELECT * FROM (SELECT * FROM rac_pg_parts OFFSET 0) s" => 2,
+        "SELECT * FROM rac_pg_parent" => 2, "SELECT * FROM rac_pg_parent ORDER BY id LIMIT 5" => 2, "SELECT * FROM ONLY rac_pg_parent" => 1 }.each do |sql, rows|
+        response = run(sql)
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text].scan("[FILTERED]").size).to eq(rows), sql
+        expect(response.content.first[:text]).to include("p1@example.com"), sql
+        expect(response.content.first[:text]).not_to include("salt-value"), sql
+      end
+    end
+
+    it "still refuses what would carry the secret column past the redaction" do
+      refused([ "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parts) SELECT * FROM c", "SELECT * FROM rac_pg_parts EXCEPT SELECT 0, '', ''",
+                "SELECT (1, 'p1@example.com', 'salt-valud') < (SELECT * FROM rac_pg_parts LIMIT 1) AS o",
+                "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parent) SELECT * FROM c" ],
+              "Blocked: the query passes the secret column `salt` through")
+      refused([ "SELECT * FROM (SELECT * FROM rac_pg_parts) s (a, b, c)" ], "Blocked: a column-alias list")
+      refused([ "SELECT * FROM rac_pg_parts ORDER BY 3", "SELECT * FROM rac_pg_parent ORDER BY 3" ], "Blocked: the query's plan uses the secret column `salt`")
+      refused([ "SELECT row_to_json(p) FROM rac_pg_parts p", "SELECT p::text FROM rac_pg_parent p" ], "Blocked: the query serialises a whole row of")
+    end
+  end
+
   it "runs a subquery that reads no secret column of a table that holds one" do
     { "SELECT (SELECT count(*) FROM rac_pg_accounts) AS n" => "| 1 |", "SELECT (SELECT count(id) FROM rac_pg_accounts) AS n" => "| 1 |",
       "SELECT exists (SELECT 1 FROM rac_pg_accounts) AS n" => "| true |", "SELECT (SELECT max(id) FROM rac_pg_accounts) AS n" => "| 1 |",
@@ -265,7 +407,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
         end
 
         expect(response.error?).to be(true), sql
-        expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+        expect(response.content.first[:text]).to end_with("took the whole 1 second timeout, so the statement was not run.")
         expect(response.content.first[:text]).not_to include("salt-value", "token-value")
       end
     end
@@ -283,7 +425,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
         took = seconds { response = run(sql) }
 
         expect(response.error?).to be(true), sql
-        expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+        expect(response.content.first[:text]).to end_with("took the whole 1 second timeout, so the statement was not run.")
         expect(took).to be_between(0.9, 2.5), sql
       end
     end
