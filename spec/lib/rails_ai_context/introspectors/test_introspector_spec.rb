@@ -433,6 +433,23 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
+  describe "shared examples" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    it "lists one name defined in several support files in file order" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "support"))
+      (1..20).each do |i|
+        File.write(File.join(@root, "spec", "support", format("f%02d.rb", i)),
+                   %(shared_examples "#{format("z%02d", 21 - i)}" do\nend\nshared_context "signed in" do\nend\n))
+      end
+
+      shared = described_class.new(RailsAiContext::StaticApp.new(@root)).call[:shared_examples]
+
+      expect(shared.select { |s| s[:name] == "signed in" }.map { |s| s[:file] })
+        .to eq((1..20).map { |i| format("spec/support/f%02d.rb", i) })
+    end
+  end
+
   # Rails names the set in test/fixtures/admin/notes.yml `admin/notes`;
   # keyed by its basename it answered for a notes.yml the app does not have.
   describe "fixture names in a nested fixture directory" do

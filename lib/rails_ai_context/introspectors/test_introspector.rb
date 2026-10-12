@@ -427,7 +427,7 @@ module RailsAiContext
             end
           end
         end
-        shared.sort_by { |s| s[:name] }
+        shared.sort_by.with_index { |s, i| [ s[:name], i ] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_shared_examples")
       end
