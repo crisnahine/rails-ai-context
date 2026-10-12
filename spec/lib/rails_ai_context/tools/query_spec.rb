@@ -391,24 +391,39 @@ RSpec.describe RailsAiContext::Tools::Query do
         c.execute("INSERT INTO big WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2000) SELECT x FROM r")
       end
     end
-    let(:slow_sql) do
-      "SELECT count(*) AS n FROM big a, big b, (SELECT * FROM big LIMIT 100) c"
-    end
+    # Eight billion rows to count: it runs for hours, so nothing but the deadline's kill ends it.
+    # These examples read how the child ended and time nothing, since a busy machine wakes the parent late.
+    let(:slow_sql) { "SELECT count(*) AS n FROM big a, big b, big c" }
+    let(:reaped) { [] }
+    let(:killed) { Signal.list.fetch("KILL") }
 
-    before { allow(ActiveRecord::Base).to receive(:connection).and_return(conn) }
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(Process).to receive(:wait).and_wrap_original { |original, pid| original.call(pid).tap { reaped << $? } }
+    end
 
     after do
       QueryTimeoutSpecRecord.remove_connection
       FileUtils.rm_rf(dir)
     end
 
-    it "stops a long query at query_timeout with the timeout message" do
+    it "ends a query that would run for hours at query_timeout, by killing its process, and answers the timeout" do
       RailsAiContext.configuration.query_timeout = 1
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      text = described_class.call(sql: slow_sql).content.first[:text]
+      response = described_class.call(sql: slow_sql)
 
-      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 3
-      expect(text).to start_with("Query exceeded 1 second timeout")
+      expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+      expect(response.error?).to be(true)
+      expect(reaped.map(&:termsig)).to eq([ killed ])
+    end
+
+    it "decides the deadline once, before the child starts, and waits no longer than what is left of it" do
+      waits = []
+      allow(IO).to receive(:select).and_wrap_original { |original, *args| waits << args.last; original.call(*args) }
+
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
+        .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+      expect(waits).to all(be_between(0, 1))
+      expect(waits).to eq(waits.sort.reverse)
     end
 
     it "returns the same rows as the in-process connection" do
@@ -457,11 +472,8 @@ RSpec.describe RailsAiContext::Tools::Query do
       allow(Process).to receive(:wait).and_wrap_original { |m, pid| pids << pid; m.call(pid) }
       allow(IO).to receive(:select).and_raise(IOError, "stream closed")
 
-      took = elapsed do
-        expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 5) }.to raise_error(IOError)
-      end
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 5) }.to raise_error(IOError)
 
-      expect(took).to be < 3
       expect { Process.kill(0, pids.first) }.to raise_error(Errno::ESRCH)
     end
 
@@ -553,7 +565,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         allow(IO).to receive(:pipe).and_wrap_original do |m|
           pipe = m.call
           sleepers << Process.fork do
-            sleep 4
+            sleep 600
             exit!(0)
           end
           pipe
@@ -567,20 +579,22 @@ RSpec.describe RailsAiContext::Tools::Query do
         end
       end
 
-      it "returns a fast result without waiting for that process" do
-        result = nil
-        took = elapsed { result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums ORDER BY n", timeout: 5) }
-
-        expect(result.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
-        expect(took).to be < 2
+      def still_running?(pid)
+        Process.waitpid(pid, Process::WNOHANG).nil?
       end
 
-      it "still stops a slow query at the deadline" do
-        took = elapsed do
-          expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
-            .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
-        end
-        expect(took).to be < 2
+      it "returns a fast result while that process still holds the pipe" do
+        result = RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums ORDER BY n", timeout: 5)
+
+        expect(result.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
+        expect(still_running?(sleepers.last)).to be(true)
+      end
+
+      it "still ends a slow query at the deadline, while that process still holds the pipe" do
+        expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 1) }
+          .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+        expect(reaped.map(&:termsig)).to eq([ killed ])
+        expect(still_running?(sleepers.last)).to be(true)
       end
     end
 
@@ -596,16 +610,15 @@ RSpec.describe RailsAiContext::Tools::Query do
         pipe
       end
 
-      fast = Thread.new { elapsed { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 2) } }
+      fast = Thread.new { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT n FROM nums", timeout: 600) }
       sleep 0.1
-      slow = Thread.new do
-        RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 2)
-      rescue RailsAiContext::DatabaseFamily::TimedOut
-        nil
-      end
+      slow = Thread.new { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, slow_sql, timeout: 600) }
 
-      expect(fast.value).to be < 1.5
-      slow.join
+      expect(fast.value.rows).to eq([ [ 1 ], [ 2 ], [ 3 ] ])
+      expect(slow).to be_alive
+    ensure
+      slow&.kill
+      slow&.join
     end
   end
 
