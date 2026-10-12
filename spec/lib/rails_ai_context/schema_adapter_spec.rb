@@ -177,6 +177,14 @@ RSpec.describe RailsAiContext::SchemaAdapter do
         expect(described_class.label({ schema: { adapter: "PostGIS" } })).to eq("PostgreSQL")
       end
 
+      it "reads a connection on mysql2 or Trilogy as MySQL" do
+        expect([ "Mysql2", "Trilogy" ].map { |name| described_class.label({ schema: { adapter: name } }) }).to eq(%w[MySQL MySQL])
+      end
+
+      it "keeps a connection's name that is no family" do
+        expect(described_class.label({ schema: { adapter: "SQLServer" } })).to eq("SQLServer")
+      end
+
       it "leaves column types that point both ways to the gem list" do
         tables = { "a" => { columns: [ { name: "x", type: "jsonb" }, { name: "y", type: "mediumtext" } ] } }
         context = { schema: { adapter: "static_parse", tables: tables }, gems: two_gems }
