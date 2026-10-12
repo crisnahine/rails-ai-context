@@ -185,8 +185,23 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   describe "a timeout of zero or under a millisecond" do
     [ 0, 0.0004 ].each do |timeout|
       it "still bounds a PostgreSQL statement, at one millisecond (#{timeout})" do
-        conn = mysql_class.new(false)
-        conn.define_singleton_method(:execute) { |sql| statements << sql }
+        conn = Class.new do
+          attr_reader :statements
+
+          def initialize = @statements = []
+
+          def adapter_name = "PostgreSQL"
+
+          def execute(sql) = @statements << sql
+
+          def select_all(_sql) = ActiveRecord::Result.new(%w[x], [ [ 1 ] ])
+
+          def transaction
+            yield
+          rescue ActiveRecord::Rollback
+            nil
+          end
+        end.new
         described_class::POSTGRESQL.read_only(conn, "SELECT 1", timeout: timeout)
         expect(conn.statements).to include("SET LOCAL statement_timeout = '1'")
       end
@@ -203,12 +218,13 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
     it "times a SQLite statement out at once", if: Process.respond_to?(:fork) do
       Dir.mktmpdir do |dir|
-        path = File.join(dir, "bounded.sqlite3")
-        SQLite3::Database.new(path).close
-        conn = double("connection", pool: double(db_config: double(configuration_hash: {})))
-        allow(described_class::SqliteRuntime).to receive(:fork_path).and_return(path)
+        stub_const("RuntimeSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+        RuntimeSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "bounded.sqlite3"))
 
-        expect { described_class::SQLITE.read_only(conn, "SELECT 1", timeout: 0) }.to raise_error(described_class::TimedOut)
+        expect { described_class::SQLITE.read_only(RuntimeSpecRecord.connection, "SELECT 1", timeout: 0) }
+          .to raise_error(described_class::TimedOut)
+      ensure
+        RuntimeSpecRecord.remove_connection
       end
     end
   end
@@ -248,8 +264,33 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
 
     it "keeps one relation's described columns when another relation's column names cannot be read" do
-      expect(described_class::POSTGRESQL.column_sources(described_pg, "SELECT ...", plan: nil))
+      expect(described_class::POSTGRESQL.column_sources(described_pg, "SELECT ...", plan: { "Node Type" => "Result" }))
         .to eq([ [ 0, nil, "accounts" ], [ 1, "api_token", "tokens" ] ])
+    end
+
+    it "names no PostgreSQL source without the statement's plan" do
+      expect { described_class::POSTGRESQL.column_sources(untouchable, "SELECT 1", plan: nil) }
+        .to raise_error(ArgumentError, /plan/)
+    end
+  end
+
+  describe "PostgreSQL planning" do
+    let(:conn) { double("connection") }
+
+    it "raises a timeout and an SQL error" do
+      allow(described_class::PostgresqlRuntime).to receive(:read_only).and_raise(described_class::TimedOut, "stopped")
+      expect { described_class::POSTGRESQL.plan(conn, "SELECT 1", timeout: 2) }.to raise_error(described_class::TimedOut)
+
+      allow(described_class::PostgresqlRuntime).to receive(:read_only).and_raise(ActiveRecord::StatementInvalid, "syntax")
+      expect { described_class::POSTGRESQL.plan(conn, "SELECT nope", timeout: 2) }.to raise_error(ActiveRecord::StatementInvalid)
+    end
+
+    it "answers no plan for text that is not one" do
+      [ "not json", "{}", "[]" ].each do |text|
+        allow(described_class::PostgresqlRuntime).to receive(:read_only)
+          .and_return(described_class::Rows.new(%w[plan], [ [ text ] ], false))
+        expect(described_class::POSTGRESQL.plan(conn, "SELECT 1", timeout: 2)).to be_nil, text
+      end
     end
   end
 

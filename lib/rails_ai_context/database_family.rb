@@ -45,7 +45,8 @@ module RailsAiContext
         runtime.explain(connection, sql, timeout)
       end
 
-      # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when planning fails
+      # @raise [TimedOut, ActiveRecord::StatementInvalid] when PostgreSQL cannot plan the statement
+      # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when the answer is no plan
       def plan(connection, sql, timeout:)
         runtime.plan(connection, sql, timeout)
       end

@@ -280,9 +280,8 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(runs?("SELECT $t$ api_key $t$ AS v", :postgresql)).to be(true)
       end
 
-      it "refuses it when no plan could be obtained" do
-        allow(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to receive(:plan).and_raise(ActiveRecord::StatementInvalid, "boom")
-        expect(refusal(sql, :postgresql)).to include("the plan could not be obtained")
+      it "refuses it in a statement that has no plan" do
+        expect(refusal("SHOW 'api_key'", :postgresql)).to include("the plan could not be obtained")
       end
 
       it "still refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
@@ -397,6 +396,48 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "answers the plan with the verdict" do
       expect(check("SELECT 1 AS x", :postgresql).plan).to eq(plan)
+    end
+
+    describe "a plan that cannot be read" do
+      let(:runtime) { RailsAiContext::DatabaseFamily::PostgresqlRuntime }
+
+      it "refuses the statement when planning answers no plan" do
+        allow(runtime).to receive(:plan).and_return(nil)
+        [ "SELECT * FROM users", "WITH u AS (SELECT * FROM users) SELECT * FROM u", "EXPLAIN ANALYZE SELECT * FROM users" ].each do |sql|
+          expect(refusal(sql, :postgresql)).to include("its plan could not be read"), sql
+        end
+      end
+
+      it "raises planning's timeout and planning's SQL error for the caller to answer" do
+        allow(runtime).to receive(:plan).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "stopped")
+        expect { check("SELECT row_to_json(u) FROM users u", :postgresql) }.to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+
+        allow(runtime).to receive(:plan).and_raise(ActiveRecord::StatementInvalid, "boom")
+        expect { check("SELECT nope FROM users", :postgresql) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+
+      it "raises an error from a plan check" do
+        allow(connection).to receive(:select_values).and_raise(ActiveRecord::StatementInvalid, "pg_proc unreadable")
+        allow(runtime).to receive(:plan).and_return({ "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] })
+        expect { check("SELECT nextval('s')", :postgresql) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+
+      it "plans whatever a leading EXPLAIN would run, in either spelling of its options" do
+        [ "EXPLAIN VALUES (1)", "EXPLAIN (ANALYZE, VERBOSE) VALUES (1)", "EXPLAIN ANALYZE VERBOSE VALUES (1)" ].each { |sql| check(sql, :postgresql) }
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", 5).exactly(3).times
+
+        check("EXPLAIN (ANALYZE) (SELECT 1)", :postgresql)
+        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", 5)
+      end
+
+      # SHOW reads a setting and PostgreSQL has no DESCRIBE, so neither has a plan to read.
+      it "runs SHOW, DESCRIBE and DESC with no plan" do
+        [ "SHOW server_version", "DESCRIBE users", "DESC users" ].each do |sql|
+          verdict = check(sql, :postgresql)
+          expect([ verdict.refused?, verdict.plan ]).to eq([ false, nil ]), sql
+        end
+        expect(runtime).not_to have_received(:plan)
+      end
     end
   end
 end

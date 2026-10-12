@@ -128,6 +128,11 @@ module RailsAiContext
 
     PASSTHROUGH_OUTPUT = /\A\(?\s*(?:[A-Za-z_]\w*\.)?[A-Za-z_]\w*\s*\)?\z/
 
+    # SHOW reads a setting and PostgreSQL has no DESCRIBE, so these have no plan.
+    # Every other statement is planned, as is whatever a leading EXPLAIN would run.
+    NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
+    EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
+
     # @param family [DatabaseFamily::Family] decides the lexing and whether the plan checks run
     # @param secrets [SecretColumns]
     # @param connection the connection the statement runs on, for the plan checks
@@ -150,7 +155,13 @@ module RailsAiContext
       end
 
       text = comment_free(sql)
-      plan = plan_of(text)
+      planned = @postgres && !text.match?(NO_PLAN)
+      plan = @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: @timeout) if planned
+      if planned && plan.nil?
+        return refuse("Blocked: the query is not run because its plan could not be read. On PostgreSQL " \
+          "the plan shows which columns a query returns, so no query runs without one.")
+      end
+
       refusal = plan_refusal(plan) || unvouched_literal_refusal(text, plan)
       refusal ? refuse(refusal) : Verdict.new(text, nil, plan)
     end
@@ -328,20 +339,6 @@ module RailsAiContext
       nil
     end
 
-    # Planning only, for the statement a leading EXPLAIN would run. Nil off
-    # PostgreSQL, for a statement with no plan, or when planning fails (the
-    # executor then raises the real error).
-    def plan_of(text)
-      return nil unless @postgres
-
-      target = text.sub(/\A\s*EXPLAIN\s+(?:\([^)]*\)\s*|ANALYZE\s+|VERBOSE\s+)*/i, "")
-      return nil unless target.match?(/\A\s*(SELECT|WITH)\b/i)
-
-      @family.plan(@connection, target, timeout: @timeout)
-    rescue StandardError
-      nil
-    end
-
     def plan_refusal(top)
       return nil unless top
 
@@ -374,8 +371,6 @@ module RailsAiContext
           "stop; only those known to just read state (sizes, lock status, recovery and WAL " \
           "position, random values) are allowed."
       end
-    rescue StandardError
-      nil
     end
 
     # A secret name that passed the text check only because it sat inside a
