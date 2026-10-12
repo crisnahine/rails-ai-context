@@ -16,7 +16,7 @@ RSpec.describe "the database argument" do
   before do
     RailsAiContext::Tools::Query.reset_cache!
     RailsAiContext.configuration.query_allowed_columns = []
-    path = File.join(@dir, "queue.sqlite3")
+    @path = path = File.join(@dir, "queue.sqlite3")
     db = SQLite3::Database.new(path)
     db.execute("CREATE TABLE jobs (name text, api_key text)")
     db.execute("INSERT INTO jobs VALUES ('mail', 'k-123')")
@@ -38,6 +38,11 @@ RSpec.describe "the database argument" do
 
   def text(response)
     response.content.first[:text]
+  end
+
+  def missing_primary
+    config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", adapter: "sqlite3", database: File.join(@dir, "primary.sqlite3"))
+    allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(config)
   end
 
   describe "rails_query" do
@@ -65,6 +70,28 @@ RSpec.describe "the database argument" do
 
       expect(response.error?).to be(true)
       expect(text(response)).to include("The cache database is configured in production, not in #{Rails.env}")
+    end
+
+    it "refuses a named SQLite database whose file is not there, by name, and creates nothing" do
+      File.delete(@path)
+
+      response = query(sql: "SELECT 1", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The queue database does not exist yet", @path, "db:prepare")
+      expect(text(response)).not_to include("Database unavailable")
+      expect(File.exist?(@path)).to be(false)
+    end
+
+    it "refuses the primary the same way with no database named, without connecting" do
+      missing_primary
+      expect(ActiveRecord::Base).not_to receive(:connection)
+
+      response = query(sql: "SELECT 1")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The primary database does not exist yet", "db:prepare")
+      expect(File.exist?(File.join(@dir, "primary.sqlite3"))).to be(false)
     end
 
     it "names the database that holds a table the query did not find" do
@@ -100,6 +127,34 @@ RSpec.describe "the database argument" do
 
       expect(answer).to include("**Pending migrations:** 1 in queue", "- 20240101000000 CreateJobs (queue)")
       expect(answer).not_to include("all up to date")
+    end
+
+    it "says the primary's SQLite file is not there in the database section, creates nothing, and still answers the other sections" do
+      missing_primary
+
+      response = runtime
+      answer = text(response)
+
+      expect(response.error?).to be(false)
+      expect(answer).to include("## Database", "The primary database does not exist yet", "## Cache")
+      expect(File.exist?(File.join(@dir, "primary.sqlite3"))).to be(false)
+    end
+
+    it "refuses a name another environment configures, whatever the section" do
+      %w[cache jobs connections database].each do |section|
+        response = runtime(section: section, database: "cache")
+
+        expect(response.error?).to be(true), section
+        expect(text(response)).to include("The cache database is configured in production, not in #{Rails.env}")
+      end
+    end
+
+    it "says a section that does not read the database argument left it unused" do
+      answer = text(runtime(section: "cache", database: "queue"))
+
+      expect(answer).to include("## Cache", "_The cache section does not read `database`, so queue was not used._")
+      expect(text(runtime(section: "database", database: "queue"))).not_to include("does not read `database`")
+      expect(text(runtime(database: "queue"))).not_to include("does not read `database`")
     end
 
     it "answers a name the app does not have with the names it has" do

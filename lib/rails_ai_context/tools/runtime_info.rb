@@ -36,7 +36,7 @@ module RailsAiContext
         if (refusal = static_tier_refusal("Live runtime state"))
           return refusal
         end
-        AppDatabases.for(rails_app.root).fetch(database) unless database.to_s.empty?
+        AppDatabases.for(rails_app.root).fetch(database).reachable! unless database.to_s.empty?
 
         lines = [ "# Runtime Info", "" ]
 
@@ -54,6 +54,9 @@ module RailsAiContext
 
         if lines.size <= 2
           lines << "_No runtime data available. Ensure the app has a database connection._"
+        end
+        if section && section != "database" && !database.to_s.empty?
+          lines << "_The #{section} section does not read `database`, so #{database} was not used._"
         end
 
         text_response(lines.join("\n"))
@@ -102,6 +105,8 @@ module RailsAiContext
           return [ "## Database", "", "_ActiveRecord not available._", "" ] unless defined?(ActiveRecord::Base)
 
           AppDatabases.lease(rails_app.root, database) { |conn| database_lines(conn, detail, database) }
+        rescue AppDatabases::Missing => e
+          [ "## Database", "", "_Not available: #{e.message}_", "" ]
         rescue AppDatabases::Error
           raise
         rescue => e

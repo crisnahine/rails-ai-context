@@ -3,17 +3,16 @@
 require "did_you_mean"
 
 module RailsAiContext
-  # Every database the app has, listed once per run: the primary, the rest of the
-  # running environment's, those only another environment configures, then dumps
-  # no environment claims. Both tiers feed one builder, so they list the same.
+  # Every database the app has, listed once per run: the primary, the rest of the running environment's,
+  # those only another environment configures, then dumps no environment claims. Both tiers list the same.
   module AppDatabases
     class Error < RailsAiContext::Error; end
     class UnknownDatabase < Error; end
     class NotHere < Error; end
     class NotBooted < Error; end
+    class Missing < Error; end
 
-    # What a pool leased for another database belongs to: Rails names a pool by
-    # its owner, and an owner that is no primary class is not the app's.
+    # The owner of a pool leased for another database. Rails names a pool by its owner.
     class LeaseOwner
       def self.primary_class?
         false
@@ -31,15 +30,17 @@ module RailsAiContext
         with_pool { |pool| pool.with_connection(&block) }
       end
 
-      # The primary is the app's own pool. Any other database gets a handler of
-      # its own per lease, so the app's pools are never touched and two
-      # concurrent leases never share a pool.
-      def with_pool
+      # Raises unless this process can lease the database. Connects to nothing.
+      def reachable!
         raise NotHere, not_here_message unless here
         raise NotBooted, "The #{name} database needs the booted app to connect, and this is the static tier." if RailsAiContext.static_tier? || !config.respond_to?(:configuration_hash)
+      end
 
-        missing = DatabaseFile.missing(primary ? ActiveRecord::Base.connection_db_config : config)
-        raise missing if missing
+      # The primary is the app's own pool. Any other database gets a handler of its own
+      # per lease, so the app's pools are never touched and no two leases share a pool.
+      def with_pool
+        reachable!
+        AppDatabases.present!(name, primary ? ActiveRecord::Base.connection_db_config : config)
         return yield(ActiveRecord::Base.connection_pool) if primary
 
         handler = ActiveRecord::ConnectionAdapters::ConnectionHandler.new
@@ -129,11 +130,21 @@ module RailsAiContext
       environments.to_sentence(words_connector: ", ", two_words_connector: " and ", last_word_connector: " and ")
     end
 
-    # A connection to the named database for the block. No name is the app's own pool, as it always was.
+    # A connection to the named database for the block. No name is the app's own connection.
     def lease(root, name, &block)
-      return yield(ActiveRecord::Base.connection) if name.to_s.empty?
+      return self.for(root).fetch(name).with_connection(&block) unless name.to_s.empty?
 
-      self.for(root).fetch(name).with_connection(&block)
+      own = ActiveRecord::Base.connection_db_config
+      present!(own.name, own)
+      yield ActiveRecord::Base.connection
+    end
+
+    # Connecting to a SQLite file that is not there would create it, so this raises first.
+    def present!(name, db_config)
+      return unless DatabaseFile.missing(db_config)
+
+      raise Missing, "The #{name} database does not exist yet: its SQLite file #{db_config.database} is not there, " \
+        "and nothing was created. Run `bin/rails db:prepare` to create it."
     end
 
     def for(root)
@@ -165,7 +176,7 @@ module RailsAiContext
           next if listed.any? { |db| db.name == name }
 
           is_primary = listed.none?(&:primary) && name == other_primary
-          next unless is_primary || (name != other_primary && tasks?(settings_of(value)))
+          next if name == other_primary && !is_primary
 
           listed << database(root, env_name, name, value, here: false, primary: is_primary, environments: configured.call(name))
         end
