@@ -776,7 +776,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
         expect(filtered).not_to include("→ create")
         expect(whole).to include("# Routes (2 routes, 1 dynamic construct not expanded)")
         expect(versioned).to eq("No routes for 'api/v1/posts'. Controllers: posts. " \
-                                "1 dynamic construct not expanded, so a route for it may be missing from this table.")
+                                "1 dynamic construct not expanded, so a route for this controller may be missing from this table.")
       end
     end
   end
