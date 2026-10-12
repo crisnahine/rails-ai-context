@@ -205,7 +205,7 @@ module RailsAiContext
         pairs
       end
 
-      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :concerns_name, :class_declarations, :lookup, :qualified
+      private_class_method :scan, :scan_dir, :ruby_files, :walk_dir, :within?, :extra_model_candidates, :extra_model_declarations, :class_declarations, :lookup, :qualified
 
       # `kind: :models` reads model_paths: what model_details lists, not only app/models.
       def each(root, kind:, skip_concerns: true, base_model: nil, &block)

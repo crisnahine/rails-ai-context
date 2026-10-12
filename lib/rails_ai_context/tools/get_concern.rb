@@ -230,8 +230,7 @@ module RailsAiContext
             lines << "" << "_No model or concern in app/models wires this validator._"
           end
 
-          hint = next_hint(pointer("rails_search_code", %(pattern:"#{name.demodulize.camelize}"), "for every use"))
-          lines << "" << hint if hint
+          add_next_hint(lines, pointer("rails_search_code", %(pattern:"#{name.demodulize.camelize}"), "for every use"))
           return text_response(lines.join("\n"))
         end
 

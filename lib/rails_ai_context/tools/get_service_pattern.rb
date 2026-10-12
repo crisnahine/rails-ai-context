@@ -187,8 +187,7 @@ module RailsAiContext
           lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}#{"; run #{search} for the rest" if search}._"
         end
 
-        hint = next_hint(pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
-        lines << "" << hint if hint
+        add_next_hint(lines, pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
 
         text_response(lines.join("\n"))
       end
@@ -230,7 +229,7 @@ module RailsAiContext
         records.map { |r| r[:entryless] && mixins.include?(r[:class_name]) ? r.merge(left_out: :mixin) : r }
       end
 
-      LEFT_OUT_NAMED = 5
+      LEFT_OUT_NAMES_PER_KIND = 5
       LEFT_OUT_KINDS = {
         base: [ "base class", " (named above)" ],
         concern: [ "concern", "" ],
@@ -250,14 +249,15 @@ module RailsAiContext
           next if of_kind.empty?
 
           names = of_kind.map { |r| r[:class_name] || constant_for(r[:path], service_dirs) }.sort
-          more = names.size - LEFT_OUT_NAMED
-          named = kind == :base ? "" : " (#{names.first(LEFT_OUT_NAMED).join(', ')}#{" and #{more} more" if more.positive?})"
+          more = names.size - LEFT_OUT_NAMES_PER_KIND
+          named = kind == :base ? "" : " (#{names.first(LEFT_OUT_NAMES_PER_KIND).join(', ')}#{" and #{more} more" if more.positive?})"
           "#{count_phrase(of_kind.size, noun)}#{suffix}#{named}"
         end
-        "_#{left_out.size} of the #{count_phrase(records.size, "Ruby file")} under the service directories are left out: #{kinds.join(', ')}._"
+        "_#{left_out.size} of the #{count_phrase(records.size, "Ruby file")} under the service directories " \
+          "#{left_out.size == 1 ? 'is' : 'are'} left out: #{kinds.join(', ')}._"
       end
 
-      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup, concerns = [])
+      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup, concerns)
         records = concerns + classified(service_files, service_dirs, root, lookup).map { |r| r[:source] || r[:left_out] ? r : r.merge(left_out: :unread) }
         read = records.reject { |record| record[:left_out] }.map do |record|
           [ record, *class_interface(record[:source], constant_for(record[:path], service_dirs)) ]

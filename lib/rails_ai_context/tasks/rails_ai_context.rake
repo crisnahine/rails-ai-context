@@ -235,8 +235,7 @@ module RailsAiContext::RakeTasks
       json_mode = ENV["JSON"] == "1"
 
       if params.delete(:help) || ARGV.include?("--help")
-        runner = RailsAiContext::CLI::ToolRunner.new(name, {})
-        puts RailsAiContext::CLI::ToolRunner.tool_help(runner.tool_class)
+        puts RailsAiContext::CLI::ToolRunner.new(name, {}).help
         next
       end
 

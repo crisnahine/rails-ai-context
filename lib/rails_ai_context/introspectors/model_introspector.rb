@@ -224,7 +224,7 @@ module RailsAiContext
 
             next if mixin_path?(record.path_name.underscore, source)
 
-            path_name = concerns_root_name(record.path_name)
+            path_name = SourceScan.concerns_name(record.path_name, source)
             declarations = DeclaredConstant.declarations(source, path_name: path_name)
             declaration = DeclaredConstant.declaration_for(declarations, path_name)
             class_name = declaration&.name || path_name
@@ -246,7 +246,7 @@ module RailsAiContext
           rescue => e
             # The file is known here whatever failed, and a consumer with none
             # derives app/models/<name>.rb, which a pack model does not have.
-            found[concerns_root_name(record.path_name)] = { error: e.message, file: record.file }.compact
+            found[SourceScan.concerns_name(record.path_name, source.to_s)] = { error: e.message, file: record.file }.compact
           end
         end
       end
@@ -556,13 +556,7 @@ module RailsAiContext
       def mixin_path?(relative, source)
         return false unless relative.split("/").include?("concerns")
 
-        !DeclaredConstant.declares_class?(source, path_name: concerns_root_name(relative.camelize))
-      end
-
-      # `concerns/` directly under app/models is an autoload root of its own,
-      # so its files carry no `Concerns::` in their constants.
-      def concerns_root_name(path_name)
-        path_name.delete_prefix("Concerns::")
+        !DeclaredConstant.declares_class?(source, path_name: SourceScan.concerns_name(relative.camelize, source))
       end
 
       # A class whose file is inside an installed gem (PaperTrail::Version) is
@@ -599,14 +593,17 @@ module RailsAiContext
 
         known = models.map(&:name).to_set
         @outside_model_dirs = Set.new
-        # Concerns stay in: a nested concerns directory is a namespace, so a
-        # class declared under one is a model and constantize sorts the mixins
-        # out. Under the top-level one only a file that declares a class is read on.
+        # A nested concerns directory is a namespace, so a class under one is a model;
+        # under the top-level one only a file that declares a class is read on.
         SourceScan.model_paths(app.root, base_model: model_base_check).each do |record|
-          path_name = concerns_root_name(record.path_name)
+          path_name = record.path_name
+          if path_name.start_with?("Concerns::")
+            source = model_source(record.path).to_s
+            path_name = SourceScan.concerns_name(path_name, source)
+          end
           next if known.include?(path_name)
           next if config.excluded_models.include?(path_name)
-          next if path_name != record.path_name && mixin_path?(record.path_name.underscore, model_source(record.path).to_s)
+          next if path_name != record.path_name && mixin_path?(record.path_name.underscore, source)
 
           # The path does not name the class: an app inflection only changes
           # case, so activitypub/activity.rb camelizes to a constant the app
@@ -2247,17 +2244,17 @@ module RailsAiContext
               source = model_source(path)
               next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
 
-              relative = relative.delete_prefix("concerns/")
+              path_name = SourceScan.concerns_name(relative.camelize, source)
 
               # The static tier never loads the app's inflector, so camelizing alone
               # would invent `Activitypub::` for an app that declares `ActivityPub::`.
-              class_name = DeclaredConstant.resolve(source, relative.camelize)
+              class_name = DeclaredConstant.resolve(source, path_name)
               next if found.key?(class_name) || config.excluded_models.include?(class_name)
 
-              declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source, path_name: relative.camelize), class_name)
+              declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source, path_name: path_name), class_name)
               found[class_name] = { path: path, source: source, superclass: declaration&.superclass, nesting: declaration&.nesting }
             rescue => e
-              found[relative.camelize] ||= { error: e.message }
+              found[path_name || relative.camelize] ||= { error: e.message }
             end
           end
         end

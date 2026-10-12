@@ -3,16 +3,16 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::CLI::ToolRunner do
-  describe ".available_tools" do
-    it "returns all tools from Server::TOOLS" do
-      tools = described_class.available_tools
+  describe "the tools it lists" do
+    it "returns all tools the server serves" do
+      tools = RailsAiContext::Server.exposed_tools
       expect(tools.size).to be >= 24
       expect(tools).to include(RailsAiContext::Tools::GetSchema)
     end
 
     it "respects skip_tools config" do
       allow(RailsAiContext.configuration).to receive(:skip_tools).and_return(%w[rails_security_scan])
-      tools = described_class.available_tools
+      tools = RailsAiContext::Server.exposed_tools
       tool_names = tools.map(&:tool_name)
       expect(tool_names).not_to include("rails_security_scan")
     end
@@ -22,7 +22,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     # for - and it used to skip nothing at all, silently.
     it "respects skip_tools written as symbols" do
       RailsAiContext.configuration.skip_tools = %i[rails_security_scan]
-      tool_names = described_class.available_tools.map(&:tool_name)
+      tool_names = RailsAiContext::Server.exposed_tools.map(&:tool_name)
       expect(tool_names).not_to include("rails_security_scan")
     ensure
       RailsAiContext.configuration.skip_tools = []
@@ -32,13 +32,13 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
   # Loading every tool to find one is a tenth of a one-tool CLI call.
   describe "resolving a name the tool classes spell" do
     it "loads no tool list for a short, medium or full name" do
-      allow(described_class).to receive(:available_tools).and_call_original
+      allow(RailsAiContext::Server).to receive(:exposed_tools).and_call_original
 
       %w[schema get_schema rails_get_schema search_code rails_validate].each do |name|
         expect(described_class.new(name, []).send(:tool_class).tool_name).to start_with("rails_")
       end
 
-      expect(described_class).not_to have_received(:available_tools)
+      expect(RailsAiContext::Server).not_to have_received(:exposed_tools)
     end
 
     # "Unknown tool" sent the reader looking for a tool the gem has.
@@ -52,6 +52,13 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
 
     it "suggests the closest name for a miss" do
       expect { described_class.new("shema", []) }.to raise_error(/Did you mean 'schema'/)
+    end
+
+    it "suggests a retired name for a miss near one, while its section is on" do
+      expect { described_class.new("gemz", []) }.to raise_error(/\AUnknown tool 'gemz'\. Did you mean 'gems'\?/)
+
+      allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_gems" ])
+      expect { described_class.new("gemz", []) }.to raise_error { |error| expect(error.message).not_to include("'gems'") }
     end
   end
 
@@ -103,6 +110,37 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(described_class.new("env_config", [ "--environment", "production" ]).run).to start_with("#{env_config}\n\n_rails_get_env_config is now")
       expect(app).not_to include("does not read")
     end
+
+    it "hands it over whatever the capitalisation of the section's name" do
+      env_config = described_class.new("config", [ "--section", "env_config" ], environment: "production").run
+
+      expect(env_config).to start_with("Environment 'production' not found.")
+      expect(described_class.new("config", [ "--section", "ENV_CONFIG" ], environment: "production").run).to eq(env_config)
+    end
+
+    it "suggests a flag the old name takes for a word that is no flag" do
+      expect { described_class.new("gems", [ "auth" ]).run }.to raise_error(described_class::InvalidArgumentError) { |error|
+        expect(error.message).to eq(
+          "Unexpected argument:\n  'auth' is not a flag - did you mean '--category auth'?\nValid params: category, offset, limit"
+        )
+      }
+    end
+
+    it "gives an old name its own help: the section it runs and that section's parameters" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+      help = described_class.new("gems", []).help.lines.map(&:chomp)
+
+      expect(help.first).to eq("rails_get_gems - runs the `gems` section of rails_get_config (notable gems by category).")
+      expect(help).to include("  rails-ai-context tool gems --category VALUE --offset VALUE --limit VALUE")
+      expect(help.grep(/\A  --/).map { |line| line.split.first }).to eq(%w[--category --offset --limit])
+    end
+
+    it "gives rails_get_config the help of every section that is on" do
+      help = described_class.new("config", []).help
+
+      expect(help).to start_with("rails_get_config - Get the app's configuration")
+      expect(help).to include("--section", "--locale", "--category")
+    end
   end
 
   # The MCP server keeps the built-in when a custom tool claims its name and
@@ -116,13 +154,12 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
 
     it "resolves to the built-in, as the MCP server serves it" do
       expect(described_class.new("schema", []).tool_class).to eq(RailsAiContext::Tools::GetSchema)
-      expect(described_class.available_tools.find { |t| t.tool_name == "rails_get_schema" })
+      expect(RailsAiContext::Server.exposed_tools.find { |t| t.tool_name == "rails_get_schema" })
         .to eq(RailsAiContext::Tools::GetSchema)
     end
 
     it "lists the name once, as tools/list does" do
-      expect(described_class.available_tools).to eq(RailsAiContext::Server.exposed_tools)
-      expect(described_class.available_tools.count { |t| t.tool_name == "rails_get_schema" }).to eq(1)
+      expect(RailsAiContext::Server.exposed_tools.count { |t| t.tool_name == "rails_get_schema" }).to eq(1)
       expect(described_class.tool_list.scan(/^  schema /).size).to eq(1)
     end
 
@@ -130,7 +167,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_schema" ])
 
       expect(described_class.new("schema", []).tool_class).to eq(custom)
-      expect(described_class.available_tools).to include(custom)
+      expect(RailsAiContext::Server.exposed_tools).to include(custom)
     end
   end
 
@@ -538,26 +575,31 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(runner.error).to eq(false)
     end
 
-    # `--limit abc` silently became 0, so the tool answered a question nobody
-    # asked. An out-of-type value is warned about like an invalid enum.
-    it "warns about a non-numeric integer value and falls back to the default" do
-      runner = described_class.new("search_code", [ "--pattern", "def", "--limit", "abc" ])
-      expect { runner.run }
-        .to output(/not a valid value for limit.*integer/i).to_stderr
+    # `--limit abc` silently became 0, and then the default: either way the
+    # tool answered a question nobody asked, at exit 0.
+    it "refuses a value of another type than the parameter's, naming the type, without running the tool" do
+      expect(RailsAiContext::Tools::SearchCode).not_to receive(:call)
+
+      [ [ "--pattern", "def", "--limit", "abc" ], { pattern: "def", limit: "abc" } ].each do |args|
+        runner = described_class.new("search_code", args)
+        answer = nil
+        expect { answer = runner.run }.not_to output.to_stderr
+        expect(answer).to start_with("**Error:** `abc` is not a valid `limit`. Valid: an integer")
+        expect(runner.error).to eq(true)
+      end
+    end
+
+    it "refuses a word that is no boolean for a boolean parameter" do
+      runner = described_class.new("routes", [ "--app-only=maybe" ])
+
+      expect(runner.run).to start_with("**Error:** `maybe` is not a valid `app_only`. Valid: true or false")
+      expect(runner.error).to eq(true)
     end
 
     it "names the valid levels when onboard is asked for the retired quick level" do
       runner = described_class.new("onboard", [ "--detail", "quick" ])
       expect { runner.run }
         .to output(/'quick' is not a valid value for detail\. Valid: summary, standard, full\. Using default\./).to_stderr
-    end
-
-    it "drops the non-numeric integer rather than coercing it to zero" do
-      runner = described_class.new("search_code", [ "--pattern", "def", "--limit", "abc" ])
-      allow($stderr).to receive(:puts)
-      kwargs = runner.send(:build_kwargs)
-      runner.send(:validate_kwargs!, kwargs, runner.send(:tool_schema))
-      expect(kwargs).not_to have_key(:limit)
     end
 
     it "keeps a numeric integer value" do

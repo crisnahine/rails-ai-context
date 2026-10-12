@@ -86,12 +86,85 @@ RSpec.describe "a server's check of the app's files at each call" do
       expect(base).to have_received(:reset_all_caches!).once
     end
 
-    it "asks nothing for a tool another tool calls" do
-      File.write(model, "class Post\n  has_many :comments\nend\n")
+    it "checks once for a call that answers by calling other tools" do
+      snapshot = base::FILE_CHECK[:snapshot]
+      allow(snapshot).to receive(:changed?).and_call_original
 
-      RailsAiContext::RunCache.around { base.refresh_if_files_changed! }
+      RailsAiContext::Tools::GetContext.call(model: "Post")
 
-      expect(base).not_to have_received(:reset_all_caches!)
+      expect(snapshot).to have_received(:changed?).once
+    end
+
+    it "checks for a call made inside a run, and drops what the run read before the edit" do
+      allow(RailsAiContext).to receive(:introspect).and_return({ app_name: "Before" }, { app_name: "After" })
+
+      RailsAiContext::RunCache.around do
+        first = RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name]
+        File.write(model, "class Post\n  has_many :comments\nend\n")
+        RailsAiContext::Tools::GetConventions.call
+
+        expect([ first, RailsAiContext::Tools::GetConventions.send(:cached_context)[:app_name] ]).to eq(%w[Before After])
+      end
+    end
+
+    context "through the built server's tools/call" do
+      let(:server) { RailsAiContext::Server.new(Rails.application, transport: :stdio).build }
+      let(:snapshot) { base::FILE_CHECK[:snapshot] }
+
+      def answer(name = "rails_get_conventions", arguments = {})
+        call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }
+        server.handle(call).dig(:result, :content, 0, :text)
+      end
+
+      def introspect_as(*patterns)
+        contexts = patterns.map { |pattern| { conventions: { patterns: [ pattern ] } } }
+        allow(RailsAiContext).to receive(:introspect).and_return(*contexts)
+      end
+
+      it "answers the second of two calls from the files as edited between them" do
+        introspect_as("before_edit", "after_edit")
+
+        first = answer
+        File.write(model, "class Post\n  has_many :comments\nend\n")
+        second = answer
+
+        expect(first).to include("Before edit")
+        expect(second).to include("After edit")
+        expect(second).not_to include("Before edit")
+        expect(RailsAiContext::CodeReloader).to have_received(:reload!).once
+      end
+
+      it "ends the answer after an edit with the stale code note when the app cannot reload" do
+        introspect_as("before_edit", "after_edit")
+        allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
+        allow(RailsAiContext::CodeReloader).to receive(:changed_code).and_return([ "app/models/post.rb" ])
+
+        first = answer
+        File.write(model, "class Post\n  has_many :comments\nend\n")
+
+        expect(first).not_to include("App code changed")
+        expect(answer).to include("After edit", "App code changed since this server booted (app/models/post.rb)")
+      end
+
+      it "checks once for a tool that calls other tools, and for a retired tool name" do
+        allow(snapshot).to receive(:changed?).and_call_original
+
+        answer("rails_get_context", { model: "Post" })
+        answer("rails_get_gems")
+
+        expect(snapshot).to have_received(:changed?).twice
+      end
+
+      it "keeps the custom tools the server resolved, warning of none again" do
+        saved = RailsAiContext.configuration.custom_tools
+        RailsAiContext.configuration.custom_tools = [ "NoSuchApp::Tool" ]
+        expect { server }.to output(/Skipping custom_tool/).to_stderr
+        File.write(model, "class Post\n  has_many :comments\nend\n")
+
+        expect { answer("rails_get_context", { model: "Post" }) }.not_to output(/Skipping custom_tool/).to_stderr
+      ensure
+        RailsAiContext.configuration.custom_tools = saved
+      end
     end
 
     context "with calls running at once, as over HTTP" do

@@ -609,13 +609,15 @@ module RailsAiContext
         end
       end
 
+      NO_TABLES = "declares no tables"
+
       # A dump too large to read, or holding no tables, keeps an entry that says so.
       def read_secondary_database_dumps
         unread = {}
         dumps = secondary_dump_files.each_with_object({}) do |(name, format, path), found|
           parsed = parse_dump(format, path)
           if parsed[:tables].blank?
-            unread[name] = [ path, parsed[:error]&.delete_prefix("#{relative_dump_path(path)} ") || "declares no tables" ]
+            unread[name] = [ path, parsed[:error]&.delete_prefix("#{relative_dump_path(path)} ") || NO_TABLES ]
             next
           end
 
@@ -625,7 +627,7 @@ module RailsAiContext
         replay_secondary_migrations(dumps, unread)
         unread.each do |name, (path, state)|
           dumps[name] ||= { tables: {}, total_tables: 0, note: "#{relative_dump_path(path)} #{state}, so its tables are not listed" }
-                          .merge(database_files(path, migrate_dir_for_dump(path)))
+                          .merge(database_files(path, migrate_dir_for_dump(path)), state == NO_TABLES ? {} : { unread: true })
         end
         names = app_databases.names
         dumps.sort_by { |name, _| names.index(name) || names.size }.to_h
