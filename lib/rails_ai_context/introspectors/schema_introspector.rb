@@ -683,18 +683,10 @@ module RailsAiContext
         columns = index[:columns]
         return nil if columns.empty?
 
-        options = index[:options]
-        entry = {
-          name:    options[:name]&.to_s,
-          columns: columns,
-          unique:  options[:unique] == true,
-          where:   (options[:where] if options[:where].is_a?(String))
-        }
+        entry = SchemaConventions.index_entry(index[:options][:name]&.to_s, columns, index[:options])
         # An expression index (e.g. "lower(email)") names no plain column.
         entry[:expression] = true if columns.size == 1 && !columns.first.match?(/\A\w+\z/)
-        detail = options.slice(:using, :type, :include, :order, :opclass, :length, :nulls_not_distinct)
-                        .reject { |_, value| value == RailsAiContext::Confidence::INFERRED }
-        entry.compact.merge(SchemaConventions.index_detail(columns, **detail))
+        entry
       end
 
       def parse_dump(format, path)

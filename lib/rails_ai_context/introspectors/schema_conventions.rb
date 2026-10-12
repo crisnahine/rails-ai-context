@@ -131,7 +131,10 @@ module RailsAiContext
       def index_entry(name, columns, options)
         where = options[:where]
         where = where.to_s if where.is_a?(Symbol)
+        detail = options.slice(:using, :type, :include, :order, :opclass, :length, :nulls_not_distinct)
+                        .reject { |_, value| value == RailsAiContext::Confidence::INFERRED }
         { name: name, columns: columns, unique: options[:unique] == true, where: (where if where.is_a?(String)) }.compact
+          .merge(index_detail(columns, **detail))
       end
 
       # A partial index's condition as the dump wrote it, for the end of a line.

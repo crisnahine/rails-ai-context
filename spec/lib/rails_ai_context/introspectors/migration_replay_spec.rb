@@ -1615,6 +1615,28 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       end
     end
   end
+  # schema.rb writes an index's using:, order:, opclass: and the rest; the replay keeps them as the dump reader does.
+  it "keeps an index's using: and order:, however the migration declares it" do
+    tables = Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "20240101000000_c.rb"), <<~RUBY)
+        create_table :assignments do |t|
+          t.bigint :score
+          t.index :score, using: :hash
+          t.references :cloned_item, index: { where: "cloned_item_id IS NOT NULL", order: :desc }
+        end
+        add_index :assignments, :score, using: :gin, opclass: :jsonb_path_ops, name: "idx_gin"
+      RUBY
+      described_class.tables(dir, pk_type: "bigint")
+    end
+
+    expect(tables["assignments"][:indexes]).to eq([
+      { name: "index_assignments_on_score", columns: [ "score" ], unique: false, using: "hash" },
+      { name: "index_assignments_on_cloned_item_id", columns: [ "cloned_item_id" ], unique: false,
+        where: "cloned_item_id IS NOT NULL", order: { "cloned_item_id" => "desc" } },
+      { name: "idx_gin", columns: [ "score" ], unique: false, using: "gin", opclass: { "score" => "jsonb_path_ops" } }
+    ])
+  end
+
   # A declared size reads as the dump writes it: an integer limit picks smallint or bigint on
   # PostgreSQL and MySQL, a string's 255 is MySQL's default, and a time type's precision is left out.
   describe "declared sizes" do
