@@ -157,10 +157,10 @@ module RailsAiContext
         unknown_param_response(unknown, section.params.map(&:to_s)) if unknown.any?
       end
 
-      # A value is capped like every echo; one holding a backtick would end the code span, so it is named outside it.
+      # A value too long to echo whole, or holding a backtick that would end the code span, is named after the call.
       def self.retired_note(section, arguments)
-        outside, spanned = arguments.slice(*section.params).partition { |_, value| value.to_s.include?("`") }
-        read = spanned.map { |key, value| "#{key}:#{JSON.generate(value.is_a?(String) ? echo_input(value) : value)}" }.join(", ")
+        outside, spanned = arguments.slice(*section.params).partition { |_, value| echo_input(value) != value.to_s || value.to_s.include?("`") }
+        read = spanned.map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", ")
         call = pointer(section.tool_name, read)
         same = ", with the same #{outside.map { |key, _| "`#{key}`" }.join(' and ')}" if outside.any?
         cli_form("\n\n_#{section.tool_name} is now #{call}#{same}; call that instead._") if call
