@@ -26,8 +26,10 @@ RSpec.describe "Answers in an app whose skip_tools turns tools off" do
     answer = text(RailsAiContext::Tools::Diagnose.call(error: "NameError: uninitialized constant Widget"))
 
     expect(calls_to_skipped(answer)).to be_empty
-    expect(answer).to include("1. Check for typo in class/module name, missing require, or autoload issue\n" \
-                              "2. Verify the file is in the correct autoload path (e.g. app/models, app/services)\n\n")
+    expect(answer[/## Suggested Fix\n(.*?)(?:\n\n|\z)/m, 1]).to eq(
+      "1. Check for typo in class/module name, missing require, or autoload issue\n" \
+      "2. Verify the file is in the correct autoload path (e.g. app/models, app/services)"
+    )
   end
 
   it "leaves out the recovery hint and the next steps naming a skipped tool" do
