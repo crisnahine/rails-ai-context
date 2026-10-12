@@ -92,6 +92,41 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(conn.statements.last).to eq("SET SESSION max_execution_time = 250")
     end
 
+    context "when the restore itself fails" do
+      before do
+        conn.failure = ActiveRecord::StatementInvalid.new("Lost connection to server during query")
+        conn.define_singleton_method(:execute) do |sql|
+          raise ActiveRecord::ConnectionNotEstablished, "gone" if sql == "SET SESSION max_execution_time = 250"
+
+          statements << sql
+        end
+      end
+
+      it "raises the statement's own error and takes the connection out of use" do
+        conn.define_singleton_method(:throw_away!) { statements << "THROW AWAY" }
+
+        expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }
+          .to raise_error(ActiveRecord::StatementInvalid, /Lost connection/)
+        expect(conn.statements.last).to eq("THROW AWAY")
+      end
+
+      it "disconnects a connection that cannot be thrown away" do
+        conn.define_singleton_method(:disconnect!) { statements << "DISCONNECT" }
+
+        expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }
+          .to raise_error(ActiveRecord::StatementInvalid, /Lost connection/)
+        expect(conn.statements.last).to eq("DISCONNECT")
+      end
+
+      it "takes the connection out of use after a statement that succeeded too" do
+        conn.failure = nil
+        conn.define_singleton_method(:throw_away!) { statements << "THROW AWAY" }
+
+        expect(described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2).rows).to eq([ [ 1 ] ])
+        expect(conn.statements.last).to eq("THROW AWAY")
+      end
+    end
+
     it "reads a 3024 or 1317 as a timeout" do
       [ 3024, 1317 ].each do |code|
         conn.failure = driver_error(ActiveRecord::StatementInvalid, code)
@@ -145,6 +180,10 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       conn.failure = driver_error(ActiveRecord::StatementInvalid, 1969, reader: :error_code)
       expect { described_class::MYSQL.read_only(conn, "SELECT 1", timeout: 2) }.to raise_error(described_class::TimedOut)
     end
+  end
+
+  it "raises errors under the gem's own base class" do
+    expect([ described_class::TimedOut, described_class::Unsupported ]).to all(be < RailsAiContext::Error)
   end
 
   describe "an engine with no family" do

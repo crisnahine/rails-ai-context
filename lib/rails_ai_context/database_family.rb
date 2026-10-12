@@ -6,10 +6,10 @@ module RailsAiContext
   # how its engine runs a guarded read and the statistics other tools show.
   module DatabaseFamily
     # A statement ran past the timeout it was given.
-    class TimedOut < StandardError; end
+    class TimedOut < RailsAiContext::Error; end
 
     # The engine has no family, so nothing was sent to it.
-    class Unsupported < StandardError; end
+    class Unsupported < RailsAiContext::Error; end
 
     # Rows from a guarded read; unbounded when no timeout could hold it.
     Rows = Struct.new(:columns, :rows, :unbounded)

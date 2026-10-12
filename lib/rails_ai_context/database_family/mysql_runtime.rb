@@ -18,11 +18,23 @@ module RailsAiContext
             begin
               in_read_only_transaction(conn, sql)
             ensure
-              conn.execute("SET SESSION max_execution_time = #{previous}")
+              restore_timeout(conn, previous)
             end
           end
         end
         Rows.new(result.columns, result.rows, false)
+      end
+
+      # A failed restore never replaces the statement's own error, and the connection it
+      # left with a short timeout leaves the pool so no later statement inherits it.
+      def restore_timeout(conn, previous)
+        conn.execute("SET SESSION max_execution_time = #{previous}")
+      rescue StandardError
+        begin
+          conn.respond_to?(:throw_away!) ? conn.throw_away! : conn.disconnect!
+        rescue StandardError
+          nil
+        end
       end
 
       # MySQL rejects SET TRANSACTION once a transaction is open, and Rails opens the lazy BEGIN
