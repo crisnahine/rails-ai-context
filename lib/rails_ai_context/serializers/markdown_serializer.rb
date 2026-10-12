@@ -75,7 +75,7 @@ module RailsAiContext
         schema = Payload.section(context, :schema)
         secondary = Payload.app_databases(schema)
 
-        sections = [ database_schema_text(schema[:tables], secondary.any? ? "primary" : nil) ]
+        sections = [ database_schema_text(schema[:tables], secondary.any? ? Payload.primary_label(context) : nil) ]
         secondary.each { |name, db| sections << database_schema_text(db[:tables], name, db[:note], Payload.named_scope_words(context, name)) }
         frameworks = Payload.framework_databases(schema).map do |name, db|
           SectionFacts.framework_database_text("#{name}#{Payload.named_database_mark(context, name)}", db)
@@ -492,7 +492,7 @@ module RailsAiContext
 
         # The other databases' own migrations, which the primary's counts leave out.
         secondary = data[:secondary_databases].is_a?(Hash) ? data[:secondary_databases] : {}
-        primary = " (primary)" if secondary.any?
+        primary = " (#{Payload.primary_label(context)})" if secondary.any?
 
         lines = [ "## Migrations" ]
         lines << "- Total: #{data[:total]}#{primary}"
@@ -503,7 +503,7 @@ module RailsAiContext
           lines << "- #{name}#{Payload.named_database_mark(context, name)}: #{counts}#{" in #{paths.join(', ')}" if paths.any?}"
         end
 
-        pending = { "primary" => Payload.pending_migrations(context) }.merge(secondary.transform_values { |db| Array(db[:pending]) })
+        pending = { Payload.primary_label(context) => Payload.pending_migrations(context) }.merge(secondary.transform_values { |db| Array(db[:pending]) })
         pending.each do |name, migrations|
           next if migrations.empty?
 

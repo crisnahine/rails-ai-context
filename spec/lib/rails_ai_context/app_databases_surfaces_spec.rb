@@ -106,6 +106,12 @@ RSpec.describe "an app whose first database is not the one named primary" do
                                   "**Run:** `bin/rails generate migration AddStateToOrders state:string --database primary`")
       end
     end
+
+    it "tells the generated files the first database's own name on the #{tier} tier" do
+      on_tier(tier, root) do
+        expect(RailsAiContext::Introspectors::MultiDatabaseIntrospector.new(app).call[:primary_name]).to eq("animals")
+      end
+    end
   end
 end
 

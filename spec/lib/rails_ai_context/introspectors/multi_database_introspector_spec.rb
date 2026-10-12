@@ -28,6 +28,10 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     it "does not return an error" do
       expect(result[:error]).to be_nil
     end
+
+    it "names the primary only where it is not called primary" do
+      expect(result).not_to have_key(:primary_name)
+    end
   end
 
   it "lists a replica only another environment configures with the environments that do, so it takes the same mark" do

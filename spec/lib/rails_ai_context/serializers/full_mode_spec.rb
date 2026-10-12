@@ -145,5 +145,17 @@ RSpec.describe "full mode's root files" do
       expect(output).to include("## Database Schema: analytics (production only, 1 table)",
                                 "Framework databases, their tables not listed: queue (production only): Solid Queue (1 table)")
     end
+
+    it "names the first database by its own name where another database is named primary" do
+      context[:multi_database] = { multi_db: true, primary_name: "animals", databases: [ { name: "animals" }, { name: "primary" } ] }
+      context[:schema][:secondary_databases] = {
+        "primary" => { adapter: "static_parse", total_tables: 1, tables: { "orders" => { columns: [ { name: "id", type: "integer" } ] } } }
+      }
+      context[:migrations] = { total: 3, pending: [ { version: "20261009140925", name: "AddTitle" } ], recent: [],
+                               secondary_databases: { "primary" => { total: 1, pending: [] } } }
+
+      expect(output).to include("## Database Schema: animals (1 table)", "## Database Schema: primary (1 table)",
+                                "- Total: 3 (animals)", "### Pending Migrations: animals (1)")
+    end
   end
 end

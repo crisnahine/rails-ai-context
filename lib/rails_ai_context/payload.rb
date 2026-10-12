@@ -139,6 +139,16 @@ module RailsAiContext
       scope_words(list(context, :multi_database, :databases).grep(Hash).find { |database| database[:name].to_s == name.to_s })
     end
 
+    # What a generated file calls the primary: its own name where another database is the one named primary.
+    def primary_label(context)
+      name = section(context, :multi_database)&.dig(:primary_name)
+      name && database_named?(context, "primary") ? name.to_s : "primary"
+    end
+
+    def database_named?(context, name)
+      list(context, :multi_database, :databases).grep(Hash).any? { |database| database[:name].to_s == name }
+    end
+
     # The mark for a database known by its database.yml name.
     def named_database_mark(context, name)
       words = named_scope_words(context, name)

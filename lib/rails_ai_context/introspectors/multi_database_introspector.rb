@@ -19,10 +19,18 @@ module RailsAiContext
           sharding: detect_sharding,
           model_connections: detect_model_connections,
           multi_db: dbs.size > 1
-        }.merge({ example_adapters: example_adapters }.compact)
+        }.merge({ example_adapters: example_adapters, primary_name: primary_name }.compact)
       end
 
       private
+
+      # The primary's database.yml name where it is not "primary": a generated file tells it from a database that is.
+      def primary_name
+        name = RailsAiContext::AppDatabases.for(root).primary&.name.to_s
+        name unless name.empty? || name == "primary"
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "primary_name")
+      end
 
       # Every app database; one the running environment does not configure names where it is configured.
       def discover_databases
