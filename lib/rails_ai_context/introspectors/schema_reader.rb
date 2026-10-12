@@ -226,7 +226,7 @@ module RailsAiContext
         schema = empty_schema
         current = nil
 
-        events.sort_by { |e| e[:location] }.each do |event|
+        events.sort_by.with_index { |e, i| [ e[:location], i ] }.each do |event|
           current = absorb(event, schema, current)
         end
         # The same loop writes that table's foreign keys twice (8.0 schema_dumper.rb:134-156).

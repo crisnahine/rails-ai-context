@@ -60,6 +60,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
       expect(reader.tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[title])
     end
 
+    it "groups the columns of one-line tables under their table when a skipped table's comment comes first" do
+      tables = (1..20).map { |i| %(  create_table "t#{i}" do |t| t.string "a#{i}"; t.string "b#{i}" end) }.join("\n")
+      reader = reader_for(<<~RUBY)
+        ActiveRecord::Schema[7.1].define(version: 2024_01_01_000000) do
+        #{tables}
+          # Could not dump table "legacy" because of following StandardError
+        end
+      RUBY
+
+      (1..20).each { |i| expect(reader.tables["t#{i}"][:columns].map { |c| c[:name] }).to eq([ "a#{i}", "b#{i}" ]) }
+    end
+
     it "records the declared column type" do
       reader = reader_for(<<~RUBY)
         create_table "users" do |t|
