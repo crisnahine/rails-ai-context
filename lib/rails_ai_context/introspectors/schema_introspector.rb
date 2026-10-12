@@ -335,10 +335,10 @@ module RailsAiContext
             **column_detail(table, col, bigint),
             comment: col.comment
           }
+          # A function default as the dump writes it: PostgreSQL's leaves out only a serial column's own sequence.
           if col.respond_to?(:virtual?) && col.virtual?
             entry[:generated] = (col.default_function || declared_generated(table, col.name)).to_s
             entry[:stored] = stored_generated?(col)
-          # PostgreSQL's dumper leaves out only a serial column's own sequence (schema_expression, 7.0 to 8.1).
           elsif col.default.nil? && col.default_function && !(col.respond_to?(:serial?) && col.serial?)
             entry[:default] = "-> { #{col.default_function.inspect} }"
           end

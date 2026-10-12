@@ -58,8 +58,9 @@ module RailsAiContext
           return record_broadcasts(node) if BROADCASTS.key?(node.name) && in_scope?(node)
           return record_defined(node) if node.name == :define_model_callbacks && in_scope?(node)
 
-          chain = MODEL_CALLBACK.match(node.name.to_s)&.[](1) unless CALLBACK_METHODS.include?(node.name)
-          return unless (CALLBACK_METHODS.include?(node.name) || chain) && in_scope?(node)
+          standard = CALLBACK_METHODS.include?(node.name)
+          chain = MODEL_CALLBACK.match(node.name.to_s)&.[](1) unless standard
+          return unless (standard || chain) && in_scope?(node)
 
           library_chain = chain unless defined_here.include?(node.name)
           return if library_chain && !@library_chains

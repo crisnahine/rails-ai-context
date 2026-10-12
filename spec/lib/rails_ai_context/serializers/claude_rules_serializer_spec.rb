@@ -220,7 +220,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       end
     end
 
-    # A live listing that lacks a model's table says so, as model_details and onboard do.
+    # A live listing that lacks a model's table says so.
     it "says a model's table is not found where the live database lacks it, in every rules file" do
       missing = { schema: { adapter: "sqlite3", tables: { "posts" => { columns: [] } } },
                   models: { "Post" => { table_name: "posts", associations: [] }, "Tag" => { table_name: "tags", associations: [] } } }

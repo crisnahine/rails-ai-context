@@ -141,9 +141,7 @@ module RailsAiContext
         end.sort_by.with_index { |entry, i| [ entry[:location].to_i, i ] }
       end
 
-      # A class body's walk with what its blocks evaluated on another receiver declare
-      # (ForeignEvalsListener's blocks) moved to `:foreign`, named as `foreign_entries` names them:
-      # each call on a line the walk found a declaration on, in source order.
+      # A class body's walk with what its blocks evaluated on another receiver declare moved to `:foreign`.
       def class_body_foreign(blocks, walked)
         return walked if blocks.empty?
 
