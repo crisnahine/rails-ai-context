@@ -34,13 +34,14 @@ module RailsAiContext
       def reachable!
         raise NotHere, not_here_message unless here
         raise NotBooted, "The #{name} database needs the booted app to connect, and this is the static tier." if RailsAiContext.static_tier? || !config.respond_to?(:configuration_hash)
+
+        AppDatabases.present!(name, primary ? ActiveRecord::Base.connection_db_config : config)
       end
 
       # The primary is the app's own pool. Any other database gets a handler of its own
       # per lease, so the app's pools are never touched and no two leases share a pool.
       def with_pool
         reachable!
-        AppDatabases.present!(name, primary ? ActiveRecord::Base.connection_db_config : config)
         return yield(ActiveRecord::Base.connection_pool) if primary
 
         handler = ActiveRecord::ConnectionAdapters::ConnectionHandler.new
@@ -176,6 +177,7 @@ module RailsAiContext
           next if listed.any? { |db| db.name == name }
 
           is_primary = listed.none?(&:primary) && name == other_primary
+          # Another environment's first database is its primary under another name, which this app already lists.
           next if name == other_primary && !is_primary
 
           listed << database(root, env_name, name, value, here: false, primary: is_primary, environments: configured.call(name))

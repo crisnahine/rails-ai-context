@@ -140,6 +140,19 @@ RSpec.describe "the database argument" do
       expect(File.exist?(File.join(@dir, "primary.sqlite3"))).to be(false)
     end
 
+    it "refuses a named SQLite database whose file is not there, whatever the section, and creates nothing" do
+      File.delete(@path)
+
+      [ nil, "database", "cache" ].each do |section|
+        response = runtime(section: section, database: "queue")
+
+        expect(response.error?).to be(true), section.inspect
+        expect(text(response)).to include("The queue database does not exist yet", @path)
+        expect(text(response)).not_to include("# Runtime Info")
+        expect(File.exist?(@path)).to be(false)
+      end
+    end
+
     it "refuses a name another environment configures, whatever the section" do
       %w[cache jobs connections database].each do |section|
         response = runtime(section: section, database: "cache")
