@@ -769,7 +769,7 @@ module RailsAiContext
         # @return [Array<[String, Boolean]>] each path, and whether it names an action
         def literal_paths(node)
           args = (node.arguments&.arguments || []).select { |a| a.is_a?(Prism::StringNode) || a.is_a?(Prism::SymbolNode) }
-          args.sort_by { |a| a.is_a?(Prism::StringNode) ? 0 : 1 }.map { |a| [ a.unescaped, a.is_a?(Prism::SymbolNode) ] }
+          args.partition { |a| a.is_a?(Prism::StringNode) }.flatten.map { |a| [ a.unescaped, a.is_a?(Prism::SymbolNode) ] }
         end
 
         def emit_verb_path(node, verb, segment, action_given, opts, rocket_key)

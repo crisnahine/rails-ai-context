@@ -878,6 +878,17 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       expect(drawn).to eq([ [ "GET", "/one", "pages#two", "one" ], [ "GET", "/two", "pages#two", "two" ] ])
     end
 
+    # Mapper#match groups the paths by class, so each group keeps its written order.
+    it "draws many paths of one route in the order written, strings before symbols" do
+      listener = described_class.new(multi_path: true)
+      paths = (1..20).map { |i| "\"/p#{i}\"" }
+      source = "Rails.application.routes.draw do\n  get :sym, #{paths.join(', ')}, to: \"pages#show\"\nend\n"
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+      drawn = listener.results.select { |r| r[:type] == :route }.map { |r| r[:path] }
+      expect(drawn).to eq((1..20).map { |i| "/p#{i}" } + [ "/sym" ])
+    end
+
     # actionpack 8.1 mapper.rb `match`: "Wrong number of arguments (expect 1, got 2)".
     it "counts a multi-path route as not expanded under Rails 8.1's single-path rule" do
       listener = described_class.new
