@@ -697,7 +697,8 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_concerns_from_source AST")
       end
 
-      # An action that permits inline is still an action, not a strong-params helper.
+      # An action that permits inline is still an action, not a strong-params helper;
+      # a public method named *_params is a helper left above `private`.
       def extract_strong_params(source, walked = class_body_walk(source), actions = [])
         return [] if source.nil?
 
@@ -707,7 +708,7 @@ module RailsAiContext
         nested = nested_ranges(walked)
         param_methods.reject do |entry|
           offset = entry.delete(:offset)
-          nested.any? { |range| range.cover?(offset) } || actions.include?(entry[:name])
+          nested.any? { |range| range.cover?(offset) } || (actions.include?(entry[:name]) && !entry[:name].end_with?("_params"))
         end
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
@@ -724,12 +725,13 @@ module RailsAiContext
 
       def extract_permit_from_def(def_node)
         result = { name: def_node.name.to_s }
+        locals = params_locals(def_node.body)
 
-        return result.merge(unrestricted: true) if find_call_in_tree(def_node.body, :permit!)
+        return result.merge(unrestricted: true) if find_call_in_tree(def_node.body, :permit!, locals)
 
-        permit_call = find_call_in_tree(def_node.body, :permit)
+        permit_call = find_call_in_tree(def_node.body, :permit, locals)
         if permit_call
-          require_call = find_require_in_chain(permit_call)
+          require_call = find_require_in_chain(permit_call, locals)
           if require_call
             req_arg = require_call.arguments&.arguments&.first
             result[:requires] = extract_ast_value(req_arg).to_s if req_arg
@@ -738,34 +740,50 @@ module RailsAiContext
           return result.merge(parse_permit_args_ast(permit_call))
         end
 
-        expect_call = find_call_in_tree(def_node.body, :expect)
+        expect_call = find_call_in_tree(def_node.body, :expect, locals)
         result.merge(parse_expect_args_ast(expect_call)) if expect_call
       end
 
-      def find_call_in_tree(node, method_name)
+      # Locals a method assigns from params (`attrs = params.require(:user)`), by name, to the value assigned.
+      def params_locals(body)
+        return {} unless body
+
+        AstWalk.each(body).grep(Prism::LocalVariableWriteNode).each_with_object({}) do |write, locals|
+          locals[write.name] = write.value if params_value?(write.value, locals)
+        end
+      end
+
+      def find_call_in_tree(node, method_name, locals = {})
         return nil unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.name == method_name && call_on_params?(node)
+        if node.is_a?(Prism::CallNode) && node.name == method_name && params_value?(node.receiver, locals)
           return node
         end
         node.child_nodes.compact.each do |child|
-          found = find_call_in_tree(child, method_name)
+          found = find_call_in_tree(child, method_name, locals)
           return found if found
         end
         nil
       end
 
-      def call_on_params?(node)
-        receiver = node.receiver
-        return false unless receiver
-        return true if receiver.is_a?(Prism::CallNode) && receiver.name == :params
-        call_on_params?(receiver) if receiver.is_a?(Prism::CallNode)
+      # A chain that starts at `params`, at `ActionController::Parameters.new`, or at a local holding one.
+      def params_value?(node, locals)
+        case node
+        when Prism::LocalVariableReadNode then locals.key?(node.name)
+        when Prism::CallNode
+          return true if node.name == :params && node.receiver.nil?
+          return node.receiver.slice.delete_prefix("::") == "ActionController::Parameters" if node.name == :new && node.receiver
+
+          params_value?(node.receiver, locals)
+        else false
+        end
       end
 
-      def find_require_in_chain(node)
+      def find_require_in_chain(node, locals = {})
         receiver = node.receiver
+        receiver = locals[receiver.name] if receiver.is_a?(Prism::LocalVariableReadNode)
         return nil unless receiver.is_a?(Prism::CallNode)
         return receiver if receiver.name == :require
-        find_require_in_chain(receiver)
+        find_require_in_chain(receiver, locals)
       end
 
       def parse_permit_args_ast(permit_call)

@@ -451,6 +451,56 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(expect_call).to eq(name: "t_params", requires: "t", nested: { "prefs" => { "theme" => [] } })
     end
 
+    # Params held in a local first, or rebuilt as ActionController::Parameters, are still params.
+    it "reads a permit on params held in a local or rebuilt from them" do
+      source = <<~RUBY
+        def user_params
+          attrs = params.require(:user)
+          attrs.permit(:name)
+        end
+        def post_params
+          ActionController::Parameters.new(params.to_unsafe_h).permit(:title)
+        end
+        def raw_params
+          scoped = params.fetch(:raw, {})
+          scoped.permit!
+        end
+      RUBY
+
+      user, post, raw = introspector.send(:extract_strong_params, source)
+
+      expect(user).to eq(name: "user_params", requires: "user", permits: [ "name" ])
+      expect(post).to eq(name: "post_params", permits: [ "title" ])
+      expect(raw).to eq(name: "raw_params", unrestricted: true)
+    end
+
+    it "keeps a public *_params helper and leaves out an action that permits inline" do
+      source = <<~RUBY
+        class OrdersController < ApplicationController
+          def index
+            @orders = Order.where(params.permit(:number))
+          end
+
+          def order_params
+            params.require(:order).permit(:total)
+          end
+        end
+      RUBY
+
+      names = introspector.send(:extract_strong_params, source, nil, %w[index order_params]).map { |h| h[:name] }
+
+      expect(names).to eq([ "order_params" ])
+    end
+
+    it "leaves out a permit on something that is not params" do
+      source = <<~RUBY
+        def plug_params(app)
+          app.permit(:name)
+        end
+      RUBY
+      expect(introspector.send(:extract_strong_params, source)).to eq([])
+    end
+
     it "leaves out a method named like strong params that permits nothing" do
       source = <<~RUBY
         def post_params
