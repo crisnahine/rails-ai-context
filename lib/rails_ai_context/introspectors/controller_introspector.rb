@@ -269,7 +269,7 @@ module RailsAiContext
       def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
-        if (targets = alias_candidates(source, path_name))
+        if path_name.end_with?("Controller") && (targets = alias_candidates(source, path_name))
           return [ path_name, unloaded ? { error: unloaded, file: record.file } : { alias_of: targets, file: record.file } ]
         end
         # A *_controller.rb that declares only a module is a mixin controllers include.
@@ -758,24 +758,37 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
 
-      # A strong-params method returns params it permits. One named *_params counts when it permits
-      # anywhere in it, or returns what another method, super or a class makes of params (`permitted_attributes(@post)`,
-      # `super.merge(...)`, `Filter.new(params).call`); one of another name only when it returns what it
-      # permits, so a helper that permits to build a URL is not one.
+      PERMITS = %i[permit! permit expect].freeze
+      # What these return is still the permitted params; `[]`, `fetch` or `dig` returns one value.
+      PARAMS_PRESERVING = %i[merge reverse_merge tap to_h to_hash slice except with_indifferent_access compact compact_blank].freeze
+
+      # A strong-params method returns params it permits. One named *_params counts when it permits anywhere
+      # in it, or returns what super, another *_params or permitted_* method, or a class given params makes of
+      # them; one of another name only when it returns the permitted params themselves, so a helper that
+      # permits to build a URL, or reads one value, is not one.
       def strong_params_entry(def_node)
         name = def_node.name.to_s
         locals = params_locals(def_node.body)
-        returned = returned_chain(def_node.body)
-        call = %i[permit! permit expect].lazy.filter_map do |method|
-          if name.end_with?("_params")
-            find_call_in_tree(def_node.body, method, locals)
-          else
-            returned.find { |node| node.is_a?(Prism::CallNode) && node.name == method && params_value?(node.receiver, locals) }
-          end
-        end.first
+        chains = returned_chains(def_node.body)
+        call = if name.end_with?("_params")
+          PERMITS.lazy.filter_map { |method| find_call_in_tree(def_node.body, method, locals) }.first
+        else
+          returned_permit(chains, locals)
+        end
         return permit_entry(name, call, locals) if call
 
-        { name: name } if name.end_with?("_params") && hands_params_on?(returned)
+        { name: name } if name.end_with?("_params") && hands_params_on?(chains.flatten)
+      end
+
+      def returned_permit(chains, locals)
+        chains.each do |chain|
+          index = chain.index { |node| node.is_a?(Prism::CallNode) && PERMITS.include?(node.name) && params_value?(node.receiver, locals) }
+          next unless index && chain.first(index).all? { |outer| outer.is_a?(Prism::CallNode) && PARAMS_PRESERVING.include?(outer.name) }
+
+          call = chain[index]
+          return call unless call.name == :expect && (call.arguments&.arguments || []).all? { |arg| arg.is_a?(Prism::SymbolNode) || arg.is_a?(Prism::StringNode) }
+        end
+        nil
       end
 
       def permit_entry(name, call, locals)
@@ -790,7 +803,9 @@ module RailsAiContext
           require_call = find_require_in_chain(call, locals)
           if require_call
             req_arg = require_call.arguments&.arguments&.first
-            result[:requires] = extract_ast_value(req_arg).to_s if req_arg
+            # A key computed at run time (`params.require(resource.object_name)`) is no name to print.
+            required = extract_ast_value(req_arg) if req_arg
+            result[:requires] = required.to_s unless required.nil? || required == "inferred"
           end
 
           result.merge(parse_permit_args_ast(call))
@@ -798,13 +813,14 @@ module RailsAiContext
         end
       end
 
-      # A returned super, call handing the whole params on, or call to another method of the controller,
-      # its parents or its concerns, which may be the one that permits.
+      # A returned super, call handing the whole params on, or call to another *_params or permitted_*
+      # method of the controller, its parents or its concerns, which may be the one that permits.
       def hands_params_on?(returned)
         returned.any? do |call|
           next true if call.is_a?(Prism::SuperNode) || call.is_a?(Prism::ForwardingSuperNode)
 
-          (call.arguments&.arguments || []).any? { |arg| bare_params?(arg) } || (call.receiver.nil? && call.name != :params)
+          (call.arguments&.arguments || []).any? { |arg| bare_params?(arg) } ||
+            (call.receiver.nil? && call.name != :params && call.name.to_s.match?(/params|permit/))
         end
       end
 
@@ -817,16 +833,17 @@ module RailsAiContext
         call.receiver.nil? || call.receiver.is_a?(Prism::SelfNode)
       end
 
-      # The calls in every chain the method can return, followed through receivers and through
+      # Each chain of calls the method can return, outermost first, followed through receivers and through
       # a local to the value it was last given (`attrs = params.permit(:a); attrs.merge(b: 1)`).
-      def returned_chain(body)
+      def returned_chains(body)
         return [] unless body
 
         explicit = AstWalk.each(body).grep(Prism::ReturnNode).flat_map { |node| Array(node.arguments&.arguments) }
-        [ body, *explicit ].flat_map { |node| tail_expressions(node) }.flat_map { |node| call_chain(node, body, Set.new) }
+        [ body, *explicit ].flat_map { |node| tail_expressions(node) }.flat_map { |node| call_chains(node, body, Set.new) }
       end
 
-      # The expressions a node can end on: the last statement, each branch's last, both sides of && and ||.
+      # The expressions a node can end on: the last statement, each branch's last, both sides of && and ||,
+      # an array's elements.
       def tail_expressions(node)
         case node
         when nil then []
@@ -838,30 +855,38 @@ module RailsAiContext
         when Prism::CaseNode, Prism::CaseMatchNode then node.conditions.flat_map { |branch| tail_expressions(branch.statements) } + tail_expressions(node.else_clause)
         when Prism::AndNode, Prism::OrNode then tail_expressions(node.left) + tail_expressions(node.right)
         when Prism::ReturnNode then Array(node.arguments&.arguments).flat_map { |arg| tail_expressions(arg) }
+        when Prism::ArrayNode then node.elements.flat_map { |element| tail_expressions(element) }
         else node.respond_to?(:value) && node.class.name.end_with?("WriteNode") ? tail_expressions(node.value) : [ node ]
         end
       end
 
-      def call_chain(node, body, seen)
+      def call_chains(node, body, seen)
         case node
-        when Prism::CallNode then [ node, *call_chain(node.receiver, body, seen) ]
-        when Prism::SuperNode, Prism::ForwardingSuperNode then [ node ]
+        when Prism::CallNode then call_chains(node.receiver, body, seen).map { |chain| [ node, *chain ] }
+        when Prism::SuperNode, Prism::ForwardingSuperNode then [ [ node ] ]
         when Prism::LocalVariableReadNode
-          return [] unless seen.add?(node.name)
+          return [ [] ] unless seen.add?(node.name)
 
           write = AstWalk.each(body).select { |n| n.class.name.start_with?("Prism::LocalVariable") && n.class.name.end_with?("WriteNode") && n.name == node.name }
                          .max_by { |n| n.location.start_offset }
-          write ? tail_expressions(write.value).flat_map { |value| call_chain(value, body, seen) } : []
-        else []
+          write ? tail_expressions(write.value).flat_map { |value| call_chains(value, body, seen) } : [ [] ]
+        else [ [] ]
         end
       end
 
-      # Locals a method assigns from params (`attrs = params.require(:user)`), by name, to the value assigned.
+      # Locals that hold params, by name, to the value they hold: one the method assigns
+      # (`attrs = params.require(:user)`), or a block's parameter over params (`params[:items].map { |item| ... }`).
       def params_locals(body)
         return {} unless body
 
-        AstWalk.each(body).grep(Prism::LocalVariableWriteNode).each_with_object({}) do |write, locals|
-          locals[write.name] = write.value if params_value?(write.value, locals)
+        AstWalk.each(body).each_with_object({}) do |node, locals|
+          if node.is_a?(Prism::LocalVariableWriteNode)
+            locals[node.name] = node.value if params_value?(node.value, locals)
+          elsif node.is_a?(Prism::CallNode) && node.block.is_a?(Prism::BlockNode) && params_value?(node.receiver, locals)
+            block_params = node.block.parameters
+            names = block_params.respond_to?(:parameters) && block_params.parameters ? block_params.parameters.requireds : []
+            names.each { |param| locals[param.name] = node if param.respond_to?(:name) && param.name }
+          end
         end
       end
 

@@ -677,9 +677,59 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         def form_params
           Form.new(self.params).attributes
         end
+
+        def owner_params
+          current_user.attributes.slice("name")
+        end
+
+        def watcher_params(app)
+          build_watchers(app)
+        end
+
+        def page_params
+          params[:page] || default_page
+        end
+
+        def checkout_params
+          permitted_checkout_attributes
+        end
+
+        def resource_params
+          [ permitted_params[:post] ]
+        end
+
+        def order_params
+          params.require(resource.object_name).permit(:total)
+        end
       RUBY
 
-      expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] }).to eq(%w[post_params item_params edition_params form_params])
+      found = introspector.send(:extract_strong_params, source)
+
+      expect(found.map { |h| h[:name] }).to eq(%w[post_params item_params edition_params form_params checkout_params resource_params order_params])
+      expect(found.last).to eq(name: "order_params", permits: [ "total" ])
+    end
+
+    it "reads a permit on each item of params a block walks, and a value read from the permit only under a *_params name" do
+      source = <<~RUBY
+        def items_params
+          params.require(:items).map { |item| item.permit(:name, :qty) }
+        end
+
+        def post_id
+          params.expect(:id)
+        end
+
+        def sort_direction
+          params.permit(:dir)[:dir] || "asc"
+        end
+
+        def update_attrs
+          params.require(:user).permit(:name).to_h.merge(by: 1)
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "items_params", requires: "items", permits: %w[name qty] },
+                                                                        { name: "update_attrs", requires: "user", permits: [ "name" ] } ])
     end
 
     it "leaves out a permit on something that is not params" do
