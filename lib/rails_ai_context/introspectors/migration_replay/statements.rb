@@ -29,7 +29,7 @@ module RailsAiContext
               tables[new_name] = tables.delete(table)
               rename_table_indexes(tables[new_name], table, new_name)
             end
-          when :add_column then add_column(tables[table], entry)
+          when :add_column then add_column(tables[table], entry, adapter)
           when :add_timestamps then add_timestamps(tables, entry)
           when :remove_column then remove_columns_from(tables[table], [ entry[:column] ])
           when :remove_columns then remove_columns_from(tables[table], entry[:columns])
@@ -106,30 +106,53 @@ module RailsAiContext
 
         def implicit_pk_columns(options, pk_type, default = nil)
           SchemaConventions.implicit_primary_key(options || {}, pk_type, default: default).map do |pk|
-            { name: pk[:name], type: pk[:type], null: false, primary_key: true, default: pk[:default], **declared_sizes(pk[:options]) }.compact
+            type, sizes = dumped_type(pk[:type], pk[:options] || {}, nil)
+            { name: pk[:name], type: type, null: false, primary_key: true, default: pk[:default], **sizes }.compact
           end
         end
 
-        # The sizes as declared; the dump writes no adapter default either.
-        def declared_sizes(options)
-          options.slice(:limit, :precision, :scale).select { |_, value| value.is_a?(Integer) }
+        POSTGRES_ADAPTER = /postg/i
+        MYSQL_ADAPTER = /mysql|trilogy/i
+
+        # A declared type and its sizes as the dump writes them (each adapter's type_to_sql and the
+        # dumper's native limits, 7.0 to 8.1): an integer limit picks smallint or bigint on PostgreSQL
+        # and MySQL, 255 is MySQL's string default, and a time type's default precision moved in 7.0.
+        def dumped_type(type, options, adapter)
+          sizes = options.slice(:limit, :precision, :scale).select { |_, value| value.is_a?(Integer) }
+          limit = sizes[:limit]
+          case type.to_s
+          when "decimal", "numeric" then [ type, sizes.slice(:precision, :scale) ]
+          when "string" then [ type, adapter.to_s.match?(MYSQL_ADAPTER) && limit == 255 ? {} : sizes.slice(:limit) ]
+          when "integer" then dumped_integer(limit, adapter)
+          else [ type, {} ]
+          end
+        end
+
+        def dumped_integer(limit, adapter)
+          postgres = adapter.to_s.match?(POSTGRES_ADAPTER)
+          return [ "integer", limit ? { limit: limit } : {} ] unless postgres || adapter.to_s.match?(MYSQL_ADAPTER)
+          return [ "bigint", {} ] if limit.to_i > 4
+          return [ "integer", {} ] if limit.nil? || limit == 4 || (postgres && limit == 3)
+
+          [ "integer", { limit: postgres ? 2 : limit } ]
         end
 
         # A computed column name is counted in the note instead: a nil name trips every reader.
-        def add_column(table_data, entry)
+        def add_column(table_data, entry, adapter = nil)
           return unless table_data && entry[:column]
 
           table_data[:columns].reject! { |c| c[:name] == entry[:column] }
-          table_data[:columns] << column_entry(entry[:column], entry[:column_type], entry)
+          table_data[:columns] << column_entry(entry[:column], entry[:column_type], entry, adapter)
         end
 
         # A column as the dump writes it, whether a table block or add_column declares it.
-        def column_entry(name, type, entry)
+        def column_entry(name, type, entry, adapter = nil)
           opts = entry[:options] || {}
           virtual = entry[:virtual] || type == "virtual"
           # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).
           type = opts[:type].to_s if type == "virtual" && (opts[:type].is_a?(Symbol) || opts[:type].is_a?(String))
-          col = { name: name, type: type, **declared_sizes(opts) }
+          type, sizes = dumped_type(type, opts, adapter)
+          col = { name: name, type: type, **sizes }
           col[:null] = false if opts[:null] == false
           default = declared_default(opts, entry)
           col[:default] = SchemaConventions.format_default(default) if opts.key?(:default) && default != RailsAiContext::Confidence::INFERRED
@@ -159,11 +182,11 @@ module RailsAiContext
         def change_column(col, entry, adapter = nil)
           return unless col
 
-          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry).merge(col.slice(:primary_key))) if adapter.to_s.start_with?("sqlite")
+          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry, adapter).merge(col.slice(:primary_key))) if adapter.to_s.start_with?("sqlite")
 
           opts = entry[:options] || {}
-          col[:type] = entry[:column_type] if entry[:column_type]
-          col.except!(:limit, :precision, :scale).merge!(declared_sizes(opts))
+          col[:type], sizes = dumped_type(entry[:column_type] || col[:type], opts, adapter)
+          col.except!(:limit, :precision, :scale).merge!(sizes)
           change_column_null(col, opts[:null]) if opts.key?(:null)
           change_column_default(col, { options: { to: declared_default(opts, entry) } }) if opts.key?(:default)
         end
@@ -179,7 +202,7 @@ module RailsAiContext
           tables[entry[:table]]&.dig(:columns)&.find { |c| c[:name] == entry[:column] }
         end
 
-        def apply_schema_column(entry, current_table, tables, pk_type)
+        def apply_schema_column(entry, current_table, tables, pk_type, adapter = nil)
           return unless tables[current_table]
           col_type = entry[:column_type]
 
@@ -192,7 +215,7 @@ module RailsAiContext
           # Skip non-column types
           return if %w[index check_constraint].include?(col_type)
 
-          col = column_entry(entry[:name], col_type, entry)
+          col = column_entry(entry[:name], col_type, entry, adapter)
           opts = entry[:options] || {}
           # Only one branch of an if runs, so a second declaration of a name replaces the first.
           tables[current_table][:columns].reject! { |c| c[:name] == col[:name] }

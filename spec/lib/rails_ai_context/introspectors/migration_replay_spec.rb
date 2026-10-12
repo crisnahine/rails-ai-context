@@ -1615,6 +1615,54 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       end
     end
   end
+  # A declared size reads as the dump writes it: an integer limit picks smallint or bigint on
+  # PostgreSQL and MySQL, a string's 255 is MySQL's default, and a time type's precision is left out.
+  describe "declared sizes" do
+    def sizes(adapter)
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+          create_table :widgets do |t|
+            t.integer :tiny, limit: 1
+            t.integer :small, limit: 2
+            t.integer :normal, limit: 4
+            t.integer :big, limit: 8
+            t.string :code, limit: 2
+            t.string :name, limit: 255
+            t.datetime :seen_at, precision: 6
+            t.decimal :price, precision: 10, scale: 2
+            t.text :body, limit: 16777215
+          end
+          add_column :widgets, :later, :integer, limit: 8
+          change_column :widgets, :normal, :integer, limit: 8
+        RUBY
+        described_class.tables(dir, pk_type: "bigint", adapter: adapter)["widgets"][:columns]
+          .drop(1).to_h { |c| [ c[:name], [ c[:type], c.slice(:limit, :precision, :scale) ] ] }
+      end
+    end
+
+    it "matches what the PostgreSQL dump writes" do
+      expect(sizes("postgresql")).to eq(
+        "tiny" => [ "integer", { limit: 2 } ], "small" => [ "integer", { limit: 2 } ], "normal" => [ "bigint", {} ],
+        "big" => [ "bigint", {} ], "code" => [ "string", { limit: 2 } ], "name" => [ "string", { limit: 255 } ],
+        "seen_at" => [ "datetime", {} ], "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", {} ],
+        "later" => [ "bigint", {} ]
+      )
+    end
+
+    it "matches what the MySQL dump writes" do
+      expect(sizes("mysql2")).to eq(
+        "tiny" => [ "integer", { limit: 1 } ], "small" => [ "integer", { limit: 2 } ], "normal" => [ "bigint", {} ],
+        "big" => [ "bigint", {} ], "code" => [ "string", { limit: 2 } ], "name" => [ "string", {} ],
+        "seen_at" => [ "datetime", {} ], "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", {} ],
+        "later" => [ "bigint", {} ]
+      )
+    end
+
+    it "keeps an integer's declared limit on SQLite" do
+      expect(sizes("sqlite3").values_at("tiny", "big", "later")).to eq([ [ "integer", { limit: 1 } ], [ "integer", { limit: 8 } ], [ "integer", { limit: 8 } ] ])
+    end
+  end
+
   # The rest of change_table's DSL. OpenProject adds workspace_type with a
   # default and drops the default in the same block; reading only the add
   # left a default the table does not have.

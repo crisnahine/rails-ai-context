@@ -250,7 +250,7 @@ module RailsAiContext
             creating = true
             Statements.seed_table(tables, current_table, entry[:options], pk_type, default: SchemaConventions.key_default(entry[:options] || {}, entry))
           elsif entry[:type] == :column && current_table
-            Statements.apply_schema_column(entry, current_table, tables, pk_type)
+            Statements.apply_schema_column(entry, current_table, tables, pk_type, adapter)
           elsif entry[:type] == :index && current_table
             Statements.apply_schema_index(entry, current_table, tables)
           elsif entry[:type] == :unread_call && current_table
