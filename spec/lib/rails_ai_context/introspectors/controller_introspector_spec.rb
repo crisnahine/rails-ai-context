@@ -621,6 +621,64 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(post).to eq(name: "post_params", requires: "post", permits: [ "title" ], computed: { "tag_ids" => "TAG_KEYS" })
     end
 
+    it "reads what a method returns through a local, an explicit return, a case, a guard and || " do
+      source = <<~RUBY
+        def update_attrs
+          attrs = params.require(:user).permit(:name)
+          attrs.merge(updated_by: current_user.id)
+        end
+
+        def attrs_for_user
+          return params.require(:user).permit(:name) if admin?
+
+          {}
+        end
+
+        def attrs_by_role
+          case role
+          when :admin then params.require(:user).permit(:name, :role)
+          else params.require(:user).permit(:name)
+          end
+        end
+
+        def cached_or_fresh
+          @attrs || params.require(:user).permit(:email)
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] })
+        .to eq(%w[update_attrs attrs_for_user attrs_by_role cached_or_fresh])
+    end
+
+    # Pundit's permitted_attributes and a parent's strong params are methods this file does not define.
+    it "keeps a *_params method that returns another method's answer" do
+      source = <<~RUBY
+        def post_params
+          permitted_attributes(@post)
+        end
+
+        def item_params
+          base_item_params.merge(owner_id: current_user.id)
+        end
+
+        def plug_params(app)
+          app.watchers.build if app.watchers.none?
+        end
+
+        def default_params = { page: 1 }
+
+        def edition_params
+          super.merge(statistics_announcement_id: 1)
+        end
+
+        def form_params
+          Form.new(self.params).attributes
+        end
+      RUBY
+
+      expect(introspector.send(:extract_strong_params, source).map { |h| h[:name] }).to eq(%w[post_params item_params edition_params form_params])
+    end
+
     it "leaves out a permit on something that is not params" do
       source = <<~RUBY
         def plug_params(app)
