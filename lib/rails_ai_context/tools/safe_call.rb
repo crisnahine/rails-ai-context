@@ -61,7 +61,9 @@ module RailsAiContext
         RailsAiContext::CodeReloader.with_app_code do
           begin
             # One call is one run: what it reads per controller or per route is read once.
-            append_note(RailsAiContext::RunCache.around { yield }, invalid_detail_note(discarded))
+            response, left_out = with_left_out_frame { RailsAiContext::RunCache.around { yield } }
+            response = append_note(response, RailsAiContext::Tools::BaseTool.left_out_note(left_out))
+            append_note(response, invalid_detail_note(discarded))
           # ScriptError too: a SyntaxError or LoadError out of an app file the
           # tool reached must cost that call, not the stdio server and every
           # tool with it.
@@ -69,6 +71,17 @@ module RailsAiContext
             failure_response(e)
           end
         end
+      end
+
+      # The tools this call's composed sections left out, kept apart from
+      # those of any tool it calls.
+      def with_left_out_frame
+        stack = (Thread.current[RailsAiContext::Tools::BaseTool::LEFT_OUT] ||= [])
+        stack.push([])
+        response = yield
+        [ response, stack.last.uniq ]
+      ensure
+        stack.pop
       end
 
       # The declared params are the contract, so a tool whose method takes
@@ -165,7 +178,8 @@ module RailsAiContext
         first = content.first
         return response unless first.is_a?(Hash) && first[:type] == "text"
 
-        noted = [ first.merge(text: "#{first[:text]}#{note}") ] + content[1..].to_a
+        body = first[:text].to_s
+        noted = [ first.merge(text: body.strip.empty? ? note.lstrip : "#{body}#{note}") ] + content[1..].to_a
 
         # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
         # reader is still asked for rather than assumed: getting it wrong

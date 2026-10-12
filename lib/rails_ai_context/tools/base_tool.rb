@@ -70,6 +70,9 @@ module RailsAiContext
       # for thread safety in multi-threaded servers (e.g., Puma).
       SHARED_CACHE = { mutex: Mutex.new }
 
+      # Per thread, one list per running tool call of the composed tools it left out.
+      LEFT_OUT = :rails_ai_context_left_out
+
       # What a server last saw of its app's files (a Fingerprinter::Snapshot),
       # when the check now running began, and when the last finished one
       # did. The snapshot is nil until a server starts, so a process that is
@@ -1055,6 +1058,24 @@ module RailsAiContext
           return nil unless RailsAiContext::Server.served?(name)
 
           [ "`#{name}(#{args})`", purpose ].compact.join(" ")
+        end
+
+        # A section of this answer that another tool builds, run only when the
+        # app serves that tool; otherwise an empty answer, and SafeCall names
+        # the tool once at the end of this one.
+        def compose(tool, **args)
+          return tool.call(**args) if RailsAiContext::Server.served_tool(tool.tool_name).equal?(tool)
+
+          Thread.current[BaseTool::LEFT_OUT]&.last&.push(tool.tool_name)
+          MCP::Tool::Response.new([ { type: "text", text: "" } ], meta: { empty: true })
+        end
+
+        def left_out_note(names)
+          return nil if names.empty?
+
+          many = names.size > 1
+          "\n\n_#{names.map { |n| "`#{n}`" }.join(', ')} #{many ? 'are' : 'is'} turned off in this app " \
+            "(skip_tools lists #{many ? 'them' : 'it'}), so #{many ? 'their sections are' : 'its section is'} left out._"
         end
 
         # `_Next:` with the pointers that are served, on one line or one per

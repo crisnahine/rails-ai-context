@@ -570,29 +570,29 @@ module RailsAiContext
           if ctrl && act
             add_section(lines, "Controller Context", report_error: true) do
               ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
-              GetControllers.call(controller: ctrl_class, action: act)
+              compose(GetControllers, controller: ctrl_class, action: act)
             end
           end
 
           if file && line
             add_section(lines, "Code Context", report_error: true) do
-              GetEditContext.call(file: file, near: parsed[:method_name] || line.to_s)
+              compose(GetEditContext, file: file, near: parsed[:method_name] || line.to_s)
             end
           end
 
           if classification[:type] == :schema_mismatch
             table = parsed[:message].match(/(?:table|relation)\s+["']?(\w+)["']?/i)&.[](1)
-            add_section(lines, "Schema Context") { GetSchema.call(table: table) } if table
+            add_section(lines, "Schema Context") { compose(GetSchema, table: table) } if table
           end
 
           if classification[:type] == :validation_failure
             model_name = file&.match(%r{app/models/(.+)\.rb})&.[](1)&.camelize
-            add_section(lines, "Model Context") { GetModelDetails.call(model: model_name) } if model_name
+            add_section(lines, "Model Context") { compose(GetModelDetails, model: model_name) } if model_name
           end
 
           if parsed[:method_name] && lines.none? { |l| l.include?("Code Context") }
             add_section(lines, "Method Trace") do
-              result = SearchCode.call(pattern: parsed[:method_name], match_type: "trace")
+              result = compose(SearchCode, pattern: parsed[:method_name], match_type: "trace")
               # A trace that found callers but no `def` is still not the
               # method's definition, which is what this section promises.
               definition_missing?(result) ? nil : result
@@ -630,7 +630,7 @@ module RailsAiContext
             # Check if calling on an association
             if method && file
               begin
-                ctx = GetEditContext.call(file: file, near: method)
+                ctx = compose(GetEditContext, file: file, near: method)
                 code = response_text(ctx)
                 # Find the receiver: something.method_name
                 receiver_match = code.match(/(\w+)\.#{Regexp.escape(method)}/)
@@ -650,7 +650,7 @@ module RailsAiContext
             if ctrl && act
               begin
                 ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
-                result = GetControllers.call(controller: ctrl_class, action: act)
+                result = compose(GetControllers, controller: ctrl_class, action: act)
                 text = response_text(result)
                 if text.include?("set_") && text.include?("find")
                   return "The `set_*` before_action uses `.find` which raises RecordNotFound. " \

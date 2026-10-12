@@ -88,7 +88,7 @@ module RailsAiContext
         lines = []
 
         # Controller + action source + private methods + instance vars
-        ctrl_result = GetControllers.call(controller: controller_name, action: action_name)
+        ctrl_result = compose(GetControllers, controller: controller_name, action: action_name)
         lines << response_text(ctrl_result)
 
         # Infer model from controller
@@ -96,13 +96,13 @@ module RailsAiContext
         model_name = snake.split("/").last.singularize.camelize
 
         # Model details
-        model_result = GetModelDetails.call(model: model_name)
+        model_result = compose(GetModelDetails, model: model_name)
         unless empty?(model_result)
           lines << "" << "---" << "" << response_text(model_result)
         end
 
         # Routes for this controller
-        route_result = GetRoutes.call(controller: snake)
+        route_result = compose(GetRoutes, controller: snake)
         unless empty?(route_result)
           lines << "" << "---" << ""
           lines << response_text(route_result)
@@ -169,13 +169,13 @@ module RailsAiContext
       # @return [Array(MCP::Tool::Response, String, nil)] the view section and
       #   a note naming the directory it came from
       private_class_method def self.controller_views(snake)
-        namespaced = GetView.call(controller: snake, detail: "standard")
+        namespaced = compose(GetView, controller: snake, detail: "standard")
         return [ namespaced, "_Views from `app/views/#{snake}`._" ] unless empty?(namespaced)
 
         basename = snake.to_s.split("/").last
         return [ namespaced, nil ] if basename.nil? || basename == snake
 
-        flat = GetView.call(controller: basename, detail: "standard")
+        flat = compose(GetView, controller: basename, detail: "standard")
         return [ namespaced, nil ] if empty?(flat)
 
         [ flat, "_No templates under `app/views/#{snake}`; these are `app/views/#{basename}`, which Rails resolves for this controller only if it sets its own view path._" ]
@@ -282,13 +282,13 @@ module RailsAiContext
       private_class_method def self.controller_context(controller_name)
         lines = []
 
-        ctrl_result = GetControllers.call(controller: controller_name)
+        ctrl_result = compose(GetControllers, controller: controller_name)
         lines << response_text(ctrl_result)
 
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
 
         # Routes for this controller
-        route_result = GetRoutes.call(controller: snake)
+        route_result = compose(GetRoutes, controller: snake)
         unless empty?(route_result)
           lines << "" << "---" << "" << response_text(route_result)
         end
@@ -310,22 +310,23 @@ module RailsAiContext
 
         resolved_name = key || model_name
 
-        model_result = GetModelDetails.call(model: resolved_name)
+        model_result = compose(GetModelDetails, model: resolved_name)
 
-        # If model not found, fail fast - don't leak partial results from sub-tools
-        return response_text(model_result) if empty?(model_result)
+        # If model not found, fail fast - don't leak partial results from sub-tools.
+        # A model the app has still gets its schema and tests when model details is turned off.
+        return response_text(model_result) if empty?(model_result) && (key.nil? || RailsAiContext::Server.served?("rails_get_model_details"))
 
         lines << response_text(model_result)
 
         if key && models[key][:table_name]
-          schema_result = GetSchema.call(table: models[key][:table_name])
+          schema_result = compose(GetSchema, table: models[key][:table_name])
           unless empty?(schema_result)
             lines << "" << "---" << "" << response_text(schema_result)
           end
         end
 
         # Tests for this model
-        test_result = GetTestInfo.call(model: resolved_name, detail: "standard")
+        test_result = compose(GetTestInfo, model: resolved_name, detail: "standard")
         unless empty?(test_result)
           lines << "" << "---" << "" << response_text(test_result)
         end
@@ -361,7 +362,7 @@ module RailsAiContext
 
       private_class_method def self.feature_context(feature_name)
         # Start with full-stack feature analysis
-        analyze_result = AnalyzeFeature.call(feature: feature_name)
+        analyze_result = compose(AnalyzeFeature, feature: feature_name)
         lines = [ response_text(analyze_result) ]
 
         # Enrich with schema columns for matching models
@@ -375,7 +376,7 @@ module RailsAiContext
             table_name = models[model_name][:table_name]
             next unless table_name
             matched_tables << table_name
-            schema_result = GetSchema.call(table: table_name)
+            schema_result = compose(GetSchema, table: table_name)
             unless empty?(schema_result)
               lines << "" << "---" << "" << response_text(schema_result)
             end
@@ -407,7 +408,7 @@ module RailsAiContext
       rescue => e
         # Fall back to plain analyze_feature on error
         RailsAiContext.debug_fail(e, label: "feature_context")
-        response_text(AnalyzeFeature.call(feature: feature_name))
+        response_text(compose(AnalyzeFeature, feature: feature_name))
       end
     end
   end
