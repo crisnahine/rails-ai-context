@@ -99,6 +99,33 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
             "Blocked: the query passes the secret column `salt` through")
   end
 
+  it "runs a subquery that reads no secret column of a table that holds one" do
+    { "SELECT (SELECT count(*) FROM rac_pg_accounts) AS n" => "| 1 |", "SELECT (SELECT count(id) FROM rac_pg_accounts) AS n" => "| 1 |",
+      "SELECT exists (SELECT 1 FROM rac_pg_accounts) AS n" => "| true |", "SELECT (SELECT max(id) FROM rac_pg_accounts) AS n" => "| 1 |",
+      "SELECT (SELECT count(*) FROM rac_pg_renamed) AS n" => "| 1 |",
+      "SELECT g, (SELECT count(*) FROM rac_pg_accounts a WHERE a.id = g) AS n FROM generate_series(1, 1) g" => "| 1 | 1 |" }.each do |sql, row|
+      response = run(sql)
+      expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+      expect(response.content.first[:text]).to include(row), sql
+    end
+  end
+
+  it "refuses a subquery that reads a secret column or a whole row" do
+    body = "FROM rac_pg_accounts"
+    refused([ "SELECT (SELECT max(api_token) #{body}) AS n", "SELECT (SELECT count(api_token) #{body}) AS n",
+              "SELECT (SELECT string_agg(api_token, ',') #{body}) AS n" ], "Blocked: query references secret column `api_token`")
+    refused([ "SELECT (SELECT row_to_json(rac_pg_accounts) #{body}) AS n", "SELECT (SELECT rac_pg_accounts #{body}) AS n",
+              "SELECT (SELECT count(rac_pg_accounts) #{body}) AS n", "SELECT count(*) #{body} a GROUP BY a",
+              "SELECT (SELECT count(*) #{body} WHERE (rac_pg_accounts.*)::text LIKE '%token-v%') AS n" ],
+            "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+    guess = "(1, 'a@example.com', 'salt-valud', 'x', 'y')"
+    refused([ "SELECT (SELECT max(harmless) FROM rac_pg_renamed) AS n", "SELECT #{guess} < (SELECT * #{body} GROUP BY 1, 2, 3, 4, 5) AS o",
+              "SELECT (SELECT count(*) #{body} a NATURAL JOIN rac_pg_accounts b) AS n",
+              "SELECT (SELECT count(*) FROM (SELECT DISTINCT * #{body}) x) AS n" ], "Blocked: the query's plan uses the secret column `salt`")
+    refused([ "SELECT count(*) FILTER (WHERE #{guess} < (SELECT * #{body})) AS n FROM generate_series(1, 1) g" ],
+            "Blocked: the query passes the secret column `salt` through")
+  end
+
   it "filters a quoted mixed-case secret column in place, and refuses what would rename or compare it" do
     conn.execute("DROP TABLE IF EXISTS rac_pg_mixed")
     conn.execute(%(CREATE TABLE rac_pg_mixed (id int, email text, "Salt" text)))

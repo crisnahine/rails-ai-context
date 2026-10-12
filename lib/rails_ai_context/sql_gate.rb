@@ -596,7 +596,7 @@ module RailsAiContext
       secret = @secrets.in_schema
       return nil if secret.empty?
 
-      named = ->(expr) { secret.find { |col| expr.downcase.match?(/\b#{Regexp.escape(col)}\b/) } }
+      named = ->(expr) { secret.find { |col| names?([ expr ], col) } }
       conds.each { |expr| (col = named.call(expr)) and return col }
       outputs.each do |expr|
         next if expr.match?(PASSTHROUGH_OUTPUT)
@@ -607,15 +607,24 @@ module RailsAiContext
     end
 
     # A secret base column some node passes through and the top node leaves unnamed (a MATERIALIZED
-    # CTE, a subquery scan, a set operation), where redaction by position cannot pin it.
+    # CTE, a subquery scan, a set operation), where redaction by position cannot pin it. A column
+    # handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
     def laundered_secret_column(plan)
       top = secret_base_columns(plan, plan.output)
       plan.nodes.each do |node|
+        reader = plan.reader(node)
         secret_base_columns(plan, Array(node["Output"])).each do |var|
-          return var.last unless top.include?(var)
+          next if top.include?(var) || (reader && !names?(plan.expressions(reader), var.last))
+
+          return var.last
         end
       end
       nil
+    end
+
+    def names?(exprs, column)
+      pattern = SecretColumns.identifier(column)
+      exprs.any? { |expr| SecretColumns.fold(expr.gsub(PLAN_LITERAL, "''")).match?(pattern) }
     end
 
     def secret_base_columns(plan, output)

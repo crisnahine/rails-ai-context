@@ -683,6 +683,79 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(plan_refusal(top)).to include("through a CTE, subquery or set operation")
     end
 
+    # Plans PostgreSQL 16 gave for `SELECT (<subquery>) AS n` over users (id, email, api_token), a secret column last.
+    describe "a subquery over a relation that holds a secret column" do
+      let(:relations) { { "users" => %w[id email api_token] } }
+      let(:columns) { %w[users.id users.email users.api_token] }
+
+      def users_scan(extra = {})
+        { "Node Type" => "Seq Scan", "Parent Relationship" => "Outer", "Relation Name" => "users", "Alias" => "users", "Output" => columns }.merge(extra)
+      end
+
+      def init_plan(node, returns = "$0")
+        { "Node Type" => "Result", "Output" => [ "$0" ],
+          "Plans" => [ node.merge("Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns #{returns})") ] }
+      end
+
+      def aggregate(output, child = users_scan, extra = {})
+        { "Node Type" => "Aggregate", "Strategy" => "Plain", "Output" => output, "Plans" => [ child ] }.merge(extra)
+      end
+
+      it "runs an aggregate that names no secret column, over a scan that hands it every column" do
+        [ "count(*)", "count(users.id)", "max(users.id)" ].each do |output|
+          expect(plan_refusal(init_plan(aggregate([ output ])))).to be_nil, output
+        end
+        filtered = users_scan("Filter" => "(users.email ~~ 'a%'::text)")
+        expect(plan_refusal(init_plan(aggregate([ "max(users.id)" ], filtered)))).to be_nil
+      end
+
+      it "runs EXISTS, whose scan returns no column" do
+        scan = { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users" }
+        expect(plan_refusal(init_plan(scan))).to be_nil
+      end
+
+      it "runs a join that names no secret column, over a scan that hands it every column" do
+        top = { "Node Type" => "Hash Join", "Output" => [ "p.title" ], "Hash Cond" => "(users.id = p.user_id)",
+                "Plans" => [ users_scan, { "Node Type" => "Hash", "Parent Relationship" => "Inner", "Output" => [ "p.title", "p.user_id" ],
+                                           "Plans" => [ { "Node Type" => "Seq Scan", "Parent Relationship" => "Outer", "Relation Name" => "posts",
+                                                          "Alias" => "p", "Output" => [ "p.title", "p.user_id" ] } ] } ] }
+        expect(plan_refusal(top)).to be_nil
+      end
+
+      it "refuses an aggregate over the secret column" do
+        [ "max(users.api_token)", "count(users.api_token)", "string_agg(users.api_token, ','::text)" ].each do |output|
+          expect(plan_refusal(init_plan(aggregate([ output ])))).to include("plan uses the secret column `api_token`"), output
+        end
+      end
+
+      it "refuses a whole row, alone, in a function and in an aggregate" do
+        whole = { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users" }
+        expect(plan_refusal(init_plan(whole.merge("Output" => [ "row_to_json(users.*)" ])))).to include("whole row of `users`")
+        expect(plan_refusal(init_plan(whole.merge("Output" => [ "users.*" ])))).to include("whole row of `users`")
+        counted = aggregate([ "count(users.*)" ], whole.merge("Parent Relationship" => "Outer", "Output" => [ "users.*" ]))
+        expect(plan_refusal(init_plan(counted))).to include("whole row of `users`")
+      end
+
+      it "refuses a subquery the aggregate reads by position" do
+        compared = users_scan("Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns $0,$1,$2)")
+        generated = { "Node Type" => "Function Scan", "Parent Relationship" => "Outer", "Function Name" => "generate_series", "Alias" => "g", "Output" => [ "g.g" ] }
+        top = { "Node Type" => "Aggregate", "Output" => [ "count(*) FILTER (WHERE (ROW(1, 'a'::text, 'b'::text) < ROW($0, $1, $2)))" ],
+                "Plans" => [ compared, generated ] }
+        expect(plan_refusal(top)).to include("passes the secret column `api_token` through")
+      end
+
+      it "refuses a scan whose columns a node between it and the aggregate passes on" do
+        sorted = { "Node Type" => "Sort", "Parent Relationship" => "Outer", "Output" => columns, "Sort Key" => %w[users.id users.email], "Plans" => [ users_scan ] }
+        unique = { "Node Type" => "Unique", "Parent Relationship" => "Outer", "Output" => columns, "Plans" => [ sorted ] }
+        expect(plan_refusal(init_plan(aggregate([ "count(*)" ], unique)))).to include("passes the secret column `api_token` through")
+      end
+
+      it "refuses an aggregate that names the secret column in a grouping set" do
+        grouped = aggregate([ "count(*)" ], users_scan, "Grouping Sets" => [ { "Group Keys" => [ [ "users.api_token" ] ] } ])
+        expect(plan_refusal(init_plan(grouped))).to include("passes the secret column `api_token` through")
+      end
+    end
+
     it "refuses an unlisted VOLATILE function as VOLATILE" do
       allow(connection).to receive(:select_values).and_return([ "nextval" ])
       expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "nextval('s'::regclass)" ] }))
