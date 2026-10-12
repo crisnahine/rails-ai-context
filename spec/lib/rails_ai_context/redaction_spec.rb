@@ -1249,7 +1249,18 @@ RSpec.describe RailsAiContext::Redaction do
     # The work a pattern does, which backtracking multiplies; other processes taking the CPU add nothing to it.
     let(:cpu_clock) { Process::CLOCK_PROCESS_CPUTIME_ID }
 
-    it "takes a fraction of a second over a 1 MB line built to make a pattern backtrack" do
+    # Regexp.timeout counts wall time, so on a loaded machine it ends a match that did little work.
+    around(:each, :cpu_timed) do |example|
+      next example.run unless Regexp.respond_to?(:timeout=)
+
+      saved = Regexp.timeout
+      Regexp.timeout = nil
+      example.run
+    ensure
+      Regexp.timeout = saved if Regexp.respond_to?(:timeout=)
+    end
+
+    it "takes a fraction of a second over a 1 MB line built to make a pattern backtrack", :cpu_timed do
       lines = [ ((("a" * 64) + "@") * 16_000), "a@#{"a." * 500_000}", "#{"a." * 500_000}@x", "a@b.#{"c" * 1_000_000}" ]
 
       lines.each do |line|
@@ -1264,7 +1275,7 @@ RSpec.describe RailsAiContext::Redaction do
     # A filtered value's offset was counted from the line's start, once per match.
     # The bound is what a backtracking pattern could never meet, with room for a
     # slow CI runner (a macOS one took 2.1 seconds where Linux takes under one).
-    it "reads a 1 MB run of dashed words or header keys in seconds, not minutes, in a log and in source" do
+    it "reads a 1 MB run of dashed words or header keys in seconds, not minutes, in a log and in source", :cpu_timed do
       [ "a-" * 500_000, "#{'token-' * 170_000}x", %("#{'token-' * 170_000}token" => "x"),
         %("Authorization"=>"x", ) * 50_000, "#{'a_' * 250_000}#{'a1' * 250_000}password=x",
         "--password 1a " * 75_000, "#{'aToken' * 170_000}x", %("api_token": { "value": "x" }, ) * 30_000,
@@ -1279,7 +1290,7 @@ RSpec.describe RailsAiContext::Redaction do
     # A call's receiver was tried from each character of a run of letters, digits and dots:
     # on Ruby 3.1 and 3.2 a 64 KB one took over 20 seconds, and on 3.3 and later a 1 MB one
     # took 2.5 seconds in one match, past the second a Rails 8 app sets as Regexp.timeout.
-    it "reads a 1 MB word or dotted run in source, each match well inside a Rails 8 Regexp.timeout" do
+    it "reads a 1 MB word or dotted run in source, each match well inside a Rails 8 Regexp.timeout", :cpu_timed do
       [ %(blob = "#{'0123456789abcdef' * 62_500}"), "a." * 500_000, "f" * 1_000_000 ].each do |line|
         started = Process.clock_gettime(cpu_clock)
         described_class.redact_source_line(line, path: "spec/support/blob.rb")
@@ -1294,7 +1305,7 @@ RSpec.describe RailsAiContext::Redaction do
     # A name was split at every underscore when what followed it failed, so a
     # long word with a secret's word in many of its parts cost its square; and
     # the path check retried from every slash of a value ending in `=`.
-    it "reads a 1 MB word with a secret's word in many of its parts, each match well inside a Rails 8 Regexp.timeout" do
+    it "reads a 1 MB word with a secret's word in many of its parts, each match well inside a Rails 8 Regexp.timeout", :cpu_timed do
       lines = [ "#{'dbpassword_' * 90_000}x = 1", "fetch(:#{'apassword_' * 100_000}x", "#{'userPassword_' * 75_000}x: 1",
                 "#{'token_' * 160_000}x =", "#{'aSecretB' * 120_000}x = 1", "--token #{'/a1' * 300_000}/=" ]
       lines.each do |line|
