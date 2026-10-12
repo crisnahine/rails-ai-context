@@ -297,10 +297,9 @@ module RailsAiContext
 
         # If model not found, fail fast - don't leak partial results from sub-tools.
         # A model the app has still gets its schema and tests when model details is turned off.
-        unless own_served?(GetModelDetails)
-          return response_text(not_found_response("Model", model_name.to_s.strip, models.keys.sort)) if key.nil?
-        end
-        return response_text(model_result) if empty?(model_result) && (key.nil? || own_served?(GetModelDetails))
+        served = own_served?(GetModelDetails)
+        return response_text(not_found_response("Model", model_name.to_s.strip, models.keys.sort)) if key.nil? && !served
+        return response_text(model_result) if empty?(model_result) && served
 
         table = key && models[key][:table_name]
         sections(response_text(model_result), (section_text(compose(GetSchema, table: table)) if table),
