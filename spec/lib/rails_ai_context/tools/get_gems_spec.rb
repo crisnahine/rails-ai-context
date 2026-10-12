@@ -387,6 +387,34 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       end
     end
 
+    # Rails 6's rails gem depends on sprockets-rails, but only rails/all or sprockets/railtie loads it.
+    it "lists sprockets-rails the rails gem pulls in only when config/application.rb loads it" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            rails (6.1.7)
+              sprockets-rails (>= 2.0.0)
+            sprockets-rails (3.4.2)
+
+        DEPENDENCIES
+          rails (~> 6.1)
+      LOCK
+      texts = [ "require \"action_controller/railtie\"\n", "require \"rails/all\"\n" ].map do |application_rb|
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config", "application.rb"), "require \"rails\"\n#{application_rb}")
+          File.write(File.join(dir, "Gemfile.lock"), lock)
+          context = { gems: RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+          allow(described_class).to receive(:cached_context).and_return(context)
+          described_class.call.content.first[:text]
+        end
+      end
+
+      expect(texts.first).not_to include("**sprockets-rails**")
+      expect(texts.last).to include("**sprockets-rails**")
+    end
+
     # The parent gem requires its engine, so devise runs inside the app; jwt stays oauth2's own detail.
     it "keeps a Rails engine the app gets through another gem" do
       Dir.mktmpdir do |dir|

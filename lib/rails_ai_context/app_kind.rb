@@ -26,7 +26,8 @@ module RailsAiContext
     FRAMEWORK_RAILTIES = {
       "activerecord" => "active_record/railtie", "activestorage" => "active_storage/engine",
       "actionmailer" => "action_mailer/railtie", "actionmailbox" => "action_mailbox/engine",
-      "actiontext" => "action_text/engine", "actioncable" => "action_cable/engine", "activejob" => "active_job/railtie"
+      "actiontext" => "action_text/engine", "actioncable" => "action_cable/engine", "activejob" => "active_job/railtie",
+      "sprockets-rails" => "sprockets/railtie"
     }.freeze
     private_constant :FRAMEWORK_RAILTIES
 
@@ -34,7 +35,8 @@ module RailsAiContext
       loads_framework?(root, "activerecord")
     end
 
-    # An application.rb that cannot be read is taken to load it: hiding a framework the app uses is the worse mistake.
+    # False only when config/application.rb picks its frameworks railtie by railtie (a require, or a list
+    # it requires in a loop) and leaves this one out; a file it cannot read is taken to load it.
     def loads_framework?(root, gem_name)
       railtie = FRAMEWORK_RAILTIES[gem_name] or return false
       framework = File.dirname(railtie)

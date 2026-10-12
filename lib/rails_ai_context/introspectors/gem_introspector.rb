@@ -186,7 +186,7 @@ module RailsAiContext
         hotwire-native-rails importmap-rails inertia_rails jbuilder jsbundling-rails jsonapi-serializer kredis lockbox
         lookbook madmin mission_control-jobs mongoid motor-admin neighbor newrelic_rpm noticed paper_trail pg_search
         propshaft pundit rack-attack react-rails rodauth-rails rolify rspec-rails rswag-api rswag-ui sentry-rails sidekiq
-        simple_form skylight solid_cable solid_cache solid_errors solid_queue sorcery sprockets-rails stimulus-rails
+        simple_form skylight solid_cable solid_cache solid_errors solid_queue sorcery stimulus-rails
         stripe tailwindcss-rails trestle turbo-rails view_component will_paginate
       ].to_set.freeze
 
