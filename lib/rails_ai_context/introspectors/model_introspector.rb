@@ -313,6 +313,8 @@ module RailsAiContext
       def outside_model_base?(class_name, candidates)
         candidate = candidates[class_name]
         return false unless candidate[:path]
+        # The frameworks' own classes (`ActiveRecord::Relation`, `ActiveModel::Model`) are never a model's base.
+        return false if outside_parent(class_name, candidates).to_s.start_with?("ActiveRecord::", "ActiveModel::")
 
         if SchemaReader.for(app.root).tables.any?
           own = candidate[:table_name] || own_table_name(class_name, candidates)

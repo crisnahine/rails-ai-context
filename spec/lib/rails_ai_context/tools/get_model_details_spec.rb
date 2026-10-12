@@ -1380,10 +1380,15 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       FileUtils.mkdir_p(File.join(dir, "db"))
       File.write(File.join(dir, "app", "models", "email_message.rb"), "class EmailMessage < Ahoy::Message\nend\n")
       File.write(File.join(dir, "app", "models", "country.rb"), "class Country < ActiveHash::Base\n  has_many :people\nend\n")
+      # OpenProject's Journable::HistoricActiveRecordRelation: a relation class whose parent's name is a table the app has.
+      File.write(File.join(dir, "app", "models", "historic_relation.rb"), "class HistoricRelation < ActiveRecord::Relation\nend\n")
       File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
         ActiveRecord::Schema[8.0].define(version: 1) do
           create_table "ahoy_messages" do |t|
             t.string "to"
+          end
+          create_table "relations" do |t|
+            t.string "kind"
           end
         end
       RUBY
@@ -1393,6 +1398,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       expect(described_class.call(model: "EmailMessage").content.first[:text]).to include("**Table:** `ahoy_messages`")
       expect(described_class.call(model: "Country").content.first[:text]).to include("Model 'Country' not found")
+      expect(models).not_to have_key("HistoricRelation")
     end
   end
 
