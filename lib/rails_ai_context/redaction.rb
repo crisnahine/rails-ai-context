@@ -17,8 +17,8 @@ module RailsAiContext
     PLACEHOLDER_NAMES = SafePath::PLACEHOLDER_SUFFIXES.map { |suffix| Regexp.escape(suffix.delete_prefix(".")) }.join("|")
     EXAMPLE_FILE = /\.(?:#{PLACEHOLDER_NAMES})\b/
     YAML_FILE = /\.ya?ml(?:\.(?:erb|#{PLACEHOLDER_NAMES}))*\z/
-    # A log, rotated ones included: Logger's development.log.0 and logrotate's .log-20261001 and .log.old.
-    LOG_FILE = /\.log(?:\.\d+|-\d{8,10}|\.old)?\z/
+    # A log, rotated ones included: Logger's development.log.0 and logrotate's .log-20261001, .log-2026-10-01 and .log.old.
+    LOG_FILE = /\.log(?:\.\d+|-\d{4}-?\d{2}-?\d{2}(?:-?\d{2})?|\.old)?\z/
 
     # Regex by design: these scrub vocabulary out of values already read from
     # the AST or a log file rather than parsing structure. A credential can
@@ -126,7 +126,9 @@ module RailsAiContext
       # Unquoted, the name needs the space a header has after its colon, so
       # `Authorization::UnauthorizedError` is a class.
       [ /(?:(?<quote>["'])(?:HTTP_(?:PROXY_)?|Proxy-|X-)?authorization\k<quote>\s*(?:=>|:|=(?!>))\s*|authorization:\s+)
-         (?<value>(?!["']?\[FILTERED\])(?:"[^"]*"|'[^']*'|(?:(?:Bearer|Basic|Token)\s+)?(?:\[FILTERED\]|="[^"]*"|[^\s"',;)\]}])+))/xi, :value ],
+         (?<value>(?!["']?\[FILTERED\])(?:"[^"]*"|'[^']*'
+           |(?:Token|Digest)\s+[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+)(?:,\s*[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+))*
+           |(?:(?:Bearer|Basic|Token)\s+)?(?:\[FILTERED\]|="[^"]*"|[^\s"',;)\]}])+))/xi, :value ],
       [ /cookie:\s(?<value>#{LOG_VALUE})/i, :value ],
       [ /session_id=(?<value>#{LOG_VALUE})/i, :value ],
       [ /_session=(?<value>#{LOG_VALUE})/i, :value ],
