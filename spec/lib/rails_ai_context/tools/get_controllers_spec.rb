@@ -1516,6 +1516,42 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(answer_for(files, controller: "MiddleController")).to include("`mid_params`")
     end
 
+    it "takes a method a concern the class includes defines at its name, as it runs before the parent's" do
+      files = {
+        "app/controllers/application_controller.rb" => <<~RUBY,
+          class ApplicationController < ActionController::Base
+            private
+
+            def filter_params = {}
+          end
+        RUBY
+        "app/controllers/concerns/filtering.rb" => <<~RUBY,
+          module Filtering
+            private
+
+            def filter_params
+              params.permit(:q)
+            end
+          end
+        RUBY
+        "app/controllers/posts_controller.rb" => <<~RUBY
+          class PostsController < ApplicationController
+            include Filtering
+
+            def index; end
+
+            private
+
+            def search_params
+              filter_params.merge(page: 1)
+            end
+          end
+        RUBY
+      }
+
+      expect(answer_for(files, controller: "PostsController")).to include("`search_params`")
+    end
+
     it "keeps a parent's strong params method when the child defines that name only as a class method or in a nested class" do
       files = {
         "app/controllers/application_controller.rb" => <<~RUBY,

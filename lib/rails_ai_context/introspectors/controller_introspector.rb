@@ -224,15 +224,16 @@ module RailsAiContext
 
       # The strong params the controller has, its own and each ancestor's that no nearer class redefines.
       def inherited_strong_params(links)
-        facts = links.map do |link, entry, source|
-          source = controller_source(entry) if entry
-          next NO_STRONG_PARAMS unless source
+        sources = links.map { |_link, entry, source| entry ? controller_source(entry) : source }
+        facts = links.each_with_index.map do |(link, entry, _source), index|
+          next NO_STRONG_PARAMS unless sources[index]
 
-          actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(source, class_name: link)
-          strong_params_facts(source, actions)
+          actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(sources[index], class_name: link)
+          strong_params_facts(sources[index], actions)
         end
+        concerns = links.each_with_index.map { |(link, _entry, _source), index| sources[index] ? concern_methods(sources[index], link) : Set.new }
         nearer = Set.new
-        lineage_strong_params(facts).each_with_index.each_with_object({}) do |(strong, index), by_name|
+        lineage_strong_params(facts, concerns).each_with_index.each_with_object({}) do |(strong, index), by_name|
           facts[index][:order].each do |name|
             next unless strong.key?(name) && !nearer.include?(name)
 
@@ -240,6 +241,16 @@ module RailsAiContext
           end
           nearer.merge(facts[index][:defined])
         end.values
+      rescue => e
+        RailsAiContext.debug_fail(e, Array(links.first&.dig(1, :strong_params)), label: "inherited_strong_params")
+      end
+
+      # The instance methods of the concerns a class includes, which run before a parent class's of that name.
+      def concern_methods(source, within)
+        (@concern_methods ||= {})[[ source, within ]] ||= extract_concerns_from_source(source).each_with_object(Set.new) do |concern, names|
+          found = ConcernPaths.module_source(app.root.to_s, concern.to_s, prefer: "controller", within: within)
+          names.merge(strong_params_facts(found, [])[:defined]) if found
+        end
       end
 
       def controller_source(entry)
@@ -766,9 +777,8 @@ module RailsAiContext
 
       NO_STRONG_PARAMS = { defined: Set.new, order: [], direct: {}, chains: {} }.freeze
 
-      # What a class body's own instance methods say about strong params, read once per source: the names it
-      # defines, the methods that permit, and what each *_params method returns. An action that permits inline
-      # is still an action, not a strong-params helper; a public *_params method is a helper left above `private`.
+      # An action that permits inline is still an action, not a strong-params helper; a public *_params
+      # method is a helper left above `private`.
       def strong_params_facts(source, actions, walked = nil)
         (@strong_params_facts ||= {})[[ source, actions.sort ]] ||= begin
           nodes = AstWalk.each(AstCache.parse_string(source).value).to_a
@@ -786,20 +796,21 @@ module RailsAiContext
         end
       end
 
-      # Each class's strong params as the controller runs them, nearest class first. A *_params method also
-      # counts when it returns what super, a call given the whole params, or another strong-params method
-      # makes: a call runs the nearest class's method of that name, so it counts when that one does, and one no
-      # class here defines (a concern's, a gem's, Pundit's) is taken at its *_params or permitted_* name.
-      def lineage_strong_params(facts)
+      # A call runs the nearest class's method of that name; one no class here defines, or a concern a class
+      # includes does (a concern's, Pundit's), is taken at its *_params or permitted_* name.
+      def lineage_strong_params(facts, concerns = [])
         owner = {}
-        facts.each_with_index { |fact, index| fact[:defined].each { |name| owner[name] ||= index } }
+        facts.each_with_index do |fact, index|
+          fact[:defined].each { |name| owner[name] = index unless owner.key?(name) }
+          Array(concerns[index]).each { |name| owner[name] = nil unless owner.key?(name) }
+        end
         strong = facts.map { |fact| fact[:direct].dup }
         loop do
           added = facts.each_with_index.flat_map do |fact, index|
             fact[:chains].filter_map do |name, chains|
               next if strong[index].key?(name)
 
-              [ index, name ] if hands_params_on?(chains) { |called| owner.key?(called) ? strong[owner[called]].key?(called) : called.match?(DELEGATE_NAME) }
+              [ index, name ] if hands_params_on?(chains) { |called| (at = owner[called]) ? strong[at].key?(called) : called.match?(DELEGATE_NAME) }
             end
           end
           break strong if added.empty?
