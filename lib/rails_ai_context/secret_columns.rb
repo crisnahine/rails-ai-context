@@ -223,7 +223,7 @@ module RailsAiContext
     end
 
     def heuristic?(down)
-      down.end_with?(*HEURISTIC_SUFFIXES) || down.match?(/password|secret|token/)
+      down.end_with?(*HEURISTIC_SUFFIXES) || down.match?(/password|secret|token|nonce/) || down == "iv" || down.end_with?("_iv")
     end
   end
 end

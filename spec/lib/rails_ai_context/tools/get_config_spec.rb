@@ -72,7 +72,18 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       text = described_class.call.content.first[:text]
 
       expect(text).to include("- **Action Cable:** solid_cable")
-      expect(text).to include("- **Database:** sqlite3")
+      expect(text).to include("- **Database:** SQLite")
+    end
+
+    # The database family's name, as the schema, onboard and runtime surfaces
+    # show it; an adapter with no family stays as database.yml writes it.
+    { "mysql2" => "MySQL", "trilogy" => "MySQL", "postgresql" => "PostgreSQL", "postgis" => "PostgreSQL",
+      "sqlite3" => "SQLite", "sqlserver" => "sqlserver" }.each do |adapter, shown|
+      it "shows a #{adapter} database as #{shown}" do
+        allow(Rails.configuration).to receive(:database_configuration).and_return(Rails.env => { "adapter" => adapter })
+
+        expect(described_class.call.content.first[:text]).to include("- **Database:** #{shown}\n")
+      end
     end
   end
 

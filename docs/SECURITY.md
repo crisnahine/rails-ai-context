@@ -123,7 +123,7 @@ A query that names a sensitive column is **rejected before execution**, not reda
 
 - in `config.query_redacted_columns`, or the fixed built-in list;
 - an `encrypts` column of one of your models;
-- a name the heuristic catches: it ends in `password`, `secret`, `token`, `key`, `digest` or `hash`, or contains `password`, `secret` or `token`;
+- a name the heuristic catches: it ends in `password`, `secret`, `token`, `key`, `digest` or `hash`, or contains `password`, `secret`, `token` or `nonce`, or is `iv` or ends in `_iv`;
 - a name the shared log and config redaction treats as secret (`passwd`, `salt`, `credentials`, `pepper`, `signing_key` and the rest of its secret words), so a word added there is secret here too
 
 minus anything in `config.query_allowed_columns`. An `encrypts` column is the exception: it is sensitive whatever that list holds. A query that names it is refused, the refusal says the allowed list does not release it, and its values stay `[FILTERED]`.
