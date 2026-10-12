@@ -54,9 +54,9 @@ module RailsAiContext
         # Before the call reads anything: an edit since the last call drops
         # the caches and reloads the app's code (see the method).
         RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
-        Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
+        call = Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
         begin
-          answer.call
+          with_crashes(answer.call, call[:crashed])
         ensure
           Thread.current[:rails_ai_context_call] = nil
         end
@@ -91,11 +91,23 @@ module RailsAiContext
             append_note(response, invalid_detail_note(discarded))
           # ScriptError too: a SyntaxError or LoadError out of an app file the
           # tool reached must cost that call, not the stdio server and every
-          # tool with it.
-          rescue StandardError, ScriptError => e
-            failure_response(e)
+          # tool with it. So must a stack overflow or a SecurityError.
+          rescue StandardError, ScriptError, SystemStackError, SecurityError => e
+            failure_response(e).tap do |failure|
+              call = Thread.current[:rails_ai_context_call]
+              (call[:crashed] ||= []) << failure.content.first[:text] if call
+            end
           end
         end
+      end
+
+      # A tool this call ran crashed: the answer is an error, and it says so where its text left the crash out.
+      def with_crashes(response, crashes)
+        return response unless crashes && response.respond_to?(:error?) && !response.error?
+
+        text = response.content.first&.dig(:text).to_s
+        unsaid = crashes.uniq.reject { |failure| text.include?(failure.lines.first.strip) }
+        rebuilt(response, SafeCall.noted(response.content, ("\n\n#{unsaid.join("\n\n")}" if unsaid.any?)), error: true)
       end
 
       # The tools this call's composed sections left out, kept apart from
@@ -194,6 +206,10 @@ module RailsAiContext
         noted = SafeCall.noted(response.content, note)
         return response if noted.equal?(response.content)
 
+        rebuilt(response, noted, error: response.error?)
+      end
+
+      def rebuilt(response, content, error:)
         # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
         # reader is still asked for rather than assumed: getting it wrong
         # turns a good answer into a NoMethodError that SafeCall's own rescue
@@ -201,7 +217,7 @@ module RailsAiContext
         extra = { structured_content: response.structured_content }
         extra[:meta] = response.meta if response.respond_to?(:meta)
 
-        MCP::Tool::Response.new(noted, error: response.error?, **extra)
+        MCP::Tool::Response.new(content, error: error, **extra)
       end
     end
   end

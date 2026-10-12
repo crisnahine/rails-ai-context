@@ -402,7 +402,11 @@ module RailsAiContext
 
       # A tool that became a config section, answered from it with the call to make instead; a refusal ends as it is.
       def retired_call(request, section, ...)
-        arguments = (request[:arguments] || {}).transform_keys(&:to_sym).except(:section)
+        given = request[:arguments] || {}
+        # Arguments that are no object go on as they are, for the SDK to refuse.
+        return call_tool(request.merge(name: "rails_get_config"), ...) unless given.is_a?(Hash)
+
+        arguments = given.transform_keys(&:to_sym).except(:section)
         refusal = Tools::GetConfig.retired_refusal(section, arguments)
         return refusal.to_h if refusal
 

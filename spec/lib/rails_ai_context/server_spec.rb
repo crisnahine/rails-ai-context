@@ -419,6 +419,32 @@ RSpec.describe RailsAiContext::Server do
         expect(quick.dig(:result, :content, 0, :text) || quick.dig(:error, :data)).to match(/summary\W+standard\W+full/)
       end
 
+      it "refuses a retired name whose arguments are no object as it refuses a served tool's" do
+        mcp_server = server.build
+        call = ->(name, arguments) { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }) }
+
+        [ [ 1 ], "x" ].each do |arguments|
+          retired = nil
+          expect { retired = call.call("rails_get_gems", arguments) }.not_to output(/unhandled exception/).to_stderr
+          expect(retired).to eq(call.call("rails_get_config", arguments))
+        end
+      end
+
+      [ SystemStackError, SecurityError ].each do |error|
+        it "answers a #{error} in a tool as a tool error, and the next call as usual" do
+          mcp_server = server.build
+          call = -> { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } }) }
+          allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_raise(error, "stack level too deep")
+
+          failed = call.call[:result]
+          expect(failed[:isError]).to be(true)
+          expect(failed[:content].first[:text]).to start_with("Tool rails_get_schema failed: #{error}: stack level too deep")
+
+          RSpec::Mocks.space.proxy_for(RailsAiContext::Tools::GetSchema).reset
+          expect(call.call[:result][:isError]).to be_falsey
+        end
+      end
+
       # The SDK named only the guess.
       it "answers a name no tool has with the nearest tools, or with every tool" do
         call = ->(name) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: {} } }) }
