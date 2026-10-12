@@ -786,6 +786,13 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class.redact_log_line("AUTHORIZATION=Bearer abc123")).to eq("AUTHORIZATION=[FILTERED]")
       expect(described_class.redact_log_line("Authorization => Bearer abc123")).to eq("Authorization => [FILTERED]")
       expect(described_class.redact_log_line("raise Authorization::UnauthorizedError")).to eq("raise Authorization::UnauthorizedError")
+      expect(described_class.redact_log_line("GET /cb?authorization=Basic dXNlcjpw&page=2")).to eq("GET /cb?authorization=[FILTERED]&page=2")
+    end
+
+    it "keeps a switch's value under a name that ends in authorization" do
+      expect(described_class.redact_log_line("skip_authorization = true")).to eq("skip_authorization = true")
+      expect(described_class.redact_log_line("requires_authorization: FALSE, authorization => nil")).to eq("requires_authorization: FALSE, authorization => nil")
+      expect(described_class.redact_log_line("Authorization: true-abc123")).to eq("Authorization: [FILTERED]")
     end
 
     it "filters a Token or Digest header's parameters whole, with no stray bracket" do

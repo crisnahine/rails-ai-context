@@ -127,9 +127,9 @@ module RailsAiContext
       # `Authorization::UnauthorizedError` is a class, or an `=` or `=>` as an
       # env dump or a debug line writes it.
       [ /(?:(?<quote>["'])(?:HTTP_(?:PROXY_)?|Proxy-|X-)?authorization\k<quote>\s*(?:=>|:|=(?!>))\s*|authorization(?::\s+|\s*(?:=>|=(?![=~>]))\s*))
-         (?<value>(?!["']?\[FILTERED\])(?:"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'
+         (?<value>(?!["']?\[FILTERED\]|(?:true|false|nil|null)(?![\w.-]))(?:"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'
            |(?:Token|Digest)\s+[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+)(?:,\s*[\w-]+=(?:"[^"]*"|\[FILTERED\]|[^\s",]+))*
-           |(?:(?:Bearer|Basic|Token)\s+)?(?:\[FILTERED\]|="[^"]*"|[^\s"',;)\]}])+))/xi, :value ],
+           |(?:(?:Bearer|Basic|Token)\s+)?(?:\[FILTERED\]|="[^"]*"|[^\s"',;&)\]}])+))/xi, :value ],
       [ /cookie:\s(?<value>#{LOG_VALUE})/i, :value ],
       [ /session_id=(?<value>#{LOG_VALUE})/i, :value ],
       [ /_session=(?<value>#{LOG_VALUE})/i, :value ],
