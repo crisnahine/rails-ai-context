@@ -16,15 +16,15 @@ module RailsAiContext
       api_key api_secret access_token refresh_token jti
     ].freeze
 
-    # Matched whether or not the name is a real column, so the check holds with no
-    # connection. `config.query_allowed_columns` releases a name that only looks secret.
-    BUILT_IN_NAMES = (DEFAULT_REDACTED_COLUMNS + %w[
-      password_reset_token remember_token secret private_key authentication_string rolpassword setconfig
-    ]).freeze
-
     # PostgreSQL catalog columns that hold a stored credential: a role's password hash, and the settings
     # stored for a role or a database. pg_roles, pg_user and pg_shadow are views over them.
     CATALOG_CREDENTIALS = { "pg_authid" => %w[rolpassword], "pg_db_role_setting" => %w[setconfig] }.freeze
+
+    # Matched whether or not the name is a real column, so the check holds with no
+    # connection. `config.query_allowed_columns` releases a name that only looks secret.
+    BUILT_IN_NAMES = (DEFAULT_REDACTED_COLUMNS + %w[
+      password_reset_token remember_token secret private_key authentication_string
+    ] + CATALOG_CREDENTIALS.values.flatten).freeze
 
     HEURISTIC_SUFFIXES = %w[password secret token key digest hash].freeze
 
@@ -73,12 +73,6 @@ module RailsAiContext
       /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
     end
 
-    # A connection the server dropped is the caller's to answer, so it is no reason to fall back.
-    def self.lost_connection?(error)
-      error.is_a?(ActiveRecord::ConnectionNotEstablished) ||
-        (defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed))
-    end
-
     def self.primary?(connection)
       connection.pool.db_config.name == ActiveRecord::Base.connection_db_config.name
     end
@@ -92,7 +86,7 @@ module RailsAiContext
       views = begin
         family.view_definitions(connection, schemas)
       rescue ActiveRecord::StatementInvalid => e
-        raise if DatabaseFamily.timed_out?(e) || lost_connection?(e)
+        raise if DatabaseFamily.timed_out?(e) || DatabaseFamily.lost_connection?(e)
 
         # Named with no definition, so each one is refused as unreadable.
         connection.views.to_h { |view| [ view, nil ] }
@@ -130,7 +124,7 @@ module RailsAiContext
       end
     rescue StandardError => e
       # A read the timeout ended is the call's timeout, so it is no reason to fall back.
-      raise if lost_connection?(e) || (e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e))
+      raise if DatabaseFamily.lost_connection?(e) || (e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e))
 
       nil
     end
@@ -365,7 +359,7 @@ module RailsAiContext
       elsif (table = @unread_tables.keys.find { |name| names?(definition, name) })
         "its definition reads `#{table}`, which is not read"
       elsif definition.match?(WILDCARD) && (relation = @by_relation.keys.find { |name| names?(definition, name) })
-        "its definition reads every column of `#{relation}`, which holds the secret column `#{@by_relation[relation].first}`"
+        "its definition has a wildcard and names `#{relation}`, which holds the secret column `#{@by_relation[relation].first}`"
       end
     end
 

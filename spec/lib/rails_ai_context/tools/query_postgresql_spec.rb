@@ -407,7 +407,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
         end
 
         expect(response.error?).to be(true), sql
-        expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+        expect(response.content.first[:text]).to end_with("took the whole 1 second timeout, so the statement was not run.")
         expect(response.content.first[:text]).not_to include("salt-value", "token-value")
       end
     end
@@ -425,7 +425,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
         took = seconds { response = run(sql) }
 
         expect(response.error?).to be(true), sql
-        expect(response.content.first[:text]).to start_with("Query exceeded 1 second timeout")
+        expect(response.content.first[:text]).to end_with("took the whole 1 second timeout, so the statement was not run.")
         expect(took).to be_between(0.9, 2.5), sql
       end
     end

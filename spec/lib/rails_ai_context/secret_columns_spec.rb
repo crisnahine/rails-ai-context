@@ -185,10 +185,10 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(refused({ "v$" => definition }, "SELECT * FROM v$x")).to be_nil
     end
 
-    it "refuses a view that reads every column of a relation holding a secret column" do
+    it "refuses a view whose definition has a wildcard and names a relation holding a secret column" do
       [ "SELECT * FROM users", "SELECT u.* FROM users u", "SELECT DISTINCT * FROM users", "SELECT id, * FROM users" ].each do |definition|
         expect(refused({ "everyone" => definition }, "SELECT * FROM everyone"))
-          .to eq([ "everyone", "its definition reads every column of `users`, which holds the secret column `passwd`" ]), definition
+          .to eq([ "everyone", "its definition has a wildcard and names `users`, which holds the secret column `passwd`" ]), definition
       end
     end
 
@@ -301,8 +301,8 @@ RSpec.describe RailsAiContext::SecretColumns do
       )
       secrets = described_class.for(conn, context: context)
 
-      expect(secrets.refused_view_in("SELECT * FROM lined")&.last).to start_with("its definition reads every column of `users`")
-      expect(secrets.refused_view_in("SELECT * FROM blocked")&.last).to start_with("its definition reads every column of `users`")
+      expect(secrets.refused_view_in("SELECT * FROM lined")&.last).to start_with("its definition has a wildcard and names `users`")
+      expect(secrets.refused_view_in("SELECT * FROM blocked")&.last).to start_with("its definition has a wildcard and names `users`")
       expect(secrets.refused_view_in("SELECT * FROM plain")).to be_nil
     end
 

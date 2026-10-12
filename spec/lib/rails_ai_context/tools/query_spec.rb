@@ -1321,15 +1321,20 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(took).to be_between(1.2, 2.2)
     end
 
-    it "answers the timeout when the reads beside the statement used all of theirs" do
+    it "says the reads before the statement took the time and the statement was not run, when they used all of theirs" do
       RailsAiContext.configuration.query_timeout = 0.3
       allow(described_class).to receive(:cached_context).and_return({})
       allow(runtime).to receive(:relation_columns).and_wrap_original { |original, conn| sleep(0.4) && original.call(conn) }
+      allow(runtime).to receive(:read_only).and_call_original
 
       response, took = timed
 
       expect(response.error?).to be(true)
-      expect(response.content.first[:text]).to start_with("Query exceeded 0.3 second timeout")
+      expect(response.content.first[:text]).to eq(
+        "The reads rails_query makes before a statement (the columns of the schema, and on PostgreSQL the statement's plan) " \
+        "took the whole 0.3 second timeout, so the statement was not run."
+      )
+      expect(runtime).not_to have_received(:read_only)
       expect(took).to be < 1.2
     end
   end
@@ -1537,7 +1542,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       {
         "renamed" => "the view `renamed` is not queried: its definition names the secret column `passwd`",
         "nested" => "the view `nested` is not queried: it reads the view `renamed`",
-        "everything" => "the view `everything` is not queried: its definition reads every column of `accounts`"
+        "everything" => "the view `everything` is not queried: its definition has a wildcard and names `accounts`"
       }.each do |view, reason|
         response = answer("SELECT * FROM #{view}")
         expect(response.error?).to be(true), view
@@ -1603,7 +1608,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         response = answer(sql)
         expect(response.error?).to be(true), sql
         expect(response.content.first[:text]).to start_with(
-          "Blocked: a `*` inside a subquery reads every column of `accounts`, which holds the secret column `passwd`. On SQLite"
+          "Blocked: a `*` inside a subquery is not run in a statement that names `accounts`, which holds the secret column `passwd`. On SQLite"
         ).and(end_with("so name the columns in the subquery.")), sql
       end
     end
@@ -1625,6 +1630,13 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     it "returns a generated column of a table that holds no secret column" do
       expect(text("SELECT size FROM notes")).to include("| 5")
+    end
+
+    it "returns a generated column that reads no secret column, beside two on the same table that read one" do
+      expect(text("SELECT shout AS s FROM accounts")).to include("| A@EXAMPLE.COM")
+      everything = text("SELECT * FROM accounts")
+      expect(everything).to include("A@EXAMPLE.COM")
+      expect(everything.scan("[FILTERED]").size).to eq(3)
     end
 
     it "releases a view and a generated column over a column the app allows" do
@@ -1660,10 +1672,22 @@ RSpec.describe RailsAiContext::Tools::Query do
       response.content.first[:text]
     end
 
-    it "answers planning's timeout as the timeout and runs nothing" do
+    it "answers planning's timeout as the reads before the statement, and runs nothing" do
       allow(runtime).to receive(:plan).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "canceling statement due to statement timeout")
-      expect(answer).to start_with("Query exceeded 5 second timeout")
-      expect(answer(explain: true)).to start_with("Query exceeded 5 second timeout")
+      [ answer, answer(explain: true) ].each do |text|
+        expect(text).to start_with("The reads rails_query makes before a statement").and end_with("took the whole 5 second timeout, so the statement was not run.")
+      end
+    end
+
+    it "says the statement ran when the trace of its columns ran out of time" do
+      allow(runtime).to receive(:plan).and_return("Node Type" => "Result")
+      allow(runtime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
+      allow(runtime).to receive(:column_sources).and_raise(RailsAiContext::DatabaseFamily::TimedOut, "canceling statement due to statement timeout")
+      response = described_class.call(sql: "SELECT 1 AS x")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "The statement ran, and the read that traces its result columns to their table columns took what was left of the " \
+                "5 second timeout the reads beside a statement share, so its rows are not shown." ]
+      )
     end
 
     it "answers planning's error as the SQL error and runs nothing" do

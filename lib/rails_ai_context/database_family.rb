@@ -235,6 +235,12 @@ module RailsAiContext
       end
     end
 
+    # A connection the server dropped: the caller's to answer, and no reason to fall back to another read.
+    def lost_connection?(error)
+      error.is_a?(ActiveRecord::ConnectionNotEstablished) ||
+        (defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed))
+    end
+
     def timed_out?(error)
       # A connection the server dropped is a QueryAborted on Rails 7.1 and later, and it is no timeout.
       return false if defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed)

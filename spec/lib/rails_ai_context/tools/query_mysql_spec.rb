@@ -176,10 +176,17 @@ RSpec.describe RailsAiContext::Tools::Query do
         guess = "(1, 'a@example.com', 'pw-valud', 'x', 'y', 'z')"
         refused([
           "SELECT #{guess} < (SELECT * FROM rac_my_accounts) AS o", "SELECT ROW#{guess} < (SELECT DISTINCTROW * FROM rac_my_accounts) AS o",
-          "SELECT #{guess} < (SELECT SQL_NO_CACHE rac_my_accounts.* FROM rac_my_accounts) AS o", "SELECT #{guess} < (TABLE rac_my_accounts) AS o",
-          "SELECT 1 FROM rac_my_contacts WHERE #{guess} IN (TABLE rac_my_accounts)", "SELECT * FROM (SELECT * FROM rac_my_accounts) x",
-          "SELECT * FROM (TABLE rac_my_accounts) x", "WITH x AS (SELECT * FROM rac_my_accounts) SELECT * FROM x"
-        ], "Blocked: a `*` inside a subquery reads every column of `rac_my_accounts`, which holds the secret column `passwd`. On MySQL")
+          "SELECT #{guess} < (SELECT SQL_NO_CACHE rac_my_accounts.* FROM rac_my_accounts) AS o", "SELECT * FROM (SELECT * FROM rac_my_accounts) x",
+          "WITH x AS (SELECT * FROM rac_my_accounts) SELECT * FROM x"
+        ], "Blocked: a `*` inside a subquery is not run in a statement that names `rac_my_accounts`, which holds the secret column `passwd`. On MySQL")
+        refused([ "SELECT #{guess} < (TABLE rac_my_accounts) AS o", "SELECT 1 FROM rac_my_contacts WHERE #{guess} IN (TABLE rac_my_accounts)",
+                  "SELECT * FROM (TABLE rac_my_accounts) x" ],
+                "Blocked: `TABLE` inside a subquery is not run in a statement that names `rac_my_accounts`, which holds the secret column `passwd`.")
+        expect(text("SELECT c.email FROM (SELECT * FROM rac_my_contacts) c WHERE c.email <> 'rac_my_accounts'")).to include("a@example.com")
+      end
+
+      it "reads the words for connection and a mysql host name inside a literal as data" do
+        expect(text("SELECT email FROM rac_my_accounts WHERE email <> 'waiting for connection' AND email NOT LIKE '%@mysql.com'")).to include("a@example.com")
         expect(text("SELECT EXISTS (SELECT * FROM rac_my_accounts) AS found, (SELECT count(*) FROM rac_my_accounts) AS n")).to include("| 1     | 1 |")
       end
 
@@ -215,8 +222,9 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       it "refuses other sessions' statements, replication state and the stored password hashes" do
         other = conn.select_value("SELECT CONNECTION_ID()").to_i
-        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS", "EXPLAIN FOR CONNECTION #{other}",
-                  "EXPLAIN FORMAT=JSON FOR CONNECTION #{other}", "DESCRIBE FOR CONNECTION #{other}" ], "Blocked: sensitive SHOW command")
+        refused([ "SHOW FULL PROCESSLIST", "SHOW REPLICA STATUS", "SHOW ENGINE INNODB STATUS", "SHOW BINARY LOGS" ], "Blocked: sensitive SHOW command")
+        refused([ "EXPLAIN FOR CONNECTION #{other}", "EXPLAIN FORMAT=JSON FOR CONNECTION #{other}", "DESCRIBE FOR CONNECTION #{other}" ],
+                "Blocked: EXPLAIN FOR CONNECTION is not run.")
         refused([ "SELECT * FROM information_schema.processlist", "SELECT * FROM performance_schema.threads",
                   "SELECT * FROM information_schema.PROCESSL\u0130ST", "SELECT trx_query AS q FROM information_schema.innodb_trx",
                   "SELECT * FROM information_schema.INNODB_FT_INDEX_CACHE", "SELECT * FROM information_schema.profiling" ], "Blocked: `")

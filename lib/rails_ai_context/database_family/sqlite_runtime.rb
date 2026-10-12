@@ -130,8 +130,8 @@ module RailsAiContext
         []
       end
 
-      # SQLite keeps no expression per column, so each generated column answers its table's definition with one
-      # mention of every column taken out: a column name still in it is one some expression reads.
+      # SQLite keeps no expression per column, so each one is cut from its table's definition. A column whose
+      # part of the definition is not found answers the whole definition.
       def generated_columns(conn, schemas = [])
         rows = conn.select_rows(across(schemas) do |schema, name|
           "SELECT m.name, p.name, p.hidden, m.sql FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
@@ -142,9 +142,31 @@ module RailsAiContext
           next if generated.empty?
 
           definition = columns.first.last.to_s
-          read = columns.reduce(definition) { |text, (name, _)| text.sub(/\b#{Regexp.escape(name)}\b/i, " ") }
-          found[table] = generated.to_h { |name| [ name, read ] }
+          expressions = column_expressions(definition)
+          found[table] = generated.to_h { |name| [ name, expressions.fetch(name.downcase, definition) ] }
         end
+      end
+
+      COLUMN_NAME = /\A("(?:""|[^"])*"|`[^`]*`|\[[^\]]*\]|'[^']*'|[^\s(]+)(.*)\z/m
+
+      # @return [Hash{String => String}] column name, lower case => what its part of a CREATE TABLE statement
+      #   says after AS
+      def column_expressions(definition)
+        scanner = SqlGate::Scanner.new(SqlGate.comment_free(definition, SQLITE))
+        depth = 0
+        parts = [ +"" ]
+        until scanner.eos?
+          read = SqlGate.quoted(scanner, SQLITE)&.last || scanner.getch
+          depth -= 1 if read == ")"
+          if depth == 1 && read == "," then parts << +""
+          elsif depth.positive? then parts.last << read
+          end
+          depth += 1 if read == "("
+        end
+        parts.filter_map do |part|
+          name, rest = part.strip.match(COLUMN_NAME)&.captures
+          [ name.gsub(/\A["`\[']|["`\]']\z/, "").downcase, rest.partition(/\bAS\b/i).last ] if name
+        end.to_h
       end
 
       # pragma_table_list, which types a shadow table, came with this version.

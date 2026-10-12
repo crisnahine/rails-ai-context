@@ -98,11 +98,12 @@ module RailsAiContext
         # The lease checked the connection answers, so this one was lost while the statement ran.
         stopped_answering_response(database, e)
       rescue DatabaseFamily::TimedOut => e
-        return stopped_answering_response(database, e.cause) if e.cause && SecretColumns.lost_connection?(e.cause)
+        return stopped_answering_response(database, e.cause) if e.cause && DatabaseFamily.lost_connection?(e.cause)
+        return error_response(e.message) if e.is_a?(ReadTimedOut)
 
         error_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
       rescue ActiveRecord::StatementInvalid => e
-        return stopped_answering_response(database, e) if SecretColumns.lost_connection?(e)
+        return stopped_answering_response(database, e) if DatabaseFamily.lost_connection?(e)
 
         error_response("SQL error: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
       rescue => e
@@ -129,6 +130,18 @@ module RailsAiContext
         error_response("The #{name} database stopped answering during the query: #{clean_error_message(error.message)}")
       end
 
+      # A read beside the statement ran out of the time those reads share. Its message is the answer.
+      class ReadTimedOut < DatabaseFamily::TimedOut; end
+
+      # Runs reads beside the statement, and says which side of it they were on when their time runs out.
+      private_class_method def self.beside_statement(outcome)
+        yield
+      rescue DatabaseFamily::TimedOut => e
+        raise if e.cause && DatabaseFamily.lost_connection?(e.cause)
+
+        raise ReadTimedOut, outcome
+      end
+
       private_class_method def self.answer(connection, sql, limit, format, explain, database)
         family = DatabaseFamily.of(connection)
         return no_family_response(family) unless family.known?
@@ -138,8 +151,17 @@ module RailsAiContext
         # The statement has query_timeout to itself. Every other read the call sends shares a second one.
         timeout = config.query_timeout
         reads = SqlGate::Budget.new(timeout)
-        secrets = reads.spend { |left| family.bounded(connection, timeout: left) { SecretColumns.for(connection, context: context, statement: sql) } }
-        verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, budget: reads).check(sql)
+        secrets, verdict = beside_statement(
+          "The reads rails_query makes before a statement (the columns of the schema, and on PostgreSQL the statement's plan) " \
+          "took the whole #{timeout} second timeout, so the statement was not run."
+        ) do
+          secrets = reads.spend { |left| family.bounded(connection, timeout: left) { SecretColumns.for(connection, context: context, statement: sql) } }
+          verdict = SqlGate.new(family: family, secrets: secrets, connection: connection, budget: reads).check(sql)
+          # A read no statement limit holds can run past its share, and then nothing is left for the reads after the statement.
+          raise DatabaseFamily::TimedOut, "the reads before the statement used the whole timeout" if reads.spent? && !verdict.refused?
+
+          [ secrets, verdict ]
+        end
         return error_response(verdict.refusal) if verdict.refused?
 
         sql = verdict.sql
@@ -156,9 +178,10 @@ module RailsAiContext
         elsif schema_metadata
           result
         else
-          sources = reads.spend do |left|
-            family.bounded(connection, timeout: left) { family.column_sources(connection, sql, plan: verdict.plan) }
-          end
+          sources = beside_statement(
+            "The statement ran, and the read that traces its result columns to their table columns took what was left of the " \
+            "#{timeout} second timeout the reads beside a statement share, so its rows are not shown."
+          ) { reads.spend { |left| family.bounded(connection, timeout: left) { family.column_sources(connection, sql, plan: verdict.plan) } } }
           redact_results(result, secrets, sources)
         end
 
@@ -244,7 +267,7 @@ module RailsAiContext
 
         text_response(lines.join("\n") + (parsed[:unbounded] ? UNBOUNDED_SQLITE_NOTE : ""))
       rescue ActiveRecord::StatementInvalid => e
-        raise if SecretColumns.lost_connection?(e)
+        raise if DatabaseFamily.lost_connection?(e)
 
         error_response("EXPLAIN failed: #{clean_error_message(e.message)}#{held_elsewhere(e.message, database)}")
       end

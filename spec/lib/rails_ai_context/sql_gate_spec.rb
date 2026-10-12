@@ -115,7 +115,7 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "refuses a sensitive SHOW and every SHOW CREATE but a table or view" do
-      expect(refusal("SHOW GRANTS FOR 'root'")).to include("sensitive SHOW command")
+      expect(refusal("SHOW GRANTS FOR 'root'", :mysql)).to include("sensitive SHOW command")
       expect(refusal("SHOW CREATE USER 'rt'@'%'", :mysql)).to include("CREATE")
       expect(refusal("SHOW CREATE DATABASE app", :mysql)).to include("CREATE")
       expect(runs?("SHOW CREATE TABLE orders", :mysql)).to be(true)
@@ -135,9 +135,29 @@ RSpec.describe RailsAiContext::SqlGate do
     it "refuses another session's plan in every spelling MySQL and MariaDB read" do
       [ "EXPLAIN FOR CONNECTION 12", "EXPLAIN FORMAT=JSON FOR CONNECTION 12", "DESCRIBE FOR CONNECTION 12", "DESC FORMAT=TREE FOR CONNECTION 12",
         "explain for\nconnection 12", "EXPLAIN /*!50000 FOR CONNECTION */ 12", "EXPLAIN FOR /* x */ CONNECTION 12" ].each do |sql|
-        expect(refusal(sql, :mysql)).to eq("Blocked: sensitive SHOW command"), sql
+        expect(refusal(sql, :mysql))
+          .to eq("Blocked: EXPLAIN FOR CONNECTION is not run. It shows the plan of the statement another session is running."), sql
       end
       expect(runs?("EXPLAIN SELECT id FROM orders", :mysql)).to be(true)
+    end
+
+    it "reads the words for connection as data in a literal and in any statement that is no EXPLAIN" do
+      [ "SELECT id FROM notes WHERE body = 'waiting for connection'", "SELECT id AS for_connection FROM notes",
+        "EXPLAIN SELECT id FROM notes WHERE body = 'for connection'" ].each do |sql|
+        %i[sqlite mysql postgresql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+      end
+    end
+
+    it "refuses each list's names on the family that has them, and reads them as plain names on the others" do
+      { "SELECT * FROM pg_stats" => :postgresql, "SELECT * FROM pg_authid" => :postgresql, "SELECT table_to_xml('users', true, false, '')" => :postgresql,
+        "SELECT pg_read_file('notes.txt')" => :postgresql, "SELECT pg_notify('a', 'b')" => :postgresql,
+        "SELECT name FROM jobs WHERE archive_command = 'x'" => :postgresql, "SELECT current_setting(name) FROM names" => :postgresql,
+        "SELECT * FROM slow_log" => :mysql, "SELECT load_file('notes.txt')" => :mysql, "SELECT get_lock('a', 1)" => :mysql, "SHOW PROCESSLIST" => :mysql,
+        "SELECT sys.id FROM systems sys" => :mysql, "SELECT * FROM sqlite_stat1" => :sqlite, "SELECT load_extension('x')" => :sqlite }.each do |sql, owner|
+        %i[sqlite mysql postgresql].each do |family|
+          expect(check(sql, family).refused?).to be(family == owner), "#{family}: #{sql}"
+        end
+      end
     end
 
     it "runs the SHOW statements that list the schema" do
@@ -165,33 +185,37 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "refuses a relation that holds sampled values, other sessions' statements or stored credentials" do
-      {
-        "SELECT histogram_bounds FROM pg_stats WHERE tablename = 'users'" => "pg_stats",
-        "SELECT stavalues1 FROM pg_catalog.pg_statistic" => "pg_statistic",
-        "SELECT query FROM pg_stat_activity" => "pg_stat_activity",
-        "SELECT query FROM pg_stat_statements" => "pg_stat_statements",
-        "SELECT * FROM information_schema.PROCESSLIST" => "PROCESSLIST",
-        "SELECT sql_text FROM performance_schema.events_statements_history" => "performance_schema",
-        "SELECT * FROM `sys`.`session`" => "sys",
-        "SELECT histogram FROM information_schema.column_statistics" => "column_statistics",
-        "SELECT min_value FROM mysql.column_stats" => "mysql",
-        "SELECT priv FROM global_priv" => "global_priv",
-        "SELECT sample FROM sqlite_stat4" => "sqlite_stat4"
-      }.each do |sql, name|
-        %i[sqlite mysql postgresql].each do |family|
-          expect(refusal(sql, family)).to eq(
-            "Blocked: `#{name}` is not read. It holds values sampled from other tables, other sessions' statements " \
-            "or stored credentials, and rails_query cannot tell which of them are secret."
-          ), "#{family}: #{sql}"
-        end
-      end
-      expect(runs?("SELECT sys_id, processlists FROM systems sys_log")).to be(true)
-    end
-
     def unread(name)
       "Blocked: `#{name}` is not read. It holds values sampled from other tables, other sessions' statements " \
         "or stored credentials, and rails_query cannot tell which of them are secret."
+    end
+
+    it "refuses a relation that holds sampled values, other sessions' statements or stored credentials" do
+      {
+        "SELECT histogram_bounds FROM pg_stats WHERE tablename = 'users'" => [ :postgresql, "pg_stats" ],
+        "SELECT stavalues1 FROM pg_catalog.pg_statistic" => [ :postgresql, "pg_statistic" ],
+        "SELECT query FROM pg_stat_activity" => [ :postgresql, "pg_stat_activity" ],
+        "SELECT query FROM pg_stat_statements" => [ :postgresql, "pg_stat_statements" ],
+        "SELECT * FROM information_schema.PROCESSLIST" => [ :mysql, "PROCESSLIST" ],
+        "SELECT sql_text FROM performance_schema.events_statements_history" => [ :mysql, "performance_schema" ],
+        "SELECT histogram FROM information_schema.column_statistics" => [ :mysql, "column_statistics" ],
+        "SELECT priv FROM global_priv" => [ :mysql, "global_priv" ],
+        "SELECT sample FROM sqlite_stat4" => [ :sqlite, "sqlite_stat4" ]
+      }.each { |sql, (family, name)| expect(refusal(sql, family)).to eq(unread(name)), sql }
+      expect(runs?("SELECT sys_id, processlists FROM systems sys_log", :mysql)).to be(true)
+    end
+
+    it "answers the file that lists the settings as a relation that is not read" do
+      expect(refusal("SELECT name, setting FROM pg_file_settings", :postgresql)).to eq("#{unread("pg_file_settings")} To read one setting, run SHOW with its name.")
+    end
+
+    it "refuses MySQL's own schemas with string literals read as data, and an alias of either name with the remedy" do
+      remedy = ->(name) { "#{unread(name)} A name before a dot is read as that schema, so an alias named `#{name}` needs another name." }
+      { "SELECT * FROM `sys`.`session`" => "sys", "SELECT User FROM mysql.user" => "mysql", "SELECT sys.id FROM systems sys" => "sys",
+        "SELECT mysql.id FROM engines AS mysql" => "mysql" }.each { |sql, name| expect(refusal(sql, :mysql)).to eq(remedy.call(name)), sql }
+      [ "SELECT id FROM users WHERE email LIKE '%@mysql.com'", "SELECT id FROM hosts WHERE name = 'sys.internal'" ].each do |sql|
+        %i[sqlite mysql postgresql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+      end
     end
 
     it "refuses the PostgreSQL relations that hold a stored credential" do
@@ -316,23 +340,24 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(refusal("WITH x AS (DELETE FROM orders RETURNING id) SELECT * FROM x")).to include("DELETE")
     end
 
-    %w[pg_read_file pg_read_binary_file pg_ls_dir pg_stat_file lo_import load_extension].each do |fn|
+    { "pg_read_file" => :postgresql, "pg_read_binary_file" => :postgresql, "pg_ls_dir" => :postgresql, "pg_stat_file" => :postgresql,
+      "lo_import" => :postgresql, "load_extension" => :sqlite }.each do |fn, family|
       it "refuses the file function #{fn}" do
-        expect(refusal("SELECT #{fn}('/etc/passwd')")).to include("dangerous function #{fn}")
+        expect(refusal("SELECT #{fn}('/etc/passwd')", family)).to include("dangerous function #{fn}")
+        expect(refusal("SELECT id FROM notes WHERE body = '#{fn}(x)'", family)).to include("dangerous function #{fn}")
       end
     end
 
     it "refuses dblink, LOAD_FILE and LOAD DATA" do
-      expect(refusal("SELECT * FROM dblink('host=evil.com', 'SELECT 1') AS t(a int)")).to include("dblink")
-      expect(refusal("SELECT LOAD_FILE('/etc/passwd')")).to match(/load_file/i)
-      expect(refusal("LOAD DATA INFILE '/etc/passwd' INTO TABLE users")).to match(/LOAD.*DATA/i)
-      expect(refusal("LOAD DATA LOCAL INFILE '/etc/passwd' INTO TABLE users")).to match(/LOAD.*DATA/i)
+      expect(refusal("SELECT * FROM dblink('host=evil.com', 'SELECT 1') AS t(a int)", :postgresql)).to include("dblink")
+      expect(refusal("SELECT LOAD_FILE('/etc/passwd')", :mysql)).to match(/load_file/i)
+      expect(refusal("LOAD DATA INFILE '/etc/passwd' INTO TABLE users", :mysql)).to match(/LOAD.*DATA/i)
+      expect(refusal("LOAD DATA LOCAL INFILE '/etc/passwd' INTO TABLE users", :mysql)).to match(/LOAD.*DATA/i)
     end
 
     it "refuses a file function inside a MySQL executable comment" do
-      [ "SELECT /*!50000 LOAD_FILE('/etc/passwd') */ AS x", "SELECT /*! pg_read_file('/etc/passwd') */ AS x",
-        "SELECT /*!80000 dblink('host=evil', 'SELECT * FROM users') */ 1" ].each do |sql|
-        %i[sqlite mysql].each { |family| expect(refusal(sql, family)).to start_with("Blocked"), "#{family}: #{sql}" }
+      [ "SELECT /*!50000 LOAD_FILE('/etc/passwd') */ AS x", "SELECT /*! load_file('/etc/passwd') */ AS x" ].each do |sql|
+        expect(refusal(sql, :mysql)).to start_with("Blocked: dangerous function"), sql
       end
     end
 
@@ -343,13 +368,13 @@ RSpec.describe RailsAiContext::SqlGate do
       pg_drop_replication_slot pg_replication_origin_create
     ].each do |fn|
       it "refuses the PostgreSQL administrative function #{fn}" do
-        expect(refusal("SELECT #{fn}(1)")).to include("administrative function #{fn}")
+        expect(refusal("SELECT #{fn}(1)", :postgresql)).to include("administrative function #{fn}")
       end
     end
 
     %w[GET_LOCK RELEASE_LOCK RELEASE_ALL_LOCKS IS_FREE_LOCK IS_USED_LOCK].each do |fn|
       it "refuses the MySQL session function #{fn}" do
-        expect(refusal("SELECT #{fn}('x')")).to include("session function #{fn}")
+        expect(refusal("SELECT #{fn}('x')", :mysql)).to include("session function #{fn}")
       end
     end
 
@@ -553,10 +578,30 @@ RSpec.describe RailsAiContext::SqlGate do
     it "refuses it when the statement names a relation that holds a secret column, by the relation and the column" do
       %i[sqlite mysql].each do |family|
         expect(refusal("SELECT (1, 'a@example.com', 'pw') < (SELECT * FROM users) AS o", family)).to eq(
-          "Blocked: a `*` inside a subquery reads every column of `users`, which holds the secret column `passwd`. " \
-          "On #{families.fetch(family).name} a value read that way can be compared or renamed past the redaction, " \
+          "Blocked: a `*` inside a subquery is not run in a statement that names `users`, which holds the secret column `passwd`. " \
+          "On #{families.fetch(family).name} a value read through such a wildcard can be compared or renamed past the redaction, " \
           "so name the columns in the subquery."
         )
+        expect(refusal("SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", family)).to eq(
+          "Blocked: `TABLE` inside a subquery is not run in a statement that names `users`, which holds the secret column `passwd`. " \
+          "`TABLE t` reads every column of `t`, and on #{families.fetch(family).name} a value read that way can be compared or renamed " \
+          "past the redaction, so SELECT the columns you need in the subquery."
+        )
+      end
+    end
+
+    it "says what it tests when the wildcard reads another relation than the one that holds the secret column" do
+      expect(refusal("SELECT u.id FROM users u WHERE u.id IN (SELECT * FROM posts)"))
+        .to start_with("Blocked: a `*` inside a subquery is not run in a statement that names `users`, which holds the secret column `passwd`.")
+    end
+
+    it "reads a relation's name inside a string literal as data, and on SQLite as a name where no string can stand" do
+      [ "SELECT * FROM (SELECT * FROM posts) p WHERE title = 'creds'", "SELECT * FROM (SELECT * FROM posts) p WHERE title LIKE '%users%'",
+        "SELECT 'users' AS label, p.* FROM (SELECT * FROM posts) p" ].each do |sql|
+        %i[sqlite mysql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+      end
+      [ "SELECT (1, 'a', 'pw') < (SELECT * FROM 'users')", "SELECT 1 < (SELECT * FROM main.'creds')", "SELECT 1 < (SELECT * FROM posts, 'creds')" ].each do |sql|
+        expect(refusal(sql)).to start_with("Blocked: a `*` inside a subquery"), sql
       end
     end
 
@@ -570,11 +615,12 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT 1 < (SELECT 1, * FROM creds)", "SELECT 1 < (SELECT *, 1 FROM creds)", "SELECT 1 < (SELECT `creds`.* FROM `creds`)",
         "SELECT * FROM (SELECT * FROM users) x", "SELECT x.* FROM (SELECT u.* FROM users u) x", "WITH x AS (SELECT * FROM users) SELECT * FROM x",
         "SELECT * FROM (SELECT * FROM users a JOIN users b ON 1) x", "SELECT * FROM posts WHERE EXISTS (SELECT 1 FROM posts WHERE 'pw' < (SELECT * FROM creds))",
-        "SELECT 1 < (TABLE creds)", "SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", "SELECT * FROM (TABLE users) t",
-        "SELECT x.* FROM (SELECT * FROM `we$`) x", "SELECT x.* FROM (SELECT * FROM we$) x", %(SELECT x.* FROM (SELECT * FROM "USERS") x),
-        "SELECT * FROM (SELECT * FROM posts) p WHERE title = 'creds'"
+        "SELECT x.* FROM (SELECT * FROM `we$`) x", "SELECT x.* FROM (SELECT * FROM we$) x", %(SELECT x.* FROM (SELECT * FROM "USERS") x)
       ].each do |sql|
         %i[sqlite mysql].each { |family| expect(refusal(sql, family)).to start_with("Blocked: a `*` inside a subquery"), "#{family}: #{sql}" }
+      end
+      [ "SELECT 1 < (TABLE creds)", "SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", "SELECT * FROM (TABLE users) t" ].each do |sql|
+        %i[sqlite mysql].each { |family| expect(refusal(sql, family)).to start_with("Blocked: `TABLE` inside a subquery"), "#{family}: #{sql}" }
       end
     end
 
