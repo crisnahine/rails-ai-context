@@ -48,7 +48,10 @@ module RailsAiContext
         reader = SchemaReader.for(root)
         schemas = [ [ nil, reader.tables, reader.foreign_keys ] ]
         unchecked = []
-        AppDatabases.for(root).reject { |db| db.primary || db.replica }.each do |db|
+        databases = AppDatabases.for(root)
+        # Rails names one file for the first database and the one named primary. It is read once, above.
+        shared = databases.primary&.dump&.path
+        databases.reject { |db| db.primary || db.replica || (shared && db.dump&.path == shared) }.each do |db|
           read = read_dump(db)
           read[:reason] ? unchecked << { name: db.name, reason: read[:reason] } : schemas << [ db.name, read[:tables], read[:foreign_keys] ]
         end

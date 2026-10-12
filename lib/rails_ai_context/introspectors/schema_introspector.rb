@@ -655,7 +655,11 @@ module RailsAiContext
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
           dump = db.dump&.path
           path, state = unread[name]
-          said = path ? "#{relative_dump_path(path)} #{state}" : "no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"}"
+          said = if path then "#{relative_dump_path(path)} #{state}"
+          elsif dump && File.exist?(dump) && secondary_dump(dump).nil?
+            "#{relative_dump_path(dump)} is read as the #{app_databases.primary.name} database's dump"
+          else "no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"}"
+          end
           dumps[name] = {
             adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
             note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, #{said})"

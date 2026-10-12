@@ -76,6 +76,39 @@ module AppDatabasesTiers
   end
 end
 
+# Rails names db/schema.rb as the dump of the first database and of the one named primary.
+RSpec.describe "an app whose first database is not the one named primary" do
+  include AppDatabasesTiers
+
+  let(:root) { File.expand_path("../../fixtures/app_databases/animals_first", __dir__) }
+  let(:app) { RailsAiContext::StaticApp.new(root) }
+
+  %i[booted static].each do |tier|
+    it "counts each finding of the shared dump once in the performance check on the #{tier} tier" do
+      on_tier(tier, root) do
+        performance = RailsAiContext::Introspectors::PerformanceIntrospector.new(app).call
+
+        expect(performance[:missing_fk_indexes]).to eq([ { table: "posts", column: "user_id", suggestion: "add_index :posts, :user_id" } ])
+        expect(performance).not_to have_key(:unchecked_databases)
+      end
+    end
+
+    it "says whose dump db/schema.rb is read as, and sends a migration to the database named primary, on the #{tier} tier" do
+      on_tier(tier, root) do
+        schema = RailsAiContext::Introspectors::SchemaIntrospector.new(app).static_call
+        allow(RailsAiContext::Tools::MigrationAdvisor).to receive_messages(cached_context: { models: {}, schema: schema }, rails_app: app)
+        advice = RailsAiContext::Tools::MigrationAdvisor.call(action: "add_column", table: "orders", column: "state", type: "string").content.first[:text]
+
+        expect(schema[:secondary_databases].keys).to eq(%w[primary])
+        expect(schema.dig(:secondary_databases, "primary", :note))
+          .to eq("Reconstructed from the migrations in db/primary_migrate (no DB connection, db/schema.rb is read as the animals database's dump)")
+        expect(advice).to include("`orders` is in primary: generate with `--database primary`",
+                                  "**Run:** `bin/rails generate migration AddStateToOrders state:string --database primary`")
+      end
+    end
+  end
+end
+
 # The sql format with a secondary whose only dump is queue_schema.rb, and a database_tasks: false entry with a committed dump.
 RSpec.describe "a dump on disk under a database's name" do
   include AppDatabasesTiers

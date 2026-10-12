@@ -81,7 +81,7 @@ RSpec.describe RailsAiContext::AppDatabases do
 
   it_behaves_like "the same list on both tiers", "animals_first", lambda { |root|
     [ entry(root, "animals", primary: true, adapter: "postgresql", dump: [ :ruby, "db/schema.rb" ]),
-      entry(root, "primary", adapter: "mysql2", dump: [ :ruby, "db/schema.rb" ]) ]
+      entry(root, "primary", adapter: "mysql2", dump: [ :ruby, "db/schema.rb" ], migrate_dirs: [ "db/primary_migrate" ]) ]
   }
 
   it_behaves_like "the same list on both tiers", "fallback_dump", lambda { |root|
