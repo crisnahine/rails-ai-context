@@ -368,9 +368,10 @@ RSpec.describe RailsAiContext::Server do
         expect(summary[:isError]).to be_falsey
         expect(summary[:content].first[:text]).not_to include("## ")
 
-        quick = call.call("quick")[:result]
-        expect(quick[:isError]).to be true
-        expect(quick[:content].first[:text]).to include('not one of: ["summary", "standard", "full"]')
+        # A newer SDK refuses the value as an error result, an older one as a JSON-RPC error.
+        quick = call.call("quick")
+        expect(quick.dig(:result, :isError)).to be(true) if quick[:result]
+        expect(quick.dig(:result, :content, 0, :text) || quick.dig(:error, :data)).to match(/summary\W+standard\W+full/)
       end
 
       # The SDK named only the guess.
