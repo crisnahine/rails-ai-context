@@ -207,7 +207,14 @@ module RailsAiContext
         end
         return paths(root, kind: kind, skip_concerns: skip_concerns, &read) unless kind == :models
 
-        model_paths(root, base_model: base_model) { |record| read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::") }
+        model_paths(root, base_model: base_model) do |record|
+          next read.call(record) unless skip_concerns && record.path_name.start_with?("Concerns::")
+
+          # The concerns root does not namespace its files, and one that declares a class may be a model.
+          bare = record.path_name.delete_prefix("Concerns::")
+          source = SafeFile.read(record.path)
+          block.call(record.with(source: source, path_name: bare)) if source && DeclaredConstant.declares_class?(source, path_name: bare)
+        end
       end
 
       # The eager form: reads and parses every file for its declared name.
