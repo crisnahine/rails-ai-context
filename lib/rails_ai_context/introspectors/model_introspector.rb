@@ -305,13 +305,22 @@ module RailsAiContext
         resolved = resolve_superclass(parent, class_name, candidates)
         return model_class?(resolved, candidates, seen + [ class_name ]) if resolved
 
-        outside_model_base?(candidates[class_name])
+        outside_model_base?(class_name, candidates)
       end
 
-      # A parent the app does not define (a gem's `ActsAsTaggableOn::Tag`) is
-      # an ActiveRecord base when the class declares associations or scopes on it.
-      def outside_model_base?(candidate)
-        data = candidate[:path] && sti_base_source(candidate[:path])
+      # A parent the app does not define (a gem's `ActsAsTaggableOn::Tag`) is an ActiveRecord
+      # base when the schema holds a table it gives the class (ActiveHash declares has_many too);
+      # with no schema to ask, when the class declares associations or scopes on it.
+      def outside_model_base?(class_name, candidates)
+        candidate = candidates[class_name]
+        return false unless candidate[:path]
+
+        if SchemaReader.for(app.root).tables.any?
+          own = candidate[:table_name] || own_table_name(class_name, candidates)
+          return outside_parent_tables(class_name, candidates, own, outside_parent(class_name, candidates)).any?
+        end
+
+        data = sti_base_source(candidate[:path])
         !!data && (Array(data[:associations]).any? || Array(data[:scopes]).any?)
       end
 
@@ -343,14 +352,19 @@ module RailsAiContext
         inherited = parent && resolve_table_name(parent, candidates, seen + [ class_name ])
         return inherited unless inherited.nil? || inherited.empty?
 
-        own = [ namespace_affix(class_name, candidates, :table_name_prefix),
-                contained_prefix(class_name, candidates, seen),
-                TableName.stem(candidate[:path], pluralize_tables?(class_name, candidates)),
-                namespace_affix(class_name, candidates, :table_name_suffix) ].join
+        own = own_table_name(class_name, candidates, seen)
         return own unless outside
 
         found = outside_parent_tables(class_name, candidates, own, outside)
         found.first if found.one?
+      end
+
+      # The namespace's prefix and suffix around the stem the file name carries.
+      def own_table_name(class_name, candidates, seen = [])
+        [ namespace_affix(class_name, candidates, :table_name_prefix),
+          contained_prefix(class_name, candidates, seen),
+          TableName.stem(candidates.dig(class_name, :path), pluralize_tables?(class_name, candidates)),
+          namespace_affix(class_name, candidates, :table_name_suffix) ].join
       end
 
       # A concrete parent the app does not define sets the table, unread here; the

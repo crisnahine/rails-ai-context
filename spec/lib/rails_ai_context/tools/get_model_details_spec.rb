@@ -1346,6 +1346,29 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # Forem's EmailMessage < Ahoy::Message declares nothing; Country < ActiveHash::Base declares has_many and is no model.
+  it "takes a gem-parent class as a model when the schema holds its table" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      FileUtils.mkdir_p(File.join(dir, "db"))
+      File.write(File.join(dir, "app", "models", "email_message.rb"), "class EmailMessage < Ahoy::Message\nend\n")
+      File.write(File.join(dir, "app", "models", "country.rb"), "class Country < ActiveHash::Base\n  has_many :people\nend\n")
+      File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+        ActiveRecord::Schema[8.0].define(version: 1) do
+          create_table "ahoy_messages" do |t|
+            t.string "to"
+          end
+        end
+      RUBY
+      models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(models: models)
+
+      expect(described_class.call(model: "EmailMessage").content.first[:text]).to include("**Table:** `ahoy_messages`")
+      expect(described_class.call(model: "Country").content.first[:text]).to include("Model 'Country' not found")
+    end
+  end
+
   it "names a declaration a condition holds back, apart from the counted ones" do
     described_class.reset_cache!
     allow(described_class).to receive(:cached_context).and_return(
