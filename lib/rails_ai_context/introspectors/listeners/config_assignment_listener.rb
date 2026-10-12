@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "pathname"
+require "prism"
 
 module RailsAiContext
   module Introspectors

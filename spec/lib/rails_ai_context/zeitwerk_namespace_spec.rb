@@ -83,6 +83,16 @@ RSpec.describe "Zeitwerk loader for the gem" do
     rubyless.each { |name| expect(File.read(entry)).to include(%(loader.ignore("\#{__dir__}/rails_ai_context/#{name}"))) }
   end
 
+  # Such a constant is built when its file autoloads, which can come before anything else required prism.
+  it "requires prism in every file whose constants name a Prism class" do
+    missing = Dir.glob(File.join(File.dirname(entry), "**/*.rb")).select do |path|
+      source = File.read(path)
+      source.match?(/^\s*[A-Z][A-Z0-9_]* = .*\bPrism::/) && !source.match?(/^require "prism"$/)
+    end
+
+    expect(missing.map { |path| File.basename(path) }).to eq([])
+  end
+
   it "loads without a zeitwerk warning about extra files under lib" do
     lib = File.dirname(entry)
     _out, err, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", 'require "rails_ai_context"')
