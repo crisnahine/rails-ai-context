@@ -320,8 +320,8 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
         expect(policies.uniq.size).to eq(policies.size)
       end
 
-      it "leaves out a file that declares only a module" do
-        File.write(File.join(policies_dir, "authorizer.rb"), "module Authorizer\n  def self.for(user) = user\nend\n")
+      it "leaves out a file whose own constant is a module, even one nesting a class" do
+        File.write(File.join(policies_dir, "authorizer.rb"), "module Authorizer\n  def self.for(user) = user\n\n  class RoleBasedQueries\n  end\nend\n")
 
         expect(result[:authorization][:policies]).not_to include("Authorizer")
         expect(result[:authorization][:policies]).to include("CollectionPolicy")

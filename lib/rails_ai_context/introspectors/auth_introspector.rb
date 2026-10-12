@@ -170,9 +170,12 @@ module RailsAiContext
 
         policies_dir = File.join(root, "app/policies")
         if Dir.exist?(policies_dir)
-          # Each class by its full name, so admin/collection_policy.rb stays apart from
-          # collection_policy.rb; a file that declares only a module is a mixin, not a policy.
-          policies = SourceScan.classes(root, kind: "app/policies").map(&:first).sort
+          # Each file's own class by its full name, so admin/collection_policy.rb stays apart from
+          # collection_policy.rb; a file whose constant is a module is a mixin, whatever it nests.
+          policies = SourceScan.each(root, kind: "app/policies").filter_map do |record|
+            declarations = DeclaredConstant.declarations(record.source, path_name: record.path_name)
+            DeclaredConstant.declaration_for(declarations, record.path_name)&.name
+          end.sort
           key = if gem_present?("pundit") then :pundit
           elsif gem_present?("action_policy") then :action_policy
           else :policies
