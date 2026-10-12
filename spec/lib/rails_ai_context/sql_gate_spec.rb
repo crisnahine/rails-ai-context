@@ -80,6 +80,14 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "refuses a statement over the length it checks, and checks one just under it" do
+      long = "SELECT id FROM posts WHERE body = '#{"x" * described_class::MAX_BYTES}'"
+      %i[sqlite mysql postgresql].each do |family|
+        expect(refusal(long, family)).to eq("Blocked: the statement is #{long.bytesize} bytes long, and rails_query checks a statement of 1000000 bytes at most.")
+      end
+      expect(runs?("SELECT id FROM posts WHERE id IN (#{(1..142_000).to_a.join(",")})")).to be(true)
+    end
+
     it "refuses a statement that starts with anything but a read" do
       expect(refusal("VACUUM users")).to include("Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed")
     end
@@ -740,6 +748,18 @@ RSpec.describe RailsAiContext::SqlGate do
       [ "SELECT $tag$a -- b$tag$ AS v", "SELECT $$a /* b */ c$$ AS v", "SELECT $é$a -- b$é$ AS v" ].each do |sql|
         expect(text(sql, :postgresql)).to eq(sql)
       end
+    end
+
+    it "keeps a comment marker inside a bracketed name on SQLite, where brackets quote a name" do
+      expect(text("SELECT [a /* x */ b], [c--d] FROM t")).to eq("SELECT [a /* x */ b], [c--d] FROM t")
+      expect(text("SELECT [a /* x */ b] FROM t", :postgresql)).to eq("SELECT [a   b] FROM t")
+    end
+
+    it "reads an E as a string prefix only when it is a word of its own, in the text to run and in every check" do
+      hidden = "SELECT 1 AS \u00a0e'a\\' AS v; SELECT 2 --'"
+      %i[sqlite postgresql].each { |family| expect(refusal(hidden, family)).to eq("Blocked: multiple statements (no semicolons)"), family.to_s }
+      expect(text("SELECT e'a\\' /* kept */ ' AS v")).to eq("SELECT e'a\\' /* kept */ ' AS v")
+      expect(text("SELECT me'a\\' /* out */ AS v")).to eq("SELECT me'a\\'   AS v")
     end
 
     it "reads a dollar as no quote off PostgreSQL, so a comment after one is taken out" do
