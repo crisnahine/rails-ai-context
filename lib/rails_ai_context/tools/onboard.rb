@@ -151,8 +151,8 @@ module RailsAiContext
           solid = schema ? solid_databases(schema) : {}
           if solid.any?
             frameworks = solid.values.uniq
-            keep = frameworks.one? ? "keeps its" : "keep their"
-            place = solid.one? ? "a database of its own" : "databases of their own"
+            keep, own = frameworks.one? ? [ "keeps its", "its own" ] : [ "keep their", "their own" ]
+            place = solid.one? ? "a database of #{own}" : "databases of #{own}"
             names = solid.keys.map { |name| "#{name}#{Payload.named_database_scope(ctx, name)}" }
             lines << "#{frameworks.to_sentence(last_word_connector: " and ")} #{keep} tables in #{place}: #{names.join(", ")}."
           end
