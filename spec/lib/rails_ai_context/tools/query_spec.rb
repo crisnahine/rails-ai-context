@@ -20,6 +20,9 @@ RSpec.describe RailsAiContext::Tools::Query do
     RailsAiContext.configuration.query_allowed_columns = []
   end
 
+  # A timeout one example shortens is not the next spec file's.
+  after { RailsAiContext.configuration.query_timeout = 5 }
+
   # A faked adapter name would send the family's catalogue reads to this SQLite database.
   def fake_family(adapter_name)
     allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)

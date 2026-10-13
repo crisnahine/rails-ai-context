@@ -1247,7 +1247,8 @@ RSpec.describe RailsAiContext::Redaction do
     end
 
     # The work a pattern does, which backtracking multiplies; other processes taking the CPU add nothing to it.
-    let(:cpu_clock) { Process::CLOCK_PROCESS_CPUTIME_ID }
+    # Windows has no process CPU clock; the bound is measured on whichever clock times the match.
+    let(:cpu_clock) { Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC }
 
     # One match's CPU seconds: the second a Rails 8 Regexp.timeout allows, or on a slower machine 50 scans
     # of the line by a pattern that cannot backtrack. A quadratic match costs thousands of such scans.
