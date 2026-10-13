@@ -422,6 +422,21 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "refuses a user variable assignment and LAST_INSERT_ID with an argument on the MySQL family, and runs what only reads them" do
+      [ "SELECT @n := @n + 1 AS n FROM users", "SELECT @a:=5", "SELECT id FROM users, (SELECT @n := 0) x" ].each do |sql|
+        expect(refusal(sql, :mysql)).to eq("Blocked: a user variable assignment (`:=`) is not run. It leaves a value on the pooled connection " \
+          "after the query returns, which a read-only transaction does not stop."), sql
+      end
+      [ "SELECT LAST_INSERT_ID(7)", "SELECT last_insert_id ( 'x' )", "SELECT id FROM users WHERE id = LAST_INSERT_ID(id + 1)" ].each do |sql|
+        expect(refusal(sql, :mysql)).to eq("Blocked: LAST_INSERT_ID with an argument is not run. It sets a value that stays on the pooled connection " \
+          "after the query returns, which a read-only transaction does not stop. LAST_INSERT_ID() with no argument runs."), sql
+      end
+      [ "SELECT LAST_INSERT_ID()", "SELECT LAST_INSERT_ID( )", "SELECT @n AS n", "SELECT id FROM users WHERE note = 'a := b'" ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
+      end
+      expect(runs?("SELECT make_interval(days := 2)", :postgresql)).to be(true)
+    end
+
     %w[GET_LOCK RELEASE_LOCK RELEASE_ALL_LOCKS IS_FREE_LOCK IS_USED_LOCK].each do |fn|
       it "refuses the MySQL session function #{fn}" do
         expect(refusal("SELECT #{fn}('x')", :mysql)).to include("session function #{fn}")

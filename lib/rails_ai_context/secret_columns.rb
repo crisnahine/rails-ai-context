@@ -61,9 +61,8 @@ module RailsAiContext
       statement.to_s.strip.empty? ? secrets : secrets.cover(statement)
     end
 
-    # A name or a statement as the databases compare names: case folded. MySQL reads a dotted capital I
-    # as i, where Ruby's downcase keeps the dot as a combining mark. Runs of spaces are squeezed in both,
-    # so a name is found in text whether or not the text was squeezed before it came here.
+    # A name or a statement as the databases compare names: case folded, a dotted capital I read as i (MySQL does,
+    # Ruby's downcase keeps the dot), and runs of spaces squeezed, so a name is found in text squeezed or not.
     def self.fold(text)
       text.to_s.downcase.delete("\u0307").squeeze(" ")
     end
@@ -183,8 +182,7 @@ module RailsAiContext
       reach(SqlGate.comment_free(statement, DatabaseFamily.of(@connection)))
     end
 
-    # Reads the schemas given and the ones the text names, then the ones the definitions of the views it names
-    # name, and so on through the views those name, ROUNDS reads deep. A view no text names is not followed.
+    # Reads the schemas given and those the text names, then follows the views the text names ROUNDS definitions deep.
     # @raise [Unreadable] when a view the text names leads deeper, or a schema's columns cannot be read
     def reach(text, schemas = [])
       return self unless @connection
@@ -257,9 +255,8 @@ module RailsAiContext
       @refused_views.find { |view, _why| names?(down, view) }
     end
 
-    # Why the view at exactly this place is refused, or nil. PostgreSQL's plan names a relation as `schema.relation`,
-    # so a table is not taken for a view of its name in another schema. Views known by name alone (their
-    # definitions could not be read) are told by the bare name.
+    # Why the view at exactly this place is refused, or nil. The plan names a relation as `schema.relation`, so a table
+    # is not taken for a view of its name in another schema; a view with no definition read is told by its bare name.
     def placed_view_refusal(relation, name)
       placed, bare = self.class.fold(relation), self.class.fold(name)
       return @refused_views[placed] if @views&.key?(placed)
@@ -441,9 +438,8 @@ module RailsAiContext
     # The value of a full-text table's `content=` option, quoted or bare.
     CONTENT_OPTION = /\bcontent\s*=\s*("(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s,)]+)/i
 
-    # virtual table => why it is not read, for each one whose definition names a refused view or a table that
-    # is not read: its rows, or its words, are theirs. A definition names a relation in its `content=` option
-    # and, for a vocabulary, as its table: any other word of it is a column or an option of its own.
+    # virtual table => why it is not read, for each one built on a refused view or on a table that is not read. Only
+    # its `content=` option, and a vocabulary's table, name a relation: any other word is its own column or option.
     def built_on_unread(index_tables)
       index_tables.each_with_object({}) do |(table, (kind, owner, definition)), built|
         table = self.class.fold(table)

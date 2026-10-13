@@ -345,6 +345,14 @@ RSpec.describe RailsAiContext::Tools::Query do
         conn.execute("SET SESSION sql_mode = '#{default}'") if default
       end
 
+      it "leaves no user variable and no LAST_INSERT_ID value on the app's connection" do
+        expect(answer("SELECT @rac_my_v := 5 AS v").error?).to be(true)
+        expect(answer("SELECT LAST_INSERT_ID(7) AS v").error?).to be(true)
+
+        expect(conn.select_rows("SELECT @rac_my_v, LAST_INSERT_ID()").first.map(&:to_s)).to eq([ "", "0" ])
+        expect(text("SELECT LAST_INSERT_ID() AS v")).to include("| 0 |")
+      end
+
       it "filters both columns of a name a join returns twice, and has no derived table of duplicate names" do
         twice = text("SELECT * FROM rac_my_accounts a JOIN rac_my_accounts b ON 1 = 1")
         expect(twice).to include("a@example.com")
