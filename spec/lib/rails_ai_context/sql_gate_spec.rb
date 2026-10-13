@@ -1350,6 +1350,13 @@ RSpec.describe RailsAiContext::SqlGate do
         plan = { "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "Plans" => [ { "Node Type" => "Append", "Parent Relationship" => "Outer", "Plans" => members } ] }
         expect(plan_refusal(plan)).to include("whole row of `users`")
       end
+
+      it "refuses a whole row over a Merge Append whose members each sit under a Sort" do
+        sorted = ->(relation, as, columns) { { "Node Type" => "Sort", "Parent Relationship" => "Member", "Output" => columns, "Plans" => [ scan_as(relation, as, "Output" => columns) ] } }
+        members = [ sorted.call("posts", "p_1", %w[p_1.id p_1.title]), sorted.call("users", "p_2", %w[p_2.id p_2.email]) ]
+        plan = { "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "Plans" => [ { "Node Type" => "Merge Append", "Parent Relationship" => "Outer", "Plans" => members } ] }
+        expect(plan_refusal(plan)).to include("whole row of `users`")
+      end
     end
 
     # Plans PostgreSQL 16 gave over rac_p (id, email, salt), partitioned in two, and over an inheritance parent.

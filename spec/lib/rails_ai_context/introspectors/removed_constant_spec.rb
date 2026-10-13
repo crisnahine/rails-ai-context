@@ -23,7 +23,8 @@ RSpec.describe "a loaded class whose constant was removed" do
   end
 
   it "is left out of a model's STI children" do
-    allow(Post).to receive(:inheritance_column).and_return("title")
+    # The children are read where the table has the inheritance column: asked of the schema file, whatever tables the connection holds.
+    allow(Post).to receive_messages(inheritance_column: "title", table_exists?: false)
     stub_const("LivePost", Class.new(Post))
     kept = removed(:GonePost, Post)
 

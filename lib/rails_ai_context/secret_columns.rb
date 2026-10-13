@@ -37,7 +37,7 @@ module RailsAiContext
     WILDCARD = /(?:\b(?:SELECT|DISTINCT|ALL)\b|[,.])\s*\*/i
 
     # A name before a dot, matched in reversed text from the dot backward: bare, or in backticks or double quotes
-    # with the quote doubled inside. No database family has a schema name longer than 64 characters.
+    # with the quote doubled inside. A schema name on MySQL, MariaDB or PostgreSQL is 64 characters at most.
     NAME_END = /\.(?=\s*(?:[\p{Word}$`"]|[^\x00-\x7F]))/
     BARE_NAME = /(?:[\p{Word}$]|[^\x00-\x7F])+/
     QUOTED_NAME = /`((?>(?:``|[^`]){1,64}))`(?!`)|"((?>(?:""|[^"]){1,64}))"(?!")/
@@ -314,12 +314,10 @@ module RailsAiContext
       scanner = StringScanner.new(text.reverse)
       names = []
       while scanner.skip_until(NAME_END)
-        after_dot = scanner.pos
         scanner.skip(/\s+/)
         if (bare = scanner.check(BARE_NAME)) then names << bare.reverse
         elsif scanner.check(QUOTED_NAME) then names << (scanner[1]&.gsub("``", "`") || scanner[2].gsub('""', '"')).reverse
         end
-        scanner.pos = after_dot
       end
       names
     end

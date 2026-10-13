@@ -430,9 +430,8 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
-  # The timeout runs the query in a forked child it can kill. Windows has no
-  # fork, so there the query runs in this process, unbounded: the group
-  # "where the platform has no fork" says so on every platform.
+  # The timeout runs the query in a forked child it can kill. Windows has no fork, so there the query runs
+  # in this process, unbounded: the group "where the platform has no fork" says so on every platform.
   describe "SQLite timeout on a file-backed database",
            skip: (Process.respond_to?(:fork) ? false : "the SQLite timeout runs the query in a forked child, and this platform has no fork") do
     let(:dir) { Dir.mktmpdir }
@@ -882,20 +881,26 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "refuses a virtual table built on a relation that is not read, however its definition spells the module and its options" do
+      # The SQLite that sqlite3 1.x bundles has no page module to build a table with.
+      paged = conn.select_value("SELECT count(*) FROM pragma_module_list WHERE name = 'sqlite_dbpage'").to_i.positive?
+      conn.execute("CREATE VIRTUAL TABLE raw_pages USING sqlite_dbpage") if paged
       [ "CREATE VIEW ren AS SELECT id, api_token AS word FROM accounts",
-        "CREATE VIRTUAL TABLE raw_pages USING sqlite_dbpage",
         "CREATE VIRTUAL TABLE short_fts USING fts5(word, conten='ren', content_rowid='id')",
         "CREATE VIRTUAL TABLE shorter_fts USING fts5(word, c=ren, content_rowid=id)",
         "CREATE VIRTUAL TABLE same_fts USING fts5(ren, content='ren', content_rowid='id')",
         "CREATE VIRTUAL TABLE docs_copy USING fts5(c0, c1, conte=docs_content, content_rowid=id)",
-        "CREATE VIRTUAL TABLE docs_terms USING fts5vocab/* words */(docs, row)" ].each { |sql| conn.execute(sql) }
+        "CREATE VIRTUAL TABLE docs_terms USING fts5vocab/* words */(docs, row)",
+        "CREATE VIEW leak_v AS SELECT id, api_token AS content FROM accounts",
+        "CREATE VIRTUAL TABLE opt_fts USING fts5(content, content = 'leak_v', content_rowid = 'id')" ].each { |sql| conn.execute(sql) }
 
-      refused("SELECT data FROM raw_pages", "Blocked: `raw_pages` is not read: its definition names `sqlite_dbpage`, which is not read.")
+      refused("SELECT data FROM raw_pages", "Blocked: `raw_pages` is not read: its definition names `sqlite_dbpage`, which is not read.") if paged
       %w[short_fts shorter_fts same_fts].each do |table|
         refused("SELECT * FROM #{table}",
                 "Blocked: `#{table}` is not read: its definition names the view `ren`, which is not queried: its definition names the secret column `api_token`.")
       end
       refused("SELECT c1 FROM docs_copy", "Blocked: `docs_copy` is not read: its definition names `docs_content`, which is not read.")
+      refused("SELECT content FROM opt_fts",
+              "Blocked: `opt_fts` is not read: its definition names the view `leak_v`, which is not queried: its definition names the secret column `api_token`.")
       refused("SELECT term FROM docs_terms",
               "Blocked: `docs_terms` is not read: it lists the words of the full-text table `docs`, which holds the secret column `api_token`.")
     end
@@ -1064,7 +1069,8 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT body FROM notes")).to match([ false, a_string_including("scribbled", "without a time limit") ])
     end
 
-    it "keeps the query process and its time limit for a statement that names none of them" do
+    it "keeps the query process and its time limit for a statement that names none of them",
+       skip: (Process.respond_to?(:fork) ? false : "a platform with no fork has no query process") do
       expect(answer("SELECT body FROM notes").last).to include("kept").and(satisfy { |text| !text.include?("without a time limit") })
       expect(answer("SELECT 'another' AS word").last).not_to include("without a time limit")
     end
