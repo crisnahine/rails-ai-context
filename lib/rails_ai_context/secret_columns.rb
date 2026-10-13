@@ -435,22 +435,35 @@ module RailsAiContext
       end
     end
 
-    # The value of a full-text table's `content=` option, quoted or bare.
-    CONTENT_OPTION = /\bcontent\s*=\s*("(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s,)]+)/i
+    # One argument of a virtual table's module: up to the next comma outside quotes, brackets and parentheses.
+    MODULE_ARGUMENT = /(?:"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|\([^()]*\)|[^,])+/
 
-    # virtual table => why it is not read, for each one built on a refused view or on a table that is not read. Only
-    # its `content=` option, and a vocabulary's table, name a relation: any other word is its own column or option.
+    # virtual table => why it is not read, for each one built on a refused view or on a table that is not read:
+    # its rows, or its words, are theirs.
     def built_on_unread(index_tables)
       index_tables.each_with_object({}) do |(table, (kind, owner, definition)), built|
         table = self.class.fold(table)
         next if definition.nil? || @unread_tables.key?(table)
 
-        down = self.class.fold(kind == :vocabulary ? owner : definition.scan(CONTENT_OPTION).join(" "))
+        down = self.class.fold("#{owner if kind == :vocabulary} #{relation_words(table, definition)}")
         view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
         other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
         built[table] = "its definition names the view `#{view}`, which is not queried: #{why}" if view
         built[table] = "its definition names `#{other}`, which is not read" if other
       end
+    end
+
+    # What a virtual table's definition can name a relation with: its module, and every argument but the columns a
+    # full-text table declares (a column named like a view is no view). An argument with `=` is an option, kept whole.
+    def relation_words(table, definition)
+      mod, arguments = definition.match(/\bUSING\s+([^\s(]+)\s*(?:\((.*)\))?\s*\z/mi)&.captures
+      return definition unless mod
+
+      columns = mod.delete(%q("'`[])).match?(/\Afts[345]\z/i) ? @columns[table] : []
+      named = arguments.to_s.scan(MODULE_ARGUMENT).reject do |argument|
+        !argument.include?("=") && columns.include?(self.class.fold(argument.delete(%q("'`[])).split.first))
+      end
+      [ mod, *named ].join(" ")
     end
 
     def refusal_of(definition)

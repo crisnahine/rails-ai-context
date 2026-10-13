@@ -201,7 +201,8 @@ module RailsAiContext
           tables[name] = [ :shadow, owner ] if owner
         end
         virtual.each do |name, sql|
-          mod, args = sql.to_s.match(VOCABULARY)&.captures
+          sql = SqlGate.comment_free(sql.to_s, SQLITE)
+          mod, args = sql.match(VOCABULARY)&.captures
           # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
           names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
           found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2], sql ] : [ :virtual, name, sql ]
