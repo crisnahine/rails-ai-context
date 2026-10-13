@@ -101,9 +101,9 @@ RSpec.describe "the database argument" do
       response = query(sql: "SELECT name FROM jobs")
 
       expect(response.error?).to be(true)
-      expect(text(response)).to include("no such table: jobs", 'The jobs table is on the queue database: run the query again with database: "queue".')
+      expect(text(response)).to end_with('no such table: jobs. The jobs table is on the queue database: run the query again with database: "queue".')
       expect(text(query(sql: "SELECT id FROM users", database: "queue")))
-        .to include('The users table is on the primary database: run the query again with database: "primary".')
+        .to end_with('no such table: users. The users table is on the primary database: run the query again with database: "primary".')
     end
 
     it "names the database that holds a table an EXPLAIN did not find" do
@@ -114,7 +114,7 @@ RSpec.describe "the database argument" do
 
       expect(response.error?).to be(true)
       expect(text(response)).to start_with("EXPLAIN failed:")
-        .and include("no such table: jobs", 'The jobs table is on the queue database: run the query again with database: "queue".')
+        .and end_with('no such table: jobs. The jobs table is on the queue database: run the query again with database: "queue".')
     end
 
     it "refuses a named database whose adapter has no family, before any connection to it is opened" do

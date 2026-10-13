@@ -2,6 +2,7 @@
 
 require "set"
 require "strscan"
+require "timeout"
 
 module RailsAiContext
   # Decides whether rails_query runs a statement: checks on its text, and on PostgreSQL on its plan.
@@ -40,6 +41,16 @@ module RailsAiContext
     # The checks read a megabyte in two seconds at the slowest (a nest of parentheses, a run of dollar signs), and
     # the longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB.
     MAX_BYTES = 1_000_000
+
+    # The text checks ran past the time they have.
+    class TextChecksTimedOut < RailsAiContext::Error; end
+
+    # @return [String, nil] the refusal of a statement longer than the checks read
+    def self.length_refusal(sql)
+      return nil unless sql.to_s.bytesize > MAX_BYTES
+
+      "Blocked: the statement is #{sql.bytesize} bytes long, and rails_query checks a statement of #{MAX_BYTES} bytes at most."
+    end
 
     # REPLACE is the MySQL statement; `replace(` is the string function every
     # database has, so a REPLACE followed by an opening parenthesis is let be.
@@ -171,6 +182,9 @@ module RailsAiContext
     # What a VALUES body may not hold if its column-alias list is to rename constants only.
     ROW_SOURCES = %w[SELECT TABLE WITH UNION EXCEPT INTERSECT].freeze
 
+    IN_SHORTHAND = "`x IN t` is SQLite's shorthand for `x IN (SELECT * FROM t)`, and a value read through such a wildcard can be " \
+      "compared past the redaction, so write the subquery with its columns named."
+
     # A UNION names its columns after its first SELECT, so another table's rows leave under those names.
     # INTERSECT and EXCEPT return only rows of their first SELECT, so they stay.
     SET_UNION = /\bUNION\b/i
@@ -213,6 +227,15 @@ module RailsAiContext
         super(text, fixed_anchor: true)
       end
 
+      # The [name] at the pointer. A line with no closing bracket is read once, however many brackets open on it.
+      def bracketed
+        return nil if @unclosed_to && pos < @unclosed_to
+
+        span = scan(BRACKETED)
+        @unclosed_to = pos + check(/[^\]\n]*/).bytesize unless span
+        span
+      end
+
       # Whether the dollar tag at the pointer stands again after itself, to close the quote it opens.
       def closed?(tag)
         @last ||= {}.tap do |last|
@@ -224,25 +247,25 @@ module RailsAiContext
     end
 
     # family decides the lexing and whether the plan checks run. budget is the seconds the reads the
-    # gate sends (the plan, the pg_proc lookup) share with the caller's other reads.
-    def initialize(family:, secrets:, connection:, budget:)
+    # gate sends (the plan, the pg_proc lookup) share with the caller's other reads. text_timeout is the seconds
+    # the checks on the statement's text have to themselves.
+    def initialize(family:, secrets:, connection:, budget:, text_timeout: RailsAiContext.configuration.query_timeout)
+      @text_timeout = text_timeout
       @family = family
       @secrets = secrets
       @connection = connection
       @budget = budget
+      @backslash = family.backslash_escapes?
     end
 
     def check(sql)
       return refuse("SQL query is required.") if sql.nil? || sql.strip.empty?
-      if sql.bytesize > MAX_BYTES
-        return refuse("Blocked: the statement is #{sql.bytesize} bytes long, and rails_query checks a statement of #{MAX_BYTES} bytes at most.")
-      end
-
-      if (refusal = text_refusal(sql))
+      if (refusal = self.class.length_refusal(sql))
         return refuse(refusal)
       end
 
-      text = comment_free(sql)
+      text, refusal = text_verdict(sql)
+      return refuse(refusal) if refusal
       planned = @family.plan_checks? && !text.match?(NO_PLAN)
       plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left) } if planned
       if planned && plan.nil?
@@ -255,13 +278,13 @@ module RailsAiContext
     end
 
     # The text with its comments out and every quoted span copied whole, as the family reads them.
-    def self.comment_free(sql, family)
+    def self.comment_free(sql, family, backslash: family.backslash_escapes?)
       scanner = Scanner.new(sql)
       out = +""
       executable = false
 
       until scanner.eos?
-        if (span = quoted(scanner, family)&.last || scanner.scan(UNQUOTED))
+        if (span = quoted(scanner, family, backslash: backslash)&.last || scanner.scan(UNQUOTED))
           out << span
         elsif family.executable_comments? && scanner.scan(/\/\*!\d*/)
           # Its content stays for the checks to read: `SELECT /*!50000 LOAD_FILE(...) */`.
@@ -281,13 +304,13 @@ module RailsAiContext
     end
 
     # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
-    # brackets: whether [name] quotes a name in this text.
-    def self.quoted(scanner, family, brackets: family.sqlite?)
+    # brackets: whether [name] quotes a name in this text. backslash: whether one escapes the next character of a string.
+    def self.quoted(scanner, family, brackets: family.sqlite?, backslash: family.backslash_escapes?)
       case scanner.peek(1)
-      when "'" then [ :string, scanner.scan(family.backslash_escapes? || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
-      when '"' then [ :quoted, scanner.scan(family.backslash_escapes? ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
+      when "'" then [ :string, scanner.scan(backslash || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
+      when '"' then [ :quoted, scanner.scan(backslash ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
       when "`" then [ :quoted, scanner.scan(PLAIN_SPAN["`"]) ]
-      when "[" then brackets && (span = scanner.scan(BRACKETED)) ? [ :quoted, span ] : nil
+      when "[" then brackets && (span = scanner.bracketed) ? [ :quoted, span ] : nil
       when "$"
         tag = scanner.check(DOLLAR_TAG) if family.dollar_quoting?
         [ :string, scanner.scan(DOLLAR_QUOTED) ] if tag && scanner.closed?(tag)
@@ -303,6 +326,34 @@ module RailsAiContext
 
     def refuse(reason)
       Verdict.new(sql: nil, refusal: reason, plan: nil)
+    end
+
+    # [the comment-free text, the refusal the text checks give or nil]. The checks send nothing and hold nothing,
+    # so ending them from outside leaves nothing half done.
+    def text_verdict(sql)
+      Timeout.timeout(@text_timeout, TextChecksTimedOut) do
+        refusal = text_refusal(sql)
+        next [ nil, refusal ] if refusal
+
+        text = comment_free(sql)
+        if @family.backslash_escapes? && (refusal = without_backslash_escapes { text_refusal(text) })
+          refusal = "#{refusal.delete_suffix(".")}. That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, " \
+            "and rails_query does not read the session's mode. Write a quote inside a string doubled, so that both readings agree."
+        end
+        [ text, refusal ]
+      end
+    rescue TextChecksTimedOut
+      [ nil, "Blocked: the checks on the statement's text ran longer than query_timeout (#{@text_timeout} seconds), so the statement " \
+        "was not run. Send a shorter statement." ]
+    end
+
+    # MySQL reads a backslash in a string as an ordinary character under NO_BACKSLASH_ESCAPES. The block's
+    # checks read the text that way.
+    def without_backslash_escapes
+      @backslash = false
+      yield
+    ensure
+      @backslash = @family.backslash_escapes?
     end
 
     def text_refusal(sql)
@@ -345,7 +396,12 @@ module RailsAiContext
         return never_read_refusal(m.captures.compact.first)
       end
       if (m = listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, :string)))
-        return "#{never_read_refusal(m[1])} A name before a dot is read as that schema, so an alias named `#{m[1]}` needs another name."
+        text_only = ->(kind, span) { kind == :string || (span.start_with?('"') && !span.match?(/\A"\w+"\z/)) }
+        return "#{never_read_refusal(m[1])} A name before a dot is read as that schema, so an alias named `#{m[1]}` needs another name." if
+          listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, &text_only))
+
+        return "#{never_read_refusal(m[1])} The name stands before a dot inside double-quoted text, which MySQL reads as a name when the " \
+          "session's sql_mode holds ANSI_QUOTES, and rails_query does not read the session's mode. Write the text in single quotes."
       end
       table, why = @secrets.unread_table_in(cleaned)
       return "Blocked: `#{table}` is not read: #{why}." if table
@@ -407,8 +463,16 @@ module RailsAiContext
         return "Blocked: `TABLE` inside a subquery #{holds} `TABLE t` reads every column of `t`, and on #{@family.name} a value read that " \
           "way can be compared or renamed past the redaction, so SELECT the columns you need in the subquery." if wildcard == :table
 
+        return "Blocked: `IN` before a table's name #{holds} #{IN_SHORTHAND}" if wildcard == :in
+
         return "Blocked: a `*` inside a subquery #{holds} On #{@family.name} a value read through such a wildcard can be compared or " \
           "renamed past the redaction, so name the columns in the subquery."
+      end
+      if wildcard && wildcard != :table && (relation = string_naming_relation(tokens))
+        return "Blocked: #{wildcard == :in ? "`IN` before a table's name" : "a `*` inside a subquery"} is not run in a statement that holds " \
+          "the string '#{relation}'. SQLite reads a string as a table's name where a name can stand, and the table `#{relation}` holds the " \
+          "secret column `#{@secrets.of_relation(relation).first}`. " + (wildcard == :in ? IN_SHORTHAND :
+          "A value read through such a wildcard can be compared or renamed past the redaction, so name the columns in the subquery.")
       end
 
       # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
@@ -531,18 +595,19 @@ module RailsAiContext
     end
 
     def comment_free(sql)
-      self.class.comment_free(sql, @family)
+      self.class.comment_free(sql, @family, backslash: @backslash)
     end
 
     # Every quoted and dollar-quoted span blanked to spaces of the same length, so a check reads structure
-    # only and positions still line up. only: the one kind to blank, :string or :quoted.
-    def mask_quoted(text, only = nil)
+    # only and positions still line up. only: the one kind to blank, :string or :quoted. With a block, the spans it picks.
+    def mask_quoted(text, only = nil, &picks)
+      picks ||= ->(kind, _span) { only.nil? || kind == only }
       scanner = Scanner.new(text)
       out = +""
 
       until scanner.eos?
-        kind, span = self.class.quoted(scanner, @family)
-        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : only.nil? || kind == only ? " " * span.length : span)
+        kind, span = self.class.quoted(scanner, @family, backslash: @backslash)
+        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : picks.call(kind, span) ? " " * span.length : span)
       end
 
       out
@@ -557,7 +622,7 @@ module RailsAiContext
         next if scanner.skip(/\s+/) || scanner.skip(/[uU]&(?=["'])/)
 
         # A bracketed name is read on every family: an alias list is told by its shape, whatever quotes its names.
-        found << (self.class.quoted(scanner, @family, brackets: true) ||
+        found << (self.class.quoted(scanner, @family, brackets: true, backslash: @backslash) ||
           scanner.scan(BARE_WORD)&.then { |span| [ span.match?(NUMBER) ? :number : :word, span ] } || [ :punct, scanner.getch ])
       end
       found
@@ -572,7 +637,9 @@ module RailsAiContext
         kind, span = self.class.quoted(scanner, @family)
         if kind == :string
           out.chop! if out.end_with?("&")
-          out.chop! if out.end_with?(*%w[e E b B x X u U]) && !out.byteslice(-2, 1).to_s.match?(/[\w$\x80-\xFF]/n)
+          # Read as a byte: a character past ASCII ends in one from 0x80 up, and it is part of a name.
+          before = out.getbyte(-2)
+          out.chop! if out.end_with?(*%w[e E b B x X u U]) && !(before && (before >= 0x80 || before.chr.match?(/[\w$]/)))
           out << "''"
         else
           out << (span || scanner.scan(UNQUOTED) || scanner.getch)
@@ -690,36 +757,52 @@ module RailsAiContext
     def values_only?(tokens, open, close)
       return false unless close && word?(tokens[open + 1], "VALUES")
 
-      tokens[(open + 2)...close].none? { |token| ROW_SOURCES.any? { |source| word?(token, source) } }
+      before = row_sources_before(tokens)
+      before[close] == before[open + 2]
     end
 
-    # :star for a select-list wildcard inside parentheses, :table for MySQL's `TABLE t` there, else nil.
-    # `count(*)` reads no column and EXISTS returns none, so both are left alone.
+    # How many row-source words stand before each token, so that no body is scanned for them on its own.
+    def row_sources_before(tokens)
+      (@row_sources ||= {}.compare_by_identity)[tokens] ||= tokens.each_with_object([ 0 ]) do |token, counts|
+        counts << counts.last + (ROW_SOURCES.any? { |source| word?(token, source) } ? 1 : 0)
+      end
+    end
+
+    # :star for a select-list wildcard inside parentheses, :table for `TABLE t` there on a family that has the
+    # statement, :in for SQLite's `x IN t` anywhere, else nil. `count(*)` reads no column and EXISTS returns
+    # none, so both are left alone.
     def subquery_wildcard(tokens)
       enclosing = []
       tokens.each_with_index do |token, i|
+        following = tokens[i + 1]
+        return :in if @family.sqlite? && word?(token, "IN") && following && following != [ :punct, "(" ]
+
         enclosing << i if token == [ :punct, "(" ]
         enclosing.pop if token == [ :punct, ")" ]
         next if enclosing.empty? || (enclosing.last.positive? && word?(tokens[enclosing.last - 1], "EXISTS"))
 
-        following = tokens[i + 1]
         star = token == [ :punct, "*" ] && (following.nil? || [ ",", ")" ].include?(following[1]) || word?(following, "FROM")) &&
           !(tokens[i - 1] == [ :punct, "(" ] && following == [ :punct, ")" ])
         return :star if star
-        return :table if word?(token, "TABLE") && tokens[i - 1] != [ :punct, "." ]
+        return :table if !@family.sqlite? && word?(token, "TABLE") && tokens[i - 1] != [ :punct, "." ]
       end
       nil
     end
 
-    # The statement with each string that can only be data emptied. MySQL reads no string as a name. SQLite
-    # reads one as a name where no string can stand: after FROM, JOIN, TABLE or a comma, and beside a dot.
+    # The statement with each string emptied: where a string names a relation, string_naming_relation reads it.
     def names_text(tokens)
-      tokens.each_with_index.map do |(kind, text), i|
-        before = tokens[i - 1] if i.positive?
-        named = kind != :string || (@family.sqlite? && (%w[FROM JOIN TABLE].any? { |word| word?(before, word) } ||
-          [ before, tokens[i + 1] ].include?([ :punct, "." ]) || before == [ :punct, "," ]))
-        named ? text : "''"
-      end.join(" ")
+      tokens.map { |kind, text| kind == :string ? "''" : text }.join(" ")
+    end
+
+    # SQLite reads a string as a name wherever a name can stand, so a string equal to such a relation's name is one.
+    def string_naming_relation(tokens)
+      return nil unless @family.sqlite?
+
+      tokens.each do |kind, text|
+        name = text[1..].delete_suffix("'").gsub("''", "'") if kind == :string
+        return name if name && @secrets.relation_secret?(name)
+      end
+      nil
     end
 
     def plan_refusal(top, text)
