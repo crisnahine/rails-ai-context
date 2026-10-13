@@ -986,7 +986,7 @@ module RailsAiContext
         bases = abstract_bases(model)
         return bases unless model.superclass == ActiveRecord::Base
 
-        bases | ActiveRecord::Base.subclasses.select { |klass| klass.name && klass.abstract_class? }
+        bases | DeclaredConstant.carried(ActiveRecord::Base.subclasses).select(&:abstract_class?)
       end
 
       def every_model_modules
@@ -1137,9 +1137,9 @@ module RailsAiContext
         return nil unless has_type_column
 
         children = if model.respond_to?(:descendants)
-          model.descendants.map(&:name).compact.sort
+          DeclaredConstant.carried(model.descendants).map(&:name).sort
         elsif model.respond_to?(:subclasses)
-          model.subclasses.map(&:name).compact.sort
+          DeclaredConstant.carried(model.subclasses).map(&:name).sort
         else
           []
         end

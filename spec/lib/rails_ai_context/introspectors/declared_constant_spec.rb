@@ -157,6 +157,16 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.renamed?(klass)).to be(true)
     end
 
+    it "is true for a class whose name another class now carries" do
+      old = Class.new
+      Object.const_set(:CarriedAgain, old)
+      Object.send(:remove_const, :CarriedAgain)
+      stub_const("CarriedAgain", Class.new)
+
+      expect(described_class.renamed?(old)).to be(true)
+      expect(described_class.renamed?(CarriedAgain)).to be(false)
+    end
+
     it "is true for a class whose name is no constant path, and for one whose path runs through a value that is no module" do
       odd = Class.new
       def odd.name = "tmp_model"
