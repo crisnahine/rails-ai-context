@@ -13,6 +13,22 @@ module RailsAiContext
     # model's context instead, with enough detail to retry or route around
     # the failure.
     module SafeCall
+      # The content with the note ending its first text block, or the content
+      # itself when there is no note or no text to end.
+      def self.noted(content, note)
+        first = Array(content).first
+        return content unless note && first.is_a?(Hash) && first[:type] == "text"
+
+        body = first[:text].to_s
+        [ first.merge(text: body.strip.empty? ? note.lstrip : "#{body}#{note}") ] + content[1..].to_a
+      end
+
+      # The parameters tools/list shows, which for rails_get_config leaves out those of a section turned off.
+      def self.published_params(tool)
+        schema = tool.respond_to?(:input_schema_value) ? tool.input_schema_value : tool.input_schema
+        (schema&.to_h&.dig(:properties) || {}).keys.map(&:to_s)
+      end
+
       def call(**kwargs)
         # An MCP client sends whatever keys it likes. Reaching the tool with
         # one it does not declare answers with an unknown-keyword ArgumentError
@@ -27,10 +43,6 @@ module RailsAiContext
         # have its note consumed by the inner one.
         discarded = discarded_detail(kwargs)
         kwargs = listify_arrays(normalize_detail(kwargs))
-        # Before the call reads anything: an edit since the last call drops
-        # the caches and reloads the app's code (see the method).
-        RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
-
         answer = -> { answer_call(discarded) { super(**kwargs) } }
 
         # Only the call the client made is its query. A composite tool answers
@@ -39,12 +51,25 @@ module RailsAiContext
         # first inner call took the outer one's params with it.
         return answer.call if Thread.current[:rails_ai_context_call]
 
-        Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
+        # Before the call reads anything: an edit since the last call drops
+        # the caches and reloads the app's code (see the method).
+        RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
+        call = Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
         begin
-          answer.call
+          with_crashes(answer.call, call[:crashed])
         ensure
           Thread.current[:rails_ai_context_call] = nil
         end
+      end
+
+      def unknown_param_response(unknown, known = SafeCall.published_params(self))
+        lines = unknown.map do |name|
+          suggestion = RailsAiContext::Tools::BaseTool.find_closest_match(name, known)
+          suggestion ? "'#{name}' - did you mean '#{suggestion}'?" : "'#{name}'"
+        end
+        valid = known.any? ? "Valid params: #{known.join(', ')}" : "This tool takes no params."
+        text = "Unknown param#{"s" if unknown.size > 1}: #{lines.join(', ')}\n#{valid}"
+        MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
       end
 
       private
@@ -61,14 +86,39 @@ module RailsAiContext
         RailsAiContext::CodeReloader.with_app_code do
           begin
             # One call is one run: what it reads per controller or per route is read once.
-            append_note(RailsAiContext::RunCache.around { yield }, invalid_detail_note(discarded))
+            response, left_out = with_left_out_frame { RailsAiContext::RunCache.around { yield } }
+            response = append_note(response, RailsAiContext::Tools::BaseTool.left_out_note(left_out))
+            append_note(response, invalid_detail_note(discarded))
           # ScriptError too: a SyntaxError or LoadError out of an app file the
           # tool reached must cost that call, not the stdio server and every
-          # tool with it.
-          rescue StandardError, ScriptError => e
-            failure_response(e)
+          # tool with it. So must a stack overflow or a SecurityError.
+          rescue StandardError, ScriptError, SystemStackError, SecurityError => e
+            failure_response(e).tap do |failure|
+              call = Thread.current[:rails_ai_context_call]
+              (call[:crashed] ||= []) << failure.content.first[:text] if call
+            end
           end
         end
+      end
+
+      # A tool this call ran crashed: the answer is an error, and it says so where its text left the crash out.
+      def with_crashes(response, crashes)
+        return response unless crashes && response.respond_to?(:error?) && !response.error?
+
+        text = response.content.first&.dig(:text).to_s
+        unsaid = crashes.uniq.reject { |failure| text.include?(failure.lines.first.strip) }
+        rebuilt(response, SafeCall.noted(response.content, ("\n\n#{unsaid.join("\n\n")}" if unsaid.any?)), error: true)
+      end
+
+      # The tools this call's composed sections left out, kept apart from
+      # those of any tool it calls.
+      def with_left_out_frame
+        stack = (Thread.current[RailsAiContext::Tools::BaseTool::LEFT_OUT] ||= [])
+        stack.push([])
+        response = yield
+        [ response, stack.last.uniq ]
+      ensure
+        stack.pop
       end
 
       # The declared params are the contract, so a tool whose method takes
@@ -78,17 +128,6 @@ module RailsAiContext
         return [] unless properties
 
         RailsAiContext::Tools::BaseTool.unknown_param_names(kwargs.keys, properties)
-      end
-
-      def unknown_param_response(unknown)
-        known = (input_schema.to_h[:properties] || {}).keys.map(&:to_s)
-        lines = unknown.map do |name|
-          suggestion = RailsAiContext::Tools::BaseTool.find_closest_match(name, known)
-          suggestion ? "'#{name}' - did you mean '#{suggestion}'?" : "'#{name}'"
-        end
-        valid = known.any? ? "Valid params: #{known.join(', ')}" : "This tool takes no params."
-        text = "Unknown param#{"s" if unknown.size > 1}: #{lines.join(', ')}\n#{valid}"
-        MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
       end
 
       # A string where the schema declares an array is a list of one, and a
@@ -108,6 +147,9 @@ module RailsAiContext
 
       def failure_response(error)
         label = respond_to?(:tool_name) ? tool_name : name
+        # A section renderer answers inside rails_get_config, the tool the caller named.
+        section = RailsAiContext::Tools::GetConfig.retired_section(label)
+        label = "rails_get_config (section #{section.name})" if section && section.renderer.equal?(self)
         origin = portable_origin(Array(error.backtrace).first.to_s)
         text = +"Tool #{label} failed: #{error.class}: #{error.message.to_s.lines.first&.strip}\n"
         text << "At: #{origin}\n" unless origin.empty?
@@ -161,12 +203,13 @@ module RailsAiContext
       def append_note(response, note)
         return response unless note && response.respond_to?(:content)
 
-        content = response.content
-        first = content.first
-        return response unless first.is_a?(Hash) && first[:type] == "text"
+        noted = SafeCall.noted(response.content, note)
+        return response if noted.equal?(response.content)
 
-        noted = [ first.merge(text: "#{first[:text]}#{note}") ] + content[1..].to_a
+        rebuilt(response, noted, error: response.error?)
+      end
 
+      def rebuilt(response, content, error:)
         # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
         # reader is still asked for rather than assumed: getting it wrong
         # turns a good answer into a NoMethodError that SafeCall's own rescue
@@ -174,7 +217,7 @@ module RailsAiContext
         extra = { structured_content: response.structured_content }
         extra[:meta] = response.meta if response.respond_to?(:meta)
 
-        MCP::Tool::Response.new(noted, error: response.error?, **extra)
+        MCP::Tool::Response.new(content, error: error, **extra)
       end
     end
   end

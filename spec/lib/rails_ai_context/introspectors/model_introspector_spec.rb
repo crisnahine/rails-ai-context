@@ -2186,11 +2186,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
-  # `concerns/` under app/models is the Zeitwerk root for mixins, and an app
-  # may also nest one anywhere - OpenProject has app/models/queries/operators/
-  # concerns. But a nested concerns/ is an ordinary namespace, so a class
-  # declared there is a model like any other and dropping it by directory name
-  # loses it.
+  # An app may nest a concerns/ anywhere (OpenProject has app/models/queries/operators/concerns),
+  # and a file there named for a class is a model candidate like any other.
   describe "models under a concerns directory" do
     def models_in(files)
       Dir.mktmpdir do |dir|
@@ -2215,13 +2212,13 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       )).to be_empty
     end
 
-    # The autoload root does not namespace its files, so the path is not their
-    # name; keeping one would report a constant the app does not have.
-    it "drops everything under the top-level concerns root" do
+    # The autoload root does not namespace its files, so the path is not their name.
+    it "keeps a class under the top-level concerns root by its bare constant, and drops the mixin" do
       expect(models_in(
         "concerns/trashable.rb" => "module Trashable\nend\n",
-        "concerns/oddity.rb" => "class Oddity < ApplicationRecord\nend\n"
-      )).to be_empty
+        "concerns/oddity.rb" => "class Oddity < ApplicationRecord\nend\n",
+        "concerns/helper.rb" => "class Helper\nend\n"
+      )).to eq([ "Oddity" ])
     end
   end
   # Rails derives the table from the class name through its own inflector, so
@@ -5763,6 +5760,119 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         names = introspector.call.keys
 
         expect(names).to eq([ "ActivityPub::Activity" ])
+      end
+    end
+  end
+
+  describe "a model class in app/models/concerns" do
+    def concerns_app(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+      File.write(File.join(dir, "app", "models", "application_record.rb"), "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+      File.write(File.join(dir, "app", "models", "concerns", "edition_link.rb"), "class EditionLink < ApplicationRecord\n  self.table_name = \"posts\"\nend\n")
+      File.write(File.join(dir, "app", "models", "concerns", "searchable.rb"), "module Searchable\n  extend ActiveSupport::Concern\nend\n")
+    end
+
+    it "is listed on the static tier under its bare constant, and the mixin beside it is left out" do
+      Dir.mktmpdir do |dir|
+        concerns_app(dir)
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to eq([ "EditionLink" ])
+        expect(models["EditionLink"]).to include(file: "app/models/concerns/edition_link.rb", table_name: "posts")
+      end
+    end
+
+    def mixins_app(dir)
+      concerns_app(dir)
+      File.write(File.join(dir, "app", "models", "concerns", "authenticatable.rb"), <<~RUBY)
+        module Authenticatable
+          extend ActiveSupport::Concern
+          class InvalidToken < StandardError; end
+          class Session < ApplicationRecord; end
+          included do
+            has_secure_password
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "concerns", "noted.rb"), "# Not under module Concerns.\nmodule Noted\nend\n")
+    end
+
+    it "leaves out a concern that holds an inner class and a mixin whose comment names a Concerns module, on the static tier" do
+      Dir.mktmpdir do |dir|
+        mixins_app(dir)
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call.keys).to eq([ "EditionLink" ])
+      end
+    end
+
+    it "leaves the same two files out on the booted tier" do
+      Dir.mktmpdir do |dir|
+        mixins_app(dir)
+        link = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "EditionLink"
+        end
+        stub_const("EditionLink", link)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to eq([ "EditionLink" ])
+      end
+    end
+
+    def other_roots_app(dir)
+      {
+        "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.eager_load_paths << Rails.root.join(\"enterprise/app/models\")\n  end\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/domain/concerns/ledger_entry.rb" => "class LedgerEntry < ApplicationRecord\n  self.table_name = \"posts\"\nend\n",
+        "app/domain/concerns/billable.rb" => "module Billable\nend\n",
+        "enterprise/app/models/concerns/audit_row.rb" => "module Concerns\n  class AuditRow < ApplicationRecord\n    self.table_name = \"posts\"\n  end\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+    end
+
+    it "is listed from a concerns directory of another root, by the constant its file declares, on the static tier" do
+      Dir.mktmpdir do |dir|
+        other_roots_app(dir)
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("LedgerEntry", "Concerns::AuditRow")
+        expect(models["LedgerEntry"][:file]).to eq("app/domain/concerns/ledger_entry.rb")
+      end
+    end
+
+    it "is listed from a concerns directory of another root on the booted tier" do
+      Dir.mktmpdir do |dir|
+        other_roots_app(dir)
+        build = ->(name) { Class.new(ApplicationRecord) { self.table_name = "posts" }.tap { |model| model.define_singleton_method(:name) { name } } }
+        stub_const("LedgerEntry", build.call("LedgerEntry"))
+        stub_const("Billable", Module.new)
+        stub_const("Concerns", Module.new)
+        stub_const("Concerns::AuditRow", build.call("Concerns::AuditRow"))
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to contain_exactly("LedgerEntry", "Concerns::AuditRow")
+      end
+    end
+
+    it "is listed on the booted tier when nothing loaded it yet" do
+      Dir.mktmpdir do |dir|
+        concerns_app(dir)
+        link = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "EditionLink"
+        end
+        stub_const("EditionLink", link)
+        stub_const("Searchable", Module.new)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([])
+
+        expect(introspector.call.keys).to eq([ "EditionLink" ])
       end
     end
   end

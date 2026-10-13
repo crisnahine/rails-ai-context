@@ -46,9 +46,10 @@ module RailsAiContext
 
         # A module in a concerns directory is a concern, not a service; the generated files'
         # Services line uses the same rule.
-        service_files = service_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
-          .reject { |f| Introspectors::ServiceClasses.concern?(relative_under(f, real_service_dirs)) }
-        return no_services_response if service_files.empty?
+        concern_files, service_files = service_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
+          .partition { |f| Introspectors::ServiceClasses.concern?(relative_under(f, real_service_dirs)) }
+        concerns = concern_files.map { |f| { path: f, left_out: :concern } }
+        return no_services_response([ left_out_note(concerns, real_service_dirs) ].compact) if service_files.empty?
 
         # One lookup for the whole call: it walks the service tree on first
         # use and only a class whose superclass is not ActiveInteraction::Base
@@ -59,7 +60,7 @@ module RailsAiContext
           return format_single_service(service, service_files, real_service_dirs, real_root, lookup)
         end
 
-        format_service_listing(service_files, real_service_dirs, real_root, detail, lookup)
+        format_service_listing(service_files, real_service_dirs, real_root, detail, lookup, concerns)
       end
 
       # A service lives under app/services, a pack, an in-repo engine or a
@@ -71,8 +72,8 @@ module RailsAiContext
       end
 
       private_class_method def self.format_single_service(service, service_files, service_dirs, root, lookup)
-        records = without_mixins(match_service_files(service, service_files, service_dirs)
-          .filter_map { |f| service_record(f, service_dirs, lookup) }, root)
+        records = classified(match_service_files(service, service_files, service_dirs), service_dirs, root, lookup)
+          .reject { |r| r[:left_out] }
         matches = records.map { |r| r[:path] }
 
         if matches.size > 1
@@ -182,12 +183,11 @@ module RailsAiContext
           end
         end
         if scan_truncated
-          lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}; " \
-                        "run `rails_search_code(pattern:\"#{class_name}\")` for the rest._"
+          search = pointer("rails_search_code", %(pattern:"#{class_name}"))
+          lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}#{"; run #{search} for the rest" if search}._"
         end
 
-        # Cross-reference hints
-        lines << "" << "_Next: `rails_search_code(pattern:\"#{class_name}\")` for all references_"
+        add_next_hint(lines, pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
 
         text_response(lines.join("\n"))
       end
@@ -195,17 +195,25 @@ module RailsAiContext
       # The classes the listing counts before it sets the bases apart. The by-name
       # lookup reads the same list, so it never answers what the listing leaves out.
       private_class_method def self.service_records(service_files, service_dirs, root, lookup)
-        without_mixins(service_files.filter_map { |file| service_record(file, service_dirs, lookup) }, root)
+        classified(service_files, service_dirs, root, lookup).reject { |r| r[:left_out] }
+      end
+
+      # Every file with the one reason it is no service, if any. The listing's
+      # count and its note of what it left out both read this.
+      private_class_method def self.classified(files, service_dirs, root, lookup)
+        tag_mixins(files.map { |file| service_record(file, service_dirs, lookup) }, root)
       end
 
       private_class_method def self.service_record(file, service_dirs, lookup)
         source = safe_read(file)
         # Kept unread so a by-name lookup can say the file is too large.
         return { path: file } unless source
-        return if Introspectors::ServiceClasses.concern?(nil, source)
+        return { path: file, left_out: :concern } if Introspectors::ServiceClasses.concern?(nil, source)
 
         class_name, superclass, nesting = name_and_superclass(source, file, service_dirs)
-        return if Introspectors::ServiceClasses.mailer?(source, class_name, superclass, lookup)
+        if Introspectors::ServiceClasses.mailer?(source, class_name, superclass, lookup)
+          return { path: file, class_name: class_name, left_out: :mailer }
+        end
 
         { path: file, source: source, class_name: class_name, superclass: superclass, nesting: nesting,
           entryless: Introspectors::ServiceClasses.entryless_module?(source, class_name) }
@@ -213,16 +221,45 @@ module RailsAiContext
 
       # A module other classes mix in is a concern in all but directory, and
       # the generated files' Services line leaves it out by the same rule.
-      private_class_method def self.without_mixins(records, root)
+      private_class_method def self.tag_mixins(records, root)
         entryless = records.select { |r| r[:entryless] }.map { |r| r[:class_name] }
         return records if entryless.empty?
 
         mixins = Introspectors::ServiceClasses.mixed_in(root, entryless)
-        records.reject { |r| mixins.include?(r[:class_name]) }
+        records.map { |r| r[:entryless] && mixins.include?(r[:class_name]) ? r.merge(left_out: :mixin) : r }
       end
 
-      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
-        read = service_records(service_files, service_dirs, root, lookup).select { |record| record[:source] }.map do |record|
+      LEFT_OUT_NAMES_PER_KIND = 5
+      LEFT_OUT_KINDS = {
+        base: [ "base class", " (named above)" ],
+        concern: [ "concern", "" ],
+        mixin: [ "module", " with no entry point that other code mixes in" ],
+        mailer: [ "mailer", "" ],
+        unread: [ "file", " too large to read" ]
+      }.freeze
+
+      # The heading counts services and a reader counts files, so the files
+      # that are no service are counted by kind beside it.
+      private_class_method def self.left_out_note(records, service_dirs)
+        left_out = records.select { |r| r[:left_out] }
+        return nil if left_out.empty?
+
+        kinds = LEFT_OUT_KINDS.filter_map do |kind, (noun, suffix)|
+          of_kind = left_out.select { |r| r[:left_out] == kind }
+          next if of_kind.empty?
+
+          names = of_kind.map { |r| r[:class_name] || constant_for(r[:path], service_dirs) }.sort
+          more = names.size - LEFT_OUT_NAMES_PER_KIND
+          named = kind == :base ? "" : " (#{names.first(LEFT_OUT_NAMES_PER_KIND).join(', ')}#{" and #{more} more" if more.positive?})"
+          "#{count_phrase(of_kind.size, noun)}#{suffix}#{named}"
+        end
+        "_#{left_out.size} of the #{count_phrase(records.size, "Ruby file")} under the service directories " \
+          "#{left_out.size == 1 ? 'is' : 'are'} left out: #{kinds.join(', ')}._"
+      end
+
+      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup, concerns)
+        records = concerns + classified(service_files, service_dirs, root, lookup).map { |r| r[:source] || r[:left_out] ? r : r.merge(left_out: :unread) }
+        read = records.reject { |record| record[:left_out] }.map do |record|
           [ record, *class_interface(record[:source], constant_for(record[:path], service_dirs)) ]
         end
         # A listed parent's macros are already read, so its children's constructors reuse them.
@@ -247,15 +284,15 @@ module RailsAiContext
 
         bases = base_class_names(service_data)
         service_data = service_data.reject { |s| bases.include?(s[:class_name]) }
+        notes = [ bases_note("services", bases),
+                  left_out_note(records.map { |r| bases.include?(r[:class_name]) && !r[:left_out] ? r.merge(left_out: :base) : r }, service_dirs) ].compact
         # A directory of base classes alone has no service anybody calls, and
         # still names the bases it left out.
-        return no_services_response(bases) if service_data.empty?
+        return no_services_response(notes) if service_data.empty?
 
         total = service_data.size
         lines = [ "# Service Objects (#{total})", "" ]
-        if bases.any?
-          lines << bases_note("services", bases) << ""
-        end
+        lines.push(*notes, "") if notes.any?
 
         # Pattern detection
         detected = detect_common_pattern(pattern_stats(service_data))
@@ -314,9 +351,8 @@ module RailsAiContext
         stats
       end
 
-      private_class_method def self.no_services_response(bases = [])
-        text_response([ "A services directory exists but contains no service objects.",
-                        bases_note("services", bases) ].compact.join("\n\n"))
+      private_class_method def self.no_services_response(notes = [])
+        text_response([ "A services directory exists but contains no service objects.", *notes.join("\n").presence ].join("\n\n"))
       end
 
       # A base class is not a service a caller invokes: counted as one it

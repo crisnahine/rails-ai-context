@@ -27,7 +27,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 36,
+        order: 31,
         mcp: "rails_review_changes(ref:\"main\")",
         cli_args: "ref=main",
         summary: "PR/commit review: file context + warnings (missing indexes, removed validations)"
@@ -150,12 +150,11 @@ module RailsAiContext
         rb_files = classified.select { |c| c[:file].end_with?(".rb") }.map { |c| c[:file] }
         if rb_files.any?
           file_list = rb_files.first(10).map { |f| "\"#{f}\"" }.join(", ")
-          lines << "_Next: `rails_validate(files:[#{file_list}], level:\"rails\")` to validate all changes._"
+          hint = next_hint(pointer("rails_validate", %(files:[#{file_list}], level:"rails"), "to validate all changes."))
+          lines << hint if hint
         end
 
         text_response(lines.join("\n"))
-      rescue => e
-        text_response("Review error: #{e.message}")
       end
 
       class << self
@@ -286,7 +285,7 @@ module RailsAiContext
           when :model
             model_name = File.basename(file, ".rb").camelize
             begin
-              result = GetModelDetails.call(model: model_name, detail: "standard")
+              result = compose(GetModelDetails, model: model_name, detail: "standard")
               lines << "" << "**Model context:** #{model_name}" unless empty?(result)
             rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
 
@@ -294,7 +293,7 @@ module RailsAiContext
             ctrl_name = File.basename(file, ".rb").camelize
             snake = ctrl_name.underscore.delete_suffix("_controller")
             begin
-              result = GetRoutes.call(controller: snake, detail: "summary")
+              result = compose(GetRoutes, controller: snake, detail: "summary")
               lines << "" << "**Routes:**" << response_text(result) unless empty?(result)
             rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
 
@@ -324,7 +323,7 @@ module RailsAiContext
 
           when :routes
             begin
-              result = GetRoutes.call(detail: "summary")
+              result = compose(GetRoutes, detail: "summary")
               summary = response_text(result).lines.first&.strip&.sub(/\A#+\s*/, "")
               lines << "" << "**Current routes:** #{summary}" unless summary.to_s.empty?
             rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end

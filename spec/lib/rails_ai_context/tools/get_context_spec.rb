@@ -27,6 +27,136 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     end
   end
 
+  describe "an unexpected exception" do
+    {
+      "a controller and an action" => [ RailsAiContext::Tools::GetRoutes, { controller: "PostsController", action: "index" } ],
+      "a controller" => [ RailsAiContext::Tools::GetRoutes, { controller: "PostsController" } ],
+      "a model" => [ RailsAiContext::Tools::GetSchema, { model: "Post" } ]
+    }.each do |mode, (tool, params)|
+      it "in a section is an error result that keeps the other sections, for #{mode}" do
+        allow(tool).to receive(:cached_context).and_raise(NoMethodError, "undefined method 'to_sentence' for an instance of Array")
+
+        response = described_class.call(**params)
+        text = response.content.first[:text]
+
+        expect(response.error?).to be(true), text
+        expect(text).to start_with("# Post")
+        expect(text).to include("Tool #{tool.tool_name} failed: NoMethodError: undefined method 'to_sentence'")
+      end
+    end
+  end
+
+  describe "a name the app does not have, with the tool that answers it turned off" do
+    around do |example|
+      saved = RailsAiContext.configuration.skip_tools
+      example.run
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+
+    def answer(**params)
+      described_class.call(**params).content.first[:text]
+    end
+
+    it "is answered as a model that was not found, with the models the app has" do
+      RailsAiContext.configuration.skip_tools = %w[rails_get_model_details]
+      expect(RailsAiContext::Tools::GetModelDetails).not_to receive(:call)
+
+      expect(answer(model: "Pots")).to start_with("Model 'Pots' not found.\nDid you mean 'Post'?\nAvailable: ")
+    end
+
+    it "is answered as a controller that was not found, with the controllers the app has" do
+      RailsAiContext.configuration.skip_tools = %w[rails_get_controllers]
+      expect(RailsAiContext::Tools::GetControllers).not_to receive(:call)
+
+      # A "Did you mean" line may come between: the spell checker's reach differs across Ruby versions.
+      not_found = /\AController 'NopeController' not found\.\n(?:Did you mean[^\n]*\n)?Available: /
+      expect(answer(controller: "NopeController")).to match(not_found)
+      expect(answer(controller: "NopeController", action: "index")).to match(not_found)
+      expect(answer(controller: "PostsController")).not_to include("not found.")
+    end
+
+    it "is answered as an action that was not found, with the actions the controller has" do
+      with_tool = answer(controller: "PostsController", action: "nope")
+      RailsAiContext.configuration.skip_tools = %w[rails_get_controllers]
+      expect(RailsAiContext::Tools::GetControllers).not_to receive(:call)
+
+      expect(with_tool).to start_with("Action 'nope' not found in PostsController. Available: create, destroy, edit, index")
+      expect(answer(controller: "PostsController", action: "nope")).to start_with(with_tool.lines.first.chomp)
+      expect(answer(controller: "posts", action: "nope")).to start_with(with_tool.lines.first.chomp)
+      expect(answer(controller: "PostsController", action: "INDEX")).not_to include("not found")
+    end
+
+    it "names the models a feature keyword matched when the tools that describe them are off" do
+      RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature rails_get_schema]
+
+      text = answer(feature: "comment")
+
+      expect(text).to start_with("The model names that hold 'comment': Comment")
+      expect(text).not_to include("No model or controller name holds this keyword")
+    end
+
+    it "is answered as a feature that matched nothing, with model names to try" do
+      RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature]
+      expect(RailsAiContext::Tools::AnalyzeFeature).not_to receive(:call)
+
+      expect(answer(feature: "zzqqxx")).to start_with(
+        "No matches found for 'zzqqxx'. No model or controller name holds this keyword.\n\nTry one of your model names: "
+      )
+    end
+  end
+
+  describe "include:" do
+    let(:keys) { %w[stimulus turbo services jobs conventions helpers env callbacks tests config gems security] }
+
+    def text(response)
+      response.content.first[:text]
+    end
+
+    it "lists every key it takes in its schema" do
+      description = described_class.input_schema_value.to_h.dig(:properties, :include, :description)
+
+      keys.each { |key| expect(description).to include("'#{key}'") }
+    end
+
+    it "runs a key given twice once" do
+      expect(RailsAiContext::Tools::GetConfig).to receive(:call).with(section: "gems").once.and_call_original
+
+      described_class.call(model: "Post", include: %w[gems GEMS gems])
+    end
+
+    it "names a key it does not take, with the keys it does" do
+      answer = text(described_class.call(model: "Post", include: %w[stimulus bogus]))
+
+      expect(answer).to include("_`include` does not take 'bogus'. It takes: #{keys.join(', ')}._")
+    end
+
+    it "answers an include whose tool skip_tools turned off without running it" do
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_security_scan]
+      expect(RailsAiContext::Tools::SecurityScan).not_to receive(:call)
+
+      answer = text(described_class.call(model: "Post", include: %w[security]))
+
+      expect(answer).to include(RailsAiContext::Server.skipped_tool_message("rails_security_scan"))
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+
+    it "answers a config include from its rails_get_config section, and says when skip_tools turned the section off" do
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_get_env]
+      expect(RailsAiContext::Tools::GetEnv).not_to receive(:call)
+
+      answer = text(described_class.call(model: "Post", include: %w[env gems]))
+
+      expect(answer).to include("\n\n---\n\n_#{RailsAiContext::Tools::GetConfig.section_named('env').off_message}_")
+      expect(answer).to include(text(RailsAiContext::Tools::GetConfig.call(section: "gems")))
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
+    end
+  end
+
   # Rails resolves a namespaced controller's templates under its full
   # controller_path. Handing GetView the basename read app/views/orders,
   # which on this app is a directory of templates a service renders.

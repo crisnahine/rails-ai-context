@@ -62,7 +62,7 @@ rails-ai-context version            # Show version
 3. **YAML config** - uses `.rails-ai-context.yml` instead of a Ruby initializer
 4. **Steps aside for the app's own copy** - in an app whose bundle carries its own rails-ai-context (another installed version, or a `path:` copy), a command that boots the app runs through that copy, as `bundle exec rails-ai-context` would, and says so on stderr. That is the copy the app's MCP configs start, and two copies in one process would each load half the gem. The bundle is the one `BUNDLE_GEMFILE` names when you set it (a dual boot's `Gemfile.next`), and a command typed in a subdirectory runs from the app root it found. `init` asks its questions itself and has that copy write only the context files; an MCP-only setup, chosen with `--mcp-only` or at the prompt, runs nothing of the app's. So does `--no-boot`: bundle exec would evaluate the app's Gemfile and start whatever copy the app names, which on a repo just cloned is code nobody has read. A bundle not installed yet (`bundle check` fails) is left alone too: its boot fails, and the static tier answers. A copy installed only under a vendored bundle path or from git is not seen from outside the bundle, so there the installed copy runs
 
-This means you get the same 45 tools, same MCP server, same context generation - without touching the project's Gemfile.
+This means you get the same 35 tools, same MCP server, same context generation - without touching the project's Gemfile.
 
 ## Configuration via YAML
 
@@ -158,7 +158,7 @@ rails-ai-context uninstall
 gem uninstall rails-ai-context   # once no other app uses it
 ```
 
-The MCP config files are updated automatically. Both modes generate the same set of context files and provide the same 45 tools. The commands named inside the files follow the install mode.
+The MCP config files are updated automatically. Both modes generate the same set of context files and provide the same 35 tools. The commands named inside the files follow the install mode.
 
 Both also take `--mcp-only`, which writes the MCP config and no context files
 at all. See [CONFIGURATION.md](CONFIGURATION.md#mcp-only).

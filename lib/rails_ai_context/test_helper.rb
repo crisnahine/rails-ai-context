@@ -97,12 +97,14 @@ module RailsAiContext
       return name_or_class if name_or_class.is_a?(Class) && name_or_class < MCP::Tool
 
       name = name_or_class.to_s
-      all_tools.find do |t|
+      found = all_tools.find do |t|
         t.tool_name == name ||
           t.tool_name == "rails_#{name}" ||
           t.tool_name == "rails_get_#{name}" ||
           t.tool_name == "get_#{name}"
       end
+      found || RailsAiContext::CLI::ToolRunner.candidate_names(name)
+        .filter_map { |candidate| RailsAiContext::Tools::GetConfig.retired_section(candidate) }.first&.renderer
     end
 
     def all_tools

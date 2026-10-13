@@ -44,6 +44,136 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  describe "a custom_tools entry that does not resolve" do
+    around do |example|
+      saved = RailsAiContext.configuration.custom_tools
+      RailsAiContext.configuration.custom_tools = [ "NoSuchApp::Tool" ]
+      example.run
+    ensure
+      RailsAiContext.configuration.custom_tools = saved
+    end
+
+    def warnings
+      printed = StringIO.new
+      saved, $stderr = $stderr, printed
+      yield
+      printed.string.scan("Skipping custom_tool").size
+    ensure
+      $stderr = saved
+    end
+
+    it "is warned about once in a tool call, however many pointers and sections the answer builds" do
+      expect(warnings { RailsAiContext::Tools::GetContext.call(model: "Post") }).to eq(1)
+    end
+
+    it "is warned about once by the server, and by no call it then answers" do
+      server = nil
+      expect(warnings { server = described_class.new(Rails.application).build }).to eq(1)
+
+      call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_context", arguments: { model: "Post" } } }
+      expect(warnings { server.handle(call) }).to eq(0)
+    end
+
+    it "is warned about once by a CLI run" do
+      expect(warnings { RailsAiContext::CLI::ToolRunner.new("context", { model: "Post" }).run }).to eq(1)
+    end
+
+    it "is resolved again in the same run once custom_tools changes" do
+      custom = Class.new(MCP::Tool) { tool_name "my_app_tool" }
+
+      RailsAiContext::RunCache.around do
+        expect(described_class.resolve_custom_tools).to eq([])
+        RailsAiContext.configuration.custom_tools = [ custom ]
+        expect(described_class.resolve_custom_tools).to eq([ custom ])
+      end
+    end
+  end
+
+  # One tool by name, by the rule tools/list follows, loading no other class.
+  describe ".served_tool" do
+    let(:config) { RailsAiContext::Configuration.new }
+    let(:custom) { double("MyApp::SchemaTool", tool_name: "rails_get_schema") }
+
+    it "answers the built-in, and nil for a name nothing serves" do
+      expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
+      expect(described_class.served_tool("rails_not_a_tool", config)).to be_nil
+    end
+
+    it "keeps the built-in over a custom tool of the same name, as tools/list does" do
+      allow(described_class).to receive(:resolve_custom_tools).and_return([ custom ])
+
+      expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
+    end
+
+    it "answers nil for a skipped built-in, and the custom tool that takes its name" do
+      config.skip_tools = %w[rails_get_schema]
+      expect(described_class.served_tool("rails_get_schema", config)).to be_nil
+
+      allow(described_class).to receive(:resolve_custom_tools).and_return([ custom ])
+      expect(described_class.served_tool("rails_get_schema", config)).to eq(custom)
+    end
+
+    context "with a BaseTool subclass the app defines outside Tools and leaves out of custom_tools" do
+      let!(:app_tool) do
+        Class.new(RailsAiContext::Tools::BaseTool) do
+          tool_name "rails_get_deploy_status"
+          description "The deploy the app runs"
+
+          def self.call(server_context: nil)
+            text_response("deployed")
+          end
+        end
+      end
+
+      after { app_tool.abstract! }
+
+      it "answers it, as tools/list does" do
+        expect(described_class.exposed_tools(config)).to include(app_tool)
+        expect(described_class.served_tool("rails_get_deploy_status", config)).to eq(app_tool)
+      end
+
+      it "answers nil once skip_tools lists it" do
+        config.skip_tools = %w[rails_get_deploy_status]
+
+        expect(described_class.exposed_tools(config)).not_to include(app_tool)
+        expect(described_class.served_tool("rails_get_deploy_status", config)).to be_nil
+      end
+
+      it "runs from the CLI by its full, medium and short name" do
+        %w[rails_get_deploy_status get_deploy_status deploy_status].each do |typed|
+          expect(RailsAiContext::CLI::ToolRunner.new(typed, []).run).to eq("deployed")
+        end
+      end
+    end
+
+    # The registry lists tools by name, and two of one name sort either way round.
+    context "with a BaseTool subclass the app gives a built-in's name, and no skip_tools" do
+      let!(:app_tool) do
+        Class.new(RailsAiContext::Tools::BaseTool) do
+          tool_name "rails_get_schema"
+          description "The app's own schema tool"
+        end
+      end
+
+      after { app_tool.abstract! }
+
+      it "serves the built-in, as the warning says and as the CLI runs" do
+        expect(described_class.exposed_tools(config)).to include(RailsAiContext::Tools::GetSchema)
+        expect(described_class.exposed_tools(config)).not_to include(app_tool)
+        expect(described_class.served_tool("rails_get_schema", config)).to eq(RailsAiContext::Tools::GetSchema)
+      end
+    end
+
+    it "agrees with exposed_tools on every built-in" do
+      config.skip_tools = %w[rails_query rails_get_view]
+      exposed = described_class.exposed_tools(config)
+
+      described_class.builtin_tools.each do |tool|
+        expect(described_class.served_tool(tool.tool_name, config)).to eq(exposed.find { |t| t.tool_name == tool.tool_name })
+      end
+    end
+  end
+
   describe ".announced_name" do
     it "is config.server_name by default" do
       expect(described_class.announced_name).to eq(RailsAiContext.configuration.server_name)
@@ -281,6 +411,58 @@ RSpec.describe RailsAiContext::Server do
         RailsAiContext.configuration.skip_tools = []
       end
 
+      it "names the skipped tool and why the call failed to an instrumentation subscriber" do
+        RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
+        payloads = []
+        subscriber = ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") { |*, payload| payloads << payload }
+
+        server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } })
+
+        expect(payloads).to contain_exactly(include(tool_name: "rails_get_schema", error: :tool_skipped))
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+        RailsAiContext.configuration.skip_tools = []
+      end
+
+      it "answers rails_onboard at summary with the overview, and the retired quick with the valid levels" do
+        call = ->(detail) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_onboard", arguments: { detail: detail } } }) }
+
+        summary = call.call("summary")[:result]
+        expect(summary[:isError]).to be_falsey
+        expect(summary[:content].first[:text]).not_to include("## ")
+
+        # A newer SDK refuses the value as an error result, an older one as a JSON-RPC error.
+        quick = call.call("quick")
+        expect(quick.dig(:result, :isError)).to be(true) if quick[:result]
+        expect(quick.dig(:result, :content, 0, :text) || quick.dig(:error, :data)).to match(/summary\W+standard\W+full/)
+      end
+
+      it "refuses a retired name whose arguments are no object as it refuses a served tool's" do
+        mcp_server = server.build
+        call = ->(name, arguments) { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } }) }
+
+        [ [ 1 ], "x" ].each do |arguments|
+          retired = nil
+          expect { retired = call.call("rails_get_gems", arguments) }.not_to output(/unhandled exception/).to_stderr
+          expect(retired).to eq(call.call("rails_get_config", arguments))
+        end
+      end
+
+      [ SystemStackError, SecurityError ].each do |error|
+        it "answers a #{error} in a tool as a tool error, and the next call as usual" do
+          mcp_server = server.build
+          call = -> { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } }) }
+          allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_raise(error, "stack level too deep")
+
+          failed = call.call[:result]
+          expect(failed[:isError]).to be(true)
+          expect(failed[:content].first[:text]).to start_with("Tool rails_get_schema failed: #{error}: stack level too deep")
+
+          RSpec::Mocks.space.proxy_for(RailsAiContext::Tools::GetSchema).reset
+          expect(call.call[:result][:isError]).to be_falsey
+        end
+      end
+
       # The SDK named only the guess.
       it "answers a name no tool has with the nearest tools, or with every tool" do
         call = ->(name) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: {} } }) }
@@ -289,6 +471,10 @@ RSpec.describe RailsAiContext::Server do
         expect(near[:code]).to eq(-32602)
         expect(near[:message]).to start_with("Tool not found: rails_get_schemaa. Did you mean rails_get_schema")
         expect(near[:data][:available]).to include("rails_get_schema", "rails_get_view")
+
+        retired = call.call("rails_get_gemz")[:error]
+        expect(retired[:message]).to start_with("Tool not found: rails_get_gemz. Did you mean rails_get_gems")
+        expect(retired[:data][:available]).not_to include("rails_get_gems")
 
         far = call.call("zzz_no_such_tool")[:error]
         expect(far[:message]).to start_with("Tool not found: zzz_no_such_tool. The tools are: rails_analyze_feature,")
@@ -328,6 +514,33 @@ RSpec.describe RailsAiContext::Server do
 
     it "resolves Puma as the handler" do
       expect(s.send(:puma_handler?, resolved_handler)).to be true
+    end
+
+    # rackup 1.x is the release line for rack 2: it loads and defines only its
+    # version, and the handlers stay in Rack::Handler.
+    it "reads Rack::Handler when rackup loads without a handler of its own" do
+      hide_const("Rackup::Handler")
+      stub_const("Rack::Handler", double(default: :rack_two_handler))
+      allow(s).to receive(:require).with("rackup").and_return(true)
+      allow(s).to receive(:require).with("rack/handler").and_return(true)
+
+      expect(resolved_handler).to eq(:rack_two_handler)
+    end
+
+    it "reads Rack::Handler when there is no rackup gem" do
+      hide_const("Rackup::Handler")
+      stub_const("Rack::Handler", double(default: :rack_two_handler))
+      allow(s).to receive(:require).with("rackup").and_raise(LoadError)
+      allow(s).to receive(:require).with("rack/handler").and_return(true)
+
+      expect(resolved_handler).to eq(:rack_two_handler)
+    end
+
+    it "reads Rackup::Handler when rackup defines it" do
+      stub_const("Rackup::Handler", double(default: :rackup_handler))
+      allow(s).to receive(:require).with("rackup").and_return(true)
+
+      expect(resolved_handler).to eq(:rackup_handler)
     end
 
     it "pins Puma to one process" do

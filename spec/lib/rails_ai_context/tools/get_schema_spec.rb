@@ -1246,6 +1246,14 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("solid_queue_jobs")
       expect(text).to include("pending migrations: 1 - 20250101000001")
     end
+
+    it "names a secondary database whose dump was not read with the reason alone" do
+      note = "db/cache_schema.rb too large (900 bytes, over max_schema_file_size), so its tables are not listed"
+      schema = described_class.cached_context[:schema]
+      schema[:secondary_databases]["cache"] = { tables: {}, total_tables: 0, note: note }
+
+      expect(described_class.call.content.first[:text]).to include("- **cache**: #{note}\n").or end_with("- **cache**: #{note}")
+    end
   end
 
   describe "a new app whose primary database has no tables yet" do

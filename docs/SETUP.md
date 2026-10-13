@@ -144,7 +144,7 @@ The MCP tools rule uses `alwaysApply: false` with a descriptive `description:` f
 
 ```markdown
 ---
-description: "Rails MCP tools reference - 45 tools for schema, models, routes, controllers, search, testing, and more"
+description: "Rails MCP tools reference - 35 tools for schema, models, routes, controllers, search, testing, and more"
 alwaysApply: false
 ---
 ```

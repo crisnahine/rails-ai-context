@@ -96,9 +96,9 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
   end
 
   describe ".registered_tools" do
-    it "returns all 45 built-in tool classes" do
+    it "returns all 35 built-in tool classes" do
       tools = described_class.registered_tools
-      expect(tools.size).to eq(45)
+      expect(tools.size).to eq(35)
     end
 
     # Registration order is reversed here so the sort has something to undo.
@@ -109,7 +109,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       names = described_class.registered_tools.map(&:tool_name)
 
       expect(names).to eq(registered.map(&:tool_name).sort)
-      expect(names.size).to eq(45)
+      expect(names.size).to eq(35)
     end
 
     it "sorts past a tool that has no name yet" do
@@ -149,7 +149,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
 
     it "tracks all subclasses" do
       expect(described_class.descendants).to be_an(Array)
-      expect(described_class.descendants.size).to eq(45)
+      expect(described_class.descendants.size).to eq(35)
     end
   end
 
@@ -162,7 +162,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
   describe "const_missing backwards compatibility" do
     it "Server::TOOLS still works" do
       expect(RailsAiContext::Server::TOOLS).to be_an(Array)
-      expect(RailsAiContext::Server::TOOLS.size).to eq(45)
+      expect(RailsAiContext::Server::TOOLS.size).to eq(35)
     end
   end
 
@@ -220,20 +220,26 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       RailsAiContext.configuration.skip_tools = saved
     end
 
-    def answer(text)
-      described_class.text_response(text).content.first[:text]
+    it "points at a served tool and leaves out one skip_tools turned off" do
+      expect(described_class.pointer("rails_get_routes", %(controller:"posts"), "for routes"))
+        .to eq(%(`rails_get_routes(controller:"posts")` for routes))
+      expect(described_class.pointer("rails_get_routes")).to eq("`rails_get_routes()`")
+      expect(described_class.pointer("rails_get_schema", %(table:"posts"), "for columns")).to be_nil
     end
 
-    it "keeps only the pointers to tools the server serves, on one line or several" do
-      expect(answer("# Post\n\n_Next: `rails_get_schema(table:\"posts\")` for columns | " \
-                    "`rails_get_routes(controller:\"posts\")` for routes_")).to eq("# Post\n\n_Next: `rails_get_routes(controller:\"posts\")` for routes_")
-      expect(answer("# Posts\n\n_Next: `rails_get_routes(controller:\"posts\")` for routes\n" \
-                    " | `rails_get_view(controller:\"posts\")` for views_")).to eq("# Posts\n\n_Next: `rails_get_routes(controller:\"posts\")` for routes_")
+    it "keeps only the served pointers in a hint, on one line or several" do
+      schema = described_class.pointer("rails_get_schema", %(table:"posts"), "for columns")
+      routes = described_class.pointer("rails_get_routes", %(controller:"posts"), "for routes")
+      search = described_class.pointer("rails_search_code", %(pattern:"Post"), "for uses.")
+
+      expect(described_class.next_hint(schema, routes, search))
+        .to eq(%(_Next: `rails_get_routes(controller:"posts")` for routes | `rails_search_code(pattern:"Post")` for uses._))
+      expect(described_class.next_hint(routes, search, lines: true))
+        .to eq(%(_Next: `rails_get_routes(controller:"posts")` for routes\n | `rails_search_code(pattern:"Post")` for uses._))
     end
 
-    it "drops a hint left with no pointer, and the blank line before it" do
-      expect(answer("# Partial\n\n_Next: `rails_get_view(path:\"posts/_post.html.erb\")` for full file content_")).to eq("# Partial")
-      expect(answer("No callbacks.\n\n_Next: `rails_get_schema(table:\"x\")` for columns._\n\nMore.")).to eq("No callbacks.\n\nMore.")
+    it "has no hint when no pointer is served" do
+      expect(described_class.next_hint(described_class.pointer("rails_get_view", %(path:"x"), "for content"))).to be_nil
     end
 
     it "leaves a model's hints naming only what is served" do

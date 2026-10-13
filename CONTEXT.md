@@ -6,9 +6,9 @@ Terms this project uses in a narrower sense than everyday English. One entry per
 
 Overloaded. Always qualify it; never use "environment" bare in a tool name, an introspector name, or a config key.
 
-**Process environment** - the environment variables a running app sees, plus the places they are declared (`ENV[]` call sites, `.env.example`, Dockerfile, credentials keys). Served by `rails_get_env`: `EnvIntrospector` reads the variables and the `ENV[]` call sites, and the tool reads the other places itself.
+**Process environment** - the environment variables a running app sees, plus the places they are declared (`ENV[]` call sites, `.env.example`, Dockerfile, credentials keys). Served by `rails_get_config(section:"env")`: `EnvIntrospector` reads the variables and the `ENV[]` call sites, and the tool reads the other places itself.
 
-**Environment config** - what `config/environments/*.rb` declares per environment: the assigned `config.*` keys and the values of the notable toggles. Served by `rails_get_env_config`, read by `EnvConfigIntrospector`.
+**Environment config** - what `config/environments/*.rb` declares per environment: the assigned `config.*` keys and the values of the notable toggles. Served by `rails_get_config(section:"env_config")`, read by `EnvConfigIntrospector`.
 
 **Environment** (unqualified, as data) - a single named Rails environment: development, production, staging. This is the only sense in which the bare word is allowed, and only as a value, never as a name. The `:environments` payload key means "the list of these", which is why it kept its name when the introspector was renamed.
 
@@ -110,10 +110,10 @@ counted. The engines section, and the static routes section, hold the mounts
 parsed from the route files.
 
 Distinct from a **Rails engine**, which is a `Rails::Engine` subclass whether
-or not anything mounts it, and which `rails_get_engines` lists separately under
-its loaded classes. The record key is `engine:` for the same reason the section
-key is `mounted_engines:` - it predates the widening, and what it holds is the
-mounted app's constant, engine or not.
+or not anything mounts it, and which `rails_get_config(section:"engines")`
+lists separately under its loaded classes. The record key is `engine:` for the
+same reason the section key is `mounted_engines:` - it predates the widening,
+and what it holds is the mounted app's constant, engine or not.
 
 ## Interaction filter
 
@@ -210,3 +210,33 @@ An install with every question answered on the command line, the way an AI tool 
 ## Install prompt
 
 A message a user pastes into their AI tool so the AI tool installs, changes, removes or starts using the gem in their app. `docs/PROMPTS.md` holds them. Each names its commands outright and runs an **unattended install**, since an AI tool's shell has no one at the keyboard to answer a question.
+
+## Database family
+
+What a database is by its adapter's name, as far as running a statement on it goes: PostgreSQL (PostGIS too), MySQL (Trilogy and MariaDB too) or SQLite. Each family knows how its database opens a read-only transaction, bounds a statement in time, explains a plan and reports table sizes; anything else is no family, and a tool that needs one refuses or says the answer is not available, naming the adapter. `DatabaseFamily` is the one answer, from a connection, a database.yml adapter or a dump's dialect. ADR-0008 records why a family is claimed by name.
+
+Not "engine", which this glossary keeps for Rails engines and **mounted apps**, and not "adapter", which is ActiveRecord's class for one driver.
+
+## App database
+
+A database the app has in any environment: one database.yml configures for the running environment, one only another environment configures (Rails 8's queue, cache and cable outside production, and a replica or a database with `database_tasks` off too), or one only a committed dump names. `AppDatabases` lists them once per run, the primary first, and each knows the environments that configure it, its **database family**, its dump and its migrations. The primary is the database `ActiveRecord::Base` is connected to on the booted tier, and the running environment's first entry on the static tier. Every surface that asks "which databases" reads this list, so the schema section, the models and the migrations cannot disagree about one app.
+
+A tool that needs a connection reaches an app database configured here and nothing else: asked for one that only production configures, it says so. A SQLite database whose file is not there is never connected to, since connecting would create the file: the answer names it and says it does not exist yet. A SQLite database other than the primary that lives in memory is refused by name too: it exists only inside the process that created it, and a new connection would open an empty one. Not the **environment** (one named Rails environment), and not a shard, which is one database's copy under another name.
+
+## Secret column
+
+A column whose values `rails_query` never returns, and whose name a statement may not mention: one the app lists in `query_redacted_columns`, an `encrypts` column, a built-in secret name, a name the result heuristic flags, or a name `Redaction`'s secret words cover, unless the app allows it by name in `query_allowed_columns`. An `encrypts` column is secret whatever that list holds: a statement that names it is refused, and its values come back filtered. A generated column whose expression reads a secret column is a secret column. On MySQL, MariaDB and SQLite, where no result column is traced to its table column, the rule also refuses a view whose definition names a secret column, and a `*` inside a subquery of a statement that names a table holding one. On PostgreSQL a materialized view is held to that view rule, and on SQLite a virtual table that holds a secret column is refused whole. `SecretColumns` decides for every check in the tool, from a read of the schema of the database the statement runs on and of every other schema or database the statement reaches. Only the primary falls back to the cached context's schema when its tables cannot be read. A database whose columns cannot be read at all is not queried. `docs/SECURITY.md` is the full statement of the rule.
+
+Not redaction itself: `Redaction` scrubs secret values out of text (logs, config, source). The two share the vocabulary, so a word added to one is secret in both.
+
+## SQL gate
+
+What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is a second guard, and the gate's checks run before it on every database family (ADR-0008). A name the gate refuses belongs to one family and is refused there alone.
+
+## Served tool
+
+A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at. An answer or a guide step names or runs a tool only when the app serves the gem's own tool under that name: a custom tool in a built-in's place is listed, and nothing gives it the built-in's arguments. A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, and the **config sections** go with the built-in.
+
+## Config section
+
+One part of the app's configuration that `rails_get_config` answers by `section`: `app` (the default: database, auth, assets, cache, queue, Action Cable, initializers, middleware), `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env` (the **process environment**), `env_config` (the **environment config**) and `i18n`. Ten of them were tools of their own; their names still reach their section from the CLI and the MCP server, and `skip_tools` lists them to turn a section off. With `app` off, a call has to name its `section`. ADR-0010.

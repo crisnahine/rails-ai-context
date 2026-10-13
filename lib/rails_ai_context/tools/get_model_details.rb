@@ -217,8 +217,8 @@ module RailsAiContext
               end
               differ = others.reject { |_, other| other[:columns] == table_data[:columns] }.map(&:first)
               if differ.any?
-                lines << "" << "Columns of `#{data[:table_name]}` in #{source}; the table differs in #{differ.join(", ")}: " \
-                               "`rails_get_schema(table:\"#{data[:table_name]}\")` lists each."
+                schema = pointer("rails_get_schema", %(table:"#{data[:table_name]}"), "lists each.")
+                lines << "" << "Columns of `#{data[:table_name]}` in #{source}; the table differs in #{differ.join(", ")}#{schema ? ": #{schema}" : "."}"
               end
             end
             lines << ignored_columns_line(ignored) if ignored.any?
@@ -575,15 +575,12 @@ module RailsAiContext
           end
         end
 
-        # Cross-reference hints - guide AI to related tools
-        hints = []
-        hints << "`rails_get_schema(table:\"#{data[:table_name]}\")` for columns/indexes" if data[:table_name]
         # Only a controller the app has: the conventional name is a guess, and
         # a hint naming a class that does not exist sends the reader nowhere.
         controller_name = Payload.controller_for_route_key(cached_context, name.underscore.pluralize)&.first
-        hints << "`rails_get_controllers(controller:\"#{controller_name}\")` for actions" if controller_name
-        hints << "`rails_analyze_feature(feature:\"#{name}\")` for full-stack view"
-        lines << "" << "_Next: #{hints.join(' | ')}_"
+        add_next_hint(lines, (pointer("rails_get_schema", %(table:"#{data[:table_name]}"), "for columns/indexes") if data[:table_name]),
+                      (pointer("rails_get_controllers", %(controller:"#{controller_name}"), "for actions") if controller_name),
+                      pointer("rails_analyze_feature", %(feature:"#{name}"), "for full-stack view"))
 
         lines.join("\n")
       end

@@ -18,27 +18,69 @@ module RailsAiContext
       attr_writer :context
 
       def call
-        schema_data = load_schema_data
         model_data = load_model_data
+        schemas, unchecked = database_schemas
+        counter_cache = []
+        fk_indexes = []
+        schemas.each do |name, tables, foreign_keys|
+          tag = ->(finding) { name ? finding.merge(database: name) : finding }
+          counter_cache.concat(detect_missing_counter_cache(model_data, tables).map(&tag))
+          fk_indexes.concat(detect_missing_fk_indexes(tables, model_data, foreign_keys).map(&tag))
+        end
 
         {
           n_plus_one_risks: detect_n_plus_one,
-          missing_counter_cache: detect_missing_counter_cache(model_data, schema_data),
-          missing_fk_indexes: detect_missing_fk_indexes(schema_data, model_data, load_foreign_keys),
+          missing_counter_cache: counter_cache.uniq { |f| f.except(:database) },
+          missing_fk_indexes: fk_indexes,
           model_all_in_controllers: detect_model_all_in_controllers(model_data),
           eager_load_candidates: detect_eager_load_candidates(model_data),
           summary: nil # populated below
-        }.tap { |result| result[:summary] = build_summary(result) }
+        }.tap do |result|
+          result[:unchecked_databases] = unchecked if unchecked.any?
+          result[:summary] = build_summary(result)
+        end
       end
 
       private
 
-      def load_schema_data
-        SchemaReader.for(root).tables
+      # [[database name (nil for the primary), tables, foreign keys]], and { name:, reason: } for each database not read.
+      def database_schemas
+        reader = SchemaReader.for(root)
+        schemas = [ [ nil, reader.tables, reader.foreign_keys ] ]
+        unchecked = []
+        databases = AppDatabases.for(root)
+        # Rails names one file for the first database and the one named primary. It is read once, above.
+        shared = databases.primary&.dump&.path
+        databases.reject { |db| db.primary || db.replica || (shared && db.dump&.path == shared) }.each do |db|
+          read = read_dump(db)
+          read[:reason] ? unchecked << { name: db.name, reason: read[:reason] } : schemas << [ db.name, read[:tables], read[:foreign_keys] ]
+        end
+        [ schemas, unchecked ]
       end
 
-      def load_foreign_keys
-        SchemaReader.for(root).foreign_keys
+      # { tables:, foreign_keys: } from the database's dump, or { reason: } saying why there is none to read.
+      def read_dump(db)
+        return { reason: no_dump_reason(db) } unless db.dump
+
+        path = db.dump.path
+        shown = path.delete_prefix("#{root.to_s.chomp('/')}/")
+        return { reason: "#{shown} is not on disk" } unless File.exist?(path)
+
+        content = SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+        return { reason: "#{shown} is over max_schema_file_size" } unless content
+        return SchemaReader.new(path).then { |schema| { tables: schema.tables, foreign_keys: schema.foreign_keys } } if db.dump.format == :ruby
+
+        tables = StructureSqlReader.parse(content)[:tables]
+        { tables: tables,
+          foreign_keys: tables.values.flat_map { |table| Array(table[:foreign_keys]).map { |fk| { from: fk[:from_table], to: fk[:to_table], column: fk[:column] } } } }
+      end
+
+      # Why a database with no dump on disk has none.
+      def no_dump_reason(db)
+        return "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" unless db.tasks
+        return "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" unless db.settings["schema_dump"]
+
+        "`schema_dump` in its database.yml entry names no file this check reads"
       end
 
       # The models section when the run has one; otherwise the model tier is
@@ -77,7 +119,7 @@ module RailsAiContext
           ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
-            tree: TREE_LISTENER,
+            column_macros: COLUMN_MACRO_LISTENER,
             mixins: Listeners::MixinsListener,
             counter_culture: -> { Listeners::GenericMacroListener.new(:counter_culture) }
           })
@@ -106,7 +148,7 @@ module RailsAiContext
             table_name: model_table(class_name),
             has_many: has_many,
             belongs_to: belongs_to,
-            tree_parent_keys: tree_parent_keys(ast, class_name),
+            macro_columns: macro_columns(ast, class_name),
             counter_cultures: ast[:counter_culture].map { |c| counter_culture_record(c) }
           }
         rescue => e
@@ -114,22 +156,37 @@ module RailsAiContext
         end
       end
 
-      # Gem macros that declare a parent key, with the option that renames it.
-      # ponytail: a fixed list; a gem outside it declares keys the static walk cannot see.
+      # Tree gem macros, which declare a parent key, with the option that renames it.
       TREE_MACROS = { acts_as_tree: :foreign_key, acts_as_nested_set: :parent_column,
                       has_closure_tree: :parent_column_name }.freeze
-      TREE_LISTENER = -> { Listeners::GenericMacroListener.new(*TREE_MACROS.keys) }
-      TREE_CONCERN_LISTENERS = { tree: TREE_LISTENER, mixins: Listeners::MixinsListener }.freeze
+      # paper_trail adds `has_many :versions, as: :item` when the app boots.
+      VERSIONS_MACRO = :has_paper_trail
+      # Gem macros that declare a column.
+      # ponytail: a fixed list; a gem outside it declares columns the static walk cannot see.
+      COLUMN_MACROS = [ *TREE_MACROS.keys, VERSIONS_MACRO ].freeze
+      COLUMN_MACRO_LISTENER = -> { Listeners::GenericMacroListener.new(*COLUMN_MACROS) }
+      COLUMN_MACRO_CONCERN_LISTENERS = { column_macros: COLUMN_MACRO_LISTENER, mixins: Listeners::MixinsListener }.freeze
 
-      # The parent key a tree macro declares, in the model or its concerns.
+      # The [table, column] a gem macro declares, in the model or its concerns.
       # The models section cannot carry it statically: the macro is a gem's.
-      def tree_parent_keys(ast, class_name)
-        collected = ConcernMacros.collect(root, ast[:mixins], keys: %i[tree], prefer: "model",
+      def macro_columns(ast, class_name)
+        collected = ConcernMacros.collect(root, ast[:mixins], keys: %i[column_macros], prefer: "model",
                                           within: class_name, cache: (@concern_cache ||= {}),
-                                          listeners: TREE_CONCERN_LISTENERS).collected
-        (ast[:tree] + Array(collected[:tree])).map do |macro|
-          ((macro[:options] || {})[TREE_MACROS[macro[:macro]]] || "parent_id").to_s
+                                          listeners: COLUMN_MACRO_CONCERN_LISTENERS).collected
+        (ast[:column_macros] + Array(collected[:column_macros])).map do |macro|
+          options = macro[:options] || {}
+          next [ versions_table(options, class_name), "item_id" ] if macro[:macro] == VERSIONS_MACRO
+
+          [ model_table(class_name), (options[TREE_MACROS[macro[:macro]]] || "parent_id").to_s ]
         end
+      end
+
+      # PaperTrail::Version reads `versions`; `versions: { class_name: }`, or the older `class_name:`, names another class.
+      def versions_table(options, owner)
+        written = options[:versions].is_a?(Hash) ? options[:versions][:class_name] : options[:class_name]
+        return "versions" unless written.is_a?(String)
+
+        table_of(TableName.resolve_class(written, owner) { |candidate| candidate if resolved_models.key?(candidate) } || written, resolved_models)
       end
 
       # The scan reads the run models section, so an association a concern or a
@@ -271,9 +328,9 @@ module RailsAiContext
         end
       end
 
-      def tree_parent_columns(model_data)
+      def macro_declared_columns(model_data)
         Array(model_data).each_with_object(Set.new) do |model, found|
-          Array(model[:tree_parent_keys]).each { |key| found << [ model[:table_name].to_s, key ] }
+          Array(model[:macro_columns]).each { |column| found << column }
         end
       end
 
@@ -285,7 +342,7 @@ module RailsAiContext
       def detect_missing_fk_indexes(schema_data, model_data = [], foreign_keys = [])
         missing = []
         declared = foreign_key_columns(foreign_keys) | association_columns(resolved_models) |
-                   tree_parent_columns(model_data)
+                   macro_declared_columns(model_data)
 
         schema_data.each do |table_name, table|
           columns = table[:columns]

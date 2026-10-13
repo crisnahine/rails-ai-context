@@ -110,6 +110,79 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
   end
 
+  describe "a custom tool in a built-in's place" do
+    let(:custom) do
+      Class.new(MCP::Tool) do
+        tool_name "rails_get_schema"
+        description "The app's own schema tool."
+      end
+    end
+
+    before { allow(helper).to receive(:exposed_tools).and_return([ custom, RailsAiContext::Tools::GetModelDetails ]) }
+
+    it "is listed, and no step or rule gives it the built-in's arguments" do
+      expect(helper.tools_name_list.join("\n")).to include("`rails_get_schema`")
+      expect(helper.served?("rails_get_schema")).to be(false)
+      expect(helper.served?("rails_get_model_details")).to be(true)
+      expect(helper.tools_antipatterns_section.join("\n")).to include("use `rails_get_model_details`")
+      expect(helper.tools_antipatterns_section.join("\n")).not_to include("rails_get_schema")
+    end
+  end
+
+  describe "the tools #tools_detail_guidance names" do
+    let(:taking_detail) { "Tools that take `detail`: " }
+    let(:named_line) { helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) } }
+
+    it "names the served tools that take detail and none that do not" do
+      expect(named_line).to include("`rails_onboard`", "`rails_get_schema`")
+      expect(named_line).not_to include("rails_get_context", "rails_analyze_feature", "rails_search_code")
+    end
+
+    it "leaves out a tool skip_tools turned off" do
+      RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
+      expect(named_line).to include("`rails_onboard`")
+      expect(named_line).not_to include("rails_get_schema")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
+
+    it "names rails_get_config with the sections that read detail" do
+      expect(named_line).to include("`rails_get_config` (sections: frontend, api, env)")
+
+      RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_env]
+      line = helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      expect(line).to include("`rails_get_config` (section: api)")
+
+      RailsAiContext.configuration.tool_mode = :cli
+      line = test_class.new.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      expect(line).to include("`config` (section: api)")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
+
+    it "names rails_get_config only while a section that reads detail is on" do
+      expect(named_line).to include("`rails_get_config`")
+
+      RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_api rails_get_env]
+      line = helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      expect(line).to include("`rails_onboard`")
+      expect(line).not_to include("rails_get_config")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
+
+    it "leaves the detail advice out when no served tool takes detail" do
+      allow(helper).to receive(:exposed_tools).and_return([ RailsAiContext::Tools::GetContext ])
+      expect(helper.tools_detail_guidance).to eq([])
+    end
+
+    it "names them by their command names in :cli mode" do
+      RailsAiContext.configuration.tool_mode = :cli
+      expect(named_line).to include("`onboard`", "`schema`")
+      expect(named_line).not_to include("rails_onboard")
+    end
+  end
+
   describe "#tools_name_list" do
     it "returns a compact list of all tool names" do
       lines = helper.tools_name_list
@@ -136,6 +209,17 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(text).to include("Check the inheritance chain")
       expect(text).to include("Empty tool output is information")
       expect(text).to include("Stale context lies")
+    end
+
+    it "sends the stack check to the conventions and gems config sections the app serves" do
+      text = helper.tools_anti_hallucination_section.join("\n")
+      expect(text).to include('Check `rails_get_config(section:"conventions")` and `rails_get_config(section:"gems")` BEFORE')
+
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_get_conventions]
+      expect(test_class.new.tools_anti_hallucination_section.join("\n")).to include('Check `rails_get_config(section:"gems")` BEFORE')
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
     end
 
     it "returns empty array when anti_hallucination_rules is false" do

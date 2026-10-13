@@ -38,6 +38,34 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         allow(described_class).to receive(:run_brakeman_unbundled).and_return([ nil, nil ])
       end
 
+      it "answers an error response when the outside run started and failed, whatever it left behind" do
+        [ [ nil, "No Rails application found in /tmp/app" ], [ nil, "no report after 600 seconds" ], [ [ 1 ], nil ] ].each do |outcome|
+          allow(described_class).to receive(:run_brakeman_unbundled).and_return(outcome)
+
+          response = described_class.call
+
+          expect(response.error?).to be(true)
+          expect(response.content.first[:text]).to include("produced no report").and include("It said: `")
+        end
+      end
+
+      it "answers a brakeman it could not start as an ordinary answer" do
+        expect(described_class.call.error?).to be(false)
+      end
+
+      it "says a run that printed nothing wrote no report" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "brakeman"), "exit 1\n")
+          allow(described_class).to receive(:brakeman_command).and_return([ RbConfig.ruby, File.join(dir, "brakeman") ])
+          allow(described_class).to receive(:run_brakeman_unbundled).and_call_original
+
+          response = described_class.call
+
+          expect(response.error?).to be(true)
+          expect(response.content.first[:text]).to include("It said: `it wrote no report and printed nothing`.")
+        end
+      end
+
       it "names the version it found and says the outside run failed too" do
         text = described_class.call.content.first[:text]
 
@@ -781,6 +809,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         allow(Brakeman).to receive(:run).and_raise(RuntimeError, "parse error in config/routes.rb")
         result = described_class.call
         text = result.content.first[:text]
+        expect(result.error?).to be(true)
         expect(text).to include("Brakeman scan failed")
         expect(text).to include("parse error")
       end

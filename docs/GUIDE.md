@@ -19,7 +19,7 @@
 |:------|:------------|
 | [Quickstart](QUICKSTART.md) | Get running in 5 minutes |
 | [Copy-paste prompts](PROMPTS.md) | Let your AI tool install, change, remove or use the gem |
-| [Tools Reference](TOOLS.md) | All 45 MCP tools with parameters |
+| [Tools Reference](TOOLS.md) | All 35 MCP tools with parameters |
 | [Recipes](RECIPES.md) | Real-world workflows and examples |
 | [Custom Tools](CUSTOM_TOOLS.md) | Build your own MCP tools |
 | [Configuration](CONFIGURATION.md) | Every config option |
@@ -373,7 +373,7 @@ rails ai:context:claude           # Use this instead (no quoting needed)
 
 ## CLI Tools
 
-All 45 MCP tools can be run directly from the terminal - no MCP server or AI client needed.
+All 35 MCP tools can be run directly from the terminal - no MCP server or AI client needed.
 
 ### Rake
 
@@ -443,7 +443,7 @@ The `tool_mode` is selected during `rails generate rails_ai_context:install`.
 
 ## MCP Tools - Common Reference
 
-The 24 tools below are the ones worth reading about before you start. [Tools Reference](TOOLS.md) carries all 45 with their parameters.
+The 21 tools below are the ones worth reading about before you start. [Tools Reference](TOOLS.md) carries all 35 with their parameters.
 
 Every tool is **read-only** and **idempotent** - they never modify your application or database.
 
@@ -580,13 +580,35 @@ rails_get_controllers(detail: "full")
 
 ### rails_get_config
 
-Returns application configuration. No parameters.
+Returns the app's configuration, one section per call. `section` picks it: `app` (the default), `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env`, `env_config` or `i18n`. Ten sections were tools of their own (`rails_get_gems`, `rails_get_env` and the rest); each answers what its tool did, and the old names still work from the CLI and over MCP.
 
-**Returns:** cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes with the attributes they declare, their defaults and reset hooks.
+**Parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `section` | string | Which section. Default: `app`. Required when `skip_tools` turns `app` off. |
+| `detail` | string | `summary` / `standard` (default) / `full`. Read by `frontend`, `api` and `env`. For `env`, summary is env var names only, standard groups them by source with external services, full adds per-file locations, Dockerfile vars and credentials keys. |
+| `category` | string | Read by `gems`: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` (default). |
+| `environment` | string | Read by `env_config`: one environment, by exact name. |
+| `locale` | string | Read by `i18n`: one locale's files and coverage. |
+| `offset`, `limit` | integer | Read by `gems`, `env_config` and `i18n`. Defaults: 0 and 50. |
+
+A parameter the asked section does not read is named in the answer as ignored.
+
+**Returns:** for `app`, cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), the `use` and `map` calls in `config.ru`, notable initializers, CurrentAttributes classes with the attributes they declare, their defaults and reset hooks. `gems` groups notable gems by category; `conventions` lists architecture patterns, directory structure and config files; `env` lists environment variables grouped by purpose, external services and credentials keys, with no values.
 
 ```
 rails_get_config()
   → Cache: redis_cache_store, Session: cookie_store, TZ: UTC, ...
+
+rails_get_config(section: "gems")
+  → Auth: devise `4.9.3`, Jobs: sidekiq `7.2.1`, ...
+
+rails_get_config(section: "conventions")
+  → Architecture: [MVC, Service objects, Concerns], Patterns: [STI, Polymorphism], ...
+
+rails_get_config(section: "env", detail: "summary")
+  → Env var names grouped by category
 ```
 
 ### rails_get_test_info
@@ -607,36 +629,6 @@ rails_get_test_info()
 
 rails_get_test_info(model: "User")
   → Shows spec/models/user_spec.rb test names (summary/standard) or full source (full)
-```
-
-### rails_get_gems
-
-Returns notable gems categorized by function.
-
-**Parameters:**
-
-| Param | Type | Description |
-|-------|------|-------------|
-| `category` | string | Filter by category: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` (default). |
-| `limit` | integer | Max gems to return. Default: 50. |
-| `offset` | integer | Skip this many gems for pagination. Default: 0. |
-
-**Returns:** Notable gems grouped by category with descriptions.
-
-```
-rails_get_gems()
-  → Auth: devise `4.9.3`, Jobs: sidekiq `7.2.1`, ...
-```
-
-### rails_get_conventions
-
-Returns detected architecture patterns. No parameters.
-
-**Returns:** architecture patterns (MVC, service objects, STI, etc.), directory structure with file counts, config files, detected patterns.
-
-```
-rails_get_conventions()
-  → Architecture: [MVC, Service objects, Concerns], Patterns: [STI, Polymorphism], ...
 ```
 
 ### rails_get_stimulus
@@ -972,7 +964,7 @@ rails_get_service_pattern(detail: "full")
   → All services with methods, initialize params, side effects, and rescue blocks
 ```
 
-**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing rather than counted as a service; asking for it by name still answers.
+**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing and left out of the service count; asking for it by name still answers. When the service directories hold more Ruby files than the listing counts, one line says how many were left out and of which kind.
 
 ### rails_get_job_pattern
 
@@ -999,31 +991,6 @@ rails_get_job_pattern(detail: "full")
 ```
 
 **Returns:** Job listing with queue breakdown or full detail including queue name, retry/discard configuration (retry_on, discard_on, Sidekiq options), perform method signature, guard clauses (early returns), dependencies (classes called), Turbo broadcasts, cron/recurring schedule (from sidekiq.yml or config files), side effects, and a list of files that enqueue the job.
-
-### rails_get_env
-
-Discover environment variables, external service dependencies, and credentials keys used by the app. Scans .rb, .rake, ERB views and config YAML for ENV[], .env.example, Dockerfile, the env Kamal's config/deploy.yml sets (secret names; clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so), config gem setting keys, Anyway::Config attributes with their env names, external HTTP calls, and credentials keys (never values).
-
-**Parameters:**
-
-| Param | Type | Description |
-|-------|------|-------------|
-| `detail` | string | `summary` / `standard` (default) / `full`. summary: env var names only. standard: env vars grouped by source + external services. full: everything including per-file locations, Dockerfile vars, and credentials keys. |
-
-**Examples:**
-
-```
-rails_get_env()
-  → Env vars grouped by purpose (Database, Redis, AWS, etc.) + external services + credentials keys
-
-rails_get_env(detail: "summary")
-  → Env var names grouped by category
-
-rails_get_env(detail: "full")
-  → Per-file env var locations with line numbers, .env.example contents, Dockerfile ENV/ARG, external services with detection method, credentials keys, encrypted columns
-```
-
-**Returns:** Environment variables grouped by purpose (Database, Redis, AWS, Payments, Email, Monitoring, API Keys, etc.) with default values where detected. External service dependencies discovered from Gemfile gems and HTTP client calls. Credentials keys (never values). Encrypted model columns. Full detail includes per-file locations with line numbers.
 
 ### rails_get_partial_interface
 
@@ -1290,7 +1257,7 @@ end
 
 The endpoint is then served by your app's own server, on its address and port; `http_bind` and `http_port` configure only the standalone process.
 
-Both transports are **read-only** - they expose the same 45 tools and never modify your app.
+Both transports are **read-only** - they expose the same 35 tools and never modify your app.
 
 ### Controller Transport (Alternative)
 
@@ -1446,7 +1413,7 @@ end
 | `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |
-| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g. `%w[rails_security_scan]`) |
+| `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g. `%w[rails_security_scan]`). A custom tool with a skipped built-in's name takes its place, `rails_get_config` with its sections included |
 | `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP primary + CLI fallback) or `:cli` (CLI only, no MCP server needed) |
 | `ai_tools` | Array | `nil` (all) | AI tools to generate context for: `%i[claude cursor copilot opencode codex]`. Selected during install. |
 | `excluded_models` | Array | internal Rails models | Models to skip |
@@ -1484,10 +1451,10 @@ end
 | `context_files` | Boolean | `true` | Set `false` for an MCP-only install: no CLAUDE.md, AGENTS.md, rules files or `.ai-context.json` are written |
 | `frontend_paths` | Array | `nil` (auto-detected) | Frontend directories, e.g. `["app/frontend", "../web-client"]`. One outside the app root is read for manifests only |
 | `extra_app_paths` | Array | `[]` | More app-root-relative directories that hold Rails app code. Each one's `app/models`, `app/controllers` and `app/views` are scanned |
-| `query_timeout` | Integer | `5` | `rails_query` statement timeout in seconds |
+| `query_timeout` | Number | `5` | `rails_query` statement timeout in seconds, a positive number |
 | `query_row_limit` | Integer | `100` | Max rows `rails_query` returns (1 to 1000) |
 | `query_redacted_columns` | Array | `password_digest`, `encrypted_password`, tokens, etc. | Column names `rails_query` refuses: a query naming one is rejected before it runs, and a returned column of that name comes back `[FILTERED]` |
-| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in sensitive list |
+| `query_allowed_columns` | Array | `[]` | Column names to exempt from the built-in secret column names. It does not release an `encrypts` column |
 | `allow_query_in_production` | Boolean | `false` | Allow `rails_query` in production |
 | `log_lines` | Integer | `50` | Default number of lines `rails_read_logs` tails |
 | `instrumentation_include_arguments` | Boolean | `false` | Forward raw tool arguments in `ActiveSupport::Notifications` events |
@@ -1881,6 +1848,7 @@ config.max_tool_response_chars = 60_000
 ### Models not detected
 
 - Models must descend from `ActiveRecord::Base`, through `ApplicationRecord` or any other base class. Without a boot they must also sit in a model directory (`app/models/`, or a pack's or engine's)
+- A file in a `concerns/` directory of a model root is a model when the class its path names has a model superclass. A concern module that holds an inner class stays a concern. Without a boot, such a class is not listed when its superclass is a gem's own record base. The booted tier resolves it through the loaded class
 - Excluded models: `ApplicationRecord`, `ActiveStorage::*`, `ActionText::*`, `ActionMailbox::*`
 - Add custom exclusions: `config.excluded_models += %w[InternalModel]`
 

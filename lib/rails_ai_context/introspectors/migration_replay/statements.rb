@@ -111,9 +111,9 @@ module RailsAiContext
           end
         end
 
-        POSTGRES_ADAPTER = /postg/i
-        MYSQL_ADAPTER = /mysql|trilogy/i
-        SQLITE_ADAPTER = /sqlite/i
+        def family(adapter)
+          RailsAiContext::DatabaseFamily.of(adapter.to_s).key
+        end
 
         # A declared type and its sizes as the dump writes them (each adapter's type_to_sql and schema_precision, 7.0 to 8.1).
         def dumped_type(type, options, adapter)
@@ -121,7 +121,7 @@ module RailsAiContext
           limit = sizes[:limit]
           case type.to_s
           when "decimal", "numeric" then [ type, sizes.slice(:precision, :scale) ]
-          when "string" then [ type, adapter.to_s.match?(MYSQL_ADAPTER) && limit == 255 ? {} : sizes.slice(:limit) ]
+          when "string" then [ type, family(adapter) == :mysql && limit == 255 ? {} : sizes.slice(:limit) ]
           when "integer" then dumped_integer(limit, adapter)
           when "datetime", "timestamp" then [ type, sizes[:precision] == 6 ? {} : sizes.slice(:precision) ]
           when "time" then [ type, sizes.slice(:precision) ]
@@ -133,8 +133,8 @@ module RailsAiContext
         # PostgreSQL's text and bytea take no limit; MySQL picks tiny to long by it (a binary under 4 KB
         # is a varbinary that keeps it); SQLite keeps it as declared.
         def dumped_blob_size(type, limit, adapter)
-          return {} if limit.nil? || adapter.to_s.match?(POSTGRES_ADAPTER)
-          return { limit: limit } unless adapter.to_s.match?(MYSQL_ADAPTER) && !(type == "binary" && limit <= 0xfff)
+          return {} if limit.nil? || family(adapter) == :postgresql
+          return { limit: limit } unless family(adapter) == :mysql && !(type == "binary" && limit <= 0xfff)
 
           size = case limit
           when 0..0xff then "tiny"
@@ -146,8 +146,8 @@ module RailsAiContext
         end
 
         def dumped_integer(limit, adapter)
-          postgres = adapter.to_s.match?(POSTGRES_ADAPTER)
-          return [ "integer", limit ? { limit: limit } : {} ] unless postgres || adapter.to_s.match?(MYSQL_ADAPTER)
+          postgres = family(adapter) == :postgresql
+          return [ "integer", limit ? { limit: limit } : {} ] unless postgres || family(adapter) == :mysql
           return [ "bigint", {} ] if limit.to_i > 4
           return [ "integer", {} ] if limit.nil? || limit == 4 || (postgres && limit == 3)
 
@@ -199,7 +199,7 @@ module RailsAiContext
         def change_column(col, entry, adapter = nil)
           return unless col
 
-          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry, adapter).merge(col.slice(:primary_key))) if adapter.to_s.match?(SQLITE_ADAPTER)
+          return col.replace(column_entry(col[:name], entry[:column_type] || col[:type], entry, adapter).merge(col.slice(:primary_key))) if family(adapter) == :sqlite
 
           opts = entry[:options] || {}
           col[:type], sizes = dumped_type(entry[:column_type] || col[:type], opts, adapter)

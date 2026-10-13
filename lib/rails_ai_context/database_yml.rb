@@ -45,24 +45,20 @@ module RailsAiContext
     end
 
     def databases_in(config)
+      # An environment whose whole value is a URL is its one database.
+      return { "primary" => { "url" => config } } if config.is_a?(String) && !config.empty?
       return {} unless config.is_a?(Hash) && config.any?
 
       config.values.all?(Hash) ? config : { "primary" => config }
     end
 
-    # Rails' rule: "primary", else the first database.
+    # ActiveRecord::Base connects to an environment's first database, whatever it is called.
     def primary_name(root)
       primary_name_in(databases(root))
     end
 
     def primary_name_in(found)
-      found.key?("primary") ? "primary" : found.keys.first
-    end
-
-    # The databases other than the primary that Rails dumps and migrates:
-    # HashConfig#database_tasks? skips a replica and database_tasks: false.
-    def task_secondaries(root)
-      databases(root).except(primary_name(root)).select { |_, entry| !entry["replica"] && entry.fetch("database_tasks", true) }
+      found.keys.first
     end
 
     # The primary database's settings.
@@ -73,12 +69,12 @@ module RailsAiContext
     # A database's schema_search_path as PostgreSQL reads it: an unquoted name folds to
     # lowercase and "$user" is the configured username. Unset, PostgreSQL's "$user", public.
     # namespace.c recomputeNamespacePath keeps a repeated schema's first place only.
-    def schema_search_path(root, name = "primary")
+    def schema_search_path(root, name = primary_name(root) || "primary")
       search_path_entries(root, name).map(&:first).uniq
     end
 
     # The schema only the search path's "$user" names, or nil: one the path also names outright is configured.
-    def user_schema(root, name = "primary")
+    def user_schema(root, name = primary_name(root) || "primary")
       entries = search_path_entries(root, name)
       user = entries.find(&:last)&.first
       user unless entries.any? { |schema, from_user| !from_user && schema == user }
@@ -89,7 +85,7 @@ module RailsAiContext
       settings = entry(root, name)
       settings = {} unless settings.is_a?(Hash)
       known = adapter(name, settings).first
-      return [ [ "public", false ] ] if known && !known.start_with?("postg")
+      return [ [ "public", false ] ] if known && !DatabaseFamily.of(known).postgresql?
 
       settings = settings.merge(url_settings(name, settings["url"]))
       # postgresql_adapter.rb:984 (8.1), :865 (7.0): schema_order is the older name.
@@ -108,24 +104,6 @@ module RailsAiContext
     # The named database's settings in the running environment, or nil.
     def entry(root, name)
       entry_in(databases(root), name)
-    end
-
-    # [environment, settings] from the first other environment that configures the database,
-    # the one whose tasks wrote its dump; nil when none does.
-    def elsewhere(root, name)
-      data = file(root)
-      return nil unless data
-
-      # A key with no config/environments file holds an anchor (`default: &default`), not an environment.
-      declared = Dir.glob(File.join(root.to_s, "config/environments/*.rb")).map { |path| File.basename(path, ".rb") }
-      data.each do |env_name, config|
-        next if env_name == RailsAiContext.environment_name
-        next if declared.any? && !declared.include?(env_name)
-
-        found = entry_in(databases_in(config), name)
-        return [ env_name, found ] if found.is_a?(Hash)
-      end
-      nil
     end
 
     def entry_in(found, name)

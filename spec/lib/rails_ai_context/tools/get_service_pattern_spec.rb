@@ -42,7 +42,8 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
         expect(text).to include("# Service Objects (1)")
         expect(text).to include("- Accessibility::ScanService")
-        expect(text).not_to include("Queueable")
+        expect(text).not_to match(/^- .*Queueable/)
+        expect(text).to include("_1 of the 2 Ruby files under the service directories is left out: 1 concern (Accessibility::Concerns::Queueable)._")
       end
     end
 
@@ -306,6 +307,104 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         text = described_class.call(service: "Nope").content.first[:text]
 
         expect(text).to include("Available: CreateOrder\n")
+      end
+    end
+
+    # A reader who counts the files under app/services gets a larger number
+    # than the heading, and the answer has to say where the rest went.
+    context "with files the listing leaves out" do
+      let(:tmpdir) { Dir.mktmpdir }
+      let(:services) { File.join(tmpdir, "app", "services") }
+
+      before do
+        FileUtils.mkdir_p(File.join(services, "concerns"))
+        File.write(File.join(services, "charge_card.rb"), "class ChargeCard < ApplicationService\n  include Auditable\n\n  def call; end\nend\n")
+        File.write(File.join(services, "application_service.rb"), "class ApplicationService\n  def self.call(*args) = new(*args).call\nend\n")
+        File.write(File.join(services, "concerns", "payloadable.rb"), "module Payloadable\n  def payload; end\nend\n")
+        File.write(File.join(services, "trackable.rb"), "module Trackable\n  extend ActiveSupport::Concern\n\n  def track; end\nend\n")
+        File.write(File.join(services, "auditable.rb"), "module Auditable\n  def audit!; end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      let(:note) do
+        "_4 of the 5 Ruby files under the service directories are left out: 1 base class (named above), " \
+          "2 concerns (Payloadable, Trackable), 1 module with no entry point that other code mixes in (Auditable)._"
+      end
+
+      %w[summary standard full].each do |detail|
+        it "says at #{detail} detail how many files it left out, by kind" do
+          text = described_class.call(detail: detail).content.first[:text]
+
+          expect(text).to include("# Service Objects (1)")
+          expect(text).to include("_Base classes not counted as services: ApplicationService. Ask for one by name for what it defines._\n#{note}\n")
+        end
+      end
+
+      it "names the first five of a kind and counts the rest" do
+        %w[a b c d e f g].each do |letter|
+          File.write(File.join(services, "concerns", "mixin_#{letter}.rb"), "module Mixin#{letter.upcase}\nend\n")
+        end
+
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("_11 of the 12 Ruby files under the service directories are left out:")
+        expect(text).to include("9 concerns (MixinA, MixinB, MixinC, MixinD, MixinE and 4 more)")
+      end
+
+      it "counts a mailer and a file too large to read" do
+        File.write(File.join(services, "digest_mailer.rb"), "class DigestMailer < ApplicationMailer\n  def weekly = mail(to: \"a@b.c\")\nend\n")
+        File.write(File.join(services, "huge_import.rb"), "class HugeImport\n  def call; end\nend\n")
+        allow(described_class).to receive(:safe_read).and_call_original
+        allow(described_class).to receive(:safe_read).with(satisfy { |path| path.to_s.end_with?("huge_import.rb") }).and_return(nil)
+
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("# Service Objects (1)")
+        expect(text).to include("_6 of the 7 Ruby files under the service directories are left out:")
+        expect(text).to include("1 mailer (DigestMailer), 1 file too large to read (HugeImport)._")
+      end
+
+      it "prints the note when nothing is left to list" do
+        FileUtils.rm(File.join(services, "charge_card.rb"))
+        FileUtils.rm(File.join(services, "application_service.rb"))
+        FileUtils.rm(File.join(services, "auditable.rb"))
+
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("contains no service objects")
+        expect(text).to include("_2 of the 2 Ruby files under the service directories are left out: 2 concerns (Payloadable, Trackable)._")
+      end
+
+      it "words the note for a directory that holds one file" do
+        %w[charge_card application_service auditable trackable].each { |name| FileUtils.rm(File.join(services, "#{name}.rb")) }
+
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("_1 of the 1 Ruby file under the service directories is left out: 1 concern (Payloadable)._")
+      end
+    end
+
+    context "with every file a service" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
+        File.write(File.join(tmpdir, "app", "services", "charge_card.rb"), "class ChargeCard\n  def call; end\nend\n")
+        File.write(File.join(tmpdir, "app", "services", "refund_card.rb"), "class RefundCard\n  def call; end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      %w[summary standard full].each do |detail|
+        it "prints no left-out note at #{detail} detail" do
+          text = described_class.call(detail: detail).content.first[:text]
+
+          expect(text).to include("# Service Objects (2)")
+          expect(text).not_to include("left out")
+        end
       end
     end
 
@@ -963,7 +1062,8 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         text = described_class.call(detail: "full").content.first[:text]
 
         expect(text).to include("# Service Objects (1)")
-        expect(text).not_to include("Payloadable")
+        expect(text).not_to include("## Payloadable")
+        expect(text).to include("is left out: 1 concern (Payloadable)._")
       end
 
       it "does not answer for it by name" do

@@ -28,6 +28,32 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     it "does not return an error" do
       expect(result[:error]).to be_nil
     end
+
+    it "names the primary only where it is not called primary" do
+      expect(result).not_to have_key(:primary_name)
+    end
+  end
+
+  it "lists a replica only another environment configures with the environments that do, so it takes the same mark" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "database.yml"), <<~YAML)
+        #{Rails.env}:
+          primary:
+            adapter: postgresql
+        production:
+          primary:
+            adapter: postgresql
+          primary_replica:
+            adapter: postgresql
+            replica: true
+      YAML
+
+      replica = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:replicas].first
+
+      expect(replica).to eq(name: "primary_replica", adapter: "postgresql", environments: %w[production])
+      expect(RailsAiContext::Payload.database_mark(replica)).to eq(" (production only)")
+    end
   end
 
   describe "replicas without a booted ActiveRecord" do

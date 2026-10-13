@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "did_you_mean"
 require "open3"
 
 module RailsAiContext
@@ -34,7 +35,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 35,
+        order: 30,
         mcp: "rails_diagnose(error:\"X\")",
         cli_args: "error=\"X\"",
         summary: "One-call error diagnosis: context + git changes + logs + fix suggestions"
@@ -60,63 +61,110 @@ module RailsAiContext
         /NameError.*uninitialized constant/ => {
           type: :name_error,
           likely: "A class or module constant could not be found. This usually means a typo in the class/module name, a missing require, or an autoload issue.",
-          fix: "1. Check for typo in class/module name, missing require, or autoload issue\n2. Verify the file is in the correct autoload path (e.g. app/models, app/services)\n3. Run `rails_search_code(pattern:\"ClassName\", match_type:\"trace\")` to find where the constant is defined"
+          fix: [
+            "Check for typo in class/module name, missing require, or autoload issue",
+            "Verify the file is in the correct autoload path (e.g. app/models, app/services)",
+            { tool: "rails_search_code", args: %(pattern:"ClassName", match_type:"trace"), text: "Run %s to find where the constant is defined" }
+          ]
         },
         /NoMethodError/ => {
           type: :nil_reference,
           likely: "A method was called on nil or an undefined name was referenced. Check for: missing association, unfetched record, typo in method name.",
-          fix: "1. Check the variable/object is not nil before calling the method\n2. Verify the association or attribute exists on the model\n3. Use `&.` safe navigation if the value can legitimately be nil"
+          fix: [
+            "Check the variable/object is not nil before calling the method",
+            "Verify the association or attribute exists on the model",
+            "Use `&.` safe navigation if the value can legitimately be nil"
+          ]
         },
         /NameError/ => {
           type: :name_error,
           likely: "An undefined name was referenced. This could be a typo in a variable, method, or constant name, or a missing require/autoload.",
-          fix: "1. Check for typo in class/module name, missing require, or autoload issue\n2. Verify the name is defined and accessible in the current scope\n3. Use `rails_search_code(pattern:\"name\", match_type:\"trace\")` to find where it is defined"
+          fix: [
+            "Check for typo in class/module name, missing require, or autoload issue",
+            "Verify the name is defined and accessible in the current scope",
+            { tool: "rails_search_code", args: %(pattern:"name", match_type:"trace"), text: "Use %s to find where it is defined" }
+          ]
         },
         /RecordNotFound/ => {
           type: :record_not_found,
           likely: "A `.find()` or `.find_by!()` call failed because the record doesn't exist. Common causes: stale URL, deleted record, wrong ID parameter.",
-          fix: "1. Use `.find_by` (returns nil) instead of `.find` (raises)\n2. Add a rescue handler or `before_action :set_record` with proper error handling\n3. Check the route parameter name matches what the controller expects"
+          fix: [
+            "Use `.find_by` (returns nil) instead of `.find` (raises)",
+            "Add a rescue handler or `before_action :set_record` with proper error handling",
+            "Check the route parameter name matches what the controller expects"
+          ]
         },
         /RecordInvalid|RecordNotSaved/ => {
           type: :validation_failure,
           likely: "A `.save!`, `.create!`, or `.update!` call failed validation. The model has validations that the submitted data doesn't satisfy.",
-          fix: "1. Use `.save` (returns false) instead of `.save!` (raises) for user-facing flows\n2. Check model validations against the params being submitted\n3. Verify required associations exist before saving"
+          fix: [
+            "Use `.save` (returns false) instead of `.save!` (raises) for user-facing flows",
+            "Check model validations against the params being submitted",
+            "Verify required associations exist before saving"
+          ]
         },
         /RoutingError/ => {
           type: :routing,
           likely: "No route matches the request. The URL or HTTP verb doesn't match any defined route.",
-          fix: "1. Run `rails_get_routes` to see all defined routes\n2. Check the HTTP verb (GET vs POST vs PATCH) matches\n3. Verify the route is not restricted by constraints"
+          fix: [
+            { tool: "rails_get_routes", args: nil, text: "Run %s to see all defined routes" },
+            "Check the HTTP verb (GET vs POST vs PATCH) matches",
+            "Verify the route is not restricted by constraints"
+          ]
         },
         /ParameterMissing/ => {
           type: :strong_params,
           likely: "A required parameter is missing from the request. The `params.require(:key)` call didn't find the expected key.",
-          fix: "1. Check the form field names match what strong params expects\n2. Verify the parameter nesting (e.g., `params[:user][:name]` vs `params[:name]`)\n3. Check the controller's `*_params` method"
+          fix: [
+            "Check the form field names match what strong params expects",
+            "Verify the parameter nesting (e.g., `params[:user][:name]` vs `params[:name]`)",
+            "Check the controller's `*_params` method"
+          ]
         },
         /StatementInvalid|UndefinedColumn|UndefinedTable/ => {
           type: :schema_mismatch,
           likely: "A database query references a column or table that doesn't exist. Common after migrations or in stale schema.",
-          fix: "1. Run `rails db:migrate` to apply pending migrations\n2. Check `rails_get_schema(table:\"...\")` for actual column names\n3. Verify the migration was generated correctly"
+          fix: [
+            "Run `rails db:migrate` to apply pending migrations",
+            { tool: "rails_get_schema", args: %(table:"..."), text: "Check %s for actual column names" },
+            "Verify the migration was generated correctly"
+          ]
         },
         /Template::Error|ActionView/ => {
           type: :view_error,
           likely: "An error occurred while rendering a view template. The underlying error is usually a NoMethodError or missing local variable.",
-          fix: "1. Check the instance variables set in the controller action\n2. Verify partial locals are passed correctly\n3. Use `rails_get_view(controller:\"...\")` to see template structure"
+          fix: [
+            "Check the instance variables set in the controller action",
+            "Verify partial locals are passed correctly",
+            { tool: "rails_get_view", args: %(controller:"..."), text: "Use %s to see template structure" }
+          ]
         },
         /ArgumentError/ => {
           type: :argument_error,
           likely: "A method received wrong number or type of arguments.",
-          fix: "1. Check the method signature matches the call site\n2. Use `rails_search_code(pattern:\"method_name\", match_type:\"trace\")` to see definition and callers"
+          fix: [
+            "Check the method signature matches the call site",
+            { tool: "rails_search_code", args: %(pattern:"method_name", match_type:"trace"), text: "Use %s to see definition and callers" }
+          ]
         },
         # The authorization gems' two failures, by the words their class names share.
         /AuthorizationNotPerformed|PolicyScopingNotPerformed/ => {
           type: :authorization_not_performed,
           likely: "The action finished without authorizing, and a check that every action does raised: Pundit's `after_action :verify_authorized` (or `verify_policy_scoped`). The message names the controller.",
-          fix: "1. Call `authorize record` (or `policy_scope(Model)`) in the action\n2. If the action is meant to be open, leave it out of the check: `skip_after_action :verify_authorized, only: :action_name`\n3. Use `rails_get_controllers(controller:\"...\", action:\"...\")` to see the filters that run on the action"
+          fix: [
+            "Call `authorize record` (or `policy_scope(Model)`) in the action",
+            "If the action is meant to be open, leave it out of the check: `skip_after_action :verify_authorized, only: :action_name`",
+            { tool: "rails_get_controllers", args: %(controller:"...", action:"..."), text: "Use %s to see the filters that run on the action" }
+          ]
         },
         /NotAuthorized|AccessDenied/ => {
           type: :authorization_denied,
           likely: "An authorization rule refused the current user this action on this record. Pundit's message names the policy method that returned false; CanCanCan's the action and subject.",
-          fix: "1. Read the policy method or ability rule the message names\n2. Check which user and record the request carried\n3. If refusing is expected, rescue it (`rescue_from`) and answer 403 instead of 500"
+          fix: [
+            "Read the policy method or ability rule the message names",
+            "Check which user and record the request carried",
+            "If refusing is expected, rescue it (`rescue_from`) and answer 403 instead of 500"
+          ]
         }
       }.freeze
 
@@ -144,7 +192,7 @@ module RailsAiContext
 
         # Suggested fix
         lines << "## Suggested Fix"
-        lines << classification[:fix]
+        lines << fix_steps(classification[:fix])
         lines << ""
 
         # Gather context based on parameters and error type
@@ -171,19 +219,16 @@ module RailsAiContext
         lines.concat(log_section) if log_section.any?
 
         # Next steps
-        next_steps = []
-        if file
-          next_steps << "_Use `rails_get_edit_context(file:\"#{file}\", near:\"#{parsed[:method_name] || line || parsed[:exception_class]}\")` to see the code._"
-        end
-        if parsed[:method_name]
-          next_steps << "_Use `rails_search_code(pattern:\"#{parsed[:method_name]}\", match_type:\"trace\")` to trace the method._"
-        end
+        next_steps = [
+          (pointer("rails_get_edit_context", %(file:"#{file}", near:"#{parsed[:method_name] || line || parsed[:exception_class]}"), "to see the code.") if file),
+          (pointer("rails_search_code", %(pattern:"#{parsed[:method_name]}", match_type:"trace"), "to trace the method.") if parsed[:method_name])
+        ].compact.map { |step| "_Use #{step}_" }
         if next_steps.any?
           lines << "## Next Steps"
           lines.concat(next_steps)
         end
 
-        output = lines.join("\n")
+        output = lines.join("\n").rstrip
 
         # Final safety cap: if total output still exceeds limit, hard-truncate
         if output.length > MAX_TOTAL_OUTPUT
@@ -192,8 +237,6 @@ module RailsAiContext
 
         # The diagnosis still answers the error, and the result is an error as every refusal is.
         refusal ? error_response(output) : text_response(output)
-      rescue => e
-        text_response("Diagnosis error: #{e.message}")
       end
 
       # A name an error message gives its exception: a class ending the way
@@ -202,6 +245,18 @@ module RailsAiContext
 
       class << self
         private
+
+        # Numbered steps; one whose text holds a tool call (%s) is left out
+        # when the app does not serve that tool.
+        def fix_steps(steps)
+          kept = steps.filter_map do |step|
+            next step unless step.is_a?(Hash)
+
+            call = pointer(step[:tool], step[:args])
+            step[:text].sub("%s") { call } if call
+          end
+          kept.each_with_index.map { |step, index| "#{index + 1}. #{step}" }.join("\n")
+        end
 
         def parse_error(error_string)
           result = { exception_class: nil, message: error_string.strip, file_refs: [], method_name: nil }
@@ -297,9 +352,11 @@ module RailsAiContext
           {
             type: :unknown,
             likely: likely,
-            fix: "1. Check the error message for clues about what went wrong\n" \
-                 "2. Use `rails_search_code(pattern:\"#{exception_class&.split("::")&.last || "ErrorName"}\")` to find where the app raises or rescues it\n" \
-                 "3. Use `rails_read_logs(level:\"ERROR\")` for the backtrace"
+            fix: [
+              "Check the error message for clues about what went wrong",
+              { tool: "rails_search_code", args: %(pattern:"#{exception_class&.split("::")&.last || "ErrorName"}"), text: "Use %s to find where the app raises or rescues it" },
+              { tool: "rails_read_logs", args: %(level:"ERROR"), text: "Use %s for the backtrace" }
+            ]
           }
         end
 
@@ -347,8 +404,10 @@ module RailsAiContext
             return {
               type: :non_public_method,
               likely: "`#{m[2]}` is #{m[1]} on #{receiver ? "`#{receiver}`" : "the receiver"}, so it cannot be called from outside the object.",
-              fix: "1. Call it from inside the class, or make it public if it is part of the interface\n" \
-                   "2. Use `rails_search_code(pattern:\"#{m[2]}\", match_type:\"definition\")` to see where it is defined and under which visibility"
+              fix: [
+                "Call it from inside the class, or make it public if it is part of the interface",
+                { tool: "rails_search_code", args: %(pattern:"#{m[2]}", match_type:"definition"), text: "Use %s to see where it is defined and under which visibility" }
+              ]
             }
           end
 
@@ -367,9 +426,11 @@ module RailsAiContext
           {
             type: :undefined_method,
             likely: likely,
-            fix: "1. #{suggestion ? "Call `#{suggestion}`, the method #{subject} has" : "Check the name against the methods #{subject} defines"}\n" \
-                 "2. Check the call goes to the object you think: an association or a presenter can hand back another class\n" \
-                 "3. Use `rails_search_code(pattern:\"#{name}\", match_type:\"trace\")` to find its definition and its callers"
+            fix: [
+              suggestion ? "Call `#{suggestion}`, the method #{subject} has" : "Check the name against the methods #{subject} defines",
+              "Check the call goes to the object you think: an association or a presenter can hand back another class",
+              { tool: "rails_search_code", args: %(pattern:"#{name}", match_type:"trace"), text: "Use %s to find its definition and its callers" }
+            ]
           }
         end
 
@@ -448,9 +509,11 @@ module RailsAiContext
           {
             type: :undefined_method_on_model,
             likely: likely,
-            fix: "1. Run `rails_get_model_details(model:\"#{receiver}\")` to see #{receiver}'s real associations and columns\n" \
-                 "2. Check for a typo in the method name or a missing association declaration (has_many/belongs_to)\n" \
-                 "3. If the data lives on another model, add the association or a delegate"
+            fix: [
+              { tool: "rails_get_model_details", args: %(model:"#{receiver}"), text: "Run %s to see #{receiver}'s real associations and columns" },
+              "Check for a typo in the method name or a missing association declaration (has_many/belongs_to)",
+              "If the data lives on another model, add the association or a delegate"
+            ]
           }
         end
 
@@ -506,29 +569,29 @@ module RailsAiContext
           if ctrl && act
             add_section(lines, "Controller Context", report_error: true) do
               ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
-              GetControllers.call(controller: ctrl_class, action: act)
+              compose(GetControllers, controller: ctrl_class, action: act)
             end
           end
 
           if file && line
             add_section(lines, "Code Context", report_error: true) do
-              GetEditContext.call(file: file, near: parsed[:method_name] || line.to_s)
+              compose(GetEditContext, file: file, near: parsed[:method_name] || line.to_s)
             end
           end
 
           if classification[:type] == :schema_mismatch
             table = parsed[:message].match(/(?:table|relation)\s+["']?(\w+)["']?/i)&.[](1)
-            add_section(lines, "Schema Context") { GetSchema.call(table: table) } if table
+            add_section(lines, "Schema Context") { compose(GetSchema, table: table) } if table
           end
 
           if classification[:type] == :validation_failure
             model_name = file&.match(%r{app/models/(.+)\.rb})&.[](1)&.camelize
-            add_section(lines, "Model Context") { GetModelDetails.call(model: model_name) } if model_name
+            add_section(lines, "Model Context") { compose(GetModelDetails, model: model_name) } if model_name
           end
 
           if parsed[:method_name] && lines.none? { |l| l.include?("Code Context") }
             add_section(lines, "Method Trace") do
-              result = SearchCode.call(pattern: parsed[:method_name], match_type: "trace")
+              result = compose(SearchCode, pattern: parsed[:method_name], match_type: "trace")
               # A trace that found callers but no `def` is still not the
               # method's definition, which is what this section promises.
               definition_missing?(result) ? nil : result
@@ -566,7 +629,7 @@ module RailsAiContext
             # Check if calling on an association
             if method && file
               begin
-                ctx = GetEditContext.call(file: file, near: method)
+                ctx = compose(GetEditContext, file: file, near: method)
                 code = response_text(ctx)
                 # Find the receiver: something.method_name
                 receiver_match = code.match(/(\w+)\.#{Regexp.escape(method)}/)
@@ -586,7 +649,7 @@ module RailsAiContext
             if ctrl && act
               begin
                 ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
-                result = GetControllers.call(controller: ctrl_class, action: act)
+                result = compose(GetControllers, controller: ctrl_class, action: act)
                 text = response_text(result)
                 if text.include?("set_") && text.include?("find")
                   return "The `set_*` before_action uses `.find` which raises RecordNotFound. " \

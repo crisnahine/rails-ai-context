@@ -1,0 +1,2 @@
+class LegacyOrder < ApplicationRecord
+end

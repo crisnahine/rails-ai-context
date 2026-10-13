@@ -266,7 +266,7 @@ config.generate_root_files = false
 
 ### "rails_query is disabled in production"
 
-By design. Override if needed:
+By design. The answer is an error response: `isError` over MCP and exit 1 from the CLI. Override if needed:
 
 ```ruby
 config.allow_query_in_production = true
@@ -274,16 +274,103 @@ config.allow_query_in_production = true
 
 ### "Blocked: contains INSERT" and other "Blocked:" messages
 
-The 4-layer SQL validator blocks write operations and injection patterns, and the message names what it hit. Ensure you're only running SELECT queries.
+The SQL gate refuses write statements, file and admin functions and secret column names, and the message names what it hit. Only read statements run: SELECT, WITH, SHOW, EXPLAIN and DESCRIBE.
 
-Common false positives:
-- A blocked keyword inside a string (`WHERE note = 'please insert coin'`) → the validator matches words, not SQL structure, so the query is refused
-- Hash characters → a `#` starts a comment on MySQL only, and never inside a quoted string
-- JSONB operators (`#>>`) → preserved correctly since v5.6.0
+What a string literal holds decides some of these:
+- A write keyword or a semicolon inside a string (`WHERE note = 'please insert coin'`, `'a; b'`) is data on every database, and the query runs
+- A secret column's name, `FOR UPDATE` / `FOR SHARE` or `UNION` inside a string is data on PostgreSQL only. On MySQL, MariaDB and SQLite the raw text decides and the query is refused, since no later check there would catch a quote the masking misread
+- `INTO OUTFILE` / `INTO DUMPFILE` is refused wherever it stands, inside a string too, on every database
+- A file or network function (`pg_read_file`, `LOAD_FILE`), a refused `SHOW` form (`SHOW GRANTS`) and a relation that is not read (`pg_stats`, `slow_log`) are refused wherever they stand, inside a string too, each on the database that has it. `slow_log` is refused on MySQL and MariaDB, and `pg_stats` on PostgreSQL
+- A session or administrative function (`pg_terminate_backend` on PostgreSQL, `GET_LOCK` on MySQL and MariaDB) is refused wherever its call stands, so `'pg_terminate_backend(1)'` inside a string is refused too. Its bare name inside a string is data
+- A `#` starts a comment on MySQL only, and only outside a quoted string
+- A JSONB operator (`#>>`) runs as written (since v5.6.0)
+
+### "Blocked: a `*` inside a subquery", "Blocked: `TABLE` inside a subquery" and "Blocked: the view ... is not queried"
+
+MySQL, MariaDB and SQLite trace no result column back to its table column, so these shapes are refused there when a secret column is in reach:
+
+- A `*` inside a subquery, a CTE body included, when the statement names a table that holds a secret column. The message names that table and the column. The rule tests the two facts together and does not tell which table the wildcard reads, so the statement is refused also when the wildcard is over another table. Name the columns in the subquery: `WITH x AS (SELECT id, email FROM users) SELECT * FROM x`. On MySQL and MariaDB `(TABLE t)` counts as a wildcard: select the columns you need. `EXISTS (SELECT * ...)` and `count(*)` run
+- On SQLite, `IN` before a table's name (`WHERE id IN users`), when the statement names a table that holds a secret column. It is SQLite's shorthand for `IN (SELECT * FROM users)`. Write the subquery with its columns named: `WHERE id IN (SELECT id FROM users)`
+- On SQLite, either of those two in a statement that holds a string equal to such a table's name (`WHERE role = 'users'`). SQLite reads a string as a table's name where a name can stand, and the rule cannot tell that use from plain data. The message says "in a statement that holds the string 'users'". Name the columns in the subquery, or compare with another value
+- A view whose definition names a secret column, or has a wildcard and names a table that holds one. Query the tables the view reads. When the column holds no secret, list its name in `config.query_allowed_columns`
+
+On PostgreSQL a plain view runs and its secret columns come back `[FILTERED]`. A materialized view whose definition names a secret column gets the view message, since its stored rows cannot be traced to a table column. Query the tables it was built from.
+
+### "Blocked: ... is not read: it is a shadow table", "it is a virtual table that holds the secret column" and "it returns the database file's raw pages"
+
+On SQLite `rails_query` reads no table that holds another table's rows or words under other names:
+
+- `sqlite_dbpage`, `sqlite_dbdata` and `sqlite_dbptr` return the database file's pages, with every stored value in them
+- A shadow table (`docs_content`, `docs_data`) holds what a virtual table stores, under other column names. The message names the virtual table to query
+- A virtual table that holds a secret column is refused whole, since a search or a function over it reads a column by its position. Keep the secret column out of the virtual table, or query the table it was copied from
+- An `fts5vocab` or `fts4aux` table over such a table lists its words, so it is refused too
+- A virtual table whose definition names a refused view, or a table that is not read, holds their rows or words. The message says "its definition names" and what it names
+
+A view over one of these is refused with "its definition reads `<table>`, which is not read". The name is refused inside a string too.
+
+### "Blocked: `pragma_foreign_keys` tells of the connection that runs it"
+
+On SQLite `rails_query` runs a statement on a connection of its own, so a value that belongs to a connection would not be the app's. The pragma functions that describe the schema or the database file run: `pragma_table_info`, `pragma_index_list`, `pragma_foreign_key_list`, `pragma_integrity_check`, `pragma_page_count` and the others [SECURITY.md](SECURITY.md#layer-1---the-sql-gate-statement-checks) lists. Every other `pragma_*` function is refused, and so are `changes()`, `total_changes()` and `last_insert_rowid()`. Read those on the app's own connection, in `bin/rails runner` or the console.
+
+### "Blocked: the statement is ... bytes long"
+
+`rails_query` checks a statement of 1,000,000 bytes at most. Send a shorter one: split a long `IN` list, or join against a table that holds the ids.
+
+### "Blocked: the checks on the statement's text ran longer than query_timeout"
+
+The checks that read a statement's text have `query_timeout` to themselves and give up when they pass it. Nothing was sent to the database. Send a shorter statement.
+
+### "Blocked: ... is not queried: its columns could not be read" and "leads through more databases than rails_query follows"
+
+The secret column rule reads the columns of every schema and database a statement reaches. A relation whose columns it cannot read is not queried, so give the account read access to the catalogue of that schema, or query a relation it can read. A view the statement names is followed through the databases or schemas its definition names, three reads deep. A statement that names a view that leads deeper is not run, and the message names the view: query the tables it reads. A statement that does not name that view runs.
+
+### "Blocked: SHOW with a WHERE clause is not run"
+
+MySQL's statement timeout does not hold a `SHOW` filter, so it is refused on every database. `SHOW ... LIKE` runs. For any other filter select from `information_schema`: `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()`.
+
+### "Blocked: `pg_stat_activity` is not read"
+
+`rails_query` reads no relation that holds values sampled from other tables, other sessions' statements or stored credentials. On PostgreSQL those are `pg_stats`, `pg_stat_activity`, `pg_authid`, `pg_settings` and their like. On MySQL and MariaDB they are `information_schema.processlist`, `performance_schema`, `sys` and the whole `mysql` schema among others. On SQLite they are the `sqlite_stat` tables and `sqlite_stmt`. [SECURITY.md](SECURITY.md#relations-and-settings-that-are-never-read) lists every name. Use the database's own client for those. Each name is refused on the database that has it, so an app table named `slow_log` is refused on MySQL and MariaDB. For `pg_settings` the message ends "To read one setting, run SHOW with its name."
+
+### "A name before a dot is read as that schema, so an alias named `sys` needs another name"
+
+On MySQL and MariaDB `mysql.` and `sys.` are read as those schemas wherever they stand outside a single-quoted string. An alias cannot be told from a schema, so `FROM users sys ... sys.id` is refused. Give the alias another name. A double-quoted string that holds `mysql.` or `sys.` is refused too, with a sentence of its own: MySQL reads double-quoted text as a name when the session's sql_mode holds `ANSI_QUOTES`. Write it in single quotes.
+
+### "That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES"
+
+On MySQL and MariaDB a backslash in a string is an escape, unless the session's sql_mode holds `NO_BACKSLASH_ESCAPES`. `rails_query` does not read the session's mode, so it checks the statement under both readings and refuses it when either one does. This message ends a refusal that the second reading alone gives: with `\'` read as a backslash and the end of the string, the text after it is code. Write a quote inside a string doubled (`'it''s'`), so that both readings agree.
+
+### "Blocked: the setting ... is not read", "Blocked: SHOW ALL is not run" and "Blocked: SHOW takes a setting's plain name on PostgreSQL"
+
+On PostgreSQL `rails_query` reads one setting at a time, by its plain name: `SHOW work_mem`. `SHOW ALL` and a quoted name (`SHOW "work_mem"`) are refused. Six settings can hold a password or a command line that carries one and are refused: `primary_conninfo`, `ssl_passphrase_command`, `archive_command`, `restore_command`, `archive_cleanup_command` and `recovery_end_command`. So is a setting whose own name reads as a secret, such as `app.jwt_secret`.
+
+### "Blocked: current_setting runs only with the setting's name written as one plain string"
+
+Write the name as one string: `current_setting('work_mem')`. A name built by an expression, read from a column or written as an `E''` or dollar-quoted string is refused, since the gate could not read which setting comes back.
+
+### "Blocked: a quoted name is followed by a parenthesis"
+
+A function called by a quoted name (`"upper"('x')`, `` `sleep`(0) ``) is refused on every database, since the checks read a function's name to decide whether it runs. Write the name without quotes. A function whose name needs quotes, such as a mixed-case one on PostgreSQL, cannot be called through `rails_query`.
+
+### "Blocked: EXPLAIN FOR CONNECTION is not run"
+
+On MySQL and MariaDB `EXPLAIN FOR CONNECTION` shows the plan of the statement another session is running, so it is refused. `EXPLAIN` of a statement of your own runs.
+
+### "The columns of the <name> database could not be read"
+
+The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is a few statements whatever the number of tables, six at most, so an account that cannot read the catalogue cannot use `rails_query`.
+
+### "The database is locked by another connection, so the query did not run"
+
+Another connection holds a lock on the SQLite database, such as a write transaction left open in a console. Nothing ran. End that transaction and run the query again. The query waits on a lock for 80% of `query_timeout` before it answers this. A lock met while the connection opens, as on the CLI or on a server's first call, gets the same answer.
+
+### "The reads rails_query makes before a statement ... took the whole <N> second timeout"
+
+Before a statement runs, `rails_query` reads the columns of the schema and, on PostgreSQL, the statement's plan. Those reads share one `query_timeout`, and here they used all of it, so the statement was not run. A table another session has locked is the usual cause. Run the query again when the lock is gone, or raise `config.query_timeout`. "The statement ran, and the read that traces its result columns ..." is the same limit met after the statement: its rows are not shown.
 
 ### "Column values show [FILTERED]"
 
-Columns whose names look sensitive are redacted, and a query that names one is rejected with "Blocked: query references sensitive column". Shortening `config.query_redacted_columns` does not lift either, because a built-in list applies as well. Exempt a column of your own by name:
+Columns whose names look secret are redacted, and a query that names one is rejected with "Blocked: query references secret column `x`." followed by what to do. Shortening `config.query_redacted_columns` does not lift either, because a built-in list applies as well. Exempt a column of your own by name:
 
 ```ruby
 config.query_allowed_columns = %w[secret]
@@ -335,7 +422,8 @@ The file is read from the app root, once, at boot, and an initializer does not r
 
 1. You are inside the app, or passed `--app-path`. A command run from a subdirectory reads the config of the app root it walks up to, and names it on stderr.
 2. The key is one the gem knows. An unknown key warns on stderr and is ignored.
-3. The file is readable and parses. Corrupted YAML degrades gracefully with a warning.
+3. The file holds `key: value` settings. A file that holds a bare string, a list or a number is ignored with "WARNING: <path>: the file holds no `key: value` settings. Ignored."
+4. The file is readable and parses. Corrupted YAML degrades gracefully with a warning.
 
 ---
 

@@ -4,6 +4,7 @@ module RailsAiContext
   module Tools
     class GetApi < BaseTool
       tool_name "rails_get_api"
+      section_renderer!
       description "Returns the app's API layer: api_only mode, serialization strategy (Jbuilder templates, " \
         "serializer classes), GraphQL schema size, API versioning, rate limiting, CORS origins, pagination gems, " \
         "and OpenAPI specs. " \
@@ -16,12 +17,6 @@ module RailsAiContext
         properties: {
           detail: RailsAiContext::DetailLevel.schema("Level of detail: summary (one-liner), standard (per-area breakdown), full (+ OpenAPI spec files, API client codegen, GraphQL resolvers/subscriptions/dataloaders)")
         }
-      )
-
-      guide_row(
-        order: 30,
-        mcp: "rails_get_api",
-        summary: "API layer: api_only mode, serializers, GraphQL, versioning, rate limiting, CORS, pagination"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)

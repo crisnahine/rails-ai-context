@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
     # COUNT(*) read every SQLite table whole on each introspection; the count
     # now stops at the cap, and a table past it is a floor.
     it "counts a SQLite table only up to the cap" do
-      stub_const("#{described_class}::SQLITE_COUNT_CAP", 2)
+      stub_const("RailsAiContext::DatabaseFamily::SqliteRuntime::COUNT_CAP", 2)
       connection = ActiveRecord::Base.connection
       connection.create_table(:ds_counted, force: true) { |t| t.string :name }
       3.times { |i| connection.execute("INSERT INTO ds_counted (name) VALUES ('row #{i}')") }
@@ -87,6 +87,12 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
 
       expect(queries).not_to be_empty
       expect(queries).to all(satisfy { |sql| !sql.include?("pg_total_relation_size") })
+    end
+
+    it "says row estimates are not available on an adapter with no family" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
+
+      expect(introspector.call).to eq(skipped: true, reason: "Row estimates are not available for the SQLServer adapter")
     end
 
     it "collects PostgreSQL stats for the PostGIS adapter" do

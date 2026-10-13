@@ -6,17 +6,14 @@ require "zeitwerk"
 # boot that copy is the one on the load path.
 require "logger"
 
-# Introspectors and tools lean on ActiveSupport's core extensions (camelize,
-# underscore, deep_dup, presence, ...) without requiring them individually.
-# In runtime tier that's harmless - booting the host Rails app loads all of
-# ActiveSupport as a side effect before any of this code runs. In static
-# tier nothing boots Rails, so those methods are only defined by accident of
-# which introspector happens to run first. Requiring them here up front
-# makes both tiers behave the same regardless of load order.
+# The static tier boots no Rails, so the core extensions the gem leans on load here.
+# active_support first: on 7.1 array/conversions calls ActiveSupport.deprecator as it loads.
+require "active_support"
 require "active_support/core_ext/string/inflections"
 require "active_support/core_ext/string/filters"
 require "active_support/core_ext/object/deep_dup"
 require "active_support/core_ext/object/blank"
+require "active_support/core_ext/array/conversions"
 
 # Same reason, for two stdlib constants. `Set` is autoloaded on newer Rubies
 # and not on the oldest one supported here; `Date` is never autoloaded. Both

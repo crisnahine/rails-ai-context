@@ -3,7 +3,7 @@
 module RailsAiContext
   module Introspectors
     # Every ENV name the app's source reads, file by file: the one scan behind
-    # `rails_get_env` and the context file's `env` section, so the two agree.
+    # rails_get_config's env section and the context file's `env` section, so the two agree.
     #
     # ENV is read from more than Ruby (database.yml ERB, rake, views). A `sensitive_patterns`
     # file is skipped, except config YAML, whose ERB gives names only, never defaults.

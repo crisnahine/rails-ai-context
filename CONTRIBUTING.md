@@ -20,7 +20,7 @@ The test suite uses [Combustion](https://github.com/pat/combustion) to boot a mi
 lib/rails_ai_context/
 ├── cli/               # CLI tool runner (tool_runner.rb) - executes MCP tools from rake/Thor
 ├── introspectors/     # 40 introspectors (schema, models, routes, etc.)
-├── tools/             # 45 MCP tools with detail levels and pagination
+├── tools/             # 35 MCP tools with detail levels and pagination
 ├── serializers/       # Per-assistant formatters + shared ToolGuideHelper
 ├── server.rb          # MCP server setup (stdio + HTTP)
 ├── live_reload.rb     # MCP live reload (file watcher + cache invalidation)
@@ -81,6 +81,35 @@ bundle exec rspec              # Full test suite
 bundle exec rspec spec/lib/    # Just lib specs
 bundle exec rubocop --parallel # Lint check
 ```
+
+### Real database servers
+
+The suite runs on SQLite. `spec/lib/rails_ai_context/database_family/database_servers_spec.rb`
+runs the PostgreSQL, MySQL and MariaDB families against real database servers, one group
+per URL that is set. `spec/lib/rails_ai_context/tools/query_postgresql_spec.rb` and
+`query_mysql_spec.rb` beside it run `rails_query` end to end on the same URLs.
+`spec/lib/rails_ai_context/app_databases_servers_spec.rb` leases a MySQL and a MariaDB
+database by name, and runs with `RAC_TEST_MYSQL_URL` and `RAC_TEST_MARIADB_URL`:
+
+| Variable | Database server | Example |
+|---|---|---|
+| `RAC_TEST_PG_URL` | PostgreSQL | `postgresql://postgres:secret@127.0.0.1:5432/rac` |
+| `RAC_TEST_MYSQL_URL` | MySQL, through mysql2 or Trilogy | `trilogy://root:secret@127.0.0.1:3306/rac` |
+| `RAC_TEST_MARIADB_URL` | MariaDB, through mysql2 or Trilogy | `trilogy://root:secret@127.0.0.1:3307/rac` |
+
+The URL's scheme picks the adapter. The drivers come from a separate Gemfile:
+
+```bash
+docker run -d --name rac-mysql -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=rac -p 3306:3306 mysql:8.4
+BUNDLE_GEMFILE=gemfiles/database_servers.gemfile bundle install
+RAC_TEST_MYSQL_URL=trilogy://root:secret@127.0.0.1:3306/rac \
+  BUNDLE_GEMFILE=gemfiles/database_servers.gemfile bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb
+```
+
+The specs create and drop tables and views whose names start with `rac_`, so point them at a scratch database.
+CI's `database_servers` job runs them on PostgreSQL 16 in every leg. Rails 8.0 runs two legs: MySQL 8.0 with MariaDB 10.6, and MySQL 8.4 with MariaDB 11.4. Rails 7.0 runs MySQL 8.0 with MariaDB 10.6, and Rails 8.1 runs MySQL 8.4 with MariaDB 11.4.
+Rails 7.0 has no Trilogy adapter, so its leg runs PostgreSQL and mysql2 only.
+The job builds mysql2 against MariaDB's client library (`libmariadb-dev`, through `BUNDLE_BUILD__MYSQL2`), which signs in to MySQL and to MariaDB. A MySQL client from 9.0 on cannot sign in to MariaDB.
 
 ### Static fixture
 

@@ -220,7 +220,7 @@ RSpec.describe RailsAiContext::Doctor do
       it "runs a database task at the app's root, and names the files it reports from there" do
         doctor = described_class.new(Rails.application, from: inside)
         config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/x.sqlite3" })
-        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
+        allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: RailsAiContext::AppDatabases::Missing.new("no") } ])
 
         expect(doctor.send(:check_pending_migrations)).to have_attributes(
           message: "the #{Rails.env} database storage/x.sqlite3 does not exist",
@@ -2260,7 +2260,7 @@ RSpec.describe RailsAiContext::Doctor do
 
         it "names a SQLite database the dummy app reads from its root under test/dummy" do
           config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", { adapter: "sqlite3", database: "storage/development.sqlite3" })
-          allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: ActiveRecord::NoDatabaseError.new("no") } ])
+          allow(doctor).to receive(:database_states).and_return([ { name: "primary", config: config, error: RailsAiContext::AppDatabases::Missing.new("no") } ])
 
           expect(doctor.send(:check_pending_migrations)).to have_attributes(
             message: "the #{Rails.env} database test/dummy/storage/development.sqlite3 does not exist",
@@ -2396,10 +2396,13 @@ RSpec.describe RailsAiContext::Doctor do
       write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n  analytics:\n    adapter: sqlite3\n    " \
                                    "database: db/analytics.sqlite3\n    migrations_paths: db/analytics_migrate\n")
       write("db/analytics_migrate/20240101000000_create_events.rb", "class CreateEvents < ActiveRecord::Migration[7.1]\nend\n")
-      analytics = database_named("analytics", File.join(@root, "db/analytics.sqlite3"))
-      allow(ActiveRecord::Base.configurations).to receive(:configs_for).and_call_original
-      allow(ActiveRecord::Base.configurations).to receive(:configs_for).with(env_name: Rails.env)
-        .and_return([ ActiveRecord::Base.connection_db_config, analytics ])
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                       "analytics" => { adapter: "sqlite3", database: File.join(@root, "db/analytics.sqlite3"),
+                                        migrations_paths: "db/analytics_migrate" } }
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+      allow(Rails).to receive(:root).and_return(Pathname.new(@root))
     end
 
     it "reads a pending migration in a secondary database, and writes nothing to it" do
@@ -2430,6 +2433,15 @@ RSpec.describe RailsAiContext::Doctor do
       expect(File.exist?(File.join(@root, "db/analytics.sqlite3"))).to be(false)
     end
 
+    # Its database.yml is read as text, and the booted app's connection is another app's.
+    it "skips the check for an app that is not the booted one, and connects to none of its databases" do
+      write("config/database.yml", "#{Rails.env}:\n  primary:\n    adapter: sqlite3\n    database: db/app.sqlite3\n")
+      write("db/migrate/20240101000000_create_notes.rb", "class CreateNotes < ActiveRecord::Migration[7.1]\nend\n")
+
+      expect(app_doctor.run[:checks].map(&:name)).not_to include("Pending migrations", "Database")
+      expect(File.exist?(File.join(@root, "db/app.sqlite3"))).to be(false)
+    end
+
     # A Windows path is absolute from its drive letter on, and read as
     # relative it was named from where doctor was typed.
     it "names a SQLite file given by a Windows path as database.yml gives it" do
@@ -2451,7 +2463,7 @@ RSpec.describe RailsAiContext::Doctor do
 
     # The pending row used to vanish with no database, so --strict passed.
     it "fails, naming a database that does not exist and the command that makes it" do
-      check = unreachable(ActiveRecord::NoDatabaseError.new("Database not found: shop_development"))
+      check = unreachable(RailsAiContext::AppDatabases::Missing.new("Database not found: shop_development"))
 
       expect(check).to have_attributes(name: "Database", status: :fail, message: "the #{Rails.env} database shop_development does not exist",
                                        fix: "Run `RAILS_ENV=#{Rails.env} bin/rails db:prepare`")
@@ -2472,7 +2484,7 @@ RSpec.describe RailsAiContext::Doctor do
     it "runs the task in the app, and names its settings from where it was typed" do
       above = described_class.new(RailsAiContext::StaticApp.new(@root), from: File.dirname(@root))
       allow(above).to receive(:database_states).and_return([
-        { name: "primary", config: database_named("primary", "shop_development"), error: ActiveRecord::NoDatabaseError.new("no") },
+        { name: "primary", config: database_named("primary", "shop_development"), error: RailsAiContext::AppDatabases::Missing.new("no") },
         { name: "queue", config: database_named("queue", "shop_queue"), error: ActiveRecord::ConnectionNotEstablished.new("refused") }
       ])
       app_dir = File.basename(@root)
@@ -2480,6 +2492,35 @@ RSpec.describe RailsAiContext::Doctor do
       expect(above.send(:check_pending_migrations).fix).to eq(
         "Run `cd #{app_dir} && RAILS_ENV=#{Rails.env} bin/rails db:prepare`; " \
         "Start the database server, or fix its settings in #{app_dir}/config/database.yml"
+      )
+    end
+
+    # A test environment often keeps a secondary in memory, which only the app's own process holds.
+    def with_database_here(name, settings)
+      other = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, name, settings)
+      list = RailsAiContext::AppDatabases.build(
+        environments: { Rails.env => { "primary" => ActiveRecord::Base.connection_db_config, name => other } },
+        current: Rails.env, root: Rails.root.to_s, dumps: []
+      )
+      allow(RailsAiContext::AppDatabases).to receive(:for).and_return(list)
+    end
+
+    it "leaves a database that lives in memory out of the databases it reads" do
+      with_database_here("cache", { adapter: "sqlite3", database: ":memory:" })
+
+      checks = doctor.run[:checks]
+
+      expect(checks.find { |check| check.name == "Pending migrations" }).to have_attributes(status: :pass)
+      expect(checks.map(&:name)).not_to include("Database")
+    end
+
+    it "says which gem to add for a database whose adapter is not in the bundle" do
+      with_database_here("warehouse", { adapter: "sqlserver", database: "warehouse" })
+
+      expect(doctor.run[:checks].find { |check| check.name == "Database" }).to have_attributes(
+        status: :fail,
+        message: "the #{Rails.env} database warehouse (warehouse) cannot be reached: its sqlserver adapter did not load",
+        fix: "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`"
       )
     end
   end

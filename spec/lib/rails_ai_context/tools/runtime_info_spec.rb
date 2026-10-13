@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 require "active_support/number_helper"
 
 RSpec.describe RailsAiContext::Tools::RuntimeInfo do
@@ -43,6 +44,12 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       text = described_class.call(section: "database").content.first[:text]
 
       expect(text).to include("**Adapter:** PostgreSQL")
+    end
+
+    it "names a Trilogy connection MySQL" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+
+      expect(described_class.call(section: "database").content.first[:text]).to include("**Adapter:** MySQL")
     end
 
     it "shows database section" do
@@ -184,38 +191,113 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
         expect(text).not_to include("=>")
       end
     end
+
+    # Solid Cache answers #stats from its database, and SQLite creates the file a connection asks for.
+    describe "a Solid Cache store whose SQLite file is missing" do
+      around do |example|
+        Dir.mktmpdir do |dir|
+          @file = File.join(dir, "production_cache.sqlite3")
+          example.run
+        end
+      end
+
+      before do
+        record = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+        stub_const("SolidCache::Record", record)
+        record.establish_connection(ActiveRecord::DatabaseConfigurations::HashConfig.new("test", "cache", adapter: "sqlite3", database: @file))
+        store = Class.new do
+          def with_each_connection = yield
+          def stats = { entries: SolidCache::Record.connection_pool.with_connection { |c| c.select_value("SELECT 1") } }
+        end
+        stub_const("SolidCache::Store", store)
+        allow(Rails).to receive(:cache).and_return(store.new)
+      end
+
+      after { ActiveRecord::Base.connection_handler.remove_connection_pool("SolidCache::Record") }
+
+      it "says the database does not exist yet and creates nothing" do
+        text = described_class.call(section: "cache").content.first[:text]
+
+        expect(File.exist?(@file)).to be(false)
+        expect(text).to include("**Store:** SolidCache::Store, this MCP server process's `Rails.cache`")
+        expect(text).to include("The cache database does not exist yet: its SQLite file #{@file} is not there, and nothing was created.")
+      end
+
+      it "reads the stats once the file is there" do
+        File.write(@file, "")
+
+        expect(described_class.call(section: "cache").content.first[:text]).to include("entries: 1")
+      end
+    end
   end
 
-  describe ".gather_table_sizes (private)" do
-    # Rails 8's default MySQL adapter reports adapter_name "Trilogy", not
-    # "Mysql2" - matching only /mysql/ here would silently drop table sizes
-    # for every Trilogy app (returns nil instead of querying INFORMATION_SCHEMA).
-    it "queries INFORMATION_SCHEMA.TABLES for the trilogy adapter" do
-      conn = double("connection")
-      allow(conn).to receive(:select_all)
-        .with(a_string_matching(/INFORMATION_SCHEMA\.TABLES/))
-        .and_return([ { "name" => "products", "bytes" => 1024 } ])
-
-      result = described_class.send(:gather_table_sizes, conn, "trilogy")
-      expect(result).to eq([ { name: "products", bytes: 1024 } ])
+  describe "table sizes" do
+    def database_section
+      described_class.call(section: "database").content.first[:text]
     end
 
-    it "reads PostgreSQL's table sizes for the PostGIS adapter" do
-      conn = double("connection")
-      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_bytes).with(conn)
-        .and_return([ { name: "parcels", bytes: 8192 } ])
+    it "shows the family's table sizes in its order" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:table_sizes)
+        .and_return([ { name: "users", bytes: 16384 }, { name: "comments", bytes: 8192 }, { name: "posts", bytes: 8192 } ])
 
-      expect(described_class.send(:gather_table_sizes, conn, "postgis")).to eq([ { name: "parcels", bytes: 8192 } ])
+      expect(database_section.scan(/^\| (\w+) \|/).flatten).to eq(%w[Table users comments posts])
     end
 
-    it "lists equally large PostgreSQL tables by name" do
-      conn = double("connection")
-      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_bytes).with(conn)
-        .and_return([ { name: "posts", bytes: 8192 }, { name: "comments", bytes: 8192 }, { name: "users", bytes: 16384 } ])
+    it "reads table sizes, index usage and pending migrations under the family's limit, at query_timeout" do
+      RailsAiContext.configuration.query_timeout = 3
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:bounded).and_call_original
 
-      expect(described_class.send(:gather_table_sizes, conn, "postgresql").map { |r| r[:name] }).to eq(%w[users comments posts])
+      described_class.call(section: "database", detail: "full")
+
+      expect(RailsAiContext::DatabaseFamily::SqliteRuntime).to have_received(:bounded).with(ActiveRecord::Base.connection, 3).at_least(3).times
+    ensure
+      RailsAiContext.configuration.query_timeout = 5
+    end
+
+    it "leaves the table sizes out when their read times out, and still answers" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:table_sizes).and_raise(ActiveRecord::QueryCanceled, "stopped")
+
+      expect(database_section).to include("**Adapter:** SQLite")
+      expect(database_section).not_to include("### Table Sizes")
+    end
+
+    it "asks the MySQL family on a Trilogy connection" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:table_sizes).and_return([ { name: "products", bytes: 1024 } ])
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
+
+      expect(database_section).to include("| products | 1 KB |")
+    end
+
+    it "says index usage is not available where the database family keeps none" do
+      expect(described_class.call(section: "database", detail: "full").content.first[:text])
+        .to include("_Index usage is not available for the SQLite database family._")
+
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:table_sizes).and_return([])
+      allow(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:bounded) { |_connection, _timeout, &reads| reads.call }
+
+      expect(described_class.call(section: "database", detail: "full").content.first[:text])
+        .to include("_Index usage is not available for the MySQL database family._")
+      expect(database_section).not_to include("Index usage")
+    end
+
+    it "says nothing of index usage when reading it failed" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:index_usage).and_raise(ActiveRecord::StatementInvalid, "boom")
+
+      expect(described_class.call(section: "database", detail: "full").content.first[:text]).not_to include("Index usage", "Index Usage")
+    end
+
+    it "says table sizes and index usage are not available on an adapter with no family" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
+
+      text = described_class.call(section: "database", detail: "full").content.first[:text]
+
+      expect(text).to include("**Adapter:** SQLServer")
+      expect(text).to include("Table sizes and index usage are not available for the SQLServer adapter")
     end
   end
+
   # SQLite reports no table sizes, so this is the only reachable seam for the
   # byte labels the database section prints.
   describe "index usage" do
@@ -227,7 +309,7 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
         { table: "posts", index: "index_posts_on_slug", scans: 0 }
       ])
 
-      expect(described_class.send(:gather_index_usage, conn, "postgresql").map { |i| i[:index] })
+      expect(RailsAiContext::DatabaseFamily::POSTGRESQL.index_usage(conn).map { |i| i[:index] })
         .to eq(%w[index_comments_on_post_id index_posts_on_slug index_posts_on_title])
     end
 

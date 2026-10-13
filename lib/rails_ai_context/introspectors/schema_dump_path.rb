@@ -20,24 +20,22 @@ module RailsAiContext
         end
       end
 
-      # Each secondary database's dump by its database.yml name, as schema_dump_path names it:
-      # its schema_dump, else <name>_schema.rb or <name>_structure.sql in its format.
-      def secondaries(root)
-        root = root.to_s
-        RailsAiContext::RunCache.fetch([ :secondary_schema_dumps, root ]) do
-          RailsAiContext::DatabaseYml.task_secondaries(root).each_with_object({}) do |(name, entry), found|
-            format = schema_format(root, entry)
-            dump = entry.key?("schema_dump") ? configured(root, entry, format) : [ format, File.join(root, "db", "#{name}_#{FILE_NAMES[format]}") ]
-            found[name] = dump if dump
-          end
-        end
+      # A secondary database's dump: the file schema_dump_path names (its schema_dump, else <name>_schema.rb or
+      # <name>_structure.sql in its format) when on disk, else a file under its name in either format. nil for none.
+      def secondary(root, name, config)
+        format = schema_format(root, config)
+        own = configured(root, config, format) if config.key?("schema_dump")
+        # Rails gives an entry named primary the unprefixed file wherever it stands.
+        named = [ format, *(FILE_NAMES.keys - [ format ]) ].map { |f| [ f, File.join(root, "db", "#{"#{name}_" unless name == "primary"}#{FILE_NAMES[f]}") ] }
+        [ own, *named ].compact.find { |_, path| File.exist?(path) } || (config.key?("schema_dump") ? own : named.first)
       end
 
-      # The database a dump belongs to: the secondary whose dump it is, else the one its file name says.
+      # The database a dump belongs to: the app database whose dump it is, else the one its file name says.
+      # No dump is the primary's.
       def database_name(root, dump_path)
-        return "primary" if dump_path.nil?
+        return RailsAiContext::AppDatabases.for(root).primary&.name || "primary" if dump_path.nil?
 
-        named = secondaries(root).find { |_, (_, path)| path == dump_path.to_s }&.first
+        named = RailsAiContext::AppDatabases.for(root).find_by_dump(dump_path)&.name
         named || File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "").then { |name| name.empty? ? "primary" : name }
       end
 

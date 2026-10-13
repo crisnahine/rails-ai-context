@@ -277,12 +277,13 @@ Proof sources:
    In the v5.33.0 release QA: the release gem in a fresh app on Ruby 3.1 with
    Rails 7.0 and 7.1, Ruby 3.2 with Rails 8.0, and Rails 8.1 on Ruby 3.3, 3.4
    and 4.0, each through the standalone and in-Gemfile installs, the rake
-   tasks and all 45 tools over MCP stdio; a Rails 8.1 app reached through a
-   symlinked path, as macOS spells its temporary folders; a Rails 8.1 and a
-   Rails 7.0 app mounting the engine, six clients calling while a model
-   changed every 0.3 seconds; the pre-commit hook installed and run by real
-   commits in an app's own repository, a monorepo's folder and a submodule;
-   and the unit suite and the E2E harness on Linux, macOS and Windows.
+   tasks and all 45 of that release's tools over MCP stdio; a Rails 8.1 app
+   reached through a symlinked path, as macOS spells its temporary folders; a
+   Rails 8.1 and a Rails 7.0 app mounting the engine, six clients calling
+   while a model changed every 0.3 seconds; the pre-commit hook installed and
+   run by real commits in an app's own repository, a monorepo's folder and a
+   submodule; and the unit suite and the E2E harness on Linux, macOS and
+   Windows.
    In the v5.34.0 release QA: the 21 apps of the v5.33.0 acceptance run
    (Mastodon, OpenProject, Discourse, Canvas, Forem, Whitehall, Consul, Open
    Food Network, Diaspora, Errbit, Huginn, Plots2, a private app and the small
@@ -303,6 +304,14 @@ Proof sources:
    private production app; each AI tool's MCP config started the way its
    client starts it; and the unit suite and the E2E harness on Linux, macOS
    and Windows.
+   In the v5.35.1 release QA: `rails_query` through its tool call on real
+   PostgreSQL 16, MySQL 8.0 and 8.4 and MariaDB 10.6 and 11.4 servers, through
+   mysql2 and Trilogy, on Rails 7.0, 8.0 and 8.1, now a CI job of its own;
+   files of statements sent through the tool on each server and on SQLite
+   before and after each fix, with every changed answer traced to its fix;
+   the tool's own checks timed on Ruby 3.4 for statements up to a megabyte
+   and on Ruby 3.1 for statements of 50 kilobytes; and the unit suite and the
+   E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
@@ -332,12 +341,24 @@ Proof sources:
    in `spec/lib/rails_ai_context/introspectors/static_tier_declarations_spec.rb`.
    `Introspector#run_introspector` reports `{ unavailable: reason }` only for
    the eight runtime-only sections, regardless of shape.
-9. `spec/e2e/empty_app_spec.rb` - all 45 built-in tools swept against an app
+9. `spec/e2e/empty_app_spec.rb` - all 35 built-in tools swept against an app
    with no scaffold, no models, no controllers beyond
    `ApplicationController`, no routes beyond root.
 10. `spec/e2e/massive_app_spec.rb` - `schema`, `model_details`, and `routes`
-    (plus `context`, `onboard`, `analyze_feature`, `get_turbo_map`, `get_env`)
+    (plus `context`, `onboard`, `analyze_feature`, `get_turbo_map` and the
+    `env` section of `get_config`)
     sampled against 500 generated models/tables under a 180-second cap.
+
+`rails_query`, `rails_runtime_info` and the row estimates run on three
+database families: PostgreSQL (with PostGIS), MySQL (mysql2 and Trilogy, with
+MariaDB) and SQLite. `rails_query` refuses any other adapter (SQL Server,
+Oracle, CockroachDB) by name before sending a statement, and the table sizes,
+row estimates and index usage say they are not available there. CI's
+`database_servers` job runs the families against PostgreSQL 16, MySQL 8.0 and
+8.4 and MariaDB 10.6 and 11.4 on Rails 8.0, through mysql2 and Trilogy. It also
+runs PostgreSQL 16 with MySQL 8.0 and MariaDB 10.6 on Rails 7.0, which has no
+Trilogy adapter, and with MySQL 8.4 and MariaDB 11.4 on Rails 8.1; see
+[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-servers).
 
 Postgres itself - live query safety (read-only transactions, the
 `BLOCKED_FUNCTIONS` guard against `pg_read_file`/`dblink`/`COPY ... PROGRAM`,

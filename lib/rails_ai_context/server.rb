@@ -51,13 +51,35 @@ module RailsAiContext
       @transport_type = transport
     end
 
-    # Resolve config.custom_tools into MCP::Tool classes. Entries may be
-    # classes or class-name strings: classes in app/ (e.g. app/mcp_tools/)
-    # are not autoloadable while config/initializers run, so referencing the
-    # constant there aborts boot - a string name defers resolution to here,
-    # where autoloading is ready. Invalid entries are warn-skipped so one bad
-    # entry cannot take down every tool invocation.
+    # config.custom_tools as MCP::Tool classes, once per run. A class-name string waits for
+    # autoloading, which config/initializers lacks; an entry that does not load is skipped with a warning.
     def self.resolve_custom_tools(config = RailsAiContext.configuration)
+      key = custom_tools_key(config)
+      given_key, given = Thread.current[GIVEN_CUSTOM_TOOLS]
+      return given if given_key == key
+
+      RunCache.fetch(key) { load_custom_tools(config) }
+    end
+
+    GIVEN_CUSTOM_TOOLS = :rails_ai_context_given_custom_tools
+    private_constant :GIVEN_CUSTOM_TOOLS
+
+    # A run that reads these as the custom tools: the list its caller already resolved.
+    # Held beside the run, since a tool call empties the run once it has checked the files.
+    def self.with_custom_tools(tools, config = RailsAiContext.configuration)
+      outer = Thread.current[GIVEN_CUSTOM_TOOLS]
+      Thread.current[GIVEN_CUSTOM_TOOLS] = [ custom_tools_key(config), tools ]
+      RunCache.around { yield }
+    ensure
+      Thread.current[GIVEN_CUSTOM_TOOLS] = outer
+    end
+
+    def self.custom_tools_key(config)
+      [ :custom_tools, config.custom_tools.dup ]
+    end
+    private_class_method :custom_tools_key
+
+    def self.load_custom_tools(config)
       config.custom_tools.filter_map do |entry|
         tool = entry
         if tool.is_a?(String)
@@ -99,10 +121,35 @@ module RailsAiContext
         end
       end
     end
+    private_class_method :load_custom_tools
 
-    # The built-in tools skip_tools turned off.
+    # The built-in tools skip_tools turned off, a retired config section's name
+    # among them unless a custom tool took rails_get_config's place.
     def self.skipped_tools(config = RailsAiContext.configuration)
-      config.skip_tools & builtin_tools.map(&:tool_name)
+      RunCache.around do
+        names = builtin_tools.map(&:tool_name)
+        names |= Tools::GetConfig::SECTIONS.map(&:tool_name) unless get_config_replaced?(config)
+        config.skip_tools.select { |name| names.include?(name) && skipped?(name, config) }.uniq
+      end
+    end
+
+    # rails_get_config is off once skip_tools turns every section off, or
+    # lists it while a custom tool claims the name.
+    def self.skipped?(name, config = RailsAiContext.configuration)
+      return config.skip_tools.include?(name) unless name == "rails_get_config"
+
+      Tools::GetConfig.sections_on(config).empty? || get_config_replaced?(config)
+    end
+
+    def self.get_config_replaced?(config)
+      config.skip_tools.include?("rails_get_config") &&
+        resolve_custom_tools(config).any? { |tool| tool_label(tool) == "rails_get_config" }
+    end
+    private_class_method :get_config_replaced?
+
+    # The retired config tool names a call still reaches, which a suggestion may name.
+    def self.retired_names(config = RailsAiContext.configuration)
+      Tools::GetConfig::SECTIONS.select { |section| !section.app? && section.served?(config) }.map(&:tool_name)
     end
 
     # One answer, on every surface, for a call naming a tool skip_tools
@@ -114,9 +161,9 @@ module RailsAiContext
     end
 
     # The SDK's "Tool not found" named only the guess. The nearest tools
-    # follow it, or every tool when none is near.
+    # follow it, a retired name among them, or every tool when none is near.
     def self.unknown_tool_message(tool_name, names)
-      near = Tools::BaseTool.find_closest_matches(tool_name.to_s, names) - [ tool_name.to_s ]
+      near = Tools::BaseTool.find_closest_matches(tool_name.to_s, names | retired_names) - [ tool_name.to_s ]
       head = "Tool not found: #{Tools::BaseTool.echo_input(tool_name)}."
       near.any? ? "#{head} Did you mean #{near.first(3).join(', ')}?" : "#{head} The tools are: #{names.sort.join(', ')}."
     end
@@ -136,15 +183,42 @@ module RailsAiContext
     # context files count and list this set, so they name no tool the
     # server lacks and leave out none it serves.
     def self.exposed_tools(config = RailsAiContext.configuration)
-      merge_tools(active_tools(config), resolve_custom_tools(config), warn: false)
+      RunCache.around { merge_tools(active_tools(config), resolve_custom_tools(config), warn: false) }
     end
+
+    # The tool served under this name, or nil, loading only that class: a registered tool,
+    # then a custom tool, then the renderer of the config section a retired name stands for.
+    def self.served_tool(name, config = RailsAiContext.configuration)
+      name = name.to_s
+      RunCache.around do
+        custom = resolve_custom_tools(config)
+        builtin = builtin_tool(name) unless skipped?(name, config)
+        builtin || custom.find { |tool| tool_label(tool) == name } || retired_renderer(name, config)
+      end
+    end
+
+    def self.retired_renderer(name, config)
+      section = Tools::GetConfig.retired_section(name)
+      section.renderer if section&.served?(config)
+    end
+    private_class_method :retired_renderer
+
+    def self.builtin_tool(name)
+      tool = Tools::BaseTool.tool_class(name)
+      return tool if tool.is_a?(Class) && tool < Tools::BaseTool && !tool.abstract? && tool.tool_name == name
+
+      # An app's BaseTool subclass registers itself wherever it is defined.
+      loaded = Tools::BaseTool.registry_mutex.synchronize { Tools::BaseTool.descendants.dup }
+      loaded.find { |registered| !registered.abstract? && registered.tool_name.to_s == name }
+    end
+    private_class_method :builtin_tool
 
     def self.active_tools(config)
       tools = builtin_tools
       skip = config.skip_tools
       return tools if skip.empty?
 
-      tools.reject { |t| skip.include?(t.tool_name) }
+      tools.reject { |t| skipped?(t.tool_name, config) }
     end
 
     # The MCP SDK refuses a tool list with a repeated name, so one duplicate
@@ -171,7 +245,8 @@ module RailsAiContext
           "keeping the first. Give one of them a different tool_name."
         end
         $stderr.puts "[rails-ai-context] WARNING: #{tools.size} tools claim the name #{name.inspect}; #{advice}" if warn
-        [ tools.first ]
+        # The registry sorts by name, so the gem's own class is not always the first of two.
+        [ tools.find { |tool| tool == Tools::BaseTool.tool_class(name) } || tools.first ]
       end
     end
 
@@ -227,7 +302,11 @@ module RailsAiContext
     def build
       config = RailsAiContext.configuration
 
-      validated_custom_tools = self.class.resolve_custom_tools(config)
+      # One run, so the three lists read one resolution of the custom tools.
+      validated_custom_tools, skipped, tools = RunCache.around do
+        custom = self.class.resolve_custom_tools(config)
+        [ custom, self.class.skipped_tools(config), self.class.merge_tools(self.class.active_tools(config), custom) ]
+      end
 
       mcp_config = MCP::Configuration.new(
         exception_reporter: EXCEPTION_REPORTER,
@@ -235,11 +314,12 @@ module RailsAiContext
       )
 
       server = SdkServer.new(
-        skipped_tools: self.class.skipped_tools(config),
+        skipped_tools: skipped,
+        custom_tools: validated_custom_tools,
         name: self.class.announced_name(config),
         version: config.server_version,
         instructions: self.class.instructions,
-        tools: self.class.merge_tools(self.class.active_tools(config), validated_custom_tools),
+        tools: tools,
         resource_templates: Resources.resource_templates,
         configuration: mcp_config
       )
@@ -291,21 +371,50 @@ module RailsAiContext
     # before the skip, a model's guess - and the SDK answered "Tool not
     # found", a protocol error most clients never show the model.
     class SdkServer < MCP::Server
-      def initialize(skipped_tools: [], **options)
+      def initialize(skipped_tools: [], custom_tools: [], **options)
         @skipped_tools = skipped_tools
+        @custom_tools = custom_tools
         super(**options)
       end
 
       private
 
-      def call_tool(request, ...)
-        name = request[:name]
-        return super if tools.key?(name)
-        return MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h if @skipped_tools.include?(name)
+      # Each call is a new run, and it reads the custom tools this server lists:
+      # resolved again, an entry that does not load would be warned about at every call.
+      def call_tool(request, *rest, **options, &block)
+        Server.with_custom_tools(@custom_tools) do
+          name = request[:name]
+          next super(request, *rest, **options, &block) if tools.key?(name)
+          next skipped_call(name) if @skipped_tools.include?(name)
 
-        add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
-        raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
-                                                   error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
+          section = Tools::GetConfig.retired_section(name)
+          next retired_call(request, section, *rest, **options, &block) if section && tools["rails_get_config"].equal?(Tools::GetConfig)
+
+          add_instrumentation_data(tool_name: name, error: :tool_not_found) if respond_to?(:add_instrumentation_data, true)
+          raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
+                                                     error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
+        end
+      end
+
+      def skipped_call(name)
+        add_instrumentation_data(tool_name: name, error: :tool_skipped) if respond_to?(:add_instrumentation_data, true)
+        MCP::Tool::Response.new([ { type: "text", text: Server.skipped_tool_message(name) } ], error: true).to_h
+      end
+
+      # A tool that became a config section, answered from it with the call to make instead; a refusal ends as it is.
+      def retired_call(request, section, ...)
+        given = request[:arguments] || {}
+        # Arguments that are no object go on as they are, for the SDK to refuse.
+        return call_tool(request.merge(name: "rails_get_config"), ...) unless given.is_a?(Hash)
+
+        arguments = given.transform_keys(&:to_sym).except(:section)
+        refusal = Tools::GetConfig.retired_refusal(section, arguments)
+        return refusal.to_h if refusal
+
+        result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section.name)), ...)
+        return result if result[:isError]
+
+        result.merge(content: Tools::SafeCall.noted(result[:content], Tools::GetConfig.retired_note(section, arguments)))
       end
     end
 
@@ -465,13 +574,18 @@ module RailsAiContext
       RailsAiContext.debug_fail(e, nil, label: "stop_http")
     end
 
+    # rack 3 keeps its handlers in the rackup gem. rack 2 keeps them itself,
+    # with or without rackup 1.x, which loads and defines only its version.
     def default_rack_handler
-      require "rackup"
-      Rackup::Handler.default
-    rescue LoadError
-      # Fallback for older rack without rackup gem
+      begin
+        require "rackup"
+      rescue LoadError
+        nil
+      end
+      return ::Rackup::Handler.default if defined?(::Rackup::Handler)
+
       require "rack/handler"
-      Rack::Handler.default
+      ::Rack::Handler.default
     end
 
     # MCP sessions live in this process's memory, so a forked worker cannot

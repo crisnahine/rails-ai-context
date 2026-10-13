@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+# The suite plus the drivers that reach real database servers. Those specs run only when
+# RAC_TEST_PG_URL, RAC_TEST_MYSQL_URL or RAC_TEST_MARIADB_URL is set; see CONTRIBUTING.md.
+
+source "https://rubygems.org"
+
+gemspec path: ".."
+
+eval_gemfile "rails.gemfile"
+
+gem "pg"
+gem "mysql2"
+gem "trilogy"

@@ -1,0 +1,8 @@
+test:
+  animals:
+    adapter: postgresql
+    database: animals_test
+  primary:
+    adapter: mysql2
+    database: app_test
+    migrations_paths: db/primary_migrate

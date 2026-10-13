@@ -383,7 +383,7 @@ module RailsAiContext
         end
 
         # Cross-reference hints
-        lines << "" << "_Next: `rails_search_code(pattern:\"#{class_name}\")` for all references_"
+        add_next_hint(lines, pointer("rails_search_code", %(pattern:"#{class_name}"), "for all references"))
 
         text_response(lines.join("\n"))
       end

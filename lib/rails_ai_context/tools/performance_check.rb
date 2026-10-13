@@ -38,7 +38,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 26,
+        order: 23,
         mcp: "rails_performance_check(model:\"X\")",
         cli_args: "model=X",
         summary: "N+1 risks, missing indexes, Model.all anti-patterns"
@@ -72,6 +72,12 @@ module RailsAiContext
 
           lines << "**Total issues found:** #{filtered_count}"
           lines << ""
+          unchecked = Array(data[:unchecked_databases])
+          if unchecked.any?
+            said = unchecked.map { |db| "#{db[:name]} (#{[ Payload.named_scope_words(cached_context, db[:name]), db[:reason] ].compact.join(', ')})" }
+            lines << "**Not checked:** #{said.join(', ')}"
+            lines << ""
+          end
 
           if RailsAiContext::DetailLevel.summary?(detail)
             kept.each do |name, items|
@@ -163,6 +169,13 @@ module RailsAiContext
           " (#{item[:controller]}#{action}#{view})"
         end
 
+        # " (queue database)", and where only another environment configures it, " (queue database, production only)".
+        def database_tag(name)
+          return "" unless name
+
+          " (#{[ "#{name} database", Payload.named_scope_words(cached_context, name) ].compact.join(", ")})"
+        end
+
         def render_section(title, items, model_filter, detail)
           return [] unless items&.any?
 
@@ -172,7 +185,7 @@ module RailsAiContext
           lines = [ "## #{title} (#{filtered.size})", "" ]
 
           filtered.each do |item|
-            lines << "- **#{item[:model] || item[:table] || "Unknown"}**"
+            lines << "- **#{item[:model] || item[:table] || "Unknown"}**#{database_tag(item[:database])}"
             lines << "  #{item[:suggestion]}" if item[:suggestion]
             if RailsAiContext::DetailLevel.full?(detail)
               lines << "  Controller: #{item[:controller]}" if item[:controller]

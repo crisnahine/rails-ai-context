@@ -20,6 +20,27 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     RailsAiContext.configuration.app_root = previous_root
   end
 
+  describe "an unexpected exception" do
+    it "is an error result from a trace" do
+      allow(described_class).to receive(:quick_search).and_raise(NoMethodError, "undefined method 'to_sentence' for an instance of Array")
+
+      response = described_class.call(pattern: "published", match_type: "trace")
+
+      expect(response.error?).to be(true), response.content.first[:text]
+      expect(response.content.first[:text]).to start_with("Tool rails_search_code failed: NoMethodError: undefined method 'to_sentence'")
+    end
+
+    it "is an error result from the ripgrep search, and no match row" do
+      allow(described_class).to receive(:ripgrep_available?).and_return(true)
+      allow(described_class).to receive(:linked_trees).and_raise(NoMethodError, "undefined method 'to_sentence' for an instance of Array")
+
+      response = described_class.call(pattern: "published")
+
+      expect(response.error?).to be(true), response.content.first[:text]
+      expect(response.content.first[:text]).to start_with("Tool rails_search_code failed: NoMethodError: undefined method 'to_sentence'")
+    end
+  end
+
   # The fallback searched a list of extensions case-insensitively while
   # ripgrep searched every text file case-sensitively, so one app's answer
   # differed by a factor of seven between the two backends.

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "find"
 require "fileutils"
 require "open3"
@@ -292,12 +293,10 @@ module RailsAiContext
       return @database_states if defined?(@database_states)
 
       @database_states = begin
-        primary = ActiveRecord::Base.connection_db_config.name
-        ActiveRecord::Base.configurations.configs_for(env_name: RailsAiContext.environment_name).map do |db_config|
-          own = db_config.name == primary
-          dirs = own ? primary_migrate_dirs : PendingMigrations.migrate_dirs_of(app.root, db_config.name)
-          { name: db_config.name, config: db_config, **MigrationStatus.of_database(db_config, dirs, primary: own) }
-        end
+        AppDatabases.for(app.root).here.select(&:tasks).map do |db|
+          dirs = db.primary ? primary_migrate_dirs : db.migrate_dirs
+          { name: db.name, config: db.config, **db.pending_migrations(dirs) }
+        end.reject { |state| AppDatabases::NotBooted === state[:error] || AppDatabases::InMemory === state[:error] }
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "database_states")
       end
@@ -305,19 +304,23 @@ module RailsAiContext
 
     def unreachable_database_check(databases, pending)
       env = RailsAiContext.environment_name
-      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(ActiveRecord::NoDatabaseError) }
+      missing, failing = databases.select { |db| db[:error] }.partition { |db| db[:error].is_a?(AppDatabases::Missing) }
       shown = ->(db) { databases.one? ? database_named(db[:config]) : "#{db[:name]} (#{database_named(db[:config])})" }
       said = []
       if missing.any?
         said << "the #{env} #{missing.one? ? "database" : "databases"} #{missing.map(&shown).join(' and ')} " \
                 "#{missing.one? ? "does" : "do"} not exist"
       end
-      failing.each { |db| said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].message)}" }
+      failing.each do |db|
+        said << "the #{env} database #{shown.(db)} cannot be reached: #{first_error_line(db[:error].is_a?(AppDatabases::Unreachable) ? db[:error].reason : db[:error].message)}"
+      end
       said << pending_phrase(pending, databases) if pending.any?
 
       fixes = []
       fixes << "Run `#{database_task("db:prepare")}`#{where_tasks_run}" if missing.any? || pending.any?
-      fixes << "Start the database server, or fix its settings in #{fix_path(File.join(app.root.to_s, "config/database.yml"))}" if failing.any?
+      unloaded, down = failing.partition { |db| db[:error].is_a?(AppDatabases::AdapterMissing) }
+      fixes.concat(unloaded.map { |db| db[:error].advice.chomp(".") }.uniq)
+      fixes << "Start the database server, or fix its settings in #{fix_path(File.join(app.root.to_s, "config/database.yml"))}" if down.any?
       Check.new(name: "Database", status: :fail, message: said.join("; "), fix: fixes.join("; "))
     end
 
@@ -347,10 +350,7 @@ module RailsAiContext
     # the app's root, as the adapter reads it, named from where doctor was typed.
     def database_named(db_config)
       name = db_config.database.to_s
-      return name unless db_config.adapter.to_s == "sqlite3" && !name.empty? && name != ":memory:" &&
-        !name.start_with?("file:") && !SafePath.absolute?(name)
-
-      typed_path(File.expand_path(name, app.root.to_s))
+      DatabaseFile.root_relative?(db_config) ? typed_path(File.expand_path(name, app.root.to_s)) : name
     end
 
     # The primary's migrations directories, and in an engine's test/dummy
@@ -484,9 +484,8 @@ module RailsAiContext
 
     # Each database's migrations directories, by the name database.yml gives it.
     def migration_dirs_by_database
-      primary = DatabaseYml.primary_name(app.root) || "primary"
-      secondaries = DatabaseYml.task_secondaries(app.root).keys.to_h { |name| [ name, PendingMigrations.migrate_dirs_of(app.root, name) ] }
-      { primary => primary_migrate_dirs }.merge(secondaries)
+      databases = AppDatabases.for(app.root)
+      { databases.primary&.name || "primary" => primary_migrate_dirs }.merge(databases.secondaries.to_h { |db| [ db.name, db.migrate_dirs ] })
     end
 
     # ── Context file checks ───────────────────────────────────────────

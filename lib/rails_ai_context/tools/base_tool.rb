@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "time"
 require "did_you_mean"
 
 require "mcp"
@@ -48,6 +49,24 @@ module RailsAiContext
           @abstract == true
         end
 
+        # A class that renders one rails_get_config section: called through
+        # that tool, and so never registered under its own name.
+        def section_renderer!
+          abstract!
+        end
+
+        # The class in Tools a tool name spells, or nil.
+        def tool_class(name)
+          const = name.to_s.delete_prefix("rails_").split("_").map(&:capitalize).join
+          Tools.const_get(const, false) if const.match?(/\A[A-Z]\w*\z/) && Tools.const_defined?(const, false)
+        end
+
+        # Whether the app serves this built-in itself. A custom tool under its
+        # name takes other parameters, so no answer runs it or points at it.
+        def own_served?(tool)
+          !tool.nil? && RailsAiContext::Server.served_tool(tool.tool_name).equal?(tool)
+        end
+
         # Sorted so load order never reaches tool --list or tools/list.
         def registered_tools
           eager_load!
@@ -69,6 +88,9 @@ module RailsAiContext
       # Shared cache across all tool subclasses, protected by a Mutex
       # for thread safety in multi-threaded servers (e.g., Puma).
       SHARED_CACHE = { mutex: Mutex.new }
+
+      # Per thread, one list per running tool call of the composed tools it left out.
+      LEFT_OUT = :rails_ai_context_left_out
 
       # What a server last saw of its app's files (a Fingerprinter::Snapshot),
       # when the check now running began, and when the last finished one
@@ -240,7 +262,9 @@ module RailsAiContext
         # 30 at 10,000 files. Only a check that began after a call did can
         # stand in for that call's own, so two calls one after the other each
         # check, and concurrent calls wait for one check together. A tool
-        # another tool calls is part of the first call and asks nothing.
+        # another tool calls is part of the first call, and SafeCall asks
+        # nothing for it. What a run already open read is dropped with the
+        # check, since it may be from before the edit.
         #
         # Outside SHARED_CACHE's mutex, unlike the TTL walk: a code reload
         # waits for running calls to finish, and they may be waiting on it.
@@ -251,10 +275,10 @@ module RailsAiContext
         # notes the files whose reload Bootsnap answers with their code from
         # before the last write.
         def refresh_if_files_changed!
-          return if RunCache.active?
+          return unless FILE_CHECK[:snapshot]
 
           snapshot = await_check(Process.clock_gettime(Process::CLOCK_MONOTONIC))
-          return unless snapshot
+          return RunCache.clear unless snapshot
 
           begin
             changed = snapshot.changed?
@@ -266,6 +290,7 @@ module RailsAiContext
               FILE_CHECK[:running] = nil
               FILE_CHECK[:done].broadcast
             end
+            RunCache.clear
           end
         rescue StandardError => e
           RailsAiContext.debug_fail(e, nil, label: "refresh_if_files_changed!")
@@ -980,8 +1005,7 @@ module RailsAiContext
 
         # Whether this tool's `detail` is DetailLevel's, read off the schema it
         # already publishes rather than a second list someone has to keep in
-        # step. `rails_onboard` spells its own levels (quick/standard/full) and
-        # is deliberately not covered.
+        # step. A custom tool that spells its own levels is left alone.
         def detail_param?
           return @detail_param if defined?(@detail_param)
 
@@ -1026,7 +1050,6 @@ module RailsAiContext
         def text_response(text, suffix: nil)
           suffix = [ suffix, static_tier_banner, stale_code_banner ].compact.join
           suffix = nil if suffix.empty?
-          text = served_hints(text)
 
           record_call(text)
 
@@ -1049,53 +1072,53 @@ module RailsAiContext
         MCP_CALL = /\b(rails_\w+)\(([^()]*)\)/
         PARAM_HINT = /`((?:\w+:(?:"[^"`]*"|[\w.]+)(?:,\s*)?)+)`/
 
-        # A `_Next:` hint points at other tools, one pointer per tool, joined
-        # by ` | ` on one line or onto lines of their own. A tool skip_tools
-        # turned off is no next step, so its pointer goes, and a hint left
-        # with none goes whole. Every answer passes here, so no tool has to
-        # check the served set itself.
-        def served_hints(text)
-          return text unless text.is_a?(String) && text.include?("_Next: ")
+        # A call to another tool as an answer writes it, then what it is for; nil when the app does not
+        # serve the gem's own tool or config section, so the hint is left out. A section goes by its retired name.
+        def pointer(name, args = nil, purpose = nil)
+          section = GetConfig.retired_section(name)
+          args = [ %(section:"#{section.name}"), args ].compact.reject(&:empty?).join(", ") if section
+          section ||= GetConfig.section_named("app") if name == "rails_get_config"
+          return nil unless section ? section.served? : own_served?(tool_class(name))
 
-          skipped = RailsAiContext::Server.skipped_tools
-          return text if skipped.empty?
-
-          lines = text.split("\n", -1)
-          kept = []
-          index = 0
-          while index < lines.size
-            block = [ lines[index] ]
-            if block.first.start_with?("_Next: ")
-              block << lines[index += 1] while lines[index + 1]&.start_with?(" | ")
-              hint = served_hint(block, skipped)
-              if hint
-                kept.concat(hint)
-              elsif kept.last == "" && lines[index + 1].to_s.empty?
-                kept.pop
-              end
-            else
-              kept << block.first
-            end
-            index += 1
-          end
-          kept.join("\n")
-        rescue StandardError => e
-          RailsAiContext.debug_fail(e, text, label: "served_hints")
+          [ "`#{section ? 'rails_get_config' : name}(#{args})`", purpose ].compact.join(" ")
         end
 
-        # The hint's lines with the pointers to skipped tools taken out; nil
-        # when none is left.
-        def served_hint(block, skipped)
-          body = block.join("\n").delete_prefix("_Next: ")
-          closing = body[/\.?_\z/].to_s
-          pointers = body.delete_suffix(closing).split(/\n? \| /)
-          served = pointers.reject { |pointer| skipped.include?(pointer[/\brails_\w+/]) }
-          return block if served.size == pointers.size
+        # A section of this answer that another tool builds. A tool the app does not
+        # serve gives an empty one, and SafeCall names it once at the end of this answer.
+        def compose(tool, **args)
+          return tool.call(**args) if own_served?(tool)
+
+          Thread.current[BaseTool::LEFT_OUT]&.last&.push(tool.tool_name)
+          MCP::Tool::Response.new([ { type: "text", text: "" } ], meta: { empty: true })
+        end
+
+        def left_out_note(names)
+          return nil if names.empty?
+
+          many = names.size > 1
+          "\n\n_#{names.map { |n| "`#{n}`" }.join(', ')} #{many ? 'are' : 'is'} turned off in this app " \
+            "(skip_tools lists #{many ? 'them' : 'it'}), so #{many ? 'their sections are' : 'its section is'} left out._"
+        end
+
+        # "Call `<pointer>`" for a not-found answer's recovery line; nil when the tool is not served.
+        def call_pointer(name, args = nil, purpose = nil)
+          pointer(name, args, purpose)&.then { |call| "Call #{call}" }
+        end
+
+        # The lines, with a blank line and the next-step hint after them when a pointer is served.
+        def add_next_hint(lines, *pointers, **layout)
+          hint = next_hint(*pointers, **layout)
+          hint ? lines << "" << hint : lines
+        end
+
+        # `_Next:` with the pointers that are served, on one line or one per
+        # line; nil when none is.
+        def next_hint(*pointers, lines: false)
+          served = pointers.compact
           return nil if served.empty?
 
-          "_Next: #{served.join(block.size > 1 ? "\n | " : " | ")}#{closing}".split("\n")
+          "_Next: #{served.join(lines ? "\n | " : " | ")}_"
         end
-        private :served_hint
 
         def cli_form(text)
           return text unless RailsAiContext.configuration.tool_mode == :cli && text.is_a?(String)

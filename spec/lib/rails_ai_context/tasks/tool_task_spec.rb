@@ -34,7 +34,7 @@ RSpec.describe "ai:tool rake task" do
   it "keeps what the app prints while it boots off a JSON=1 envelope" do
     stdout, stderr = run_task
 
-    expect(JSON.parse(stdout)).to include("tool" => "rails_get_conventions", "error" => false)
+    expect(JSON.parse(stdout)).to include("tool" => "rails_get_config", "error" => false)
     expect(stderr).to include("hello from an initializer")
   end
 

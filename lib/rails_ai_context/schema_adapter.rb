@@ -30,15 +30,6 @@ module RailsAiContext
     POSTGRES_ONLY_TYPES = %w[jsonb hstore inet cidr citext tsvector ltree macaddr interval].freeze
     MYSQL_ONLY_TYPES = %w[tinytext mediumtext longtext tinyblob mediumblob longblob].freeze
 
-    # structure.sql dialects as SchemaIntrospector records them, plus adapter names that
-    # mean one of them (activerecord-postgis-adapter registers `postgis`).
-    DIALECTS = {
-      "postgresql" => "PostgreSQL",
-      "postgis" => "PostgreSQL",
-      "mysql" => "MySQL",
-      "sqlite" => "SQLite"
-    }.freeze
-
     DISPLAY_ORDER = %w[PostgreSQL MySQL SQLite].freeze
 
     module_function
@@ -58,9 +49,13 @@ module RailsAiContext
         from_examples(context) || from_gems(context) || "unknown"
     end
 
-    # A connection's adapter_name as the other surfaces name it (PostGIS is PostgreSQL).
+    # A connection's adapter_name as the other surfaces name it (PostGIS is PostgreSQL, Trilogy is MySQL).
     def display(adapter_name)
-      DIALECTS.fetch(adapter_name.to_s.downcase, adapter_name)
+      family = DatabaseFamily.of(adapter_name)
+      return adapter_name unless family.known?
+
+      # A label read back from the payload carries the mark, and the family reads past it.
+      adapter_name.to_s.end_with?(DatabaseFamily::DEFAULT_SUFFIX) ? family.name + DatabaseFamily::DEFAULT_SUFFIX : family.name
     end
 
     def label_with_reason(context)
@@ -91,9 +86,8 @@ module RailsAiContext
       multi = context[:multi_database]
       return nil unless Tools::SectionFetch.usable?(multi)
 
-      primary = Array(multi[:databases]).find { |db| db[:name].to_s == "primary" } ||
-                Array(multi[:databases]).first
-      database_label(primary)
+      # The app databases list puts the primary first.
+      database_label(Array(multi[:databases]).first)
     end
 
     # A secondary database's adapter: its database.yml entry, else the dialect
@@ -114,15 +108,15 @@ module RailsAiContext
       adapter = database[:adapter]
       return nil if placeholder?(adapter)
 
-      name = DIALECTS[adapter.to_s] || GEM_ADAPTERS[adapter.to_s] || adapter
-      database[:adapter_default] ? "#{name} by database.yml default" : name
+      name = display(adapter.to_s)
+      database[:adapter_default] ? name + DatabaseFamily::DEFAULT_SUFFIX : name
     end
 
     def from_examples(context)
       multi = context[:multi_database]
       return nil unless Tools::SectionFetch.usable?(multi)
 
-      candidates(Array(multi[:example_adapters]).map { |name| DIALECTS[name.to_s] || GEM_ADAPTERS[name.to_s] || name.to_s })
+      candidates(Array(multi[:example_adapters]).map { |name| display(name.to_s) })
     end
 
     def from_column_types(schema)
@@ -144,7 +138,8 @@ module RailsAiContext
     def from_dialect(schema)
       return nil unless schema.is_a?(Hash)
 
-      DIALECTS[schema[:dialect].to_s]
+      family = DatabaseFamily.of(schema[:dialect].to_s)
+      family.name if family.known?
     end
 
     # Never a guess: naming one of `pg` and `mysql2` can put a database the app does not

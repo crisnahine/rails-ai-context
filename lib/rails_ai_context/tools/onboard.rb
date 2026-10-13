@@ -7,20 +7,18 @@ module RailsAiContext
       description "Get a narrative walkthrough of the Rails application - stack, data model, authentication, key flows, " \
         "background jobs, frontend, testing, getting started instructions, and the app's custom rake tasks, generators and Railties. " \
         "Use when: first encountering a project, onboarding a new developer, or orienting an AI agent. " \
-        "Key params: detail (quick/standard/full)."
+        "Key params: detail (summary/standard/full)."
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: %w[quick standard full],
-            description: "Detail level. quick: 1-paragraph overview. standard: structured walkthrough (default). full: all subsystems included."
-          }
+          detail: RailsAiContext::DetailLevel.schema(
+            "Detail level. summary: 1-paragraph overview. standard: structured walkthrough (default). full: all subsystems included."
+          )
         }
       )
 
       guide_row(
-        order: 37,
+        order: 32,
         mcp: "rails_onboard(detail:\"standard\")",
         cli_args: "detail=standard",
         summary: "Narrative app walkthrough for new developers or AI agents"
@@ -41,24 +39,20 @@ module RailsAiContext
         ctx = cached_context
 
         body = case detail
-        when "quick"
-          compose_quick(ctx)
-        when "full"
+        when RailsAiContext::DetailLevel::SUMMARY
+          compose_summary(ctx)
+        when RailsAiContext::DetailLevel::FULL
           compose_full(ctx)
         else
           compose_standard(ctx)
         end
         text_response(body, suffix: introspection_warnings_note(ctx))
-      rescue => e
-        text_response("Onboard error: #{e.message}")
       end
 
       class << self
         private
 
-        # ── Quick: single paragraph ──────────────────────────────────────
-
-        def compose_quick(ctx)
+        def compose_summary(ctx)
           app = ctx[:app_name] || "This Rails app"
 
           ruby = ruby_phrase(ctx)
@@ -74,10 +68,14 @@ module RailsAiContext
           stats = []
           schema = Payload.section(ctx, :schema)
           if schema
-            own = own_secondary_databases(ctx, schema)
+            unread, own = own_secondary_databases(ctx, schema).partition { |db| db[:unread] }
             table_count = schema[:total_tables].to_i + own.sum { |db| db[:tables] }
             if table_count > 0
               stats << count_phrase(table_count, "table") + (own.any? ? " in #{count_phrase(own.size + 1, "database")}" : "")
+            end
+            if unread.any?
+              stats << "the #{unread.map { |db| db[:name] }.to_sentence(two_words_connector: " and ", last_word_connector: " and ")} " \
+                       "#{unread.one? ? 'database' : 'databases'} not read"
             end
           end
 
@@ -142,7 +140,7 @@ module RailsAiContext
             db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
             # Every database the app's own dumps declare, as rails_get_schema reads them.
             own_secondary_databases(ctx, schema).each do |other|
-              db += ", plus the #{other[:name]} database#{" on #{other[:adapter]}" if other[:adapter]} (#{count_phrase(other[:tables], 'table')})"
+              db += ", plus the #{other[:name]} database#{Payload.named_database_mark(ctx, other[:name])}#{" on #{other[:adapter]}" if other[:adapter]} (#{other[:unread] ? 'tables not read' : count_phrase(other[:tables], 'table')})"
             end
           elsif RailsAiContext::AppKind.mongoid?(rails_app.root)
             database = RailsAiContext::AppKind.mongoid_database(rails_app.root)
@@ -156,7 +154,11 @@ module RailsAiContext
           lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} #{db ? "on #{db}" : "without Active Record"}."
           solid = schema ? solid_databases(schema) : {}
           if solid.any?
-            lines << "#{solid.values.uniq.to_sentence} keep#{"s" if solid.values.uniq.one?} their tables in databases of their own: #{solid.keys.join(", ")}."
+            frameworks = solid.values.uniq
+            keep, own = frameworks.one? ? [ "keeps its", "its own" ] : [ "keep their", "their own" ]
+            place = solid.one? ? "a database of #{own}" : "databases of #{own}"
+            names = solid.keys.map { |name| "#{name}#{Payload.named_database_mark(ctx, name)}" }
+            lines << "#{frameworks.to_sentence(last_word_connector: " and ")} #{keep} tables in #{place}: #{names.join(", ")}."
           end
           unread = unread_bundle(rails)
           lines << unread if unread
@@ -188,12 +190,13 @@ module RailsAiContext
         # The app's own databases besides the primary, as its schema dumps
         # declare them: metrics71's analytics database on SQLite went
         # uncounted beside its PostgreSQL primary. Each is
-        # { name:, adapter:, tables: }, the adapter nil when database.yml does not say.
+        # { name:, adapter:, tables:, unread: }, the adapter nil when database.yml does not say,
+        # `unread` true for a dump that could not be read, whose table count is then no count.
         def own_secondary_databases(ctx, schema)
           configured = Array(Payload.section(ctx, :multi_database)&.dig(:databases)).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
           Payload.app_databases(schema).map do |name, db|
             { name: name.to_s, adapter: RailsAiContext::SchemaAdapter.database_label(configured[name.to_s]),
-              tables: (db[:total_tables] || db[:tables].size).to_i }
+              tables: (db[:total_tables] || db[:tables].size).to_i, unread: db[:unread] }
           end
         end
 

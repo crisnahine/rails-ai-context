@@ -56,6 +56,38 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(text).to include("- Eager load candidates: 1")
     end
 
+    it "names the database a finding is in, and each database it did not check" do
+      performance_data[:missing_fk_indexes] << { table: "page_views", column: "user_id", database: "analytics", suggestion: "add_index :page_views, :user_id" }
+      performance_data[:unchecked_databases] = [ { name: "reporting", reason: "db/reporting_schema.rb is not on disk" } ]
+
+      %w[summary standard].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("**Not checked:** reporting (db/reporting_schema.rb is not on disk)")
+      end
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("- **page_views** (analytics database)\n  add_index :page_views, :user_id")
+    end
+
+    it "says a database it did not check is one only another environment configures" do
+      performance_data[:unchecked_databases] = [ { name: "warehouse", reason: "db/warehouse_schema.rb is not on disk" } ]
+      allow(described_class).to receive(:cached_context).and_return(
+        performance: performance_data, models: {},
+        multi_database: { databases: [ { name: "primary" }, { name: "warehouse", environments: %w[production] } ] }
+      )
+
+      expect(described_class.call(detail: "summary").content.first[:text])
+        .to include("**Not checked:** warehouse (production only, db/warehouse_schema.rb is not on disk)\n")
+    end
+
+    it "says a finding's database is one only another environment configures" do
+      performance_data[:missing_fk_indexes] << { table: "jobs", column: "batch_id", database: "queue", suggestion: "add_index :jobs, :batch_id" }
+      allow(described_class).to receive(:cached_context).and_return(
+        performance: performance_data, models: {},
+        multi_database: { databases: [ { name: "primary" }, { name: "queue", environments: %w[production] } ] }
+      )
+
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("- **jobs** (queue database, production only)\n  add_index :jobs, :batch_id")
+    end
+
     it "heads every detail section" do
       text = described_class.call(detail: "standard").content.first[:text]
 

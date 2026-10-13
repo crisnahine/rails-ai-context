@@ -395,7 +395,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "reads a MySQL text column's size as schema.rb writes it" do
         column = double(name: "body", type: :text, null: true, default: nil, default_function: nil, limit: 16_777_215, precision: nil,
                         scale: nil, comment: nil, collation: nil, sql_type: "mediumtext", array?: false)
-        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false))
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2"))
 
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
       end
@@ -404,7 +404,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       it "takes a MySQL table's own collation, read once for every table" do
         column = double(name: "name", type: :string, null: true, default: nil, default_function: nil, limit: nil, precision: nil,
                         scale: nil, comment: nil, collation: "utf8mb4_bin", sql_type: "varchar(255)", array?: false)
-        connection = double("mysql2", columns: [ column ], native_database_types: {}, mariadb?: false)
+        connection = double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2")
         allow(connection).to receive(:select_rows).once
           .and_return([ [ "userxroles", "utf8mb4_bin" ], [ "user_roles", "utf8mb4_0900_ai_ci" ] ])
         allow(introspector).to receive(:connection).and_return(connection)
@@ -418,7 +418,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           double(name: name, type: type, null: true, default: nil, default_function: nil, limit: nil, precision: nil,
                  scale: nil, comment: nil, collation: nil, sql_type: sql_type, array?: false)
         end
-        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: columns, native_database_types: {}, mariadb?: false))
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: columns, native_database_types: {}, adapter_name: "Mysql2"))
 
         expect(introspector.send(:extract_columns, "pa_v_shapes").map { |c| c[:type] }).to eq([ "enum('a','b')", "set('x','y')", "timestamp" ])
       end
@@ -1328,6 +1328,50 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    describe "a secondary dump that gives no tables" do
+      let(:database_yml) do
+        <<~YAML
+          #{RailsAiContext.environment_name}:
+            primary:
+              adapter: sqlite3
+              database: db/dev.sqlite3
+            queue:
+              adapter: sqlite3
+              database: db/queue.sqlite3
+              migrations_paths: db/queue_migrate
+        YAML
+      end
+      let(:queue_dump) { "ActiveRecord::Schema[8.1].define(version: 1) do\n  create_table \"solid_queue_jobs\" do |t|\n    t.string \"queue_name\"\n  end\nend\n" }
+
+      it "names a dump too large to read, with the reason" do
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => database_yml, "db/schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\nend\n",
+                         "db/migrate/20240101000000_create_posts.rb" => create_posts, "db/queue_schema.rb" => queue_dump)
+          allow(RailsAiContext.configuration).to receive(:max_schema_file_size).and_return(60)
+
+          queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
+
+          expect(queue).to include(tables: {}, total_tables: 0, dump: "db/queue_schema.rb", unread: true)
+          # The size on disk: a text-mode write on Windows makes each newline two bytes.
+          size = File.size(File.join(dir, "db/queue_schema.rb"))
+          expect(queue[:note]).to eq("db/queue_schema.rb too large (#{size} bytes, over max_schema_file_size), so its tables are not listed")
+        end
+      end
+
+      it "says what the dump holds when the migrations answer instead" do
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => database_yml, "db/migrate/20240101000000_create_posts.rb" => create_posts,
+                         "db/queue_schema.rb" => "ActiveRecord::Schema[8.1].define(version: 1) do\nend\n",
+                         "db/queue_migrate/20240101000000_create_jobs.rb" => create_posts.sub("CreatePosts", "CreateJobs").sub(":posts", ":jobs"))
+
+          queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
+
+          expect(queue[:tables].keys).to eq([ "jobs" ])
+          expect(queue[:note]).to end_with("(no DB connection, db/queue_schema.rb declares no tables)")
+        end
+      end
+    end
+
     it "lists no replica or database_tasks: false entry as a database of its own" do
       Dir.mktmpdir do |dir|
         write_app(dir, "config/database.yml" => <<~YAML,
@@ -1353,7 +1397,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:secondary_databases].keys).to eq([ "analytics" ])
-        expect(RailsAiContext::Introspectors::SchemaDumpPath.secondaries(dir).keys).to eq([ "analytics" ])
+        expect(RailsAiContext::AppDatabases.for(dir).secondaries.map(&:name)).to eq([ "analytics" ])
       end
     end
 
@@ -2727,9 +2771,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
     end
 
     it "types a configured primary dump's implicit key by the primary database's adapter" do
-      yml = "#{RailsAiContext.environment_name}:\n  queue:\n    adapter: sqlite3\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n"
+      yml = "#{RailsAiContext.environment_name}:\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n  queue:\n    adapter: sqlite3\n"
       static_with({ "config/database.yml" => yml, "db/main.rb" => one_table_rb.call("widgets") }) do |result, _|
         expect(result[:tables]["widgets"][:columns].first).to include(name: "id", type: "bigint")
+      end
+    end
+
+    # ActiveRecord::Base connects to an environment's first database, so that one is the primary.
+    it "reads a database named primary that is not its environment's first as another database, typed by its own adapter" do
+      yml = "#{RailsAiContext.environment_name}:\n  queue:\n    adapter: sqlite3\n  primary:\n    adapter: postgresql\n    schema_dump: main.rb\n"
+      files = { "config/database.yml" => yml, "db/main.rb" => one_table_rb.call("widgets"), "db/schema.rb" => one_table_rb.call("jobs") }
+      static_with(files) do |result, _|
+        expect(result[:tables]["jobs"][:columns].first).to include(name: "id", type: "integer")
+        expect(result[:secondary_databases]["primary"][:tables]["widgets"][:columns].first).to include(name: "id", type: "bigint")
       end
     end
 

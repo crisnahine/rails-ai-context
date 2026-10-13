@@ -681,12 +681,11 @@ module RailsAiContext
         model_name = RailsAiContext::Introspectors::TableName.model_for(
           ctrl_path.split("/").last.singularize.camelize, nil, RailsAiContext::Payload.models(ctx)
         )
-        lines << ""
-        lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"
-        lines << " | `rails_get_model_details(model:\"#{model_name}\")` for model" if model_name
         # The full path, which is the directory Rails resolves templates in:
         # the basename reads another component's views on a namespaced app.
-        lines << " | `rails_get_view(controller:\"#{ctrl_path}\")` for views_"
+        add_next_hint(lines, pointer("rails_get_routes", %(controller:"#{ctrl_path}"), "for routes"),
+                      (pointer("rails_get_model_details", %(model:"#{model_name}"), "for model") if model_name),
+                      pointer("rails_get_view", %(controller:"#{ctrl_path}"), "for views"), lines: true)
 
         lines.join("\n")
       end

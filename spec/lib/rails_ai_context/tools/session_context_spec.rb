@@ -94,6 +94,21 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(RailsAiContext::Tools::BaseTool.session_queries.map { |q| q[:tool] }).to eq([ "rails_get_schema" ])
     end
 
+    it "records a mark that names a retired tool as the config section call it stands for" do
+      replies = [ described_class.call(mark: "get_gems:category:auth"), described_class.call(mark: "rails_get_env") ]
+
+      expect(replies.map(&:error?)).to eq([ false, false ])
+      expect(replies.first.content.first[:text]).to eq("Marked `rails_get_config` with params `category:auth,section:gems` as queried.")
+      expect(RailsAiContext::Tools::BaseTool.session_queries.map { |q| [ q[:tool], q[:params] ] })
+        .to eq([ [ "rails_get_config", "category:auth,section:gems" ], [ "rails_get_config", "section:env" ] ])
+    end
+
+    it "refuses a mark that names a retired tool whose section is turned off" do
+      allow(RailsAiContext.configuration).to receive(:skip_tools).and_return([ "rails_get_gems" ])
+
+      expect(described_class.call(mark: "get_gems:auth").error?).to be(true)
+    end
+
     it "refuses a mark that names no tool" do
       result = described_class.call(mark: "")
 

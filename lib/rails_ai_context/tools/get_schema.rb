@@ -115,9 +115,8 @@ module RailsAiContext
             end
             # Cross-reference hint for AI: suggest next tool call
             model_refs = models_for_table([ table_key, listed_as ], models_data, schema: schema, database: (databases.first if databases.size == 1))
-            if model_refs.any?
-              output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
-            end
+            hint = next_hint(pointer("rails_get_model_details", %(model:"#{model_refs.first}"), "for associations, validations, scopes.")) if model_refs.any?
+            output += "\n\n#{hint}" if hint
             return text_response(output)
           end
 
@@ -142,7 +141,7 @@ module RailsAiContext
             end
             coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat([ "" ] + coverage) if coverage.any?
-            lines.concat(secondary_databases_lines(schema))
+            lines.concat(secondary_databases_lines(schema, ctx))
             if page[:offset] + page[:limit] < total
               lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more, or `table:\"name\"` for full detail._"
               lines << "_cache_key: #{cache_key}_"
@@ -254,7 +253,7 @@ module RailsAiContext
 
             coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat(coverage + [ "" ]) if coverage.any?
-            lines.concat(secondary_databases_lines(schema))
+            lines.concat(secondary_databases_lines(schema, ctx))
             if page[:offset] + page[:limit] < total
               lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
             end
@@ -278,7 +277,7 @@ module RailsAiContext
             end
             coverage = model_coverage_lines(tables, models_data, schema)
             lines.concat(coverage + [ "" ]) if coverage.any?
-            lines.concat(secondary_databases_lines(schema))
+            lines.concat(secondary_databases_lines(schema, ctx))
             if page[:offset] + page[:limit] < total
               lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
               lines << "_cache_key: #{cache_key}_"
@@ -439,15 +438,18 @@ module RailsAiContext
       # cache, cable) to its own schema/structure file. This tool targets the
       # primary database's tables in detail, so secondaries get a compact
       # one-line-per-database summary rather than full column detail.
-      private_class_method def self.secondary_databases_lines(schema)
+      private_class_method def self.secondary_databases_lines(schema, ctx)
         secondary = schema[:secondary_databases]
         return [] unless secondary
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
+          label = "**#{name}**#{Payload.named_database_mark(ctx, name)}"
+          next lines << "- #{label}: #{db[:note]}" if db[:tables].blank?
+
           pending = Array(db[:pending_migrations])
           pending_text = pending.any? ? "; pending migrations: #{pending_phrase(pending)}" : ""
-          lines << "- **#{name}**: #{Introspectors::SchemaConventions.relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
+          lines << "- #{label}: #{Introspectors::SchemaConventions.relations_phrase(db[:tables])} (#{db[:tables].keys.join(', ')}) - #{db[:note]}#{pending_text}"
         end
         lines
       end

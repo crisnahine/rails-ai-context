@@ -90,14 +90,15 @@ module RailsAiContext
         callbacks = data[:callbacks] || {}
         association_lines = association_callback_lines(data)
         if callbacks.empty? && association_lines.empty?
-          return "# #{name}\n\nNo callbacks defined.\n\n_Next: `rails_get_model_details(model:\"#{name}\")` for full model detail._"
+          hint = next_hint(pointer("rails_get_model_details", %(model:"#{name}"), "for full model detail."))
+          return [ "# #{name}", "No callbacks defined.", hint ].compact.join("\n\n")
         end
 
         lines = [ "# #{name} - Callbacks", "" ]
         if callbacks.empty?
           lines << "No record callbacks defined."
           lines.concat(association_section(association_lines))
-          lines << "" << "_Next: `rails_get_model_details(model:\"#{name}\")` for associations and validations_"
+          add_next_hint(lines, pointer("rails_get_model_details", %(model:"#{name}"), "for associations and validations"))
           return lines.join("\n")
         end
 
@@ -150,9 +151,8 @@ module RailsAiContext
         lines.concat(association_section(association_lines))
 
         # Cross-reference hints
-        lines << ""
-        lines << "_Next: `rails_get_model_details(model:\"#{name}\")` for associations and validations"
-        lines << " | `rails_get_concern(name:\"ConcernName\")` for concern-provided callbacks_"
+        add_next_hint(lines, pointer("rails_get_model_details", %(model:"#{name}"), "for associations and validations"),
+                      pointer("rails_get_concern", %(name:"ConcernName"), "for concern-provided callbacks"), lines: true)
 
         lines.join("\n")
       end

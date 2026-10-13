@@ -1,0 +1,376 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+
+# rails_query and rails_runtime_info against an app database other than the primary.
+RSpec.describe "the database argument" do
+  around do |example|
+    Dir.mktmpdir do |dir|
+      @dir = dir
+      example.run
+    ensure
+      FileUtils.rm_rf(@migrate) if @migrate
+    end
+  end
+
+  before do
+    RailsAiContext::Tools::Query.reset_cache!
+    RailsAiContext.configuration.query_allowed_columns = []
+    @path = path = File.join(@dir, "queue.sqlite3")
+    db = SQLite3::Database.new(path)
+    db.execute("CREATE TABLE jobs (name text, api_key text)")
+    db.execute("INSERT INTO jobs VALUES ('mail', 'k-123')")
+    db.close
+    # Rails reads migrations only from inside the app.
+    @migrate = Rails.root.join("db/queue_migrate").to_s
+    configurations = ActiveRecord::DatabaseConfigurations.new(
+      Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                     "queue" => { adapter: "sqlite3", database: path, migrations_paths: @migrate } },
+      "production" => { "primary" => { adapter: "sqlite3", database: File.join(@dir, "production.sqlite3") },
+                        "cache" => { adapter: "sqlite3", database: File.join(@dir, "cache.sqlite3") } }
+    )
+    allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+  end
+
+  def query(**args)
+    RailsAiContext::Tools::Query.call(**args)
+  end
+
+  def text(response)
+    response.content.first[:text]
+  end
+
+  def missing_primary
+    config = ActiveRecord::DatabaseConfigurations::HashConfig.new(Rails.env, "primary", adapter: "sqlite3", database: File.join(@dir, "primary.sqlite3"))
+    allow(ActiveRecord::Base).to receive(:connection_db_config).and_return(config)
+  end
+
+  describe "rails_query" do
+    it "reads the named database, and the primary with none named" do
+      expect(text(query(sql: "SELECT name FROM jobs", database: "queue"))).to include("| mail |")
+      expect(text(query(sql: "SELECT name FROM jobs"))).to include("no such table: jobs")
+    end
+
+    it "applies the secret column rule to the named database's columns" do
+      answer = text(query(sql: "SELECT * FROM jobs", database: "queue"))
+
+      expect(answer).to include("[FILTERED]")
+      expect(answer).not_to include("k-123")
+    end
+
+    it "answers a misspelled name with the closest one and the names the app has" do
+      response = query(sql: "SELECT 1", database: "qeue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("No database named qeue. Did you mean queue?", "primary, queue, cache")
+    end
+
+    it "says a database only another environment configures is configured there" do
+      response = query(sql: "SELECT 1", database: "cache")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The cache database is configured in production. This process runs in #{Rails.env}")
+    end
+
+    it "refuses a named SQLite database whose file is not there, by name, and creates nothing" do
+      File.delete(@path)
+
+      response = query(sql: "SELECT 1", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The queue database does not exist yet", @path, "db:prepare")
+      expect(text(response)).not_to include("Database unavailable")
+      expect(File.exist?(@path)).to be(false)
+    end
+
+    it "refuses the primary the same way with no database named, without connecting" do
+      missing_primary
+      expect(ActiveRecord::Base).not_to receive(:connection)
+
+      response = query(sql: "SELECT 1")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The primary database does not exist yet", "db:prepare")
+      expect(File.exist?(File.join(@dir, "primary.sqlite3"))).to be(false)
+    end
+
+    it "names the database that holds a table the query did not find" do
+      allow(RailsAiContext::Tools::Query).to receive(:cached_context)
+        .and_return(schema: { tables: { "users" => {} }, secondary_databases: { "queue" => { tables: { "jobs" => {} } } } })
+
+      response = query(sql: "SELECT name FROM jobs")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to end_with('no such table: jobs. The jobs table is on the queue database: run the query again with database: "queue".')
+      expect(text(query(sql: "SELECT id FROM users", database: "queue")))
+        .to end_with('no such table: users. The users table is on the primary database: run the query again with database: "primary".')
+    end
+
+    it "names the database that holds a table an EXPLAIN did not find" do
+      allow(RailsAiContext::Tools::Query).to receive(:cached_context)
+        .and_return(schema: { tables: { "users" => {} }, secondary_databases: { "queue" => { tables: { "jobs" => {} } } } })
+
+      response = query(sql: "SELECT name FROM jobs", explain: true)
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to start_with("EXPLAIN failed:")
+        .and end_with('no such table: jobs. The jobs table is on the queue database: run the query again with database: "queue".')
+    end
+
+    it "refuses a named database whose adapter has no family, before any connection to it is opened" do
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                       "legacy" => { adapter: "sqlserver", database: "legacy", host: "127.0.0.1" } }
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+      opened = false
+      allow_any_instance_of(ActiveRecord::ConnectionAdapters::ConnectionHandler).to receive(:establish_connection) { opened = true and raise("opened") }
+
+      response = query(sql: "SELECT 1", database: "legacy")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to start_with("rails_query refuses the sqlserver adapter").and end_with("No statement was sent.")
+      expect(opened).to be(false)
+    end
+
+    it "refuses every statement on a named database whose columns cannot be read, by its name" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "catalogue unreadable")
+
+      response = RailsAiContext::RunCache.around { query(sql: "SELECT name FROM jobs", database: "queue") }
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to eq("The columns of the queue database could not be read, so its secret columns cannot be told and no query runs on it.")
+    end
+
+    it "answers a named database no connection reaches as an error that names it" do
+      allow_any_instance_of(ActiveRecord::ConnectionAdapters::SQLite3Adapter).to receive(:verify!)
+        .and_raise(ActiveRecord::ConnectionNotEstablished, "connection refused")
+
+      response = query(sql: "SELECT 1", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to eq("The queue database cannot be reached: connection refused. Check the file its config/database.yml entry names.")
+    end
+
+    it "answers a named database in memory as an error that names it" do
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => ActiveRecord::Base.connection_db_config.configuration_hash,
+                       "scratch" => { adapter: "sqlite3", database: ":memory:" } }
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+
+      response = query(sql: "SELECT 1", database: "scratch")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("scratch", "memory")
+    end
+
+    it "answers a connection to a named database lost during the statement as an error that names it" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:read_only)
+        .and_raise(ActiveRecord::ConnectionNotEstablished, "server closed the connection unexpectedly")
+
+      response = query(sql: "SELECT 1", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to eq("The queue database stopped answering during the query: server closed the connection unexpectedly")
+    end
+  end
+
+  describe "rails_runtime_info" do
+    def runtime(**args)
+      RailsAiContext::Tools::RuntimeInfo.call(**args)
+    end
+
+    it "reports the named database's tables" do
+      answer = text(runtime(section: "database", database: "queue"))
+
+      expect(answer).to include("## Database: queue", "| jobs |")
+      expect(answer).not_to include("| users |")
+    end
+
+    it "reports pending migrations in every database configured here" do
+      FileUtils.mkdir_p(@migrate)
+      File.write(File.join(@migrate, "20240101000000_create_jobs.rb"), "class CreateJobs < ActiveRecord::Migration[7.1]\nend\n")
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("**Pending migrations:** 1 in queue", "- 20240101000000 CreateJobs (queue)")
+      expect(answer).not_to include("all up to date")
+    end
+
+    it "reports another database's pending migration when Rails runs none on the primary" do
+      pending_queue_migration
+      with_database("primary", ActiveRecord::Base.connection_db_config.configuration_hash.merge(database_tasks: false))
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("**Pending migrations:** 1 in queue", "- 20240101000000 CreateJobs (queue)")
+      expect(answer).not_to include("all up to date")
+    end
+
+    it "reports the databases it read, and says why of each it could not read, leaving one in memory out" do
+      pending_queue_migration
+      with_database("gone", { adapter: "sqlite3", database: File.join(@dir, "gone.sqlite3") })
+      with_database("bad", { adapter: "sqlite3", database: @dir })
+      with_database("warehouse", { adapter: "sqlserver", database: "warehouse" })
+      with_database("mem", { adapter: "sqlite3", database: ":memory:" })
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include(
+        "**Pending migrations:** 1 in queue\n- 20240101000000 CreateJobs (queue)\n",
+        "_Pending migrations could not be read for gone: The gone database does not exist yet: its SQLite file #{File.join(@dir, "gone.sqlite3")} is not there, " \
+        "and nothing was created. Run `bin/rails db:prepare` to create it._",
+        "_Pending migrations could not be read for warehouse: The warehouse database cannot be reached: its sqlserver adapter did not load. " \
+        "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`._"
+      )
+      expect(answer).to match(/^_Pending migrations could not be read for bad: The bad database cannot be reached: .*unable to open database file.* Check the file its config\/database.yml entry names\._$/i)
+      expect(answer).not_to include("mem")
+    end
+
+    it "names the databases that are up to date beside one it could not read" do
+      with_database("gone", { adapter: "sqlite3", database: File.join(@dir, "gone.sqlite3") })
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("**Migrations:** all up to date in primary, queue\n", "_Pending migrations could not be read for gone: The gone database does not exist yet")
+    end
+
+    it "opens one connection to a named database for a call" do
+      opened = 0
+      subscription = ActiveSupport::Notifications.subscribe("!connection.active_record") { opened += 1 }
+
+      runtime(database: "queue")
+
+      expect(opened).to eq(1)
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscription)
+    end
+
+    it "says Rails runs no migrations when the app's one database sets database_tasks: false" do
+      with_database("queue", { adapter: "sqlite3", database: @path, replica: true })
+      with_database("primary", ActiveRecord::Base.connection_db_config.configuration_hash.merge(database_tasks: false))
+
+      answer = text(runtime(section: "database"))
+
+      expect(answer).to include("_Rails runs no migrations on primary: its database.yml entry turns `database_tasks` off._")
+      expect(answer).not_to include("up to date", "Pending")
+    end
+
+    it "says the primary's SQLite file is not there in the database section, creates nothing, and still answers the other sections" do
+      missing_primary
+
+      response = runtime
+      answer = text(response)
+
+      expect(response.error?).to be(false)
+      expect(answer).to include("## Database", "The primary database does not exist yet", "## Cache")
+      expect(File.exist?(File.join(@dir, "primary.sqlite3"))).to be(false)
+    end
+
+    it "refuses a named SQLite database whose file is not there, whatever the section, and creates nothing" do
+      File.delete(@path)
+
+      [ nil, "database", "cache" ].each do |section|
+        response = runtime(section: section, database: "queue")
+
+        expect(response.error?).to be(true), section.inspect
+        expect(text(response)).to include("The queue database does not exist yet", @path)
+        expect(text(response)).not_to include("# Runtime Info")
+        expect(File.exist?(@path)).to be(false)
+      end
+    end
+
+    it "refuses a name another environment configures, whatever the section" do
+      %w[cache jobs connections database].each do |section|
+        response = runtime(section: section, database: "cache")
+
+        expect(response.error?).to be(true), section
+        expect(text(response)).to include("The cache database is configured in production. This process runs in #{Rails.env}")
+      end
+    end
+
+    def pending_queue_migration
+      FileUtils.mkdir_p(@migrate)
+      File.write(File.join(@migrate, "20240101000000_create_jobs.rb"), "class CreateJobs < ActiveRecord::Migration[7.1]\nend\n")
+    end
+
+    def with_database(name, settings)
+      hashes = ActiveRecord::Base.configurations.configurations.group_by(&:env_name)
+                                 .transform_values { |configs| configs.to_h { |config| [ config.name, config.configuration_hash ] } }
+      hashes[Rails.env][name] = settings
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(ActiveRecord::DatabaseConfigurations.new(hashes))
+    end
+
+    it "shows a named database its own pending migrations and no other database's" do
+      pending_queue_migration
+
+      expect(text(runtime(section: "database", database: "queue"))).to include("**Pending migrations:** 1\n- 20240101000000 CreateJobs\n")
+      primary = text(runtime(section: "database", database: "primary"))
+      expect(primary).to include("## Database: primary", "**Migrations:** all up to date\n")
+      expect(primary).not_to include("CreateJobs")
+    end
+
+    it "says why a named database Rails runs no migrations on has none to show" do
+      pending_queue_migration
+      legacy = File.join(@dir, "legacy.sqlite3")
+      FileUtils.cp(@path, legacy)
+      with_database("legacy", { adapter: "sqlite3", database: legacy, database_tasks: false })
+
+      answer = text(runtime(section: "database", database: "legacy"))
+
+      expect(answer).to include("## Database: legacy", "_Rails runs no migrations on legacy: its database.yml entry turns `database_tasks` off._")
+      expect(answer).not_to include("CreateJobs", "Pending migrations", "up to date")
+    end
+
+    it "refuses a named database no connection reaches, by name, whatever the section" do
+      with_database("queue", { adapter: "sqlite3", database: @dir })
+
+      [ nil, "database", "cache" ].each do |section|
+        response = runtime(section: section, database: "queue")
+
+        expect(response.error?).to be(true), section.inspect
+        expect(text(response)).to include("The queue database cannot be reached:", "config/database.yml")
+        expect(text(response)).not_to include("# Runtime Info")
+      end
+    end
+
+    it "says the primary cannot be reached in the database section, and still answers the other sections" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished.new("Connection refused"))
+
+      response = runtime
+      answer = text(response)
+
+      expect(response.error?).to be(false)
+      expect(answer).to include("## Database\n\n_Not available: The primary database cannot be reached: Connection refused. ", "## Cache")
+    end
+
+    it "refuses a named database that lives in memory" do
+      with_database("queue", { adapter: "sqlite3", database: ":memory:" })
+
+      response = runtime(section: "database", database: "queue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("The queue database lives in memory")
+    end
+
+    it "says no section had anything to show when none did" do
+      expect(text(runtime(section: "none"))).to end_with("_No runtime data available: no section had anything to show._")
+    end
+
+    it "says a section that does not read the database argument left it unused" do
+      answer = text(runtime(section: "cache", database: "queue"))
+
+      expect(answer).to include("## Cache", "_The cache section does not read `database`, so queue was not used._")
+      expect(text(runtime(section: "database", database: "queue"))).not_to include("does not read `database`")
+      expect(text(runtime(database: "queue"))).not_to include("does not read `database`")
+    end
+
+    it "answers a name the app does not have with the names it has" do
+      response = runtime(database: "qeue")
+
+      expect(response.error?).to be(true)
+      expect(text(response)).to include("Did you mean queue?")
+    end
+  end
+end

@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-**All 45 read-only tools, with every parameter.**
+**All 35 read-only tools, with every parameter.**
 
 [Quickstart](QUICKSTART.md) · [Recipes](RECIPES.md) · [Custom Tools](CUSTOM_TOOLS.md) · [CLI Reference](CLI.md)
 
@@ -59,9 +59,9 @@ Most lookup tools accept a **`detail`** parameter: `summary` (compact), `standar
 | [Understand](#understand) | `analyze_feature`, `get_context`, `onboard` |
 | [Schema & Models](#schema--models) | `get_schema`, `get_model_details`, `get_callbacks`, `get_concern` |
 | [Controllers & Routes](#controllers--routes) | `get_controllers`, `get_routes` |
-| [Views & Frontend](#views--frontend) | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map`, `get_frontend_stack` |
+| [Views & Frontend](#views--frontend) | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map` |
 | [Testing & Quality](#testing--quality) | `get_test_info`, `generate_test`, `validate`, `security_scan`, `performance_check` |
-| [App Config & Services](#app-config--services) | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_i18n`, `get_mailers`, `get_engines`, `get_autoload`, `get_active_support`, `get_env_config` |
+| [App Config & Services](#app-config--services) | `get_config`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_mailers` |
 | [Data & Debugging](#data--debugging) | `dependency_graph`, `migration_advisor`, `search_docs`, `query`, `read_logs`, `diagnose`, `review_changes`, `runtime_info`, `session_context` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -131,14 +131,21 @@ Composite context: schema + model + controller + routes + views for a resource. 
 | `action` | string | - | Specific controller action; requires `controller` |
 | `model` | string | - | Model name (e.g., `Post`) |
 | `feature` | string | - | Feature keyword (e.g., `post`) |
-| `include` | array | - | Extra context to add: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks` |
+| `include` | array | - | Extra context to add: `stimulus`, `turbo`, `services`, `jobs`, `conventions`, `helpers`, `env`, `callbacks`, `tests`, `config`, `gems`, `security`. A key is read in any capitalisation, and a key given twice runs once |
+
+A model, controller or feature keyword the app does not have is answered as not found, with the closest name where there is one. An `action` the controller does not have is answered "Action 'nope' not found in PostsController. Available: create, destroy, ...", also when `skip_tools` lists `rails_get_controllers`. With `rails_analyze_feature` turned off, a `feature` keyword that only model names hold is answered with them: "The model names that hold 'comment': Comment." An include whose tool `skip_tools` turns off is answered by saying so, and that tool does not run.
+
+An unexpected failure is an error response that starts "Tool rails_get_context failed:". A crash inside one section is an error response too: `isError` over MCP and exit 1 on the CLI. The text keeps every section, and the crashed one reads "Tool <name> failed: <Class>: <message>". A section that answers an error for another reason, such as a refusal or a failed Brakeman run, stays a section of an ordinary answer. `rails_diagnose` and `rails_review_changes` answer a crashed section the same way.
 
 ### `rails_onboard`
 
 Narrative app walkthrough for getting up to speed. The stack line counts the
 tables of every database the app's own schema dumps declare, as
 `rails_get_schema` reads them; the databases Rails 8 gives Solid Queue, Solid
-Cache and Solid Cable get one line, without their tables. It ends with the app's custom
+Cache and Solid Cable get one line, without their tables. A database whose
+dump was not read is named with "(tables not read)" and left out of the table
+count, and the summary says so: "5 tables in 2 databases, the warehouse
+database not read". It ends with the app's custom
 rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its arguments,
 description and file: the first 15 at `standard`, every one at `full`.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
@@ -147,7 +154,7 @@ generator's template, and the Railties under `lib/` with their initializers.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `quick`, `standard`, `full` |
+| `detail` | enum | `standard` | `summary` (one-paragraph overview), `standard`, `full` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
@@ -161,6 +168,15 @@ Database schema with column types, indexes, defaults, encrypted hints. Booted,
 a table `db/schema.rb` declares and the connected database does not have is
 named as a migration that has not run, and the listing header says when the
 two table counts disagree.
+
+The other databases are listed after the primary's tables: every database any
+environment in `config/database.yml` configures, so a Rails 8 app's queue,
+cache and cable dumps are read even where only production configures them,
+then any committed dump no environment names. A dump too large to read, or
+holding no tables, is named with the reason. A secondary's dump is read from
+its own path, else from the other format's file under its name
+(`db/queue_schema.rb` or `db/queue_structure.sql`), whatever `database_tasks`
+or `schema_format` says.
 
 Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
 with the column, so a lookup on it alone can use one; `[unique]` means a unique
@@ -363,14 +379,6 @@ Turbo Stream broadcast-to-subscription wiring with mismatch warnings. Streams ar
 | `stream` | string | - | Filter by stream or channel name (e.g., `notifications`); a name no broadcast or subscription carries says so and lists the app's streams |
 | `controller` | string | - | Filter by controller name (e.g., `messages`) |
 
-### `rails_get_frontend_stack`
-
-Auto-detects React/Vue/Svelte/Angular, Hotwire, TypeScript, Vite/Shakapacker, package manager, monorepo layout.
-
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
-
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
 ---
@@ -415,7 +423,7 @@ JavaScript (`.js`, `.mjs`, `.cjs`) is parsed by `node --check` as the module sys
 
 ### `rails_security_scan`
 
-Brakeman static analysis: SQL injection, XSS, mass assignment, command injection.
+Brakeman static analysis: SQL injection, XSS, mass assignment, command injection. A scan that fails, on an unknown check name for one, answers "Brakeman scan failed: ..." as an error response: `isError` over MCP and exit 1 on the CLI. A brakeman run from outside the bundle that started and failed is an error response too. One that could not start is an ordinary answer.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -429,7 +437,9 @@ Brakeman static analysis: SQL injection, XSS, mass assignment, command injection
 > bundle and says so: the installed gem's own `bin/brakeman`, run by the app's
 > Ruby, not whatever `brakeman` is on PATH. When no scan can run, the answer
 > says which case it is: brakeman is nowhere on the machine, or it is
-> installed and produced no report.
+> installed and produced no report. For the second it quotes what brakeman
+> said, or says "it wrote no report and printed nothing" or "its report could
+> not be read".
 
 ### `rails_performance_check`
 
@@ -455,6 +465,15 @@ not a risk. The inverse Rails sets on each record of
 the render passes as a literal (`show_seller: false`) is not read. ERB and
 jbuilder are read; Haml and Slim templates are not, and neither are serializers.
 
+Missing indexes and counter caches are checked in every database's dump, and a
+finding outside the primary names its database. A dump on disk under a
+database's name is read whatever `database_tasks` or `schema_dump` says. A
+database whose tables could not be read is listed under **Not checked** with
+the reason: its dump is not on disk or is over `max_schema_file_size`, or its
+`config/database.yml` entry turns `database_tasks` or `schema_dump` off and no
+dump is on disk. A database another environment configures carries its mark:
+`**Not checked:** warehouse (production only, db/warehouse_schema.rb is not on disk)`.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `model` | string | - | Filter results to one model |
@@ -467,27 +486,33 @@ jbuilder are read; Haml and Slim templates are not, and neither are serializers.
 
 ## App Config & Services
 
-### `rails_get_api`
+### `rails_get_config`
 
-API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQL, versioning, rate limiting, OpenAPI specs, CORS, pagination.
+The app's configuration, one section per call. `section` picks it; the default, `app`, is what the tool answered before it took sections. Ten tools that each answered one section were folded in, and their old names still work: the CLI resolves `gems`, `rails_get_gems` and the rest to their section, and a call to an old name is answered from its section with a note naming the new call and the arguments the section reads. Under `tool_mode: :cli` the note is the command. A value goes into the note's call when it is a number, a boolean, or at most 80 characters of letters, digits, `_`, `.` and `-`. Any other value is named after the call: "_rails_get_i18n is now `rails_get_config(section:"i18n")`, with the same `locale`; call that instead._" A parameter the asked section does not read is named in the answer as ignored.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary` (one-liner), `standard` (per-area breakdown), `full` (adds OpenAPI spec paths) |
+| `section` | enum | `app` | `app`, `gems`, `frontend`, `api`, `engines`, `conventions`, `autoload`, `active_support`, `env`, `env_config`, `i18n` |
+| `detail` | enum | `standard` | `summary`, `standard`, `full`. Read by `frontend`, `api`, `env` |
+| `category` | enum | `all` | Read by `gems`. See below |
+| `environment` | string | - | Read by `env_config`. One environment, by exact name (e.g. `production`) |
+| `locale` | string | - | Read by `i18n`. One locale's files and coverage, by exact name |
+| `offset` | integer | `0` | Read by `gems`, `env_config`, `i18n`. Skip this many entries |
+| `limit` | integer | `50` | Read by `gems`, `env_config`, `i18n`. Max entries to return |
 
-### `rails_get_conventions`
+`skip_tools` turns one section off by its old tool's name (`rails_get_env` turns `env` off); `rails_get_config` turns off `app` alone. The tool leaves `tools/list` only when every section is off.
 
-Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
+With `app` off, `section` is required: the published schema marks it required, the description says so, and a call with no `section` is answered with the sections that are on.
 
-*No parameters.*
+A `section` the tool does not have, or one `skip_tools` turned off, is refused with the sections that are on. A call to an old name that sends a parameter no section reads is refused with that section's own parameters, and a refused call to an old name carries no note about the new call.
 
-### `rails_get_config`
+A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name. The ten sections go with the built-in, so a retired name such as `rails_get_gems` is then an unknown tool.
+
+#### `app` (default)
 
 Database config, auth framework, assets, cache, queue, Action Cable. The `use` and `map` calls in `config.ru` are listed apart from the stack, since they run before Rails.
 
-*No parameters.*
-
-### `rails_get_gems`
+#### `gems` (was `rails_get_gems`)
 
 Notable gems with versions, categories, and config file locations. A config
 location is printed only when the app has that file, and an initializer is
@@ -498,19 +523,47 @@ another gem brings in, or, for a framework `rails` pulls in, when
 config/application.rb loads it; a gem the lockfile holds only for another
 gem's own use is left out.
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `category` | enum | `all` | `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all` |
-| `offset` | integer | `0` | Skip this many gems |
-| `limit` | integer | `50` | Max gems to return |
+`category` takes: `auth`, `jobs`, `frontend`, `api`, `database`, `files`, `testing`, `deploy`, `monitoring`, `admin`, `pagination`, `search`, `forms`, `server`, `notifications`, `validation`, `utilities`, `services`, `payments`, `all`.
 
-### `rails_get_env`
+#### `frontend` (was `rails_get_frontend_stack`)
+
+Auto-detects React/Vue/Svelte/Angular, Hotwire, TypeScript, Vite/Shakapacker, package manager, monorepo layout.
+
+#### `api` (was `rails_get_api`)
+
+API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQL, versioning, rate limiting, OpenAPI specs, CORS, pagination.
+
+#### `engines` (was `rails_get_engines`)
+
+What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - the app's own in-repo engines, plugins and modules read from the tree, each with the models the model scan filed under its path, and loaded engine classes with route/model counts.
+
+#### `conventions` (was `rails_get_conventions`)
+
+Auth checks, flash messages, create action template, test patterns, and the admin resources ActiveAdmin, Administrate, Avo, Madmin and Trestle register (with ActiveAdmin's permitted params).
+
+#### `autoload` (was `rails_get_autoload`)
+
+Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, custom inflections.
+
+#### `active_support` (was `rails_get_active_support`)
+
+ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, the `ActiveSupport::Notifications` events the app subscribes to (`subscribe`, `monotonic_subscribe`, and a Subscriber's `attach_to`) with file and line, read from source in both tiers, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
+
+#### `env` (was `rails_get_env`)
 
 Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`, plus `config.ru`, `db/seeds.rb`, `db/seeds/` and the Ruby scripts in `bin/`. A tag on a YAML comment line is not read: ERB runs it, but what it writes goes with the comment. Config YAML matching `sensitive_patterns` (`config/database.yml`, `config/cable.yml`, `config/storage.yml` and the rest) is read only for the ENV names in its ERB tags, so a default there is listed as present and not read; credentials and keys are never read, and the answer says so. A default is read from a second argument or from a block whose one statement is a literal (`ENV.fetch("REDIS_URL") { "redis://localhost:6379/1" }`). The env Kamal's `config/deploy.yml` gives the app container is listed too: secret names only, and clear values, except one holding a URL or a key-like token, or under a secret-named variable, which shows as hidden, and one an ERB tag sets, which says so. So are the setting keys in the config gem's `config/settings.yml` and `config/settings/<env>.yml` when the bundle has the config gem, and the attributes of each `Anyway::Config` class in `config/configs` or `app/configs` with the env name it reads (`PAYMENT_API_KEY`), never their values. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's. A default is redacted by the rule a source literal gets: a credential format under any name, a URL's password, and under a secret-named variable a value that is not clearly something else, so an address, URL or hostname default prints as written.
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+#### `env_config` (was `rails_get_env_config`)
+
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved. An
+"Every environment" block above them lists the keys `config/application.rb`
+sets (`config.x` included) and, for each `config_for(:name)`, the keys
+`config/name.yml` gives the running environment, `shared` merged in, names
+only.
+
+#### `i18n` (was `rails_get_i18n`)
+
+I18n setup: default/available locales, backend, locale files with key counts, per-locale coverage, fallbacks.
 
 ### `rails_get_helper_methods`
 
@@ -534,7 +587,11 @@ nested inside a `hash` filter shown under it. Callers are read from every
 autoloads, and the page says when the twenty-caller display cap or the scan's
 own file ceiling left the list partial. A module under
 `app/services/concerns/` is a concern rather than a service object, so
-`rails_get_concern` lists it and this tool does not.
+`rails_get_concern` lists it and this tool does not. The listing counts
+services, and when the service directories hold more Ruby files than that,
+one line under the heading says how many it left out and of which kind: base
+classes, concerns, modules with no entry point that other code mixes in,
+mailers, and files too large to read.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -584,16 +641,6 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 | `offset` | integer | `0` | Skip this many components |
 | `limit` | integer | `50` | Max components to return |
 
-### `rails_get_i18n`
-
-I18n setup: default/available locales, backend, locale files with key counts, per-locale coverage, fallbacks.
-
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `locale` | string | - | Show only this locale's files and coverage, by exact name |
-| `offset` | integer | `0` | Pagination offset over locale files |
-| `limit` | integer | `50` | Max locale files to return |
-
 ### `rails_get_mailers`
 
 ActionMailer mailers: every mailer class with its delivery actions and delivery method. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
@@ -616,38 +663,6 @@ defines it), and each mailbox's processing callbacks.
 | `mailer` | string | - | One mailer, by exact name |
 | `offset` | integer | `0` | Pagination offset |
 | `limit` | integer | `50` | Max mailers to return |
-
-### `rails_get_engines`
-
-What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - the app's own in-repo engines, plugins and modules read from the tree, each with the models the model scan filed under its path, and loaded engine classes with route/model counts.
-
-*No parameters.*
-
-### `rails_get_autoload`
-
-Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, custom inflections.
-
-*No parameters.*
-
-### `rails_get_active_support`
-
-ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, the `ActiveSupport::Notifications` events the app subscribes to (`subscribe`, `monotonic_subscribe`, and a Subscriber's `attach_to`) with file and line, read from source in both tiers, tagged logging, subscribed `on_load` hooks, cache store. Validator classes living among the concerns are counted and listed apart from them, as `rails_get_concern` does.
-
-*No parameters.*
-
-### `rails_get_env_config`
-
-Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved. An
-"Every environment" block above them lists the keys `config/application.rb`
-sets (`config.x` included) and, for each `config_for(:name)`, the keys
-`config/name.yml` gives the running environment, `shared` merged in, names
-only.
-
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `environment` | string | - | One environment, by exact name (e.g. `production`) |
-| `offset` | integer | `0` | Skip this many config keys per environment |
-| `limit` | integer | `50` | Max config keys listed per environment |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
@@ -680,12 +695,14 @@ file already named what the generator would name this one (`rails generate
 migration` refuses that name), and a migration not yet run that already adds
 the column or creates the table when it runs (a `def down`, a `dir.down` or a
 `revert` block only undoes, so what it adds does not count). It also warns
-about a `create_table` for a
-table that exists and a `null: false` column with no default on a table with
-rows (the row count is the database's estimate), and refuses a column type no
-adapter knows. For `remove_column`, `rename_column` and `change_type` it lists
-the lines in `app/`, `lib/` and `config/` that name the column, the code the
-change breaks.
+about a `create_table` for a table that exists and a `null: false` column with
+no default on a table with rows. The row count is the primary database's
+estimate, so a table on another database has no count and the warning says
+"if `<table>` holds any rows". It refuses a column type no adapter knows. For
+`remove_column`, `rename_column` and `change_type` it lists the lines in
+`app/`, `lib/` and `config/` that name the column, the code the change breaks.
+Index and lock advice follows the database family of the database that holds
+the table.
 
 It refuses a `table`, `type` or `new_name` longer than 256 characters, a
 `column` that long outside `create_table`, and `options` longer than 1,024
@@ -714,7 +731,17 @@ Bundled topic index with weighted keyword search. Optional on-demand GitHub fetc
 
 ### `rails_query`
 
-Safe read-only SQL with layered security: regex validation, a PostgreSQL plan check (whole-row leaks, expanded sensitive columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
+Safe read-only SQL with layered security: the SQL gate, a PostgreSQL plan check (whole-row leaks, expanded secret columns and VOLATILE admin functions refused before anything runs), `SET TRANSACTION READ ONLY`, timeout, and column redaction. [Learn about the security model →](SECURITY.md)
+
+It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. So is a database no connection reaches, which the answer names with what to do about it. So are a locked SQLite database and the refusal in production.
+
+On PostgreSQL, MySQL and MariaDB every statement a call sends has a time limit. The query has `query_timeout` to itself and the reads beside it share a second one, so the statements of a call take about twice `query_timeout` at most. On SQLite the query has `query_timeout`, and the reads beside it run on the app's own connection with no statement limit. The [security model](SECURITY.md#layer-2---database-level-read-only) says what bounds each statement and lists the stated limits.
+
+On MySQL, MariaDB and SQLite a statement that names a view whose definition names a secret column is refused. So is a `*` inside a subquery when the statement names a table that holds a secret column, and on SQLite `IN` before a table's name (`x IN t`). On PostgreSQL a materialized view whose definition names a secret column is refused. On SQLite a virtual table that holds a secret column, a shadow table and the page modules are refused, and only the pragma functions that describe the schema or the database file run.
+
+The secret column rule reads the columns of every schema and database a statement reaches: the ones its text names, on PostgreSQL the ones its plan names, and the ones the views it names lead to, three reads deep. So a secret column of a table in another one is refused by name too.
+
+On MySQL and MariaDB the text checks read a backslash in a string both ways, and a statement that either reading refuses is refused. On every family the text checks give up with a refusal when they have run longer than `query_timeout`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -722,10 +749,25 @@ Safe read-only SQL with layered security: regex validation, a PostgreSQL plan ch
 | `limit` | integer | `100` | Maximum rows to return (hard cap: 1000) |
 | `format` | enum | `table` | `table`, `csv` |
 | `explain` | boolean | `false` | Show query plan instead of results |
+| `database` | string | the primary | The app database to query, by its `config/database.yml` name (`queue`, `cache`). The secret column rule and the database family are that database's |
+
+`database` is checked when the tool runs, against the databases the app has then:
+
+- A name the app does not have is answered with the closest one and every name it has.
+- A database only another environment configures, a replica and one with `database_tasks` off included, is answered with the environments that do.
+- A top-level entry of `config/database.yml` that code connects to by name (`establish_connection(:reporting)`) is an environment to Rails, so `database` does not take its name: the answer lists the databases of the running environment.
+- One that only a committed dump names is answered as such.
+- On the static tier the whole tool is unavailable, with or without `database`.
+- A SQLite database whose file is not there is an error, with or without `database`. The message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.
+- A SQLite database other than the primary that lives in memory (`:memory:`, or a `file:` URI with `mode=memory`) is refused by name. It exists only inside the process that created it, and a new connection would open an empty one.
+- A database whose columns cannot be read is not queried. The answer is "The columns of the <name> database could not be read, so its secret columns cannot be told and no query runs on it."
+- When a statement or an `explain: true` fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use. The pointer is built from the schema dumps, so a table on a database with no dump gets none.
+
+Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.
 
 > Disabled in production by default.
 
-> Name the columns you need. A query that references a sensitive column (directly, or through an alias or expression), serialises a whole row, carries a column-alias list that renames a wildcard (a `VALUES`-body list such as `(VALUES (1,'a')) AS v(id, name)` is allowed - it renames no table column), uses UNION, or calls a session-effecting function is refused with a message that says why. `SELECT *` is allowed and its sensitive columns come back `[FILTERED]`. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed and their definition text is secret-redacted; other `SHOW CREATE` forms are refused. In the default format a definition is shown whole, as the DDL in a fenced code block with its line breaks kept (a view's character set and collation follow as `name: value` lines); `csv` returns it as one quoted field. When the row limit holds rows back - only when the query really returned more than the cap - the answer says so in every format.
+> Name the columns you need. A query is refused, with a message that says why, when it does one of these: it references a secret column (directly, or through an alias or expression; an `encrypts` column also when `query_allowed_columns` lists it); it serialises a whole row; it carries a column-alias list that renames a wildcard (a `VALUES`-body list such as `(VALUES (1,'a')) AS v(id, name)` is allowed, since it renames no table column); it uses UNION; it calls a session-effecting function, a function that returns a whole table as one value (`table_to_xml`), or any function by a quoted name; it reads a statistics, session or credential relation (`pg_stats`, `pg_stat_activity`, `pg_settings`, `performance_schema`, the `mysql` schema) or a PostgreSQL setting that can hold a password (`primary_conninfo`); it is a `SHOW` with a `WHERE` clause, `SHOW ALL` on PostgreSQL or `EXPLAIN FOR CONNECTION` on MySQL and MariaDB; or it is over 1,000,000 bytes long. `SELECT *` is allowed and its secret columns come back `[FILTERED]`. `SHOW CREATE TABLE` / `SHOW CREATE VIEW` are allowed and their definition text is secret-redacted; other `SHOW CREATE` forms are refused. In the default format a definition is shown whole, as the DDL in a fenced code block with its line breaks kept (a view's character set and collation follow as `name: value` lines); `csv` returns it as one quoted field. When the row limit holds rows back - only when the query really returned more than the cap - the answer says so in every format. With `csv`, a query that returns no rows answers the header row alone.
 
 > **Cell rendering by format.** A `markdown` table cell shows `NULL` as `_NULL_`, escapes a pipe (`a\|b`) so it cannot end the cell, renders a line break as the two characters `\n` so it cannot end the row, and shortens a value over 100 characters to `…` (a `SHOW CREATE` definition is not a table cell, so it is never shortened). A `csv` cell is the value itself: `NULL` is an empty field, nothing is escaped beyond RFC 4180 quoting (a field holding a comma, a quote or a line break is wrapped in quotes with its quotes doubled), and nothing is truncated - so a line break stays a real line break inside the quoted field. Binary (non-text) data shows as `[BLOB]` in both.
 
@@ -776,12 +818,19 @@ Each diff passes through the redaction every tool's source does, read as the fil
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
 
-The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there.
+Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On MySQL, MariaDB and SQLite the full detail says "_Index usage is not available for the MySQL database family._", or SQLite. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter.
+
+The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there. Solid Cache's stats are read from its database, so when that is a SQLite file that is not there, the cache section says the database does not exist yet and creates nothing.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 | `section` | enum | - | One section only: `database`, `cache`, `jobs`, `connections` |
+| `database` | string | the primary | The app database whose adapter, table sizes, index usage and pending migrations the database section shows, named and checked as `rails_query`'s `database` is, whatever the `section`. A name that cannot be reached is an error for every section, and a section that does not read `database` says so |
+
+With no `database`, pending migrations are read for every database the running environment configures and migrates, each from its own `schema_migrations`. With more than one, the line names the databases that were read (`**Migrations:** all up to date in primary, queue`). A database that could not be read gets a line of its own with the reason, `_Pending migrations could not be read for <name>: <reason>_`, and the others are still reported. An in-memory database is left out. Under a named database the section shows that database's own. For a replica, or a database whose `config/database.yml` entry turns `database_tasks` off, it says Rails runs no migrations on it. The connections section is always about the app's own pools.
+
+A named database is an error whatever the `section` when it is not configured here, lives in memory outside the primary, has a SQLite file that is not there, has an adapter whose gem did not load, or has a server that does not answer. The last two answers name the database, say what stopped the connection and say what to do. With no `database`, a primary whose SQLite file is not there or that cannot be reached is a note in the Database section, and the other sections still answer. Nothing is created either way. On the static tier the whole tool is unavailable, with or without `database`.
 
 ### `rails_session_context`
 
@@ -790,7 +839,7 @@ Session-aware context tracking across tool calls within a conversation. Pass `ac
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `action` | enum | - | `status` (queried tools with timestamps), `summary` (short recap), `reset` (clear this conversation's record) |
-| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken |
+| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken. A retired name such as `get_gems` is recorded as `rails_get_config` with its section |
 
 Each conversation has its own record: over HTTP, one server process serves every client, and each client's `Mcp-Session-Id` keeps its calls, and its `reset`, to itself. A tool that answers by calling others (`rails_get_context`, `rails_diagnose`, `rails_review_changes`) is recorded as the one call the client made.
 

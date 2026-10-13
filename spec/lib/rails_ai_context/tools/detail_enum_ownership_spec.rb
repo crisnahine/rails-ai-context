@@ -21,7 +21,9 @@ RSpec.describe "DetailLevel owns the schema enum" do
   end
 
   it "builds every tool's detail property, wording aside" do
-    tools = RailsAiContext::Tools::BaseTool.registered_tools.select(&:detail_param?)
+    config = RailsAiContext::Tools::GetConfig
+    renderers = config::SECTIONS.reject(&:app?).map(&:renderer)
+    tools = (RailsAiContext::Tools::BaseTool.registered_tools + renderers).select(&:detail_param?)
 
     expect(tools.size).to be >= 20
 
@@ -32,12 +34,23 @@ RSpec.describe "DetailLevel owns the schema enum" do
     end
   end
 
+  it "gives every served tool that takes detail the shared levels" do
+    served = RailsAiContext::Server.exposed_tools.select { |tool| tool.respond_to?(:input_schema) }
+    with_detail = served.select { |tool| tool.input_schema.to_h.dig(:properties, :detail) }
+
+    expect(with_detail.map(&:tool_name)).to include("rails_onboard")
+    with_detail.each do |tool|
+      expect(tool.input_schema.to_h.dig(:properties, :detail, :enum)).to eq(RailsAiContext::DetailLevel::ALL),
+        "#{tool.tool_name} takes other detail levels"
+    end
+  end
+
   it "leaves no tool spelling the detail property by hand" do
     offenders = Dir.glob(File.join(lib_root, "rails_ai_context", "tools", "*.rb"))
       .select { |f| File.read(f).match?(/detail: \{/) }
       .map { |f| File.basename(f) }
 
-    expect(offenders).to eq([ "onboard.rb" ]),
+    expect(offenders).to be_empty,
       "Tools spelling the detail hash instead of calling DetailLevel.schema: #{offenders.join(', ')}"
   end
 end

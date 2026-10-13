@@ -1,24 +1,200 @@
 # frozen_string_literal: true
 
+require "json"
+
 module RailsAiContext
   module Tools
     class GetConfig < BaseTool
       tool_name "rails_get_config"
-      description "Get Rails app configuration: cache store, session store, timezone, queue adapter, custom middleware, initializers. " \
-        "Use when: configuring caching, checking session/queue setup, or seeing what initializers exist. " \
-        "No parameters needed. Returns non-default middleware and all initializers."
 
-      input_schema(properties: {})
+      # One part of the answer. `tool_name` is the tool that answered it, a retired
+      # name for every section but app; skip_tools turns the section off by it.
+      Section = Data.define(:name, :tool_name, :params, :summary) do
+        def app?
+          name == "app"
+        end
 
-      guide_row(
-        order: 21,
-        mcp: "rails_get_config",
-        summary: "Database adapter, auth, assets, cache, queue, Action Cable"
-      )
+        # The class that renders it; the app section is GetConfig's own.
+        def renderer
+          BaseTool.tool_class(tool_name)
+        end
+
+        def on?(config = RailsAiContext.configuration)
+          !config.skip_tools.include?(tool_name)
+        end
+
+        # On, and rails_get_config is the gem's own tool, with no custom one in its place.
+        def served?(config = RailsAiContext.configuration)
+          on?(config) && RailsAiContext::Server.served_tool("rails_get_config", config).equal?(GetConfig)
+        end
+
+        def off_message
+          "The `#{name}` section of rails_get_config is turned off in this app: skip_tools lists #{tool_name} " \
+            "(.rails-ai-context.yml or config/initializers/rails_ai_context.rb). Take it out of skip_tools to use it."
+        end
+      end
+
+      SECTIONS = [
+        Section.new(name: "app", tool_name: "rails_get_config", params: [],
+                    summary: "database, auth, assets, cache, session, queue, Action Cable, middleware, initializers"),
+        Section.new(name: "gems", tool_name: "rails_get_gems", params: %i[category offset limit], summary: "notable gems by category"),
+        Section.new(name: "frontend", tool_name: "rails_get_frontend_stack", params: %i[detail],
+                    summary: "JS framework, build tool, TypeScript, package manager"),
+        Section.new(name: "api", tool_name: "rails_get_api", params: %i[detail],
+                    summary: "serializers, GraphQL, versioning, CORS, rate limiting, pagination"),
+        Section.new(name: "engines", tool_name: "rails_get_engines", params: [], summary: "mounted engines and Rack apps"),
+        Section.new(name: "conventions", tool_name: "rails_get_conventions", params: [], summary: "architecture and patterns"),
+        Section.new(name: "autoload", tool_name: "rails_get_autoload", params: [], summary: "Zeitwerk paths, inflections"),
+        Section.new(name: "active_support", tool_name: "rails_get_active_support", params: [],
+                    summary: "concerns, notifications, on_load hooks"),
+        Section.new(name: "env", tool_name: "rails_get_env", params: %i[detail],
+                    summary: "names of environment variables and credentials keys"),
+        Section.new(name: "env_config", tool_name: "rails_get_env_config", params: %i[environment offset limit],
+                    summary: "config/environments/*.rb per environment"),
+        Section.new(name: "i18n", tool_name: "rails_get_i18n", params: %i[locale offset limit], summary: "locales, locale files, coverage")
+      ].freeze
+
+      def self.section_named(name)
+        SECTIONS.find { |section| section.name == name.to_s.downcase }
+      end
+
+      # The section a retired tool name stands for, or nil.
+      def self.retired_section(tool_name)
+        SECTIONS.find { |section| !section.app? && section.tool_name == tool_name.to_s }
+      end
+
+      def self.sections_on(config = RailsAiContext.configuration)
+        SECTIONS.select { |section| section.on?(config) }
+      end
+
+      # Each parameter's schema, less the description that names its sections.
+      PARAM_SCHEMAS = {
+        detail: [ {}, "summary, standard (default) or full." ],
+        category: [
+          { type: "string", enum: Introspectors::GemIntrospector::NOTABLE_GEMS.values.map { |gem| gem[:category].to_s }.uniq + %w[all] },
+          "only this category. Default: all."
+        ],
+        environment: [ { type: "string" }, "only this environment (e.g. \"production\")." ],
+        locale: [ { type: "string" }, "only this locale (e.g. \"fr\")." ],
+        offset: [ { type: "integer" }, "skip this many entries. Default: 0." ],
+        limit: [ { type: "integer" }, "max entries. Default: 50." ]
+      }.freeze
+
+      # The schema over the given sections: a parameter none of them reads is
+      # left out, and `section` is required once app, its default, is not among them.
+      def self.schema_for(sections, any_section: false)
+        default = sections.any?(&:app?)
+        about = default ? "Default: app." : "Required: the app section is turned off in this app."
+        properties = { section: { type: "string", enum: sections.map(&:name), description: "Which section to answer. #{about}" } }
+        properties[:section].delete(:enum) if any_section
+        PARAM_SCHEMAS.each do |param, (schema, text)|
+          readers = sections.select { |section| section.params.include?(param) }
+          next if readers.empty?
+
+          text = "#{readers.map(&:name).join(', ')}: #{text}"
+          properties[param] = param == :detail ? RailsAiContext::DetailLevel.schema(text) : schema.merge(description: text)
+        end
+        default ? { properties: properties } : { properties: properties, required: [ "section" ] }
+      end
+
+      def self.description_for(sections)
+        listed = sections.map { |section| "#{section.name} (#{'default: ' if section.app?}#{section.summary})" }
+        "Get the app's configuration, one section per call. section#{' (required)' if sections.none?(&:app?)}: #{listed.join(', ')}."
+      end
+
+      # The schema that validates a call takes any section and every parameter, so `call` gives
+      # the one refusal for a section that is off or unknown; tools/list publishes the sections that are on.
+      VALIDATING_SCHEMA = ArgumentSchema.new(schema_for(SECTIONS, any_section: true))
+      description(description_for(SECTIONS))
+
+      def self.input_schema(*args)
+        args.empty? ? VALIDATING_SCHEMA : super
+      end
+
+      def self.input_schema_value
+        MCP::Tool::InputSchema.new(schema_for(sections_on))
+      end
+
+      def self.description_value
+        description_for(sections_on)
+      end
+
+      # The row calls the default section, or the first one on when app is off.
+      def self.guide_row
+        app, others = sections_on.partition(&:app?)
+        names = others.map(&:name).join(", ")
+        summary = [ ("App config (database, auth, assets, cache, queue)" if app.any?),
+                    ("`section` picks #{app.any? ? 'another' : 'one'}: #{names}" unless names.empty?) ].compact.join("; ")
+        first = others.first unless app.any?
+        GuideRow.new(order: 20, mcp: first ? %(rails_get_config(section:"#{first.name}")) : "rails_get_config",
+                     cli_args: ("section=#{first.name}" if first), summary: summary)
+      end
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(server_context: nil)
+      def self.call(section: nil, detail: nil, category: nil, offset: nil, limit: nil, environment: nil, locale: nil, server_context: nil)
+        on = sections_on.map(&:name).join(", ")
+        return error_response(RailsAiContext::Server.skipped_tool_message(tool_name)) if on.empty?
+
+        asked = section_named(section.nil? ? "app" : section)
+        return error_response("`section` does not take '#{echo_input(section)}'. It takes: #{on}.") unless asked
+        return error_response(section.nil? ? section_required_message : "#{asked.off_message} The sections that are on: #{on}.") unless asked.on?
+
+        given = { detail: detail, category: category, offset: offset, limit: limit, environment: environment, locale: locale }.compact
+        response = asked.app? ? app_section : render(asked, given)
+        append_note(response, unread_note(asked.name, given.keys - asked.params))
+      end
+
+      # A retired name's answer: its section's, ending with the call to make
+      # instead, which carries the arguments the section reads. A refusal ends as it is.
+      def self.with_retired_note(response, section, arguments)
+        response.error? ? response : append_note(response, retired_note(section, arguments))
+      end
+
+      # The refusal of a parameter no section reads in a retired name's call, naming its own section's; or nil.
+      def self.retired_refusal(section, arguments)
+        unknown = unknown_param_names(arguments.keys, input_schema.to_h[:properties])
+        unknown_param_response(unknown, section.params.map(&:to_s)) if unknown.any?
+      end
+
+      # A value goes into the call only when it reads the same in a code span, an MCP call and a shell command.
+      CALL_SAFE = /\A[\w.-]+\z/
+
+      # Every other value, and one too long to echo whole, is named after the call.
+      def self.retired_note(section, arguments)
+        spanned, outside = arguments.slice(*section.params).partition do |_, value|
+          value.is_a?(Integer) || value == true || value == false || (value.is_a?(String) && value.match?(CALL_SAFE) && echo_input(value) == value)
+        end
+        read = spanned.map { |key, value| "#{key}:#{JSON.generate(value)}" }.join(", ")
+        call = pointer(section.tool_name, read)
+        same = ", with the same #{outside.map { |key, _| "`#{key}`" }.join(' and ')}" if outside.any?
+        cli_form("\n\n_#{section.tool_name} is now #{call}#{same}; call that instead._") if call
+      end
+
+      # The renderer answers as a tool another tool called, so an answered call is recorded here.
+      private_class_method def self.render(section, given)
+        section.renderer.call(**given.slice(*section.params)).tap { |response| record_call(response_text(response)) unless response.error? }
+      end
+
+      private_class_method def self.section_required_message
+        "`section` is required in this app: skip_tools lists rails_get_config, which turns the default `app` section off. " \
+          "It takes: #{sections_on.map(&:name).join(', ')}."
+      end
+
+      # Only a detail the caller sent is normalized, so a section that does
+      # not read it can say so.
+      def self.normalize_detail(kwargs)
+        kwargs[:detail].nil? ? kwargs : super
+      end
+
+      private_class_method def self.unread_note(section, unread)
+        return nil if unread.empty?
+
+        names = unread.map { |name| "`#{name}`" }.join(", ")
+        "\n\n_The `#{section}` section does not read #{names}, so #{unread.size > 1 ? 'they were' : 'it was'} ignored._"
+      end
+
+      private_class_method def self.app_section
         if static_refusal_for(:config) && (rackup = rackup_lines).any?
           return text_response(([ unavailable_text ] + rackup).join("\n"))
         end
@@ -197,8 +373,9 @@ module RailsAiContext
         env = Rails.configuration.database_configuration&.dig(Rails.env) rescue nil
         return nil unless env.is_a?(Hash)
 
-        # A multi-database environment nests one block per database; primary is the app's own.
-        env["adapter"] || (env["primary"] || env.values.find { |v| v.is_a?(Hash) })&.dig("adapter")
+        # A multi-database environment nests one block per database; the first is the app's own.
+        adapter = env["adapter"] || env.values.find { |v| v.is_a?(Hash) }&.dig("adapter")
+        adapter && SchemaAdapter.display(adapter.to_s)
       end
 
       # The auth section's rule, read from the files when the section did not

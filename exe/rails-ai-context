@@ -92,10 +92,11 @@ TYPED_IN_ENV = "RAILS_AI_CONTEXT_TYPED_IN"
 # `context` either.
 MCP_REFRESH_FLAG_SINCE = "5.33.0"
 
-# After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
-# decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
-ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
+# The tool names and `config` sections whose `--environment` is their own filter and leaves RAILS_ENV alone.
+# Decided before boot, when no tool schema can load; cli_smoke_spec holds the list to the schemas.
+ENVIRONMENT_FILTER_OWNERS = %w[env_config].freeze
 
+require "rbconfig"
 require "shellwords"
 require "thor"
 
@@ -237,10 +238,20 @@ class RailsAiContextCLI < Thor
         return
       end
 
+      # Value-taking class options land in args too.
+      @app_path_override = extract_value_flag!(args, "--app-path")
+      # `--app-path --help` names no path: the flag took the help flag for its value.
+      if %w[--help -h].include?(@app_path_override)
+        @app_path_override = nil
+        args << "--help"
+      end
+
       if args.include?("--help") || args.include?("-h")
+        # The app's configuration file says which tools and sections it serves; reading it boots nothing.
+        root = app_root.resolve(cwd: Dir.pwd, app_path: @app_path_override || options[:app_path]).root
         entry_boot.require_gem_without_app!
-        tool_class = ::RailsAiContext::CLI::ToolRunner.new(name, []).tool_class
-        puts ::RailsAiContext::CLI::ToolRunner.tool_help(tool_class)
+        ::RailsAiContext::Configuration.auto_load!(root || Dir.pwd)
+        puts ::RailsAiContext::CLI::ToolRunner.new(name, []).help
         return
       end
 
@@ -252,11 +263,15 @@ class RailsAiContextCLI < Thor
       json_mode = true if args.delete("--json")
       json_mode = true if args.delete("-j")
 
-      # Value-taking class options land in args too. A tool that declares `environment`
-      # keeps it: booting in the env it filters for fails where the app has no database.
-      @app_path_override = extract_value_flag!(args, "--app-path")
+      # A tool that declares `environment` keeps it: booting in the env it filters for fails where the app has no database.
       environment_flag = extract_value_flag!(args, "--environment")
-      if environment_flag && ENVIRONMENT_PARAM_TOOLS.include?(name.to_s.delete_prefix("rails_").delete_prefix("get_"))
+      short = name.to_s.delete_prefix("rails_").delete_prefix("get_")
+      # Read here because the tool parses its own arguments after boot, and the section decides
+      # which env boots: the last one named, as the tool reads it.
+      section = args.each_with_index.filter_map do |arg, at|
+        arg == "--section" ? args[at + 1] : (arg.split("=", 2).last if arg.start_with?("--section=", "section="))
+      end.last
+      if environment_flag && (ENVIRONMENT_FILTER_OWNERS.include?(short) || (short == "config" && ENVIRONMENT_FILTER_OWNERS.include?(section.to_s.downcase)))
         args.push("--environment", environment_flag)
       else
         @environment_override = environment_flag

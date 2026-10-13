@@ -118,6 +118,43 @@ module RailsAiContext
       end
     end
 
+    # Where a multi-database entry is configured when that is not the running environment, in words, or nil.
+    def scope_words(database)
+      return nil unless database.is_a?(Hash)
+
+      environments = Array(database[:environments])
+      return "#{environments.first} only" if environments.one?
+      return AppDatabases.environment_phrase(environments) if environments.any?
+
+      "committed dump only" if database[:dump_only]
+    end
+
+    # The same in parentheses, to follow the database's name.
+    def database_mark(database)
+      words = scope_words(database)
+      words ? " (#{words})" : ""
+    end
+
+    def named_scope_words(context, name)
+      scope_words(list(context, :multi_database, :databases).grep(Hash).find { |database| database[:name].to_s == name.to_s })
+    end
+
+    # What a generated file calls the primary: its own name where another database is the one named primary.
+    def primary_label(context)
+      name = section(context, :multi_database)&.dig(:primary_name)
+      name && database_named?(context, "primary") ? name.to_s : "primary"
+    end
+
+    def database_named?(context, name)
+      list(context, :multi_database, :databases).grep(Hash).any? { |database| database[:name].to_s == name }
+    end
+
+    # The mark for a database known by its database.yml name.
+    def named_database_mark(context, name)
+      words = named_scope_words(context, name)
+      words ? " (#{words})" : ""
+    end
+
     # Each database past the primary that the schema section read tables
     # for, by its database.yml name.
     def secondary_databases(schema)
@@ -193,7 +230,7 @@ module RailsAiContext
 
       secondary = schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases].keys : []
       [ nil, *secondary ].filter_map do |db|
-        live = db.nil? && !parsed_schema?(schema) && schema[:adapter].to_s.match?(/postg/i)
+        live = db.nil? && !parsed_schema?(schema) && DatabaseFamily.of(schema[:adapter].to_s).postgresql?
         shown, data = Introspectors::SchemaIntrospector.qualified_table(name.to_s, database: db&.to_s, live: live)
         # The fourth entry is the name the listing shows the table under, which its models read.
         [ db&.to_s, name.to_s, data, shown ] if data

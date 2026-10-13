@@ -2,7 +2,7 @@
 
 # Custom Tools
 
-**Build your own MCP tools that run alongside the 45 built-in ones.**
+**Build your own MCP tools that run alongside the 35 built-in ones.**
 
 [Tools Reference](TOOLS.md) · [Configuration](CONFIGURATION.md) · [Architecture](ARCHITECTURE.md) · [FAQ](FAQ.md)
 
@@ -11,7 +11,7 @@
 ---
 
 > [!NOTE]
-> Custom tools have full access to your Rails environment - ActiveRecord, services, mailers, everything. They appear alongside the 45 built-in tools in both MCP and CLI.
+> Custom tools have full access to your Rails environment - ActiveRecord, services, mailers, everything. They appear alongside the 35 built-in tools in both MCP and CLI.
 
 ## Creating a custom tool
 
@@ -209,6 +209,12 @@ RailsAiContext.configure do |config|
   config.skip_tools   = %w[rails_security_scan]
 end
 ```
+
+The replacement is listed with the app's tools. The gem's own hints, the guide's steps and `rails_get_context` leave it out, since they would call it with the built-in's arguments.
+
+A custom `rails_get_config` listed in `skip_tools` replaces the built-in with its sections: the old names such as `rails_get_gems` then reach nothing, and no answer points at a section.
+
+A custom tool may also reuse one of those old names with the built-in left on. It is served as its own tool. The gem's own hints still mean the built-in section and print it as `rails_get_config(section:"gems")`.
 
 ## Tips
 

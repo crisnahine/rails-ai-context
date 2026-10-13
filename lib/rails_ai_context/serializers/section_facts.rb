@@ -41,11 +41,21 @@ module RailsAiContext
 
         parts = [ "#{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}" ]
         Payload.secondary_databases(schema).each do |name, db|
+          label = "#{name}#{Payload.named_database_mark(ctx, name)}"
+          next parts << "#{label}: #{empty_database_text(db)}" if db[:tables].empty?
+
           tables = CountPhrase.call(db[:total_tables].to_i, "table")
           adapter = SchemaAdapter.secondary_label(ctx, name, db)
-          parts << (framework_database_text(name, db) || "#{name}: #{adapter ? "#{adapter} - #{tables}" : tables}")
+          parts << (framework_database_text(label, db) || "#{label}: #{adapter ? "#{adapter} - #{tables}" : tables}")
         end
         "- Database: #{parts.join('; ')}"
+      end
+
+      # A dump that was read and holds no table says so, in the schema section's words.
+      def empty_database_text(db)
+        return "tables not read" if db[:unread]
+
+        db[:dump] ? "#{db[:dump]} #{Introspectors::SchemaIntrospector::NO_TABLES}" : "no tables"
       end
 
       # A database a Rails framework keeps to itself, as every file names it:
@@ -65,7 +75,7 @@ module RailsAiContext
         pending = Payload.pending_migrations(ctx) if migrations.key?(:pending)
         parts = [ migration_counts(migrations[:total], pending) ]
         secondary = migrations[:secondary_databases].is_a?(Hash) ? migrations[:secondary_databases] : {}
-        secondary.each { |name, db| parts << "#{name}: #{migration_counts(db[:total], db[:pending])}" }
+        secondary.each { |name, db| parts << "#{name}#{Payload.named_database_mark(ctx, name)}: #{migration_counts(db[:total], db[:pending])}" }
         "- Migrations: #{parts.join('; ')}"
       end
 

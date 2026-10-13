@@ -31,7 +31,7 @@ module RailsAiContext
       )
 
       guide_row(
-        order: 34,
+        order: 29,
         mcp: "rails_generate_test(model:\"X\")",
         cli_args: "model=X",
         summary: "Generate test scaffolding matching project patterns (framework, factories, style)"
@@ -61,8 +61,6 @@ module RailsAiContext
         elsif file
           generate_file_test(file.strip, framework, tests_data, type)
         end
-      rescue => e
-        text_response("Generate test error: #{e.message}")
       end
 
       class << self
@@ -106,7 +104,7 @@ module RailsAiContext
           key = fuzzy_find_key(models.keys, model_name)
           unless key
             return not_found_response("Model", model_name, models.keys.sort,
-              recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+              recovery_tool: call_pointer("rails_get_model_details", %(detail:"summary"), "to see all models"))
           end
 
           data = models[key]
@@ -512,7 +510,7 @@ module RailsAiContext
           ctrl_class = RailsAiContext::Payload.find_controller(cached_context, ctrl_name)
           if known.any? && ctrl_class.nil?
             return not_found_response("Controller", ctrl_name, known.keys.sort,
-              recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
+              recovery_tool: call_pointer("rails_get_controllers", %(detail:"summary"), "to see all controllers"))
           end
 
           ctrl_class ||= ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
@@ -1673,7 +1671,7 @@ module RailsAiContext
             key = fuzzy_find_key(models.keys, model_name)
             unless key
               return not_found_response("Model", model_name, models.keys.sort,
-                recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+                recovery_tool: call_pointer("rails_get_model_details", %(detail:"summary"), "to see all models"))
             end
             RailsAiContext::Payload.controller_for_route_key(cached_context, key.to_s.underscore.pluralize)&.first
           end

@@ -38,11 +38,11 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         allow(described_class).to receive(:cached_context).and_return({ app_name: "Dummy", models: {}, tests: tests })
 
         standard = described_class.call(detail: "standard").content.first[:text]
-        quick = described_class.call(detail: "quick").content.first[:text]
+        summary = described_class.call(detail: "summary").content.first[:text]
 
         expect(standard).to include("Framework: not read.")
         expect(standard).not_to include("no tests yet", "Data setup: inline")
-        expect(quick).to include("with its tests not read")
+        expect(summary).to include("with its tests not read")
       end
     end
   end
@@ -123,6 +123,17 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       })
     end
 
+    it "marks a database another environment configures, as every other surface does" do
+      configured = [ { name: "primary", adapter: "postgresql" }, { name: "analytics", adapter: "sqlite3", environments: [ "production" ] },
+                     { name: "queue", adapter: "sqlite3", environments: %w[staging production] }, { name: "cache", adapter: "sqlite3" } ]
+      allow(described_class).to receive(:cached_context).and_return({ app_name: "Metrics", models: {}, schema: schema, multi_database: { databases: configured } })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("plus the analytics database (production only) on SQLite (2 tables).")
+      expect(text).to include("databases of their own: queue (staging and production), cache.\n")
+    end
+
     it "counts every database the app's dumps declare and names the framework's in one line" do
       text = described_class.call(detail: "standard").content.first[:text]
 
@@ -131,10 +142,46 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("solid_queue_jobs")
     end
 
-    it "counts the app's tables across its databases in the quick overview" do
-      text = described_class.call(detail: "quick").content.first[:text]
+    {
+      "one" => [ { "cache" => "solid_cache_entries" },
+                 "Solid Cache keeps its tables in a database of its own: cache." ],
+      "two" => [ { "queue" => "solid_queue_jobs", "cache" => "solid_cache_entries" },
+                 "Solid Queue and Solid Cache keep their tables in databases of their own: queue, cache." ],
+      "three" => [ { "cache" => "solid_cache_entries", "queue" => "solid_queue_jobs", "cable" => "solid_cable_messages" },
+                   "Solid Cache, Solid Queue and Solid Cable keep their tables in databases of their own: cache, queue, cable." ],
+      "one framework's two" => [ { "queue" => "solid_queue_jobs", "queue_archive" => "solid_queue_jobs" },
+                                 "Solid Queue keeps its tables in databases of its own: queue, queue_archive." ]
+    }.each do |count, (databases, sentence)|
+      it "words #{count} Solid database#{"s" unless count == "one"} as a sentence" do
+        schema[:secondary_databases] = databases.to_h { |name, table| [ name, { total_tables: 1, tables: { table => {} } } ] }
+
+        expect(described_class.call(detail: "standard").content.first[:text]).to include("\n#{sentence}\n")
+      end
+    end
+
+    it "counts the app's tables across its databases in the summary overview" do
+      text = described_class.call(detail: "summary").content.first[:text]
 
       expect(text).to include("5 tables in 2 databases")
+    end
+
+    it "says a secondary whose dump was not read was not read, at every level, and counts no tables for it" do
+      schema[:secondary_databases]["warehouse"] = { tables: {}, total_tables: 0, unread: true,
+                                                    note: "db/warehouse_schema.rb is over the size limit, so its tables are not listed" }
+
+      summary, standard, full = %w[summary standard full].map { |detail| described_class.call(detail: detail).content.first[:text] }
+
+      expect(summary).to include("- 5 tables in 2 databases, the warehouse database not read.")
+      [ standard, full ].each do |text|
+        expect(text).to include("plus the analytics database on SQLite (2 tables), plus the warehouse database (tables not read).")
+      end
+      expect([ summary, standard, full ].join).not_to include("0 tables")
+    end
+
+    it "names the unread databases in the summary when no other secondary was read" do
+      schema[:secondary_databases] = %w[warehouse ledger].to_h { |name| [ name, { tables: {}, total_tables: 0, unread: true } ] }
+
+      expect(described_class.call(detail: "summary").content.first[:text]).to include("- 3 tables, the warehouse and ledger databases not read")
     end
   end
 
@@ -340,11 +387,17 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Welcome")
     end
 
-    it "quick mode returns a paragraph without section headers" do
-      result = described_class.call(detail: "quick")
+    it "summary returns a paragraph without section headers" do
+      result = described_class.call(detail: "summary")
       text = result.content.first[:text]
       expect(text).not_to include("## ")
       expect(text).to include("Rails")
+    end
+
+    it "answers the retired quick level with the standard walkthrough and the valid levels" do
+      text = described_class.call(detail: "quick").content.first[:text]
+      expect(text).to include("## Stack")
+      expect(text).to include("\"quick\" is not a valid `detail`; showing standard. Valid: summary, standard, full.")
     end
 
     it "standard mode includes structured sections" do
@@ -511,7 +564,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
     # Both depths describe the same app, so the depth that says less must not
     # be the one that claims more.
-    it "keeps quick silent about a ruby version the app declares nowhere" do
+    it "keeps summary silent about a ruby version the app declares nowhere" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",
         rails_version: "8.0",
@@ -520,7 +573,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         tier: "static"
       })
 
-      text = described_class.call(detail: "quick").content.first[:text]
+      text = described_class.call(detail: "summary").content.first[:text]
 
       expect(text).to include("TestApp** is a Rails 8.0 app")
       expect(text).not_to include("UNAVAILABLE")
@@ -540,11 +593,11 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       })
 
       standard = described_class.call(detail: "standard").content.first[:text]
-      quick = described_class.call(detail: "quick").content.first[:text]
+      summary = described_class.call(detail: "summary").content.first[:text]
 
       expect(standard).to include("TestApp is a Rails application declaring Ruby 3.4 on")
-      expect(quick).to include("**TestApp** is a Rails app")
-      [ standard, quick ].each { |text| expect(text.lines.first(4).join).not_to include("UNAVAILABLE") }
+      expect(summary).to include("**TestApp** is a Rails app")
+      [ standard, summary ].each { |text| expect(text.lines.first(4).join).not_to include("UNAVAILABLE") }
     end
 
     it "names the Ruby engine the app declares, with the Ruby version it implements" do
@@ -554,10 +607,10 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       })
 
       standard = described_class.call(detail: "standard").content.first[:text]
-      quick = described_class.call(detail: "quick").content.first[:text]
+      summary = described_class.call(detail: "summary").content.first[:text]
 
       expect(standard).to include("Fx is a Rails 8.1.4 application declaring JRuby 9.4.8.0 (Ruby 3.1.4) on")
-      expect(quick).to include("**Fx** is a Rails 8.1.4 / JRuby 9.4.8.0 (Ruby 3.1.4) app")
+      expect(summary).to include("**Fx** is a Rails 8.1.4 / JRuby 9.4.8.0 (Ruby 3.1.4) app")
     end
 
     it "names the engine alone when the app declares no Ruby version" do
@@ -581,7 +634,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         RailsAiContext::GemLock::Spec.new({}, reason: "x", absent: true, outside_gemfile: "../../Gemfile")
       )
 
-      %w[quick standard].each do |detail|
+      %w[summary standard].each do |detail|
         text = described_class.call(detail: detail).content.first[:text]
 
         expect(text).to include("Its gems and Rails version are not read: config/boot.rb points Bundler at `../../Gemfile`, outside the app's git repository.")
@@ -664,7 +717,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Payment-related models: Payment, CardPayment, BankTransfer.")
     end
 
-    context "quick mode" do
+    context "summary" do
       it "includes frontend summary from architecture conventions" do
         allow(described_class).to receive(:cached_context).and_return({
           app_name: "MyApp",
@@ -677,7 +730,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           gems: { notable_gems: [] },
           tests: { framework: "minitest" }
         })
-        result = described_class.call(detail: "quick")
+        result = described_class.call(detail: "summary")
         text = result.content.first[:text]
 
         expect(text).to include("Hotwire + Phlex frontend")
@@ -710,7 +763,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           tests: { framework: "no tests yet (minitest in the bundle)" }
         })
 
-        text = described_class.call(detail: "quick").content.first[:text]
+        text = described_class.call(detail: "summary").content.first[:text]
 
         expect(text).to include("no tests yet")
         expect(text).not_to include("tested with")
@@ -773,7 +826,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           tests: { framework: "minitest" }
         })
 
-        text = described_class.call(detail: "quick").content.first[:text]
+        text = described_class.call(detail: "summary").content.first[:text]
 
         expect(text).to include("**Acme** is a Rails 8.0 / Ruby 3.4 app -")
         expect(text).not_to include("messaging")
@@ -791,7 +844,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           gems: { notable_gems: [] },
           tests: { framework: "minitest" }
         })
-        result = described_class.call(detail: "quick")
+        result = described_class.call(detail: "summary")
         text = result.content.first[:text]
 
         expect(text).to include("25 tables")
@@ -841,7 +894,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           jobs: { jobs: [], mailers: [], channels: [], workers: [ { name: "Billing::Invoices::CreateWorker" } ] }
         })
 
-        expect(described_class.call(detail: "quick").content.first[:text]).to include("1 Sidekiq worker")
+        expect(described_class.call(detail: "summary").content.first[:text]).to include("1 Sidekiq worker")
       end
 
       it "leaves the caveat off when the workers are the background work" do

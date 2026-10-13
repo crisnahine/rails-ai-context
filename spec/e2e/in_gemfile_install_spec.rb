@@ -164,13 +164,13 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       # The file is applied before this initializer, so an in-place edit here -
       # the idiom the gem's own remedy strings taught - survives the load.
       File.write(init, "#{original_init}\nRailsAiContext.configure do |config|\n" \
-                       "  config.skip_tools << \"rails_get_gems\"\nend\n")
+                       "  config.skip_tools << \"rails_get_routes\"\nend\n")
 
       with_edit = @cli.cli("tool", "--list")
       expect(with_edit.success?).to be(true), with_edit.to_s
       expect(with_edit.stdout).not_to match(/^\s+query\s/)
       expect(with_edit.stdout).not_to match(/^\s+read_logs\s/)
-      expect(with_edit.stdout).not_to match(/^\s+gems\s/)
+      expect(with_edit.stdout).not_to match(/^\s+routes\s/)
       expect(with_edit.stdout).to match(/^\s+schema\s/)
 
       File.write(init, original_init)
@@ -199,11 +199,11 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
   end
 
   describe "CLI tool invocations" do
-    # Representative sample of the 45 tools - covers the main output
-    # channels (schema, routes, models, components, etc.). Running ALL 45
+    # Representative sample of the tools - covers the main output
+    # channels (schema, routes, models, components, etc.). Running every tool
     # via subprocess per describe block would push wall-clock past 5
-    # minutes; the in-process ToolRunner smoke spec covers complete
-    # coverage (spec/cli_smoke_spec.rb, 45 tools in 0.15s).
+    # minutes; the in-process ToolRunner smoke spec (spec/cli_smoke_spec.rb)
+    # covers them all.
     # `context` answers about one thing, so it is asked about one: called bare
     # it refuses, which is the documented exit 1 and not what this block is
     # for. The scaffolded Post is the app's own model.

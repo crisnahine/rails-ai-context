@@ -113,7 +113,7 @@ rails 'ai:tool[search_code]' pattern="your_method_name" match_type=trace
 rails 'ai:tool[analyze_feature]' feature=auth
 
 # 3. Get your app's actual conventions - not generic Rails patterns
-rails 'ai:tool[conventions]'
+rails 'ai:tool[config]' section=conventions
 ```
 
 ## What to do next

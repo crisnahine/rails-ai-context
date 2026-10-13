@@ -37,11 +37,10 @@ module RailsAiContext
       migrate_dirs_of(root, Introspectors::SchemaDumpPath.database_name(root, dump_path))
     end
 
-    # The same, for the database database.yml names `name`.
+    # The same, for the app database named `name`.
     def migrate_dirs_of(root, name)
-      entry = RailsAiContext::DatabaseYml.entry(root, name)
-      Introspectors::MigrationReplay.configured_dirs(root, entry) ||
-        [ File.join(root.to_s, "db", name == "primary" || entry ? "migrate" : "#{name}_migrate") ]
+      found = AppDatabases.for(root).of_dump_name(name)
+      found ? found.migrate_dirs : [ File.join(root.to_s, "db", name == "primary" ? "migrate" : "#{name}_migrate") ]
     end
 
     # Every versioned migration file under the directory or directories. One file scan behind

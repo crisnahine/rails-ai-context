@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module RailsAiContext
   module Introspectors
     # Discovers multi-database configuration: multiple databases, replicas,
@@ -13,22 +15,28 @@ module RailsAiContext
         dbs = discover_databases
         {
           databases: dbs,
-          replicas: dbs.select { |d| d[:replica] }.map { |d| { name: d[:name], adapter: d[:adapter] } },
+          replicas: dbs.select { |d| d[:replica] }.map { |d| d.slice(:name, :adapter, :environments) },
           sharding: detect_sharding,
           model_connections: detect_model_connections,
           multi_db: dbs.size > 1
-        }.merge({ example_adapters: example_adapters }.compact)
+        }.merge({ example_adapters: example_adapters, primary_name: primary_name }.compact)
       end
 
       private
 
-      def discover_databases
-        booted = booted_databases
-        # A boot that failed leaves the handlers empty without raising, and an
-        # app that declares two databases is not an app with none.
-        booted.any? ? booted : file_databases
+      # The primary's database.yml name where it is not "primary": a generated file tells it from a database that is.
+      def primary_name
+        name = RailsAiContext::AppDatabases.for(root).primary&.name.to_s
+        name unless name.empty? || name == "primary"
       rescue => e
-        RailsAiContext.debug_fail(e, file_databases, label: "discover_databases")
+        RailsAiContext.debug_fail(e, nil, label: "primary_name")
+      end
+
+      # Every app database; one the running environment does not configure names where it is configured.
+      def discover_databases
+        RailsAiContext::AppDatabases.for(root).map { |db| database_entry(db) }
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "discover_databases")
       end
 
       # Adapters in the example database files of an app that commits none, read by line since
@@ -113,30 +121,16 @@ module RailsAiContext
         end
       end
 
-      def booted_databases
-        return [] unless defined?(ActiveRecord::Base)
-
-        ActiveRecord::Base.configurations.configs_for(env_name: Rails.env, include_hidden: true).map do |config|
-          info = { name: config.name, adapter: config.adapter }
-          info[:database] = anonymize_db_name(config.database) if config.database
-          info[:replica] = true if config.respond_to?(:replica?) && config.replica?
-          info
+      def database_entry(db)
+        info = { name: db.name, adapter: db.adapter }
+        info[:adapter_default] = true if db.adapter_default
+        database = db.config.database if db.config.respond_to?(:database)
+        info[:database] = anonymize_db_name(database) if database
+        info[:replica] = true if db.replica
+        # Configured only in another environment, or only a committed dump names it.
+        unless db.here
+          db.environments.any? ? info[:environments] = db.environments : info[:dump_only] = true
         end
-      end
-
-      def file_databases
-        databases = RailsAiContext::DatabaseYml.databases(root)
-        # Rails builds the primary from DATABASE_URL when the file has no entry for the env.
-        return ENV["DATABASE_URL"].to_s.empty? ? [] : [ database_entry("primary", {}) ] if databases.empty?
-
-        databases.map { |name, entry| database_entry(name, entry) }
-      end
-
-      def database_entry(name, entry)
-        adapter, from_default = RailsAiContext::DatabaseYml.adapter(name, entry)
-        info = { name: name.to_s, adapter: adapter }
-        info[:adapter_default] = true if from_default
-        info[:replica] = true if entry["replica"] == true
         info
       end
 

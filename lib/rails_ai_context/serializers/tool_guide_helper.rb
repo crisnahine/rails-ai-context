@@ -82,12 +82,11 @@ module RailsAiContext
         exposed_tools.size
       end
 
-      # Whether the server serves the tool. The guide names no other: a step,
-      # rule or pointer whose tool skip_tools removed is left out, or said
-      # without it, so nothing sends the AI to a tool tools/list lacks.
+      # Whether the server serves the gem's own tool under this name. A step, rule or pointer
+      # carries that tool's arguments, so it is left out for a skipped tool and for a custom one in its place.
       def served?(mcp_name)
         @served_tool_names ||= exposed_tools.to_set { |tool| RailsAiContext::Server.tool_label(tool) }
-        @served_tool_names.include?(mcp_name)
+        @served_tool_names.include?(mcp_name) && exposed_tools.include?(RailsAiContext::Tools::BaseTool.tool_class(mcp_name))
       end
 
       # The named tools the server serves, each as tool_ref gives it.
@@ -140,18 +139,30 @@ module RailsAiContext
         ]
       end
 
-      # Rule 3's check before scaffolding: the conventions and gems tools the
+      # Rule 3's check before scaffolding: the conventions and gems sections the
       # server serves, else the app's own files.
       def stack_check_text
-        refs = served_refs("rails_get_conventions", "rails_get_gems")
+        refs = %w[conventions gems].filter_map { |section| section_ref(section) }
         refs.any? ? "Check #{refs.join(" and ")}" : "Check the Gemfile and the code that already does it"
       end
 
+      # A rails_get_config section named once in prose, or nil when skip_tools turned it off.
+      def section_ref(section)
+        return nil unless RailsAiContext::Tools::GetConfig.section_named(section).served?
+
+        tool_ref("rails_get_config", %(section:"#{section}"), "section=#{section}")
+      end
+
       def tools_detail_guidance
+        names = detail_tool_names
+        return [] if names.empty?
+
         lines = [
           "### detail parameter - ALWAYS start with summary",
           "",
-          "Individual lookup tools accept `#{param_text("detail", "summary")}`. Use the right level:",
+          "Tools that take `detail`: #{names.join(", ")}.",
+          "",
+          "Pass `#{param_text("detail", "summary")}` first. Use the right level:",
           "- **summary** - first call, orient yourself (table list, model names, route overview)",
           "- **standard** - working detail (columns with types, associations, action source) - DEFAULT",
           "- **full** - only when you need indexes, foreign keys, code snippets, or complete content",
@@ -165,6 +176,23 @@ module RailsAiContext
           lines << ""
         end
         lines
+      end
+
+      def detail_tool_names
+        taking = exposed_tools.select { |tool| tool.input_schema_value.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
+        taking.map do |tool|
+          name = RailsAiContext::Server.tool_label(tool)
+          name = RailsAiContext::CLI::ToolRunner.short_name(name) if tool_mode == :cli
+          "`#{name}`#{detail_sections_note(tool)}"
+        end
+      end
+
+      # rails_get_config reads `detail` in some sections, and its default one answers that it does not.
+      def detail_sections_note(tool)
+        return nil unless tool.equal?(RailsAiContext::Tools::GetConfig)
+
+        names = tool.sections_on.select { |section| section.params.include?(:detail) }.map(&:name)
+        " (section#{"s" if names.size > 1}: #{names.join(", ")})"
       end
 
       def tools_power_tool_section

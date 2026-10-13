@@ -15,12 +15,16 @@ module RailsAiContext
             type: "string",
             enum: %w[database cache jobs connections],
             description: "Filter to one section. Omit for all sections."
+          },
+          database: {
+            type: "string",
+            description: "The app database whose table sizes and index usage to show, by its config/database.yml name. Default: the primary."
           }
         }
       )
 
       guide_row(
-        order: 38,
+        order: 33,
         mcp: "rails_runtime_info(detail:\"standard\")",
         cli_args: "detail=standard",
         summary: "Live runtime: DB pool, table sizes, cache stats, job queues, pending migrations"
@@ -28,19 +32,21 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: false)
 
-      def self.call(detail: "standard", section: nil, server_context: nil)
+      def self.call(detail: "standard", section: nil, database: nil, server_context: nil)
         if (refusal = static_tier_refusal("Live runtime state"))
           return refusal
         end
+        named = !database.to_s.empty?
+        sections = section ? [ section ] : %w[connections database cache jobs]
+        # The database section leases the named database itself, and refuses one it cannot reach.
+        AppDatabases.lease(rails_app.root, database) { nil } if named && !sections.include?("database")
 
         lines = [ "# Runtime Info", "" ]
-
-        sections = section ? [ section ] : %w[connections database cache jobs]
 
         sections.each do |s|
           result = case s
           when "connections" then gather_connection_pool
-          when "database"    then gather_database(detail)
+          when "database"    then gather_database(detail, database)
           when "cache"       then gather_cache
           when "jobs"        then gather_jobs(detail)
           end
@@ -48,12 +54,15 @@ module RailsAiContext
         end
 
         if lines.size <= 2
-          lines << "_No runtime data available. Ensure the app has a database connection._"
+          lines << "_No runtime data available: no section had anything to show._"
+        end
+        if section && section != "database" && named
+          lines << "_The #{section} section does not read `database`, so #{database} was not used._"
         end
 
         text_response(lines.join("\n"))
-      rescue => e
-        text_response("Runtime info error: #{e.message}")
+      rescue AppDatabases::Error => e
+        error_response(e.message)
       end
 
       class << self
@@ -91,16 +100,29 @@ module RailsAiContext
 
         # ── Database section ─────────────────────────────────────────────
 
-        def gather_database(detail)
+        def gather_database(detail, database)
           return [ "## Database", "", "_ActiveRecord not available._", "" ] unless defined?(ActiveRecord::Base)
 
-          conn = ActiveRecord::Base.connection
-          adapter = conn.adapter_name.downcase
-          lines = [ "## Database", "" ]
-          lines << "**Adapter:** #{SchemaAdapter.display(conn.adapter_name)}"
+          AppDatabases.lease(rails_app.root, database) { |conn| database_lines(conn, detail, database) }
+        rescue AppDatabases::Missing, AppDatabases::Unreachable => e
+          raise unless database.to_s.empty?
 
-          # Table sizes
-          sizes = gather_table_sizes(conn, adapter)
+          [ "## Database", "", "_Not available: #{e.message}_", "" ]
+        rescue AppDatabases::Error
+          raise
+        rescue => e
+          [ "## Database", "", "_Not available: #{e.message}_", "" ]
+        end
+
+        def database_lines(conn, detail, database)
+          family = DatabaseFamily.of(conn)
+          lines = [ database.to_s.empty? ? "## Database" : "## Database: #{database}", "" ]
+          lines << "**Adapter:** #{SchemaAdapter.display(conn.adapter_name)}"
+          unless family.known?
+            lines << "" << "_Table sizes and index usage are not available for the #{family.name} adapter._"
+          end
+
+          sizes = gather_table_sizes(conn, family)
           if sizes&.any?
             lines << "" << "### Table Sizes"
             lines << "| Table | Size |"
@@ -114,21 +136,14 @@ module RailsAiContext
             lines << "_#{count_phrase(sizes.size - shown, "more table")}..._" if sizes.size > shown
           end
 
-          # Pending migrations
-          pending = gather_pending_migrations
-          if pending
-            if pending.empty?
-              lines << "" << "**Migrations:** all up to date"
-            else
-              lines << "" << "**Pending migrations:** #{pending.size}"
-              pending.each { |m| lines << "- #{m[:version]} #{m[:name]}" }
-            end
-          end
+          lines.concat(database.to_s.empty? ? pending_migration_lines : own_pending_migration_lines(conn, database))
 
           # Index usage (full detail only)
           if RailsAiContext::DetailLevel.full?(detail)
-            index_usage = gather_index_usage(conn, adapter)
-            if index_usage&.any?
+            index_usage = gather_index_usage(conn, family)
+            if index_usage.nil? && family.known?
+              lines << "" << "_Index usage is not available for the #{family.name} database family._"
+            elsif index_usage&.any?
               lines << "" << "### Index Usage"
               unused = index_usage.select { |i| i[:scans] == 0 }
               if unused.any?
@@ -144,8 +159,6 @@ module RailsAiContext
 
           lines << ""
           lines
-        rescue => e
-          [ "## Database", "", "_Not available: #{e.message}_", "" ]
         end
 
         # Rails-managed bookkeeping tables - real tables, but noise in a
@@ -153,72 +166,76 @@ module RailsAiContext
         # introspector, which also skips them).
         INTERNAL_TABLES = %w[schema_migrations ar_internal_metadata].freeze
 
-        # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
-        # "Trilogy", not "Mysql2") - matching only /mysql/ silently drops
-        # table sizes for every Trilogy app.
-        MYSQL_ADAPTER = /mysql|trilogy/i
+        def gather_table_sizes(conn, family)
+          return nil unless family.known?
 
-        # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
-        POSTGRES_ADAPTER = /postg/i
-
-        def gather_table_sizes(conn, adapter)
-          rows =
-            case adapter
-            when POSTGRES_ADAPTER
-              Introspectors::PgPartitions.table_bytes(conn).sort_by { |r| [ -r[:bytes], r[:name] ] }
-            when MYSQL_ADAPTER
-              sql = "SELECT table_name AS name, (data_length + index_length) AS bytes FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() ORDER BY bytes DESC"
-              conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
-            when /sqlite/
-              gather_sqlite_table_sizes(conn)
-            end
-          return nil unless rows
-
-          rows.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
+          AppDatabases.bounded(conn) { family.table_sizes(conn) }&.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "gather_table_sizes")
         end
 
-        def gather_sqlite_table_sizes(conn)
-          # dbstat lists every b-tree: user tables, their indexes, and SQLite
-          # internals (sqlite_schema, sqlite_autoindex_*, sqlite_sequence).
-          # Restrict to real application tables so indexes and internal objects
-          # don't crowd out (or get mistaken for) the tables agents care about.
-          app_tables = conn.select_values(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-          ).to_set
+        # Every database Rails migrates here, each through its own connection.
+        def pending_migration_lines
+          here = AppDatabases.for(rails_app.root).here
+          primary = here.find(&:primary)
+          migrated = here.select(&:tasks)
+          return primary_pending_lines if primary.nil? || migrated == [ primary ]
+          return no_migrations_line(primary) if migrated.empty?
 
-          begin
-            result = conn.select_all("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC")
-            rows = result.filter_map do |r|
-              { name: r["name"], bytes: r["bytes"].to_i } if app_tables.include?(r["name"])
-            end
-            return rows if rows.any?
+          states = migrated.to_h { |db| [ db, db.pending_migrations ] }.reject { |_, state| state[:error].is_a?(AppDatabases::InMemory) }
+          read, unread = states.partition { |_, state| state[:pending] }
+          lines = pending_lines(read.to_h { |db, state| [ db.name, state[:pending] ] }, named: true)
+          unread.each { |db, state| lines << "" << "_Pending migrations could not be read for #{db.name}: #{state[:error].message.lines.first.to_s.strip}_" }
+          lines
+        end
+
+        # The app's one migrated database, read through the app's own connection.
+        def primary_pending_lines
+          dirs = RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root)
+          pending = begin
+            AppDatabases.bounded(ActiveRecord::Base.connection) { RailsAiContext::PendingMigrations.live(dirs) }
           rescue => e
-            RailsAiContext.debug_fail(e, label: "gather_sqlite_table_sizes (dbstat)")
+            RailsAiContext.debug_fail(e, nil, label: "primary_pending_lines")
           end
-
-          # Fallback: whole-DB size split across user tables (dbstat unavailable).
-          page_count = conn.select_value("PRAGMA page_count").to_i
-          page_size = conn.select_value("PRAGMA page_size").to_i
-          total = page_count * page_size
-          tables = app_tables.to_a.sort
-          tables.map { |t| { name: t, bytes: total / [ tables.size, 1 ].max } }
+          pending ? pending_lines({ "primary" => pending }) : []
         end
 
-        def gather_pending_migrations
-          RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root))
-        end
+        # A named database's own, read through the connection the section leased.
+        def own_pending_migration_lines(conn, name)
+          db = AppDatabases.for(rails_app.root).fetch(name)
+          return no_migrations_line(db) unless db.tasks
 
-        def gather_index_usage(conn, adapter)
-          case adapter
-          when POSTGRES_ADAPTER
-            Introspectors::PgPartitions.index_stats(conn).sort_by { |i| [ i[:scans], i[:table], i[:index] ] }
-          else
-            nil
-          end
+          dirs = db.primary ? RailsAiContext::PendingMigrations.migrate_dirs_for(rails_app.root) : db.migrate_dirs
+          pending_lines({ db.name => AppDatabases.bounded(conn) { RailsAiContext::MigrationStatus.pending_on(conn.pool, dirs) } })
+        rescue AppDatabases::Error
+          raise
         rescue => e
-          RailsAiContext.debug_fail(e, nil, label: "gather_index_usage")
+          [ "", "_Pending migrations could not be read for #{name}: #{e.message.lines.first.to_s.strip}_" ]
+        end
+
+        # found: each database that was read, by name, with its pending migrations. named: says which database each is in.
+        def pending_lines(found, named: false)
+          return [] if found.empty?
+
+          pending = found.flat_map { |name, list| list.map { |m| "- #{m[:version]} #{m[:name]}#{" (#{name})" if named}" } }
+          return [ "", "**Migrations:** all up to date#{" in #{found.keys.join(', ')}" if named}" ] if pending.empty?
+
+          counts = found.reject { |_, list| list.empty? }.map { |name, list| "#{list.size} in #{name}" }
+          total = if !named then pending.size
+          else counts.one? ? counts.first : "#{pending.size} (#{counts.join(', ')})"
+          end
+          [ "", "**Pending migrations:** #{total}", *pending ]
+        end
+
+        def no_migrations_line(db)
+          reason = db.replica ? "it is a replica" : "its database.yml entry turns `database_tasks` off"
+          [ "", "_Rails runs no migrations on #{db.name}: #{reason}._" ]
+        end
+
+        def gather_index_usage(conn, family)
+          AppDatabases.bounded(conn) { family.index_usage(conn) } if family.known?
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "gather_index_usage")
         end
 
         # ── Cache section ────────────────────────────────────────────────
@@ -271,17 +288,33 @@ module RailsAiContext
             store = (env[:notable] || {})["cache_store"]
             next unless store && !store.match?(PROCESS_STORES)
 
-            # The store's name; its options are rails_get_env_config's to show, unshortened.
+            # The store's name; its options are the env_config section's to show, unshortened.
             "- #{env[:name]}: `#{store[/\A:\w+/] || store}` (`#{env[:file]}`)"
           end
+        end
+
+        # Solid Cache answers #stats from its databases, one per shard, and
+        # connecting to a SQLite file that is not there creates it.
+        def cache_database_missing(cache)
+          return unless defined?(::SolidCache::Store) && cache.is_a?(::SolidCache::Store)
+
+          cache.with_each_connection do
+            config = ::SolidCache::Record.connection_db_config
+            AppDatabases.present!(config.name, config)
+          end
+          nil
+        rescue AppDatabases::Missing, AppDatabases::Unreachable => e
+          e.message
         end
 
         def gather_cache
           cache = Rails.cache
           lines = [ "## Cache", "" ]
-          lines << "**Store:** #{cache.class.name.demodulize}, this MCP server process's `Rails.cache` (#{rails_env_name})"
+          lines << "**Store:** #{cache.class.name.delete_prefix("ActiveSupport::Cache::")}, this MCP server process's `Rails.cache` (#{rails_env_name})"
 
-          if cache.respond_to?(:stats)
+          if (missing = cache_database_missing(cache))
+            lines << "_#{missing}_"
+          elsif cache.respond_to?(:stats)
             cache_stat_lines(cache.stats).each { |line| lines << line }
           elsif cache.respond_to?(:redis)
             begin
@@ -309,8 +342,8 @@ module RailsAiContext
           lines << "" << cache_scope(cache)
           elsewhere = configured_elsewhere
           if elsewhere.any?
-            lines.push("", "**The app's cache in other environments:**", *elsewhere,
-                       "_`rails_get_env_config(environment:\"...\")` shows each one's options._")
+            options = pointer("rails_get_env_config", %(environment:"..."), "shows each one's options.")
+            lines.push("", "**The app's cache in other environments:**", *elsewhere, *("_#{options}_" if options))
           end
 
           lines << ""

@@ -6,7 +6,7 @@ require "tmpdir"
 # Every file a run writes, read back as the AI tool reads it. The guide named
 # tools tools/list does not hold (`get_schema`, `get_context`), broke its own
 # code spans, kept "use MCP tools" in eleven files of a CLI-mode app, and
-# counted and listed the 45 built-ins whatever skip_tools and custom_tools
+# counted and listed every built-in whatever skip_tools and custom_tools
 # made of them.
 RSpec.describe "the tools every generated file names" do
   let(:context) { RailsAiContext.introspect }
@@ -166,9 +166,22 @@ RSpec.describe "the tools every generated file names" do
     it "names no skipped built-in anywhere, whichever it is" do
       RailsAiContext.configuration.tool_mode = :mcp
 
+      sections = RailsAiContext::Tools::GetConfig::SECTIONS
       RailsAiContext::Server.builtin_tools.map(&:tool_name).each do |name|
-        RailsAiContext.configuration.skip_tools = [ name ]
+        # Skipping its own name turns off the app section alone; every section's name takes it out of tools/list.
+        RailsAiContext.configuration.skip_tools = name == "rails_get_config" ? sections.map(&:tool_name) : [ name ]
         generated_files.each { |path, content| expect(mentions(content, name)).to eq([]), "#{path} names skipped #{name}" }
+      end
+    end
+
+    it "names no config section whose tool skip_tools lists" do
+      RailsAiContext.configuration.tool_mode = :mcp
+
+      RailsAiContext::Tools::GetConfig::SECTIONS.reject(&:app?).each do |section|
+        RailsAiContext.configuration.skip_tools = [ section.tool_name ]
+        generated_files.each do |path, content|
+          expect(content).not_to include(%(section:"#{section.name}")), "#{path} names skipped #{section.tool_name}"
+        end
       end
     end
   end

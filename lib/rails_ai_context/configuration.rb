@@ -50,6 +50,8 @@ module RailsAiContext
       return unless File.exist?(path)
 
       data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES) || {}
+      return $stderr.puts("[rails-ai-context] WARNING: #{path}: the file holds no `key: value` settings. Ignored.") unless data.is_a?(Hash)
+
       config = RailsAiContext.configuration
 
       data.each do |key, value|
@@ -257,7 +259,7 @@ module RailsAiContext
     # metadata (method, tool_name, duration, error) is forwarded to
     # subscribers. When true, `tool_arguments` and `arguments` are forwarded
     # verbatim - including raw SQL from `rails_query`, env var names from
-    # `rails_get_env`, and log search patterns from `rails_read_logs`.
+    # `rails_get_config(section: "env")`, and log search patterns from `rails_read_logs`.
     #
     # Setting this to true means the operator takes on the redaction
     # obligation for any downstream observability pipeline (Datadog, Scout,
@@ -379,7 +381,7 @@ module RailsAiContext
     attr_accessor :extra_app_paths
 
     # Database query tool settings (rails_query)
-    attr_accessor :query_timeout              # Statement timeout in seconds (default: 5)
+    attr_reader :query_timeout                # Statement timeout in seconds, a positive number (default: 5)
     attr_reader :query_row_limit              # Max rows returned (default: 100, hard cap: 1000)
     attr_accessor :query_redacted_columns     # Column names a query may not reference, redacted in output
     attr_accessor :query_allowed_columns      # Column names to exempt from the built-in sensitive list
@@ -459,12 +461,7 @@ module RailsAiContext
       @extra_app_paths          = []
       @query_timeout            = 5
       @query_row_limit          = 100
-      @query_redacted_columns   = %w[
-        password_digest encrypted_password password_hash
-        reset_password_token confirmation_token unlock_token
-        otp_secret session_data secret_key
-        api_key api_secret access_token refresh_token jti
-      ]
+      @query_redacted_columns   = SecretColumns::DEFAULT_REDACTED_COLUMNS.dup
       @query_allowed_columns    = []
       @allow_query_in_production = false
       @log_lines                = 50
@@ -527,6 +524,16 @@ module RailsAiContext
       value = value.to_i
       raise ArgumentError, "max_tool_response_chars must be positive (got #{value})" unless value > 0
       @max_tool_response_chars = value
+    end
+
+    # A fraction of a second is kept as given: each database family rounds it up to the least it can bound.
+    def query_timeout=(value)
+      number = value.is_a?(String) ? Integer(value, exception: false) || Float(value, exception: false) : value
+      unless number.is_a?(Numeric) && number.real? && number.positive? && number.finite?
+        raise ArgumentError, "query_timeout must be positive (got #{value})"
+      end
+
+      @query_timeout = number
     end
 
     def query_row_limit=(value)
