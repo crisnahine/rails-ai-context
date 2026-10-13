@@ -25,6 +25,7 @@ module RailsAiContext
         @top = top
         @nodes = []
         @parents = {}.compare_by_identity
+        @appended = {}.compare_by_identity
         collect(top)
         # The alias defaults to the relation name when the query gave none, which is how `users.*` resolves.
         # Keyed as EXPLAIN prints it: `t` and "T" are two aliases.
@@ -35,7 +36,8 @@ module RailsAiContext
           @names[key] = rel.to_s.downcase
           as = (node["Alias"] || rel).to_s
           # The members of an Append over partitions are `name_1`, `name_2`, and a node over them names their columns by `name`.
-          [ as, as[/\A(.+)_\d+\z/m, 1] ].compact.each { |name| (map[name] ||= []) << key }
+          # Anywhere else `name_1` is the plan's own name for a second use of `name`, which stands for another relation.
+          [ as, (as[/\A(.+)_\d+\z/m, 1] if @appended[node]) ].compact.each { |name| (map[name] ||= []) << key }
         end
         @aliases.each_value(&:uniq!)
       end
@@ -94,6 +96,7 @@ module RailsAiContext
 
         @nodes << node
         @parents[node] = parent
+        @appended[node] = true if parent && (@appended[parent] || APPENDS.include?(parent["Node Type"]))
         Array(node["Plans"]).each { |child| collect(child, node) }
       end
 

@@ -61,7 +61,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     statements.each do |sql|
       response = run(sql)
       expect(response.error?).to be(true), sql
-      expect(response.content.first[:text]).to start_with(start), sql
+      expect(response.content.first[:text]).to start_with(start), "#{sql}: #{response.content.first[:text]}"
       expect(response.content.first[:text]).not_to include("salt-value", "token-value"), sql
     end
   end
@@ -116,6 +116,40 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     expect([ response.error?, response.content.first[:text].include?('{"id":1}') ]).to eq([ false, true ])
   ensure
     conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+  end
+
+  describe "an alias a statement uses twice, and a table named like a numbered alias" do
+    before do
+      conn.execute("DROP TABLE IF EXISTS rac_pg_plain, rac_pg_ev, rac_pg_ev_2 CASCADE")
+      conn.execute("CREATE TABLE rac_pg_plain (id int)")
+      conn.execute("CREATE TABLE rac_pg_ev (id int, note text)")
+      conn.execute("CREATE TABLE rac_pg_ev_2 (id int, api_token text)")
+      conn.execute("INSERT INTO rac_pg_plain VALUES (1)")
+      conn.execute("INSERT INTO rac_pg_ev VALUES (1, 'first event')")
+      conn.execute("INSERT INTO rac_pg_ev_2 VALUES (1, 'token-value')")
+    end
+
+    after { conn.execute("DROP TABLE IF EXISTS rac_pg_plain, rac_pg_ev, rac_pg_ev_2 CASCADE") }
+
+    it "runs a whole row of the relation that holds no secret column" do
+      { "SELECT row_to_json(p) AS j FROM rac_pg_plain p WHERE EXISTS (SELECT 1 FROM rac_pg_accounts p WHERE p.id = 1)" => '{"id":1}',
+        "SELECT row_to_json(p) AS j, (SELECT count(*) FROM rac_pg_accounts p) AS n FROM rac_pg_plain p" => '{"id":1}',
+        "SELECT row_to_json(p) AS j FROM rac_pg_plain p WHERE p.id IN (SELECT p.id FROM rac_pg_accounts p)" => '{"id":1}',
+        "SELECT to_json(rac_pg_ev.*) AS j FROM rac_pg_ev JOIN rac_pg_ev_2 ON rac_pg_ev.id = rac_pg_ev_2.id" => "first event" }.each do |sql, shown|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including(shown) ]), sql
+      end
+    end
+
+    it "refuses a whole row of the relation that holds one, and names that relation" do
+      refused([ "SELECT (SELECT row_to_json(p) FROM rac_pg_accounts p LIMIT 1) AS j FROM rac_pg_plain p",
+                "SELECT row_to_json(p) AS j FROM rac_pg_accounts p WHERE EXISTS (SELECT 1 FROM rac_pg_plain p WHERE p.id = 1)",
+                "SELECT row_to_json(x) AS j FROM rac_pg_plain x_7 JOIN rac_pg_accounts x ON true",
+                "SELECT row_to_json(x_7) AS j FROM rac_pg_plain x JOIN rac_pg_accounts x_7 ON true" ],
+              "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+      refused([ "SELECT to_json(rac_pg_ev_2.*) AS j FROM rac_pg_ev JOIN rac_pg_ev_2 ON rac_pg_ev.id = rac_pg_ev_2.id" ],
+              "Blocked: the query serialises a whole row of `rac_pg_ev_2`")
+    end
   end
 
   describe "a relation outside the search path" do

@@ -1227,6 +1227,45 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    # PostgreSQL 16 numbers the second use of an alias: `p_1` is the `p` of a subquery.
+    describe "an alias that ends in an underscore and digits" do
+      let(:relations) { { "posts" => %w[id title], "users" => %w[id email api_token], "ev" => %w[id note], "ev_2" => %w[id api_token] } }
+
+      def scan_as(relation, as, extra = {})
+        { "Node Type" => "Seq Scan", "Parent Relationship" => "Outer", "Relation Name" => relation, "Alias" => as, "Output" => [ "#{as}.*" ] }.merge(extra)
+      end
+
+      def over(output, *children)
+        { "Node Type" => "Nested Loop", "Output" => output, "Plans" => children }
+      end
+
+      it "runs a whole row of a relation with no secret column whose alias a subquery uses again for one that holds one" do
+        again = scan_as("users", "p_1", "Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns $0)", "Filter" => "(p_1.id = 1)").except("Output")
+        expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "One-Time Filter" => "$0", "Plans" => [ again, scan_as("posts", "p") ] })).to be_nil
+      end
+
+      it "runs a whole row of a table beside a table named like its numbered alias" do
+        expect(plan_refusal(over([ "to_json(ev.*)" ], scan_as("ev", "ev"), scan_as("ev_2", "ev_2", "Output" => [ "ev_2.id" ])))).to be_nil
+      end
+
+      it "refuses the whole row a subquery reads under the numbered alias, by the relation it reads" do
+        inner = scan_as("users", "p_1", "Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns $0)", "Output" => [ "row_to_json(p_1.*)" ])
+        expect(plan_refusal(scan_as("posts", "p", "Output" => [ "$0" ], "Plans" => [ inner ]))).to include("whole row of `users`")
+      end
+
+      it "refuses a whole row of the relation that holds a secret column when a relation with none is scanned first under a numbered alias" do
+        plan = over([ "row_to_json(x.*)" ], scan_as("posts", "x_7", "Output" => %w[x_7.id x_7.title]), scan_as("users", "x", "Parent Relationship" => "Inner"))
+        expect(plan_refusal(plan)).to include("whole row of `users`")
+      end
+
+      it "refuses a whole row a node over an Append reads when the member that holds the secret column is scanned second" do
+        members = [ scan_as("posts", "p_1", "Parent Relationship" => "Member", "Output" => %w[p_1.id p_1.title]),
+                    scan_as("users", "p_2", "Parent Relationship" => "Member", "Output" => %w[p_2.id p_2.email]) ]
+        plan = { "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "Plans" => [ { "Node Type" => "Append", "Parent Relationship" => "Outer", "Plans" => members } ] }
+        expect(plan_refusal(plan)).to include("whole row of `users`")
+      end
+    end
+
     # Plans PostgreSQL 16 gave over rac_p (id, email, salt), partitioned in two, and over an inheritance parent.
     describe "a partitioned table or an inheritance parent that holds a secret column" do
       let(:relations) do
