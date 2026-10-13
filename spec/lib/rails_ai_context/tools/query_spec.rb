@@ -587,6 +587,27 @@ RSpec.describe RailsAiContext::Tools::Query do
       writer&.close
     end
 
+    it "answers as locked a database another process locked before the connection opened" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      QueryTimeoutSpecRecord.connection_pool.disconnect!
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        $stdout.puts "locked"
+        $stdout.flush
+        sleep 30
+      RUBY
+      expect(writer.gets).to eq("locked\n")
+
+      response = described_class.call(sql: "SELECT count(*) AS n FROM nums")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished." ]
+      )
+    ensure
+      Process.kill(:KILL, writer.pid) if writer
+      writer&.close
+    end
+
     it "answers locked when the deadline passes while a slow child still waits on the lock, and the timeout when no lock is met" do
       conn.execute("PRAGMA journal_mode = DELETE")
       slow = 0.4
@@ -848,6 +869,76 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "a wildcard inside a subquery on a file-backed SQLite database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryWildcardSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryWildcardSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "t.sqlite3"))
+      QueryWildcardSpecRecord.connection.tap do |c|
+        [ "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, password_digest TEXT)",
+          "INSERT INTO users VALUES (1, 'a@example.test', 'MARKER-DIGEST-1')",
+          "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)", "INSERT INTO posts VALUES (1, 'the users table'), (2, 'users')",
+          "CREATE TABLE ids (id INTEGER PRIMARY KEY)", "INSERT INTO ids VALUES (1)" ].each { |sql| c.execute(sql) }
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryWildcardSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "refuses it when a string of the statement equals the name of a table that holds a secret column" do
+      [ "('users')", "(('users'))", "('users') AS u", "('users' u)", "('users' NOT INDEXED)", "ids CROSS JOIN ('users')",
+        "ids LEFT JOIN ('users') ON 1", "(ids), ('users')", "'users'", "main.'users'", "('USERS')" ].each do |from|
+        sql = "SELECT (1, 'a@example.test', 'M') < (SELECT * FROM #{from}) AS o"
+        name = from[/'(\w+)'/, 1]
+        expect(answer(sql)).to eq([ true,
+          "Blocked: a `*` inside a subquery is not run in a statement that holds the string '#{name}'. SQLite reads a string as a table's " \
+          "name where a name can stand, and the table `#{name}` holds the secret column `password_digest`. A value read through such a " \
+          "wildcard can be compared or renamed past the redaction, so name the columns in the subquery." ]), sql
+      end
+      expect(answer("SELECT * FROM (SELECT * FROM posts) p WHERE title = 'users'").last).to start_with("Blocked: a `*` inside a subquery")
+    end
+
+    it "refuses IN before the name of a table that holds a secret column, and runs IN before a list or a subquery in parentheses" do
+      row = "(1, 'a@example.test', 'MARKER-DIGEST-1')"
+      [ "SELECT #{row} IN users AS o", "SELECT #{row} NOT IN users AS o", %(SELECT #{row} IN "users" AS o), "SELECT #{row} IN main.users AS o",
+        "SELECT #{row} IN 'users' AS o" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_starting_with("Blocked: `IN` before a table's name is not run in a statement that ") ]), sql
+      end
+      { "SELECT id FROM users WHERE id IN (1, 2)" => "| 1  |", "SELECT title FROM posts WHERE id IN (SELECT id FROM users)" => "the users table",
+        "SELECT 1 IN ids AS o" => "| 1 |" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+    end
+
+    it "answers SQLite's own error for TABLE, which SQLite has no statement for" do
+      [ "SELECT 1 < (TABLE users)", "SELECT * FROM (TABLE users) t" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_starting_with("SQL error: SQLite3::SQLException: near \"TABLE\": syntax error") ]), sql
+      end
+    end
+
+    it "runs it when the strings of the statement name no such table" do
+      { "SELECT * FROM (SELECT * FROM posts) p WHERE title LIKE '%users%'" => "the users table",
+        "SELECT * FROM (SELECT * FROM ('posts')) p WHERE id = 1" => "the users table",
+        "SELECT title FROM posts WHERE title = 'users'" => "| users" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+    end
+  end
+
   describe "SQLite tables in the temp schema and in an attached database" do
     let(:dir) { Dir.mktmpdir }
     let(:conn) do
@@ -920,6 +1011,17 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       expect(text).to include("| 3 |")
       expect(text).to include("without a time limit")
+    end
+  end
+
+  describe "a statement over the length the checks read" do
+    it "is refused before anything reads it" do
+      expect(RailsAiContext::SecretColumns).not_to receive(:for)
+      expect(RailsAiContext::SqlGate).not_to receive(:comment_free)
+      response = described_class.call(sql: "SELECT 1 AS v, #{"[" * 1_000_000}")
+      expect(response.error?).to be(true)
+      expect(response.content.first[:text])
+        .to eq("Blocked: the statement is 1000015 bytes long, and rails_query checks a statement of 1000000 bytes at most.")
     end
   end
 
@@ -1923,18 +2025,27 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(mcp(sql: "SELECT 1")).to eq(guard)
     end
 
-    it "answers a locked SQLite database as locked, with no word of a timeout, for a query and for its EXPLAIN" do
-      busy = begin
-        begin
-          raise SQLite3::BusyException, "database is locked"
-        rescue SQLite3::BusyException
-          raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
-        end
-      rescue ActiveRecord::StatementInvalid => e
-        e
+    let(:busy) do
+      begin
+        raise SQLite3::BusyException, "database is locked"
+      rescue SQLite3::BusyException
+        raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
       end
-      locked = [ "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished.", true ]
+    rescue ActiveRecord::StatementInvalid => e
+      e
+    end
+    let(:locked) { [ "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished.", true ] }
 
+    it "answers a lock met while the connection opens as locked, and any other failure to connect as unreachable" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(busy)
+      expect(cli("sql=SELECT 1")).to eq(locked)
+      expect(mcp(sql: "SELECT 1")).to eq(locked)
+
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished, "no file")
+      expect(mcp(sql: "SELECT 1")).to match([ a_string_starting_with("The primary database cannot be reached: no file."), true ])
+    end
+
+    it "answers a locked SQLite database as locked, with no word of a timeout, for a query and for its EXPLAIN" do
       allow(ActiveRecord::Base.connection).to receive(:select_all).and_wrap_original do |original, sql, *rest, **options|
         sql.to_s.match?(/FROM users/) ? raise(busy) : original.call(sql, *rest, **options)
       end
