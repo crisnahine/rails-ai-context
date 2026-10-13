@@ -1027,6 +1027,28 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT n.body, v.email FROM notes n JOIN other.vault v ON v.id = n.id")).to match([ false, a_string_including("kept", "v@example.com") ])
       expect(answer("SELECT id FROM scratch")).to match([ false, a_string_including("| 1") ])
     end
+
+    it "answers a catalog read of the temp schema or of the attached database from the app's connection, and says it ran without a time limit" do
+      { "SELECT name FROM sqlite_temp_master ORDER BY name" => "| scratch", "SELECT name FROM SQLITE_TEMP_SCHEMA ORDER BY name" => "| scratch",
+        "SELECT name FROM pragma_table_info('scratch')" => "| pin_token", "SELECT page_count FROM pragma_page_count('other')" => "| 2",
+        "SELECT name FROM pragma_table_info('vault', 'other')" => "| door_token",
+        "SELECT name FROM pragma_table_list WHERE schema = 'temp' AND type = 'table' ORDER BY name" => "| scratch",
+%(SELECT count(*) AS n FROM "temp".sqlite_master) => "| 2" }.each do |sql, value|
+        expect(answer(sql)).to match([ false, a_string_including(value, "without a time limit") ]), sql
+      end
+    end
+
+    it "reads the temp table where a table of the main database has its name" do
+      conn.execute("CREATE TEMP TABLE notes (id INTEGER, body TEXT)")
+      conn.execute("INSERT INTO temp.notes VALUES (1, 'scribbled')")
+
+      expect(answer("SELECT body FROM notes")).to match([ false, a_string_including("scribbled", "without a time limit") ])
+    end
+
+    it "keeps the query process and its time limit for a statement that names none of them" do
+      expect(answer("SELECT body FROM notes").last).to include("kept").and(satisfy { |text| !text.include?("without a time limit") })
+      expect(answer("SELECT 'another' AS word").last).not_to include("without a time limit")
+    end
   end
 
   # Where there is no fork (Windows), a file-backed database gets no
@@ -1511,6 +1533,10 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).to include("7 rows returned")
       expect(text).to include("7 rows shown; the query returned more")
     end
+
+    it "counts one row as one row" do
+      expect(answer("SELECT n FROM big", limit: 1)).to include("_1 row returned._", "_1 row shown; the query returned more (the row limit of 1;")
+    end
   end
 
   describe "a result column SQLite renamed as a duplicate" do
@@ -1810,14 +1836,14 @@ RSpec.describe RailsAiContext::Tools::Query do
 
     # Rails before 7.2 asks the SQLite version here, and where no child process can run (no fork) the
     # statement and its query_only guard are sent on this connection: neither is a read of the schema.
-    it "sends six reads of the schema before an ordinary statement" do
+    it "sends six reads of the schema before an ordinary statement, and two of what the connection alone holds where a query process can run" do
       conn
       sent = []
       ActiveSupport::Notifications.subscribed(->(*, payload) { sent << payload[:sql] }, "sql.active_record") do
         expect(text("SELECT id, email FROM accounts WHERE id = 1")).to include("a@example.com")
       end
 
-      expect(sent.grep_v(/sqlite_version|query_only|FROM accounts/).size).to eq(6)
+      expect(sent.grep_v(/sqlite_version|query_only|FROM accounts/).size).to eq(Process.respond_to?(:fork) ? 8 : 6)
     end
 
     it "refuses a view whose definition holds a comment before its wildcard, and one named with a dollar or a quote" do

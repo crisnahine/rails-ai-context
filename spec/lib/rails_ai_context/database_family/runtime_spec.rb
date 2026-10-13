@@ -493,7 +493,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
           expect { described_class::SQLITE.read_only(conn, sql, timeout: 5) }
             .to raise_error(ActiveRecord::StatementInvalid, /no such function: x/) { |e| expect(e).not_to be_a(described_class::TimedOut) }
         end
-        expect(sent).to eq([])
+        expect(sent).to eq([ "SELECT name FROM sqlite_temp_master WHERE type IN ('table', 'view')", "PRAGMA database_list" ])
       end
 
       it "raises the SQL error of a statement neither connection can prepare" do
