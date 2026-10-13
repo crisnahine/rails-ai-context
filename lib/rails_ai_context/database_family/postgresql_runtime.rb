@@ -91,9 +91,8 @@ module RailsAiContext
 
       def planned_sources(plan)
         read = PostgresqlPlan.new(plan)
-        read.output.each_with_index.filter_map do |expr, i|
-          rel, col = read.base_column(expr)
-          [ i, col, rel ] if col
+        read.output.each_with_index.flat_map do |exprs, i|
+          exprs.flat_map { |expr| read.base_columns(expr) }.map { |rel, col| [ i, col, rel ] }.uniq { |_, col, _| col }
         end
       end
 

@@ -375,6 +375,84 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       refused([ "SELECT * FROM rac_pg_parts ORDER BY 3", "SELECT * FROM rac_pg_parent ORDER BY 3" ], "Blocked: the query's plan uses the secret column `salt`")
       refused([ "SELECT row_to_json(p) FROM rac_pg_parts p", "SELECT p::text FROM rac_pg_parent p" ], "Blocked: the query serialises a whole row of")
     end
+
+    it "refuses a whole row of the partitions under any alias" do
+      refused([ "SELECT row_to_json(e) FROM rac_pg_parts e", "SELECT row_to_json(rac_pg_parts) FROM rac_pg_parts", "SELECT row_to_json(e_1) FROM rac_pg_parts e_1",
+                %(SELECT row_to_json("E x") FROM rac_pg_parts "E x"), "SELECT e::text FROM rac_pg_parts e", "SELECT *, e FROM rac_pg_parts e",
+                "SELECT count(*) FROM rac_pg_parts e WHERE e::text LIKE '%salt-v%'", "SELECT row_to_json(l) FROM rac_pg_accounts a, rac_pg_parts l" ],
+              "Blocked: the query serialises a whole row of `rac_pg_parts_a`")
+    end
+
+    it "answers every read of a partitioned table that holds no secret column" do
+      conn.execute("DROP TABLE IF EXISTS rac_pg_plain_parts CASCADE")
+      conn.execute("CREATE TABLE rac_pg_plain_parts (id int, label text) PARTITION BY RANGE (id)")
+      conn.execute("CREATE TABLE rac_pg_plain_parts_a PARTITION OF rac_pg_plain_parts FOR VALUES FROM (0) TO (10)")
+      conn.execute("CREATE TABLE rac_pg_plain_parts_b PARTITION OF rac_pg_plain_parts FOR VALUES FROM (10) TO (20)")
+      conn.execute("INSERT INTO rac_pg_plain_parts VALUES (1, 'first part'), (11, 'second part')")
+
+      [ "SELECT * FROM rac_pg_plain_parts", "SELECT *, id + 1 AS next FROM rac_pg_plain_parts", "SELECT tableoid::regclass, * FROM rac_pg_plain_parts",
+        "SELECT row_to_json(e) FROM rac_pg_plain_parts e", "SELECT *, e FROM rac_pg_plain_parts e", "SELECT e::text FROM rac_pg_plain_parts e",
+        "SELECT * FROM rac_pg_plain_parts ORDER BY id LIMIT 5", "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_plain_parts) SELECT * FROM c" ].each do |sql|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("first part", "second part") ]), sql
+      end
+    ensure
+      conn.execute("DROP TABLE IF EXISTS rac_pg_plain_parts CASCADE")
+    end
+  end
+
+  describe "a view over a UNION ALL of tables, one of which holds a secret column" do
+    let(:tables) { %w[rac_pg_logs_2023 rac_pg_logs_2024 rac_pg_logs_2025 rac_pg_logs_a rac_pg_logs_b] }
+
+    def drop
+      conn.execute("DROP TABLE IF EXISTS #{tables.join(", ")} CASCADE")
+    end
+
+    def union(view, row, *members)
+      first, *rest = members.map { |table| "SELECT id, #{format(row, table)}%s FROM #{table}" }
+      conn.execute("CREATE VIEW #{view} AS #{[ format(first, " AS r"), *rest.map { |member| format(member, "") } ].join(" UNION ALL ")}")
+    end
+
+    before do
+      drop
+      tables.each_with_index do |table, i|
+        held = %w[rac_pg_logs_2023 rac_pg_logs_a].include?(table) ? "" : ", api_token text"
+        conn.execute("CREATE TABLE #{table} (id int, label text#{held})")
+        conn.execute("INSERT INTO #{table} VALUES (#{i}, 'log #{i}'#{", 'token-value'" unless held.empty?})")
+      end
+      union("rac_pg_u_text", "%s::text", "rac_pg_logs_2023", "rac_pg_logs_2024")
+      union("rac_pg_u_jsonb", "to_jsonb(%s)", "rac_pg_logs_2023", "rac_pg_logs_2024")
+      union("rac_pg_u_three", "to_jsonb(%s)", "rac_pg_logs_2023", "rac_pg_logs_2024", "rac_pg_logs_2025")
+      union("rac_pg_u_secret_first", "to_jsonb(%s)", "rac_pg_logs_2024", "rac_pg_logs_2023")
+      union("rac_pg_u_letters", "to_jsonb(%s)", "rac_pg_logs_a", "rac_pg_logs_b")
+      union("rac_pg_u_none", "to_jsonb(%s)", "rac_pg_logs_2023", "rac_pg_logs_a")
+      conn.execute("CREATE VIEW rac_pg_u_columns AS SELECT * FROM rac_pg_logs_2024 UNION ALL SELECT * FROM rac_pg_logs_b")
+      conn.execute("CREATE VIEW rac_pg_u_renamed AS SELECT id, label AS note FROM rac_pg_logs_2023 UNION ALL SELECT id, api_token FROM rac_pg_logs_2024")
+    end
+
+    after { drop }
+
+    it "refuses the whole row of the table that holds it, wherever that table stands in the view and whatever the tables are named" do
+      refused([ "SELECT * FROM rac_pg_u_jsonb", "SELECT * FROM rac_pg_u_text", "SELECT * FROM rac_pg_u_three", "SELECT r FROM rac_pg_u_jsonb WHERE id = 1",
+                "SELECT r->>'api_token' AS t FROM rac_pg_u_jsonb", "SELECT count(*) FROM rac_pg_u_text WHERE r LIKE '%token-v%'",
+                "SELECT * FROM rac_pg_u_secret_first", "SELECT * FROM rac_pg_u_jsonb ORDER BY id" ],
+              "Blocked: the query serialises a whole row of `rac_pg_logs_2024`")
+      refused([ "SELECT * FROM rac_pg_u_letters" ], "Blocked: the query serialises a whole row of `rac_pg_logs_b`")
+    end
+
+    it "runs the view over tables that hold none, and the columns of the others that are no whole row" do
+      { "SELECT * FROM rac_pg_u_none" => "log 3", "SELECT id FROM rac_pg_u_jsonb" => "| 1  |", "SELECT id FROM rac_pg_u_letters" => "| 4  |" }.each do |sql, shown|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including(shown) ]), sql
+      end
+    end
+
+    it "filters the secret column where every member hands it up in one place, and refuses a member that hands it up under another name" do
+      response = run("SELECT * FROM rac_pg_u_columns")
+      expect([ response.error?, response.content.first[:text].scan("[FILTERED]").size ]).to eq([ false, 2 ])
+      expect(response.content.first[:text]).not_to include("token-value")
+      refused([ "SELECT * FROM rac_pg_u_renamed", "SELECT note FROM rac_pg_u_renamed ORDER BY 1" ], "Blocked: the query passes the secret column `api_token` through")
+    end
   end
 
   it "runs a subquery that reads no secret column of a table that holds one" do

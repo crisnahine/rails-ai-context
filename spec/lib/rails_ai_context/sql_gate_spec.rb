@@ -1266,8 +1266,77 @@ RSpec.describe RailsAiContext::SqlGate do
       it "refuses members that hand up the secret column in another place, as a view over a UNION ALL plans them" do
         swapped = { "Node Type" => "Append", "Plans" => [ member("rac_p_a", "t_1"), member("rac_p_a", "t_2", %w[id salt email]) ] }
         expect(plan_refusal(swapped)).to include("passes the secret column `salt` through")
+      end
+
+      it "reads members that hand up the same columns in the same places alike, whatever their aliases" do
         mixed = { "Node Type" => "Append", "Plans" => [ member("rac_p_a", "a"), member("rac_p_b", "b") ] }
-        expect(plan_refusal(mixed)).to include("passes the secret column `salt` through")
+        expect(plan_refusal(mixed)).to be_nil
+        expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(mixed).map { |i, column, _| [ i, column ] })
+          .to eq([ [ 0, "id" ], [ 1, "email" ], [ 2, "salt" ] ])
+      end
+
+      it "refuses a whole row of the partitions under any alias, in a member and in a node over them" do
+        [ "e", "pev", "e_1", "E x" ].each do |as|
+          row = ->(name) { [ "row_to_json((#{name.match?(/\W/) ? %("#{name}") : name}.*)::rac_p)" ] }
+          members = [ member("rac_p_a", "#{as}_1").merge("Output" => row.call("#{as}_1")), member("rac_p_b", "#{as}_2").merge("Output" => row.call("#{as}_2")) ]
+          expect(plan_refusal({ "Node Type" => "Append", "Plans" => members })).to include("whole row of `rac_p_a`"), as
+        end
+        over = { "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ],
+                 "Plans" => [ { "Node Type" => "Append", "Parent Relationship" => "Outer",
+                                "Plans" => [ member("rac_parent", "p_1", [ "*" ]), member("rac_child", "p_2", [ "*" ]) ] } ] }
+        expect(plan_refusal(over)).to include("whole row of `rac_parent`")
+      end
+    end
+
+    # Plans PostgreSQL 16 gave for views over `SELECT id, <the whole row> FROM logs_2023 UNION ALL SELECT ... FROM logs_2024`.
+    describe "a view over a UNION ALL of tables, one of which holds a secret column" do
+      let(:relations) do
+        { "logs_2023" => %w[id label], "logs_2024" => %w[id label api_token], "logs_2025" => %w[id label api_token],
+          "logs_a" => %w[id label], "logs_b" => %w[id label api_token] }.flat_map { |name, columns| [ [ name, columns ], [ "public.#{name}", columns ] ] }.to_h
+      end
+
+      def scan_of(table, output, extra = {})
+        { "Node Type" => "Seq Scan", "Parent Relationship" => "Member", "Relation Name" => table, "Schema" => "public", "Alias" => table,
+          "Output" => output.map { |expr| format(expr, table) } }.merge(extra)
+      end
+
+      def union(tables, output, extra = {})
+        { "Node Type" => "Append", "Plans" => tables.map { |table| scan_of(table, output) } }.merge(extra)
+      end
+
+      it "refuses the whole row of the table that holds the secret column, wherever that table stands among the members" do
+        { %w[logs_2023 logs_2024] => "logs_2024", %w[logs_2023 logs_2024 logs_2025] => "logs_2024", %w[logs_2024 logs_2023] => "logs_2024",
+          %w[logs_a logs_b] => "logs_b" }.each do |tables, held|
+          [ "to_jsonb(%s.*)", "(%s.*)::text" ].each do |row|
+            expect(plan_refusal(union(tables, [ "%s.id", row ]))).to include("whole row of `#{held}`"), "#{tables} #{row}"
+          end
+        end
+      end
+
+      it "refuses the whole row read through an operator, and compared in a filter the aggregate counts" do
+        read = { "Node Type" => "Result", "Output" => [ "((to_jsonb(logs_2023.*)) ->> 'api_token'::text)" ],
+                 "Plans" => [ union(%w[logs_2023 logs_2024], [ "to_jsonb(%s.*)" ], "Parent Relationship" => "Outer") ] }
+        expect(plan_refusal(read)).to include("whole row of `logs_2024`")
+        filtered = %w[logs_2023 logs_2024].map do |table|
+          scan_of(table, [], "Filter" => "((#{table}.*)::text ~~ '%FAKE%'::text)").except("Output")
+        end
+        counted = { "Node Type" => "Aggregate", "Output" => [ "count(*)" ], "Plans" => [ { "Node Type" => "Append", "Parent Relationship" => "Outer", "Plans" => filtered } ] }
+        expect(plan_refusal(counted)).to include("whole row of `logs_2024`")
+      end
+
+      it "runs the whole rows of tables that hold no secret column, and the plain columns of the ones that do" do
+        expect(plan_refusal(union(%w[logs_2023 logs_a], [ "%s.id", "to_jsonb(%s.*)" ]))).to be_nil
+        expect(plan_refusal(union(%w[logs_2023 logs_2024], [ "%s.id", "%s.label" ]))).to be_nil
+      end
+
+      it "names the secret column behind a result column when any member hands it up there, and refuses members that differ" do
+        same = union(%w[logs_2024 logs_b], [ "%s.id", "%s.label", "%s.api_token" ])
+        expect(plan_refusal(same)).to be_nil
+        expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(same).map { |i, column, _| [ i, column ] })
+          .to eq([ [ 0, "id" ], [ 1, "label" ], [ 2, "api_token" ] ])
+        differing = { "Node Type" => "Append", "Plans" => [ scan_of("logs_2023", [ "%s.id", "%s.label", "'x'::text" ]),
+                                                             scan_of("logs_2024", [ "%s.id", "%s.label", "%s.api_token" ]) ] }
+        expect(plan_refusal(differing)).to include("passes the secret column `api_token` through")
       end
     end
 

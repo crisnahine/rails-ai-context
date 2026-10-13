@@ -871,16 +871,17 @@ module RailsAiContext
         "query is refused. Name the columns you need; `#{offending}` is never returned."
     end
 
-    # A whole-row `alias.*` of a relation with a secret column. An alias the
+    # A whole-row `alias.*` where any relation the alias stands for holds a secret column. An alias the
     # plan does not resolve is refused when any relation in it is secret.
     def whole_row_leak(exprs, aliases)
-      any_secret = aliases.values.any? { |rel| @secrets.relation_secret?(rel) }
+      any_secret = aliases.values.flatten.any? { |rel| @secrets.relation_secret?(rel) }
       exprs.each do |expr|
         expr.scan(/(?:([A-Za-z_]\w*)|"((?:""|[^"])+)")\.\*/) do |bare, quoted|
           al = bare || quoted.gsub('""', '"')
-          rel = aliases[al]
-          return rel if rel && @secrets.relation_secret?(rel)
-          return (rel || al) if rel.nil? && any_secret
+          rels = aliases[al]
+          secret = rels&.find { |rel| @secrets.relation_secret?(rel) }
+          return secret if secret
+          return al if rels.nil? && any_secret
         end
       end
       nil
@@ -905,7 +906,7 @@ module RailsAiContext
     # A secret base column some node passes through and the top node leaves unnamed, so redaction by position cannot
     # pin it. A column handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
     def laundered_secret_column(plan)
-      top = secret_base_columns(plan, plan.output)
+      top = secret_base_columns(plan, plan.output.flatten)
       plan.nodes.each do |node|
         reader = plan.reader(node)
         secret_base_columns(plan, Array(node["Output"])).each do |var|
@@ -923,10 +924,7 @@ module RailsAiContext
     end
 
     def secret_base_columns(plan, output)
-      output.filter_map do |expr|
-        rel, col = plan.base_column(expr)
-        [ rel, col ] if rel && @secrets.of_relation(rel).include?(col)
-      end.to_set
+      output.flat_map { |expr| plan.base_columns(expr) }.select { |rel, col| @secrets.of_relation(rel).include?(col) }.to_set
     end
 
     def function_names(exprs)
