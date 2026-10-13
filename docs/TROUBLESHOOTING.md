@@ -287,9 +287,11 @@ What a string literal holds decides some of these:
 
 ### "Blocked: a `*` inside a subquery", "Blocked: `TABLE` inside a subquery" and "Blocked: the view ... is not queried"
 
-MySQL, MariaDB and SQLite trace no result column back to its table column, so two shapes are refused there when a secret column is in reach:
+MySQL, MariaDB and SQLite trace no result column back to its table column, so these shapes are refused there when a secret column is in reach:
 
-- A `*` inside a subquery, a CTE body included, when the statement names a table that holds a secret column. The message names that table and the column. The rule tests the two facts together and does not tell which table the wildcard reads, so the statement is refused also when the wildcard is over another table. Name the columns in the subquery: `WITH x AS (SELECT id, email FROM users) SELECT * FROM x`. MySQL's `(TABLE t)` counts as a wildcard: select the columns you need. `EXISTS (SELECT * ...)` and `count(*)` run
+- A `*` inside a subquery, a CTE body included, when the statement names a table that holds a secret column. The message names that table and the column. The rule tests the two facts together and does not tell which table the wildcard reads, so the statement is refused also when the wildcard is over another table. Name the columns in the subquery: `WITH x AS (SELECT id, email FROM users) SELECT * FROM x`. On MySQL and MariaDB `(TABLE t)` counts as a wildcard: select the columns you need. `EXISTS (SELECT * ...)` and `count(*)` run
+- On SQLite, `IN` before a table's name (`WHERE id IN users`), when the statement names a table that holds a secret column. It is SQLite's shorthand for `IN (SELECT * FROM users)`. Write the subquery with its columns named: `WHERE id IN (SELECT id FROM users)`
+- On SQLite, either of those two in a statement that holds a string equal to such a table's name (`WHERE role = 'users'`). SQLite reads a string as a table's name where a name can stand, and the rule cannot tell that use from plain data. The message says "in a statement that holds the string 'users'". Name the columns in the subquery, or compare with another value
 - A view whose definition names a secret column, or has a wildcard and names a table that holds one. Query the tables the view reads. When the column holds no secret, list its name in `config.query_allowed_columns`
 
 On PostgreSQL a plain view runs and its secret columns come back `[FILTERED]`. A materialized view whose definition names a secret column gets the view message, since its stored rows cannot be traced to a table column. Query the tables it was built from.
@@ -302,6 +304,7 @@ On SQLite `rails_query` reads no table that holds another table's rows or words 
 - A shadow table (`docs_content`, `docs_data`) holds what a virtual table stores, under other column names. The message names the virtual table to query
 - A virtual table that holds a secret column is refused whole, since a search or a function over it reads a column by its position. Keep the secret column out of the virtual table, or query the table it was copied from
 - An `fts5vocab` or `fts4aux` table over such a table lists its words, so it is refused too
+- A virtual table whose definition names a refused view, or a table that is not read, holds their rows or words. The message says "its definition names" and what it names
 
 A view over one of these is refused with "its definition reads `<table>`, which is not read". The name is refused inside a string too.
 
@@ -313,9 +316,13 @@ On SQLite `rails_query` runs a statement on a connection of its own, so a value 
 
 `rails_query` checks a statement of 1,000,000 bytes at most. Send a shorter one: split a long `IN` list, or join against a table that holds the ids.
 
-### "Blocked: ... is not queried: its columns could not be read" and "lead to more databases than rails_query follows"
+### "Blocked: the checks on the statement's text ran longer than query_timeout"
 
-The secret column rule reads the columns of every schema and database a statement reaches. A relation whose columns it cannot read is not queried, so give the account read access to the catalogue of that schema, or query a relation it can read. A statement whose views lead through more than three rounds of further databases is not run: query the tables those views read.
+The checks that read a statement's text have `query_timeout` to themselves and give up when they pass it. Nothing was sent to the database. Send a shorter statement.
+
+### "Blocked: ... is not queried: its columns could not be read" and "leads through more databases than rails_query follows"
+
+The secret column rule reads the columns of every schema and database a statement reaches. A relation whose columns it cannot read is not queried, so give the account read access to the catalogue of that schema, or query a relation it can read. A view the statement names is followed through the databases or schemas its definition names, three reads deep. A statement that names a view that leads deeper is not run, and the message names the view: query the tables it reads. A statement that does not name that view runs.
 
 ### "Blocked: SHOW with a WHERE clause is not run"
 
@@ -327,7 +334,11 @@ MySQL's statement timeout does not hold a `SHOW` filter, so it is refused on eve
 
 ### "A name before a dot is read as that schema, so an alias named `sys` needs another name"
 
-On MySQL and MariaDB `mysql.` and `sys.` are read as those schemas wherever they stand outside a single-quoted string. An alias cannot be told from a schema, so `FROM users sys ... sys.id` is refused. Give the alias another name. A double-quoted string that holds `mysql.` is refused too: write it in single quotes.
+On MySQL and MariaDB `mysql.` and `sys.` are read as those schemas wherever they stand outside a single-quoted string. An alias cannot be told from a schema, so `FROM users sys ... sys.id` is refused. Give the alias another name. A double-quoted string that holds `mysql.` or `sys.` is refused too, with a sentence of its own: MySQL reads double-quoted text as a name when the session's sql_mode holds `ANSI_QUOTES`. Write it in single quotes.
+
+### "That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES"
+
+On MySQL and MariaDB a backslash in a string is an escape, unless the session's sql_mode holds `NO_BACKSLASH_ESCAPES`. `rails_query` does not read the session's mode, so it checks the statement under both readings and refuses it when either one does. This message ends a refusal that the second reading alone gives: with `\'` read as a backslash and the end of the string, the text after it is code. Write a quote inside a string doubled (`'it''s'`), so that both readings agree.
 
 ### "Blocked: the setting ... is not read", "Blocked: SHOW ALL is not run" and "Blocked: SHOW takes a setting's plain name on PostgreSQL"
 
@@ -351,7 +362,7 @@ The secret column rule reads the database's columns before any query runs. When 
 
 ### "The database is locked by another connection, so the query did not run"
 
-Another connection holds a lock on the SQLite database, such as a write transaction left open in a console. Nothing ran. End that transaction and run the query again. The query waits on a lock for 80% of `query_timeout` before it answers this.
+Another connection holds a lock on the SQLite database, such as a write transaction left open in a console. Nothing ran. End that transaction and run the query again. The query waits on a lock for 80% of `query_timeout` before it answers this. A lock met while the connection opens, as on the CLI or on a server's first call, gets the same answer.
 
 ### "The reads rails_query makes before a statement ... took the whole <N> second timeout"
 
