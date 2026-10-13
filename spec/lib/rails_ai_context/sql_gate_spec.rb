@@ -34,7 +34,9 @@ RSpec.describe RailsAiContext::SqlGate do
 
   def check(sql, family = :sqlite)
     secrets = RailsAiContext::SecretColumns.new(relations: relations, views: views, generated: generated, encrypted: encrypted)
-    described_class.new(family: families.fetch(family), secrets: secrets, connection: connection, budget: described_class::Budget.new(5)).check(sql)
+    # The text checks get minutes: these examples read verdicts, and a megabyte takes seconds on a loaded machine.
+    described_class.new(family: families.fetch(family), secrets: secrets, connection: connection, budget: described_class::Budget.new(5),
+                        text_timeout: 600).check(sql)
   end
 
   def refusal(sql, family = :sqlite)
@@ -242,6 +244,16 @@ RSpec.describe RailsAiContext::SqlGate do
       [ "SELECT id FROM users WHERE email LIKE '%@mysql.com'", "SELECT id FROM hosts WHERE name = 'sys.internal'" ].each do |sql|
         %i[sqlite mysql postgresql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
       end
+    end
+
+    it "refuses a double-quoted text that holds either schema's name before a dot, and says what a double-quoted text can be" do
+      quoted = ->(name) do
+        "#{unread(name)} The name stands before a dot inside double-quoted text, which MySQL reads as a name when the session's sql_mode " \
+          "holds ANSI_QUOTES, and rails_query does not read the session's mode. Write the text in single quotes."
+      end
+      expect(refusal(%(SELECT id FROM posts WHERE title LIKE "%@mysql.com"), :mysql)).to eq(quoted.call("mysql"))
+      expect(refusal(%(SELECT id FROM hosts WHERE name = "sys.internal"), :mysql)).to eq(quoted.call("sys"))
+      expect(refusal(%(SELECT User FROM "mysql".user), :mysql)).to end_with("so an alias named `mysql` needs another name.")
     end
 
     it "refuses the PostgreSQL relations that hold a stored credential" do
@@ -608,12 +620,46 @@ RSpec.describe RailsAiContext::SqlGate do
           "On #{families.fetch(family).name} a value read through such a wildcard can be compared or renamed past the redaction, " \
           "so name the columns in the subquery."
         )
-        expect(refusal("SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", family)).to eq(
-          "Blocked: `TABLE` inside a subquery is not run in a statement that names `users`, which holds the secret column `passwd`. " \
-          "`TABLE t` reads every column of `t`, and on #{families.fetch(family).name} a value read that way can be compared or renamed " \
-          "past the redaction, so SELECT the columns you need in the subquery."
-        )
       end
+      expect(refusal("SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", :mysql)).to eq(
+        "Blocked: `TABLE` inside a subquery is not run in a statement that names `users`, which holds the secret column `passwd`. " \
+        "`TABLE t` reads every column of `t`, and on MySQL a value read that way can be compared or renamed " \
+        "past the redaction, so SELECT the columns you need in the subquery."
+      )
+    end
+
+    it "has no TABLE rule on SQLite, which has no TABLE statement" do
+      [ "SELECT 1 < (TABLE creds)", "SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", "SELECT * FROM (TABLE users) t" ].each do |sql|
+        expect(runs?(sql)).to be(true), sql
+      end
+    end
+
+    it "holds IN before a relation's name to the wildcard rule on SQLite, in every spelling of the name" do
+      [ "SELECT (1, 'a@example.test', 'x') IN users AS o", "SELECT (1, 'a', 'x') NOT IN users AS o", %(SELECT (1, 'a', 'x') IN "users" AS o),
+        "SELECT (1, 'a', 'x') IN [users] AS o", "SELECT (1, 'a', 'x') IN `users` AS o", "SELECT (1, 'a', 'x') IN main.users AS o",
+        "SELECT 'pw' IN creds AS o", "SELECT id FROM posts WHERE 'pw' IN creds", "SELECT EXISTS (SELECT 1 FROM posts WHERE 'pw' IN creds) AS o",
+        "SELECT 'pw'IN\ncreds AS o" ].each do |sql|
+        expect(refusal(sql)).to start_with("Blocked: `IN` before a table's name is not run in a statement that names `"), sql
+      end
+      expect(refusal("SELECT 'pw' IN creds AS o")).to eq(
+        "Blocked: `IN` before a table's name is not run in a statement that names `creds`, which holds the secret column `passwd`. " \
+        "`x IN t` is SQLite's shorthand for `x IN (SELECT * FROM t)`, and a value read through such a wildcard can be compared past the " \
+        "redaction, so write the subquery with its columns named."
+      )
+      expect(refusal("SELECT (1, 'a', 'x') IN 'users' AS o")).to eq(
+        "Blocked: `IN` before a table's name is not run in a statement that holds the string 'users'. SQLite reads a string as a table's name " \
+        "where a name can stand, and the table `users` holds the secret column `passwd`. `x IN t` is SQLite's shorthand for " \
+        "`x IN (SELECT * FROM t)`, and a value read through such a wildcard can be compared past the redaction, so write the subquery with " \
+        "its columns named."
+      )
+    end
+
+    it "runs IN before a list or a subquery in parentheses, and IN before a relation's name where no relation named holds a secret column" do
+      [ "SELECT id FROM users WHERE id IN (1, 2)", "SELECT id FROM posts WHERE id IN (SELECT id FROM users)", "SELECT id FROM posts WHERE id NOT IN (1)",
+        "SELECT id FROM posts WHERE title IN ('users')", "SELECT 1 IN posts AS o", "SELECT id FROM posts WHERE title = 'x IN users'" ].each do |sql|
+        expect(runs?(sql)).to be(true), sql
+      end
+      expect(refusal("SELECT 'pw' IN creds AS o", :mysql).to_s).not_to include("`IN` before")
     end
 
     it "says what it tests when the wildcard reads another relation than the one that holds the secret column" do
@@ -667,7 +713,7 @@ RSpec.describe RailsAiContext::SqlGate do
         %i[sqlite mysql].each { |family| expect(refusal(sql, family)).to start_with("Blocked: a `*` inside a subquery"), "#{family}: #{sql}" }
       end
       [ "SELECT 1 < (TABLE creds)", "SELECT 1 FROM posts WHERE (1, 'a', 'pw') IN (TABLE users)", "SELECT * FROM (TABLE users) t" ].each do |sql|
-        %i[sqlite mysql].each { |family| expect(refusal(sql, family)).to start_with("Blocked: `TABLE` inside a subquery"), "#{family}: #{sql}" }
+        expect(refusal(sql, :mysql)).to start_with("Blocked: `TABLE` inside a subquery"), sql
       end
     end
 

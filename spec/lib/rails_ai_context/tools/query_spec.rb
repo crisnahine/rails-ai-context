@@ -850,6 +850,25 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT * FROM (SELECT * FROM posts) p WHERE title = 'users'").last).to start_with("Blocked: a `*` inside a subquery")
     end
 
+    it "refuses IN before the name of a table that holds a secret column, and runs IN before a list or a subquery in parentheses" do
+      row = "(1, 'a@example.test', 'MARKER-DIGEST-1')"
+      [ "SELECT #{row} IN users AS o", "SELECT #{row} NOT IN users AS o", %(SELECT #{row} IN "users" AS o), "SELECT #{row} IN main.users AS o",
+        "SELECT #{row} IN 'users' AS o" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_starting_with("Blocked: `IN` before a table's name is not run in a statement that ") ]), sql
+      end
+      { "SELECT id FROM users WHERE id IN (1, 2)" => "| 1  |", "SELECT title FROM posts WHERE id IN (SELECT id FROM users)" => "the users table",
+        "SELECT 1 IN ids AS o" => "| 1 |" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+    end
+
+    it "answers SQLite's own error for TABLE, which SQLite has no statement for" do
+      [ "SELECT 1 < (TABLE users)", "SELECT * FROM (TABLE users) t" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_starting_with("SQL error: SQLite3::SQLException: near \"TABLE\": syntax error") ]), sql
+      end
+    end
+
     it "runs it when the strings of the statement name no such table" do
       { "SELECT * FROM (SELECT * FROM posts) p WHERE title LIKE '%users%'" => "the users table",
         "SELECT * FROM (SELECT * FROM ('posts')) p WHERE id = 1" => "the users table",

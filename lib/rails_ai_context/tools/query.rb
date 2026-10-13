@@ -222,9 +222,9 @@ module RailsAiContext
         holder = held.find { |name, tables| name != asked && tables.is_a?(Hash) && tables.key?(table) }&.first or return ""
 
         found = databases[holder]
-        return " The #{table} table is on the #{holder} database: run the query again with database: \"#{holder}\"." if found.nil? || found.here
+        return ". The #{table} table is on the #{holder} database: run the query again with database: \"#{holder}\"." if found.nil? || found.here
 
-        " The #{table} table is on the #{holder} database, which #{RailsAiContext.environment_name} does not configure."
+        ". The #{table} table is on the #{holder} database, which #{RailsAiContext.environment_name} does not configure."
       rescue StandardError => e
         RailsAiContext.debug_fail(e, "", label: "held_elsewhere")
       end

@@ -182,6 +182,9 @@ module RailsAiContext
     # What a VALUES body may not hold if its column-alias list is to rename constants only.
     ROW_SOURCES = %w[SELECT TABLE WITH UNION EXCEPT INTERSECT].freeze
 
+    IN_SHORTHAND = "`x IN t` is SQLite's shorthand for `x IN (SELECT * FROM t)`, and a value read through such a wildcard can be " \
+      "compared past the redaction, so write the subquery with its columns named."
+
     # A UNION names its columns after its first SELECT, so another table's rows leave under those names.
     # INTERSECT and EXCEPT return only rows of their first SELECT, so they stay.
     SET_UNION = /\bUNION\b/i
@@ -393,7 +396,12 @@ module RailsAiContext
         return never_read_refusal(m.captures.compact.first)
       end
       if (m = listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, :string)))
-        return "#{never_read_refusal(m[1])} A name before a dot is read as that schema, so an alias named `#{m[1]}` needs another name."
+        text_only = ->(kind, span) { kind == :string || (span.start_with?('"') && !span.match?(/\A"\w+"\z/)) }
+        return "#{never_read_refusal(m[1])} A name before a dot is read as that schema, so an alias named `#{m[1]}` needs another name." if
+          listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, &text_only))
+
+        return "#{never_read_refusal(m[1])} The name stands before a dot inside double-quoted text, which MySQL reads as a name when the " \
+          "session's sql_mode holds ANSI_QUOTES, and rails_query does not read the session's mode. Write the text in single quotes."
       end
       table, why = @secrets.unread_table_in(cleaned)
       return "Blocked: `#{table}` is not read: #{why}." if table
@@ -455,13 +463,16 @@ module RailsAiContext
         return "Blocked: `TABLE` inside a subquery #{holds} `TABLE t` reads every column of `t`, and on #{@family.name} a value read that " \
           "way can be compared or renamed past the redaction, so SELECT the columns you need in the subquery." if wildcard == :table
 
+        return "Blocked: `IN` before a table's name #{holds} #{IN_SHORTHAND}" if wildcard == :in
+
         return "Blocked: a `*` inside a subquery #{holds} On #{@family.name} a value read through such a wildcard can be compared or " \
           "renamed past the redaction, so name the columns in the subquery."
       end
-      if wildcard == :star && (relation = string_naming_relation(tokens))
-        return "Blocked: a `*` inside a subquery is not run in a statement that holds the string '#{relation}'. SQLite reads a string as a " \
-          "table's name where a name can stand, and the table `#{relation}` holds the secret column `#{@secrets.of_relation(relation).first}`. " \
-          "A value read through such a wildcard can be compared or renamed past the redaction, so name the columns in the subquery."
+      if wildcard && wildcard != :table && (relation = string_naming_relation(tokens))
+        return "Blocked: #{wildcard == :in ? "`IN` before a table's name" : "a `*` inside a subquery"} is not run in a statement that holds " \
+          "the string '#{relation}'. SQLite reads a string as a table's name where a name can stand, and the table `#{relation}` holds the " \
+          "secret column `#{@secrets.of_relation(relation).first}`. " + (wildcard == :in ? IN_SHORTHAND :
+          "A value read through such a wildcard can be compared or renamed past the redaction, so name the columns in the subquery.")
       end
 
       # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
@@ -579,14 +590,15 @@ module RailsAiContext
     end
 
     # Every quoted and dollar-quoted span blanked to spaces of the same length, so a check reads structure
-    # only and positions still line up. only: the one kind to blank, :string or :quoted.
-    def mask_quoted(text, only = nil)
+    # only and positions still line up. only: the one kind to blank, :string or :quoted. With a block, the spans it picks.
+    def mask_quoted(text, only = nil, &picks)
+      picks ||= ->(kind, _span) { only.nil? || kind == only }
       scanner = Scanner.new(text)
       out = +""
 
       until scanner.eos?
         kind, span = self.class.quoted(scanner, @family, backslash: @backslash)
-        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : only.nil? || kind == only ? " " * span.length : span)
+        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : picks.call(kind, span) ? " " * span.length : span)
       end
 
       out
@@ -747,20 +759,23 @@ module RailsAiContext
       end
     end
 
-    # :star for a select-list wildcard inside parentheses, :table for MySQL's `TABLE t` there, else nil.
-    # `count(*)` reads no column and EXISTS returns none, so both are left alone.
+    # :star for a select-list wildcard inside parentheses, :table for `TABLE t` there on a family that has the
+    # statement, :in for SQLite's `x IN t` anywhere, else nil. `count(*)` reads no column and EXISTS returns
+    # none, so both are left alone.
     def subquery_wildcard(tokens)
       enclosing = []
       tokens.each_with_index do |token, i|
+        following = tokens[i + 1]
+        return :in if @family.sqlite? && word?(token, "IN") && following && following != [ :punct, "(" ]
+
         enclosing << i if token == [ :punct, "(" ]
         enclosing.pop if token == [ :punct, ")" ]
         next if enclosing.empty? || (enclosing.last.positive? && word?(tokens[enclosing.last - 1], "EXISTS"))
 
-        following = tokens[i + 1]
         star = token == [ :punct, "*" ] && (following.nil? || [ ",", ")" ].include?(following[1]) || word?(following, "FROM")) &&
           !(tokens[i - 1] == [ :punct, "(" ] && following == [ :punct, ")" ])
         return :star if star
-        return :table if word?(token, "TABLE") && tokens[i - 1] != [ :punct, "." ]
+        return :table if !@family.sqlite? && word?(token, "TABLE") && tokens[i - 1] != [ :punct, "." ]
       end
       nil
     end
