@@ -458,7 +458,7 @@ RSpec.describe RailsAiContext::Server do
           expect(failed[:isError]).to be(true)
           expect(failed[:content].first[:text]).to start_with("Tool rails_get_schema failed: #{error}: stack level too deep")
 
-          RSpec::Mocks.space.proxy_for(RailsAiContext::Tools::GetSchema).reset
+          allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_call_original
           expect(call.call[:result][:isError]).to be_falsey
         end
       end

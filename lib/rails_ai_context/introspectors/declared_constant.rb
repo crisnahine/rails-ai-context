@@ -110,12 +110,23 @@ module RailsAiContext
       # has_and_belongs_to_many through a singleton `name=`, so it answers
       # "HABTM_Tags" while it lives at "Account::HABTM_Tags". Keyed by that
       # name it would overwrite the real entry, or collapse two owners of one
-      # association name onto one.
+      # association name onto one. A class whose constant was removed keeps its
+      # name and stays among its parent's descendants until it is collected.
       #
       # @param klass [Class] a loaded class
       # @return [Boolean]
       def renamed?(klass)
-        klass.name != klass.to_s
+        scope = Object
+        klass.name.to_s.split("::").each do |part|
+          return true unless scope.is_a?(Module) && scope.const_defined?(part, false)
+          # Asking loads no file: a constant still waiting to autoload is taken to name the class.
+          return false if scope.autoload?(part, false)
+
+          scope = scope.const_get(part, false)
+        end
+        !scope.equal?(klass)
+      rescue NameError
+        true
       end
 
       # @return [Boolean] whether the source declares a class at all. A file

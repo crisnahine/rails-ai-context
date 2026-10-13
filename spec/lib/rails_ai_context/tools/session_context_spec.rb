@@ -125,6 +125,12 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(RailsAiContext::Tools::BaseTool.session_queries).to be_empty
     end
 
+    it "suggests a retired name for a mark that is near one" do
+      result = described_class.call(mark: "gem:auth")
+
+      expect(result.content.first[:text]).to start_with("Unknown tool 'gem' in `mark`. Did you mean 'gems'?")
+    end
+
     it "has read-only annotations" do
       annotations = described_class.annotations_value
       expect(annotations.read_only_hint).to eq(true)

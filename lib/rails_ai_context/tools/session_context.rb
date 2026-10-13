@@ -73,9 +73,8 @@ module RailsAiContext
           [ tool, params ]
         end
 
-        # The tool a mark names, spelled the way the server names it, so a
-        # mark and the call it stands for are one entry, and the config section
-        # a retired name stands for. Takes the short forms the CLI takes.
+        # The tool a mark names, spelled as the server names it, so a mark and the call it stands for are one
+        # entry, with the config section a retired name stands for. Takes the short forms the CLI takes.
         def known_tool(name)
           return nil if name.to_s.empty?
 

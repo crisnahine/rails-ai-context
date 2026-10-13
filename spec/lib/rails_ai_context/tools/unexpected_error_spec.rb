@@ -108,7 +108,7 @@ RSpec.describe "a tool that raises unexpectedly" do
     it "is over with the call, so the next answer is an ordinary one" do
       crash_in(tools::GetSchema)
       tools::GetContext.call(model: "Post")
-      RSpec::Mocks.space.proxy_for(tools::GetSchema).reset
+      allow(tools::GetSchema).to receive(:cached_context).and_call_original
 
       expect(tools::GetContext.call(model: "Post").error?).to be(false)
     end

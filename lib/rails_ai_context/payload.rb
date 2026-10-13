@@ -135,18 +135,28 @@ module RailsAiContext
       words ? " (#{words})" : ""
     end
 
+    # The multi_database section. A payload that holds none (a preset without it) gets the same list
+    # from the app databases, so no mark or name depends on the preset.
+    def multi_database(context)
+      section(context, :multi_database) || Introspectors::MultiDatabaseIntrospector.new(RailsAiContext.default_app).listing
+    end
+
+    def databases(context)
+      Array(multi_database(context)[:databases]).grep(Hash)
+    end
+
     def named_scope_words(context, name)
-      scope_words(list(context, :multi_database, :databases).grep(Hash).find { |database| database[:name].to_s == name.to_s })
+      scope_words(databases(context).find { |database| database[:name].to_s == name.to_s })
     end
 
     # What a generated file calls the primary: its own name where another database is the one named primary.
     def primary_label(context)
-      name = section(context, :multi_database)&.dig(:primary_name)
+      name = multi_database(context)[:primary_name]
       name && database_named?(context, "primary") ? name.to_s : "primary"
     end
 
     def database_named?(context, name)
-      list(context, :multi_database, :databases).grep(Hash).any? { |database| database[:name].to_s == name }
+      databases(context).any? { |database| database[:name].to_s == name }
     end
 
     # The mark for a database known by its database.yml name.

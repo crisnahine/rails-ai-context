@@ -148,6 +148,25 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.renamed?(klass)).to be(true)
     end
 
+    it "is true for a class whose constant was removed" do
+      klass = Class.new
+      Object.const_set(:GoneClass, klass)
+      Object.send(:remove_const, :GoneClass)
+
+      expect(klass.name).to eq("GoneClass")
+      expect(described_class.renamed?(klass)).to be(true)
+    end
+
+    it "is false for a class whose constant waits to autoload, and loads no file to ask" do
+      klass = Class.new
+      def klass.name = "WaitingClass"
+      Object.autoload(:WaitingClass, "/nowhere/waiting_class.rb")
+
+      expect(described_class.renamed?(klass)).to be(false)
+    ensure
+      Object.send(:remove_const, :WaitingClass)
+    end
+
     it "is false for a class that answers its own constant path" do
       stub_const("Account", Class.new)
 

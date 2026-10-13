@@ -123,7 +123,9 @@ module RailsAiContext
           end
 
           sizes = gather_table_sizes(conn, family)
-          if sizes&.any?
+          if sizes == :unread
+            lines << "" << "_Table sizes were not read: the read failed or took longer than query_timeout._"
+          elsif sizes&.any?
             lines << "" << "### Table Sizes"
             lines << "| Table | Size |"
             lines << "|-------|------|"
@@ -141,7 +143,9 @@ module RailsAiContext
           # Index usage (full detail only)
           if RailsAiContext::DetailLevel.full?(detail)
             index_usage = gather_index_usage(conn, family)
-            if index_usage.nil? && family.known?
+            if index_usage == :unread
+              lines << "" << "_Index usage was not read: the read failed or took longer than query_timeout._"
+            elsif index_usage.nil? && family.known?
               lines << "" << "_Index usage is not available for the #{family.name} database family._"
             elsif index_usage&.any?
               lines << "" << "### Index Usage"
@@ -171,7 +175,7 @@ module RailsAiContext
 
           AppDatabases.bounded(conn) { family.table_sizes(conn) }&.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
         rescue => e
-          RailsAiContext.debug_fail(e, nil, label: "gather_table_sizes")
+          RailsAiContext.debug_fail(e, :unread, label: "gather_table_sizes")
         end
 
         # Every database Rails migrates here, each through its own connection.
@@ -235,7 +239,7 @@ module RailsAiContext
         def gather_index_usage(conn, family)
           AppDatabases.bounded(conn) { family.index_usage(conn) } if family.known?
         rescue => e
-          RailsAiContext.debug_fail(e, [], label: "gather_index_usage")
+          RailsAiContext.debug_fail(e, :unread, label: "gather_index_usage")
         end
 
         # ── Cache section ────────────────────────────────────────────────

@@ -167,7 +167,7 @@ module RailsAiContext
         return nil if RailsAiContext::Introspectors::ActionSource.unlisted_action(rails_app.root, name, action.to_s,
                                                                                  file: Payload.controller_file(ctx, name), controllers: controllers)
 
-        "Action '#{echo_input(action)}' not found in #{name}. Available: #{actions.join(', ')}"
+        GetControllers.missing_action_message(name, action, actions)
       end
 
       # The templates for a controller, read from the directory Rails would
@@ -354,7 +354,7 @@ module RailsAiContext
         analyze_result = compose(AnalyzeFeature, feature: feature_name)
         parts = [ response_text(analyze_result) ]
         related = []
-        named = []
+        matched_models = []
 
         # Enrich with schema columns for matching models
         ctx = begin; cached_context; rescue; nil; end
@@ -364,7 +364,7 @@ module RailsAiContext
 
           models.each_key do |model_name|
             next unless model_name.downcase.include?(feature_name.downcase)
-            named << model_name
+            matched_models << model_name
             table_name = models[model_name][:table_name]
             next unless table_name
             matched_tables << table_name
@@ -396,7 +396,7 @@ module RailsAiContext
         return text unless text.empty? && !own_served?(AnalyzeFeature)
 
         # With rails_analyze_feature off, only model and controller names were matched.
-        return "The model names that hold '#{echo_input(feature_name)}': #{named.sort.join(', ')}." if named.any?
+        return "The model names that hold '#{echo_input(feature_name)}': #{matched_models.sort.join(', ')}." if matched_models.any?
 
         "No matches found for '#{echo_input(feature_name)}'. No model or controller name holds this keyword.#{AnalyzeFeature.model_names_hint(ctx)}"
       rescue => e

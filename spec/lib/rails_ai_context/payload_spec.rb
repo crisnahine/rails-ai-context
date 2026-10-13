@@ -76,6 +76,20 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
+  describe ".primary_label" do
+    it "is the first database's own name where another database is named primary" do
+      context = { multi_database: { primary_name: "animals", databases: [ { name: "animals" }, { name: "primary" } ] } }
+
+      expect(described_class.primary_label(context)).to eq("animals")
+    end
+
+    it "is primary where no other database carries that name" do
+      context = { multi_database: { primary_name: "main", databases: [ { name: "main" }, { name: "analytics" } ] } }
+
+      expect(described_class.primary_label(context)).to eq("primary")
+    end
+  end
+
   describe ".model_tables" do
     let(:orders) { ->(column) { { tables: { "orders" => { columns: [ { name: column } ] } } } } }
     let(:schema) { { tables: { "users" => { columns: [] } }, secondary_databases: { "shard_one" => orders.call("a"), "shard_two" => orders.call("b") } } }
