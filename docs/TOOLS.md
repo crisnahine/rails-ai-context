@@ -737,9 +737,11 @@ It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-o
 
 On PostgreSQL, MySQL and MariaDB every statement a call sends has a time limit. The query has `query_timeout` to itself and the reads beside it share a second one, so the statements of a call take about twice `query_timeout` at most. On SQLite the query has `query_timeout`, and the reads beside it run on the app's own connection with no statement limit. The [security model](SECURITY.md#layer-2---database-level-read-only) says what bounds each statement and lists the stated limits.
 
-On MySQL, MariaDB and SQLite a statement that names a view whose definition names a secret column is refused. So is a `*` inside a subquery when the statement names a table that holds a secret column. On PostgreSQL a materialized view whose definition names a secret column is refused. On SQLite a virtual table that holds a secret column, a shadow table and the page modules are refused, and only the pragma functions that describe the schema or the database file run.
+On MySQL, MariaDB and SQLite a statement that names a view whose definition names a secret column is refused. So is a `*` inside a subquery when the statement names a table that holds a secret column, and on SQLite `IN` before a table's name (`x IN t`). On PostgreSQL a materialized view whose definition names a secret column is refused. On SQLite a virtual table that holds a secret column, a shadow table and the page modules are refused, and only the pragma functions that describe the schema or the database file run.
 
-The secret column rule reads the columns of every schema and database a statement names, so a secret column of a table in another one is refused by name too.
+The secret column rule reads the columns of every schema and database a statement reaches: the ones its text names, on PostgreSQL the ones its plan names, and the ones the views it names lead to, three reads deep. So a secret column of a table in another one is refused by name too.
+
+On MySQL and MariaDB the text checks read a backslash in a string both ways, and a statement that either reading refuses is refused. On every family the text checks give up with a refusal when they have run longer than `query_timeout`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
