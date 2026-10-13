@@ -56,9 +56,8 @@ module RailsAiContext
         end.uniq
       end
 
-      # The expressions that can stand at each result column: entry i is result column i, with any sort or group key
-      # past the result width. An Append prints no Output, and each of its members hands up a row of its own.
-      # @return [Array<Array<String>>]
+      # @return [Array<Array<String>>] the expressions that can stand at result column i, with any sort or group key
+      #   past the result width. An Append prints no Output, and each of its members hands up a row of its own.
       def output
         return Array(@top["Output"]).map { |expr| [ expr ] } if @top.key?("Output") || !APPENDS.include?(@top["Node Type"])
 

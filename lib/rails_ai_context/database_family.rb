@@ -105,8 +105,8 @@ module RailsAiContext
         runtime.column_sources(connection, sql, plan)
       end
 
-      # Every schema read below takes the schemas to read. With none it reads what a statement reaches with
-      # no schema named: the PostgreSQL search path, the MySQL connection's database, SQLite's main and temp.
+      # A schema read that is given no schemas reads at least what a statement reaches with no schema named:
+      # the PostgreSQL search path, the MySQL connection's database, SQLite's main and temp.
 
       # @return [Array<String>] the schemas a statement reaches with no schema named, where the reads' own
       #   default does not cover them: SQLite's attached databases
@@ -142,9 +142,8 @@ module RailsAiContext
         runtime.generated_columns(connection, schemas)
       end
 
-      # @return [Hash{String => Array(Symbol, String)}] table => [:pages, :shadow, :vocabulary or :virtual, the virtual
-      #   table it belongs to]: what holds another table's rows or words under other names. A virtual table and a
-      #   vocabulary also carry their definition.
+      # @return [Hash{String => Array}] what holds another table's rows or words under other names: table =>
+      #   [:pages, :shadow, :vocabulary or :virtual, its virtual table, and for the last two kinds their definition]
       def index_tables(connection, schemas = [])
         runtime.index_tables(connection, schemas)
       end

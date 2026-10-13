@@ -38,8 +38,8 @@ module RailsAiContext
       end
     end
 
-    # The checks read a megabyte in two seconds at the slowest (a nest of parentheses, a run of dollar signs), and
-    # the longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB.
+    # The longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB. The checks on a
+    # statement's text have text_timeout seconds to read one.
     MAX_BYTES = 1_000_000
 
     # The text checks ran past the time they have.
@@ -64,7 +64,7 @@ module RailsAiContext
     # refused by the CREATE keyword - SHOW CREATE USER prints credential hashes.
     SHOW_CREATE_DEFINITION = /\A\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\b/i
     BLOCKED_CLAUSES  = /\bFOR\s+(?:UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b|\bLOCK\s+IN\s+SHARE\s+MODE\b/i
-    # The lists below hold each name under the family that has it, so a name is refused where it can be read.
+    # A list keyed by family holds each name under the family that has it, so a name is refused where it can be read.
 
     # Other sessions' statements, replication hosts and users, and the row data a log holds.
     BLOCKED_SHOWS = { mysql: /\bSHOW\s+(?:(?:FULL|ALL)\s+)?(?:GRANTS|PROCESSLIST|BINLOG|BINARY|RELAYLOG|SLAVES?|MASTER|REPLICAS?|ENGINE|
@@ -251,9 +251,8 @@ module RailsAiContext
       end
     end
 
-    # family decides the lexing and whether the plan checks run. budget is the seconds the reads the
-    # gate sends (the plan, the pg_proc lookup) share with the caller's other reads. text_timeout is the seconds
-    # the checks on the statement's text have to themselves.
+    # budget: the seconds the reads the gate sends (the plan, the catalog lookups) share with the caller's other reads.
+    # text_timeout: the seconds the checks on the statement's text have to themselves.
     def initialize(family:, secrets:, connection:, budget:, text_timeout: RailsAiContext.configuration.query_timeout)
       @text_timeout = text_timeout
       @family = family
@@ -785,9 +784,8 @@ module RailsAiContext
       end
     end
 
-    # :star for a select-list wildcard inside parentheses, :table for `TABLE t` there on a family that has the
-    # statement, :in for SQLite's `x IN t` anywhere, else nil. `count(*)` reads no column and EXISTS returns
-    # none, so both are left alone.
+    # :star for a select-list wildcard inside parentheses, :table for `TABLE t` there off SQLite, :in for SQLite's
+    # `x IN t` anywhere, else nil. `count(*)` reads no column and EXISTS returns none, so both are left alone.
     def subquery_wildcard(tokens)
       enclosing = []
       tokens.each_with_index do |token, i|
