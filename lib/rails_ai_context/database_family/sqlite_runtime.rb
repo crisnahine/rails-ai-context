@@ -16,6 +16,9 @@ module RailsAiContext
 
       # What the child writes where a result's length would stand, the moment it meets a lock.
       MET_LOCK = [ (1 << 64) - 1 ].pack("Q>").freeze
+      # What it writes once the statement is prepared: the schema is read, so a lock met on the way there is behind it.
+      PAST_LOCK = [ (1 << 64) - 2 ].pack("Q>").freeze
+      WAITS_ON_LOCK = { MET_LOCK => true, PAST_LOCK => false }.freeze
 
       # A plan row that reads a table: the step, then the table's name or, for a table the statement
       # renames, the alias alone ("SEARCH u USING INDEX i"). SQLite before 3.36 wrote "SCAN TABLE users AS u".
@@ -275,6 +278,7 @@ module RailsAiContext
           db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
           wait_on_lock(db, writer, timeout * 0.8)
           stmt = db.prepare(sql)
+          writer.write(PAST_LOCK)
           [ :ok, stmt.columns, stmt.to_a ]
         rescue => e
           # Which step failed is the child's own fact; the message can hold text from the statement.
@@ -305,13 +309,18 @@ module RailsAiContext
       end
 
       # Read by length: any other process forked meanwhile holds a copy of the writer, so EOF may never come.
+      # A deadline that passes while the child waits on a lock is answered as locked; past the lock it is the timeout.
       def read_child_result(reader, deadline)
-        met_lock = false
+        on_lock = false
         size = begin
-          met_lock = true while (prefix = read_before(reader, 8, deadline)) == MET_LOCK
-          prefix.unpack1("Q>")
+          loop do
+            prefix = read_before(reader, 8, deadline)
+            break prefix.unpack1("Q>") unless WAITS_ON_LOCK.key?(prefix)
+
+            on_lock = WAITS_ON_LOCK.fetch(prefix)
+          end
         rescue TimedOut
-          raise unless met_lock
+          raise unless on_lock
 
           raise Busy, BUSY
         end

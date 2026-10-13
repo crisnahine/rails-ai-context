@@ -634,6 +634,33 @@ RSpec.describe RailsAiContext::Tools::Query do
       writer&.close
     end
 
+    it "answers the timeout for a statement that runs past the deadline after a lock it met has gone, and reaps the child each time" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      runtime = RailsAiContext::DatabaseFamily
+      lock = lambda do |seconds|
+        IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3"), seconds.to_s ]).tap { |io| io.gets }
+          db = SQLite3::Database.new(ARGV[0])
+          db.execute("BEGIN EXCLUSIVE")
+          $stdout.puts "locked"
+          $stdout.flush
+          sleep ARGV[1].to_f
+          db.execute("COMMIT")
+        RUBY
+      end
+
+      expect { runtime::SQLITE.read_only(conn, slow_sql, timeout: 1) }.to raise_error { |e| expect(e.class).to eq(runtime::TimedOut) }
+      writer = lock.call(1)
+      # The child waits on the lock for up to 2.4 s; the lock goes at 1 s and the count is still running at 3 s.
+      expect { runtime::SQLITE.read_only(conn, slow_sql, timeout: 3) }.to raise_error { |e| expect(e.class).to eq(runtime::TimedOut) }
+      writer.close
+      writer = lock.call(30)
+      expect { runtime::SQLITE.read_only(conn, slow_sql, timeout: 1) }.to raise_error(runtime::Busy)
+      expect(reaped.size).to eq(3)
+    ensure
+      Process.kill(:KILL, writer.pid) if writer && !writer.closed?
+      writer&.close
+    end
+
     it "reruns in-process, without a time limit, what only the app connection can answer" do
       conn.raw_connection.create_function("rac_twice", 1) { |func, x| func.result = x * 2 }
       text = described_class.call(sql: "SELECT rac_twice(n) AS t FROM nums ORDER BY n").content.first[:text]
