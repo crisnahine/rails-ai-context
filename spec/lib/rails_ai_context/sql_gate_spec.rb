@@ -759,6 +759,20 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "reads a statement that holds no backslash once, and one that holds a backslash under both readings" do
+      reads = 0
+      allow_any_instance_of(described_class).to receive(:text_refusal).and_wrap_original do |original, *args|
+        reads += 1
+        original.call(*args)
+      end
+      counts = [ "SELECT id FROM posts WHERE title = 'x' OR title = 'y'", %q(SELECT id FROM posts WHERE title = 'a\\b') ].map do |sql|
+        reads = 0
+        expect(runs?(sql, :mysql)).to be(true), sql
+        reads
+      end
+      expect(counts).to eq([ 1, 2 ])
+    end
+
     it "ends the refusal with a full stop before it names the reading" do
       expect(refusal(%q(SELECT '\' , id FROM posts; SELECT 2 -- '), :mysql)).to eq("Blocked: multiple statements (no semicolons).#{mode}")
       expect(refusal(%q(SELECT '\' , user FROM mysql.user -- '), :mysql)).to include("needs another name. That is how MySQL reads")
