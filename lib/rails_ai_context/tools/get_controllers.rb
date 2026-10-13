@@ -287,6 +287,10 @@ module RailsAiContext
         end
       end
 
+      def self.missing_action_message(controller_name, action_name, actions)
+        "Action '#{echo_input(action_name)}' not found in #{controller_name}. Available: #{actions.join(', ')}"
+      end
+
       private_class_method def self.format_action_source(controller_name, info, action_name)
         # An alias is the same class: its actions are read from the controller it names.
         target = info[:alias_of] && RailsAiContext::Payload.controllers(cached_context)[info[:alias_of]]
@@ -304,7 +308,7 @@ module RailsAiContext
           unlisted = RailsAiContext::Introspectors::ActionSource.unlisted_action(rails_app.root, controller_name, action_name,
             file: carried, controllers: RailsAiContext::Payload.controllers(cached_context))
           unless unlisted
-            return empty_response("Action '#{echo_input(action_name)}' not found in #{controller_name}. Available: #{actions.join(', ')}")
+            return empty_response(missing_action_message(controller_name, action_name, actions))
           end
 
           action_name = unlisted[:name]
