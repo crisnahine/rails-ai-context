@@ -193,7 +193,7 @@ module RailsAiContext
         # { name:, adapter:, tables:, unread: }, the adapter nil when database.yml does not say,
         # `unread` true for a dump that could not be read, whose table count is then no count.
         def own_secondary_databases(ctx, schema)
-          configured = Array(Payload.section(ctx, :multi_database)&.dig(:databases)).grep(Hash).to_h { |d| [ d[:name].to_s, d ] }
+          configured = Payload.databases(ctx).to_h { |d| [ d[:name].to_s, d ] }
           Payload.app_databases(schema).map do |name, db|
             { name: name.to_s, adapter: RailsAiContext::SchemaAdapter.database_label(configured[name.to_s]),
               tables: (db[:total_tables] || db[:tables].size).to_i, unread: db[:unread] }

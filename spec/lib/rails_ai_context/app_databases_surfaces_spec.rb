@@ -149,3 +149,46 @@ RSpec.describe "a dump on disk under a database's name" do
     end
   end
 end
+
+# `preset: standard` runs no multi_database section.
+RSpec.describe "the app databases where the payload holds no multi_database section" do
+  around do |example|
+    config = RailsAiContext.configuration
+    previous = [ RailsAiContext.tier, ENV.fetch("RAILS_ENV", nil), config.introspectors, config.app_root ]
+    RailsAiContext.tier = :static
+    ENV["RAILS_ENV"] = "test"
+    config.introspectors = RailsAiContext::Configuration::PRESETS[:standard].dup
+    example.run
+  ensure
+    RailsAiContext.tier, ENV["RAILS_ENV"], config.introspectors, config.app_root = previous
+  end
+
+  def answers(fixture)
+    root = File.expand_path("../../fixtures/app_databases/#{fixture}", __dir__)
+    RailsAiContext.configuration.app_root = root
+    RailsAiContext::RunCache.around do
+      context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+      tools = [ RailsAiContext::Tools::GetSchema, RailsAiContext::Tools::Onboard ]
+      tools.each { |tool| allow(tool).to receive_messages(cached_context: context) }
+      { context: context, schema: tools.first.call(detail: "summary").content.first[:text],
+        onboard: tools.last.call(detail: "standard").content.first[:text],
+        file: RailsAiContext::Serializers::MarkdownSerializer.new(context).call }
+    end
+  end
+
+  it "marks the databases only production configures in rails_get_schema, rails_onboard and the generated file" do
+    found = answers("rails8")
+
+    expect(found[:context]).not_to have_key(:multi_database)
+    expect(found[:schema]).to include("- **cache** (production only): 1 table", "- **queue** (production only): 1 table")
+    expect(found[:onboard]).to include("databases of their own: cache (production only), queue (production only), cable (production only).")
+    expect(found[:file]).to include("cable (production only): Solid Cable (1 table)", "- queue (production only): 1 total, 0 pending in db/queue_migrate")
+  end
+
+  it "names the first database by its own name where another database is named primary" do
+    found = answers("animals_first")
+
+    expect(found[:onboard]).to include("plus the primary database on MySQL (1 table).")
+    expect(found[:file]).to include("## Database Schema: animals (2 tables)", "## Database Schema: primary (1 table)", "- Total: 0 (animals)")
+  end
+end
