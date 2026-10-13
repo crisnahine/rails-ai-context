@@ -231,6 +231,15 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "leaves out a concerns class with no superclass, whatever the booted app says of record bases" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app/models/concerns"))
+      File.write(File.join(dir, "app/models/concerns/tracker.rb"), "class Tracker\nend\n")
+
+      expect(described_class.each(dir, kind: :models, base_model: ->(_) { true }).to_a).to be_empty
+    end
+  end
+
   it "reads the concerns namespace from the declarations a file parses to" do
     commented = "# Unlike module Concerns::Noted, this one is top level.\nmodule Noted\n  NOTE = \"module Concerns\"\nend\n"
 

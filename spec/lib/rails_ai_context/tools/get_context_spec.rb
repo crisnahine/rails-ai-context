@@ -87,6 +87,34 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(answer(controller: "PostsController", action: "INDEX")).not_to include("not found")
     end
 
+    describe "for an action" do
+      around { |example| Dir.mktmpdir { |dir| @dir = dir and example.run } }
+
+      before do
+        FileUtils.mkdir_p(File.join(@dir, "app/controllers"))
+        File.write(File.join(@dir, "app/controllers/application_controller.rb"), "class ApplicationController < ActionController::Base\n  def health; end\nend\n")
+        File.write(File.join(@dir, "app/controllers/widgets_controller.rb"), "class WidgetsController < ApplicationController\n  def index; end\nend\n")
+        widgets = { actions: %w[index show], file: "app/controllers/widgets_controller.rb" }
+        controllers = { "WidgetsController" => widgets,
+                        "LegacyWidgetsController" => widgets.merge(alias_of: "WidgetsController", file: "app/controllers/legacy_widgets_controller.rb") }
+        allow(described_class).to receive_messages(cached_context: { controllers: { controllers: controllers } }, rails_app: RailsAiContext::StaticApp.new(@dir))
+        RailsAiContext.configuration.skip_tools = %w[rails_get_controllers]
+      end
+
+      it "names the controller a second name stands for" do
+        expect(answer(controller: "LegacyWidgetsController", action: "nope"))
+          .to start_with("Action 'nope' not found in WidgetsController. Available: index, show")
+      end
+
+      it "takes a listed action in any case" do
+        expect(answer(controller: "WidgetsController", action: "SHOW")).not_to include("not found")
+      end
+
+      it "takes an action the controller inherits" do
+        expect(answer(controller: "WidgetsController", action: "health")).not_to include("not found")
+      end
+    end
+
     it "names the models a feature keyword matched when the tools that describe them are off" do
       RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature rails_get_schema]
 

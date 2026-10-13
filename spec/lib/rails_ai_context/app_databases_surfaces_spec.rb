@@ -107,6 +107,20 @@ RSpec.describe "an app whose first database is not the one named primary" do
       end
     end
 
+    it "advises on a table of the database named primary by that database's family and with no row count of the first database, on the #{tier} tier" do
+      on_tier(tier, root) do
+        schema = RailsAiContext::Introspectors::SchemaIntrospector.new(app).static_call
+        context = { models: {}, schema: schema.merge(adapter: "postgresql"), database_stats: { tables: [ { table: "orders", approximate_rows: 5 } ] } }
+        allow(RailsAiContext::Tools::MigrationAdvisor).to receive_messages(cached_context: context, rails_app: app)
+        index = RailsAiContext::Tools::MigrationAdvisor.call(action: "add_index", table: "orders", column: "state").content.first[:text]
+        column = RailsAiContext::Tools::MigrationAdvisor.call(action: "add_column", table: "orders", column: "state", type: "string", options: "null: false")
+                                                        .content.first[:text]
+
+        expect(index).to include("**Note:** MySQL/MariaDB add indexes to InnoDB tables via online DDL by default")
+        expect(column).to include("`null: false` without a default fails if `orders` holds any rows")
+      end
+    end
+
     it "tells the generated files the first database's own name on the #{tier} tier" do
       on_tier(tier, root) do
         expect(RailsAiContext::Introspectors::MultiDatabaseIntrospector.new(app).call[:primary_name]).to eq("animals")
