@@ -107,7 +107,7 @@ RSpec.describe "the standard library the shipped code names" do
 
       seen << path
       scan(read(path))[:relatives].each do |relative|
-        visit.call(File.expand_path("#{relative.delete_suffix('.rb')}.rb", "/#{File.dirname(path)}").delete_prefix("/"))
+        visit.call(Pathname.new(File.dirname(path)).join("#{relative.delete_suffix('.rb')}.rb").cleanpath.to_s)
       end
       order << path
     end
