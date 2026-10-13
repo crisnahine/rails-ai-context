@@ -79,13 +79,14 @@ module RailsAiContext
 
       # An Append over partitions, or over a parent and its children, prints no Output: its members `name_1`, `name_2`
       # hand up the same columns in the same places. They are read as one relation, the first, also under `name`.
+      # A place that holds an expression in every member has no source, and each member's own Output is still judged.
       def read_members(node)
         return if node.key?("Output") || ![ "Append", "Merge Append" ].include?(node["Node Type"])
 
         members = Array(node["Plans"])
         shared = members.map { |member| member["Alias"].to_s[/\A(.+)_\d+\z/m, 1] if member["Relation Name"] }.uniq
         columns = members.map { |member| Array(member["Output"]).map { |expr| expr.to_s.match(BASE_VAR)&.then { |m| m[3] || m[4] } } }.uniq
-        return unless shared.size == 1 && shared.first && columns.size == 1 && columns.first.all?
+        return unless shared.size == 1 && shared.first && columns.size == 1
 
         first = @aliases[members.first["Alias"]]
         members.each { |member| @aliases[member["Alias"]] = first }

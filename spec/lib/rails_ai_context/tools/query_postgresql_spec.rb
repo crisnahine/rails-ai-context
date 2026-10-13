@@ -352,6 +352,20 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       end
     end
 
+    it "filters the secret column in place with an expression beside the wildcard, as it does for a table with no partitions" do
+      [ "SELECT *, id + 1 AS next FROM rac_pg_parts", "SELECT tableoid::regclass, * FROM rac_pg_parts", "SELECT 1 AS one, * FROM rac_pg_parts",
+        "SELECT *, upper(email) AS up FROM rac_pg_parts ORDER BY id LIMIT 5", "SELECT p.*, now() > '2020-01-01' AS later FROM rac_pg_parts p",
+        "SELECT *, id + 1 AS next FROM rac_pg_parent" ].each do |sql|
+        response = run(sql)
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text].scan("[FILTERED]").size).to eq(2), sql
+        expect(response.content.first[:text]).to include("p1@example.com", "p2@example.com"), sql
+        expect(response.content.first[:text]).not_to include("salt-value"), sql
+      end
+      refused([ "SELECT *, upper(salt) AS s FROM rac_pg_parts" ], "Blocked: query references secret column `salt`")
+      refused([ "SELECT *, p::text AS row FROM rac_pg_parts p" ], "Blocked: the query serialises a whole row of")
+    end
+
     it "still refuses what would carry the secret column past the redaction" do
       refused([ "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parts) SELECT * FROM c", "SELECT * FROM rac_pg_parts EXCEPT SELECT 0, '', ''",
                 "SELECT (1, 'p1@example.com', 'salt-valud') < (SELECT * FROM rac_pg_parts LIMIT 1) AS o",

@@ -1081,6 +1081,36 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(sources).to eq([ [ 0, "id", "public.rac_p_a" ], [ 1, "email", "public.rac_p_a" ], [ 2, "salt", "public.rac_p_a" ] ])
       end
 
+      # `SELECT *, id + 1 AS next`, `SELECT tableoid::regclass, *` and `SELECT 1 AS one, *` over the partitioned table.
+      def beside(as = "rac_p")
+        [ ->(name) { [ "#{name}.id", "#{name}.email", "#{name}.salt", "(#{name}.id + 1)" ] },
+          ->(name) { [ "(#{name}.tableoid)::regclass", "#{name}.id", "#{name}.email", "#{name}.salt" ] },
+          ->(name) { [ "1", "#{name}.id", "#{name}.email", "#{name}.salt" ] } ].map do |output|
+          { "Node Type" => "Append", "Subplans Removed" => 0,
+            "Plans" => [ member("rac_p_a", "#{as}_1").merge("Output" => output.call("#{as}_1")), member("rac_p_b", "#{as}_2").merge("Output" => output.call("#{as}_2")) ] }
+        end
+      end
+
+      it "runs an expression beside the wildcard, and names the table column behind each plain result column" do
+        beside.each { |plan| expect(plan_refusal(plan)).to be_nil, plan.dig("Plans", 0, "Output").inspect }
+        sources = beside.map { |plan| RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(plan).map { |i, column, _| [ i, column ] } }
+        expect(sources).to eq([ [ [ 0, "id" ], [ 1, "email" ], [ 2, "salt" ] ], [ [ 1, "id" ], [ 2, "email" ], [ 3, "salt" ] ], [ [ 1, "id" ], [ 2, "email" ], [ 3, "salt" ] ] ])
+
+        sorted = { "Node Type" => "Sort", "Parent Relationship" => "Outer", "Output" => [ "rac_p.id", "rac_p.email", "rac_p.salt", "((rac_p.id + 1))" ],
+                   "Sort Key" => [ "rac_p.id" ], "Plans" => [ beside.first.merge("Parent Relationship" => "Outer") ] }
+        expect(plan_refusal({ "Node Type" => "Limit", "Output" => sorted["Output"], "Plans" => [ sorted ] })).to be_nil
+      end
+
+      it "refuses an expression over the secret column beside the wildcard, and an expression in one member where the other hands up a column" do
+        over = ->(name) { [ "#{name}.id", "#{name}.email", "#{name}.salt", "upper(#{name}.salt)" ] }
+        named = { "Node Type" => "Append",
+                  "Plans" => [ member("rac_p_a", "rac_p_1").merge("Output" => over.call("rac_p_1")), member("rac_p_b", "rac_p_2").merge("Output" => over.call("rac_p_2")) ] }
+        expect(plan_refusal(named)).to include("plan uses the secret column `salt`")
+        uneven = { "Node Type" => "Append",
+                   "Plans" => [ member("rac_p_a", "t_1"), member("rac_p_a", "t_2").merge("Output" => [ "t_2.id", "upper(t_2.email)", "t_2.salt" ]) ] }
+        expect(plan_refusal(uneven)).to include("passes the secret column `salt` through")
+      end
+
       it "still refuses the secret column as a sort key, through a materialized CTE and through a set operation" do
         by_salt = { "Node Type" => "Sort", "Output" => %w[x.id x.email x.salt], "Sort Key" => [ "x.salt" ], "Plans" => [ append("x", "Parent Relationship" => "Outer") ] }
         expect(plan_refusal(by_salt)).to include("plan uses the secret column `salt`")
