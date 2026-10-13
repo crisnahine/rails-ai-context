@@ -776,6 +776,18 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  it "reads a sequence like a table that holds no secret column" do
+    conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
+    conn.execute("CREATE SEQUENCE rac_pg_seq START 41")
+    [ "SELECT last_value FROM rac_pg_seq", "SELECT * FROM rac_pg_seq", "SELECT s.last_value + 0 AS same FROM rac_pg_seq s" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("41") ]), sql
+    end
+    refused([ "SELECT nextval('rac_pg_seq') AS n" ], "Blocked: function nextval is VOLATILE")
+  ensure
+    conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
+  end
+
   it "runs SHOW, which has no plan" do
     expect(run("SHOW server_version").error?).to be(false)
   end
