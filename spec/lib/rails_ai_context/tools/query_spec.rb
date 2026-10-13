@@ -976,6 +976,15 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT * FROM peek")).to match([ true, a_string_starting_with("Blocked: the view `peek` is not queried: its definition names the secret column `door_token`") ])
     end
 
+    it "holds a wildcard subquery and IN to the wildcard rule when a string or a name spells a table of either" do
+      row = "(1, 'v@example.com', 'door-value')"
+      [ "SELECT #{row} < (SELECT * FROM ('vault')) AS o", "SELECT #{row} < (SELECT * FROM other.'vault') AS o",
+        "SELECT (1, 'pin-value') < (SELECT * FROM ('scratch')) AS o", "SELECT #{row} IN 'vault' AS o", "SELECT #{row} IN other.vault AS o",
+        "SELECT (1, 'pin-value') IN temp.scratch AS o" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_starting_with("Blocked: ").and(including("is not run in a statement that")) ]), sql
+      end
+    end
+
     it "filters a secret column of either in place, and runs a statement that reads none" do
       expect(answer("SELECT * FROM other.vault")).to match([ false, a_string_including("v@example.com", "[FILTERED]") ])
       expect(answer("SELECT * FROM other.vault").last).not_to include("door-value")
