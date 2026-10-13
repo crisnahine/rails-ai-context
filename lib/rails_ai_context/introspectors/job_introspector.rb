@@ -79,7 +79,7 @@ module RailsAiContext
         JOB_DIRS.each { |kind| EagerLoad.dir(app.root, kind: kind) }
 
         ActiveJob::Base.descendants.filter_map do |job|
-          next if job.name.nil? || job.name == "ApplicationJob" ||
+          next if job.name.nil? || job.name == "ApplicationJob" || DeclaredConstant.renamed?(job) ||
                   job.name.start_with?("ActionMailer", "ActiveStorage::", "ActionMailbox::", "Turbo::", "Sentry::")
           next unless app_defined?(job)
           if SuperclassChain.abstract_base?(job.name, inherited: job.descendants.any?)
@@ -765,7 +765,7 @@ module RailsAiContext
         ActionMailer::Base.descendants.filter_map do |mailer|
           # `descendants` is every mailer in the process, and a gem's is not
           # the app's however it is named.
-          next if mailer.name.nil? || !app_defined?(mailer)
+          next if mailer.name.nil? || DeclaredConstant.renamed?(mailer) || !app_defined?(mailer)
 
           # Reflection with the app-base subtraction: `action_methods` stops
           # subtracting at the framework base, so a public helper on a
@@ -1279,7 +1279,7 @@ module RailsAiContext
         EagerLoad.dir(app.root, kind: "app/channels")
 
         ActionCable::Channel::Base.descendants.filter_map do |channel|
-          next if channel.name.nil? || channel.name == "ApplicationCable::Channel"
+          next if channel.name.nil? || channel.name == "ApplicationCable::Channel" || DeclaredConstant.renamed?(channel)
 
           file = source_file_for(channel)
           macros = channel_sources.find { |klass| klass.file == file }&.macros ||

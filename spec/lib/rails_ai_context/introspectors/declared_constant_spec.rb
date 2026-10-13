@@ -148,6 +148,15 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.renamed?(klass)).to be(true)
     end
 
+    it "is true for a class whose constant was removed" do
+      klass = Class.new
+      Object.const_set(:GoneClass, klass)
+      Object.send(:remove_const, :GoneClass)
+
+      expect(klass.name).to eq("GoneClass")
+      expect(described_class.renamed?(klass)).to be(true)
+    end
+
     it "is false for a class that answers its own constant path" do
       stub_const("Account", Class.new)
 

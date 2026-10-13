@@ -1750,16 +1750,13 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
   # counted as the app's: an app with 118 Sidekiq workers and no ActiveJob of
   # its own reported "1 job", and that job was Chewy's indexing worker.
   describe "whose jobs these are" do
-    # Stubbed rather than `load`-ed. A real subclass stays in
-    # ActiveJob::Base.descendants for the rest of the run and keeps its name
-    # even after remove_const, so a leftover from here would be counted as the
-    # app's own job by a later example - the very bug under test.
+    # A double under its own constant stands for each job, so an example decides where Ruby says it was defined.
     before { allow(Object).to receive(:const_source_location).and_call_original }
 
     def job(name, defined_in:, subclasses: [])
       allow(Object).to receive(:const_source_location).with(name)
         .and_return(defined_in && [ defined_in, 1 ])
-      double(name, name: name, queue_name: "default", priority: nil, descendants: subclasses)
+      double(name, name: name, queue_name: "default", priority: nil, descendants: subclasses).tap { |fake| stub_const(name, fake) }
     end
 
     # The fixture app's own job files are merged in from source; these
