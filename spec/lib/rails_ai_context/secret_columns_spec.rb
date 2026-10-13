@@ -181,8 +181,7 @@ RSpec.describe RailsAiContext::SecretColumns do
         'quo"ted' => [ %(SELECT * FROM "quo""ted") ],
         "back`tick" => [ "SELECT * FROM `back``tick`" ]
       }.each do |view, statements|
-        # The name is answered as the rule folds it, with a run of spaces as one.
-        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view.squeeze(" ")), sql }
+        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view), sql }
       end
       expect(refused({ "v$" => definition }, "SELECT * FROM v$x")).to be_nil
     end
@@ -369,6 +368,17 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(secrets.refused_view_in("SELECT * FROM lined")&.last).to start_with("its definition has a wildcard and names `users`")
       expect(secrets.refused_view_in("SELECT * FROM blocked")&.last).to start_with("its definition has a wildcard and names `users`")
       expect(secrets.refused_view_in("SELECT * FROM plain")).to be_nil
+    end
+
+    it "names a refused view, a table that is not read and a relation in a sentence as the database spells them" do
+      secrets = described_class.new(relations: { "Hq_Users" => %w[id password_digest] },
+                                    views: { "Hq  Odd View" => "SELECT id, password_digest AS s FROM Hq_Users", "Over It" => "SELECT s FROM `Hq  Odd View`" },
+                                    index_tables: { "Raw_Pages" => [ :pages, nil ] })
+
+      expect(secrets.refused_view_in("select s from `hq  odd view`")).to eq([ "Hq  Odd View", "its definition names the secret column `password_digest`" ])
+      expect(secrets.refused_view_in("SELECT s FROM `over it`").last).to start_with("it reads the view `Hq  Odd View`: ")
+      expect(secrets.unread_table_in("select data from raw_pages").first).to eq("Raw_Pages")
+      expect(secrets.relation_named_in("select count(*) from hq_users")).to eq("Hq_Users")
     end
 
     it "reads the connection's schema once per run, however many checks ask" do
