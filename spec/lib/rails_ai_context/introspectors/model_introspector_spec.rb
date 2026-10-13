@@ -2596,6 +2596,27 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "a model file whose class body raises as it loads" do
+    let(:raising) { Rails.root.join("app", "models", "zz_raising_widget.rb") }
+
+    around do |example|
+      File.write(raising, "class ZzRaisingWidget < ApplicationRecord\nend\n")
+      example.run
+    ensure
+      FileUtils.rm_f(raising)
+    end
+
+    it "is named with what it raised, and the other models stay listed" do
+      allow(ActiveSupport::Inflector).to receive(:constantize).and_call_original
+      allow(ActiveSupport::Inflector).to receive(:constantize).with("ZzRaisingWidget").and_raise(ArgumentError, "Unknown type :jsonb")
+
+      result = described_class.new(Rails.application).call
+
+      expect(result["ZzRaisingWidget"]).to include(error: "Unknown type :jsonb", file: "app/models/zz_raising_widget.rb")
+      expect(result).to have_key("Post")
+    end
+  end
+
   # A root outside app/models holds generators and gem subclasses too; one of
   # them that will not load is not a model, and static leaves it out.
   describe "a class outside the model directories that cannot load" do

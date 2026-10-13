@@ -629,10 +629,10 @@ module RailsAiContext
             next unless klass < ActiveRecord::Base && !klass.abstract_class?
             models << klass
             known << class_name
-          rescue NameError, LoadError, ScriptError => e
-            # A syntax-broken file costs itself, not the whole listing, but
-            # its name is recorded: a file that exists for a class reflection
-            # lacks is not the same answer as no such model.
+          rescue StandardError, ScriptError => e
+            # A file that will not load, whatever its class body raises, costs
+            # itself and not the whole listing, but its name is recorded: a file
+            # that exists for a class reflection lacks is no missing model.
             @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
           end
