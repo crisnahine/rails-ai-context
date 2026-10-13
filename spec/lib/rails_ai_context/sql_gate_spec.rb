@@ -752,6 +752,11 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "ends the refusal with a full stop before it names the reading" do
+      expect(refusal(%q(SELECT '\' , id FROM posts; SELECT 2 -- '), :mysql)).to eq("Blocked: multiple statements (no semicolons).#{mode}")
+      expect(refusal(%q(SELECT '\' , user FROM mysql.user -- '), :mysql)).to include("needs another name. That is how MySQL reads")
+    end
+
     it "keeps a refusal both readings give as it was" do
       expect(refusal("SELECT user FROM mysql.user", :mysql)).not_to include("NO_BACKSLASH_ESCAPES")
       expect(refusal(%q(SELECT '\' , x FROM performance_schema.threads -- '), :mysql)).to start_with("Blocked: `performance_schema` is not read.")

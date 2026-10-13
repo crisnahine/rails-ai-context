@@ -337,7 +337,7 @@ module RailsAiContext
 
         text = comment_free(sql)
         if @family.backslash_escapes? && (refusal = without_backslash_escapes { text_refusal(text) })
-          refusal = "#{refusal} That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, " \
+          refusal = "#{refusal.delete_suffix(".")}. That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, " \
             "and rails_query does not read the session's mode. Write a quote inside a string doubled, so that both readings agree."
         end
         [ text, refusal ]
