@@ -22,6 +22,17 @@ RSpec.describe "a loaded class whose constant was removed" do
     expect(models.keys).not_to include("GoneRow")
   end
 
+  it "is left out of a model's STI children" do
+    allow(Post).to receive(:inheritance_column).and_return("title")
+    stub_const("LivePost", Class.new(Post))
+    kept = removed(:GonePost, Post)
+
+    post = RailsAiContext::Introspectors::ModelIntrospector.new(Rails.application).call["Post"]
+
+    expect(kept.name).to eq("GonePost")
+    expect(post[:sti][:sti_children]).to eq(%w[LivePost])
+  end
+
   it "is left out of the controller list" do
     kept = removed(:GoneController, ApplicationController) { def index; end }
 

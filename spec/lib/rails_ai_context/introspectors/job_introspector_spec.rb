@@ -1811,16 +1811,16 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     # booted app reporting one job more than the same app read statically is a
     # disagreement about what the app runs.
     it "drops an abstract base another job inherits from" do
-      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ "ImportUsersJob" ])
       child = job("ImportUsersJob", defined_in: app_job_file)
+      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ child ])
 
       expect(names_reported_for(base, child)).to eq(%w[ImportUsersJob])
     end
 
     # Only an Active Job record is checked against the queues a worker polls.
     it "marks a reflected job and a reflected base as Active Job" do
-      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ "ImportUsersJob" ])
       child = job("ImportUsersJob", defined_in: app_job_file)
+      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ child ])
       allow(ActiveJob::Base).to receive(:descendants).and_return([ base, child ])
 
       result = described_class.new(Rails.application).call
