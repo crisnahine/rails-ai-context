@@ -410,6 +410,11 @@ module RailsAiContext
         return "Blocked: a `*` inside a subquery #{holds} On #{@family.name} a value read through such a wildcard can be compared or " \
           "renamed past the redaction, so name the columns in the subquery."
       end
+      if wildcard == :star && (relation = string_naming_relation(tokens))
+        return "Blocked: a `*` inside a subquery is not run in a statement that holds the string '#{relation}'. SQLite reads a string as a " \
+          "table's name where a name can stand, and the table `#{relation}` holds the secret column `#{@secrets.of_relation(relation).first}`. " \
+          "A value read through such a wildcard can be compared or renamed past the redaction, so name the columns in the subquery."
+      end
 
       # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
       view_refusal(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
@@ -702,15 +707,20 @@ module RailsAiContext
       nil
     end
 
-    # The statement with each string that can only be data emptied. MySQL reads no string as a name. SQLite
-    # reads one as a name where no string can stand: after FROM, JOIN, TABLE or a comma, and beside a dot.
+    # The statement with each string emptied: where a string names a relation, string_naming_relation reads it.
     def names_text(tokens)
-      tokens.each_with_index.map do |(kind, text), i|
-        before = tokens[i - 1] if i.positive?
-        named = kind != :string || (@family.sqlite? && (%w[FROM JOIN TABLE].any? { |word| word?(before, word) } ||
-          [ before, tokens[i + 1] ].include?([ :punct, "." ]) || before == [ :punct, "," ]))
-        named ? text : "''"
-      end.join(" ")
+      tokens.map { |kind, text| kind == :string ? "''" : text }.join(" ")
+    end
+
+    # SQLite reads a string as a name wherever a name can stand, so a string equal to such a relation's name is one.
+    def string_naming_relation(tokens)
+      return nil unless @family.sqlite?
+
+      tokens.each do |kind, text|
+        name = text[1..].delete_suffix("'").gsub("''", "'") if kind == :string
+        return name if name && @secrets.relation_secret?(name)
+      end
+      nil
     end
 
     def plan_refusal(top, text)

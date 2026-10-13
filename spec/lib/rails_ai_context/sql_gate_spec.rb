@@ -596,13 +596,34 @@ RSpec.describe RailsAiContext::SqlGate do
         .to start_with("Blocked: a `*` inside a subquery is not run in a statement that names `users`, which holds the secret column `passwd`.")
     end
 
-    it "reads a relation's name inside a string literal as data, and on SQLite as a name where no string can stand" do
+    it "reads a relation's name inside a string literal as data on MySQL" do
       [ "SELECT * FROM (SELECT * FROM posts) p WHERE title = 'creds'", "SELECT * FROM (SELECT * FROM posts) p WHERE title LIKE '%users%'",
-        "SELECT 'users' AS label, p.* FROM (SELECT * FROM posts) p" ].each do |sql|
-        %i[sqlite mysql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+        "SELECT 'users' AS label, p.* FROM (SELECT * FROM posts) p", "SELECT 1 < (SELECT * FROM ('users'))" ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
       end
-      [ "SELECT (1, 'a', 'pw') < (SELECT * FROM 'users')", "SELECT 1 < (SELECT * FROM main.'creds')", "SELECT 1 < (SELECT * FROM posts, 'creds')" ].each do |sql|
-        expect(refusal(sql)).to start_with("Blocked: a `*` inside a subquery"), sql
+    end
+
+    it "reads a string equal to the relation's name as that name on SQLite, wherever the string stands" do
+      row = "SELECT (1, 'a@example.test', 'M') < (SELECT * FROM"
+      [ "#{row} ('users')) AS o", "#{row} (('users'))) AS o", "#{row} ('users') AS u) AS o", "#{row} ('users' u)) AS o",
+        "#{row} ('users' NOT INDEXED)) AS o", "#{row} posts CROSS JOIN ('users')) AS o", "#{row} posts LEFT JOIN ('users') ON 1) AS o",
+        "#{row} (posts), ('users')) AS o", "#{row} 'users') AS o", "#{row} main.'USERS') AS o", "#{row} posts, 'creds') AS o",
+        "#{row} ('we$')) AS o", "SELECT * FROM (SELECT * FROM posts) p WHERE title = 'creds'",
+        "SELECT 'users' AS label, p.* FROM (SELECT * FROM posts) p" ].each do |sql|
+        expect(refusal(sql)).to start_with("Blocked: a `*` inside a subquery is not run in a statement that holds the string '"), sql
+      end
+      expect(refusal("SELECT 1 < (SELECT * FROM ('users'))")).to eq(
+        "Blocked: a `*` inside a subquery is not run in a statement that holds the string 'users'. SQLite reads a string as a table's name " \
+        "where a name can stand, and the table `users` holds the secret column `passwd`. A value read through such a wildcard can be " \
+        "compared or renamed past the redaction, so name the columns in the subquery."
+      )
+    end
+
+    it "runs a wildcard subquery on SQLite when no string of the statement equals such a relation's name" do
+      [ "SELECT * FROM (SELECT * FROM posts) p WHERE title LIKE '%users%'", "SELECT * FROM (SELECT * FROM posts) p WHERE title = 'the users'",
+        "SELECT * FROM (SELECT * FROM posts) p WHERE title = 'it''s'", "SELECT * FROM (SELECT * FROM ('posts')) p",
+        "SELECT title FROM posts WHERE title = 'users'" ].each do |sql|
+        expect(runs?(sql)).to be(true), sql
       end
     end
 
