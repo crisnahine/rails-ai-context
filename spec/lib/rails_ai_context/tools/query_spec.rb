@@ -1656,7 +1656,8 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text("SELECT id, email FROM accounts WHERE id = 1")).to include("a@example.com")
       ActiveSupport::Notifications.unsubscribe(subscriber)
 
-      expect(sent.size).to eq(6)
+      # Rails 7.0 asks the connection for its SQLite version on each use.
+      expect(sent.reject { |sql| sql.include?("sqlite_version") }).to match(Array.new(6) { a_string_matching(/sqlite_master|database_list|pragma_table_list/) })
     end
 
     it "refuses a view whose definition holds a comment before its wildcard, and one named with a dollar or a quote" do
