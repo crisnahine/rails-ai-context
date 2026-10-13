@@ -312,6 +312,11 @@ Proof sources:
    the tool's own checks timed on Ruby 3.4 for statements up to a megabyte
    and on Ruby 3.1 for statements of 50 kilobytes; and the unit suite and the
    E2E harness on Linux, macOS and Windows.
+   In the v5.35.2 closing review: the statement files of the v5.35.1 QA sent
+   through the tool again on PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite,
+   on the v5.35.1 code and on the fixed code, with every changed answer traced
+   to its fix; and for each fix an example that fails on the v5.35.1 code, on a
+   real server where the fix is a server's.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

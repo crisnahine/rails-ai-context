@@ -5,6 +5,173 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.35.2] - 2026-10-13
+
+### Security
+
+- **On MySQL and MariaDB a quote character inside a string does not change
+  which databases a statement is read to name.** The secret column rule reads
+  the columns of every database a statement names. In 5.35.1, the first release
+  with that read, a quote character inside a string could keep the rule from
+  seeing that the statement named another database. A secret column of a table
+  or of a view in that database then came back. Each name before a dot is now
+  read backward from its dot, so nothing written before the name changes how it
+  is read. The refusals are the ones 5.35.1 gives. This gap is in 5.35.1
+  alone: earlier versions read no other database, which the 5.35.1 notes cover.
+- **On MySQL and MariaDB a `[` outside a string or a quoted name is refused.**
+  MariaDB reads `[name]` as a quoted name when the session's sql_mode holds
+  `MSSQL`, and the statement checks read a bracket as an ordinary character. In
+  a session with that mode a name in brackets passed the check for the `mysql`
+  and `sys` schemas, and text the checks took for a string could be code to the
+  server. `rails_query` does not read the session's mode, so it now refuses the
+  bracket on both servers. 5.35.1 and every earlier version had the gap, on an
+  app whose connection runs in that mode.
+- **On MySQL and MariaDB a query leaves no value behind on the app's
+  connection.** A user variable assignment (`:=`) and `LAST_INSERT_ID` called
+  with an argument each set a value that stayed on the pooled connection after
+  the query returned, which a read-only transaction does not stop. Both are now
+  refused. 5.35.1 and every earlier version ran them.
+- **On PostgreSQL what a foreign scan sends to the remote server is read like
+  what the plan runs itself.** A condition, a sort or a group on a secret
+  column of a `postgres_fdw` foreign table ran on the remote server, where the
+  plan checks did not read it. So a statement could test the column's value,
+  also through a view that renames the column and under a `column_name`
+  option. The remote statement the plan prints is now read, and such a
+  statement answers "Blocked: the query's plan uses the secret column
+  `<column>`". Fetching the column returns `[FILTERED]` as before. A statement
+  whose plan holds a foreign scan costs one more catalog read. Only the remote
+  statement of `postgres_fdw` is read: another foreign data wrapper prints
+  keys of its own. 5.35.1 and every earlier version had the gap.
+- **On PostgreSQL the check for a secret column passed through a subquery
+  reads a name with two spaces in a row or a dotted capital I.** In 5.35.1
+  that check missed a secret column whose name holds either one. A statement
+  that passes such a column through a subquery, a CTE or a set operation is
+  now refused as for any other secret column. 5.35.0 refused it, so the gap is
+  in 5.35.1 alone.
+- **On SQLite a virtual table built on a relation that is not read is refused
+  however its definition is written.** 5.35.1 read a relation's name in the
+  `content=` option of a full-text table and in the table a vocabulary lists.
+  A virtual table that named the relation another way ran, and returned the
+  rows or words of a refused view, a shadow table or the page modules. The
+  module and every argument can now name a relation, except the columns a
+  full-text table (fts3, fts4, fts5) declares. An argument with `=` is read
+  whole, whatever its name, and comments are taken out first. The answers are
+  the ones 5.35.1 gives. The gap needs a virtual table the app itself created.
+  5.35.0 and earlier returned such a table's rows too.
+
+### Changed
+
+- **On MySQL and MariaDB a statement with a user variable assignment (`:=`) is
+  refused.** The answer is "Blocked: a user variable assignment (`:=`) is not
+  run. It leaves a value on the pooled connection after the query returns,
+  which a read-only transaction does not stop." A statement that numbers its
+  rows with `@n := @n + 1` ran before and is refused now. Use a window
+  function, `ROW_NUMBER() OVER (...)`, which MySQL 8 and MariaDB 10.2 and
+  later have. A `:=` inside a string or a quoted name is data and runs.
+- **On MySQL and MariaDB `LAST_INSERT_ID` with an argument is refused.** The
+  answer is "Blocked: LAST_INSERT_ID with an argument is not run. It sets a
+  value that stays on the pooled connection after the query returns, which a
+  read-only transaction does not stop. LAST_INSERT_ID() with no argument
+  runs." The call is matched on the raw text, like the session functions, so
+  it is refused inside a string too.
+- **On MySQL and MariaDB a statement with a `[` outside a string or a quoted
+  name is refused.** The answer is "Blocked: a `[` outside a string or a
+  quoted name is not run. MariaDB reads it as the start of a quoted name when
+  the session's sql_mode holds MSSQL, and rails_query does not read the
+  session's mode. Quote a name in backticks." MySQL, and MariaDB outside that
+  mode, run no statement that holds one, so nothing that ran there before is
+  refused. In a session with that mode, write `` `name` `` for `[name]`. A `[`
+  inside a string or a backticked name runs.
+
+### Fixed
+
+- **A write that follows a `WITH` clause is refused as the write it is.**
+  `WITH ... INSERT INTO ...` answered "Blocked: SELECT INTO creates a table".
+  It now answers "Blocked: contains INSERT", and `REPLACE` and `MERGE` after a
+  `WITH` clause are named the same way. A real `SELECT ... INTO` keeps its
+  sentence.
+- **A refusal names a view, a table and a relation as the database spells
+  them.** It named them case folded, with a run of spaces as one space, so a
+  view called `Hq  Odd View` was named `hq odd view`, which no relation is
+  called. Two names that differ by a run of spaces alone are one name to the
+  rule, and the refusal names the first of them it read.
+- **A view refused over a table that is not read is said to name it.** The
+  answer ended "its definition reads `<table>`, which is not read", and the
+  rule tests whether the definition names the table. It now ends "its
+  definition names `<table>`, which is not read".
+- **The answer for a view that leads too deep drops its count.** It reads "The
+  view `<view>` leads through more databases than rails_query follows, so the
+  secret columns it could read cannot be told and no statement that names it
+  runs." The "(3 rounds)" after "follows" told a user nothing.
+- **The note for a row limit of one says "1 row shown".** It said "1 rows
+  shown; the query returned more".
+- **On PostgreSQL a sequence can be queried.** `SELECT last_value FROM
+  <sequence>` and `SELECT * FROM <sequence>` ran on 5.35.0, and 5.35.1 answered
+  that the sequence's columns could not be read. A sequence is now read like a
+  table that holds no secret column.
+- **On PostgreSQL a whole row of a table with no secret column runs when
+  another table shares its alias or its name with a number after it.** 5.35.1
+  refused such a statement when a subquery used the same alias for a table
+  that holds a secret column, or when a table named like `name_2` stood beside
+  it, and the refusal named the other table. 5.35.0 ran it. The number the
+  planner adds to an alias is now taken off for the members of an Append or a
+  Merge Append alone, and a refusal over a whole row names the relation whose
+  row the statement reads.
+- **On PostgreSQL a block comment inside a block comment is read as the server
+  reads it.** PostgreSQL nests block comments, and the gate ended one at the
+  first `*/`, so `SELECT 1 /* a /* b */ c */ AS n` answered PostgreSQL's
+  syntax error. It now runs.
+- **On SQLite a statement that runs past `query_timeout` answers the timeout
+  when a writer takes the lock while it runs.** It answered that the database
+  was locked and the query did not run. The query process now takes its read
+  lock before it prepares the statement, so no lock stops the statement from
+  there on. The locked answer is given for a lock the query process is still
+  waiting on when it gives up or when the deadline passes.
+- **On a SQLite file database a statement that names something the app's
+  connection alone holds runs on that connection.** That is a temp table or
+  view, `sqlite_temp_master` or `sqlite_temp_schema`, the `temp` schema, an
+  attached database, and `pragma_table_list` while the connection holds a temp
+  table or view or an attachment. The query process has none of them, so it
+  answered an empty list or "unknown database". The answer now ends with the
+  note that the query ran without a time limit. A name is matched anywhere in
+  the statement, inside a string too. Finding this out takes two more reads
+  before a statement on a file database where a query process can run: eight
+  reads before the statement, where there were six.
+- **The full generated file lists the first database's recent migrations
+  under its own name.** With a first database not named `primary` and another
+  one that is, the heading read `### Recent Migrations: primary`. It now names
+  the first database, as in `### Recent Migrations: animals`.
+- **The database marks and the first database's own name do not depend on the
+  preset.** On `preset: standard`, or any `introspectors` list without
+  `multi_database`, `rails_get_schema`, `rails_onboard`,
+  `rails_performance_check` and the generated files lost the mark of a
+  database another environment configures, such as `cache (production only)`,
+  and called a first database with another name `primary`. They now read the
+  app databases list there, as on `full`, and `rails_onboard` names a
+  secondary's adapter.
+- **The model, controller, job, mailer and channel lists hold a class only
+  while its own constant names it.** A class whose constant was removed stays
+  loaded until the garbage collector takes it, so a list could hold it in one
+  run and lose it in the next. Such a class is now left out. A constant still
+  waiting to autoload counts as naming its class. The lists of a class's
+  children follow the same rule: a model's STI children, the classes a base job
+  or mailer is inherited by, and the abstract bases.
+- **A model file that raises before its class opens costs that model alone.**
+  A failing `require` at the top of the file, or a raise above the class line,
+  made the whole models section answer an error. The file is now named with
+  what it raised, and the other models stay listed.
+- **The refusal over a secret column says where `query_allowed_columns` is
+  set on either install.** It said to add the name "in an initializer", which
+  does nothing on a standalone install. It now ends "add "x" to
+  query_allowed_columns in .rails-ai-context.yml (or in
+  config/initializers/rails_ai_context.rb where the app bundles the gem)."
+- **`rails_runtime_info` says when table sizes or index usage could not be
+  read.** A read that failed or ran out of time left its part of the database
+  section out with no word. The section now says "_Table sizes were not read:
+  the read failed or took longer than query_timeout._", and at `detail:
+  "full"` "_Index usage was not read: the read failed or took longer than
+  query_timeout._"
+
 ## [5.35.1] - 2026-10-13
 
 ### Security
@@ -226,13 +393,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function lookup, and the column trace share a second `query_timeout`, and each
   is charged the time it ran. A read that runs out of time ends the call with an
   error that names those reads, so the statements of a call take about twice
-  `query_timeout` at most.
-  On MySQL and MariaDB a wait on a lock ends at `query_timeout` rounded up to a
-  whole second, and `explain: true` is bounded while it waits on a lock too.
-  `SHOW`, `DESCRIBE` and a plain `EXPLAIN` have that lock wait limit alone
-  there, since the statement limit does not cover them. On SQLite those reads
-  run on the app's own connection with no statement limit, and a wait on another
-  writer ends at that connection's busy timeout.
+  `query_timeout` at most. On MySQL and MariaDB a wait on a lock ends at
+  `query_timeout` rounded up to a whole second, and `explain: true` is bounded
+  while it waits on a lock too. `SHOW`, `DESCRIBE` and a plain `EXPLAIN` have
+  that lock wait limit alone there, since the statement limit does not cover
+  them. On SQLite those reads run on the app's own connection with no statement
+  limit, and a wait on another writer ends at that connection's busy timeout.
 - **`rails_runtime_info` reads table sizes, index usage and pending migrations
   under `query_timeout` on PostgreSQL, MySQL and MariaDB.** They had no time
   limit, so a locked table held the answer until the lock went. Each read now
@@ -250,11 +416,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the app's own connection in four cases: an in-memory database, a platform
   without `fork`, a statement the child could not prepare, and a transaction
   open on the app's connection. A statement that fails while it runs in the
-  child is answered with its SQL error and is not run again. On
-  the app's own connection a statement that returns rows slowly now ends a few
-  rows after `query_timeout` passes, since an interrupt lands only between two
-  rows. One long step still cannot be ended there, so the answer keeps its
-  "without a time limit" note.
+  child is answered with its SQL error and is not run again. On the app's own
+  connection a statement that returns rows slowly now ends a few rows after
+  `query_timeout` passes, since an interrupt lands only between two rows. One
+  long step still cannot be ended there, so the answer keeps its "without a time
+  limit" note.
 - **On MySQL and MariaDB no statement runs on a connection Rails replaced.**
   Rails reconnects a connection it lost before the transaction begins, and the
   new session has no read-only transaction and no time limit. The statement is
@@ -424,10 +590,9 @@ Ten tools that each answered one section of the app's configuration leave
   query that names it ran on 5.35.0. Take it out of the query, or list its
   name in `query_allowed_columns` when it holds no secret.
 - **On MySQL, MariaDB and SQLite `SELECT *` inside a subquery is refused over a
-  table with a secret column.**
-  `WITH x AS (SELECT * FROM users) SELECT * FROM x` ran on 5.35.0, and is
-  refused now when `users` holds a secret column. Name the columns in the
-  subquery. On SQLite `WHERE id IN users` ran too, and is
+  table with a secret column.** `WITH x AS (SELECT * FROM users) SELECT * FROM
+  x` ran on 5.35.0, and is refused now when `users` holds a secret column. Name
+  the columns in the subquery. On SQLite `WHERE id IN users` ran too, and is
   refused the same way: write `IN (SELECT id FROM users)`. There a string equal
   to the name of such a table, as in `WHERE role = 'users'`, refuses a statement
   with a `*` inside a subquery or with that `IN` form.
