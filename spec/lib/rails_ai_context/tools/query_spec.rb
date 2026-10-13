@@ -1673,6 +1673,48 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(everything.scan("[FILTERED]").size).to eq(3)
     end
 
+    it "filters a generated column named like a table constraint's keyword, beside that constraint" do
+      conn.execute("CREATE TABLE owners (id INTEGER PRIMARY KEY)")
+      {
+        "constraint" => 'CONSTRAINT "fk_rails_1" FOREIGN KEY ("owner_id") REFERENCES "owners" ("id")',
+        "check" => "CHECK (owner_id > 0)", "unique" => 'UNIQUE ("owner_id")', "primary" => 'PRIMARY KEY ("id")',
+        "foreign" => 'FOREIGN KEY ("owner_id") REFERENCES "owners" ("id")'
+      }.each do |column, constraint|
+        conn.execute(%{CREATE TABLE "r_#{column}" ("id" integer, "password_digest" varchar, } +
+          %{"#{column}" varchar GENERATED ALWAYS AS (password_digest) STORED, "owner_id" integer, #{constraint})})
+        conn.execute(%(INSERT INTO "r_#{column}" (id, password_digest) VALUES (1, 'pw-value')))
+
+        named = answer(%(SELECT "#{column}" FROM r_#{column}))
+        expect(named.error?).to be(true), column
+        expect(named.content.first[:text]).to include("`#{column}` is a generated column that reads `password_digest`"), column
+        expect(text("SELECT * FROM r_#{column}")).to include("[FILTERED]").and(satisfy { |t| !t.include?("pw-value") }), column
+      end
+    end
+
+    it "filters a generated column whose name differs from an innocent one's by the case of a letter past ASCII" do
+      conn.execute(%(CREATE TABLE accents (id INTEGER, passwd TEXT, "É" TEXT AS (passwd) STORED, "é" TEXT AS (id) STORED)))
+      conn.execute("INSERT INTO accents (id, passwd) VALUES (1, 'pw-value')")
+
+      [ %(SELECT "É" FROM accents), %(SELECT "é" FROM accents), "SELECT * FROM accents" ].each do |sql|
+        expect(text(sql)).not_to include("pw-value"), sql
+      end
+    end
+
+    it "reads a generated column's own expression past a quoted name, a comma or a parenthesis in a name, and a default with a comma" do
+      conn.execute(%{CREATE TABLE odd (id INTEGER, passwd TEXT, label TEXT DEFAULT 'a, b', "two words" TEXT AS (upper(label)) VIRTUAL, } +
+        %{"a,b" TEXT AS (passwd) VIRTUAL, "c(d" TEXT AS (label || '!') VIRTUAL, "e""f" TEXT AS (passwd) VIRTUAL, [g h] TEXT AS (label) VIRTUAL, } +
+        %{`i)j` TEXT AS (passwd) VIRTUAL, plain TEXT GENERATED ALWAYS AS (lower(label)) STORED, CHECK (id > 0))})
+      conn.execute("INSERT INTO odd (id, passwd, label) VALUES (1, 'pw-value', 'Shown')")
+
+      expect(text(%{SELECT "two words" AS a, "c(d" AS b, [g h] AS c, plain AS d FROM odd})).to include("| SHOWN | Shown! | Shown | shown |")
+      [ %("a,b"), %("e""f"), "`i)j`" ].each do |column|
+        expect(answer("SELECT #{column} AS x FROM odd").error?).to be(true), column
+      end
+      everything = text("SELECT * FROM odd")
+      expect(everything).to include("SHOWN", "Shown!").and(satisfy { |t| !t.include?("pw-value") })
+      expect(everything.scan("[FILTERED]").size).to eq(4)
+    end
+
     it "releases a view and a generated column over a column the app allows" do
       RailsAiContext.configuration.query_allowed_columns = %w[passwd shadow kept]
       expect(text("SELECT * FROM renamed")).to include("pw-value")

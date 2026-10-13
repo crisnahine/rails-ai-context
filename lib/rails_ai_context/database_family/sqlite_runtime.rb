@@ -143,14 +143,16 @@ module RailsAiContext
 
           definition = columns.first.last.to_s
           expressions = column_expressions(definition)
-          found[table] = generated.to_h { |name| [ name, expressions.fetch(name.downcase, definition) ] }
+          found[table] = generated.to_h { |name| [ name, expressions[name.downcase(:ascii)] || definition ] }
         end
       end
 
-      COLUMN_NAME = /\A("(?:""|[^"])*"|`[^`]*`|\[[^\]]*\]|'[^']*'|[^\s(]+)(.*)\z/m
+      COLUMN_NAME = /\A(?:"((?:""|[^"])*)"|`((?:``|[^`])*)`|\[([^\]]*)\]|'((?:''|[^'])*)'|([^\s(]+))(.*)\z/m
+      # A bare one of these opens a table constraint. In quotes it is a column's name.
+      TABLE_CONSTRAINT = /\A(?:CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN)\z/i
 
-      # @return [Hash{String => String}] column name, lower case => what its part of a CREATE TABLE statement
-      #   says after AS
+      # @return [Hash{String => String, nil}] column name, folded as SQLite compares names (ASCII only) => what its
+      #   part of a CREATE TABLE statement says after AS; nil where that cannot be told
       def column_expressions(definition)
         scanner = SqlGate::Scanner.new(SqlGate.comment_free(definition, SQLITE))
         depth = 0
@@ -163,10 +165,13 @@ module RailsAiContext
           end
           depth += 1 if read == "("
         end
-        parts.filter_map do |part|
-          name, rest = part.strip.match(COLUMN_NAME)&.captures
-          [ name.gsub(/\A["`\[']|["`\]']\z/, "").downcase, rest.partition(/\bAS\b/i).last ] if name
-        end.to_h
+        parts.each_with_object({}) do |part, found|
+          *quoted, bare, rest = part.strip.match(COLUMN_NAME)&.captures
+          next if rest.nil? || bare&.match?(TABLE_CONSTRAINT)
+
+          name = (bare || quoted.compact.first.gsub(/(["`'])\1/, '\1')).downcase(:ascii)
+          found[name] = found.key?(name) ? nil : rest.partition(/\bAS\b/i).last.presence
+        end
       end
 
       # pragma_table_list, which types a shadow table, came with this version.

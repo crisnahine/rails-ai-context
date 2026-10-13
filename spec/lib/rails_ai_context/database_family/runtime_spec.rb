@@ -413,6 +413,15 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(columns).to eq("accounts" => %w[id passwd shadow kept], "notes" => %w[id body])
     end
 
+    it "answers the whole table definition for a generated column whose own expression it cannot tell" do
+      runtime = RailsAiContext::DatabaseFamily::SqliteRuntime
+      definition = %(CREATE TABLE t ("x" TEXT AS (passwd), "X" TEXT AS (id), passwd TEXT, id INTEGER, CHECK (id > 0)))
+      allow(@conn).to receive(:select_rows).and_return([ [ "t", "x", 2, definition ], [ "t", "passwd", 0, definition ] ])
+
+      expect(runtime.column_expressions(definition)).to eq("x" => nil, "passwd" => nil, "id" => nil)
+      expect(described_class::SQLITE.generated_columns(@conn)).to eq("t" => { "x" => definition })
+    end
+
     it "reads the view bodies in one statement and the generated columns in one" do
       views = generated = nil
       expect(statements { views = described_class::SQLITE.view_definitions(@conn) }.size).to eq(1)
