@@ -14,6 +14,9 @@ module RailsAiContext
       # A row-capped result is far below this; a larger prefix is a corrupt one.
       MAX_RESULT_BYTES = 1 << 30
 
+      # What the child writes where a result's length would stand, the moment it meets a lock.
+      MET_LOCK = [ (1 << 64) - 1 ].pack("Q>").freeze
+
       # A plan row that reads a table: the step, then the table's name or, for a table the statement
       # renames, the alias alone ("SEARCH u USING INDEX i"). SQLite before 3.36 wrote "SCAN TABLE users AS u".
       PLAN_STEP = /\A(SCAN|SEARCH)\s+(?:TABLE\s+)?(.+?)(?:\s+AS\s+\S+)?(?=\s+USING\b|\s+VIRTUAL TABLE\b|\z)/
@@ -268,8 +271,7 @@ module RailsAiContext
         reader.close
         payload = begin
           db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
-          # Under the deadline, so a database that stays locked is answered as locked before the parent stops waiting.
-          db.busy_timeout = (timeout * 800).to_i
+          wait_on_lock(db, writer, timeout * 0.8)
           stmt = db.prepare(sql)
           [ :ok, stmt.columns, stmt.to_a ]
         rescue => e
@@ -285,9 +287,32 @@ module RailsAiContext
         exit!(0)
       end
 
+      # Waits on a lock for the seconds given, under the deadline, so a database that stays locked is answered as
+      # locked before the parent stops waiting. The parent is told at the first wait: a child that started late
+      # is still waiting when the deadline passes.
+      def wait_on_lock(db, writer, seconds)
+        met = nil
+        db.busy_handler do |count|
+          if count.zero?
+            met = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            writer.write(MET_LOCK)
+          end
+          sleep 0.01
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) - met < seconds
+        end
+      end
+
       # Read by length: any other process forked meanwhile holds a copy of the writer, so EOF may never come.
       def read_child_result(reader, deadline)
-        size = read_before(reader, 8, deadline).unpack1("Q>")
+        met_lock = false
+        size = begin
+          met_lock = true while (prefix = read_before(reader, 8, deadline)) == MET_LOCK
+          prefix.unpack1("Q>")
+        rescue TimedOut
+          raise unless met_lock
+
+          raise Busy, BUSY
+        end
         status, *rest = begin
           raise ArgumentError, "result length out of range" if size > MAX_RESULT_BYTES
 

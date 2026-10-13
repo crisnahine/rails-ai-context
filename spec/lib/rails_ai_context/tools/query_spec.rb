@@ -584,6 +584,32 @@ RSpec.describe RailsAiContext::Tools::Query do
       writer&.close
     end
 
+    it "answers locked when the deadline passes while a slow child still waits on the lock, and the timeout when no lock is met" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      slow = 0.4
+      allow(SQLite3::Database).to receive(:new).and_wrap_original do |original, *args, **options|
+        sleep slow
+        original.call(*args, **options)
+      end
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 0.2) }
+        .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        $stdout.puts "locked"
+        $stdout.flush
+        sleep 30
+      RUBY
+      expect(writer.gets).to eq("locked\n")
+      # The child opens at 0.4 s and would wait on the lock until 1.2 s, past the deadline at 1 s.
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 1) }
+        .to raise_error(RailsAiContext::DatabaseFamily::Busy)
+    ensure
+      Process.kill(:KILL, writer.pid) if writer
+      writer&.close
+    end
+
     it "reruns in-process, without a time limit, what only the app connection can answer" do
       conn.raw_connection.create_function("rac_twice", 1) { |func, x| func.result = x * 2 }
       text = described_class.call(sql: "SELECT rac_twice(n) AS t FROM nums ORDER BY n").content.first[:text]
