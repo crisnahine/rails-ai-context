@@ -280,8 +280,10 @@ RSpec.describe RailsAiContext::Tools::Query do
       it "refuses what either reading of a backslash refuses, whether or not the session's sql_mode holds NO_BACKSLASH_ESCAPES" do
         default = conn.select_value("SELECT @@SESSION.sql_mode")
         guess = "(1, 'a@example.com', 'pw-valud', 'x', 'y', 'z')"
-        [ default, "#{default},NO_BACKSLASH_ESCAPES" ].each do |mode|
-          conn.execute("SET SESSION sql_mode = #{conn.quote(mode)}")
+        # mysql2 cannot quote a string once the session is in this mode, so on it no call gets as far as the checks.
+        modes = [ default, ("#{default},NO_BACKSLASH_ESCAPES" unless conn.adapter_name == "Mysql2") ].compact
+        modes.each do |mode|
+          conn.execute("SET SESSION sql_mode = '#{mode}'")
           { %q(SELECT '\' , user, host, plugin FROM mysql.user -- ') => "Blocked: `mysql` is not read.",
             %q(SELECT '\' , db, user FROM mysql.db -- ') => "Blocked: `mysql` is not read.",
             %q(SELECT '\' , thd_id, conn_id FROM sys.session -- ') => "Blocked: `sys` is not read.",
@@ -292,11 +294,11 @@ RSpec.describe RailsAiContext::Tools::Query do
           end
           expect(text("SELECT email FROM rac_my_accounts WHERE email NOT LIKE '%@mysql.com'")).to include("a@example.com"), mode
         end
-        conn.execute("SET SESSION sql_mode = #{conn.quote(default)}")
+        conn.execute("SET SESSION sql_mode = '#{default}'")
         expect(text(%q(SELECT 'it\'s' AS v, email FROM rac_my_accounts))).to include("it's", "a@example.com")
         expect(text(%q(SELECT 'a\\\\b' AS v))).to include("a\\b")
       ensure
-        conn.execute("SET SESSION sql_mode = #{conn.quote(default)}") if default
+        conn.execute("SET SESSION sql_mode = '#{default}'") if default
       end
 
       it "filters both columns of a name a join returns twice, and has no derived table of duplicate names" do
