@@ -34,6 +34,17 @@ RSpec.describe "a loaded class whose constant was removed" do
     expect(post[:sti][:sti_children]).to eq(%w[LivePost])
   end
 
+  it "is no abstract base whose class methods are taken off a model" do
+    gone = removed(:GoneBase, ActiveRecord::Base) { self.abstract_class = true }
+    model = Class.new(ActiveRecord::Base) { self.table_name = "posts" }
+    model.define_singleton_method(:name) { "Legacy" }
+    [ gone, model ].each { |klass| klass.define_singleton_method(:recent_first) { |*| all } }
+
+    details = RailsAiContext::Introspectors::ModelIntrospector.new(Rails.application).send(:extract_model_details, model)
+
+    expect(details[:class_methods]).to include("recent_first")
+  end
+
   it "is left out of the controller list" do
     kept = removed(:GoneController, ApplicationController) { def index; end }
 
@@ -58,5 +69,22 @@ RSpec.describe "a loaded class whose constant was removed" do
     expect(kept.map(&:name)).to eq(%w[GoneJob GoneMailer GoneChannel])
     expect(names).to include("ExampleJob", "UserMailer", "LiveChannel")
     expect(names).not_to include("GoneJob", "GoneMailer", "GoneChannel")
+  end
+
+  it "makes no base of a job or a mailer it alone inherited, and is left out of the classes a base is inherited by" do
+    allow(Object).to receive(:const_source_location).and_call_original
+    %w[BaseSweepJob BaseNoticeMailer BaseDigestMailer LiveDigestMailer].each { |name| allow(Object).to receive(:const_source_location).with(name).and_return(nil) }
+    stub_const("BaseSweepJob", Class.new(ActiveJob::Base) { def perform; end })
+    stub_const("BaseNoticeMailer", Class.new(ActionMailer::Base) { def welcome; end })
+    stub_const("BaseDigestMailer", Class.new(ActionMailer::Base))
+    stub_const("LiveDigestMailer", Class.new(BaseDigestMailer) { def daily; end })
+    kept = [ removed(:GoneSweepJob, BaseSweepJob), removed(:GoneNoticeMailer, BaseNoticeMailer), removed(:GoneDigestMailer, BaseDigestMailer) ]
+
+    found = RailsAiContext::Introspectors::JobIntrospector.new(Rails.application).call
+
+    expect(kept.map(&:name)).to eq(%w[GoneSweepJob GoneNoticeMailer GoneDigestMailer])
+    expect(found[:jobs].map { |job| job[:name] }).to include("BaseSweepJob")
+    expect(found[:mailers].map { |mailer| mailer[:name] }).to include("BaseNoticeMailer")
+    expect(found[:mailer_bases].find { |base| base[:name] == "BaseDigestMailer" }).to include(inherited_by: %w[LiveDigestMailer])
   end
 end

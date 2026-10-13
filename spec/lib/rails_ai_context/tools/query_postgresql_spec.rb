@@ -789,7 +789,8 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   describe "a foreign table that holds a secret column, behind a view that renames it" do
     def drop
       conn.execute("DROP SERVER IF EXISTS rac_pg_loop CASCADE")
-      conn.execute("DROP TABLE IF EXISTS rac_pg_remote CASCADE")
+      conn.execute("DROP TABLE IF EXISTS rac_pg_remote, rac_pg_remote_titles CASCADE")
+      conn.execute(%(DROP SCHEMA IF EXISTS "Rac.Far" CASCADE))
     end
 
     before do
@@ -822,6 +823,18 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       response = run("SELECT a.id, b.t FROM rac_pg_far a JOIN rac_pg_far b ON a.id = b.id WHERE a.id = 1")
       expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("[FILTERED]") ])
       expect(response.content.first[:text]).not_to include("token-value")
+    end
+
+    it "reads the secret columns of a table in another schema that only the remote join names" do
+      [ "INSERT INTO rac_pg_remote SELECT g, 'row ' || g, 'token-value-' || g FROM generate_series(2, 3000) g",
+        "CREATE TABLE rac_pg_remote_titles (id int, title text)", "INSERT INTO rac_pg_remote_titles SELECT g, 'title ' || g FROM generate_series(1, 3000) g",
+        "CREATE FOREIGN TABLE rac_pg_titles (id int, title text) SERVER rac_pg_loop OPTIONS (table_name 'rac_pg_remote_titles')",
+        %(CREATE SCHEMA "Rac.Far"),
+        %(CREATE FOREIGN TABLE "Rac.Far"."In (it)" (id int, label text, api_token text) SERVER rac_pg_loop OPTIONS (schema_name 'public', table_name 'rac_pg_remote')),
+        %(CREATE VIEW rac_pg_whole AS SELECT x FROM "Rac.Far"."In (it)" x) ].each { |sql| conn.execute(sql) }
+
+      refused([ "SELECT b.x::text AS j FROM rac_pg_titles a JOIN rac_pg_whole b ON a.id = (b.x).id WHERE a.id = 1",
+                "SELECT b.x FROM rac_pg_titles a JOIN rac_pg_whole b ON a.id = (b.x).id WHERE a.id = 1" ], "Blocked: ")
     end
 
     it "refuses a condition, a sort and a group on the secret column that the scan sends to the remote server" do

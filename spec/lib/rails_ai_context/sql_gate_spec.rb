@@ -1223,6 +1223,14 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(renamed).map { |i, column, _| [ i, column ] }).to eq([ [ 0, "id" ], [ 1, "api_token" ] ])
         nested = join.merge("Output" => [ "to_jsonb(z.*)" ], "Relations" => "Aggregate on (((public.posts x) INNER JOIN (public.posts y)) LEFT JOIN (public.users z))")
         expect(plan_refusal(nested)).to include("whole row of `users`")
+        expect(plan_refusal(join.merge("Relations" => "(users a) INNER JOIN (posts b)"))).to include("whole row of `users`")
+        quoted = join.merge("Output" => [ %(row_to_json("a ""b""".*)) ], "Relations" => %((public.users "a ""b""") INNER JOIN (public.posts p)))
+        expect(plan_refusal(quoted)).to include("whole row of `users`")
+      end
+
+      it "names the schema of each table of such a join, for the secret column rule to read" do
+        join = { "Node Type" => "Foreign Scan", "Output" => [ "x.id" ], "Relations" => %(("Far.S"."In (it)" x) INNER JOIN (public.posts p)) }
+        expect(RailsAiContext::DatabaseFamily::PostgresqlPlan.new(join).relations).to eq([ [ "Far.S", "far.s.in (it)" ], %w[public public.posts] ])
       end
 
       it "reads a secret column by the name its column_name option gives it on the remote server" do

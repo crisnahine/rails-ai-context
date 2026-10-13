@@ -22,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MariaDB reads `[name]` as a quoted name when the session's sql_mode holds
   `MSSQL`, and the statement checks read a bracket as an ordinary character. In
   a session with that mode the checks and the server could read one statement
-  two ways. `rails_query` does not read the session's mode, so it now refuses the
-  bracket on both servers. 5.35.1 and every earlier version had the gap, on an
-  app whose connection runs in that mode.
+  two ways. `rails_query` does not read the session's mode, so it now refuses
+  the bracket on both servers. 5.35.1 and every earlier version had the gap,
+  on an app whose connection runs in that mode.
 - **On MySQL and MariaDB a query leaves no value behind on the app's
   connection.** A user variable assignment (`:=`) and `LAST_INSERT_ID` called
   with an argument each set a value that stayed on the pooled connection after
@@ -44,11 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **On PostgreSQL a join that the remote server runs is traced to its
   tables.** When `postgres_fdw` sends a whole join to the remote server, the
   plan names the tables with their aliases in one line of the scan, which the
-  plan checks did not read. A secret column that a view renamed came back from
-  such a join, and so did a whole row. The tables and aliases of that line are
-  now read like any scan's: the column is `[FILTERED]` in place and a whole
-  row is refused, as for a local table. 5.35.1 and every earlier version had
-  the gap.
+  plan checks did not read, so the secret column rule did not reach those
+  tables. The tables and aliases of that line are now read like any scan's: a
+  secret column is `[FILTERED]` in place and a whole row is refused, as for a
+  local table. 5.35.1 and every earlier version had the gap.
 - **On PostgreSQL the check for a secret column passed through a subquery
   reads a name with two spaces in a row or a dotted capital I.** In 5.35.1
   that check missed a secret column whose name holds either one. A statement
@@ -63,11 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module and every argument can now name a relation, except the columns a
   full-text table (fts3, fts4, fts5) declares and the type an `fts5vocab`
   table ends with (`row`, `col` or `instance`). An argument with `=` is read
-  whole, whatever its name, and comments are taken out first. The answers are
+  whole, whatever its name, and comments are taken out first. The module is
+  read after the table's own name, so a name that spells a module changes
+  nothing: 5.35.1 read such a name as the module, and the rule for a virtual
+  table that holds a secret column did not reach that table. The answers are
   the ones 5.35.1 gives. The gap needs a virtual table the app itself created.
-  5.35.0 and earlier returned such a table's rows too. A relation whose own
-  name holds an apostrophe is now also matched where a statement or a
-  definition writes it in single quotes.
+  5.35.0 and earlier returned such a table's rows too.
+- **On SQLite a relation whose name holds an apostrophe is matched where it
+  is written in single quotes.** SQLite reads a name in single quotes where a
+  table is expected, with the apostrophe doubled inside. The secret column
+  rule spelled a name in double quotes and in backticks and missed that
+  spelling, so a statement or a definition that used it was not held to the
+  rule for that relation. 5.35.1 and every earlier version had the gap, on an
+  app with a relation so named.
 
 ### Changed
 
@@ -78,9 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows with `@n := @n + 1` ran before and is refused now. Use a window
   function, `ROW_NUMBER() OVER (...)`, which MySQL 8 and MariaDB 10.2 and
   later have. A `:=` inside a string or a quoted name is data and runs, with
-  one case apart: a string that also holds a backslash before a quote. The
-  second reading of a backslash ends the string at that quote, which puts the
-  `:=` outside it. Write the quote doubled.
+  one case apart: a statement with a backslash before a quote inside a string.
+  The second reading of a backslash ends the string at that quote, and where
+  that leaves the `:=` outside a string the statement is refused. Write the
+  quote doubled.
 - **On MySQL and MariaDB `LAST_INSERT_ID` with an argument is refused.** The
   answer is "Blocked: LAST_INSERT_ID with an argument is not run. It sets a
   value that stays on the pooled connection after the query returns, which a
@@ -94,10 +102,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's mode. Quote a name in backticks." MySQL, and MariaDB outside that
   mode, run no statement that holds one. In a session with that mode, write
   `` `name` `` for `[name]`. A `[` inside a string or a backticked name runs,
-  with one case apart: a string that also holds a backslash before a quote,
-  as in `'O\'Brien'` beside `REGEXP '[a-z]'`. The second reading of a
-  backslash ends the string at that quote, which puts the `[` outside it. Such
-  a statement ran before and is refused now. Write the quote doubled.
+  with one case apart: a statement with a backslash before a quote inside a
+  string, as in `'O\'Brien'` beside `REGEXP '[a-z]'`. The second reading of a
+  backslash ends the string at that quote, and where that leaves the `[`
+  outside a string the statement is refused. Such a statement ran before.
+  Write the quote doubled.
 - **These refusals go out under a patch number.** Each closes a guard gap, and
   the maintainer chose 5.35.2 for them, outside step 1 of `docs/RELEASING.md`.
 
@@ -147,15 +156,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waiting on when it gives up or when the deadline passes.
 - **On a SQLite file database a statement that names something the app's
   connection alone holds runs on that connection.** That is a temp object,
-  `sqlite_temp_master` or `sqlite_temp_schema`, the `temp` schema, an attached
-  database or a table or an index in one, and `pragma_table_list` while the
-  connection holds a temp object or an attachment. The query process has none
-  of them, so it answered an empty list or "unknown database". The answer now
-  ends with the note that the query ran without a time limit. A name is
-  matched anywhere in the statement, in any letter case and inside a string
-  too. Finding this out takes two more reads before a statement on a file
-  database where a query process can run, eight where there were six, and one
-  more for each attached database.
+  `sqlite_temp_master` or `sqlite_temp_schema`, the `temp` schema or an
+  attached database. A pragma function (`pragma_table_info(...)`,
+  `pragma_table_list` and the rest) runs there too while the connection holds
+  a temp object or an attachment, since its argument can name any of them. The
+  query process has none of them, so it answered an empty list, the rows of a
+  main table of the same name, or "unknown database". The answer now ends with
+  the note that the query ran without a time limit. A name is matched anywhere
+  in the statement, in any letter case and inside a string too. Finding this
+  out takes two more reads before a statement on a file database where a query
+  process can run: eight where there were six.
 - **The full generated file lists the first database's recent migrations
   under its own name.** With a first database not named `primary` and another
   one that is, the heading read `### Recent Migrations: primary`. It now names

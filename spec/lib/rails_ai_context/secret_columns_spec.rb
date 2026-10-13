@@ -376,8 +376,10 @@ RSpec.describe RailsAiContext::SecretColumns do
                                     views: { "Hq  Odd View" => "SELECT id, password_digest AS s FROM Hq_Users", "Over It" => "SELECT s FROM `Hq  Odd View`",
                                              "All_Of" => "SELECT * FROM Hq_Users", "Page_Peek" => "SELECT data FROM Raw_Pages" },
                                     index_tables: { "Raw_Pages" => [ :pages, nil ],
-                                                    "View_Words" => [ :virtual, "View_Words", %(CREATE VIRTUAL TABLE View_Words USING fts5(w, content="Hq  Odd View")) ],
-                                                    "Page_Words" => [ :virtual, "Page_Words", "CREATE VIRTUAL TABLE Page_Words USING fts5(w, content=Raw_Pages)" ] })
+                                                    "View_Words" => [ :virtual, "View_Words", %( USING fts5(w, content="Hq  Odd View")) ],
+                                                    "Page_Words" => [ :virtual, "Page_Words", " USING fts5(w, content=Raw_Pages)" ],
+                                                    "Page_Terms" => [ :virtual, "Page_Terms", " USING fts5vocab(Raw_Pages)" ],
+                                                    "Odd_Words" => [ :virtual, "Odd_Words", %("o USING fts5vocab(a, b)" USING fts5(w, content=Raw_Pages)) ] })
 
       expect(secrets.refused_view_in("select s from `hq  odd view`")).to eq([ "Hq  Odd View", "its definition names the secret column `password_digest`" ])
       expect(secrets.refused_view_in("SELECT s FROM `over it`").last).to start_with("it reads the view `Hq  Odd View`: ")
@@ -387,6 +389,10 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(secrets.unread_table_in("select data from raw_pages").first).to eq("Raw_Pages")
       expect(secrets.unread_table_in("select w from view_words").last).to start_with("its definition names the view `Hq  Odd View`, which is not queried: ")
       expect(secrets.unread_table_in("select w from page_words").last).to eq("its definition names `Raw_Pages`, which is not read")
+      # A vocabulary's last argument is its type; one argument alone is no type.
+      expect(secrets.unread_table_in("select term from page_terms").last).to eq("its definition names `Raw_Pages`, which is not read")
+      # A definition that does not open with its module is read whole.
+      expect(secrets.unread_table_in("select w from odd_words").last).to eq("its definition names `Raw_Pages`, which is not read")
       expect(secrets.relation_named_in("select count(*) from hq_users")).to eq("Hq_Users")
     end
 

@@ -443,8 +443,11 @@ module RailsAiContext
       end
     end
 
+    # A name or a string in any of the four quotings SQLite reads.
+    SQLITE_QUOTED = /"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]/
+
     # One argument of a virtual table's module: up to the next comma outside quotes, brackets and parentheses.
-    MODULE_ARGUMENT = /(?:"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|\([^()]*\)|[^,])+/
+    MODULE_ARGUMENT = /(?:#{SQLITE_QUOTED}|\([^()]*\)|[^,])+/
 
     # virtual table => why it is not read, for each one built on a refused view or on a table that is not read:
     # its rows, or its words, are theirs.
@@ -462,12 +465,12 @@ module RailsAiContext
     end
 
     # The name an argument of a virtual table's module opens with: one quoted name whole, or its first word.
-    LEADING_NAME = /\A\s*(?:"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s"'`\[]+)/
+    LEADING_NAME = /\A\s*(?:#{SQLITE_QUOTED}|[^\s"'`\[]+)/
 
     # What a virtual table's definition can name a relation with: its module, and every argument but the columns a
     # full-text table declares (a column named like a view is no view). An argument with `=` is an option, kept whole.
     def relation_words(table, definition)
-      mod, arguments = definition.match(/\bUSING\s+([^\s(]+)\s*(?:\((.*)\))?\s*\z/mi)&.captures
+      mod, arguments = definition.match(/\A\s*USING\s+([^\s(]+)\s*(?:\((.*)\))?\s*\z/mi)&.captures
       return definition unless mod
 
       mod_name = mod.delete(%q("'`[]))

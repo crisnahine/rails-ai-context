@@ -127,7 +127,7 @@ module RailsAiContext
 
       # The loaded classes among these that their own constants still name.
       def carried(classes)
-        classes.reject { |klass| klass.name.nil? || renamed?(klass) }
+        classes.reject { |klass| renamed?(klass) }
       end
 
       # @return [Boolean] whether the source declares a class at all. A file

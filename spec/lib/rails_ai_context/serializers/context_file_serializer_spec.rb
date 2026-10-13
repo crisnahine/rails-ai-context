@@ -121,8 +121,7 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
         serializer = described_class.new(context, format: :opencode)
         result = serializer.call
-        agents_file = result[:written].find { |f| f.end_with?("AGENTS.md") && !f.include?("app/") }
-        expect(agents_file).not_to be_nil
+        expect(result[:written]).to include(File.join(dir, "AGENTS.md"))
       end
     end
 
@@ -131,8 +130,7 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
         serializer = described_class.new(context, format: :codex)
         result = serializer.call
-        agents_file = result[:written].find { |f| f.end_with?("AGENTS.md") && !f.include?("app/") }
-        expect(agents_file).not_to be_nil
+        expect(result[:written]).to include(File.join(dir, "AGENTS.md"))
       end
     end
 
@@ -141,8 +139,7 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
         serializer = described_class.new(context, format: :all)
         result = serializer.call
-        root_agents = result[:written].select { |f| File.basename(f) == "AGENTS.md" && !f.include?("app/") }
-        expect(root_agents.size).to eq(1)
+        expect(result[:written].count(File.join(dir, "AGENTS.md"))).to eq(1)
       end
     end
 

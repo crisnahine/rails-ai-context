@@ -448,6 +448,26 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(described_class::SQLITE.index_tables(@conn).keys).not_to include("docs_more_data")
       expect(described_class::SQLITE.index_tables(@conn, %w[main SIDE])).to include("docs_more_data" => [ :shadow, "docs_more" ])
     end
+
+    it "types a virtual table by the module after its own name, whatever that name spells" do
+      @conn.execute(%(CREATE VIRTUAL TABLE "v USING fts5vocab(q)" USING fts5(body)))
+      @conn.execute(%(CREATE VIRTUAL TABLE "v words" USING fts5vocab("v USING fts5vocab(q)", row)))
+
+      expect(described_class::SQLITE.index_tables(@conn)).to include(
+        "v USING fts5vocab(q)" => [ :virtual, "v USING fts5vocab(q)", " USING fts5(body)" ],
+        "v words" => [ :vocabulary, "v USING fts5vocab(q)", %( USING fts5vocab("v USING fts5vocab(q)", row)) ]
+      )
+    end
+
+    it "types a table whose stored definition does not open as SQLite writes one by no module named inside it" do
+      @conn.execute("CREATE VIRTUAL TABLE odd USING fts5(body)")
+      @conn.execute("PRAGMA writable_schema = ON")
+      @conn.execute(%(UPDATE sqlite_master SET sql = 'CREATE VIRTUAL TABLE IF NOT EXISTS "o USING fts5vocab(q)" USING fts5(body)' WHERE name = 'odd'))
+
+      expect(described_class::SQLITE.index_tables(@conn)["odd"].first).to eq(:virtual)
+    ensure
+      @conn.execute("PRAGMA writable_schema = OFF")
+    end
   end
 
   describe "a SQLite statement" do

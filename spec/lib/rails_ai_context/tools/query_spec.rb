@@ -930,6 +930,26 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT term FROM spaced_terms ORDER BY term")).to match([ false, a_string_including("plain") ])
     end
 
+    it "reads the module after the table's own name, so a name that spells another module changes nothing" do
+      [ "CREATE VIEW ren AS SELECT id, api_token AS w FROM accounts",
+        %(CREATE VIRTUAL TABLE "x USING fts5vocab(a, b)" USING fts5(w, content_rowid=id, content=ren)),
+        %(CREATE VIRTUAL TABLE "d USING fts5vocab(q, r)" USING fts5(title, api_token)),
+        %(INSERT INTO "d USING fts5vocab(q, r)" VALUES ('hello', '#{marker}')) ].each { |sql| conn.execute(sql) }
+
+      refused(%(SELECT w FROM "x USING fts5vocab(a, b)"), "Blocked: `x USING fts5vocab(a, b)` is not read: its definition names the view `ren`, " \
+        "which is not queried: its definition names the secret column `api_token`.")
+      [ %(SELECT highlight("d USING fts5vocab(q, r)", 1, '', '') AS h FROM "d USING fts5vocab(q, r)"),
+        %(SELECT snippet("d USING fts5vocab(q, r)", 1, '', '', '', 8) AS s FROM "d USING fts5vocab(q, r)") ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_starting_with("Blocked: `d USING fts5vocab(q, r)` is not read: it is a virtual table that holds the secret column `api_token`") ]), sql
+      end
+    end
+
+    it "answers the temp catalog from the app's connection when a temp trigger is all that connection holds" do
+      conn.execute("CREATE TEMP TRIGGER archive_guard BEFORE DELETE ON notes_archive BEGIN SELECT 1; END")
+
+      expect(answer("SELECT name FROM sqlite_temp_master")).to match([ false, a_string_including("archive_guard") ])
+    end
+
     it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
       stub_const("RailsAiContext::DatabaseFamily::SqliteRuntime::TYPED_TABLES", "99")
       expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
@@ -1094,6 +1114,49 @@ RSpec.describe RailsAiContext::Tools::Query do
        skip: (Process.respond_to?(:fork) ? false : "a platform with no fork has no query process") do
       expect(answer("SELECT body FROM notes").last).to include("kept").and(satisfy { |text| !text.include?("without a time limit") })
       expect(answer("SELECT 'another' AS word").last).not_to include("without a time limit")
+    end
+
+    it "keeps the query process for a name the main database holds too, where the attached database's table is not the one read",
+       skip: (Process.respond_to?(:fork) ? false : "a platform with no fork has no query process") do
+      [ "CREATE TABLE other.Notes (id INTEGER, body TEXT)", "INSERT INTO other.Notes VALUES (1, 'archived')",
+        "CREATE INDEX notes_by_id ON notes (id)", "CREATE INDEX other.notes_by_id ON Notes (id)" ].each { |sql| conn.execute(sql) }
+
+      [ "SELECT body FROM notes", "SELECT 'notes_by_id' AS word" ].each do |sql|
+        expect(answer(sql).last).to satisfy { |text| !text.include?("without a time limit") }, sql
+      end
+      expect(answer("SELECT body FROM notes").last).to include("kept")
+      expect(answer("SELECT body FROM other.notes")).to match([ false, a_string_including("archived", "without a time limit") ])
+    end
+
+    it "runs a pragma function on the app's connection, whose argument can be a name put together as the statement runs" do
+      { "SELECT name FROM pragma_table_info('scr' || 'atch') ORDER BY cid" => "| pin_token", "SELECT name FROM pragma_table_info('va' || 'ult') ORDER BY cid" => "| door_token",
+        "SELECT count(*) AS pages FROM pragma_page_count('temp') WHERE page_count > 0" => "| 1" }.each do |sql, value|
+        expect(answer(sql)).to match([ false, a_string_including(value, "without a time limit") ]), sql
+      end
+    end
+
+    it "reads the temp table where its name holds a quote character, in the doubled spelling too" do
+      [ %(CREATE TABLE "q""uote" (word TEXT)), %(INSERT INTO "q""uote" VALUES ('main-row')), %(CREATE TEMP TABLE "q""uote" (word TEXT)),
+        %(INSERT INTO temp."q""uote" VALUES ('temp-row')), %(CREATE TABLE "it's" (word TEXT)), %(INSERT INTO "it's" VALUES ('main-row')),
+        %(CREATE TEMP TABLE "it's" (word TEXT)), %(INSERT INTO temp."it's" VALUES ('temp-row')) ].each { |sql| conn.execute(sql) }
+
+      [ %(SELECT word FROM "q""uote"), "SELECT word FROM 'it''s'" ].each do |sql|
+        expect(answer(sql)).to match([ false, a_string_including("temp-row", "without a time limit") ]), sql
+      end
+    end
+
+    it "runs a statement when an attached database has a dot in its name" do
+      conn.execute(%(ATTACH DATABASE '#{File.join(dir, "old.sqlite3")}' AS "archive.2024"))
+      conn.execute(%(CREATE TABLE "archive.2024".ledger (id INTEGER, memo TEXT)))
+
+      conn.execute(%(INSERT INTO "archive.2024".ledger VALUES (1, 'carried over')))
+
+      expect(answer("SELECT body FROM notes")).to match([ false, a_string_including("kept") ])
+      expect(answer(%(SELECT memo FROM "archive.2024".ledger))).to match([ false, a_string_including("carried over", "without a time limit") ])
+    end
+
+    it "reads a table only the attached database holds by its bare name, which the query process cannot prepare" do
+      expect(answer("SELECT email FROM vault")).to match([ false, a_string_including("v@example.com", "without a time limit") ])
     end
   end
 

@@ -630,8 +630,8 @@ module RailsAiContext
             models << klass
             known << class_name
           rescue StandardError, ScriptError => e
-            # Whatever loading it raises, one file costs itself alone, and its name is
-            # recorded: a file that exists for a class reflection lacks is no missing model.
+            # A file that raises as it loads costs itself alone, and its name is recorded:
+            # a file that exists for a class reflection lacks is no missing model.
             @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
           end
@@ -1136,13 +1136,7 @@ module RailsAiContext
 
         return nil unless has_type_column
 
-        children = if model.respond_to?(:descendants)
-          DeclaredConstant.carried(model.descendants).map(&:name).sort
-        elsif model.respond_to?(:subclasses)
-          DeclaredConstant.carried(model.subclasses).map(&:name).sort
-        else
-          []
-        end
+        children = DeclaredConstant.carried(model.descendants).map(&:name).sort
 
         parent = model.superclass
         sti_parent = if parent && parent != ActiveRecord::Base &&

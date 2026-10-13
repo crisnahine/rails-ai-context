@@ -42,19 +42,18 @@ module RailsAiContext
         Rows.new(result.columns, result.rows, true)
       end
 
-      # The temp catalog, the temp schema, and the pragma function that lists the tables of every schema.
-      CONNECTION_CATALOG = /(?<![\w$])(?:sqlite_temp_(?:master|schema)|temp["`'\]]?\s*\.|pragma_table_list(?![\w$]))/i
+      # The temp catalog, the temp schema, and a pragma function: it reads any schema, by a name that can be put together as it runs.
+      CONNECTION_CATALOG = /(?<![\w$])(?:sqlite_temp_(?:master|schema)|temp["`'\]]?\s*\.|pragma_\w)/i
 
-      # Whether the statement names what the connection holds and a child would lack: a temp object, the temp schema,
-      # an attached database or anything in one. A name inside a string counts, since a pragma function takes one there.
+      # Whether the statement names what the connection holds and a child would answer wrongly: a temp object, the temp schema or
+      # an attached database, in a string too. A table only an attached database holds needs no match: no child can prepare it.
       def held_here?(conn, sql)
-        # None of these reads waits on another connection's lock, which the pragma function for the same list does.
-        attached = conn.select_rows("PRAGMA database_list").filter_map { |_seq, name, _file| name unless OWN_SCHEMAS.include?(name) }
-        names = conn.select_values("SELECT name FROM sqlite_temp_master") + attached +
-          attached.flat_map { |schema| conn.select_values("SELECT name FROM #{conn.quote_table_name(schema)}.sqlite_master") }
+        # Neither read waits on another connection's lock, which the pragma function for the same list does.
+        names = conn.select_rows("PRAGMA database_list").filter_map { |_seq, name, _file| name unless OWN_SCHEMAS.include?(name) } +
+          conn.select_values("SELECT name FROM sqlite_temp_master")
         return false if names.empty?
 
-        sql.match?(CONNECTION_CATALOG) || sql.match?(/(?<![\w$])(?:#{Regexp.union(names).source})(?![\w$])/i)
+        sql.match?(CONNECTION_CATALOG) || SecretColumns.fold(sql).match?(Regexp.union(names.map { |name| SecretColumns.identifier(name) }))
       end
 
       # The watchdog's interrupt lands when the driver is back in Ruby between two rows, so it ends a
@@ -199,7 +198,7 @@ module RailsAiContext
 
       # pragma_table_list, which types a shadow table, came with this version.
       TYPED_TABLES = "3.37"
-      VOCABULARY = /\bUSING\s+["'`\[]?(fts5vocab|fts4aux)\b["'`\]]?\s*\((.*)\)/mi
+      VOCABULARY = /\A\s*USING\s+["'`\[]?(fts5vocab|fts4aux)\b["'`\]]?\s*\((.*)\)/mi
 
       # Modules that return the database file's pages or cells, whatever table they belong to.
       PAGE_MODULES = %w[sqlite_dbpage sqlite_dbdata sqlite_dbptr].freeze
@@ -217,13 +216,22 @@ module RailsAiContext
           tables[name] = [ :shadow, owner ] if owner
         end
         virtual.each do |name, sql|
-          sql = SqlGate.comment_free(sql.to_s, SQLITE)
-          mod, args = sql.match(VOCABULARY)&.captures
+          clause = module_clause(SqlGate.comment_free(sql.to_s, SQLITE))
+          mod, args = clause.match(VOCABULARY)&.captures
           # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
           names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
-          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2], sql ] : [ :virtual, name, sql ]
+          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2], clause ] : [ :virtual, name, clause ]
         end
         found
+      end
+
+      # What a virtual table's definition says after the table's own name: `USING module(arguments)`.
+      # SQLite stores it from the name on, and a quoted name can hold the word USING.
+      def module_clause(sql)
+        scanner = SqlGate::Scanner.new(sql)
+        scanner.skip(/\s*CREATE\s+VIRTUAL\s+TABLE\s+/i)
+        SqlGate.quoted(scanner, SQLITE) || scanner.skip(/[^\s"'`\[]+/)
+        scanner.rest
       end
 
       def table_sizes(conn)
