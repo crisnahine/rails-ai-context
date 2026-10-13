@@ -113,11 +113,98 @@ RSpec.describe RailsAiContext::Tools::Query do
           answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
           ActiveSupport::Notifications.unsubscribe(subscriber)
 
-          asked = sent.grep(/SCHEMATA/)
-          expect(asked.size).to eq(2)
+          expect(sent.grep(/SCHEMATA/).size).to eq(1)
           expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_other'\)/).size).to eq(3)
-          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/).size).to eq(3)
+          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/)).to be_empty
           expect(sent.grep(/TABLE_SCHEMA IN \('information_schema'\)/)).to be_empty
+        end
+
+        it "reads a third database when the statement names the view that leads there" do
+          sent = []
+          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+          answer("SELECT f FROM rac_my_other.chain")
+          ActiveSupport::Notifications.unsubscribe(subscriber)
+
+          expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/).size).to eq(3)
+        end
+      end
+
+      describe "views that lead through other databases" do
+        let(:databases) { %w[rac_my_c1 rac_my_c2 rac_my_c3 rac_my_c4 rac_my_twin] }
+
+        def drop_chain
+          %w[rac_my_far rac_my_near rac_my_peek].each { |view| conn.execute("DROP VIEW IF EXISTS #{view}") }
+          conn.execute("DROP TABLE IF EXISTS rac_my_notes")
+          databases.each { |name| conn.execute("DROP DATABASE IF EXISTS #{name}") }
+        end
+
+        before do
+          drop_chain
+          databases.each { |name| conn.execute("CREATE DATABASE #{name}") }
+          conn.execute("CREATE TABLE rac_my_c4.t (id int, door_token varchar(50))")
+          conn.execute("INSERT INTO rac_my_c4.t VALUES (1, 'door-value')")
+          conn.execute("CREATE VIEW rac_my_c3.v AS SELECT id, door_token AS x FROM rac_my_c4.t")
+          conn.execute("CREATE VIEW rac_my_c2.v AS SELECT id, x FROM rac_my_c3.v")
+          conn.execute("CREATE VIEW rac_my_c1.v AS SELECT id, x FROM rac_my_c2.v")
+          conn.execute("CREATE VIEW rac_my_far AS SELECT id, x FROM rac_my_c1.v")
+          conn.execute("CREATE VIEW rac_my_near AS SELECT id, x FROM rac_my_c2.v")
+          conn.execute("CREATE TABLE rac_my_notes (id int, body varchar(50))")
+          conn.execute("INSERT INTO rac_my_notes VALUES (1, 'public note')")
+          conn.execute("CREATE TABLE rac_my_twin.rac_my_notes (id int, body varchar(50), api_token varchar(50))")
+          conn.execute("INSERT INTO rac_my_twin.rac_my_notes VALUES (1, 'other note', 'door-value')")
+          conn.execute("CREATE VIEW rac_my_peek AS SELECT id, body FROM rac_my_twin.rac_my_notes")
+        end
+
+        after { drop_chain }
+
+        def sent
+          statements = []
+          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| statements << payload[:sql] }
+          yield
+          statements
+        ensure
+          ActiveSupport::Notifications.unsubscribe(subscriber)
+        end
+
+        def refused(statements, start)
+          statements.each do |sql|
+            response = answer(sql)
+            expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with(start) ]), sql
+            expect(response.content.first[:text]).not_to include("door-value"), sql
+          end
+        end
+
+        it "runs a statement that names none of them, after the reads of its own database alone" do
+          [ "SELECT 1 AS one", "SELECT a.id, a.email FROM rac_my_accounts a WHERE a.id = 1" ].each do |sql|
+            response = nil
+            statements = sent { response = answer(sql) }
+            expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("| 1 ") ]), sql
+            expect(statements.grep(/rac_my_c\d|rac_my_twin/)).to be_empty, sql
+          end
+          expect(sent { answer("SELECT id, email FROM rac_my_accounts WHERE id = 1") }.size).to eq(17)
+        end
+
+        it "refuses a statement that names a view four databases from the rows, by the view" do
+          refused([ "SELECT * FROM rac_my_far", "SELECT x FROM rac_my_far", "SELECT f.id FROM rac_my_accounts a JOIN rac_my_far f ON f.id = a.id" ],
+                  "The view `rac_my_far` leads through more databases than rails_query follows (3 rounds), so the secret columns it could " \
+                  "read cannot be told and no statement that names it runs.")
+          refused([ "SELECT * FROM rac_my_c1.v" ], "The view `v` leads through more databases than rails_query follows (3 rounds)")
+        end
+
+        it "follows a view three databases from the rows, and refuses it for the secret column it renames" do
+          refused([ "SELECT * FROM rac_my_near", "SELECT upper(x) FROM rac_my_near" ],
+                  "Blocked: the view `rac_my_near` is not queried: it reads the view `v`: its definition names the secret column `door_token`.")
+        end
+
+        it "runs a wildcard subquery over its own table, and refuses it when the statement names the database of a table of that name" do
+          [ "SELECT * FROM (SELECT * FROM rac_my_notes) s", "WITH c AS (SELECT * FROM rac_my_notes) SELECT * FROM c" ].each do |sql|
+            response = answer(sql)
+            expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("public note") ]), sql
+          end
+          refused([ "SELECT * FROM (SELECT * FROM rac_my_notes) s WHERE EXISTS (SELECT 1 FROM rac_my_twin.rac_my_notes)" ],
+                  "Blocked: a `*` inside a subquery is not run in a statement that names `rac_my_notes`, which holds the secret column `api_token`.")
+          peeked = answer("SELECT * FROM rac_my_peek")
+          expect([ peeked.error?, peeked.content.first[:text] ]).to match([ false, a_string_including("other note") ])
         end
       end
 

@@ -138,10 +138,10 @@ module RailsAiContext
       end
 
       def generated_columns(conn, schemas = [])
-        DatabaseFamily.by_table(conn.select_rows(
+        DatabaseFamily.keep_expressions({}, conn.select_rows(
           "SELECT TABLE_NAME, COLUMN_NAME, GENERATION_EXPRESSION FROM information_schema.COLUMNS " \
           "WHERE #{in_schemas(conn, "TABLE_SCHEMA", schemas)} AND GENERATION_EXPRESSION <> ''"
-        )).transform_values(&:to_h)
+        ))
       end
 
       def index_tables(_conn, _schemas = [])

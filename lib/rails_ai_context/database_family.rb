@@ -122,7 +122,7 @@ module RailsAiContext
       end
 
       # @return [Hash{String => String, nil}] view name => the definition the database stores, nil for one it
-      #   will not show
+      #   will not show. On PostgreSQL also under `schema.view`, as traced_views names it too.
       def view_definitions(connection, schemas = [])
         runtime.view_definitions(connection, schemas)
       end
@@ -138,7 +138,8 @@ module RailsAiContext
       end
 
       # @return [Hash{String => Array(Symbol, String)}] table => [:pages, :shadow, :vocabulary or :virtual, the virtual
-      #   table it belongs to]: what holds another table's rows or words under other names
+      #   table it belongs to]: what holds another table's rows or words under other names. A virtual table and a
+      #   vocabulary also carry their definition.
       def index_tables(connection, schemas = [])
         runtime.index_tables(connection, schemas)
       end
@@ -214,6 +215,14 @@ module RailsAiContext
     #   are read as one text, and as unreadable when either is.
     def by_view(rows)
       rows.group_by(&:first).transform_values { |found| found.map(&:last).then { |texts| texts.all? ? texts.join("\n") : nil } }
+    end
+
+    # Adds [table, generated column, expression] rows to found, as table => { column => expression }. Tables of one
+    # name in two schemas keep every expression their columns of one name have.
+    def keep_expressions(found, rows)
+      rows.each_with_object(found) do |(table, column, expression), kept|
+        (kept[table] ||= {}).merge!(column => expression.to_s) { |_column, known, read| known.include?(read) ? known : "#{known} #{read}" }
+      end
     end
 
     BUSY = "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished."

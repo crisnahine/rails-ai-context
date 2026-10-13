@@ -20,6 +20,9 @@ RSpec.describe RailsAiContext::Tools::Query do
     RailsAiContext.configuration.query_allowed_columns = []
   end
 
+  # A timeout one example shortens is not the next spec file's.
+  after { RailsAiContext.configuration.query_timeout = 5 }
+
   # A faked adapter name would send the family's catalogue reads to this SQLite database.
   def fake_family(adapter_name)
     allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return(adapter_name)
@@ -605,6 +608,32 @@ RSpec.describe RailsAiContext::Tools::Query do
       writer&.close
     end
 
+    it "answers locked when the deadline passes while a slow child still waits on the lock, and the timeout when no lock is met" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      slow = 0.4
+      allow(SQLite3::Database).to receive(:new).and_wrap_original do |original, *args, **options|
+        sleep slow
+        original.call(*args, **options)
+      end
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 0.2) }
+        .to raise_error(RailsAiContext::DatabaseFamily::TimedOut)
+
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        $stdout.puts "locked"
+        $stdout.flush
+        sleep 30
+      RUBY
+      expect(writer.gets).to eq("locked\n")
+      # The child opens at 0.4 s and would wait on the lock until 1.2 s, past the deadline at 1 s.
+      expect { RailsAiContext::DatabaseFamily::SQLITE.read_only(conn, "SELECT count(*) AS n FROM nums", timeout: 1) }
+        .to raise_error(RailsAiContext::DatabaseFamily::Busy)
+    ensure
+      Process.kill(:KILL, writer.pid) if writer
+      writer&.close
+    end
+
     it "reruns in-process, without a time limit, what only the app connection can answer" do
       conn.raw_connection.create_function("rac_twice", 1) { |func, x| func.result = x * 2 }
       text = described_class.call(sql: "SELECT rac_twice(n) AS t FROM nums ORDER BY n").content.first[:text]
@@ -799,6 +828,37 @@ RSpec.describe RailsAiContext::Tools::Query do
         failed, text = answer(sql)
         expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
       end
+    end
+
+    it "runs a full-text table whose own name reads like a secret column's, since only the columns it declares decide" do
+      conn.execute("CREATE VIRTUAL TABLE token_search USING fts5(title, body)")
+      conn.execute("INSERT INTO token_search VALUES ('hello', 'world of words')")
+      conn.execute("CREATE VIRTUAL TABLE token_search_vocab USING fts5vocab(token_search, row)")
+
+      { "SELECT * FROM token_search" => "world of words",
+        "SELECT title FROM token_search WHERE token_search MATCH 'hello'" => "hello",
+        "SELECT highlight(token_search, 1, '<', '>') AS h FROM token_search WHERE token_search MATCH 'words'" => "world of <words>",
+        "SELECT snippet(token_search, 1, '<', '>', '', 8) AS s FROM token_search WHERE token_search MATCH 'words'" => "world of <words>",
+        "SELECT term FROM token_search_vocab ORDER BY term" => "words" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+      expect(answer("SELECT title FROM docs").last).to start_with("Blocked: `docs` is not read: it is a virtual table that holds the secret column `api_token`")
+    end
+
+    it "refuses a virtual table whose definition names a refused view, with its vocabulary and a view over it" do
+      [ "CREATE VIEW ren AS SELECT id, api_token AS word FROM accounts",
+        "CREATE VIRTUAL TABLE ren_fts USING fts5(word, content='ren', content_rowid='id')",
+        "CREATE VIRTUAL TABLE ren_terms USING fts5vocab(ren_fts, row)",
+        "CREATE VIEW ren_over AS SELECT word AS w FROM ren_fts",
+        "CREATE VIRTUAL TABLE mail_fts USING fts5(email, content='accounts', content_rowid='id')" ].each { |sql| conn.execute(sql) }
+
+      [ "SELECT word FROM ren_fts", "SELECT * FROM ren_fts", "SELECT highlight(ren_fts, 0, '', '') AS h FROM ren_fts" ].each do |sql|
+        refused(sql, "Blocked: `ren_fts` is not read: its definition names the view `ren`, which is not queried: its definition names the secret column `api_token`.")
+      end
+      refused("SELECT term FROM ren_terms", "Blocked: `ren_terms` is not read: its definition names `ren_fts`, which is not read.")
+      expect(answer("SELECT w FROM ren_over")).to match([ true, a_string_starting_with("Blocked: the view `ren_over` is not queried: its definition reads `ren_fts`, which is not read.") ])
+      expect(answer("SELECT email FROM mail_fts")).to match([ false, a_string_including("a@example.com") ])
     end
 
     it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
@@ -1691,6 +1751,16 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text("SELECT * FROM contacts")).to include("a@example.com")
     end
 
+    it "sends six reads of the schema before an ordinary statement, which a child process runs" do
+      conn
+      sent = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+      expect(text("SELECT id, email FROM accounts WHERE id = 1")).to include("a@example.com")
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+
+      expect(sent.size).to eq(6)
+    end
+
     it "refuses a view whose definition holds a comment before its wildcard, and one named with a dollar or a quote" do
       conn.execute("CREATE VIEW lined (a, b, c, d, e, f) AS SELECT -- note\n * FROM accounts")
       conn.execute("CREATE VIEW blocked (a, b, c, d, e, f) AS SELECT /* note */ * FROM accounts")
@@ -1773,6 +1843,78 @@ RSpec.describe RailsAiContext::Tools::Query do
       everything = text("SELECT * FROM accounts")
       expect(everything).to include("A@EXAMPLE.COM")
       expect(everything.scan("[FILTERED]").size).to eq(3)
+    end
+
+    it "filters a generated column named like a table constraint's keyword, beside that constraint" do
+      conn.execute("CREATE TABLE owners (id INTEGER PRIMARY KEY)")
+      {
+        "constraint" => 'CONSTRAINT "fk_rails_1" FOREIGN KEY ("owner_id") REFERENCES "owners" ("id")',
+        "check" => "CHECK (owner_id > 0)", "unique" => 'UNIQUE ("owner_id")', "primary" => 'PRIMARY KEY ("id")',
+        "foreign" => 'FOREIGN KEY ("owner_id") REFERENCES "owners" ("id")'
+      }.each do |column, constraint|
+        conn.execute(%{CREATE TABLE "r_#{column}" ("id" integer, "password_digest" varchar, } +
+          %{"#{column}" varchar GENERATED ALWAYS AS (password_digest) STORED, "owner_id" integer, #{constraint})})
+        conn.execute(%(INSERT INTO "r_#{column}" (id, password_digest) VALUES (1, 'pw-value')))
+
+        named = answer(%(SELECT "#{column}" FROM r_#{column}))
+        expect(named.error?).to be(true), column
+        expect(named.content.first[:text]).to include("`#{column}` is a generated column that reads `password_digest`"), column
+        expect(text("SELECT * FROM r_#{column}")).to include("[FILTERED]").and(satisfy { |t| !t.include?("pw-value") }), column
+      end
+    end
+
+    it "filters a generated column whose name differs from an innocent one's by the case of a letter past ASCII" do
+      conn.execute(%(CREATE TABLE accents (id INTEGER, passwd TEXT, "É" TEXT AS (passwd) STORED, "é" TEXT AS (id) STORED)))
+      conn.execute("INSERT INTO accents (id, passwd) VALUES (1, 'pw-value')")
+
+      [ %(SELECT "É" FROM accents), %(SELECT "é" FROM accents), "SELECT * FROM accents" ].each do |sql|
+        expect(text(sql)).not_to include("pw-value"), sql
+      end
+    end
+
+    it "reads a generated column's own expression past a quoted name, a comma or a parenthesis in a name, and a default with a comma" do
+      conn.execute(%{CREATE TABLE odd (id INTEGER, passwd TEXT, label TEXT DEFAULT 'a, b', "two words" TEXT AS (upper(label)) VIRTUAL, } +
+        %{"a,b" TEXT AS (passwd) VIRTUAL, "c(d" TEXT AS (label || '!') VIRTUAL, "e""f" TEXT AS (passwd) VIRTUAL, [g h] TEXT AS (label) VIRTUAL, } +
+        %{`i)j` TEXT AS (passwd) VIRTUAL, plain TEXT GENERATED ALWAYS AS (lower(label)) STORED, CHECK (id > 0))})
+      conn.execute("INSERT INTO odd (id, passwd, label) VALUES (1, 'pw-value', 'Shown')")
+
+      expect(text(%{SELECT "two words" AS a, "c(d" AS b, [g h] AS c, plain AS d FROM odd})).to include("| SHOWN | Shown! | Shown | shown |")
+      [ %("a,b"), %("e""f"), "`i)j`" ].each do |column|
+        expect(answer("SELECT #{column} AS x FROM odd").error?).to be(true), column
+      end
+      everything = text("SELECT * FROM odd")
+      expect(everything).to include("SHOWN", "Shown!").and(satisfy { |t| !t.include?("pw-value") })
+      expect(everything.scan("[FILTERED]").size).to eq(4)
+    end
+
+    context "when a second table has a generated column of the same name" do
+      let(:context) { { models: { "Vault" => { encrypts: %w[ssn] } } } }
+
+      before do
+        conn.execute("CREATE TABLE vaults (id INTEGER, ssn TEXT, shadow TEXT AS (ssn) VIRTUAL)")
+        conn.execute("INSERT INTO vaults (id, ssn) VALUES (1, 'ssn-value')")
+        conn.execute("CREATE TABLE widgets (id INTEGER, label TEXT, twin TEXT AS (upper(label)) VIRTUAL)")
+        conn.execute("CREATE TEMP TABLE widgets (id INTEGER, passwd TEXT, twin TEXT AS (passwd) VIRTUAL)")
+        conn.execute("INSERT INTO temp.widgets (id, passwd) VALUES (1, 'pw-value')")
+        RailsAiContext.configuration.query_allowed_columns = %w[shadow]
+      end
+
+      it "keeps the name secret past the allowed list when any column of that name reads an encrypts column" do
+        named = answer("SELECT shadow AS s FROM vaults")
+        expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("`shadow` is a generated column that reads `ssn`, an `encrypts` value") ])
+        expect(text("SELECT * FROM vaults")).not_to include("ssn-value")
+      end
+
+      it "reads the expression of each table of one name in two schemas" do
+        expect(answer("SELECT twin AS t FROM temp.widgets").error?).to be(true)
+        expect(text("SELECT * FROM temp.widgets")).not_to include("pw-value")
+      end
+
+      it "reads every secret column a generated column's expression names" do
+        rule = RailsAiContext::SecretColumns.new(relations: { "t" => %w[password_digest ssn both] }, encrypted: %w[ssn],
+                                                 generated: { "t" => { "both" => "password_digest || ssn" } })
+        expect(rule.encrypted?("both")).to be(true)
+      end
     end
 
     it "releases a view and a generated column over a column the app allows" do

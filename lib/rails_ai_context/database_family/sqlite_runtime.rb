@@ -14,6 +14,9 @@ module RailsAiContext
       # A row-capped result is far below this; a larger prefix is a corrupt one.
       MAX_RESULT_BYTES = 1 << 30
 
+      # What the child writes where a result's length would stand, the moment it meets a lock.
+      MET_LOCK = [ (1 << 64) - 1 ].pack("Q>").freeze
+
       # A plan row that reads a table: the step, then the table's name or, for a table the statement
       # renames, the alias alone ("SEARCH u USING INDEX i"). SQLite before 3.36 wrote "SCAN TABLE users AS u".
       PLAN_STEP = /\A(SCAN|SEARCH)\s+(?:TABLE\s+)?(.+?)(?:\s+AS\s+\S+)?(?=\s+USING\b|\s+VIRTUAL TABLE\b|\z)/
@@ -113,10 +116,11 @@ module RailsAiContext
         (schemas.empty? ? OWN_SCHEMAS : schemas).map { |schema| yield %("#{schema.gsub('"', '""')}"), "'#{schema.gsub("'", "''")}'" }.join(" UNION ALL ")
       end
 
+      # A virtual table's hidden columns are left out (hidden = 1): a full-text table has one of its own name.
       def relation_columns(conn, schemas = [])
         DatabaseFamily.by_table(conn.select_rows(across(schemas) do |schema, name|
           "SELECT m.name, p.name FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
-            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'"
+            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND p.hidden <> 1"
         end)).transform_values(&:flatten)
       end
 
@@ -137,20 +141,22 @@ module RailsAiContext
           "SELECT m.name, p.name, p.hidden, m.sql FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
             "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
         end)
-        DatabaseFamily.by_table(rows).each_with_object({}) do |(table, columns), found|
-          generated = columns.filter_map { |name, hidden, _| name if GENERATED.include?(hidden.to_i) }
+        # Tables of one name in two schemas each have a definition of their own.
+        rows.group_by { |table, _name, _hidden, definition| [ table, definition.to_s ] }.each_with_object({}) do |((table, definition), columns), found|
+          generated = columns.filter_map { |_table, name, hidden, _| name if GENERATED.include?(hidden.to_i) }
           next if generated.empty?
 
-          definition = columns.first.last.to_s
           expressions = column_expressions(definition)
-          found[table] = generated.to_h { |name| [ name, expressions.fetch(name.downcase, definition) ] }
+          DatabaseFamily.keep_expressions(found, generated.map { |name| [ table, name, expressions[name.downcase(:ascii)] || definition ] })
         end
       end
 
-      COLUMN_NAME = /\A("(?:""|[^"])*"|`[^`]*`|\[[^\]]*\]|'[^']*'|[^\s(]+)(.*)\z/m
+      COLUMN_NAME = /\A(?:"((?:""|[^"])*)"|`((?:``|[^`])*)`|\[([^\]]*)\]|'((?:''|[^'])*)'|([^\s(]+))(.*)\z/m
+      # A bare one of these opens a table constraint. In quotes it is a column's name.
+      TABLE_CONSTRAINT = /\A(?:CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN)\z/i
 
-      # @return [Hash{String => String}] column name, lower case => what its part of a CREATE TABLE statement
-      #   says after AS
+      # @return [Hash{String => String, nil}] column name, folded as SQLite compares names (ASCII only) => what its
+      #   part of a CREATE TABLE statement says after AS; nil where that cannot be told
       def column_expressions(definition)
         scanner = SqlGate::Scanner.new(SqlGate.comment_free(definition, SQLITE))
         depth = 0
@@ -163,10 +169,13 @@ module RailsAiContext
           end
           depth += 1 if read == "("
         end
-        parts.filter_map do |part|
-          name, rest = part.strip.match(COLUMN_NAME)&.captures
-          [ name.gsub(/\A["`\[']|["`\]']\z/, "").downcase, rest.partition(/\bAS\b/i).last ] if name
-        end.to_h
+        parts.each_with_object({}) do |part, found|
+          *quoted, bare, rest = part.strip.match(COLUMN_NAME)&.captures
+          next if rest.nil? || bare&.match?(TABLE_CONSTRAINT)
+
+          name = (bare || quoted.compact.first.gsub(/(["`'])\1/, '\1')).downcase(:ascii)
+          found[name] = found.key?(name) ? nil : rest.partition(/\bAS\b/i).last.presence
+        end
       end
 
       # pragma_table_list, which types a shadow table, came with this version.
@@ -191,7 +200,7 @@ module RailsAiContext
           mod, args = sql.to_s.match(VOCABULARY)&.captures
           # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
           names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
-          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2] ] : [ :virtual, name ]
+          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2], sql ] : [ :virtual, name, sql ]
         end
         found
       end
@@ -263,8 +272,7 @@ module RailsAiContext
         reader.close
         payload = begin
           db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
-          # Under the deadline, so a database that stays locked is answered as locked before the parent stops waiting.
-          db.busy_timeout = (timeout * 800).to_i
+          wait_on_lock(db, writer, timeout * 0.8)
           stmt = db.prepare(sql)
           [ :ok, stmt.columns, stmt.to_a ]
         rescue => e
@@ -280,9 +288,32 @@ module RailsAiContext
         exit!(0)
       end
 
+      # Waits on a lock for the seconds given, under the deadline, so a database that stays locked is answered as
+      # locked before the parent stops waiting. The parent is told at the first wait: a child that started late
+      # is still waiting when the deadline passes.
+      def wait_on_lock(db, writer, seconds)
+        met = nil
+        db.busy_handler do |count|
+          if count.zero?
+            met = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            writer.write(MET_LOCK)
+          end
+          sleep 0.01
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) - met < seconds
+        end
+      end
+
       # Read by length: any other process forked meanwhile holds a copy of the writer, so EOF may never come.
       def read_child_result(reader, deadline)
-        size = read_before(reader, 8, deadline).unpack1("Q>")
+        met_lock = false
+        size = begin
+          met_lock = true while (prefix = read_before(reader, 8, deadline)) == MET_LOCK
+          prefix.unpack1("Q>")
+        rescue TimedOut
+          raise unless met_lock
+
+          raise Busy, BUSY
+        end
         status, *rest = begin
           raise ArgumentError, "result length out of range" if size > MAX_RESULT_BYTES
 

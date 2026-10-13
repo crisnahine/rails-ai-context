@@ -170,22 +170,30 @@ module RailsAiContext
       learn(relations: relations, views: views, traced_views: traced_views, generated: generated, index_tables: index_tables)
     end
 
-    # Reads the schemas the statement names, and those the view definitions read so far name, into the rule.
-    # @raise [Unreadable] when view definitions still name new schemas after ROUNDS reads
+    # Reads what the statement reaches into the rule.
+    # @raise [Unreadable] as #reach does
     def cover(statement)
       return self unless @connection
 
+      reach(SqlGate.comment_free(statement, DatabaseFamily.of(@connection)))
+    end
+
+    # Reads the schemas given and the ones the text names, then the ones the definitions of the views it names
+    # name, and so on through the views those name, ROUNDS reads deep. A view no text names is not followed.
+    # @raise [Unreadable] when a view the text names leads deeper, or a schema's columns cannot be read
+    def reach(text, schemas = [])
+      return self unless @connection
+
       family = DatabaseFamily.of(@connection)
-      statement = SqlGate.comment_free(statement, family)
+      read_schemas(schemas)
       (ROUNDS + 1).times do |round|
-        names = [ statement, *@views.to_h.values.compact ].flat_map { |text| dotted_names(text) }.to_set - @asked
-        @asked.merge(names)
+        followed = views_reached(text)
+        names = [ text, *@views.to_h.values_at(*followed.keys).compact ].flat_map { |read| dotted_names(read) }.to_set - @asked
         found = family.schemas_named(@connection, names.to_a) - @read
+        raise too_deep(found, followed, family) if found.any? && round == ROUNDS
+
+        @asked.merge(names)
         return self if found.empty?
-        if round == ROUNDS
-          raise Unreadable, "The statement and the views of the databases it names lead to more databases than rails_query " \
-            "follows (#{ROUNDS} rounds), so the secret columns it could read cannot be told and it is not run."
-        end
 
         read_schemas(found)
       end
@@ -223,14 +231,18 @@ module RailsAiContext
     end
 
     # True for an `encrypts` column and for a generated column that reads one: neither is released by name.
-    def encrypted?(name)
+    # Generated columns of one name on two tables are one name here, encrypted when either reads such a column.
+    def encrypted?(name, through = [])
       down = self.class.fold(name)
-      @encrypted.include?(down) || (@generated.key?(down) && encrypted?(@generated[down]))
+      return true if @encrypted.include?(down)
+
+      !through.include?(down) && @generated.fetch(down, []).any? { |source| encrypted?(source, through + [ down ]) }
     end
 
-    # @return [String, nil] the secret column a generated column's expression reads
+    # @return [String, nil] a secret column a generated column's expression reads, an `encrypts` one first
     def generated_from(name)
-      @generated[self.class.fold(name)]
+      sources = @generated.fetch(self.class.fold(name), [])
+      sources.find { |source| encrypted?(source) } || sources.first
     end
 
     # [view, why] for the first refused view the text names, or nil. A view's definition renames a
@@ -238,6 +250,22 @@ module RailsAiContext
     def refused_view_in(text)
       down = self.class.fold(text)
       @refused_views.find { |view, _why| names?(down, view) }
+    end
+
+    # Why the view at exactly this place is refused, or nil. PostgreSQL's plan names a relation as `schema.relation`,
+    # so a table is not taken for a view of its name in another schema. Views known by name alone (their
+    # definitions could not be read) are told by the bare name.
+    def placed_view_refusal(relation, name)
+      placed, bare = self.class.fold(relation), self.class.fold(name)
+      return @refused_views[placed] if @views&.key?(placed)
+
+      @refused_views[bare] if @views&.key?(bare) && @views[bare].nil?
+    end
+
+    # Whether the relation is a view whose rows the plan does not trace to their table columns.
+    def stored_view?(relation)
+      placed = self.class.fold(relation)
+      !@views.nil? && @views.key?(placed) && !@traced.include?(placed)
     end
 
     # [table, why] for the first table the text names that is never read, or nil: the file's pages, a shadow
@@ -278,6 +306,31 @@ module RailsAiContext
       text.scan(DOTTED).map { |found| found.compact.first.gsub(/([`"])\1/, '\1') }
     end
 
+    # view => the view the text names that leads to it, for each view the text names and each one their
+    # definitions name. A view the plan reads through is no start: its relations are in the plan.
+    def views_reached(text)
+      down = self.class.fold(text)
+      reached = @views.to_h.keys.select { |view| !@traced.include?(view) && names?(down, view) }.to_h { |view| [ view, view ] }
+      waiting = reached.keys
+      while (view = waiting.shift)
+        definition = self.class.fold(@views[view])
+        (@views.keys - reached.keys).each do |other|
+          next unless names?(definition, other)
+
+          reached[other] = reached[view]
+          waiting << other
+        end
+      end
+      reached
+    end
+
+    def too_deep(found, followed, family)
+      found = found.map { |schema| self.class.fold(schema) }
+      view = followed.find { |name, _start| (dotted_names(self.class.fold(@views[name])) & found).any? }&.last
+      Unreadable.new("The view `#{view}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows " \
+        "(#{ROUNDS} rounds), so the secret columns it could read cannot be told and no statement that names it runs.")
+    end
+
     def learn(relations:, views: nil, traced_views: [], generated: {}, index_tables: {})
       fold = self.class.method(:fold)
       relations.each { |relation, names| @columns[fold.call(relation)].concat(Array(names).map(&fold)) }
@@ -297,7 +350,14 @@ module RailsAiContext
       # A generated column can read another one, so this repeats until it finds no more.
       flag_secret_columns(@columns) while trace_generated(@expressions)
       @unread_tables = unread_tables(@index_tables)
-      @refused_views = @views ? refused_views(@views).except(*@traced) : {}
+      # A virtual table can be built on a refused view, and a view on that virtual table.
+      loop do
+        @refused_views = @views ? refused_views(@views).except(*@traced) : {}
+        built = built_on_unread(@index_tables)
+        break if built.empty?
+
+        @unread_tables.merge!(built)
+      end
     end
 
     def flag_secret_columns(columns)
@@ -309,18 +369,17 @@ module RailsAiContext
       @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, self.class.identifier(c) ] }
     end
 
-    # Whether another generated column was found to read a secret column.
+    # Whether another secret column was found that a generated column reads. Every source of a name is kept.
     def trace_generated(generated)
       found = false
       generated.each_value do |expressions|
         expressions.each do |column, expression|
           column = self.class.fold(column)
-          next if @generated.key?(column)
+          down = self.class.fold(expression)
+          sources = @named.filter_map { |name, pattern| name if name != column && down.match?(pattern) } - @generated.fetch(column, [])
+          next if sources.empty?
 
-          source = named_in(expression)
-          next if source.nil? || source == column
-
-          @generated[column] = source
+          (@generated[column] ||= []).concat(sources)
           found = true
         end
       end
@@ -359,6 +418,21 @@ module RailsAiContext
           end
         end
         unread[self.class.fold(table)] = why if why
+      end
+    end
+
+    # virtual table => why it is not read, for each one whose definition names a refused view or a table that
+    # is not read: its rows, or its words, are theirs.
+    def built_on_unread(index_tables)
+      index_tables.each_with_object({}) do |(table, (_kind, _owner, definition)), built|
+        table = self.class.fold(table)
+        next if definition.nil? || @unread_tables.key?(table)
+
+        down = self.class.fold(definition)
+        view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
+        other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
+        built[table] = "its definition names the view `#{view}`, which is not queried: #{why}" if view
+        built[table] = "its definition names `#{other}`, which is not read" if other
       end
     end
 
