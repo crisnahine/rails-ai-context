@@ -311,6 +311,16 @@ RSpec.describe RailsAiContext::Tools::Query do
         conn.execute("SET SESSION sql_mode = '#{default}'") if default
       end
 
+      it "refuses the server's own schema after a comment that holds a backslash and a quote, under NO_BACKSLASH_ESCAPES" do
+        skip "mysql2 cannot quote a string once the session is in this mode" if conn.adapter_name == "Mysql2"
+        default = conn.select_value("SELECT @@SESSION.sql_mode")
+        conn.execute("SET SESSION sql_mode = '#{default},NO_BACKSLASH_ESCAPES'")
+        response = answer(%q(SELECT '\' /* \' */ , user, host FROM mysql.user -- '))
+        expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("Blocked: `mysql` is not read.") ])
+      ensure
+        conn.execute("SET SESSION sql_mode = '#{default}'") if default
+      end
+
       it "filters both columns of a name a join returns twice, and has no derived table of duplicate names" do
         twice = text("SELECT * FROM rac_my_accounts a JOIN rac_my_accounts b ON 1 = 1")
         expect(twice).to include("a@example.com")

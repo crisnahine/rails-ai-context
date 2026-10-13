@@ -752,6 +752,13 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "reads a comment as the second reading does: one that holds a backslash and a quote after a string that ends in a backslash" do
+      { %q(SELECT '\' /* \' */ , user, host FROM mysql.user -- ') => "Blocked: `mysql` is not read.",
+        %q(SELECT '\' /* \' */ , t.a FROM (SELECT * FROM users) t (a, b, c) -- ') => "Blocked: a column-alias list" }.each do |sql, start|
+        expect(refusal(sql, :mysql)).to start_with(start).and(end_with(mode)), sql
+      end
+    end
+
     it "ends the refusal with a full stop before it names the reading" do
       expect(refusal(%q(SELECT '\' , id FROM posts; SELECT 2 -- '), :mysql)).to eq("Blocked: multiple statements (no semicolons).#{mode}")
       expect(refusal(%q(SELECT '\' , user FROM mysql.user -- '), :mysql)).to include("needs another name. That is how MySQL reads")
