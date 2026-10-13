@@ -135,6 +135,15 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(refusal("DO $$ BEGIN PERFORM 1; END $$", :postgresql)).to include("Only SELECT")
     end
 
+    it "refuses a write that follows a WITH clause as the write it is, on every family" do
+      { "WITH x AS (SELECT 1 AS n) INSERT INTO posts (id) SELECT n FROM x" => "INSERT", "WITH x AS (SELECT 1 AS n) insert or ignore into posts (id) SELECT n FROM x" => "insert",
+        "WITH x AS (SELECT 1 AS n) REPLACE INTO posts (id) SELECT n FROM x" => "REPLACE",
+        "WITH x AS (SELECT 1 AS n) MERGE INTO posts p USING x ON p.id = x.n WHEN MATCHED THEN DO NOTHING" => "MERGE" }.each do |sql, keyword|
+        families.each_key { |family| expect(refusal(sql, family)).to eq("Blocked: contains #{keyword}"), "#{family}: #{sql}" }
+      end
+      expect(refusal("WITH x AS (SELECT 1 AS n) SELECT n INTO posts FROM x WHERE 'INSERT' = 'x'")).to eq("Blocked: SELECT INTO creates a table")
+    end
+
     it "refuses SELECT INTO and a disk write" do
       expect(refusal("SELECT * INTO new_table FROM users")).to include("SELECT INTO creates a table")
       expect(refusal("SELECT 1 INTO OUTFILE '/tmp/leak.txt'")).to eq("Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk")

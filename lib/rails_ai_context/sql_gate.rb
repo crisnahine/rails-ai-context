@@ -403,7 +403,11 @@ module RailsAiContext
       return "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" if cleaned.match?(BLOCKED_OUTPUT)
       # No second statement is left by here, so an INTO after a SELECT belongs to it.
       select = masked.index(/\bSELECT\b/i)
-      return "Blocked: SELECT INTO creates a table" if select && masked.rindex(/\bINTO\b/i).to_i > select
+      if select && masked.rindex(/\bINTO\b/i).to_i > select
+        # After a WITH clause the INTO can be a write's own.
+        write = masked[/\b(?:INSERT|MERGE|REPLACE(?!\s*\())\b(?=[^;]*\bINTO\b)/i]
+        return write ? "Blocked: contains #{write}" : "Blocked: SELECT INTO creates a table"
+      end
 
       if (m = listed(BLOCKED_FUNCTIONS, cleaned))
         return "Blocked: dangerous function #{m[0]} (filesystem/network primitive)"
