@@ -73,7 +73,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         def refused(statements, start)
           statements.each do |sql|
             response = answer(sql)
-            expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with(start) ]), sql
+            expect([ response.error?, response.content.first[:text] ]).to match([ true, start.is_a?(Regexp) ? start : a_string_starting_with(start) ]), sql
             expect(response.content.first[:text]).not_to include("tok-value", "pw2-value", "far-value"), sql
           end
         end
@@ -116,7 +116,9 @@ RSpec.describe RailsAiContext::Tools::Query do
           names = views.map { |name| "`#{name.gsub("`", "``")}`" }
           names.each { |name| conn.execute("CREATE VIEW #{name} AS SELECT id, session_token AS t FROM rac_my_other.acc") }
           names.zip(views) do |name, view|
-            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], "Blocked: the view `#{view}` is not queried")
+            # Two names that differ by a run of spaces alone are one name to the rule, which names the first it read.
+            shown = views.select { |other| other.squeeze(" ") == view.squeeze(" ") }
+            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], /\ABlocked: the view `#{Regexp.union(shown)}` is not queried/)
           end
         ensure
           names.each { |name| conn.execute("DROP VIEW IF EXISTS #{name}") }
