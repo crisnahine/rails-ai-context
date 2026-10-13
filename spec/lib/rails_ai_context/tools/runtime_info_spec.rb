@@ -254,11 +254,17 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       RailsAiContext.configuration.query_timeout = 5
     end
 
-    it "leaves the table sizes out when their read times out, and still answers" do
+    it "says the table sizes were not read when their read times out, and still answers" do
       allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:table_sizes).and_raise(ActiveRecord::QueryCanceled, "stopped")
 
-      expect(database_section).to include("**Adapter:** SQLite")
-      expect(database_section).not_to include("### Table Sizes")
+      expect(database_section).to include("**Adapter:** SQLite\n\n_Table sizes were not read: the read failed or took longer than query_timeout._\n")
+      expect(database_section).not_to include("### Table Sizes", "stopped")
+    end
+
+    it "says nothing of table sizes where the database has no table" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:table_sizes).and_return([])
+
+      expect(database_section).not_to include("Table sizes", "Table Sizes")
     end
 
     it "asks the MySQL family on a Trilogy connection" do
@@ -282,8 +288,17 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(database_section).not_to include("Index usage")
     end
 
-    it "says nothing of index usage when reading it failed" do
+    it "says index usage was not read when reading it failed" do
       allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:index_usage).and_raise(ActiveRecord::StatementInvalid, "boom")
+
+      text = described_class.call(section: "database", detail: "full").content.first[:text]
+
+      expect(text).to include("\n_Index usage was not read: the read failed or took longer than query_timeout._\n")
+      expect(text).not_to include("Index Usage", "boom", "Index usage is not available")
+    end
+
+    it "says nothing of index usage where the database has no index" do
+      allow(RailsAiContext::DatabaseFamily::SqliteRuntime).to receive(:index_usage).and_return([])
 
       expect(described_class.call(section: "database", detail: "full").content.first[:text]).not_to include("Index usage", "Index Usage")
     end
