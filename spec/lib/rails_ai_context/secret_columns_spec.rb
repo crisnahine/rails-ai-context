@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "delegate"
 
 RSpec.describe RailsAiContext::SecretColumns do
   let(:config) { RailsAiContext.configuration }
@@ -314,6 +315,16 @@ RSpec.describe RailsAiContext::SecretColumns do
   describe ".for" do
     let(:conn) { ActiveRecord::Base.connection }
     let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }
+
+    # The app's connection as the connection of another of its databases: its pool answers that database's entry
+    # and stays the real pool for the rest, so a reconnect inside an example still finds what it asks for.
+    def as_database(name)
+      pool = Class.new(SimpleDelegator) { attr_accessor :db_config }.new(conn.pool)
+      pool.db_config = double(env_name: "test", name: name)
+      allow(conn).to receive(:pool).and_return(pool)
+      conn
+    end
+
     let(:context) do
       {
         schema: { tables: {
@@ -376,11 +387,10 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "keeps one answer per database within a run" do
       allow(runtime).to receive_messages(unqualified_schemas: [], relation_columns: {}, view_definitions: {}, generated_columns: {}, index_tables: {})
-      other = conn.dup
-      allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       RailsAiContext::RunCache.around do
-        expect(described_class.for(conn, context: context)).to be(described_class.for(conn, context: context))
-        expect(described_class.for(other, context: context)).not_to be(described_class.for(conn, context: context))
+        primary = described_class.for(conn, context: context)
+        expect(described_class.for(conn, context: context)).to be(primary)
+        expect(described_class.for(as_database("queue"), context: context)).not_to be(primary)
       end
     end
 
@@ -470,11 +480,9 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     it "raises for another database whose tables cannot be read, naming it, and reads no schema from the context" do
-      other = conn.dup
-      allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
 
-      expect { described_class.for(other, context: context) }.to raise_error(
+      expect { described_class.for(as_database("queue"), context: context) }.to raise_error(
         described_class::Unreadable,
         "The columns of the queue database could not be read, so its secret columns cannot be told and no query runs on it."
       )

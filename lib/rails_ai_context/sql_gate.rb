@@ -161,6 +161,10 @@ module RailsAiContext
       master_pos_wait | source_pos_wait
     )\s*\(/ix }.freeze
 
+    # A value either one sets stays on the pooled connection, in or out of a read-only transaction.
+    VARIABLE_ASSIGNMENT = { mysql: /:=/ }.freeze
+    SETS_LAST_INSERT_ID = { mysql: /\blast_insert_id\s*\(\s*[^\s)]/i }.freeze
+
     # VOLATILE built-ins that only read: pg_proc marks a reader of live server
     # state VOLATILE too. Any other VOLATILE function in the plan is refused.
     PG_VOLATILE_ALLOWLIST = %w[
@@ -438,6 +442,14 @@ module RailsAiContext
       if (m = listed(BLOCKED_SESSION, cleaned))
         return "Blocked: session function #{m[0].sub(/\s*\(\z/, "")} leaves state (a named lock) on the pooled " \
           "connection after the query returns. rails_query will not run it."
+      end
+      if listed(VARIABLE_ASSIGNMENT, masked)
+        return "Blocked: a user variable assignment (`:=`) is not run. It leaves a value on the pooled connection after the query " \
+          "returns, which a read-only transaction does not stop."
+      end
+      if listed(SETS_LAST_INSERT_ID, cleaned)
+        return "Blocked: LAST_INSERT_ID with an argument is not run. It sets a value that stays on the pooled connection after the " \
+          "query returns, which a read-only transaction does not stop. LAST_INSERT_ID() with no argument runs."
       end
 
       tokens = tokens(cleaned)
