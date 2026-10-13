@@ -775,7 +775,8 @@ Ten tools that each answered one section of the app's configuration leave
   refused with a reason about a CTE or subquery when the table holds a secret
   column. It now runs with that column `[FILTERED]`, also with an expression
   beside the wildcard, as in `SELECT *, id + 1 AS next FROM events`. A whole-row
-  read of such a table stays refused, and the refusal names the first partition.
+  read of such a table stays refused when any of its partitions holds a secret
+  column.
 - **A `rails_query` timeout is an error.** A query that ran past
   `query_timeout` came back as an ordinary answer. With the same text it is
   now an error response, for a query and for `explain: true`: the CLI exits
