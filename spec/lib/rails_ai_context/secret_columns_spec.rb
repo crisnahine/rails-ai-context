@@ -391,13 +391,38 @@ RSpec.describe RailsAiContext::SecretColumns do
 
       RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: statement) }
 
-      expect(asked).to contain_exactly("a", "b`x", 'c"y', "d e", "ünï$1", "f", "g", "1")
+      expect(asked).to include("a", "b`x", 'c"y', "ünï$1", "f", "g", "1")
+      expect(asked).not_to include("id", "t", "note", "h", "5", "open", "d e", "e")
+    end
+
+    it "asks for a name that stands after a quote character written inside a string" do
+      statements = {
+        %(SELECT '"' AS q, v.id FROM far_one.v v WHERE '"' = '"') => "far_one",
+        %(SELECT '`' AS q, id FROM `far_two`.`t`) => "far_two",
+        %(SELECT 'a`b' AS q, id FROM `far_three`.t) => "far_three",
+        %(SELECT '[' AS q, id FROM far_four.t WHERE ']' = ']') => "far_four",
+        %(SELECT id FROM far_five.t WHERE '".c' <> 'x' AND '"' = '"') => "far_five",
+        %(SELECT 'it''s [' AS q, id FROM far_six.t WHERE note <> ']') => "far_six",
+        %(SELECT 'a"b' AS q, id FROM "far_seven".t) => "far_seven",
+        %(SELECT '`' AS q, id FROM `far``eight`.t) => "far`eight",
+        %(SELECT '`' AS q, id FROM ```far_nine`.t) => "`far_nine",
+        %(SELECT '"' AS q, id FROM "far""ten"\n . t) => 'far"ten'
+      }
+
+      statements.each do |statement, name|
+        asked = []
+        allow(runtime).to receive(:schemas_named) { |_conn, names| asked.concat(names) && [] }
+        RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: statement) }
+
+        expect(asked).to include(name), statement
+      end
     end
 
     # A regexp over the whole text is quadratic on a Ruby with no match cache (before 3.2).
     it "reads those names in time that grows with the statement" do
       clock = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
-      texts = [ "'#{"a" * 40_000}'", "`" * 40_001, "[a " * 13_000, "\"a " * 13_000, "'#{"é " * 20_000}'" ].map { |long| "SELECT #{long} FROM t WHERE t.id = 1" }
+      texts = [ "'#{"a" * 40_000}'", "`" * 40_001, "[a " * 13_000, "\"a " * 13_000, "'#{"é " * 20_000}'", "." * 40_000, "a ." * 13_000,
+                "`a`." * 10_000, "\"\"." * 13_000, "`` a" * 10_000 + "`." ].map { |long| "SELECT #{long} FROM t WHERE t.id = 1" }
       allow(runtime).to receive(:schemas_named).and_return([])
 
       started = Process.clock_gettime(clock)

@@ -36,10 +36,11 @@ module RailsAiContext
     # A wildcard in a select list. `count(*)` reads no column, so it is left out.
     WILDCARD = /(?:\b(?:SELECT|DISTINCT|ALL)\b|[,.])\s*\*/i
 
-    # A name as a statement writes it before a dot: in backticks, double quotes or brackets, or bare.
-    QUOTED_NAME = /`(?:``|[^`])+`|"(?:""|[^"])+"|\[[^\]]+\]/
+    # A name before a dot, matched in reversed text from the dot backward: bare, or in backticks or double quotes
+    # with the quote doubled inside. No database family has a schema name longer than 64 characters.
+    NAME_END = /\.(?=\s*(?:[\p{Word}$`"]|[^\x00-\x7F]))/
     BARE_NAME = /(?:[\p{Word}$]|[^\x00-\x7F])+/
-    CLOSERS = { "`" => "`", '"' => '"', "[" => "]" }.freeze
+    QUOTED_NAME = /`((?>(?:``|[^`]){1,64}))`(?!`)|"((?>(?:""|[^"]){1,64}))"(?!")/
 
     # How many times the schemas a statement and the view definitions name are followed into more view definitions.
     ROUNDS = 3
@@ -306,19 +307,18 @@ module RailsAiContext
 
     private
 
-    # Every name that stands before a dot: a schema, a table or an alias. One pass over the text, since a
-    # regexp that finds them is quadratic on a Ruby with no match cache; an opener with no closer is no name.
+    # Every name that stands before a dot, read backward from the dot, so a quote character inside a string before it
+    # changes nothing. A name in brackets is not read: SQLite reads every schema, and the gate refuses a bracket on MySQL.
     def dotted_names(text)
-      scanner = StringScanner.new(text)
-      bytes = text.b
-      last = CLOSERS.transform_values { |closer| bytes.rindex(closer) || -1 }
+      scanner = StringScanner.new(text.reverse)
       names = []
-      until scanner.eos?
-        quoted = last.fetch(scanner.peek(1), -1) > scanner.pos ? scanner.scan(QUOTED_NAME) : nil
-        name = quoted ? quoted[1..-2] : scanner.scan(BARE_NAME)
-        next scanner.getch unless name
-
-        names << name.gsub(/([`"])\1/, '\1') if scanner.match?(/\s*\./)
+      while scanner.skip_until(NAME_END)
+        after_dot = scanner.pos
+        scanner.skip(/\s+/)
+        if (bare = scanner.check(BARE_NAME)) then names << bare.reverse
+        elsif scanner.check(QUOTED_NAME) then names << (scanner[1]&.gsub("``", "`") || scanner[2].gsub('""', '"')).reverse
+        end
+        scanner.pos = after_dot
       end
       names
     end

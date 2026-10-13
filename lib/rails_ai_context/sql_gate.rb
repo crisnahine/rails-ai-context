@@ -372,6 +372,11 @@ module RailsAiContext
       # file functions stay on the raw text: no read-only transaction stops them.
       masked = mask_quoted(cleaned)
       return "Blocked: multiple statements (no semicolons)" if masked.match?(MULTI_STATEMENT)
+      # MariaDB in its MSSQL mode reads [name] as a quoted name, and no statement of this family holds a bracket otherwise.
+      if @family.mysql? && masked.include?("[")
+        return "Blocked: a `[` outside a string or a quoted name is not run. MariaDB reads it as the start of a quoted name when the " \
+          "session's sql_mode holds MSSQL, and rails_query does not read the session's mode. Quote a name in backticks."
+      end
       # PostgreSQL's read-only transaction refuses a locking read, so a literal there is data.
       # MySQL's runs FOR SHARE and LOCK IN SHARE MODE, so there the raw text decides.
       locking = @family.refuses_locking_reads? ? masked : cleaned

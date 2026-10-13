@@ -90,6 +90,19 @@ RSpec.describe RailsAiContext::Tools::Query do
           refused([ "SELECT * FROM (SELECT * #{from}) s", "SELECT s.id FROM (SELECT * #{from}) s WHERE s.email LIKE 'b%'" ], "Blocked: ")
         end
 
+        it "refuses it the same when a string in the statement holds a quote character" do
+          from = "FROM rac_my_other.acc"
+          refused([ %(SELECT '"' AS q, session_token AS x #{from} WHERE '"' = '"'), "SELECT '`' AS q, session_token AS x FROM `rac_my_other`.`acc`",
+                    "SELECT 'a`b' AS q, session_token AS x FROM `rac_my_other`.acc", "SELECT '[' AS q, session_token AS x #{from} WHERE ']' = ']'",
+                    %(SELECT session_token AS x #{from} WHERE '".c' <> 'x' AND '"' = '"') ],
+                  "Blocked: query references secret column `session_token`")
+          refused([ %(SELECT '"' AS q, v.* FROM rac_my_other.v v WHERE '"' = '"'), "SELECT '`' AS q, p FROM `rac_my_other`.`v`",
+                    "SELECT '[' AS q, upper(p) AS u FROM rac_my_other.v WHERE ']' = ']'" ],
+                  "Blocked: the view `v` is not queried: its definition names the secret column `passwd`")
+          refused([ %(SELECT '"' AS q, f FROM rac_my_other.chain WHERE '"' = '"') ],
+                  "Blocked: the view `chain` is not queried: its definition names the secret column `far_token`")
+        end
+
         it "refuses a view over it, in either database, and a view that leads to a third database" do
           refused([ "SELECT * FROM rac_my_across", "SELECT t FROM rac_my_across" ],
                   "Blocked: the view `rac_my_across` is not queried: its definition names the secret column `session_token`")
@@ -317,6 +330,19 @@ RSpec.describe RailsAiContext::Tools::Query do
         conn.execute("SET SESSION sql_mode = '#{default},NO_BACKSLASH_ESCAPES'")
         response = answer(%q(SELECT '\' /* \' */ , user, host FROM mysql.user -- '))
         expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("Blocked: `mysql` is not read.") ])
+      ensure
+        conn.execute("SET SESSION sql_mode = '#{default}'") if default
+      end
+
+      it "refuses a square bracket when the session's sql_mode holds MSSQL, where it quotes a name", if: server == "MariaDB" do
+        default = conn.select_value("SELECT @@SESSION.sql_mode")
+        conn.execute("SET SESSION sql_mode = 'MSSQL'")
+        [ "SELECT [User], [Host] FROM [mysql].[user]", "SELECT 1 AS ['], passwd AS x FROM rac_my_accounts -- ']",
+          "SELECT 1 AS ['], User, Host FROM mysql.user -- ']", "SELECT [passwd] AS x FROM [rac_my_accounts]", "SELECT [p1] FROM [rac_my_renamed]" ].each do |sql|
+          response = answer(sql)
+          expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("Blocked: a `[` outside a string") ]), sql
+        end
+        expect(text("SELECT email FROM rac_my_accounts WHERE email <> '[x]'")).to include("a@example.com")
       ensure
         conn.execute("SET SESSION sql_mode = '#{default}'") if default
       end

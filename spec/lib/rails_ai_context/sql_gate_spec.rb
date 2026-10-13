@@ -256,6 +256,18 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(refusal(%(SELECT User FROM "mysql".user), :mysql)).to end_with("so an alias named `mysql` needs another name.")
     end
 
+    it "refuses a square bracket outside a string or a quoted name on the MySQL family, where MariaDB's MSSQL mode reads it as a name's quote" do
+      bracket = "Blocked: a `[` outside a string or a quoted name is not run. MariaDB reads it as the start of a quoted name when the " \
+        "session's sql_mode holds MSSQL, and rails_query does not read the session's mode. Quote a name in backticks."
+      [ "SELECT [User] FROM [mysql].[user]", "SELECT 1 AS ['], User, Host FROM mysql.user -- ']", "SELECT id FROM [users]",
+        "SELECT 'it''s' AS q, [id] FROM users", "SELECT `a` , [b] FROM users" ].each { |sql| expect(refusal(sql, :mysql)).to eq(bracket), sql }
+      [ "SELECT '[' AS q, id FROM users WHERE note <> ']'", "SELECT `a[b` FROM users", %(SELECT id FROM users WHERE note = "[x]") ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
+      end
+      expect(runs?("SELECT [id] FROM [users]", :sqlite)).to be(true)
+      expect(runs?("SELECT tags[1] FROM posts", :postgresql)).to be(true)
+    end
+
     it "refuses the PostgreSQL relations that hold a stored credential" do
       %w[pg_user_mapping pg_user_mappings pg_subscription pg_authid pg_shadow pg_db_role_setting pg_foreign_server pg_foreign_data_wrapper
          pg_foreign_table pg_hba_file_rules pg_ident_file_mappings].each do |name|
@@ -499,10 +511,12 @@ RSpec.describe RailsAiContext::SqlGate do
   describe "column-alias lists" do
     let(:body) { "(SELECT * FROM users)" }
 
+    # A bracket is refused first on the MySQL family, whatever stands in the brackets.
     def refused_everywhere(statements)
       statements.each do |sql|
         %i[sqlite mysql postgresql].each do |family|
-          expect(refusal(sql, family)).to start_with("Blocked: a column-alias list"), "#{family}: #{sql}"
+          start = family == :mysql && sql.include?("[") ? "Blocked: a `[` outside a string" : "Blocked: a column-alias list"
+          expect(refusal(sql, family)).to start_with(start), "#{family}: #{sql}"
         end
       end
     end
@@ -602,7 +616,10 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT (a, b) = (c, d) FROM t", "SELECT ROW(a, b) FROM t", "SELECT id FROM t CROSS JOIN LATERAL f(a, b)",
         "WITH u AS (SELECT a, b FROM t) SELECT coalesce(a, b) AS c FROM u", "SELECT id FROM (SELECT id FROM t) x JOIN u USING (id)",
         "SELECT * FROM (SELECT id FROM t) x WHERE (id) IN (id)", "SELECT x.id FROM (SELECT id FROM t) AS x ORDER BY (id)"
-      ].each { |sql| %i[sqlite mysql postgresql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" } }
+      ].each do |sql|
+        families = sql.include?("[") ? %i[sqlite postgresql] : %i[sqlite mysql postgresql]
+        families.each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+      end
     end
 
     it "still refuses a secret name inside a VALUES body" do
