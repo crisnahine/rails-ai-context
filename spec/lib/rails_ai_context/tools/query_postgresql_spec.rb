@@ -788,6 +788,58 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP TABLE IF EXISTS rac_pg_spaced, rac_pg_dotted")
   end
 
+  describe "a foreign table that holds a secret column, behind a view that renames it" do
+    def drop
+      conn.execute("DROP SERVER IF EXISTS rac_pg_loop CASCADE")
+      conn.execute("DROP TABLE IF EXISTS rac_pg_remote CASCADE")
+    end
+
+    before do
+      drop
+      url = URI.parse(ENV.fetch("RAC_TEST_PG_URL"))
+      conn.execute("CREATE TABLE rac_pg_remote (id int, label text, api_token text)")
+      conn.execute("INSERT INTO rac_pg_remote VALUES (1, 'far row', 'token-value')")
+      begin
+        conn.execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw")
+        conn.execute("CREATE SERVER rac_pg_loop FOREIGN DATA WRAPPER postgres_fdw " \
+          "OPTIONS (dbname #{conn.quote(conn.current_database)}, port #{conn.quote(conn.select_value("SHOW port"))})")
+        conn.execute("CREATE USER MAPPING FOR CURRENT_USER SERVER rac_pg_loop OPTIONS (user #{conn.quote(url.user)}, password #{conn.quote(url.password.to_s)})")
+        conn.execute("CREATE FOREIGN TABLE rac_pg_foreign (id int, label text, api_token text) SERVER rac_pg_loop OPTIONS (table_name 'rac_pg_remote')")
+        conn.execute("CREATE VIEW rac_pg_far AS SELECT id, label, api_token AS t FROM rac_pg_foreign")
+        conn.execute("CREATE FOREIGN TABLE rac_pg_foreign_renamed (id int, api_token text OPTIONS (column_name 'label')) SERVER rac_pg_loop OPTIONS (table_name 'rac_pg_remote')")
+        conn.execute("CREATE VIEW rac_pg_far_renamed AS SELECT id, api_token AS t FROM rac_pg_foreign_renamed")
+        conn.select_value("SELECT count(*) FROM rac_pg_foreign")
+      rescue ActiveRecord::StatementInvalid => e
+        skip "postgres_fdw cannot reach this server from itself: #{e.message.lines.first}"
+      end
+    end
+
+    after { drop }
+
+    it "refuses a condition, a sort and a group on the secret column that the scan sends to the remote server" do
+      refused([ "SELECT id FROM rac_pg_far WHERE t LIKE 'token-v%'", "SELECT id FROM rac_pg_far WHERE t IS NOT NULL", "SELECT id FROM rac_pg_far ORDER BY t",
+                "SELECT id FROM rac_pg_far ORDER BY t LIMIT 1", "SELECT count(*) FROM rac_pg_far WHERE t LIKE 'token-v%'", "SELECT count(*) FROM rac_pg_far GROUP BY t" ],
+              "Blocked: the query's plan uses the secret column `api_token`")
+    end
+
+    it "refuses a condition on a secret column that carries another name on the remote server" do
+      refused([ "SELECT id FROM rac_pg_far_renamed WHERE t LIKE 'far%'", "SELECT id FROM rac_pg_far_renamed ORDER BY t" ],
+              "Blocked: the query's plan uses the secret column `api_token`")
+      response = run("SELECT * FROM rac_pg_far_renamed WHERE id = 1")
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("[FILTERED]") ])
+      expect(response.content.first[:text]).not_to include("far row")
+    end
+
+    it "filters the secret column in place, and runs a condition and a sort on the other columns" do
+      { "SELECT * FROM rac_pg_far" => "[FILTERED]", "SELECT * FROM rac_pg_foreign WHERE label = 'far row' ORDER BY id LIMIT 3" => "[FILTERED]",
+        "SELECT id, label FROM rac_pg_far WHERE label <> 'api_token' ORDER BY label" => "far row", "SELECT count(*) AS n, label FROM rac_pg_far GROUP BY label" => "far row" }.each do |sql, shown|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including(shown) ]), sql
+        expect(response.content.first[:text]).not_to include("token-value"), sql
+      end
+    end
+  end
+
   it "reads a sequence like a table that holds no secret column" do
     conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
     conn.execute("CREATE SEQUENCE rac_pg_seq START 41")

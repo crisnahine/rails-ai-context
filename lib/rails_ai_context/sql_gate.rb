@@ -829,6 +829,8 @@ module RailsAiContext
         outputs.concat(Array(node["Output"]).map { |e| e.to_s.gsub(PLAN_LITERAL, "''") })
         PLAN_COND_KEYS.each { |k| conds.concat(Array(node[k]).map { |e| e.to_s.gsub(PLAN_LITERAL, "''") }) }
       end
+      foreign = plan.nodes.select { |node| node["Remote SQL"] }
+      conds.concat(foreign.map { |node| remote_uses(node) }, local_names(foreign))
       # EXPLAIN prints no row of a VALUES list and no LIMIT, so the functions the text names are read too.
       called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text) ])
 
@@ -865,6 +867,32 @@ module RailsAiContext
           "functions change server or session state in ways a read-only transaction does not " \
           "stop; only those known to just read state (sizes, lock status, recovery and WAL " \
           "position, random values) are allowed."
+      end
+    end
+
+    # What the statement a foreign scan sends does with a column past fetching it: its joins, conditions and sorts.
+    # GROUP BY names a key by its place in the select list, so a grouped statement is read whole.
+    def remote_uses(node)
+      remote = node["Remote SQL"].to_s.gsub(PLAN_LITERAL, "''")
+      past_select = remote.sub(/\ASELECT\b.*?\bFROM\b/m, "")
+      past_select.match?(/\bGROUP\s+BY\b/i) ? remote : past_select
+    end
+
+    # The foreign columns a remote statement uses under the name their column_name option gives them, by their own
+    # names. A join or an aggregate the remote server runs names its tables under "Relations".
+    def local_names(foreign)
+      return [] if foreign.empty?
+
+      renamed = @budget.spend do |left|
+        @family.bounded(@connection, timeout: left) do
+          @connection.select_rows(
+            "SELECT c.relname, a.attname, o.option_value FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
+            "CROSS JOIN LATERAL pg_options_to_table(a.attfdwoptions) o WHERE o.option_name = 'column_name' AND NOT a.attisdropped"
+          )
+        end
+      end
+      renamed.filter_map do |table, local, far|
+        local if foreign.any? { |node| names?(node.values_at("Relation Name", "Relations").map(&:to_s), table) && names?([ remote_uses(node) ], far) }
       end
     end
 

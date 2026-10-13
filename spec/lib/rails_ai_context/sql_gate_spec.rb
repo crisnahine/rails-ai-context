@@ -1147,6 +1147,40 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    # Plans PostgreSQL 16 gave over a postgres_fdw table.
+    describe "a foreign scan" do
+      before { allow(connection).to receive(:select_rows).and_return([]) }
+
+      def foreign(remote, output = [ "u.id" ])
+        scan(output, "Node Type" => "Foreign Scan", "Remote SQL" => remote)
+      end
+
+      it "refuses a condition, a sort and a group key on a secret column that the scan sends to the remote server" do
+        [ "SELECT id FROM public.users WHERE ((api_token ~~ 'F%'))", "SELECT id FROM public.users ORDER BY api_token ASC NULLS LAST",
+          "SELECT r1.id FROM (public.users r1 INNER JOIN public.users r2 ON (((r1.api_token = r2.api_token))))" ].each do |remote|
+          expect(plan_refusal(foreign(remote))).to include("plan uses the secret column `api_token`"), remote
+        end
+        grouped = { "Node Type" => "Foreign Scan", "Output" => [ "(count(*))", "u.api_token" ], "Relations" => "Aggregate on (public.users u)",
+                    "Remote SQL" => "SELECT count(*), api_token FROM public.users GROUP BY 2" }
+        expect(plan_refusal(grouped)).to include("plan uses the secret column `api_token`")
+      end
+
+      it "runs a scan that fetches a secret column for redaction to filter, and one whose remote condition holds its name as a string" do
+        expect(plan_refusal(foreign("SELECT id, api_token FROM public.users", %w[u.id u.api_token]))).to be_nil
+        expect(plan_refusal(foreign("SELECT id, api_token FROM public.users WHERE ((id = 1)) ORDER BY email ASC NULLS LAST", %w[u.id u.api_token]))).to be_nil
+        expect(plan_refusal(foreign("SELECT id FROM public.users WHERE ((email = 'api_token'))"))).to be_nil
+      end
+
+      it "reads a secret column by the name its column_name option gives it on the remote server" do
+        allow(connection).to receive(:select_rows).and_return([ %w[users api_token tok], %w[users email mail], %w[others api_token id] ])
+        expect(plan_refusal(foreign("SELECT id FROM public.far WHERE ((tok ~~ 'F%'))"))).to include("plan uses the secret column `api_token`")
+        expect(plan_refusal(foreign("SELECT id, tok FROM public.far WHERE ((mail ~~ 'F%')) AND ((id = 1))", %w[u.id u.api_token]))).to be_nil
+        grouped = { "Node Type" => "Foreign Scan", "Output" => [ "(count(*))", "u.id" ], "Remote SQL" => "SELECT count(*), id FROM public.far GROUP BY 2" }
+        expect(plan_refusal(grouped.merge("Relations" => "Aggregate on (public.users u)"))).to be_nil
+        expect(plan_refusal(grouped.merge("Relations" => "Aggregate on (public.others o)"))).to include("plan uses the secret column `api_token`")
+      end
+    end
+
     context "with secret columns whose names hold two spaces in a row or a dotted capital I" do
       let(:relations) { { "users" => [ "id", "api  token", "apİ_key" ] } }
 
