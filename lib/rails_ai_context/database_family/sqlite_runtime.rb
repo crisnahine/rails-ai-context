@@ -116,10 +116,11 @@ module RailsAiContext
         (schemas.empty? ? OWN_SCHEMAS : schemas).map { |schema| yield %("#{schema.gsub('"', '""')}"), "'#{schema.gsub("'", "''")}'" }.join(" UNION ALL ")
       end
 
+      # A virtual table's hidden columns are left out (hidden = 1): a full-text table has one of its own name.
       def relation_columns(conn, schemas = [])
         DatabaseFamily.by_table(conn.select_rows(across(schemas) do |schema, name|
           "SELECT m.name, p.name FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
-            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'"
+            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND p.hidden <> 1"
         end)).transform_values(&:flatten)
       end
 

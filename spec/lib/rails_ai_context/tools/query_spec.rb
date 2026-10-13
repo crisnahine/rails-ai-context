@@ -806,6 +806,22 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
     end
 
+    it "runs a full-text table whose own name reads like a secret column's, since only the columns it declares decide" do
+      conn.execute("CREATE VIRTUAL TABLE token_search USING fts5(title, body)")
+      conn.execute("INSERT INTO token_search VALUES ('hello', 'world of words')")
+      conn.execute("CREATE VIRTUAL TABLE token_search_vocab USING fts5vocab(token_search, row)")
+
+      { "SELECT * FROM token_search" => "world of words",
+        "SELECT title FROM token_search WHERE token_search MATCH 'hello'" => "hello",
+        "SELECT highlight(token_search, 1, '<', '>') AS h FROM token_search WHERE token_search MATCH 'words'" => "world of <words>",
+        "SELECT snippet(token_search, 1, '<', '>', '', 8) AS s FROM token_search WHERE token_search MATCH 'words'" => "world of <words>",
+        "SELECT term FROM token_search_vocab ORDER BY term" => "words" }.each do |sql, value|
+        failed, text = answer(sql)
+        expect([ failed, text.include?(value) ]).to eq([ false, true ]), "#{sql}: #{text}"
+      end
+      expect(answer("SELECT title FROM docs").last).to start_with("Blocked: `docs` is not read: it is a virtual table that holds the secret column `api_token`")
+    end
+
     it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
       allow(conn).to receive(:database_version).and_return(ActiveRecord::ConnectionAdapters::AbstractAdapter::Version.new("3.36.0"))
       expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
