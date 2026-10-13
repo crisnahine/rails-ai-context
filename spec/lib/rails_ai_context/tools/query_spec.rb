@@ -584,6 +584,27 @@ RSpec.describe RailsAiContext::Tools::Query do
       writer&.close
     end
 
+    it "answers as locked a database another process locked before the connection opened" do
+      conn.execute("PRAGMA journal_mode = DELETE")
+      QueryTimeoutSpecRecord.connection_pool.disconnect!
+      writer = IO.popen([ RbConfig.ruby, "-rbundler/setup", "-rsqlite3", "-e", <<~RUBY, File.join(dir, "t.sqlite3") ])
+        db = SQLite3::Database.new(ARGV[0])
+        db.execute("BEGIN EXCLUSIVE")
+        $stdout.puts "locked"
+        $stdout.flush
+        sleep 30
+      RUBY
+      expect(writer.gets).to eq("locked\n")
+
+      response = described_class.call(sql: "SELECT count(*) AS n FROM nums")
+      expect([ response.error?, response.content.first[:text] ]).to eq(
+        [ true, "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished." ]
+      )
+    ensure
+      Process.kill(:KILL, writer.pid) if writer
+      writer&.close
+    end
+
     it "reruns in-process, without a time limit, what only the app connection can answer" do
       conn.raw_connection.create_function("rac_twice", 1) { |func, x| func.result = x * 2 }
       text = described_class.call(sql: "SELECT rac_twice(n) AS t FROM nums ORDER BY n").content.first[:text]
@@ -1841,18 +1862,27 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(mcp(sql: "SELECT 1")).to eq(guard)
     end
 
-    it "answers a locked SQLite database as locked, with no word of a timeout, for a query and for its EXPLAIN" do
-      busy = begin
-        begin
-          raise SQLite3::BusyException, "database is locked"
-        rescue SQLite3::BusyException
-          raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
-        end
-      rescue ActiveRecord::StatementInvalid => e
-        e
+    let(:busy) do
+      begin
+        raise SQLite3::BusyException, "database is locked"
+      rescue SQLite3::BusyException
+        raise ActiveRecord::StatementInvalid, "SQLite3::BusyException: database is locked"
       end
-      locked = [ "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished.", true ]
+    rescue ActiveRecord::StatementInvalid => e
+      e
+    end
+    let(:locked) { [ "The database is locked by another connection, so the query did not run. Run it again when the other connection has finished.", true ] }
 
+    it "answers a lock met while the connection opens as locked, and any other failure to connect as unreachable" do
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(busy)
+      expect(cli("sql=SELECT 1")).to eq(locked)
+      expect(mcp(sql: "SELECT 1")).to eq(locked)
+
+      allow(ActiveRecord::Base.connection).to receive(:verify!).and_raise(ActiveRecord::ConnectionNotEstablished, "no file")
+      expect(mcp(sql: "SELECT 1")).to match([ a_string_starting_with("The primary database cannot be reached: no file."), true ])
+    end
+
+    it "answers a locked SQLite database as locked, with no word of a timeout, for a query and for its EXPLAIN" do
       allow(ActiveRecord::Base.connection).to receive(:select_all).and_wrap_original do |original, sql, *rest, **options|
         sql.to_s.match?(/FROM users/) ? raise(busy) : original.call(sql, *rest, **options)
       end

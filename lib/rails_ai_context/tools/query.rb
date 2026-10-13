@@ -97,6 +97,9 @@ module RailsAiContext
         return no_family_response(family) if family && !family.known?
 
         AppDatabases.lease(rails_app.root, database) { |connection| answer(connection, sql, limit, format, explain, database) }
+      rescue AppDatabases::Unreachable => e
+        # A lock met while the connection opens is the locked database a statement meets, so it answers the same.
+        error_response([ e, e.cause ].compact.any? { |error| DatabaseFamily.busy?(error) } ? DatabaseFamily::BUSY : e.message)
       rescue AppDatabases::Error, SecretColumns::Unreadable, DatabaseFamily::Busy => e
         error_response(e.message)
       rescue ActiveRecord::ConnectionNotEstablished => e
