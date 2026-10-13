@@ -246,6 +246,29 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  describe "a plain view over a materialized view, both off the search path, over a secret column in a third schema" do
+    def drop
+      conn.execute("DROP VIEW IF EXISTS rac_pg_over_far")
+      %w[rac_pg_f1 rac_pg_f2].each { |schema| conn.execute("DROP SCHEMA IF EXISTS #{schema} CASCADE") }
+    end
+
+    before do
+      drop
+      %w[rac_pg_f1 rac_pg_f2].each { |schema| conn.execute("CREATE SCHEMA #{schema}") }
+      conn.execute("CREATE TABLE rac_pg_f2.t (id int, door_token text)")
+      conn.execute("INSERT INTO rac_pg_f2.t VALUES (1, 'token-value')")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_f1.m AS SELECT id, door_token AS x FROM rac_pg_f2.t")
+      conn.execute("CREATE VIEW rac_pg_over_far AS SELECT id, x FROM rac_pg_f1.m")
+    end
+
+    after { drop }
+
+    it "follows the materialized view the plan names into the schema its definition reads, and refuses it" do
+      refused([ "SELECT * FROM rac_pg_over_far", "SELECT x FROM rac_pg_over_far" ],
+              "Blocked: the view `m` is not queried: its definition names the secret column `door_token`.")
+    end
+  end
+
   describe "a table and a materialized view of one name in two schemas" do
     def drop
       conn.execute("DROP SCHEMA IF EXISTS rac_pg_audit CASCADE")

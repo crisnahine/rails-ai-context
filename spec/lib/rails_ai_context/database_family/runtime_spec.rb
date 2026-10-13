@@ -422,6 +422,12 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(described_class::SQLITE.generated_columns(@conn)).to eq("t" => { "x" => definition })
     end
 
+    it "keeps each generated column's own expression where two names differ by the case of a letter past ASCII, as SQLite tells them apart" do
+      @conn.execute(%(CREATE TABLE accents (id INTEGER, passwd TEXT, "É" TEXT AS (passwd) STORED, "é" TEXT AS (id) STORED)))
+
+      expect(described_class::SQLITE.generated_columns(@conn)["accents"]).to match("É" => a_string_matching(/\A \(passwd\)/), "é" => a_string_matching(/\A \(id\)/))
+    end
+
     it "reads the view bodies in one statement and the generated columns in one" do
       views = generated = nil
       expect(statements { views = described_class::SQLITE.view_definitions(@conn) }.size).to eq(1)
