@@ -19,17 +19,17 @@ module RailsAiContext
           sharding: detect_sharding,
           model_connections: detect_model_connections,
           multi_db: dbs.size > 1
-        }.merge(names)
+        }.merge(from_configuration)
       end
 
       # What the section says of each database by name, read from configuration alone.
       def listing
-        { databases: discover_databases }.merge(names)
+        { databases: discover_databases }.merge(from_configuration)
       end
 
       private
 
-      def names
+      def from_configuration
         { example_adapters: example_adapters, primary_name: primary_name }.compact
       end
 

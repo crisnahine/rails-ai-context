@@ -617,8 +617,8 @@ module RailsAiContext
           "A model declares `#{offending}` with `encrypts`, so config.query_allowed_columns does not release it."
         end
       else
-        "#{"#{reads}. " if source}If `#{offending}` is not secret in your app, add \"#{offending}\" to " \
-          "config.query_allowed_columns in an initializer."
+        "#{"#{reads}. " if source}If `#{offending}` is not secret in your app, add \"#{offending}\" to query_allowed_columns in " \
+          ".rails-ai-context.yml (or in config/initializers/rails_ai_context.rb where the app bundles the gem)."
       end
       "Blocked: query references secret column `#{offending}`. " \
         "Name the columns you need; `#{offending}` is secret and never " \

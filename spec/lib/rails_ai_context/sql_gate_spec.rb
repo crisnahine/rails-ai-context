@@ -944,7 +944,8 @@ RSpec.describe RailsAiContext::SqlGate do
     it "refuses a statement naming it and says how to release it" do
       text = refusal("SELECT shadow FROM users")
       expect(text).to include("secret column `shadow`", "`shadow` is a generated column that reads `passwd`")
-      expect(text).to include('add "shadow" to config.query_allowed_columns')
+      expect(text).to end_with('add "shadow" to query_allowed_columns in .rails-ai-context.yml (or in config/initializers/rails_ai_context.rb ' \
+                               "where the app bundles the gem).")
     end
 
     it "says one that reads an encrypts column is not released" do

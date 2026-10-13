@@ -630,9 +630,8 @@ module RailsAiContext
             models << klass
             known << class_name
           rescue StandardError, ScriptError => e
-            # A file that will not load, whatever its class body raises, costs
-            # itself and not the whole listing, but its name is recorded: a file
-            # that exists for a class reflection lacks is no missing model.
+            # Whatever loading it raises, one file costs itself alone, and its name is
+            # recorded: a file that exists for a class reflection lacks is no missing model.
             @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
           end

@@ -157,6 +157,17 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.renamed?(klass)).to be(true)
     end
 
+    it "is true for a class whose name is no constant path, and for one whose path runs through a value that is no module" do
+      odd = Class.new
+      def odd.name = "tmp_model"
+      stub_const("NotAModule", 5)
+      inner = Class.new
+      def inner.name = "NotAModule::Inner"
+
+      expect(described_class.renamed?(odd)).to be(true)
+      expect(described_class.renamed?(inner)).to be(true)
+    end
+
     it "is false for a class whose constant waits to autoload, and loads no file to ask" do
       klass = Class.new
       def klass.name = "WaitingClass"

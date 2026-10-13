@@ -105,20 +105,15 @@ module RailsAiContext
         one.delete("_").casecmp?(other.delete("_"))
       end
 
-      # A loaded class that answers a name no constant carries belongs to no
-      # file - Rails names the anonymous join class it builds for a
-      # has_and_belongs_to_many through a singleton `name=`, so it answers
-      # "HABTM_Tags" while it lives at "Account::HABTM_Tags". Keyed by that
-      # name it would overwrite the real entry, or collapse two owners of one
-      # association name onto one. A class whose constant was removed keeps its
-      # name and stays among its parent's descendants until it is collected.
+      # A loaded class that answers a name no constant carries belongs to no file: the join class Rails names
+      # "HABTM_Tags" through a singleton `name=`, or a class whose constant was removed and is not yet collected.
       #
       # @param klass [Class] a loaded class
       # @return [Boolean]
       def renamed?(klass)
         scope = Object
         klass.name.to_s.split("::").each do |part|
-          return true unless scope.is_a?(Module) && scope.const_defined?(part, false)
+          return true unless scope.const_defined?(part, false)
           # Asking loads no file: a constant still waiting to autoload is taken to name the class.
           return false if scope.autoload?(part, false)
 
@@ -126,6 +121,7 @@ module RailsAiContext
         end
         !scope.equal?(klass)
       rescue NameError
+        # A name that is no constant path, or a path through a value that is no module.
         true
       end
 

@@ -2596,7 +2596,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
-  describe "a model file whose class body raises as it loads" do
+  describe "a model file that raises when the list loads its class" do
     let(:raising) { Rails.root.join("app", "models", "zz_raising_widget.rb") }
 
     around do |example|
