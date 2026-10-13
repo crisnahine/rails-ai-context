@@ -304,6 +304,14 @@ Proof sources:
    private production app; each AI tool's MCP config started the way its
    client starts it; and the unit suite and the E2E harness on Linux, macOS
    and Windows.
+   In the v5.35.1 release QA: `rails_query` through its tool call on real
+   PostgreSQL 16, MySQL 8.0 and 8.4 and MariaDB 10.6 and 11.4 servers, through
+   mysql2 and Trilogy, on Rails 7.0, 8.0 and 8.1, now a CI job of its own;
+   files of statements sent through the tool on each server and on SQLite
+   before and after each fix, with every changed answer traced to its fix;
+   the tool's own checks timed on Ruby 3.4 for statements up to a megabyte
+   and on Ruby 3.1 for statements of 50 kilobytes; and the unit suite and the
+   E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
