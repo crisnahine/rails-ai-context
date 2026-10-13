@@ -896,6 +896,13 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(text("SELECT me'a\\' /* out */ AS v")).to eq("SELECT me'a\\'   AS v")
     end
 
+    it "reads a string prefix letter that follows a non-ASCII character as the end of a name on PostgreSQL" do
+      [ "SELECT id FROM posts WHERE title = E'x'", "SELECT id AS idée'x' FROM posts", "SELECT 1 AS 名B'1010'",
+        "SELECT 1 AS 名x'1F'", "SELECT 1 AS 名U&'x'" ].each do |sql|
+        expect(check(sql, :postgresql).sql).to eq(sql), sql
+      end
+    end
+
     it "reads a dollar as no quote off PostgreSQL, so a comment after one is taken out" do
       %i[sqlite mysql].each { |family| expect(text("SELECT $t$ -- x $t$ AS v\nFROM t", family)).to eq("SELECT $t$  \nFROM t") }
     end

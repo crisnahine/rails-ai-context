@@ -616,7 +616,9 @@ module RailsAiContext
         kind, span = self.class.quoted(scanner, @family)
         if kind == :string
           out.chop! if out.end_with?("&")
-          out.chop! if out.end_with?(*%w[e E b B x X u U]) && !out.byteslice(-2, 1).to_s.match?(/[\w$\x80-\xFF]/n)
+          # Read as a byte: a character past ASCII ends in one from 0x80 up, and it is part of a name.
+          before = out.getbyte(-2)
+          out.chop! if out.end_with?(*%w[e E b B x X u U]) && !(before && (before >= 0x80 || before.chr.match?(/[\w$]/)))
           out << "''"
         else
           out << (span || scanner.scan(UNQUOTED) || scanner.getch)

@@ -490,6 +490,13 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     expect(response.content.first[:text]).to start_with("SQL error:").and include("nope")
   end
 
+  it "answers PostgreSQL's own error for a string prefix letter that follows a non-ASCII character" do
+    [ "SELECT id FROM rac_pg_accounts WHERE email = E'x'", "SELECT id AS idée'x' FROM rac_pg_accounts", "SELECT 1 AS 名B'1010'" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("SQL error: PG::") ]), sql
+    end
+  end
+
   it "runs SHOW, which has no plan" do
     expect(run("SHOW server_version").error?).to be(false)
   end
