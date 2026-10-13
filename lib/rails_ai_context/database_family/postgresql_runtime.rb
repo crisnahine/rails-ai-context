@@ -110,15 +110,18 @@ module RailsAiContext
         )
       end
 
+      # A plan names the session's temporary schema pg_temp, whatever number its own name carries.
+      SCHEMA = "CASE WHEN n.oid = pg_my_temp_schema() THEN 'pg_temp' ELSE n.nspname END"
+
       def in_schemas(conn, schemas)
-        schemas.empty? ? "n.nspname = ANY (current_schemas(false))" : "n.nspname IN (#{schemas.map { |name| conn.quote(name) }.join(", ")})"
+        schemas.empty? ? "n.nspname = ANY (current_schemas(false))" : "#{SCHEMA} IN (#{schemas.map { |name| conn.quote(name) }.join(", ")})"
       end
 
       # Every relation that stores rows: tables, partitioned tables, materialized views and foreign tables.
       # One read that takes no lock on any of them.
       def relation_columns(conn, schemas = [])
         rows = conn.select_rows(
-          "SELECT n.nspname, c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
+          "SELECT #{SCHEMA}, c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
           "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'm', 'f') AND a.attnum > 0 " \
           "AND NOT a.attisdropped AND #{in_schemas(conn, schemas)} ORDER BY c.relname, a.attnum"
         )
@@ -133,12 +136,12 @@ module RailsAiContext
       # A materialized view stores its rows, so its result columns have no table column to be traced to. The
       # views are read with it for what a materialized view built on one reads. Each is also under `schema.view`.
       def view_definitions(conn, schemas = [])
-        rows = conn.select_rows("SELECT n.nspname, c.relname, pg_get_viewdef(c.oid) #{VIEWS} IN ('v', 'm') AND #{in_schemas(conn, schemas)}")
+        rows = conn.select_rows("SELECT #{SCHEMA}, c.relname, pg_get_viewdef(c.oid) #{VIEWS} IN ('v', 'm') AND #{in_schemas(conn, schemas)}")
         DatabaseFamily.by_view(rows.flat_map { |schema, view, definition| [ [ view, definition ], [ "#{schema}.#{view}", definition ] ] })
       end
 
       def traced_views(conn, schemas = [])
-        conn.select_rows("SELECT n.nspname, c.relname #{VIEWS} = 'v' AND #{in_schemas(conn, schemas)}")
+        conn.select_rows("SELECT #{SCHEMA}, c.relname #{VIEWS} = 'v' AND #{in_schemas(conn, schemas)}")
           .flat_map { |schema, view| [ view, "#{schema}.#{view}" ] }
       end
 

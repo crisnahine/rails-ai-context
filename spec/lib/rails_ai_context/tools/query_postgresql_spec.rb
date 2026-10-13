@@ -267,6 +267,35 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  describe "a temporary table" do
+    before do
+      conn.execute("CREATE TEMP TABLE rac_pg_scratch (id int, label text, api_token text)")
+      conn.execute("INSERT INTO rac_pg_scratch VALUES (1, 'temp label', 'token-value')")
+      conn.execute("CREATE TEMP TABLE rac_pg_jotted (id int, label text)")
+      conn.execute("INSERT INTO rac_pg_jotted VALUES (1, 'jotted label')")
+      conn.execute("CREATE TEMP VIEW rac_pg_scratched AS SELECT id, api_token AS t FROM rac_pg_scratch")
+    end
+
+    after { conn.execute("DROP TABLE IF EXISTS pg_temp.rac_pg_scratch, pg_temp.rac_pg_jotted CASCADE") }
+
+    it "runs an ordinary statement over one, and filters its secret column like any table's" do
+      { "SELECT * FROM rac_pg_jotted" => "jotted label", "SELECT row_to_json(j) FROM rac_pg_jotted j" => "jotted label",
+        "SELECT id, label FROM rac_pg_scratch" => "temp label", "SELECT * FROM rac_pg_scratch" => "[FILTERED]",
+        "SELECT * FROM pg_temp.rac_pg_scratch" => "[FILTERED]", "SELECT * FROM rac_pg_scratched" => "[FILTERED]" }.each do |sql, shown|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including(shown) ]), sql
+        expect(response.content.first[:text]).not_to include("token-value"), sql
+      end
+    end
+
+    it "still refuses its whole row, and an expression over the secret column a temporary view renames" do
+      refused([ "SELECT row_to_json(s) FROM rac_pg_scratch s", "SELECT s::text FROM pg_temp.rac_pg_scratch s" ],
+              "Blocked: the query serialises a whole row of `rac_pg_scratch`")
+      refused([ "SELECT upper(t) FROM rac_pg_scratched", "SELECT max(t) FROM rac_pg_scratched" ],
+              "Blocked: the query's plan uses the secret column `api_token`")
+    end
+  end
+
   describe "a materialized view" do
     before do
       conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_pg_stored_nested, rac_pg_stored_plain, rac_pg_stored CASCADE")
