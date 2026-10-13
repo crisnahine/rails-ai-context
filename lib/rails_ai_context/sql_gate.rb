@@ -2,6 +2,7 @@
 
 require "set"
 require "strscan"
+require "timeout"
 
 module RailsAiContext
   # Decides whether rails_query runs a statement: checks on its text, and on PostgreSQL on its plan.
@@ -40,6 +41,16 @@ module RailsAiContext
     # The checks read a megabyte in two seconds at the slowest (a nest of parentheses, a run of dollar signs), and
     # the longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB.
     MAX_BYTES = 1_000_000
+
+    # The text checks ran past the time they have.
+    class TextChecksTimedOut < RailsAiContext::Error; end
+
+    # @return [String, nil] the refusal of a statement longer than the checks read
+    def self.length_refusal(sql)
+      return nil unless sql.to_s.bytesize > MAX_BYTES
+
+      "Blocked: the statement is #{sql.bytesize} bytes long, and rails_query checks a statement of #{MAX_BYTES} bytes at most."
+    end
 
     # REPLACE is the MySQL statement; `replace(` is the string function every
     # database has, so a REPLACE followed by an opening parenthesis is let be.
@@ -213,6 +224,15 @@ module RailsAiContext
         super(text, fixed_anchor: true)
       end
 
+      # The [name] at the pointer. A line with no closing bracket is read once, however many brackets open on it.
+      def bracketed
+        return nil if @unclosed_to && pos < @unclosed_to
+
+        span = scan(BRACKETED)
+        @unclosed_to = pos + check(/[^\]\n]*/).bytesize unless span
+        span
+      end
+
       # Whether the dollar tag at the pointer stands again after itself, to close the quote it opens.
       def closed?(tag)
         @last ||= {}.tap do |last|
@@ -224,8 +244,10 @@ module RailsAiContext
     end
 
     # family decides the lexing and whether the plan checks run. budget is the seconds the reads the
-    # gate sends (the plan, the pg_proc lookup) share with the caller's other reads.
-    def initialize(family:, secrets:, connection:, budget:)
+    # gate sends (the plan, the pg_proc lookup) share with the caller's other reads. text_timeout is the seconds
+    # the checks on the statement's text have to themselves.
+    def initialize(family:, secrets:, connection:, budget:, text_timeout: RailsAiContext.configuration.query_timeout)
+      @text_timeout = text_timeout
       @family = family
       @secrets = secrets
       @connection = connection
@@ -235,19 +257,12 @@ module RailsAiContext
 
     def check(sql)
       return refuse("SQL query is required.") if sql.nil? || sql.strip.empty?
-      if sql.bytesize > MAX_BYTES
-        return refuse("Blocked: the statement is #{sql.bytesize} bytes long, and rails_query checks a statement of #{MAX_BYTES} bytes at most.")
-      end
-
-      if (refusal = text_refusal(sql))
+      if (refusal = self.class.length_refusal(sql))
         return refuse(refusal)
       end
 
-      text = comment_free(sql)
-      if @family.backslash_escapes? && (refusal = without_backslash_escapes { text_refusal(text) })
-        return refuse("#{refusal} That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, " \
-          "and rails_query does not read the session's mode. Write a quote inside a string doubled, so that both readings agree.")
-      end
+      text, refusal = text_verdict(sql)
+      return refuse(refusal) if refusal
       planned = @family.plan_checks? && !text.match?(NO_PLAN)
       plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left) } if planned
       if planned && plan.nil?
@@ -292,7 +307,7 @@ module RailsAiContext
       when "'" then [ :string, scanner.scan(backslash || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
       when '"' then [ :quoted, scanner.scan(backslash ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
       when "`" then [ :quoted, scanner.scan(PLAIN_SPAN["`"]) ]
-      when "[" then brackets && (span = scanner.scan(BRACKETED)) ? [ :quoted, span ] : nil
+      when "[" then brackets && (span = scanner.bracketed) ? [ :quoted, span ] : nil
       when "$"
         tag = scanner.check(DOLLAR_TAG) if family.dollar_quoting?
         [ :string, scanner.scan(DOLLAR_QUOTED) ] if tag && scanner.closed?(tag)
@@ -308,6 +323,25 @@ module RailsAiContext
 
     def refuse(reason)
       Verdict.new(sql: nil, refusal: reason, plan: nil)
+    end
+
+    # [the comment-free text, the refusal the text checks give or nil]. The checks send nothing and hold nothing,
+    # so ending them from outside leaves nothing half done.
+    def text_verdict(sql)
+      Timeout.timeout(@text_timeout, TextChecksTimedOut) do
+        refusal = text_refusal(sql)
+        next [ nil, refusal ] if refusal
+
+        text = comment_free(sql)
+        if @family.backslash_escapes? && (refusal = without_backslash_escapes { text_refusal(text) })
+          refusal = "#{refusal} That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, " \
+            "and rails_query does not read the session's mode. Write a quote inside a string doubled, so that both readings agree."
+        end
+        [ text, refusal ]
+      end
+    rescue TextChecksTimedOut
+      [ nil, "Blocked: the checks on the statement's text ran longer than query_timeout (#{@text_timeout} seconds), so the statement " \
+        "was not run. Send a shorter statement." ]
     end
 
     # MySQL reads a backslash in a string as an ordinary character under NO_BACKSLASH_ESCAPES. The block's
@@ -700,7 +734,15 @@ module RailsAiContext
     def values_only?(tokens, open, close)
       return false unless close && word?(tokens[open + 1], "VALUES")
 
-      tokens[(open + 2)...close].none? { |token| ROW_SOURCES.any? { |source| word?(token, source) } }
+      before = row_sources_before(tokens)
+      before[close] == before[open + 2]
+    end
+
+    # How many row-source words stand before each token, so that no body is scanned for them on its own.
+    def row_sources_before(tokens)
+      (@row_sources ||= {}.compare_by_identity)[tokens] ||= tokens.each_with_object([ 0 ]) do |token, counts|
+        counts << counts.last + (ROW_SOURCES.any? { |source| word?(token, source) } ? 1 : 0)
+      end
     end
 
     # :star for a select-list wildcard inside parentheses, :table for MySQL's `TABLE t` there, else nil.

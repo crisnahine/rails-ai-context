@@ -88,6 +88,31 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(runs?("SELECT id FROM posts WHERE id IN (#{(1..142_000).to_a.join(",")})")).to be(true)
     end
 
+    it "reads a run of opening brackets and a nest of VALUES lists in time that grows with their length" do
+      cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+      nest = 200_000 / 23
+      [ "SELECT 1 AS v, #{"[" * 200_000}", "SELECT * FROM #{"(VALUES (" * nest}1#{")) AS t(a)" * nest}" ].each do |sql|
+        families.each do |key, family|
+          gate = described_class.new(family: family, secrets: RailsAiContext::SecretColumns.new, connection: connection,
+                                     budget: described_class::Budget.new(5), text_timeout: 600)
+          started = Process.clock_gettime(cpu)
+          gate.check(sql)
+          # Quadratic, either shape took minutes at this length.
+          expect(Process.clock_gettime(cpu) - started).to be < 20, "#{key}: #{sql[0, 30]}"
+        end
+      end
+    end
+
+    it "gives up with a refusal of its own when the text checks run past the time they have" do
+      gate = described_class.new(family: families.fetch(:sqlite), secrets: RailsAiContext::SecretColumns.new, connection: connection,
+                                 budget: described_class::Budget.new(5), text_timeout: 0.01)
+      expect(gate.check("SELECT #{"(" * 450_000}1#{")" * 450_000} AS v").refusal).to eq(
+        "Blocked: the checks on the statement's text ran longer than query_timeout (0.01 seconds), so the statement was not run. " \
+        "Send a shorter statement."
+      )
+      expect(gate.check("SELECT 1 AS v").refused?).to be(false)
+    end
+
     it "refuses a statement that starts with anything but a read" do
       expect(refusal("VACUUM users")).to include("Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed")
     end

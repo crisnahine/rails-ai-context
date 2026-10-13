@@ -87,6 +87,11 @@ module RailsAiContext
           )
         end
 
+        # Before anything reads the statement: every scan of it takes time that grows with its length.
+        if (refusal = SqlGate.length_refusal(sql))
+          return error_response(refusal)
+        end
+
         # Decided from the configuration, so an adapter with no family is refused before its server is pinged.
         family = configured_family(database)
         return no_family_response(family) if family && !family.known?

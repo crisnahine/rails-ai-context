@@ -914,6 +914,17 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "a statement over the length the checks read" do
+    it "is refused before anything reads it" do
+      expect(RailsAiContext::SecretColumns).not_to receive(:for)
+      expect(RailsAiContext::SqlGate).not_to receive(:comment_free)
+      response = described_class.call(sql: "SELECT 1 AS v, #{"[" * 1_000_000}")
+      expect(response.error?).to be(true)
+      expect(response.content.first[:text])
+        .to eq("Blocked: the statement is 1000015 bytes long, and rails_query checks a statement of 1000000 bytes at most.")
+    end
+  end
+
   describe "names Redaction's secret words cover" do
     it "redacts a result column named by one" do
       text = described_class.call(sql: "SELECT 1 AS passwd, 2 AS salt, 3 AS credentials, 4 AS pepper, 5 AS n").content.first[:text]
