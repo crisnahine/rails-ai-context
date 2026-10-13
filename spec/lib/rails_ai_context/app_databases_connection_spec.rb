@@ -179,6 +179,8 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     end
 
     it "keeps each limit an entry sets for itself" do
+      RailsAiContext.configuration.query_timeout = 5
+
       expect(limits(RailsAiContext::DatabaseFamily::MYSQL, entry(connect_timeout: 9))).to eq(connect_timeout: 9, read_timeout: 15)
       expect(limits(RailsAiContext::DatabaseFamily::MYSQL, entry(read_timeout: 1))).to eq(connect_timeout: 5, read_timeout: 1)
     end
