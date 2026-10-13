@@ -187,11 +187,8 @@ module RailsAiContext
           Payload.framework_databases(schema).to_h { |name, info| [ name.to_s, Payload.database_framework(info) ] }
         end
 
-        # The app's own databases besides the primary, as its schema dumps
-        # declare them: metrics71's analytics database on SQLite went
-        # uncounted beside its PostgreSQL primary. Each is
-        # { name:, adapter:, tables:, unread: }, the adapter nil when database.yml does not say,
-        # `unread` true for a dump that could not be read, whose table count is then no count.
+        # The app's own databases besides the primary, as its schema dumps declare them. The adapter is nil when
+        # database.yml does not say; `unread` marks a dump that could not be read, whose table count is no count.
         def own_secondary_databases(ctx, schema)
           configured = Payload.databases(ctx).to_h { |d| [ d[:name].to_s, d ] }
           Payload.app_databases(schema).map do |name, db|

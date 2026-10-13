@@ -89,9 +89,8 @@ module RailsAiContext
             response, left_out = with_left_out_frame { RailsAiContext::RunCache.around { yield } }
             response = append_note(response, RailsAiContext::Tools::BaseTool.left_out_note(left_out))
             append_note(response, invalid_detail_note(discarded))
-          # ScriptError too: a SyntaxError or LoadError out of an app file the
-          # tool reached must cost that call, not the stdio server and every
-          # tool with it. So must a stack overflow or a SecurityError.
+          # An app file that cannot load, a stack overflow or a SecurityError costs that call,
+          # where a StandardError rescue alone would let it end the stdio server and every tool with it.
           rescue StandardError, ScriptError, SystemStackError, SecurityError => e
             failure_response(e).tap do |failure|
               call = Thread.current[:rails_ai_context_call]
