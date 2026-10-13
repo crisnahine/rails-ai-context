@@ -69,11 +69,11 @@ module RailsAiContext
         members.all? { |member| member["Relation Name"] } && columns.size == 1 ? outputs.transpose : []
       end
 
-      # @return [Array<Array(String, String)>] [relation, column], downcased, for a plain Var of a base relation:
-      #   one for each relation its alias stands for
+      # @return [Array<Array(String, String)>] [relation, column] for a plain Var of a base relation, the column
+      #   folded as the secret column rule folds a name: one for each relation its alias stands for
       def base_columns(expr)
         m = expr.to_s.strip.match(BASE_VAR) or return []
-        column = (m[3] || m[4].gsub('""', '"')).downcase
+        column = SecretColumns.fold(m[3] || m[4].gsub('""', '"'))
         Array(aliases[m[1] || m[2].gsub('""', '"')]).map { |rel| [ rel, column ] }
       end
 

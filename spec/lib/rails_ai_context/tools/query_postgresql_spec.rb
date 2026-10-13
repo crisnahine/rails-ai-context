@@ -776,6 +776,18 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  it "refuses a comparison with a row whose secret column's name holds two spaces in a row or a dotted capital I" do
+    conn.execute("DROP TABLE IF EXISTS rac_pg_spaced, rac_pg_dotted")
+    conn.execute(%(CREATE TABLE rac_pg_spaced (id int, "api  token" text)))
+    conn.execute(%(CREATE TABLE rac_pg_dotted (id int, "apİ_key" text)))
+    conn.execute("INSERT INTO rac_pg_spaced VALUES (1, 'token-value')")
+    conn.execute("INSERT INTO rac_pg_dotted VALUES (1, 'token-value')")
+    refused([ "SELECT (1, 'token-valud') < (SELECT * FROM rac_pg_spaced) AS o" ], "Blocked: the query passes the secret column `api token` through")
+    refused([ "SELECT (1, 'token-valud') < (SELECT * FROM rac_pg_dotted) AS o" ], "Blocked: the query passes the secret column `api_key` through")
+  ensure
+    conn.execute("DROP TABLE IF EXISTS rac_pg_spaced, rac_pg_dotted")
+  end
+
   it "reads a sequence like a table that holds no secret column" do
     conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
     conn.execute("CREATE SEQUENCE rac_pg_seq START 41")

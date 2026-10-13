@@ -1147,6 +1147,18 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    context "with secret columns whose names hold two spaces in a row or a dotted capital I" do
+      let(:relations) { { "users" => [ "id", "api  token", "apİ_key" ] } }
+
+      it "refuses each one a child passes through that the top node does not expose" do
+        [ %(users."api  token"), %(users."Api  Token"), %(users."apİ_key") ].each do |var|
+          top = { "Node Type" => "CTE Scan", "Output" => [ "c.id", "c.t" ],
+                  "Plans" => [ { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users", "Output" => [ "users.id", var ] } ] }
+          expect(plan_refusal(top)).to include("through a CTE, subquery or set operation"), var
+        end
+      end
+    end
+
     it "refuses a secret column a child passes through that the top node does not expose" do
       top = { "Node Type" => "CTE Scan", "Output" => [ "c.id", "c.t" ],
               "Plans" => [ { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users",
