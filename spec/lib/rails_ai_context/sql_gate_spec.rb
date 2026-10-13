@@ -82,12 +82,13 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "refuses a statement over the length it checks, and checks one just under it" do
-      long = "SELECT id FROM posts WHERE body = '#{"x" * described_class::MAX_BYTES}'"
+    it "refuses a statement one byte over the length it checks, and checks one of that length" do
+      of = ->(bytes) { "SELECT id FROM posts WHERE body = '#{"x" * (bytes - 36)}'" }
+      long = of.call(described_class::MAX_BYTES + 1)
       %i[sqlite mysql postgresql].each do |family|
-        expect(refusal(long, family)).to eq("Blocked: the statement is #{long.bytesize} bytes long, and rails_query checks a statement of 1000000 bytes at most.")
+        expect(refusal(long, family)).to eq("Blocked: the statement is 1000001 bytes long, and rails_query checks a statement of 1000000 bytes at most.")
+        expect(runs?(of.call(described_class::MAX_BYTES), family)).to be(true), family.to_s
       end
-      expect(runs?("SELECT id FROM posts WHERE id IN (#{(1..142_000).to_a.join(",")})")).to be(true)
     end
 
     it "reads a run of opening brackets and a nest of VALUES lists in time that grows with their length" do
@@ -99,7 +100,7 @@ RSpec.describe RailsAiContext::SqlGate do
                                      budget: described_class::Budget.new(5), text_timeout: 600)
           started = Process.clock_gettime(cpu)
           gate.check(sql)
-          # Quadratic, either shape took minutes at this length.
+          # A reader whose time grows with the square of the length takes minutes here.
           expect(Process.clock_gettime(cpu) - started).to be < 20, "#{key}: #{sql[0, 30]}"
         end
       end
@@ -646,7 +647,7 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "still refuses a secret name inside a VALUES body" do
+    it "refuses a secret name inside a VALUES body" do
       expect(refusal("SELECT * FROM (VALUES (password_digest)) AS v(a, b)")).to include("secret column `password_digest`")
     end
   end
@@ -801,17 +802,18 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "reads a statement that holds no backslash once, and one that holds a backslash under both readings" do
+      # Each reading takes the comments out once for its checks, and the text to run is made once more.
       reads = 0
-      allow_any_instance_of(described_class).to receive(:text_refusal).and_wrap_original do |original, *args|
+      allow(described_class).to receive(:comment_free).and_wrap_original do |original, *args, **options|
         reads += 1
-        original.call(*args)
+        original.call(*args, **options)
       end
       counts = [ "SELECT id FROM posts WHERE title = 'x' OR title = 'y'", %q(SELECT id FROM posts WHERE title = 'a\\b') ].map do |sql|
         reads = 0
         expect(runs?(sql, :mysql)).to be(true), sql
         reads
       end
-      expect(counts).to eq([ 1, 2 ])
+      expect(counts).to eq([ 2, 3 ])
     end
 
     it "ends the refusal with a full stop before it names the reading" do
@@ -819,13 +821,13 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(refusal(%q(SELECT '\' , user FROM mysql.user -- '), :mysql)).to include("needs another name. That is how MySQL reads")
     end
 
-    it "keeps a refusal both readings give as it was" do
+    it "gives a refusal both readings give with no word of the session's mode" do
       expect(refusal("SELECT user FROM mysql.user", :mysql)).not_to include("NO_BACKSLASH_ESCAPES")
       expect(refusal(%q(SELECT '\' , x FROM performance_schema.threads -- '), :mysql)).to start_with("Blocked: `performance_schema` is not read.")
       expect(refusal(%q(SELECT '\' , passwd AS x FROM users -- '), :mysql)).to start_with("Blocked: query references secret column `passwd`")
     end
 
-    it "runs a statement with an escaped quote or an escaped backslash in a string, and reads the other families as before" do
+    it "runs a statement with an escaped quote or an escaped backslash in a string, and reads a backslash as an ordinary character on SQLite" do
       [ %q(SELECT 'it\'s' AS v), %q(SELECT 'a\\b' AS v), %q(SELECT id FROM posts WHERE title = 'it\'s' AND id > 1),
         "SELECT id FROM posts WHERE title LIKE '%@mysql.com'", %q(SELECT "say \"hi\"" AS v) ].each do |sql|
         expect(runs?(sql, :mysql)).to be(true), sql
@@ -902,7 +904,7 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(refusal("DESCRIBE 'api_key'", :postgresql)).to include("the plan could not be obtained")
       end
 
-      it "still refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
+      it "refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
         expect(refusal("SELECT 'x' || api_secret AS y FROM t", :postgresql)).to include("api_secret")
         expect(refusal('SELECT "api_key" FROM t', :postgresql)).to include("api_key")
         expect(refusal(%(SELECT 1 AS "a'b", upper(api_key), 'x' FROM users), :postgresql)).to include("api_key")
@@ -1010,7 +1012,7 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "reads a string prefix letter that follows a non-ASCII character as the end of a name on PostgreSQL" do
-      [ "SELECT id FROM posts WHERE title = E'x'", "SELECT id AS idée'x' FROM posts", "SELECT 1 AS 名B'1010'",
+      [ "SELECT id FROM posts WHERE title =\u00a0E'x'", "SELECT id AS idée'x' FROM posts", "SELECT 1 AS 名B'1010'",
         "SELECT 1 AS 名x'1F'", "SELECT 1 AS 名U&'x'" ].each do |sql|
         expect(check(sql, :postgresql).sql).to eq(sql), sql
       end
@@ -1408,7 +1410,7 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(plan_refusal(uneven)).to include("passes the secret column `salt` through")
       end
 
-      it "still refuses the secret column as a sort key, through a materialized CTE and through a set operation" do
+      it "refuses the secret column as a sort key, through a materialized CTE and through a set operation" do
         by_salt = { "Node Type" => "Sort", "Output" => %w[x.id x.email x.salt], "Sort Key" => [ "x.salt" ], "Plans" => [ append("x", "Parent Relationship" => "Outer") ] }
         expect(plan_refusal(by_salt)).to include("plan uses the secret column `salt`")
         cte = { "Node Type" => "CTE Scan", "CTE Name" => "c", "Alias" => "c", "Output" => %w[c.id c.email c.salt],

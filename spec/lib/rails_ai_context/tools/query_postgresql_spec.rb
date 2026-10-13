@@ -13,8 +13,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     described_class.reset_cache!
     stub_const("RacPgQueryRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
     RacPgQueryRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
-    conn.execute("DROP VIEW IF EXISTS rac_pg_renamed")
-    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts")
+    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts CASCADE")
     conn.execute("CREATE TABLE rac_pg_accounts (id int, email text, salt text, api_token text, shadow text GENERATED ALWAYS AS (salt) STORED)")
     conn.execute("INSERT INTO rac_pg_accounts VALUES (1, 'a@example.com', 'salt-value', 'token-value')")
     conn.execute("CREATE VIEW rac_pg_renamed AS SELECT id, salt AS harmless FROM rac_pg_accounts")
@@ -23,8 +22,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   after do
-    conn.execute("DROP VIEW IF EXISTS rac_pg_renamed")
-    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts")
+    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts CASCADE")
     RacPgQueryRecord.remove_connection
     RailsAiContext.configuration.query_timeout = 5
   end
@@ -353,7 +351,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       end
     end
 
-    it "still refuses its whole row, and an expression over the secret column a temporary view renames" do
+    it "refuses its whole row, and an expression over the secret column a temporary view renames" do
       refused([ "SELECT row_to_json(s) FROM rac_pg_scratch s", "SELECT s::text FROM pg_temp.rac_pg_scratch s" ],
               "Blocked: the query serialises a whole row of `rac_pg_scratch`")
       refused([ "SELECT upper(t) FROM rac_pg_scratched", "SELECT max(t) FROM rac_pg_scratched" ],
@@ -381,7 +379,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
               "Blocked: the view `rac_pg_stored_nested` is not queried: it reads the view `rac_pg_renamed`: its definition names the secret column `salt`.")
     end
 
-    it "runs when its definition names none, and a view the plan traces still runs" do
+    it "runs when its definition names none, as a view the plan traces does" do
       [ "SELECT * FROM rac_pg_stored_plain", "SELECT * FROM rac_pg_renamed" ].each do |sql|
         response = run(sql)
         expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
@@ -431,7 +429,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       refused([ "SELECT *, p::text AS row FROM rac_pg_parts p" ], "Blocked: the query serialises a whole row of")
     end
 
-    it "still refuses what would carry the secret column past the redaction" do
+    it "refuses what would carry the secret column past the redaction" do
       refused([ "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parts) SELECT * FROM c", "SELECT * FROM rac_pg_parts EXCEPT SELECT 0, '', ''",
                 "SELECT (1, 'p1@example.com', 'salt-valud') < (SELECT * FROM rac_pg_parts LIMIT 1) AS o",
                 "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parent) SELECT * FROM c" ],
@@ -770,7 +768,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   it "answers PostgreSQL's own error for a string prefix letter that follows a non-ASCII character" do
-    [ "SELECT id FROM rac_pg_accounts WHERE email = E'x'", "SELECT id AS idée'x' FROM rac_pg_accounts", "SELECT 1 AS 名B'1010'" ].each do |sql|
+    [ "SELECT id FROM rac_pg_accounts WHERE email =\u00a0E'x'", "SELECT id AS idée'x' FROM rac_pg_accounts", "SELECT 1 AS 名B'1010'" ].each do |sql|
       response = run(sql)
       expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("SQL error: PG::") ]), sql
     end
