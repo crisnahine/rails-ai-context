@@ -392,7 +392,8 @@ RSpec.describe RailsAiContext::SecretColumns do
         ActiveSupport::Notifications.unsubscribe(subscriber)
       end
 
-      expect(sent.size).to eq(6)
+      # Rails before 7.2 asks the SQLite version here when no earlier example has.
+      expect(sent.grep_v(/sqlite_version/).size).to eq(6)
       expect(runtime.relation_columns(conn)).to eq(conn.tables.sort.to_h { |table| [ table, conn.columns(table).map(&:name) ] })
     end
 
