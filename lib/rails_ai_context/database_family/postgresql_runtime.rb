@@ -131,13 +131,15 @@ module RailsAiContext
       VIEWS = "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind"
 
       # A materialized view stores its rows, so its result columns have no table column to be traced to. The
-      # views are read with it for what a materialized view built on one reads.
+      # views are read with it for what a materialized view built on one reads. Each is also under `schema.view`.
       def view_definitions(conn, schemas = [])
-        DatabaseFamily.by_view(conn.select_rows("SELECT c.relname, pg_get_viewdef(c.oid) #{VIEWS} IN ('v', 'm') AND #{in_schemas(conn, schemas)}"))
+        rows = conn.select_rows("SELECT n.nspname, c.relname, pg_get_viewdef(c.oid) #{VIEWS} IN ('v', 'm') AND #{in_schemas(conn, schemas)}")
+        DatabaseFamily.by_view(rows.flat_map { |schema, view, definition| [ [ view, definition ], [ "#{schema}.#{view}", definition ] ] })
       end
 
       def traced_views(conn, schemas = [])
-        conn.select_values("SELECT c.relname #{VIEWS} = 'v' AND #{in_schemas(conn, schemas)}")
+        conn.select_rows("SELECT n.nspname, c.relname #{VIEWS} = 'v' AND #{in_schemas(conn, schemas)}")
+          .flat_map { |schema, view| [ view, "#{schema}.#{view}" ] }
       end
 
       # A stored generated column is a plain column to the plan, so its expression is read here.

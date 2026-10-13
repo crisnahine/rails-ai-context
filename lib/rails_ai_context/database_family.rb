@@ -122,7 +122,7 @@ module RailsAiContext
       end
 
       # @return [Hash{String => String, nil}] view name => the definition the database stores, nil for one it
-      #   will not show
+      #   will not show. On PostgreSQL also under `schema.view`, as traced_views names it too.
       def view_definitions(connection, schemas = [])
         runtime.view_definitions(connection, schemas)
       end

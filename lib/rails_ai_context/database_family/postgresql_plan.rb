@@ -37,11 +37,6 @@ module RailsAiContext
         @nodes.each { |node| read_members(node) }
       end
 
-      # @return [Array<String>] every relation the plan reads, by its own name
-      def relation_names
-        @names.values.uniq
-      end
-
       # The relation's own name, with no schema, for an answer.
       def name(relation)
         @names.fetch(relation, relation)

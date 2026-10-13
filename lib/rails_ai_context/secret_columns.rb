@@ -170,22 +170,30 @@ module RailsAiContext
       learn(relations: relations, views: views, traced_views: traced_views, generated: generated, index_tables: index_tables)
     end
 
-    # Reads the schemas the statement names, and those the view definitions read so far name, into the rule.
-    # @raise [Unreadable] when view definitions still name new schemas after ROUNDS reads
+    # Reads what the statement reaches into the rule.
+    # @raise [Unreadable] as #reach does
     def cover(statement)
       return self unless @connection
 
+      reach(SqlGate.comment_free(statement, DatabaseFamily.of(@connection)))
+    end
+
+    # Reads the schemas given and the ones the text names, then the ones the definitions of the views it names
+    # name, and so on through the views those name, ROUNDS reads deep. A view no text names is not followed.
+    # @raise [Unreadable] when a view the text names leads deeper, or a schema's columns cannot be read
+    def reach(text, schemas = [])
+      return self unless @connection
+
       family = DatabaseFamily.of(@connection)
-      statement = SqlGate.comment_free(statement, family)
+      read_schemas(schemas)
       (ROUNDS + 1).times do |round|
-        names = [ statement, *@views.to_h.values.compact ].flat_map { |text| dotted_names(text) }.to_set - @asked
-        @asked.merge(names)
+        followed = views_reached(text)
+        names = [ text, *@views.to_h.values_at(*followed.keys).compact ].flat_map { |read| dotted_names(read) }.to_set - @asked
         found = family.schemas_named(@connection, names.to_a) - @read
+        raise too_deep(found, followed, family) if found.any? && round == ROUNDS
+
+        @asked.merge(names)
         return self if found.empty?
-        if round == ROUNDS
-          raise Unreadable, "The statement and the views of the databases it names lead to more databases than rails_query " \
-            "follows (#{ROUNDS} rounds), so the secret columns it could read cannot be told and it is not run."
-        end
 
         read_schemas(found)
       end
@@ -240,6 +248,22 @@ module RailsAiContext
       @refused_views.find { |view, _why| names?(down, view) }
     end
 
+    # Why the view at exactly this place is refused, or nil. PostgreSQL's plan names a relation as `schema.relation`,
+    # so a table is not taken for a view of its name in another schema. Views known by name alone (their
+    # definitions could not be read) are told by the bare name.
+    def placed_view_refusal(relation, name)
+      placed, bare = self.class.fold(relation), self.class.fold(name)
+      return @refused_views[placed] if @views&.key?(placed)
+
+      @refused_views[bare] if @views&.key?(bare) && @views[bare].nil?
+    end
+
+    # Whether the relation is a view whose rows the plan does not trace to their table columns.
+    def stored_view?(relation)
+      placed = self.class.fold(relation)
+      !@views.nil? && @views.key?(placed) && !@traced.include?(placed)
+    end
+
     # [table, why] for the first table the text names that is never read, or nil: the file's pages, a shadow
     # table, and a virtual table or its vocabulary when the virtual table holds a secret column.
     def unread_table_in(text)
@@ -276,6 +300,31 @@ module RailsAiContext
 
     def dotted_names(text)
       text.scan(DOTTED).map { |found| found.compact.first.gsub(/([`"])\1/, '\1') }
+    end
+
+    # view => the view the text names that leads to it, for each view the text names and each one their
+    # definitions name. A view the plan reads through is no start: its relations are in the plan.
+    def views_reached(text)
+      down = self.class.fold(text)
+      reached = @views.to_h.keys.select { |view| !@traced.include?(view) && names?(down, view) }.to_h { |view| [ view, view ] }
+      waiting = reached.keys
+      while (view = waiting.shift)
+        definition = self.class.fold(@views[view])
+        (@views.keys - reached.keys).each do |other|
+          next unless names?(definition, other)
+
+          reached[other] = reached[view]
+          waiting << other
+        end
+      end
+      reached
+    end
+
+    def too_deep(found, followed, family)
+      found = found.map { |schema| self.class.fold(schema) }
+      view = followed.find { |name, _start| (dotted_names(self.class.fold(@views[name])) & found).any? }&.last
+      Unreadable.new("The view `#{view}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows " \
+        "(#{ROUNDS} rounds), so the secret columns it could read cannot be told and no statement that names it runs.")
     end
 
     def learn(relations:, views: nil, traced_views: [], generated: {}, index_tables: {})

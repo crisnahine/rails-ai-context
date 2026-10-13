@@ -1589,6 +1589,16 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text("SELECT * FROM contacts")).to include("a@example.com")
     end
 
+    it "sends six reads of the schema before an ordinary statement, which a child process runs" do
+      conn
+      sent = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
+      expect(text("SELECT id, email FROM accounts WHERE id = 1")).to include("a@example.com")
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+
+      expect(sent.size).to eq(6)
+    end
+
     it "refuses a view whose definition holds a comment before its wildcard, and one named with a dollar or a quote" do
       conn.execute("CREATE VIEW lined (a, b, c, d, e, f) AS SELECT -- note\n * FROM accounts")
       conn.execute("CREATE VIEW blocked (a, b, c, d, e, f) AS SELECT /* note */ * FROM accounts")

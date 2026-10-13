@@ -257,6 +257,59 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
   end
 
+  describe "what a statement reaches on a server of several databases" do
+    let(:conn) { ActiveRecord::Base.connection }
+    let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }
+    # database => [its tables, its views]. far leads through d1, d2 and d3 to d4; near starts at d2.
+    let(:server) do
+      {
+        "own" => [ { "notes" => %w[id body] }, { "far" => "SELECT x FROM d1.v", "near" => "SELECT x FROM d2.v", "peek" => "SELECT body FROM twin.notes" } ],
+        "d1" => [ {}, { "v" => "SELECT x FROM d2.v" } ], "d2" => [ {}, { "v" => "SELECT x FROM d3.v" } ],
+        "d3" => [ {}, { "v" => "SELECT door_token AS x FROM d4.t" } ], "d4" => [ { "t" => %w[id door_token] }, {} ],
+        "twin" => [ { "notes" => %w[id body api_token] }, {} ]
+      }
+    end
+    let(:read) { [] }
+
+    before do
+      held = ->(schemas, part) { schemas.map { |schema| server.fetch(schema)[part] }.reduce({}) { |all, found| all.merge(found) { |_, a, b| a + b } } }
+      allow(runtime).to receive_messages(unqualified_schemas: %w[own], generated_columns: {}, index_tables: {})
+      allow(runtime).to receive(:schemas_named) { |_conn, names| names & (server.keys - %w[own]) }
+      allow(runtime).to receive(:relation_columns) { |_conn, schemas| read.concat(schemas) && held.call(schemas, 0) }
+      allow(runtime).to receive(:view_definitions) { |_conn, schemas| held.call(schemas, 1) }
+    end
+
+    def rule(sql)
+      RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: sql) }
+    end
+
+    it "reads no other database for a statement that names none and no view" do
+      rule("SELECT n.id FROM notes n")
+      expect(read).to eq(%w[own])
+      expect(rule("SELECT * FROM (SELECT * FROM notes) s").relation_secret?("notes")).to be(false)
+    end
+
+    it "reads the database a statement names, and holds a table of one name in both as one" do
+      expect(rule("SELECT 1 FROM notes WHERE EXISTS (SELECT 1 FROM twin.notes)").of_relation("notes")).to eq(%w[api_token])
+      expect(read).to eq(%w[own twin])
+    end
+
+    it "follows the view a statement names three databases deep, and judges it" do
+      expect(rule("SELECT * FROM near").refused_view_in("select * from near"))
+        .to eq([ "near", "it reads the view `v`: its definition names the secret column `door_token`" ])
+      expect(read).to eq(%w[own d2 d3 d4])
+    end
+
+    it "refuses a statement that names a view which leads a fourth database deep, by the view" do
+      expect { rule("SELECT * FROM far") }.to raise_error(
+        described_class::Unreadable,
+        "The view `far` leads through more databases than rails_query follows (3 rounds), so the secret columns it could read " \
+        "cannot be told and no statement that names it runs."
+      )
+      expect { rule("SELECT * FROM d1.v") }.to raise_error(described_class::Unreadable, /\AThe view `v` leads through more databases/)
+    end
+  end
+
   describe ".for" do
     let(:conn) { ActiveRecord::Base.connection }
     let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }

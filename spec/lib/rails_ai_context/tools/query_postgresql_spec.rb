@@ -174,6 +174,99 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  describe "views that lead through schemas outside the search path" do
+    let(:schemas) { %w[rac_pg_c1 rac_pg_c2 rac_pg_c3 rac_pg_c4] }
+
+    def drop
+      conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_pg_far, rac_pg_near")
+      conn.execute("DROP VIEW IF EXISTS rac_pg_plain_far")
+      schemas.each { |schema| conn.execute("DROP SCHEMA IF EXISTS #{schema} CASCADE") }
+    end
+
+    before do
+      drop
+      schemas.each { |schema| conn.execute("CREATE SCHEMA #{schema}") }
+      conn.execute("CREATE TABLE rac_pg_c4.t (id int, door_token text)")
+      conn.execute("INSERT INTO rac_pg_c4.t VALUES (1, 'token-value')")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_c3.m AS SELECT id, door_token AS x FROM rac_pg_c4.t")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_c2.m AS SELECT id, x FROM rac_pg_c3.m")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_c1.m AS SELECT id, x FROM rac_pg_c2.m")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_far AS SELECT id, x FROM rac_pg_c1.m")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_near AS SELECT id, x FROM rac_pg_c2.m")
+      conn.execute("CREATE VIEW rac_pg_c3.v AS SELECT id, door_token AS x FROM rac_pg_c4.t")
+      conn.execute("CREATE VIEW rac_pg_c2.v AS SELECT id, x FROM rac_pg_c3.v")
+      conn.execute("CREATE VIEW rac_pg_c1.v AS SELECT id, x FROM rac_pg_c2.v")
+      conn.execute("CREATE VIEW rac_pg_plain_far AS SELECT id, x FROM rac_pg_c1.v")
+    end
+
+    after { drop }
+
+    def sent
+      statements = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| statements << payload[:sql] }
+      yield
+      statements
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "runs a statement that names none of them, after the reads of its own schema alone" do
+      [ "SELECT 1 AS one", "SELECT a.id, a.email FROM rac_pg_accounts a WHERE a.id = 1" ].each do |sql|
+        response = nil
+        statements = sent { response = run(sql) }
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("| 1 ") ]), sql
+        expect(statements.grep(/rac_pg_c\d/)).to be_empty, sql
+      end
+      expect(sent { run("SELECT id, email FROM rac_pg_accounts WHERE id = 1") }.size).to eq(24)
+    end
+
+    it "refuses a statement that names a materialized view four schemas from the rows, by the view" do
+      refused([ "SELECT * FROM rac_pg_far", "SELECT x FROM rac_pg_far", "SELECT f.id FROM rac_pg_accounts a JOIN rac_pg_far f ON f.id = a.id" ],
+              "The view `rac_pg_far` leads through more schemas than rails_query follows (3 rounds), so the secret columns it could read " \
+              "cannot be told and no statement that names it runs.")
+    end
+
+    it "follows a materialized view three schemas from the rows, and refuses it for the secret column it stores" do
+      refused([ "SELECT * FROM rac_pg_near", "SELECT upper(x) FROM rac_pg_near" ],
+              "Blocked: the view `rac_pg_near` is not queried: it reads the view `m`: its definition names the secret column `door_token`.")
+    end
+
+    it "reads through plain views however deep, and filters the secret column the plan traces" do
+      response = run("SELECT * FROM rac_pg_plain_far")
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("[FILTERED]") ])
+      expect(response.content.first[:text]).not_to include("token-value")
+    end
+  end
+
+  describe "a table and a materialized view of one name in two schemas" do
+    def drop
+      conn.execute("DROP SCHEMA IF EXISTS rac_pg_audit CASCADE")
+      conn.execute("DROP TABLE IF EXISTS rac_pg_summary")
+    end
+
+    before do
+      drop
+      conn.execute("CREATE SCHEMA rac_pg_audit")
+      conn.execute("CREATE TABLE rac_pg_audit.ledger (id int, email text, door_token text)")
+      conn.execute("INSERT INTO rac_pg_audit.ledger VALUES (1, 'ledger@example.com', 'token-value')")
+      conn.execute("CREATE MATERIALIZED VIEW rac_pg_audit.rac_pg_summary AS SELECT id, door_token AS t FROM rac_pg_audit.ledger")
+      conn.execute("CREATE TABLE rac_pg_summary (id int, label text)")
+      conn.execute("INSERT INTO rac_pg_summary VALUES (1, 'public summary')")
+    end
+
+    after { drop }
+
+    it "runs a statement over the table, with the other schema named or not, and refuses the materialized view" do
+      [ "SELECT * FROM rac_pg_summary", "SELECT s.label, l.email FROM rac_pg_summary s JOIN rac_pg_audit.ledger l ON l.id = s.id",
+        "SELECT s.label FROM public.rac_pg_summary s WHERE EXISTS (SELECT 1 FROM rac_pg_audit.ledger)" ].each do |sql|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("public summary") ]), sql
+      end
+      refused([ "SELECT * FROM rac_pg_audit.rac_pg_summary", "SELECT s.label FROM rac_pg_summary s, rac_pg_audit.rac_pg_summary m" ],
+              "Blocked: the view `rac_pg_summary` is not queried: its definition names the secret column `door_token`.")
+    end
+  end
+
   describe "a materialized view" do
     before do
       conn.execute("DROP MATERIALIZED VIEW IF EXISTS rac_pg_stored_nested, rac_pg_stored_plain, rac_pg_stored CASCADE")

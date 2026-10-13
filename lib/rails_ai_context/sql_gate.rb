@@ -412,27 +412,36 @@ module RailsAiContext
       end
 
       # A definition is schema text, so SHOW CREATE VIEW still shows which tables a refused view reads.
-      view_refusal(literal_free) unless cleaned.match?(SHOW_CREATE_DEFINITION)
+      # With a plan the view is told there, by its schema and name: the text does not say which schema a name is in.
+      return nil if cleaned.match?(SHOW_CREATE_DEFINITION) || @family.plan_checks?
+
+      view, why = @secrets.refused_view_in(literal_free)
+      view_refusal(view, why) if view
     end
 
-    def view_refusal(text)
-      view, why = @secrets.refused_view_in(text)
-      return nil unless view
-
+    def view_refusal(view, why)
       "Blocked: the view `#{view}` is not queried: #{why}. A view can rename a column past the redaction " \
         "on #{@family.name}, so query the tables it reads."
     end
 
-    # The plan names every relation a statement reads, through any view and in any schema.
+    # The plan names every relation a statement reads, through any view and in any schema. A view that stores
+    # its rows holds what its definition read, so the rule follows that definition as it follows a statement.
     def unread_relation_refusal(plan)
-      unknown = plan.relations.reject { |_schema, relation| @secrets.knows?(relation) }
-      return nil if unknown.empty?
+      relations = plan.relations.map(&:last)
+      unknown = plan.relations.reject { |_schema, relation| @secrets.knows?(relation) }.map(&:first)
+      beside = ->(&reads) { @budget.spend { |left| @family.bounded(@connection, timeout: left, &reads) } }
+      beside.call { @secrets.read_schemas(unknown) } if unknown.any?
+      stored = relations.select { |relation| @secrets.stored_view?(relation) }
+      beside.call { @secrets.reach(stored.join(" ")) } if stored.any?
 
-      @budget.spend { |left| @family.bounded(@connection, timeout: left) { @secrets.read_schemas(unknown.map(&:first)) } }
-      _schema, relation = unknown.find { |_, name| !@secrets.knows?(name) }
-      return nil unless relation
+      if (relation = relations.find { |name| !@secrets.knows?(name) })
+        return "Blocked: `#{relation}` is not queried: its columns could not be read, so rails_query cannot tell which of them are secret."
+      end
 
-      "Blocked: `#{relation}` is not queried: its columns could not be read, so rails_query cannot tell which of them are secret."
+      relations.lazy.filter_map do |placed|
+        why = @secrets.placed_view_refusal(placed, plan.name(placed))
+        view_refusal(plan.name(placed), why) if why
+      end.first
     end
 
     # The family's own part of a list, matched against the text.
@@ -717,7 +726,7 @@ module RailsAiContext
       return nil unless top
 
       plan = DatabaseFamily::PostgresqlPlan.new(top)
-      refusal = unread_relation_refusal(plan) || plan.relation_names.lazy.filter_map { |relation| view_refusal(relation) }.first
+      refusal = unread_relation_refusal(plan)
       return refusal if refusal
 
       raw = plan.nodes.flat_map { |node| plan.expressions(node) }
