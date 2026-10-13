@@ -888,6 +888,25 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT email FROM mail_fts")).to match([ false, a_string_including("a@example.com") ])
     end
 
+    it "refuses a virtual table built on a relation that is not read, however its definition spells the module and its options" do
+      [ "CREATE VIEW ren AS SELECT id, api_token AS word FROM accounts",
+        "CREATE VIRTUAL TABLE raw_pages USING sqlite_dbpage",
+        "CREATE VIRTUAL TABLE short_fts USING fts5(word, conten='ren', content_rowid='id')",
+        "CREATE VIRTUAL TABLE shorter_fts USING fts5(word, c=ren, content_rowid=id)",
+        "CREATE VIRTUAL TABLE same_fts USING fts5(ren, content='ren', content_rowid='id')",
+        "CREATE VIRTUAL TABLE docs_copy USING fts5(c0, c1, conte=docs_content, content_rowid=id)",
+        "CREATE VIRTUAL TABLE docs_terms USING fts5vocab/* words */(docs, row)" ].each { |sql| conn.execute(sql) }
+
+      refused("SELECT data FROM raw_pages", "Blocked: `raw_pages` is not read: its definition names `sqlite_dbpage`, which is not read.")
+      %w[short_fts shorter_fts same_fts].each do |table|
+        refused("SELECT * FROM #{table}",
+                "Blocked: `#{table}` is not read: its definition names the view `ren`, which is not queried: its definition names the secret column `api_token`.")
+      end
+      refused("SELECT c1 FROM docs_copy", "Blocked: `docs_copy` is not read: its definition names `docs_content`, which is not read.")
+      refused("SELECT term FROM docs_terms",
+              "Blocked: `docs_terms` is not read: it lists the words of the full-text table `docs`, which holds the secret column `api_token`.")
+    end
+
     it "reads a full-text table with a column named like a refused view, and refuses one whose content option names that view" do
       [ "CREATE VIEW summary AS SELECT id, api_token AS word FROM accounts",
         "CREATE VIRTUAL TABLE notes_fts USING fts5(title, summary)", "INSERT INTO notes_fts VALUES ('hello', 'a short summary')",
