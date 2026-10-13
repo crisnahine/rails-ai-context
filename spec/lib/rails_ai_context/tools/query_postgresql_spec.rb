@@ -151,6 +151,14 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
               "Blocked: the query passes the secret column `door_token` through")
     end
 
+    it "refuses a materialized view over it whatever the view's name holds: two spaces in a row, one, a tab, a newline, capitals" do
+      names = [ "Rac  Far", "Rac Far", "Rac\tFar", "Rac\nFar", "RAC_pg_Far" ].map { |name| %("#{name}") }
+      names.each { |name| conn.execute("CREATE MATERIALIZED VIEW #{name} AS SELECT id, door_token AS d FROM rac_pg_audit.ledger") }
+      names.each { |name| refused([ "SELECT * FROM #{name}", "SELECT d FROM #{name}", "SELECT f.d FROM #{name} f" ], "Blocked: the view `") }
+    ensure
+      names.each { |name| conn.execute("DROP MATERIALIZED VIEW IF EXISTS #{name}") }
+    end
+
     it "filters its secret column in place, and runs a join that reads none" do
       [ "SELECT * FROM rac_pg_audit.ledger", "SELECT * FROM rac_pg_audit.renamed", "SELECT * FROM rac_pg_reach",
         "SELECT * FROM (SELECT * FROM rac_pg_audit.ledger OFFSET 0) s" ].each do |sql|

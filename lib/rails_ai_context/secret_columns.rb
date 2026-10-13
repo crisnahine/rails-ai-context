@@ -61,15 +61,16 @@ module RailsAiContext
     end
 
     # A name or a statement as the databases compare names: case folded. MySQL reads a dotted capital I
-    # as i, where Ruby's downcase keeps the dot as a combining mark.
+    # as i, where Ruby's downcase keeps the dot as a combining mark. Runs of spaces are squeezed in both,
+    # so a name is found in text whether or not the text was squeezed before it came here.
     def self.fold(text)
-      text.to_s.downcase.delete("\u0307")
+      text.to_s.downcase.delete("\u0307").squeeze(" ")
     end
 
-    # Matches the name as a whole identifier, whatever characters it holds and however it is quoted.
-    # The gate reads text with its runs of spaces squeezed, so the name's are squeezed too.
+    # Matches the name as a whole identifier in folded text, whatever characters it holds and however it is quoted.
     def self.identifier(name)
-      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``") ].uniq.map { |spelling| Regexp.escape(spelling.squeeze(" ")) }
+      name = fold(name)
+      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``") ].uniq.map { |spelling| Regexp.escape(spelling) }
       /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
     end
 

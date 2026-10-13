@@ -98,6 +98,16 @@ RSpec.describe RailsAiContext::Tools::Query do
           refused([ "SELECT * FROM rac_my_other.chain" ], "Blocked: the view `chain` is not queried: its definition names the secret column `far_token`")
         end
 
+        it "refuses a view over it whatever the view's name holds: two spaces in a row, one, a tab, a newline, a backtick, capitals" do
+          names = [ "rac my  far", "rac my far", "rac my\tfar", "rac my\nfar", "rac my`far", "Rac_My_FAR" ].map { |name| "`#{name.gsub("`", "``")}`" }
+          names.each { |name| conn.execute("CREATE VIEW #{name} AS SELECT id, session_token AS t FROM rac_my_other.acc") }
+          names.each do |name|
+            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], "Blocked: the view `")
+          end
+        ensure
+          names.each { |name| conn.execute("DROP VIEW IF EXISTS #{name}") }
+        end
+
         it "filters its secret columns in place, runs a join that reads none, and shows a refused view's definition" do
           listed = answer("SELECT * FROM rac_my_other.acc")
           expect([ listed.error?, listed.content.first[:text] ]).to match([ false, a_string_including("b@example.com", "[FILTERED]") ])

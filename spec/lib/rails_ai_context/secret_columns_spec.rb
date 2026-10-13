@@ -176,11 +176,12 @@ RSpec.describe RailsAiContext::SecretColumns do
       definition = "SELECT passwd AS p1 FROM users"
       {
         "v$" => [ "SELECT * FROM v$", %(SELECT * FROM "v$" WHERE p1 > ''), "SELECT * FROM `V$`" ],
-        "two  words" => [ %(SELECT * FROM "two words"), "SELECT * FROM [two words]" ],
+        "two  words" => [ %(SELECT * FROM "two words"), "SELECT * FROM [two words]", %(SELECT * FROM "two  words"), "SELECT * FROM `Two  Words`" ],
         'quo"ted' => [ %(SELECT * FROM "quo""ted") ],
         "back`tick" => [ "SELECT * FROM `back``tick`" ]
       }.each do |view, statements|
-        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view), sql }
+        # The name is answered as the rule folds it, with a run of spaces as one.
+        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view.squeeze(" ")), sql }
       end
       expect(refused({ "v$" => definition }, "SELECT * FROM v$x")).to be_nil
     end
