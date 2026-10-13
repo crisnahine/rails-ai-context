@@ -30,7 +30,7 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
   end
 
   describe ".load_from_yaml" do
-    it "reports a file that holds no mapping, and applies nothing" do
+    it "reports a file that holds no mapping" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, ".rails-ai-context.yml")
 

@@ -135,9 +135,9 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         it "reads the other database's columns in the same budget, and no system schema" do
           sent = []
-          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-          answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
-          ActiveSupport::Notifications.unsubscribe(subscriber)
+          ActiveSupport::Notifications.subscribed(->(*, payload) { sent << payload[:sql] }, "sql.active_record") do
+            answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
+          end
 
           expect(sent.grep(/SCHEMATA/).size).to eq(1)
           expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_other'\)/).size).to eq(3)
@@ -147,9 +147,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         it "reads a third database when the statement names the view that leads there" do
           sent = []
-          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-          answer("SELECT f FROM rac_my_other.chain")
-          ActiveSupport::Notifications.unsubscribe(subscriber)
+          ActiveSupport::Notifications.subscribed(->(*, payload) { sent << payload[:sql] }, "sql.active_record") { answer("SELECT f FROM rac_my_other.chain") }
 
           expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/).size).to eq(3)
         end

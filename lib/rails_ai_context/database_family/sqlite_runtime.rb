@@ -16,7 +16,7 @@ module RailsAiContext
 
       # What the child writes where a result's length would stand, the moment it meets a lock.
       MET_LOCK = [ (1 << 64) - 1 ].pack("Q>").freeze
-      # What it writes once the statement is prepared: the schema is read, so a lock met on the way there is behind it.
+      # What it writes once it holds its read lock: no lock can stop the statement from there on.
       PAST_LOCK = [ (1 << 64) - 2 ].pack("Q>").freeze
       WAITS_ON_LOCK = { MET_LOCK => true, PAST_LOCK => false }.freeze
 
@@ -33,13 +33,27 @@ module RailsAiContext
       def read_only(conn, sql, timeout)
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
         # A child opens the file itself and would answer without the rows of a transaction open here.
-        if !conn.transaction_open? && (path = fork_path(conn))
+        if !conn.transaction_open? && (path = fork_path(conn)) && !DatabaseFamily.bounding { held_here?(conn, sql) }
           result = in_child(conn, path, sql, deadline)
           return Rows.new(result.columns, result.rows, false) if result
         end
 
         result = DatabaseFamily.bounding { on_app_connection(conn, sql, deadline) }
         Rows.new(result.columns, result.rows, true)
+      end
+
+      # The temp catalog, the temp schema, and the pragma function that lists the tables of every schema.
+      CONNECTION_CATALOG = /(?<![\w$])(?:sqlite_temp_(?:master|schema)|temp["`'\]]?\s*\.|pragma_table_list(?![\w$]))/i
+
+      # Whether the statement names what the connection holds and a child would lack: a temp object, the temp
+      # schema or an attached database. A name inside a string counts, since a pragma function takes one there.
+      def held_here?(conn, sql)
+        # Neither read waits on another connection's lock, which the pragma function for the same list does.
+        names = conn.select_values("SELECT name FROM sqlite_temp_master WHERE type IN ('table', 'view')") +
+          conn.select_rows("PRAGMA database_list").filter_map { |_seq, name, _file| name unless OWN_SCHEMAS.include?(name) }
+        return false if names.empty?
+
+        sql.match?(CONNECTION_CATALOG) || sql.match?(/(?<![\w$])#{Regexp.union(names)}(?![\w$])/i)
       end
 
       # The watchdog's interrupt lands when the driver is back in Ruby between two rows, so it ends a
@@ -193,7 +207,8 @@ module RailsAiContext
       def index_tables(conn, schemas = [])
         tables = ->(kept) { across(schemas) { |schema, _| "SELECT name, sql FROM #{schema}.sqlite_master WHERE type = 'table' AND rootpage #{kept}" } }
         virtual = conn.select_rows(tables.call("= 0")).to_h
-        stored = if conn.database_version >= TYPED_TABLES then conn.select_values("SELECT name FROM pragma_table_list WHERE type = 'shadow'")
+        stored = if conn.database_version >= TYPED_TABLES
+          conn.select_values(across(schemas) { |_, name| "SELECT name FROM pragma_table_list WHERE type = 'shadow' AND schema = #{name} COLLATE NOCASE" })
         else conn.select_rows(tables.call("> 0")).map(&:first)
         end
         found = stored.each_with_object(PAGE_MODULES.to_h { |name| [ name, [ :pages, nil ] ] }) do |name, tables|
@@ -278,8 +293,11 @@ module RailsAiContext
         payload = begin
           db = SQLite3::Database.new(path, readonly: true, extensions: extensions)
           wait_on_lock(db, writer, timeout * 0.8)
-          stmt = db.prepare(sql)
+          # A read inside a transaction keeps its lock, so the statement itself never waits on one.
+          db.execute("BEGIN")
+          db.execute("SELECT 1 FROM sqlite_master LIMIT 1")
           writer.write(PAST_LOCK)
+          stmt = db.prepare(sql)
           [ :ok, stmt.columns, stmt.to_a ]
         rescue => e
           # Which step failed is the child's own fact; the message can hold text from the statement.
@@ -294,9 +312,8 @@ module RailsAiContext
         exit!(0)
       end
 
-      # Waits on a lock for the seconds given, under the deadline, so a database that stays locked is answered as
-      # locked before the parent stops waiting. The parent is told at the first wait: a child that started late
-      # is still waiting when the deadline passes.
+      # Gives up under the deadline, so the child answers a database that stays locked. The parent is told at
+      # the first wait, for a child that started late and is still waiting at the deadline.
       def wait_on_lock(db, writer, seconds)
         met = nil
         db.busy_handler do |count|

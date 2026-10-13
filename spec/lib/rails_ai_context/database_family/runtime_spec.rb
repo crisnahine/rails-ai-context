@@ -438,6 +438,16 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(generated["accounts"].keys).to eq(%w[shadow kept])
       expect(generated["accounts"]["shadow"]).to match(/\bpasswd\b/).and satisfy { |text| text.scan(/\bpasswd\b/).size == 1 }
     end
+
+    it "lists the shadow tables of the schemas it is given and of no other" do
+      @conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body)")
+      @conn.execute("ATTACH DATABASE '#{File.join(dir, "side.sqlite3")}' AS side")
+      @conn.execute("CREATE VIRTUAL TABLE side.docs_more USING fts5(body)")
+
+      expect(described_class::SQLITE.index_tables(@conn)).to include("docs_data" => [ :shadow, "docs" ])
+      expect(described_class::SQLITE.index_tables(@conn).keys).not_to include("docs_more_data")
+      expect(described_class::SQLITE.index_tables(@conn, %w[main SIDE])).to include("docs_more_data" => [ :shadow, "docs_more" ])
+    end
   end
 
   describe "a SQLite statement" do
@@ -483,7 +493,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
           expect { described_class::SQLITE.read_only(conn, sql, timeout: 5) }
             .to raise_error(ActiveRecord::StatementInvalid, /no such function: x/) { |e| expect(e).not_to be_a(described_class::TimedOut) }
         end
-        expect(sent).to eq([])
+        expect(sent).to eq([ "SELECT name FROM sqlite_temp_master WHERE type IN ('table', 'view')", "PRAGMA database_list" ])
       end
 
       it "raises the SQL error of a statement neither connection can prepare" do
