@@ -888,6 +888,22 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT email FROM mail_fts")).to match([ false, a_string_including("a@example.com") ])
     end
 
+    it "reads a full-text table with a column named like a refused view, and refuses one whose content option names that view" do
+      [ "CREATE VIEW summary AS SELECT id, api_token AS word FROM accounts",
+        "CREATE VIRTUAL TABLE notes_fts USING fts5(title, summary)", "INSERT INTO notes_fts VALUES ('hello', 'a short summary')",
+        "CREATE VIRTUAL TABLE notes_terms USING fts5vocab(notes_fts, row)",
+        %(CREATE VIRTUAL TABLE quoted_fts USING fts5(word, content = "summary", content_rowid='id')),
+        "CREATE VIRTUAL TABLE quoted_terms USING fts5vocab('quoted_fts', 'row')" ].each { |sql| conn.execute(sql) }
+
+      { "SELECT title FROM notes_fts" => "hello", "SELECT * FROM notes_fts WHERE notes_fts MATCH 'hello'" => "a short summary",
+        "SELECT term FROM notes_terms ORDER BY term" => "short" }.each do |sql, value|
+        expect(answer(sql)).to match([ false, a_string_including(value) ]), sql
+      end
+      refused("SELECT word FROM quoted_fts", "Blocked: `quoted_fts` is not read: its definition names the view `summary`, which is not queried: " \
+        "its definition names the secret column `api_token`.")
+      refused("SELECT term FROM quoted_terms", "Blocked: `quoted_terms` is not read: its definition names `quoted_fts`, which is not read.")
+    end
+
     it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
       allow(conn).to receive(:database_version).and_return(ActiveRecord::ConnectionAdapters::AbstractAdapter::Version.new("3.36.0"))
       expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")

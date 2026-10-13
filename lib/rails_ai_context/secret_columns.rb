@@ -438,14 +438,18 @@ module RailsAiContext
       end
     end
 
+    # The value of a full-text table's `content=` option, quoted or bare.
+    CONTENT_OPTION = /\bcontent\s*=\s*("(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s,)]+)/i
+
     # virtual table => why it is not read, for each one whose definition names a refused view or a table that
-    # is not read: its rows, or its words, are theirs.
+    # is not read: its rows, or its words, are theirs. A definition names a relation in its `content=` option
+    # and, for a vocabulary, as its table: any other word of it is a column or an option of its own.
     def built_on_unread(index_tables)
-      index_tables.each_with_object({}) do |(table, (_kind, _owner, definition)), built|
+      index_tables.each_with_object({}) do |(table, (kind, owner, definition)), built|
         table = self.class.fold(table)
         next if definition.nil? || @unread_tables.key?(table)
 
-        down = self.class.fold(definition)
+        down = self.class.fold(kind == :vocabulary ? owner : definition.scan(CONTENT_OPTION).join(" "))
         view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
         other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
         built[table] = "its definition names the view `#{view}`, which is not queried: #{why}" if view
