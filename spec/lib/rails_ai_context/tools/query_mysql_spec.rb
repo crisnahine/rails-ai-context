@@ -190,6 +190,28 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(text("SELECT EXISTS (SELECT * FROM rac_my_accounts) AS found, (SELECT count(*) FROM rac_my_accounts) AS n")).to include("| 1     | 1 |")
       end
 
+      it "refuses what either reading of a backslash refuses, whether or not the session's sql_mode holds NO_BACKSLASH_ESCAPES" do
+        default = conn.select_value("SELECT @@SESSION.sql_mode")
+        guess = "(1, 'a@example.com', 'pw-valud', 'x', 'y', 'z')"
+        [ default, "#{default},NO_BACKSLASH_ESCAPES" ].each do |mode|
+          conn.execute("SET SESSION sql_mode = #{conn.quote(mode)}")
+          { %q(SELECT '\' , user, host, plugin FROM mysql.user -- ') => "Blocked: `mysql` is not read.",
+            %q(SELECT '\' , db, user FROM mysql.db -- ') => "Blocked: `mysql` is not read.",
+            %q(SELECT '\' , thd_id, conn_id FROM sys.session -- ') => "Blocked: `sys` is not read.",
+            %q(SELECT '\' , thread_id FROM performance_schema.threads -- ') => "Blocked: `performance_schema` is not read.",
+            %(SELECT '\\' , #{guess} < (SELECT * FROM rac_my_accounts) AS o -- ') => "Blocked: a `*` inside a subquery" }.each do |sql, start|
+            response = answer(sql)
+            expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with(start) ]), "#{mode}: #{sql}"
+          end
+          expect(text("SELECT email FROM rac_my_accounts WHERE email NOT LIKE '%@mysql.com'")).to include("a@example.com"), mode
+        end
+        conn.execute("SET SESSION sql_mode = #{conn.quote(default)}")
+        expect(text(%q(SELECT 'it\'s' AS v, email FROM rac_my_accounts))).to include("it's", "a@example.com")
+        expect(text(%q(SELECT 'a\\\\b' AS v))).to include("a\\b")
+      ensure
+        conn.execute("SET SESSION sql_mode = #{conn.quote(default)}") if default
+      end
+
       it "filters both columns of a name a join returns twice, and has no derived table of duplicate names" do
         twice = text("SELECT * FROM rac_my_accounts a JOIN rac_my_accounts b ON 1 = 1")
         expect(twice).to include("a@example.com")

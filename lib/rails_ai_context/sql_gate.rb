@@ -230,6 +230,7 @@ module RailsAiContext
       @secrets = secrets
       @connection = connection
       @budget = budget
+      @backslash = family.backslash_escapes?
     end
 
     def check(sql)
@@ -243,6 +244,10 @@ module RailsAiContext
       end
 
       text = comment_free(sql)
+      if @family.backslash_escapes? && (refusal = without_backslash_escapes { text_refusal(text) })
+        return refuse("#{refusal} That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, " \
+          "and rails_query does not read the session's mode. Write a quote inside a string doubled, so that both readings agree.")
+      end
       planned = @family.plan_checks? && !text.match?(NO_PLAN)
       plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left) } if planned
       if planned && plan.nil?
@@ -255,13 +260,13 @@ module RailsAiContext
     end
 
     # The text with its comments out and every quoted span copied whole, as the family reads them.
-    def self.comment_free(sql, family)
+    def self.comment_free(sql, family, backslash: family.backslash_escapes?)
       scanner = Scanner.new(sql)
       out = +""
       executable = false
 
       until scanner.eos?
-        if (span = quoted(scanner, family)&.last || scanner.scan(UNQUOTED))
+        if (span = quoted(scanner, family, backslash: backslash)&.last || scanner.scan(UNQUOTED))
           out << span
         elsif family.executable_comments? && scanner.scan(/\/\*!\d*/)
           # Its content stays for the checks to read: `SELECT /*!50000 LOAD_FILE(...) */`.
@@ -281,11 +286,11 @@ module RailsAiContext
     end
 
     # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
-    # brackets: whether [name] quotes a name in this text.
-    def self.quoted(scanner, family, brackets: family.sqlite?)
+    # brackets: whether [name] quotes a name in this text. backslash: whether one escapes the next character of a string.
+    def self.quoted(scanner, family, brackets: family.sqlite?, backslash: family.backslash_escapes?)
       case scanner.peek(1)
-      when "'" then [ :string, scanner.scan(family.backslash_escapes? || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
-      when '"' then [ :quoted, scanner.scan(family.backslash_escapes? ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
+      when "'" then [ :string, scanner.scan(backslash || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
+      when '"' then [ :quoted, scanner.scan(backslash ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
       when "`" then [ :quoted, scanner.scan(PLAIN_SPAN["`"]) ]
       when "[" then brackets && (span = scanner.scan(BRACKETED)) ? [ :quoted, span ] : nil
       when "$"
@@ -303,6 +308,15 @@ module RailsAiContext
 
     def refuse(reason)
       Verdict.new(sql: nil, refusal: reason, plan: nil)
+    end
+
+    # MySQL reads a backslash in a string as an ordinary character under NO_BACKSLASH_ESCAPES. The block's
+    # checks read the text that way.
+    def without_backslash_escapes
+      @backslash = false
+      yield
+    ensure
+      @backslash = @family.backslash_escapes?
     end
 
     def text_refusal(sql)
@@ -527,7 +541,7 @@ module RailsAiContext
     end
 
     def comment_free(sql)
-      self.class.comment_free(sql, @family)
+      self.class.comment_free(sql, @family, backslash: @backslash)
     end
 
     # Every quoted and dollar-quoted span blanked to spaces of the same length, so a check reads structure
@@ -537,7 +551,7 @@ module RailsAiContext
       out = +""
 
       until scanner.eos?
-        kind, span = self.class.quoted(scanner, @family)
+        kind, span = self.class.quoted(scanner, @family, backslash: @backslash)
         out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : only.nil? || kind == only ? " " * span.length : span)
       end
 
@@ -553,7 +567,7 @@ module RailsAiContext
         next if scanner.skip(/\s+/) || scanner.skip(/[uU]&(?=["'])/)
 
         # A bracketed name is read on every family: an alias list is told by its shape, whatever quotes its names.
-        found << (self.class.quoted(scanner, @family, brackets: true) ||
+        found << (self.class.quoted(scanner, @family, brackets: true, backslash: @backslash) ||
           scanner.scan(BARE_WORD)&.then { |span| [ span.match?(NUMBER) ? :number : :word, span ] } || [ :punct, scanner.getch ])
       end
       found

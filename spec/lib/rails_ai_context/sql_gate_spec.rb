@@ -663,6 +663,39 @@ RSpec.describe RailsAiContext::SqlGate do
     end
   end
 
+  describe "a backslash before a quote on MySQL, which the session's sql_mode reads in one of two ways" do
+    let(:relations) { { "users" => %w[id email passwd], "posts" => %w[id title] } }
+    let(:mode) do
+      " That is how MySQL reads the statement when the session's sql_mode holds NO_BACKSLASH_ESCAPES, and rails_query does not read " \
+        "the session's mode. Write a quote inside a string doubled, so that both readings agree."
+    end
+
+    it "refuses a statement that either reading refuses, and says which reading it was" do
+      { %q(SELECT '\' , user, host, plugin FROM mysql.user -- ') => "Blocked: `mysql` is not read.",
+        %q(SELECT '\' , thd_id, conn_id FROM sys.session -- ') => "Blocked: `sys` is not read.",
+        %q(SELECT '\' , (1, 'a@example.test', 'M') < (SELECT * FROM users) AS o -- ') => "Blocked: a `*` inside a subquery",
+        %q(SELECT '\' , id FROM posts; SELECT 2 -- ') => "Blocked: multiple statements",
+        %q(SELECT '\' , id INTO @v FROM posts -- ') => "Blocked: SELECT INTO creates a table",
+        %q(SELECT "\" , id FROM posts; SELECT 2 -- ") => "Blocked: multiple statements" }.each do |sql, start|
+        expect(refusal(sql, :mysql)).to start_with(start).and(end_with(mode)), sql
+      end
+    end
+
+    it "keeps a refusal both readings give as it was" do
+      expect(refusal("SELECT user FROM mysql.user", :mysql)).not_to include("NO_BACKSLASH_ESCAPES")
+      expect(refusal(%q(SELECT '\' , x FROM performance_schema.threads -- '), :mysql)).to start_with("Blocked: `performance_schema` is not read.")
+      expect(refusal(%q(SELECT '\' , passwd AS x FROM users -- '), :mysql)).to start_with("Blocked: query references secret column `passwd`")
+    end
+
+    it "runs a statement with an escaped quote or an escaped backslash in a string, and reads the other families as before" do
+      [ %q(SELECT 'it\'s' AS v), %q(SELECT 'a\\b' AS v), %q(SELECT id FROM posts WHERE title = 'it\'s' AND id > 1),
+        "SELECT id FROM posts WHERE title LIKE '%@mysql.com'", %q(SELECT "say \"hi\"" AS v) ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
+      end
+      expect(refusal(%q(SELECT '\' , id FROM posts; SELECT 2 -- '), :sqlite)).to eq("Blocked: multiple statements (no semicolons)")
+    end
+  end
+
   describe "secret columns named in the text" do
     it "refuses a secret name however the statement uses it" do
       [
