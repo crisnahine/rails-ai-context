@@ -87,8 +87,9 @@ module RailsAiContext
           )
         end
 
-        # Before anything reads the statement: every scan of it takes time that grows with its length.
-        if (refusal = SqlGate.length_refusal(sql))
+        # Before a connection is leased or anything reads the statement: a call with none needs no database,
+        # and every scan of a statement takes time that grows with its length.
+        if (refusal = SqlGate.blank_refusal(sql) || SqlGate.length_refusal(sql))
           return error_response(refusal)
         end
 

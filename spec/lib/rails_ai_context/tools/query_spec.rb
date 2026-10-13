@@ -1066,6 +1066,17 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "a call with no statement" do
+    it "is refused before a connection is leased" do
+      expect(RailsAiContext::AppDatabases).not_to receive(:lease)
+
+      [ nil, "", "  \n" ].each do |blank|
+        response = described_class.call(sql: blank)
+        expect([ response.error?, response.content.first[:text] ]).to eq([ true, "SQL query is required." ]), blank.inspect
+      end
+    end
+  end
+
   describe "a statement over the length the checks read" do
     it "is refused before anything reads it" do
       expect(RailsAiContext::SecretColumns).not_to receive(:for)

@@ -755,6 +755,7 @@ On MySQL and MariaDB the text checks read a backslash in a string both ways, and
 
 - A name the app does not have is answered with the closest one and every name it has.
 - A database only another environment configures, a replica and one with `database_tasks` off included, is answered with the environments that do.
+- A top-level entry of `config/database.yml` that code connects to by name (`establish_connection(:reporting)`) is an environment to Rails, so `database` does not take its name: the answer lists the databases of the running environment.
 - One that only a committed dump names is answered as such.
 - On the static tier the whole tool is unavailable, with or without `database`.
 - A SQLite database whose file is not there is an error, with or without `database`. The message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.

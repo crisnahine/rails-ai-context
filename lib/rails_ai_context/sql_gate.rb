@@ -45,6 +45,11 @@ module RailsAiContext
     # The text checks ran past the time they have.
     class TextChecksTimedOut < RailsAiContext::Error; end
 
+    # @return [String, nil] the refusal of a call that holds no statement
+    def self.blank_refusal(sql)
+      "SQL query is required." if sql.to_s.strip.empty?
+    end
+
     # @return [String, nil] the refusal of a statement longer than the checks read
     def self.length_refusal(sql)
       return nil unless sql.to_s.bytesize > MAX_BYTES
@@ -259,8 +264,7 @@ module RailsAiContext
     end
 
     def check(sql)
-      return refuse("SQL query is required.") if sql.nil? || sql.strip.empty?
-      if (refusal = self.class.length_refusal(sql))
+      if (refusal = self.class.blank_refusal(sql) || self.class.length_refusal(sql))
         return refuse(refusal)
       end
 
