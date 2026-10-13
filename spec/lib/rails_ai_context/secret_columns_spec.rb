@@ -304,7 +304,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "refuses a statement that names a view which leads a fourth database deep, by the view" do
       expect { rule("SELECT * FROM far") }.to raise_error(
         described_class::Unreadable,
-        "The view `far` leads through more databases than rails_query follows (3 rounds), so the secret columns it could read " \
+        "The view `far` leads through more databases than rails_query follows, so the secret columns it could read " \
         "cannot be told and no statement that names it runs."
       )
       expect { rule("SELECT * FROM d1.v") }.to raise_error(described_class::Unreadable, /\AThe view `v` leads through more databases/)

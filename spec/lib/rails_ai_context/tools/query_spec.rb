@@ -820,9 +820,9 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     it "refuses a view over a shadow table and over the raw pages" do
-      refused("SELECT body FROM note_rows", "Blocked: the view `note_rows` is not queried: its definition reads `notes_content`, which is not read. " \
+      refused("SELECT body FROM note_rows", "Blocked: the view `note_rows` is not queried: its definition names `notes_content`, which is not read. " \
                                             "A view can rename a column past the redaction on SQLite, so query the tables it reads.")
-      expect(answer("SELECT * FROM pages").last).to start_with("Blocked: the view `pages` is not queried: its definition reads `sqlite_dbpage`")
+      expect(answer("SELECT * FROM pages").last).to start_with("Blocked: the view `pages` is not queried: its definition names `sqlite_dbpage`")
     end
 
     it "refuses the vocabulary of a virtual table that holds a secret column, and the virtual table whole" do
@@ -877,7 +877,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         refused(sql, "Blocked: `ren_fts` is not read: its definition names the view `ren`, which is not queried: its definition names the secret column `api_token`.")
       end
       refused("SELECT term FROM ren_terms", "Blocked: `ren_terms` is not read: its definition names `ren_fts`, which is not read.")
-      expect(answer("SELECT w FROM ren_over")).to match([ true, a_string_starting_with("Blocked: the view `ren_over` is not queried: its definition reads `ren_fts`, which is not read.") ])
+      expect(answer("SELECT w FROM ren_over")).to match([ true, a_string_starting_with("Blocked: the view `ren_over` is not queried: its definition names `ren_fts`, which is not read.") ])
       expect(answer("SELECT email FROM mail_fts")).to match([ false, a_string_including("a@example.com") ])
     end
 

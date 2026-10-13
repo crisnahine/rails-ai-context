@@ -345,8 +345,8 @@ module RailsAiContext
     def too_deep(found, followed, family)
       found = found.map { |schema| self.class.fold(schema) }
       view = followed.find { |name, _start| (dotted_names(self.class.fold(@views[name])) & found).any? }&.last
-      Unreadable.new("The view `#{spelled(view)}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows " \
-        "(#{ROUNDS} rounds), so the secret columns it could read cannot be told and no statement that names it runs.")
+      Unreadable.new("The view `#{spelled(view)}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows, " \
+        "so the secret columns it could read cannot be told and no statement that names it runs.")
     end
 
     # The name as the database spells it, for a sentence: the rule itself holds every name folded.
@@ -482,7 +482,7 @@ module RailsAiContext
       elsif (column = named_in(definition))
         "its definition names the secret column `#{column}`"
       elsif (table = @unread_tables.keys.find { |name| names?(definition, name) })
-        "its definition reads `#{spelled(table)}`, which is not read"
+        "its definition names `#{spelled(table)}`, which is not read"
       elsif definition.match?(WILDCARD) && (relation = @by_relation.keys.find { |name| names?(definition, name) })
         "its definition has a wildcard and names `#{spelled(relation)}`, which holds the secret column `#{@by_relation[relation].first}`"
       end

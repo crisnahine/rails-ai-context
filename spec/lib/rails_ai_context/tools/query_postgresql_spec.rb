@@ -262,7 +262,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
 
     it "refuses a statement that names a materialized view four schemas from the rows, by the view" do
       refused([ "SELECT * FROM rac_pg_far", "SELECT x FROM rac_pg_far", "SELECT f.id FROM rac_pg_accounts a JOIN rac_pg_far f ON f.id = a.id" ],
-              "The view `rac_pg_far` leads through more schemas than rails_query follows (3 rounds), so the secret columns it could read " \
+              "The view `rac_pg_far` leads through more schemas than rails_query follows, so the secret columns it could read " \
               "cannot be told and no statement that names it runs.")
     end
 

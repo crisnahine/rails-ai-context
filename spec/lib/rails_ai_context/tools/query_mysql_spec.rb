@@ -210,9 +210,9 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         it "refuses a statement that names a view four databases from the rows, by the view" do
           refused([ "SELECT * FROM rac_my_far", "SELECT x FROM rac_my_far", "SELECT f.id FROM rac_my_accounts a JOIN rac_my_far f ON f.id = a.id" ],
-                  "The view `rac_my_far` leads through more databases than rails_query follows (3 rounds), so the secret columns it could " \
+                  "The view `rac_my_far` leads through more databases than rails_query follows, so the secret columns it could " \
                   "read cannot be told and no statement that names it runs.")
-          refused([ "SELECT * FROM rac_my_c1.v" ], "The view `v` leads through more databases than rails_query follows (3 rounds)")
+          refused([ "SELECT * FROM rac_my_c1.v" ], "The view `v` leads through more databases than rails_query follows, so the")
         end
 
         it "follows a view three databases from the rows, and refuses it for the secret column it renames" do
