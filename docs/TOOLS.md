@@ -145,8 +145,10 @@ tables of every database the app's own schema dumps declare, as
 Cache and Solid Cable get one line, without their tables. A database whose
 dump was not read is named with "(tables not read)" and left out of the table
 count, and the summary says so: "5 tables in 2 databases, the warehouse
-database not read". It ends with the app's custom
-rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its arguments,
+database not read". A known limit: on `preset: standard` on the static tier
+the stack line reads the primary's adapter as `unknown`. It ends with the
+app's custom rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its
+arguments,
 description and file: the first 15 at `standard`, every one at `full`.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
 command and its USAGE line), the `lib/templates` files that replace a built-in
@@ -177,6 +179,13 @@ holding no tables, is named with the reason. A secondary's dump is read from
 its own path, else from the other format's file under its name
 (`db/queue_schema.rb` or `db/queue_structure.sql`), whatever `database_tasks`
 or `schema_format` says.
+
+A database only another environment configures carries a mark, as in
+`cache (production only)`, and a first database that is not named `primary`
+is listed under its own name. Both are the same under every `preset`. With the
+`multi_database` introspector off, as on `preset: standard`, `rails_get_schema`,
+`rails_onboard`, `rails_performance_check` and the generated files read them
+from the app's database list.
 
 Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
 with the column, so a lookup on it alone can use one; `[unique]` means a unique
@@ -471,7 +480,8 @@ database's name is read whatever `database_tasks` or `schema_dump` says. A
 database whose tables could not be read is listed under **Not checked** with
 the reason: its dump is not on disk or is over `max_schema_file_size`, or its
 `config/database.yml` entry turns `database_tasks` or `schema_dump` off and no
-dump is on disk. A database another environment configures carries its mark:
+dump is on disk, or "`schema_dump` in its database.yml entry names no file this
+check reads". A database another environment configures carries its mark:
 `**Not checked:** warehouse (production only, db/warehouse_schema.rb is not on disk)`.
 
 | Parameter | Type | Default | Description |
@@ -735,13 +745,13 @@ Safe read-only SQL with layered security: the SQL gate, a PostgreSQL plan check 
 
 It runs on PostgreSQL, MySQL (with MariaDB) and SQLite, each with its own read-only transaction and statement timeout. On any other adapter it answers with that adapter's name and runs nothing. A statement that runs past `query_timeout` is answered as a timeout and any other database error as an SQL error. Both are error responses: `isError` over MCP and a non-zero exit on the CLI. So is a database no connection reaches, which the answer names with what to do about it. So are a locked SQLite database and the refusal in production.
 
-On PostgreSQL, MySQL and MariaDB every statement a call sends has a time limit. The query has `query_timeout` to itself and the reads beside it share a second one, so the statements of a call take about twice `query_timeout` at most. On SQLite the query has `query_timeout`, and the reads beside it run on the app's own connection with no statement limit. The [security model](SECURITY.md#layer-2---database-level-read-only) says what bounds each statement and lists the stated limits.
+On PostgreSQL, MySQL and MariaDB every statement a call sends has a time limit. The query has `query_timeout` to itself and the reads beside it share a second one, so the statements of a call take about twice `query_timeout` at most. On SQLite the query has `query_timeout`, and the reads beside it run on the app's own connection with no statement limit. A SQLite statement that names something the app's connection alone holds, such as a temp table or an attached database, runs on that connection, and its answer says it ran without a time limit. The [security model](SECURITY.md#layer-2---database-level-read-only) says what bounds each statement and lists the stated limits.
 
 On MySQL, MariaDB and SQLite a statement that names a view whose definition names a secret column is refused. So is a `*` inside a subquery when the statement names a table that holds a secret column, and on SQLite `IN` before a table's name (`x IN t`). On PostgreSQL a materialized view whose definition names a secret column is refused. On SQLite a virtual table that holds a secret column, a shadow table and the page modules are refused, and only the pragma functions that describe the schema or the database file run.
 
 The secret column rule reads the columns of every schema and database a statement reaches: the ones its text names, on PostgreSQL the ones its plan names, and the ones the views it names lead to, three reads deep. So a secret column of a table in another one is refused by name too.
 
-On MySQL and MariaDB the text checks read a backslash in a string both ways, and a statement that either reading refuses is refused. On every family the text checks give up with a refusal when they have run longer than `query_timeout`.
+On MySQL and MariaDB the text checks read a backslash in a string both ways, and a statement that either reading refuses is refused. There a `[` outside a string or a quoted name, a user variable assignment (`:=`) and `LAST_INSERT_ID` with an argument are refused too. On every family the text checks give up with a refusal when they have run longer than `query_timeout`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -755,7 +765,7 @@ On MySQL and MariaDB the text checks read a backslash in a string both ways, and
 
 - A name the app does not have is answered with the closest one and every name it has.
 - A database only another environment configures, a replica and one with `database_tasks` off included, is answered with the environments that do.
-- A top-level entry of `config/database.yml` that code connects to by name (`establish_connection(:reporting)`) is an environment to Rails, so `database` does not take its name: the answer lists the databases of the running environment.
+- A top-level entry of `config/database.yml` that code connects to by name (`establish_connection(:reporting)`) is an environment to Rails, so `database` does not take its name: the answer lists every database the app has, as in "No database named reporting. This app has: primary, cache, queue".
 - One that only a committed dump names is answered as such.
 - On the static tier the whole tool is unavailable, with or without `database`.
 - A SQLite database whose file is not there is an error, with or without `database`. The message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.
@@ -818,7 +828,7 @@ Each diff passes through the redaction every tool's source does, read as the fil
 
 Live database pool stats, table sizes, pending migrations, cache stats, queue depth.
 
-Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On MySQL, MariaDB and SQLite the full detail says "_Index usage is not available for the MySQL database family._", or SQLite. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter.
+Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On MySQL, MariaDB and SQLite the full detail says "_Index usage is not available for the MySQL database family._", or SQLite. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter. A read that failed or took longer than `query_timeout` is said in one line: "_Table sizes were not read: the read failed or took longer than query_timeout._", and at `detail: "full"` "_Index usage was not read: the read failed or took longer than query_timeout._"
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there. Solid Cache's stats are read from its database, so when that is a SQLite file that is not there, the cache section says the database does not exist yet and creates nothing.
 

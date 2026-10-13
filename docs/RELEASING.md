@@ -32,7 +32,9 @@ pushed.
    commit anyway.
 4. **Prose that names the last version goes stale where no check can see it.**
    `docs/COMPATIBILITY.md` names the release its proof sources come from. Grep
-   the tree for the previous version before committing.
+   the tree for the previous version before committing. The repository's About
+   text on GitHub names the tool count, and no check reads it:
+   `gh repo edit --description` changes it.
 5. **The copy-paste prompts name a version floor.** `docs/PROMPTS.md` (and the
    README's copy of the recommended prompt) tells the AI tool to install
    `>= 5.35.0`, the first release with the install flags. If the release that

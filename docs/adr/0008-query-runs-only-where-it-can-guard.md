@@ -2,7 +2,7 @@
 
 Status: accepted
 
-`rails_query` promises two guards the database itself enforces: a read-only transaction and a statement timeout. Each database server spells both differently, and some cannot give one at all, so the tool runs a statement only where it knows the spelling. A **database family** is that knowledge: one per kind of database, read from the adapter's name in the database's configuration before any connection opens, and the only place a database's read-only and timeout rules live.
+`rails_query` promises two guards the database itself enforces: a read-only transaction and a statement timeout. Each database server spells both differently, and some cannot give one at all, so the tool runs a statement only where it knows the spelling. A **database family** is that knowledge: one per kind of database, told by the adapter's name, and the only place a database's read-only and timeout rules live. `rails_query` reads the name from the database's configuration, before any connection opens.
 
 ## Decision
 
@@ -12,7 +12,7 @@ Status: accepted
   - PostgreSQL: `SET LOCAL statement_timeout` inside the read-only transaction, at one millisecond or more, since zero turns the timeout off.
   - MySQL: the session's `max_execution_time`, read first, set for the statement and restored after. The `MAX_EXECUTION_TIME` hint binds only the outermost SELECT and leaves a statement that starts with WITH or EXPLAIN with no bound, so it is not used.
   - MariaDB: the session's `max_statement_time`, read first, set for the statement and restored after. MariaDB ignores the MySQL hint and has no `max_execution_time`.
-  - SQLite: a forked child with a deadline, since sqlite3-ruby holds the interpreter lock while a statement steps and nothing in the process can end it. A statement the child cannot prepare runs on the app's own connection, where a watchdog's interrupt ends one that returns rows slowly.
+  - SQLite: a forked child with a deadline, since sqlite3-ruby holds the interpreter lock while a statement steps and nothing in the process can end it. A statement runs on the app's own connection in five cases: an in-memory database, a platform without `fork`, a statement the child cannot prepare, a transaction open on that connection, and a statement that names something that connection alone holds (a temp table or view, the temp schema, an attached database). There a watchdog's interrupt ends a statement that returns rows slowly.
 - What bounds each kind of statement a call sends:
   - The query and `explain: true` have `query_timeout` to themselves: `statement_timeout` on PostgreSQL, the session's statement limit with `lock_wait_timeout` on MySQL and MariaDB, the child's deadline on SQLite.
   - The reads beside the query (the schema, the PostgreSQL plan with its `pg_proc` lookup, the column trace) run in a block the family bounds the same way. They share a second `query_timeout`, and each is charged the time it ran. On SQLite they run on the app's own connection with no statement limit, and a wait on another writer ends at its busy timeout.
@@ -24,7 +24,7 @@ Status: accepted
   - MySQL's statement limit holds `SELECT` only, so the gate refuses `SHOW` with a `WHERE` clause on every family.
 - A timeout is recognised by `ActiveRecord::QueryAborted` (QueryCanceled, StatementTimeout) or by the database's native code. MariaDB's 1969 has no Rails class in any version. Message text is never read, so a missing column named "timeout" is reported as an SQL error.
 - The statement checks before execution stay on every family. MySQL's read-only transaction lets `FOR SHARE`, `LOCK IN SHARE MODE`, `INTO @var` and `INTO OUTFILE` through, so it cannot be the only guard.
-- Only PostgreSQL traces a result column to its table column, through the statement's plan, so there a statement runs only with a plan. MySQL, MariaDB and SQLite have no such trace. There a view is checked by the definition the database stores and refused when it names a secret column, and a `*` inside a subquery is refused when the statement names a table that holds one.
+- Only PostgreSQL traces a result column to its table column, through the statement's plan, so there a statement runs only with a plan. MySQL, MariaDB and SQLite have no such trace. There a view is checked by the definition the database stores and refused when it names a secret column, and a `*` inside a subquery is refused when the statement names a table that holds one. A PostgreSQL materialized view stores its rows, so the plan traces none of its columns either, and it is held to the same view rule.
 - A guarded read leaves an open transaction as it found it: a savepoint on PostgreSQL, and a refusal on MySQL and MariaDB, which cannot make an open transaction read-only.
 
 ## Consequences
