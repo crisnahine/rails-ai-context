@@ -840,6 +840,18 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  it "runs a statement with a block comment inside a block comment, and nothing the comment holds" do
+    { "SELECT 41 /* a /* b */ c */ AS n" => "41", "SELECT email /* /* */ , salt AS s */ FROM rac_pg_accounts" => "a@example.com",
+      "SELECT 41 AS n /* /* */ */ -- */ , (SELECT salt FROM rac_pg_accounts)" => "41" }.each do |sql, shown|
+      [ {}, { explain: true } ].each do |options|
+        response = RailsAiContext::RunCache.around { described_class.call(sql: sql, **options) }
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text]).not_to include("salt-value"), sql
+        expect(response.content.first[:text]).to include(shown), sql if options.empty?
+      end
+    end
+  end
+
   it "reads a sequence like a table that holds no secret column" do
     conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
     conn.execute("CREATE SEQUENCE rac_pg_seq START 41")

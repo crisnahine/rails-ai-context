@@ -56,6 +56,11 @@ module RailsAiContext
         postgresql?
       end
 
+      # A block comment inside a block comment needs a closer of its own.
+      def nested_comments?
+        postgresql?
+      end
+
       # `/*! ... */` holds text the database runs.
       def executable_comments?
         mysql?

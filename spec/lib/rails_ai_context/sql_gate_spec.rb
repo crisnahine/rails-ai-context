@@ -1005,6 +1005,19 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(text("SELECT 1 /*!50000 , 2 */", :mysql)).to eq("SELECT 1   , 2")
     end
 
+    it "reads a block comment inside a block comment as PostgreSQL nests them, and ends one at the first closer on the other families" do
+      nested = "SELECT 1 /* a /* b */ , 2 */ AS n"
+      expect(text(nested, :postgresql)).to eq("SELECT 1   AS n")
+      expect(text("SELECT /* /* /* x */ */ */ 1 /**/ AS /*/ y */ n", :postgresql)).to eq("SELECT   1   AS   n")
+      %i[sqlite mysql].each { |family| expect(text(nested, family)).to eq("SELECT 1   , 2 */ AS n"), family.to_s }
+    end
+
+    it "reads a block comment that never closes to the end of the text, nested or plain" do
+      expect(text("SELECT 1 /* a /* b */ AS n", :postgresql)).to eq("SELECT 1")
+      expect(text("SELECT 1 /* a /* b AS n", :postgresql)).to eq("SELECT 1")
+      expect(text("SELECT 1 /* a AS n", :sqlite)).to eq("SELECT 1")
+    end
+
     it "reads a hash comment and a dash-dash needing a space on MySQL alone" do
       expect(text("SELECT 7 AS n # why")).to eq("SELECT 7 AS n # why")
       expect(text("SELECT 7 AS n # why", :mysql)).to eq("SELECT 7 AS n")

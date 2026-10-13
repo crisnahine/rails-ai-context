@@ -321,9 +321,16 @@ module RailsAiContext
       end
     end
 
-    # The comment that opens where the scanner stands, as the family reads it, or nil.
+    # Skips the comment that opens where the scanner stands, as the family reads it. One that never closes runs to the end.
+    # @return [Boolean] whether one opened there
     def self.comment(scanner, family)
-      scanner.scan(/\/\*.*?(?:\*\/|\z)/m) || scanner.scan(family.line_comment)
+      return !scanner.skip(family.line_comment).nil? unless scanner.skip(/\/\*/)
+
+      depth = 1
+      marks = family.nested_comments? ? /\/\*|\*\// : /\*\//
+      depth += scanner.matched == "/*" ? 1 : -1 while depth.positive? && scanner.skip_until(marks)
+      scanner.terminate if depth.positive?
+      true
     end
 
     private
