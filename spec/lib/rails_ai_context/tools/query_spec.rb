@@ -1883,6 +1883,22 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
     end
 
+    it "reads a quoted generated column's name with its own quote character alone un-doubled" do
+      # Each pair: a generated column, and a column whose name is the first one's with every kind of quote un-doubled.
+      conn.execute(%q{CREATE TABLE quotes (id INTEGER, passwd TEXT, "g''" TEXT GENERATED ALWAYS AS (passwd) STORED, [g''''] TEXT DEFAULT 'as is', } +
+        %q{`h""` TEXT AS (passwd) STORED, [h""""] TEXT DEFAULT 'as is', [k''] TEXT AS (passwd) STORED, "k''''" TEXT DEFAULT 'as is', } +
+        %q{'m""' TEXT AS (passwd) STORED, [m""""] TEXT DEFAULT 'as is')})
+      conn.execute("INSERT INTO quotes (id, passwd) VALUES (1, 'pw-value')")
+
+      [ %q("g''"), %q(`h""`), %q([k'']), %q("m""""") ].each do |column|
+        named = answer("SELECT #{column} AS x FROM quotes")
+        expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("is a generated column that reads `passwd`") ]), column
+      end
+      everything = text("SELECT * FROM quotes")
+      expect(everything).to include("as is").and(satisfy { |t| !t.include?("pw-value") })
+      expect(everything.scan("[FILTERED]").size).to eq(5)
+    end
+
     it "reads a generated column's own expression past a quoted name, a comma or a parenthesis in a name, and a default with a comma" do
       conn.execute(%{CREATE TABLE odd (id INTEGER, passwd TEXT, label TEXT DEFAULT 'a, b', "two words" TEXT AS (upper(label)) VIRTUAL, } +
         %{"a,b" TEXT AS (passwd) VIRTUAL, "c(d" TEXT AS (label || '!') VIRTUAL, "e""f" TEXT AS (passwd) VIRTUAL, [g h] TEXT AS (label) VIRTUAL, } +

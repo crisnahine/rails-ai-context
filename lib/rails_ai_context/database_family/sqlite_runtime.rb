@@ -170,10 +170,11 @@ module RailsAiContext
           depth += 1 if read == "("
         end
         parts.each_with_object({}) do |part, found|
-          *quoted, bare, rest = part.strip.match(COLUMN_NAME)&.captures
+          double, tick, bracket, single, bare, rest = part.strip.match(COLUMN_NAME)&.captures
           next if rest.nil? || bare&.match?(TABLE_CONSTRAINT)
 
-          name = (bare || quoted.compact.first.gsub(/(["`'])\1/, '\1')).downcase(:ascii)
+          # A quote is doubled only inside a name its own kind encloses, and a bracketed name doubles nothing.
+          name = (bare || bracket || double&.gsub('""', '"') || tick&.gsub("``", "`") || single.gsub("''", "'")).downcase(:ascii)
           found[name] = found.key?(name) ? nil : rest.partition(/\bAS\b/i).last.presence
         end
       end
