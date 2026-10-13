@@ -179,7 +179,8 @@ RSpec.describe RailsAiContext::SecretColumns do
         "v$" => [ "SELECT * FROM v$", %(SELECT * FROM "v$" WHERE p1 > ''), "SELECT * FROM `V$`" ],
         "two  words" => [ %(SELECT * FROM "two words"), "SELECT * FROM [two words]", %(SELECT * FROM "two  words"), "SELECT * FROM `Two  Words`" ],
         'quo"ted' => [ %(SELECT * FROM "quo""ted") ],
-        "back`tick" => [ "SELECT * FROM `back``tick`" ]
+        "back`tick" => [ "SELECT * FROM `back``tick`" ],
+        "it's" => [ %(SELECT * FROM "it's"), "SELECT * FROM 'it''s'" ]
       }.each do |view, statements|
         statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view), sql }
       end
@@ -264,7 +265,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     # database => [its tables, its views]. far leads through d1, d2 and d3 to d4; near starts at d2.
     let(:server) do
       {
-        "own" => [ { "notes" => %w[id body] }, { "far" => "SELECT x FROM d1.v", "near" => "SELECT x FROM d2.v", "peek" => "SELECT body FROM twin.notes" } ],
+        "own" => [ { "notes" => %w[id body] }, { "Far" => "SELECT x FROM d1.v", "near" => "SELECT x FROM d2.v", "peek" => "SELECT body FROM twin.notes" } ],
         "d1" => [ {}, { "v" => "SELECT x FROM d2.v" } ], "d2" => [ {}, { "v" => "SELECT x FROM d3.v" } ],
         "d3" => [ {}, { "v" => "SELECT door_token AS x FROM d4.t" } ], "d4" => [ { "t" => %w[id door_token] }, {} ],
         "twin" => [ { "notes" => %w[id body api_token] }, {} ]
@@ -304,7 +305,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "refuses a statement that names a view which leads a fourth database deep, by the view" do
       expect { rule("SELECT * FROM far") }.to raise_error(
         described_class::Unreadable,
-        "The view `far` leads through more databases than rails_query follows, so the secret columns it could read " \
+        "The view `Far` leads through more databases than rails_query follows, so the secret columns it could read " \
         "cannot be told and no statement that names it runs."
       )
       expect { rule("SELECT * FROM d1.v") }.to raise_error(described_class::Unreadable, /\AThe view `v` leads through more databases/)
@@ -372,12 +373,20 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "names a refused view, a table that is not read and a relation in a sentence as the database spells them" do
       secrets = described_class.new(relations: { "Hq_Users" => %w[id password_digest] },
-                                    views: { "Hq  Odd View" => "SELECT id, password_digest AS s FROM Hq_Users", "Over It" => "SELECT s FROM `Hq  Odd View`" },
-                                    index_tables: { "Raw_Pages" => [ :pages, nil ] })
+                                    views: { "Hq  Odd View" => "SELECT id, password_digest AS s FROM Hq_Users", "Over It" => "SELECT s FROM `Hq  Odd View`",
+                                             "All_Of" => "SELECT * FROM Hq_Users", "Page_Peek" => "SELECT data FROM Raw_Pages" },
+                                    index_tables: { "Raw_Pages" => [ :pages, nil ],
+                                                    "View_Words" => [ :virtual, "View_Words", %(CREATE VIRTUAL TABLE View_Words USING fts5(w, content="Hq  Odd View")) ],
+                                                    "Page_Words" => [ :virtual, "Page_Words", "CREATE VIRTUAL TABLE Page_Words USING fts5(w, content=Raw_Pages)" ] })
 
       expect(secrets.refused_view_in("select s from `hq  odd view`")).to eq([ "Hq  Odd View", "its definition names the secret column `password_digest`" ])
       expect(secrets.refused_view_in("SELECT s FROM `over it`").last).to start_with("it reads the view `Hq  Odd View`: ")
+      expect(secrets.refused_view_in("select * from all_of").last)
+        .to eq("its definition has a wildcard and names `Hq_Users`, which holds the secret column `password_digest`")
+      expect(secrets.refused_view_in("select data from page_peek").last).to eq("its definition names `Raw_Pages`, which is not read")
       expect(secrets.unread_table_in("select data from raw_pages").first).to eq("Raw_Pages")
+      expect(secrets.unread_table_in("select w from view_words").last).to start_with("its definition names the view `Hq  Odd View`, which is not queried: ")
+      expect(secrets.unread_table_in("select w from page_words").last).to eq("its definition names `Raw_Pages`, which is not read")
       expect(secrets.relation_named_in("select count(*) from hq_users")).to eq("Hq_Users")
     end
 
@@ -404,7 +413,7 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
-    it "asks for every name a statement writes before a dot, in any quotes" do
+    it "asks for every name a statement writes before a dot: bare, in backticks or in double quotes" do
       asked = []
       allow(runtime).to receive(:schemas_named) { |_conn, names| asked.concat(names) && [] }
       statement = %(SELECT a.id, `b``x`.id, "c""y".id, [d e].id, ünï$1.id, f  .id FROM t WHERE note = 'g.h' AND 1.5 > 0 AND `open)

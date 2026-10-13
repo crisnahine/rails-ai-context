@@ -921,6 +921,15 @@ RSpec.describe RailsAiContext::Tools::Query do
       refused("SELECT term FROM quoted_terms", "Blocked: `quoted_terms` is not read: its definition names `quoted_fts`, which is not read.")
     end
 
+    it "reads a full-text table whose quoted column holds a space, and a vocabulary whose type is spelled like a refused view" do
+      [ "CREATE VIEW summary AS SELECT id, api_token AS word FROM accounts", "CREATE VIEW col AS SELECT id, api_token AS word FROM accounts",
+        %(CREATE VIRTUAL TABLE spaced_fts USING fts5("my summary", body)), "INSERT INTO spaced_fts VALUES ('first', 'a plain body')",
+        "CREATE VIRTUAL TABLE spaced_terms USING fts5vocab(spaced_fts, col)" ].each { |sql| conn.execute(sql) }
+
+      expect(answer("SELECT body FROM spaced_fts")).to match([ false, a_string_including("a plain body") ])
+      expect(answer("SELECT term FROM spaced_terms ORDER BY term")).to match([ false, a_string_including("plain") ])
+    end
+
     it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
       stub_const("RailsAiContext::DatabaseFamily::SqliteRuntime::TYPED_TABLES", "99")
       expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
@@ -1056,17 +1065,29 @@ RSpec.describe RailsAiContext::Tools::Query do
       { "SELECT name FROM sqlite_temp_master ORDER BY name" => "| scratch", "SELECT name FROM SQLITE_TEMP_SCHEMA ORDER BY name" => "| scratch",
         "SELECT name FROM pragma_table_info('scratch')" => "| pin_token", "SELECT page_count FROM pragma_page_count('other')" => "| 2",
         "SELECT name FROM pragma_table_info('vault', 'other')" => "| door_token",
+        "SELECT name FROM pragma_table_info('SCRATCH')" => "| pin_token", "SELECT page_count FROM pragma_page_count('OTHER')" => "| 2",
         "SELECT name FROM pragma_table_list WHERE schema = 'temp' AND type = 'table' ORDER BY name" => "| scratch",
 %(SELECT count(*) AS n FROM "temp".sqlite_master) => "| 2" }.each do |sql, value|
         expect(answer(sql)).to match([ false, a_string_including(value, "without a time limit") ]), sql
       end
     end
 
+    it "reads on the app's connection what a pragma function is asked of a table or an index only that connection holds" do
+      conn.execute("CREATE INDEX other.vault_by_email ON vault (email)")
+      conn.execute("CREATE TEMP TRIGGER scratch_guard BEFORE DELETE ON scratch BEGIN SELECT 1; END")
+
+      expect(answer("SELECT name FROM pragma_table_info('vault') ORDER BY cid")).to match([ false, a_string_including("door_token") ])
+      expect(answer("SELECT name FROM pragma_index_info('vault_by_email')")).to match([ false, a_string_including("email") ])
+      expect(answer("SELECT name FROM sqlite_temp_master WHERE type = 'trigger'")).to match([ false, a_string_including("scratch_guard") ])
+    end
+
     it "reads the temp table where a table of the main database has its name" do
       conn.execute("CREATE TEMP TABLE notes (id INTEGER, body TEXT)")
       conn.execute("INSERT INTO temp.notes VALUES (1, 'scribbled')")
 
-      expect(answer("SELECT body FROM notes")).to match([ false, a_string_including("scribbled", "without a time limit") ])
+      [ "SELECT body FROM notes", "SELECT body FROM NOTES" ].each do |sql|
+        expect(answer(sql)).to match([ false, a_string_including("scribbled", "without a time limit") ]), sql
+      end
     end
 
     it "keeps the query process and its time limit for a statement that names none of them",

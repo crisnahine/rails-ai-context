@@ -70,7 +70,7 @@ module RailsAiContext
     # Matches the name as a whole identifier in folded text, whatever characters it holds and however it is quoted.
     def self.identifier(name)
       name = fold(name)
-      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``") ].uniq.map { |spelling| Regexp.escape(spelling) }
+      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``"), name.gsub("'", "''") ].uniq.map { |spelling| Regexp.escape(spelling) }
       /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
     end
 
@@ -461,16 +461,22 @@ module RailsAiContext
       end
     end
 
+    # The name an argument of a virtual table's module opens with: one quoted name whole, or its first word.
+    LEADING_NAME = /\A\s*(?:"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s"'`\[]+)/
+
     # What a virtual table's definition can name a relation with: its module, and every argument but the columns a
     # full-text table declares (a column named like a view is no view). An argument with `=` is an option, kept whole.
     def relation_words(table, definition)
       mod, arguments = definition.match(/\bUSING\s+([^\s(]+)\s*(?:\((.*)\))?\s*\z/mi)&.captures
       return definition unless mod
 
-      columns = mod.delete(%q("'`[])).match?(/\Afts[345]\z/i) ? @columns[table] : []
+      mod_name = mod.delete(%q("'`[]))
+      columns = mod_name.match?(/\Afts[345]\z/i) ? @columns[table] : []
       named = arguments.to_s.scan(MODULE_ARGUMENT).reject do |argument|
-        !argument.include?("=") && columns.include?(self.class.fold(argument.delete(%q("'`[])).split.first))
+        !argument.include?("=") && columns.include?(self.class.fold(argument[LEADING_NAME].to_s.delete(%q("'`[])).strip))
       end
+      # A vocabulary's last argument is its type (row, col or instance), which SQLite reads as no relation.
+      named.pop if mod_name.casecmp?("fts5vocab") && named.size > 1
       [ mod, *named ].join(" ")
     end
 

@@ -1189,6 +1189,9 @@ RSpec.describe RailsAiContext::SqlGate do
 
     # Plans PostgreSQL 16 gave over a postgres_fdw table.
     describe "a foreign scan" do
+      # A join or an aggregate the remote server runs names its tables with their schema.
+      let(:relations) { super().merge("public.users" => %w[id email api_token], "public.posts" => %w[id title], "public.others" => %w[id api_token]) }
+
       before { allow(connection).to receive(:select_rows).and_return([]) }
 
       def foreign(remote, output = [ "u.id" ])
@@ -1209,6 +1212,17 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(plan_refusal(foreign("SELECT id, api_token FROM public.users", %w[u.id u.api_token]))).to be_nil
         expect(plan_refusal(foreign("SELECT id, api_token FROM public.users WHERE ((id = 1)) ORDER BY email ASC NULLS LAST", %w[u.id u.api_token]))).to be_nil
         expect(plan_refusal(foreign("SELECT id FROM public.users WHERE ((email = 'api_token'))"))).to be_nil
+      end
+
+      it "reads the relations of a join the remote server runs: a whole row is refused and a result column is traced to its table" do
+        join = { "Node Type" => "Foreign Scan", "Output" => [ "row_to_json(a.*)" ], "Relations" => %((public.users a) INNER JOIN (public.posts "B c")),
+                 "Remote SQL" => "SELECT r1.id FROM (public.users r1 INNER JOIN public.posts r2 ON (((r1.id = r2.id))))" }
+        expect(plan_refusal(join)).to include("whole row of `users`")
+        expect(plan_refusal(join.merge("Output" => [ %(row_to_json("B c".*)) ]))).to be_nil
+        renamed = join.merge("Output" => %w[users.id users_1.api_token], "Relations" => "(public.users) INNER JOIN (public.users users_1)")
+        expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(renamed).map { |i, column, _| [ i, column ] }).to eq([ [ 0, "id" ], [ 1, "api_token" ] ])
+        nested = join.merge("Output" => [ "to_jsonb(z.*)" ], "Relations" => "Aggregate on (((public.posts x) INNER JOIN (public.posts y)) LEFT JOIN (public.users z))")
+        expect(plan_refusal(nested)).to include("whole row of `users`")
       end
 
       it "reads a secret column by the name its column_name option gives it on the remote server" do

@@ -45,15 +45,16 @@ module RailsAiContext
       # The temp catalog, the temp schema, and the pragma function that lists the tables of every schema.
       CONNECTION_CATALOG = /(?<![\w$])(?:sqlite_temp_(?:master|schema)|temp["`'\]]?\s*\.|pragma_table_list(?![\w$]))/i
 
-      # Whether the statement names what the connection holds and a child would lack: a temp object, the temp
-      # schema or an attached database. A name inside a string counts, since a pragma function takes one there.
+      # Whether the statement names what the connection holds and a child would lack: a temp object, the temp schema,
+      # an attached database or anything in one. A name inside a string counts, since a pragma function takes one there.
       def held_here?(conn, sql)
-        # Neither read waits on another connection's lock, which the pragma function for the same list does.
-        names = conn.select_values("SELECT name FROM sqlite_temp_master WHERE type IN ('table', 'view')") +
-          conn.select_rows("PRAGMA database_list").filter_map { |_seq, name, _file| name unless OWN_SCHEMAS.include?(name) }
+        # None of these reads waits on another connection's lock, which the pragma function for the same list does.
+        attached = conn.select_rows("PRAGMA database_list").filter_map { |_seq, name, _file| name unless OWN_SCHEMAS.include?(name) }
+        names = conn.select_values("SELECT name FROM sqlite_temp_master") + attached +
+          attached.flat_map { |schema| conn.select_values("SELECT name FROM #{conn.quote_table_name(schema)}.sqlite_master") }
         return false if names.empty?
 
-        sql.match?(CONNECTION_CATALOG) || sql.match?(/(?<![\w$])#{Regexp.union(names)}(?![\w$])/i)
+        sql.match?(CONNECTION_CATALOG) || sql.match?(/(?<![\w$])(?:#{Regexp.union(names).source})(?![\w$])/i)
       end
 
       # The watchdog's interrupt lands when the driver is back in Ruby between two rows, so it ends a

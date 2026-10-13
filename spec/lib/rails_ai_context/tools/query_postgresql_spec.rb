@@ -814,6 +814,16 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
 
     after { drop }
 
+    it "traces a join the remote server runs: a whole row of the table is refused and its secret column is filtered under another name" do
+      conn.execute("INSERT INTO rac_pg_remote SELECT g, 'row ' || g, 'token-value-' || g FROM generate_series(2, 3000) g")
+      refused([ "SELECT row_to_json(a) AS j FROM rac_pg_foreign a JOIN rac_pg_foreign b ON a.id = b.id WHERE a.id = 1",
+                "SELECT a::text AS w FROM rac_pg_foreign a JOIN rac_pg_foreign b ON a.id = b.id WHERE a.id = 1" ],
+              "Blocked: the query serialises a whole row of `rac_pg_foreign`")
+      response = run("SELECT a.id, b.t FROM rac_pg_far a JOIN rac_pg_far b ON a.id = b.id WHERE a.id = 1")
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("[FILTERED]") ])
+      expect(response.content.first[:text]).not_to include("token-value")
+    end
+
     it "refuses a condition, a sort and a group on the secret column that the scan sends to the remote server" do
       refused([ "SELECT id FROM rac_pg_far WHERE t LIKE 'token-v%'", "SELECT id FROM rac_pg_far WHERE t IS NOT NULL", "SELECT id FROM rac_pg_far ORDER BY t",
                 "SELECT id FROM rac_pg_far ORDER BY t LIMIT 1", "SELECT count(*) FROM rac_pg_far WHERE t LIKE 'token-v%'", "SELECT count(*) FROM rac_pg_far GROUP BY t" ],

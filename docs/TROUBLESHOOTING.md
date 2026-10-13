@@ -343,11 +343,11 @@ On MySQL and MariaDB a backslash in a string is an escape, unless the session's 
 
 ### "Blocked: a `[` outside a string or a quoted name is not run"
 
-On MySQL and MariaDB a square bracket outside a string or a quoted name is refused. MariaDB reads `[name]` as a quoted name when the session's sql_mode holds `MSSQL`, and `rails_query` does not read the session's mode, so its checks could read such a statement another way than the server does. Quote a name in backticks: `` `name` ``. A `[` inside a string, such as a JSON path (`'$[0]'`), runs.
+On MySQL and MariaDB a square bracket outside a string or a quoted name is refused. MariaDB reads `[name]` as a quoted name when the session's sql_mode holds `MSSQL`, and `rails_query` does not read the session's mode, so its checks could read such a statement another way than the server does. Quote a name in backticks: `` `name` ``. A `[` inside a string, such as a JSON path (`'$[0]'`), runs. One case apart: a string that also holds a backslash before a quote (`'O\'Brien'`) is read a second way that ends it at that quote, so a `[` after it is refused. Write the quote doubled (`'O''Brien'`).
 
 ### "Blocked: a user variable assignment (`:=`) is not run"
 
-On MySQL and MariaDB `SELECT @n := @n + 1` leaves `@n` set on the app's pooled connection after the query returns, and a read-only transaction does not stop that. To number rows, use a window function, which MySQL 8 and MariaDB 10.2 and later have: `SELECT ROW_NUMBER() OVER (ORDER BY id) AS n, title FROM posts`. A `:=` inside a string runs.
+On MySQL and MariaDB `SELECT @n := @n + 1` leaves `@n` set on the app's pooled connection after the query returns, and a read-only transaction does not stop that. To number rows, use a window function, which MySQL 8 and MariaDB 10.2 and later have: `SELECT ROW_NUMBER() OVER (ORDER BY id) AS n, title FROM posts`. A `:=` inside a string runs, unless the string also holds a backslash before a quote: write that quote doubled.
 
 ### "Blocked: LAST_INSERT_ID with an argument is not run"
 
@@ -379,7 +379,7 @@ On MySQL and MariaDB `EXPLAIN FOR CONNECTION` shows the plan of the statement an
 
 ### "The columns of the <name> database could not be read"
 
-The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is a few statements whatever the number of tables, eight at most, so an account that cannot read the catalogue cannot use `rails_query`.
+The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is a few statements whatever the number of tables, six at most, so an account that cannot read the catalogue cannot use `rails_query`.
 
 ### "The database is locked by another connection, so the query did not run"
 
@@ -387,7 +387,7 @@ Another connection holds a lock on the SQLite database, such as a write transact
 
 ### "This SQLite query ran without a time limit"
 
-On SQLite `rails_query` runs a statement in a process of its own, which it ends at `query_timeout`. That process cannot see what the app's own connection alone holds. So the statement runs on the app's connection, with this note, on an in-memory database, on a platform without `fork`, inside an open transaction, and when it needs a function, a module or a collation only that connection has. It runs there too when it names a temp table or view, the `temp` schema, `sqlite_temp_master` or an attached database, and when it names `pragma_table_list` while the connection holds a temp table or view or an attachment. A name is matched anywhere in the statement, inside a string too. A statement that returns rows slowly still ends a few rows after `query_timeout`. One long step cannot be ended there.
+On SQLite `rails_query` runs a statement in a process of its own, which it ends at `query_timeout`. That process cannot see what the app's own connection alone holds. So the statement runs on the app's connection, with this note, on an in-memory database, on a platform without `fork`, inside an open transaction, and when it needs a function, a module or a collation only that connection has. It runs there too when it names a temp object, the `temp` schema, `sqlite_temp_master`, an attached database or a table or an index in one, and when it names `pragma_table_list` while the connection holds a temp object or an attachment. A name is matched anywhere in the statement, in any letter case and inside a string too. A statement that returns rows slowly still ends a few rows after `query_timeout`. One long step cannot be ended there.
 
 ### "The reads rails_query makes before a statement ... took the whole <N> second timeout"
 
