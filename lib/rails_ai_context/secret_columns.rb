@@ -231,14 +231,18 @@ module RailsAiContext
     end
 
     # True for an `encrypts` column and for a generated column that reads one: neither is released by name.
-    def encrypted?(name)
+    # Generated columns of one name on two tables are one name here, encrypted when either reads such a column.
+    def encrypted?(name, through = [])
       down = self.class.fold(name)
-      @encrypted.include?(down) || (@generated.key?(down) && encrypted?(@generated[down]))
+      return true if @encrypted.include?(down)
+
+      !through.include?(down) && @generated.fetch(down, []).any? { |source| encrypted?(source, through + [ down ]) }
     end
 
-    # @return [String, nil] the secret column a generated column's expression reads
+    # @return [String, nil] a secret column a generated column's expression reads, an `encrypts` one first
     def generated_from(name)
-      @generated[self.class.fold(name)]
+      sources = @generated.fetch(self.class.fold(name), [])
+      sources.find { |source| encrypted?(source) } || sources.first
     end
 
     # [view, why] for the first refused view the text names, or nil. A view's definition renames a
@@ -346,7 +350,14 @@ module RailsAiContext
       # A generated column can read another one, so this repeats until it finds no more.
       flag_secret_columns(@columns) while trace_generated(@expressions)
       @unread_tables = unread_tables(@index_tables)
-      @refused_views = @views ? refused_views(@views).except(*@traced) : {}
+      # A virtual table can be built on a refused view, and a view on that virtual table.
+      loop do
+        @refused_views = @views ? refused_views(@views).except(*@traced) : {}
+        built = built_on_unread(@index_tables)
+        break if built.empty?
+
+        @unread_tables.merge!(built)
+      end
     end
 
     def flag_secret_columns(columns)
@@ -358,18 +369,17 @@ module RailsAiContext
       @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, self.class.identifier(c) ] }
     end
 
-    # Whether another generated column was found to read a secret column.
+    # Whether another secret column was found that a generated column reads. Every source of a name is kept.
     def trace_generated(generated)
       found = false
       generated.each_value do |expressions|
         expressions.each do |column, expression|
           column = self.class.fold(column)
-          next if @generated.key?(column)
+          down = self.class.fold(expression)
+          sources = @named.filter_map { |name, pattern| name if name != column && down.match?(pattern) } - @generated.fetch(column, [])
+          next if sources.empty?
 
-          source = named_in(expression)
-          next if source.nil? || source == column
-
-          @generated[column] = source
+          (@generated[column] ||= []).concat(sources)
           found = true
         end
       end
@@ -408,6 +418,21 @@ module RailsAiContext
           end
         end
         unread[self.class.fold(table)] = why if why
+      end
+    end
+
+    # virtual table => why it is not read, for each one whose definition names a refused view or a table that
+    # is not read: its rows, or its words, are theirs.
+    def built_on_unread(index_tables)
+      index_tables.each_with_object({}) do |(table, (_kind, _owner, definition)), built|
+        table = self.class.fold(table)
+        next if definition.nil? || @unread_tables.key?(table)
+
+        down = self.class.fold(definition)
+        view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
+        other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
+        built[table] = "its definition names the view `#{view}`, which is not queried: #{why}" if view
+        built[table] = "its definition names `#{other}`, which is not read" if other
       end
     end
 

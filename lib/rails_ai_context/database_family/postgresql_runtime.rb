@@ -149,11 +149,11 @@ module RailsAiContext
       def generated_columns(conn, _schemas = [])
         return {} if conn.database_version < 12_00_00
 
-        DatabaseFamily.by_table(conn.select_rows(
+        DatabaseFamily.keep_expressions({}, conn.select_rows(
           "SELECT c.relname, a.attname, pg_get_expr(d.adbin, d.adrelid) FROM pg_attribute a " \
           "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " \
           "WHERE a.attgenerated <> '' AND NOT a.attisdropped"
-        )).transform_values(&:to_h)
+        ))
       end
 
       def relation_name(conn, oid)

@@ -822,6 +822,21 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT title FROM docs").last).to start_with("Blocked: `docs` is not read: it is a virtual table that holds the secret column `api_token`")
     end
 
+    it "refuses a virtual table whose definition names a refused view, with its vocabulary and a view over it" do
+      [ "CREATE VIEW ren AS SELECT id, api_token AS word FROM accounts",
+        "CREATE VIRTUAL TABLE ren_fts USING fts5(word, content='ren', content_rowid='id')",
+        "CREATE VIRTUAL TABLE ren_terms USING fts5vocab(ren_fts, row)",
+        "CREATE VIEW ren_over AS SELECT word AS w FROM ren_fts",
+        "CREATE VIRTUAL TABLE mail_fts USING fts5(email, content='accounts', content_rowid='id')" ].each { |sql| conn.execute(sql) }
+
+      [ "SELECT word FROM ren_fts", "SELECT * FROM ren_fts", "SELECT highlight(ren_fts, 0, '', '') AS h FROM ren_fts" ].each do |sql|
+        refused(sql, "Blocked: `ren_fts` is not read: its definition names the view `ren`, which is not queried: its definition names the secret column `api_token`.")
+      end
+      refused("SELECT term FROM ren_terms", "Blocked: `ren_terms` is not read: its definition names `ren_fts`, which is not read.")
+      expect(answer("SELECT w FROM ren_over")).to match([ true, a_string_starting_with("Blocked: the view `ren_over` is not queried: its definition reads `ren_fts`, which is not read.") ])
+      expect(answer("SELECT email FROM mail_fts")).to match([ false, a_string_including("a@example.com") ])
+    end
+
     it "reads a shadow table by its name where SQLite does not type one, so a table that shares a virtual table's prefix is not read" do
       allow(conn).to receive(:database_version).and_return(ActiveRecord::ConnectionAdapters::AbstractAdapter::Version.new("3.36.0"))
       expect(answer("SELECT c1 FROM docs_content").last).to start_with("Blocked: `docs_content` is not read: it is a shadow table")
@@ -1765,6 +1780,36 @@ RSpec.describe RailsAiContext::Tools::Query do
       everything = text("SELECT * FROM odd")
       expect(everything).to include("SHOWN", "Shown!").and(satisfy { |t| !t.include?("pw-value") })
       expect(everything.scan("[FILTERED]").size).to eq(4)
+    end
+
+    context "when a second table has a generated column of the same name" do
+      let(:context) { { models: { "Vault" => { encrypts: %w[ssn] } } } }
+
+      before do
+        conn.execute("CREATE TABLE vaults (id INTEGER, ssn TEXT, shadow TEXT AS (ssn) VIRTUAL)")
+        conn.execute("INSERT INTO vaults (id, ssn) VALUES (1, 'ssn-value')")
+        conn.execute("CREATE TABLE widgets (id INTEGER, label TEXT, twin TEXT AS (upper(label)) VIRTUAL)")
+        conn.execute("CREATE TEMP TABLE widgets (id INTEGER, passwd TEXT, twin TEXT AS (passwd) VIRTUAL)")
+        conn.execute("INSERT INTO temp.widgets (id, passwd) VALUES (1, 'pw-value')")
+        RailsAiContext.configuration.query_allowed_columns = %w[shadow]
+      end
+
+      it "keeps the name secret past the allowed list when any column of that name reads an encrypts column" do
+        named = answer("SELECT shadow AS s FROM vaults")
+        expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("`shadow` is a generated column that reads `ssn`, an `encrypts` value") ])
+        expect(text("SELECT * FROM vaults")).not_to include("ssn-value")
+      end
+
+      it "reads the expression of each table of one name in two schemas" do
+        expect(answer("SELECT twin AS t FROM temp.widgets").error?).to be(true)
+        expect(text("SELECT * FROM temp.widgets")).not_to include("pw-value")
+      end
+
+      it "reads every secret column a generated column's expression names" do
+        rule = RailsAiContext::SecretColumns.new(relations: { "t" => %w[password_digest ssn both] }, encrypted: %w[ssn],
+                                                 generated: { "t" => { "both" => "password_digest || ssn" } })
+        expect(rule.encrypted?("both")).to be(true)
+      end
     end
 
     it "releases a view and a generated column over a column the app allows" do

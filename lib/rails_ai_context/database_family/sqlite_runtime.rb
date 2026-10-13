@@ -141,13 +141,13 @@ module RailsAiContext
           "SELECT m.name, p.name, p.hidden, m.sql FROM #{schema}.sqlite_master m JOIN pragma_table_xinfo(m.name, #{name}) p " \
             "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql LIKE '%AS%(%'"
         end)
-        DatabaseFamily.by_table(rows).each_with_object({}) do |(table, columns), found|
-          generated = columns.filter_map { |name, hidden, _| name if GENERATED.include?(hidden.to_i) }
+        # Tables of one name in two schemas each have a definition of their own.
+        rows.group_by { |table, _name, _hidden, definition| [ table, definition.to_s ] }.each_with_object({}) do |((table, definition), columns), found|
+          generated = columns.filter_map { |_table, name, hidden, _| name if GENERATED.include?(hidden.to_i) }
           next if generated.empty?
 
-          definition = columns.first.last.to_s
           expressions = column_expressions(definition)
-          found[table] = generated.to_h { |name| [ name, expressions[name.downcase(:ascii)] || definition ] }
+          DatabaseFamily.keep_expressions(found, generated.map { |name| [ table, name, expressions[name.downcase(:ascii)] || definition ] })
         end
       end
 
@@ -200,7 +200,7 @@ module RailsAiContext
           mod, args = sql.to_s.match(VOCABULARY)&.captures
           # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
           names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
-          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2] ] : [ :virtual, name ]
+          found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2], sql ] : [ :virtual, name, sql ]
         end
         found
       end
