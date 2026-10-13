@@ -171,6 +171,7 @@ module RailsAiContext
       @index_tables = {}
       @asked = Set.new
       @read = []
+      @spelled = {}
       learn(relations: relations, views: views, traced_views: traced_views, generated: generated, index_tables: index_tables)
     end
 
@@ -252,7 +253,8 @@ module RailsAiContext
     # column outside the statement, where no check on the statement reads it.
     def refused_view_in(text)
       down = self.class.fold(text)
-      @refused_views.find { |view, _why| names?(down, view) }
+      view, why = @refused_views.find { |name, _why| names?(down, name) }
+      [ spelled(view), why ] if view
     end
 
     # Why the view at exactly this place is refused, or nil. The plan names a relation as `schema.relation`, so a table
@@ -274,13 +276,15 @@ module RailsAiContext
     # table, and a virtual table or its vocabulary when the virtual table holds a secret column.
     def unread_table_in(text)
       down = self.class.fold(text)
-      @unread_tables.find { |table, _why| names?(down, table) }
+      table, why = @unread_tables.find { |name, _why| names?(down, name) }
+      [ spelled(table), why ] if table
     end
 
     # The first relation holding a secret column that the statement's text names, or nil.
     def relation_named_in(text)
       down = self.class.fold(text)
-      @by_relation.each_key.find { |relation| names?(down, relation) }
+      relation = @by_relation.each_key.find { |name| names?(down, name) }
+      relation && spelled(relation)
     end
 
     # The first secret name the statement's text names, or nil. Case-insensitive
@@ -341,12 +345,18 @@ module RailsAiContext
     def too_deep(found, followed, family)
       found = found.map { |schema| self.class.fold(schema) }
       view = followed.find { |name, _start| (dotted_names(self.class.fold(@views[name])) & found).any? }&.last
-      Unreadable.new("The view `#{view}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows " \
+      Unreadable.new("The view `#{spelled(view)}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows " \
         "(#{ROUNDS} rounds), so the secret columns it could read cannot be told and no statement that names it runs.")
+    end
+
+    # The name as the database spells it, for a sentence: the rule itself holds every name folded.
+    def spelled(name)
+      @spelled.fetch(name, name)
     end
 
     def learn(relations:, views: nil, traced_views: [], generated: {}, index_tables: {})
       fold = self.class.method(:fold)
+      [ relations, views, index_tables ].each { |named| named&.each_key { |name| @spelled[fold.call(name)] ||= name.to_s } }
       relations.each { |relation, names| @columns[fold.call(relation)].concat(Array(names).map(&fold)) }
       generated.each do |relation, expressions|
         @columns[fold.call(relation)].concat(expressions.keys.map(&fold))
@@ -411,7 +421,7 @@ module RailsAiContext
         end
         return refused if nested.empty?
 
-        nested.each { |view, inner| refused[view] = "it reads the view `#{inner}`: #{refused[inner]}" }
+        nested.each { |view, inner| refused[view] = "it reads the view `#{spelled(inner)}`: #{refused[inner]}" }
       end
     end
 
@@ -435,22 +445,35 @@ module RailsAiContext
       end
     end
 
-    # The value of a full-text table's `content=` option, quoted or bare.
-    CONTENT_OPTION = /\bcontent\s*=\s*("(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s,)]+)/i
+    # One argument of a virtual table's module: up to the next comma outside quotes, brackets and parentheses.
+    MODULE_ARGUMENT = /(?:"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|\([^()]*\)|[^,])+/
 
-    # virtual table => why it is not read, for each one built on a refused view or on a table that is not read. Only
-    # its `content=` option, and a vocabulary's table, name a relation: any other word is its own column or option.
+    # virtual table => why it is not read, for each one built on a refused view or on a table that is not read:
+    # its rows, or its words, are theirs.
     def built_on_unread(index_tables)
       index_tables.each_with_object({}) do |(table, (kind, owner, definition)), built|
         table = self.class.fold(table)
         next if definition.nil? || @unread_tables.key?(table)
 
-        down = self.class.fold(kind == :vocabulary ? owner : definition.scan(CONTENT_OPTION).join(" "))
+        down = self.class.fold("#{owner if kind == :vocabulary} #{relation_words(table, definition)}")
         view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
         other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
-        built[table] = "its definition names the view `#{view}`, which is not queried: #{why}" if view
-        built[table] = "its definition names `#{other}`, which is not read" if other
+        built[table] = "its definition names the view `#{spelled(view)}`, which is not queried: #{why}" if view
+        built[table] = "its definition names `#{spelled(other)}`, which is not read" if other
       end
+    end
+
+    # What a virtual table's definition can name a relation with: its module, and every argument but the columns a
+    # full-text table declares (a column named like a view is no view). An argument with `=` is an option, kept whole.
+    def relation_words(table, definition)
+      mod, arguments = definition.match(/\bUSING\s+([^\s(]+)\s*(?:\((.*)\))?\s*\z/mi)&.captures
+      return definition unless mod
+
+      columns = mod.delete(%q("'`[])).match?(/\Afts[345]\z/i) ? @columns[table] : []
+      named = arguments.to_s.scan(MODULE_ARGUMENT).reject do |argument|
+        !argument.include?("=") && columns.include?(self.class.fold(argument.delete(%q("'`[])).split.first))
+      end
+      [ mod, *named ].join(" ")
     end
 
     def refusal_of(definition)
@@ -459,9 +482,9 @@ module RailsAiContext
       elsif (column = named_in(definition))
         "its definition names the secret column `#{column}`"
       elsif (table = @unread_tables.keys.find { |name| names?(definition, name) })
-        "its definition reads `#{table}`, which is not read"
+        "its definition reads `#{spelled(table)}`, which is not read"
       elsif definition.match?(WILDCARD) && (relation = @by_relation.keys.find { |name| names?(definition, name) })
-        "its definition has a wildcard and names `#{relation}`, which holds the secret column `#{@by_relation[relation].first}`"
+        "its definition has a wildcard and names `#{spelled(relation)}`, which holds the secret column `#{@by_relation[relation].first}`"
       end
     end
 

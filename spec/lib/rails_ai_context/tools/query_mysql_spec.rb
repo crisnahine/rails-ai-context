@@ -112,10 +112,11 @@ RSpec.describe RailsAiContext::Tools::Query do
         end
 
         it "refuses a view over it whatever the view's name holds: two spaces in a row, one, a tab, a newline, a backtick, capitals" do
-          names = [ "rac my  far", "rac my far", "rac my\tfar", "rac my\nfar", "rac my`far", "Rac_My_FAR" ].map { |name| "`#{name.gsub("`", "``")}`" }
+          views = [ "rac my  far", "rac my far", "rac my\tfar", "rac my\nfar", "rac my`far", "Rac_My_FAR" ]
+          names = views.map { |name| "`#{name.gsub("`", "``")}`" }
           names.each { |name| conn.execute("CREATE VIEW #{name} AS SELECT id, session_token AS t FROM rac_my_other.acc") }
-          names.each do |name|
-            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], "Blocked: the view `")
+          names.zip(views) do |name, view|
+            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], "Blocked: the view `#{view}` is not queried")
           end
         ensure
           names.each { |name| conn.execute("DROP VIEW IF EXISTS #{name}") }
