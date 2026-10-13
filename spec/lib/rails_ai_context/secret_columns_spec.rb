@@ -383,6 +383,28 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
+    it "asks for every name a statement writes before a dot, in any quotes" do
+      asked = []
+      allow(runtime).to receive(:schemas_named) { |_conn, names| asked.concat(names) && [] }
+      statement = %(SELECT a.id, `b``x`.id, "c""y".id, [d e].id, ünï$1.id, f  .id FROM t WHERE note = 'g.h' AND 1.5 > 0 AND `open)
+
+      RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: statement) }
+
+      expect(asked).to contain_exactly("a", "b`x", 'c"y', "d e", "ünï$1", "f", "g", "1")
+    end
+
+    # A regexp over the whole text is quadratic on a Ruby with no match cache (before 3.2).
+    it "reads those names in time that grows with the statement" do
+      clock = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+      texts = [ "'#{"a" * 40_000}'", "`" * 40_001, "[a " * 13_000, "\"a " * 13_000, "'#{"é " * 20_000}'" ].map { |long| "SELECT #{long} FROM t WHERE t.id = 1" }
+      allow(runtime).to receive(:schemas_named).and_return([])
+
+      started = Process.clock_gettime(clock)
+      texts.each { |text| RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: text) } }
+
+      expect(Process.clock_gettime(clock) - started).to be < 10
+    end
+
     it "lists the schemas, reads the columns, the views and the generated columns in one statement each, and the virtual and shadow tables in two" do
       sent = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }

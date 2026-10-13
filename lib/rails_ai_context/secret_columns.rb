@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "set"
+require "strscan"
 
 module RailsAiContext
   # The columns rails_query never returns and whose names a statement may not
@@ -35,8 +36,10 @@ module RailsAiContext
     # A wildcard in a select list. `count(*)` reads no column, so it is left out.
     WILDCARD = /(?:\b(?:SELECT|DISTINCT|ALL)\b|[,.])\s*\*/i
 
-    # A name that stands before a dot, in any quotes: a schema, a table or an alias.
-    DOTTED = /(?:`((?:``|[^`])+)`|"((?:""|[^"])+)"|\[([^\]]+)\]|((?:[\p{Word}$]|[^\x00-\x7F])+))\s*\./
+    # A name as a statement writes it before a dot: in backticks, double quotes or brackets, or bare.
+    QUOTED_NAME = /`(?:``|[^`])+`|"(?:""|[^"])+"|\[[^\]]+\]/
+    BARE_NAME = /(?:[\p{Word}$]|[^\x00-\x7F])+/
+    CLOSERS = { "`" => "`", '"' => '"', "[" => "]" }.freeze
 
     # How many times the schemas a statement and the view definitions name are followed into more view definitions.
     ROUNDS = 3
@@ -302,8 +305,21 @@ module RailsAiContext
 
     private
 
+    # Every name that stands before a dot: a schema, a table or an alias. One pass over the text, since a
+    # regexp that finds them is quadratic on a Ruby with no match cache; an opener with no closer is no name.
     def dotted_names(text)
-      text.scan(DOTTED).map { |found| found.compact.first.gsub(/([`"])\1/, '\1') }
+      scanner = StringScanner.new(text)
+      bytes = text.b
+      last = CLOSERS.transform_values { |closer| bytes.rindex(closer) || -1 }
+      names = []
+      until scanner.eos?
+        quoted = last.fetch(scanner.peek(1), -1) > scanner.pos ? scanner.scan(QUOTED_NAME) : nil
+        name = quoted ? quoted[1..-2] : scanner.scan(BARE_NAME)
+        next scanner.getch unless name
+
+        names << name.gsub(/([`"])\1/, '\1') if scanner.match?(/\s*\./)
+      end
+      names
     end
 
     # view => the view the text names that leads to it, for each view the text names and each one their
