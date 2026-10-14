@@ -2617,6 +2617,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Ruby has made the class and registered it by the time its body raises, so
+  # it looks loaded while holding only what ran before the raise.
+  describe "a model file whose class body raises partway down" do
+    let(:dir) { Dir.mktmpdir }
+    let(:loader) { Zeitwerk::Loader.new.tap { |l| l.push_dir(File.join(dir, "app", "models")); l.setup } }
+
+    before do
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "zz_half_built.rb"), <<~RUBY)
+        class ZzHalfBuilt < ApplicationRecord
+          self.table_name = "posts"
+          belongs_to :user
+          raise ArgumentError, "boom in class body"
+          has_many :comments
+        end
+      RUBY
+      allow(Rails.autoloaders).to receive(:main).and_return(loader)
+    end
+
+    after do
+      loader.unload
+      loader.unregister if loader.respond_to?(:unregister)
+      Object.send(:remove_const, :ZzHalfBuilt) if Object.const_defined?(:ZzHalfBuilt, false) && !Object.autoload?(:ZzHalfBuilt)
+      FileUtils.remove_entry(dir)
+    end
+
+    it "is named with what it raised and not reflected" do
+      result = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dir)).call }
+
+      expect(result["ZzHalfBuilt"]).to eq(error: "boom in class body", file: "app/models/zz_half_built.rb", table_name: "posts")
+    end
+  end
+
   # A root outside app/models holds generators and gem subclasses too; one of
   # them that will not load is not a model, and static leaves it out.
   describe "a class outside the model directories that cannot load" do

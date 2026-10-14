@@ -601,6 +601,12 @@ module RailsAiContext
             source = model_source(record.path).to_s
             path_name = SourceScan.concerns_name(path_name, source)
           end
+          # A class whose body raised is registered holding what ran before the raise.
+          if (raised = EagerLoad.raised(record.path))
+            half_built = DeclaredConstant.named(model_source(record.path).to_s, path_name)
+            models.reject! { |model| model.name == half_built }
+            known.delete(half_built)
+          end
           next if known.include?(path_name)
           next if config.excluded_models.include?(path_name)
           next if path_name != record.path_name && mixin_path?(record.path_name.underscore, source)
@@ -618,7 +624,7 @@ module RailsAiContext
           # Never required here either: a file that does not compile, or
           # whose class body needs one that does not (see EagerLoad). Why is
           # the answer for that model.
-          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path))
+          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path) || raised)
             @unloadable[class_name] = reason
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
             next
