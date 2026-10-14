@@ -196,7 +196,7 @@ connection: its temp objects and its attached databases. When it holds any of
 them, a statement runs there if it names one of them, the temp catalog
 (`sqlite_temp_master`, `sqlite_temp_schema`) or the `temp` schema, or if it
 calls a pragma function (`pragma_table_info(...)`, `pragma_table_list` and the
-rest), whose argument can name any of them. The child has none of these and
+rest) or `dbstat`, whose argument can name any of them. The child has none of these and
 would answer an empty list, the rows of a main table of the same name, or
 "unknown database". A table that only an attached database holds needs no
 match: the child cannot prepare a statement that reads it, which is the third
@@ -283,6 +283,8 @@ If one of your own columns merely looks secret (an `oauth_applications.secret`, 
 ```ruby
 config.query_allowed_columns = %w[secret]
 ```
+
+On a standalone install, where no initializer runs, put the name under `query_allowed_columns:` in `.rails-ai-context.yml`.
 
 Results are redacted as well: a returned column comes back as `[FILTERED]` when the rule flags its **output name**, and on PostgreSQL when its origin is a secret base column - either by **provenance** (`PG::Result#ftable` / `#ftablecol`, mapped to the base column) or by the **plan's top-node `Output`**, whose i-th expression is result column i. The plan path catches a view (or inlined CTE/subquery/join) that renamed a secret column to a harmless name: `CREATE VIEW user_tokens AS SELECT id, api_token AS t FROM users; SELECT t FROM user_tokens` returns `t` as `[FILTERED]`. A quoted mixed-case secret column (`"Salt"`) is filtered in place the same way. So is a secret column under a wildcard over a partitioned table or an inheritance parent: each partition is read as its own relation, a result column is filtered when any of them hands a secret column up in that place, and a whole-row read is refused when any of them holds one. An expression beside the wildcard (`SELECT *, id + 1 AS next`) changes nothing: each plain result column keeps its table column, and each partition's expressions are checked as expressions. The arms of a `UNION ALL` inside a view are read the same way: each arm against its own table, so no arm stands for another. A result column whose table's column names cannot be read is filtered when that table holds a secret column. When the table cannot be told either, it is filtered when any table holds one. On SQLite a second result column of the same name comes back as `name:1`, and the rule reads that name without its suffix. `SHOW`, `DESCRIBE` and `EXPLAIN` output skips column-name redaction; the one exception is `SHOW CREATE TABLE` / `SHOW CREATE VIEW`, whose definition text is run through the shared secret redaction so a credential embedded in it is filtered.
 

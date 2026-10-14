@@ -293,7 +293,7 @@ MySQL, MariaDB and SQLite trace no result column back to its table column, so th
 - A `*` inside a subquery, a CTE body included, when the statement names a table that holds a secret column. The message names that table and the column. The rule tests the two facts together and does not tell which table the wildcard reads, so the statement is refused also when the wildcard is over another table. Name the columns in the subquery: `WITH x AS (SELECT id, email FROM users) SELECT * FROM x`. On MySQL and MariaDB `(TABLE t)` counts as a wildcard: select the columns you need. `EXISTS (SELECT * ...)` and `count(*)` run
 - On SQLite, `IN` before a table's name (`WHERE id IN users`), when the statement names a table that holds a secret column. It is SQLite's shorthand for `IN (SELECT * FROM users)`. Write the subquery with its columns named: `WHERE id IN (SELECT id FROM users)`
 - On SQLite, either of those two in a statement that holds a string equal to such a table's name (`WHERE role = 'users'`). SQLite reads a string as a table's name where a name can stand, and the rule cannot tell that use from plain data. The message says "in a statement that holds the string 'users'". Name the columns in the subquery, or compare with another value
-- A view whose definition names a secret column, or has a wildcard and names a table that holds one. Query the tables the view reads. When the column holds no secret, list its name in `config.query_allowed_columns`
+- A view whose definition names a secret column, or has a wildcard and names a table that holds one. Query the tables the view reads. When the column holds no secret, list its name in `query_allowed_columns` (`.rails-ai-context.yml`, or `config.query_allowed_columns` in an initializer where the app bundles the gem)
 
 On PostgreSQL a plain view runs and its secret columns come back `[FILTERED]`. A materialized view whose definition names a secret column gets the view message, since its stored rows cannot be traced to a table column. Query the tables it was built from.
 
@@ -347,7 +347,7 @@ On MySQL and MariaDB a square bracket outside a string or a quoted name is refus
 
 ### "Blocked: a user variable assignment (`:=`) is not run"
 
-On MySQL and MariaDB `SELECT @n := @n + 1` leaves `@n` set on the app's pooled connection after the query returns, and a read-only transaction does not stop that. To number rows, use a window function, which MySQL 8 and MariaDB 10.2 and later have: `SELECT ROW_NUMBER() OVER (ORDER BY id) AS n, title FROM posts`. A `:=` inside a string runs, unless a backslash before a quote in the statement leaves it outside a string in the second reading of a backslash: write that quote doubled.
+On MySQL and MariaDB `SELECT @n := @n + 1` leaves `@n` set on the app's pooled connection after the query returns, and a read-only transaction does not stop that. To number rows, use a window function, which MySQL 8 and MariaDB 10.2 and later have: `SELECT ROW_NUMBER() OVER (ORDER BY id) AS n, title FROM posts`. A `:=` inside a string or a quoted name runs, unless a backslash before a quote in the statement leaves it outside a string in the second reading of a backslash: write that quote doubled.
 
 ### "Blocked: LAST_INSERT_ID with an argument is not run"
 
@@ -387,7 +387,7 @@ Another connection holds a lock on the SQLite database, such as a write transact
 
 ### "This SQLite query ran without a time limit"
 
-On SQLite `rails_query` runs a statement in a process of its own, which it ends at `query_timeout`. That process cannot see what the app's own connection alone holds. So the statement runs on the app's connection, with this note, on an in-memory database, on a platform without `fork`, inside an open transaction, and when it needs a function, a module or a collation only that connection has. It runs there too when it names a temp object, the `temp` schema, `sqlite_temp_master` or an attached database, and when it calls a pragma function (`pragma_table_info(...)`, `pragma_table_list` and the rest) while the connection holds a temp object or an attachment. A name is matched anywhere in the statement, in any letter case and inside a string too. A statement that returns rows slowly still ends a few rows after `query_timeout`. One long step cannot be ended there.
+On SQLite `rails_query` runs a statement in a process of its own, which it ends at `query_timeout`. That process cannot see what the app's own connection alone holds. So the statement runs on the app's connection, with this note, on an in-memory database, on a platform without `fork`, inside an open transaction, and when it needs a table, a function, a module, a collation or an encryption key only that connection has. While the connection holds a temp object or an attachment, it runs there too when it names a temp object, the `temp` schema, `sqlite_temp_master` or an attached database, or calls a pragma function (`pragma_table_info(...)`, `pragma_table_list` and the rest) or `dbstat`. A name is matched anywhere in the statement, in any letter case and inside a string too. A statement that returns rows slowly still ends a few rows after `query_timeout`. One long step cannot be ended there.
 
 ### "The reads rails_query makes before a statement ... took the whole <N> second timeout"
 
@@ -400,6 +400,8 @@ Columns whose names look secret are redacted, and a query that names one is reje
 ```ruby
 config.query_allowed_columns = %w[secret]
 ```
+
+On a standalone install, where no initializer runs, put the name under `query_allowed_columns:` in `.rails-ai-context.yml`.
 
 ---
 

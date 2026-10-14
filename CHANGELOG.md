@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+The three refusals below go out under a patch number. Each closes a guard gap,
+and the maintainer chose 5.35.2 for them, outside step 1 of `docs/RELEASING.md`.
+
 - **On MySQL and MariaDB a statement with a user variable assignment (`:=`) is
   refused.** The answer is "Blocked: a user variable assignment (`:=`) is not
   run. It leaves a value on the pooled connection after the query returns,
@@ -107,8 +110,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backslash ends the string at that quote, and where that leaves the `[`
   outside a string the statement is refused. Such a statement ran before.
   Write the quote doubled.
-- **These refusals go out under a patch number.** Each closes a guard gap, and
-  the maintainer chose 5.35.2 for them, outside step 1 of `docs/RELEASING.md`.
 
 ### Fixed
 
@@ -154,18 +155,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lock before it prepares the statement, so no lock stops the statement from
   there on. The locked answer is given for a lock the query process is still
   waiting on when it gives up or when the deadline passes.
+- **On SQLite a column whose name starts with `pragma_` can be queried.**
+  5.35.1 read such a name as a pragma function and refused the statement as
+  one that tells of the connection that runs it. A name the secret column rule
+  reads as a column of the database now runs, as on 5.35.0.
 - **On a SQLite file database a statement that names something the app's
-  connection alone holds runs on that connection.** That is a temp object,
-  `sqlite_temp_master` or `sqlite_temp_schema`, the `temp` schema or an
-  attached database. A pragma function (`pragma_table_info(...)`,
-  `pragma_table_list` and the rest) runs there too while the connection holds
-  a temp object or an attachment, since its argument can name any of them. The
-  query process has none of them, so it answered an empty list, the rows of a
-  main table of the same name, or "unknown database". The answer now ends with
-  the note that the query ran without a time limit. A name is matched anywhere
-  in the statement, in any letter case and inside a string too. Finding this
-  out takes two more reads before a statement on a file database where a query
-  process can run: eight where there were six.
+  connection alone holds runs on that connection.** While that connection
+  holds a temp object or an attachment, a statement runs there when it names a
+  temp object, `sqlite_temp_master` or `sqlite_temp_schema`, the `temp` schema
+  or an attached database, or calls a pragma function (`pragma_table_info(...)`,
+  `pragma_table_list` and the rest) or `dbstat`, since an argument can name any
+  of them.
+  The query process has none of them, so it answered an empty list, the rows of
+  a main table of the same name, or "unknown database". The answer now ends
+  with the note that the query ran without a time limit. A name is matched
+  anywhere in the statement, in any letter case and inside a string too.
+  Finding this out takes two more reads before a statement on a file database
+  where a query process can run: eight where there were six.
 - **The full generated file lists the first database's recent migrations
   under its own name.** With a first database not named `primary` and another
   one that is, the heading read `### Recent Migrations: primary`. It now names
@@ -422,12 +428,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function lookup, and the column trace share a second `query_timeout`, and each
   is charged the time it ran. A read that runs out of time ends the call with an
   error that names those reads, so the statements of a call take about twice
-  `query_timeout` at most. On MySQL and MariaDB a wait on a lock ends at
-  `query_timeout` rounded up to a whole second, and `explain: true` is bounded
-  while it waits on a lock too. `SHOW`, `DESCRIBE` and a plain `EXPLAIN` have
-  that lock wait limit alone there, since the statement limit does not cover
-  them. On SQLite those reads run on the app's own connection with no statement
-  limit, and a wait on another writer ends at that connection's busy timeout.
+  `query_timeout` at most.
+  On MySQL and MariaDB a wait on a lock ends at `query_timeout` rounded up to a
+  whole second, and `explain: true` is bounded while it waits on a lock too.
+  `SHOW`, `DESCRIBE` and a plain `EXPLAIN` have that lock wait limit alone
+  there, since the statement limit does not cover them. On SQLite those reads
+  run on the app's own connection with no statement limit, and a wait on another
+  writer ends at that connection's busy timeout.
 - **`rails_runtime_info` reads table sizes, index usage and pending migrations
   under `query_timeout` on PostgreSQL, MySQL and MariaDB.** They had no time
   limit, so a locked table held the answer until the lock went. Each read now
@@ -445,11 +452,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the app's own connection in four cases: an in-memory database, a platform
   without `fork`, a statement the child could not prepare, and a transaction
   open on the app's connection. A statement that fails while it runs in the
-  child is answered with its SQL error and is not run again. On the app's own
-  connection a statement that returns rows slowly now ends a few rows after
-  `query_timeout` passes, since an interrupt lands only between two rows. One
-  long step still cannot be ended there, so the answer keeps its "without a time
-  limit" note.
+  child is answered with its SQL error and is not run again. On
+  the app's own connection a statement that returns rows slowly now ends a few
+  rows after `query_timeout` passes, since an interrupt lands only between two
+  rows. One long step still cannot be ended there, so the answer keeps its
+  "without a time limit" note.
 - **On MySQL and MariaDB no statement runs on a connection Rails replaced.**
   Rails reconnects a connection it lost before the transaction begins, and the
   new session has no read-only transaction and no time limit. The statement is
@@ -619,9 +626,10 @@ Ten tools that each answered one section of the app's configuration leave
   query that names it ran on 5.35.0. Take it out of the query, or list its
   name in `query_allowed_columns` when it holds no secret.
 - **On MySQL, MariaDB and SQLite `SELECT *` inside a subquery is refused over a
-  table with a secret column.** `WITH x AS (SELECT * FROM users) SELECT * FROM
-  x` ran on 5.35.0, and is refused now when `users` holds a secret column. Name
-  the columns in the subquery. On SQLite `WHERE id IN users` ran too, and is
+  table with a secret column.**
+  `WITH x AS (SELECT * FROM users) SELECT * FROM x` ran on 5.35.0, and is
+  refused now when `users` holds a secret column. Name the columns in the
+  subquery. On SQLite `WHERE id IN users` ran too, and is
   refused the same way: write `IN (SELECT id FROM users)`. There a string equal
   to the name of such a table, as in `WHERE role = 'users'`, refuses a statement
   with a `*` inside a subquery or with that `IN` form.

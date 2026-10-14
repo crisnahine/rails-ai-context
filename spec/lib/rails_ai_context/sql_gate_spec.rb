@@ -83,7 +83,8 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "refuses a statement one byte over the length it checks, and checks one of that length" do
-      of = ->(bytes) { "SELECT id FROM posts WHERE body = '#{"x" * (bytes - 36)}'" }
+      template = "SELECT id FROM posts WHERE body = ''"
+      of = ->(bytes) { template.sub("''", "'#{"x" * (bytes - template.bytesize)}'") }
       long = of.call(described_class::MAX_BYTES + 1)
       %i[sqlite mysql postgresql].each do |family|
         expect(refusal(long, family)).to eq("Blocked: the statement is 1000001 bytes long, and rails_query checks a statement of 1000000 bytes at most.")
@@ -480,7 +481,7 @@ RSpec.describe RailsAiContext::SqlGate do
   end
 
   describe "SQLite pragma functions" do
-    let(:relations) { { "pragma_notes" => %w[id body] } }
+    let(:relations) { { "pragma_notes" => %w[id body], "flags" => %w[id pragma_flag] } }
 
     it "runs every one that describes the schema or the database file, and refuses the rest on SQLite alone" do
       %w[table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check integrity_check quick_check
@@ -494,6 +495,7 @@ RSpec.describe RailsAiContext::SqlGate do
       end
       expect(runs?("SELECT changes, total_changes FROM counters")).to be(true)
       expect(runs?("SELECT id, body FROM pragma_notes")).to be(true)
+      expect(runs?("SELECT id FROM flags WHERE pragma_flag = 1")).to be(true)
     end
   end
 
@@ -642,8 +644,8 @@ RSpec.describe RailsAiContext::SqlGate do
         "WITH u AS (SELECT a, b FROM t) SELECT coalesce(a, b) AS c FROM u", "SELECT id FROM (SELECT id FROM t) x JOIN u USING (id)",
         "SELECT * FROM (SELECT id FROM t) x WHERE (id) IN (id)", "SELECT x.id FROM (SELECT id FROM t) AS x ORDER BY (id)"
       ].each do |sql|
-        families = sql.include?("[") ? %i[sqlite postgresql] : %i[sqlite mysql postgresql]
-        families.each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+        run_on = sql.include?("[") ? %i[sqlite postgresql] : %i[sqlite mysql postgresql]
+        run_on.each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
       end
     end
 

@@ -450,12 +450,12 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
 
     it "types a virtual table by the module after its own name, whatever that name spells" do
-      @conn.execute(%(CREATE VIRTUAL TABLE "v USING fts5vocab(q)" USING fts5(body)))
-      @conn.execute(%(CREATE VIRTUAL TABLE "v words" USING fts5vocab("v USING fts5vocab(q)", row)))
+      @conn.execute(%(CREATE VIRTUAL TABLE "v USING fts5vocab(q, r)" USING fts5(body)))
+      @conn.execute(%(CREATE VIRTUAL TABLE "v words" USING fts5vocab("v USING fts5vocab(q, r)", row)))
 
       expect(described_class::SQLITE.index_tables(@conn)).to include(
-        "v USING fts5vocab(q)" => [ :virtual, "v USING fts5vocab(q)", " USING fts5(body)" ],
-        "v words" => [ :vocabulary, "v USING fts5vocab(q)", %( USING fts5vocab("v USING fts5vocab(q)", row)) ]
+        "v USING fts5vocab(q, r)" => [ :virtual, "v USING fts5vocab(q, r)", " USING fts5(body)" ],
+        "v words" => [ :vocabulary, "v USING fts5vocab(q, r)", %( USING fts5vocab("v USING fts5vocab(q, r)", row)) ]
       )
     end
 

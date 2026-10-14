@@ -42,8 +42,9 @@ module RailsAiContext
         Rows.new(result.columns, result.rows, true)
       end
 
-      # The temp catalog, the temp schema, and a pragma function: it reads any schema, by a name that can be put together as it runs.
-      CONNECTION_CATALOG = /(?<![\w$])(?:sqlite_temp_(?:master|schema)|temp["`'\]]?\s*\.|pragma_\w)/i
+      # The temp catalog, the temp schema, and a pragma function or dbstat: each reads any schema, by a name that can be put
+      # together as the statement runs.
+      CONNECTION_CATALOG = /(?<![\w$])(?:sqlite_temp_(?:master|schema)|temp["`'\]]?\s*\.|pragma_\w|dbstat(?![\w$]))/i
 
       # Whether the statement names what the connection holds and a child would answer wrongly: a temp object, the temp schema or
       # an attached database, in a string too. A table only an attached database holds needs no match: no child can prepare it.
@@ -219,7 +220,7 @@ module RailsAiContext
           clause = module_clause(SqlGate.comment_free(sql.to_s, SQLITE))
           mod, args = clause.match(VOCABULARY)&.captures
           # fts5vocab([schema,] table, type) and fts4aux([schema,] table).
-          names = args.to_s.split(",").map { |arg| arg.strip.delete(%q('"`[])) }
+          names = args.to_s.scan(SecretColumns::MODULE_ARGUMENT).map { |arg| arg.strip.delete(%q('"`[])) }
           found[name] = mod ? [ :vocabulary, mod.casecmp?("fts4aux") ? names.last : names[-2], clause ] : [ :virtual, name, clause ]
         end
         found

@@ -1087,7 +1087,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         "SELECT name FROM pragma_table_info('vault', 'other')" => "| door_token",
         "SELECT name FROM pragma_table_info('SCRATCH')" => "| pin_token", "SELECT page_count FROM pragma_page_count('OTHER')" => "| 2",
         "SELECT name FROM pragma_table_list WHERE schema = 'temp' AND type = 'table' ORDER BY name" => "| scratch",
-%(SELECT count(*) AS n FROM "temp".sqlite_master) => "| 2" }.each do |sql, value|
+        %(SELECT count(*) AS n FROM "temp".sqlite_master) => "| 2" }.each do |sql, value|
         expect(answer(sql)).to match([ false, a_string_including(value, "without a time limit") ]), sql
       end
     end
@@ -1128,9 +1128,15 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(answer("SELECT body FROM other.notes")).to match([ false, a_string_including("archived", "without a time limit") ])
     end
 
-    it "runs a pragma function on the app's connection, whose argument can be a name put together as the statement runs" do
-      { "SELECT name FROM pragma_table_info('scr' || 'atch') ORDER BY cid" => "| pin_token", "SELECT name FROM pragma_table_info('va' || 'ult') ORDER BY cid" => "| door_token",
-        "SELECT count(*) AS pages FROM pragma_page_count('temp') WHERE page_count > 0" => "| 1" }.each do |sql, value|
+    it "runs a pragma function and dbstat on the app's connection, whose argument can be a name put together as the statement runs" do
+      statements = { "SELECT name FROM pragma_table_info('scr' || 'atch') ORDER BY cid" => "| pin_token",
+                     "SELECT name FROM pragma_table_info('va' || 'ult') ORDER BY cid" => "| door_token",
+                     "SELECT count(*) AS pages FROM pragma_page_count('temp') WHERE page_count > 0" => "| 1" }
+      # dbstat is built into some SQLite builds alone.
+      if conn.select_values("SELECT name FROM pragma_module_list").include?("dbstat")
+        statements.merge!("SELECT count(*) > 0 AS held FROM dbstat('temp')" => "| 1", "SELECT count(*) > 0 AS held FROM dbstat('ot' || 'her')" => "| 1")
+      end
+      statements.each do |sql, value|
         expect(answer(sql)).to match([ false, a_string_including(value, "without a time limit") ]), sql
       end
     end

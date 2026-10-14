@@ -145,11 +145,12 @@ tables of every database the app's own schema dumps declare, as
 Cache and Solid Cable get one line, without their tables. A database whose
 dump was not read is named with "(tables not read)" and left out of the table
 count, and the summary says so: "5 tables in 2 databases, the warehouse
-database not read". A known limit: on `preset: standard` on the static tier
-the stack line reads the primary's adapter as `unknown`. It ends with the
-app's custom rake tasks (Rakefile, `lib/tasks`, `rakelib`), each with its
-arguments, description and file: the first 15 at `standard`, every one at
-`full`.
+database not read". It ends with the app's custom rake tasks (Rakefile,
+`lib/tasks`, `rakelib`), each with its arguments, description and file: the
+first 15 at `standard`, every one at `full`. A known limit: on
+`preset: standard` on the static tier the stack line reads the primary's
+adapter as `unknown`, and a database's heading in the generated files can name
+no adapter.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
 command and its USAGE line), the `lib/templates` files that replace a built-in
 generator's template, and the Railties under `lib/` with their initializers.
