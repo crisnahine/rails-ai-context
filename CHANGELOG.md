@@ -5,6 +5,167 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.0] - 2026-10-14
+
+### Security
+
+- **On PostgreSQL 18 a set operation over a secret column is refused, as it
+  is on older servers.** PostgreSQL 18 plans a set operation over the tables
+  themselves, and the plan check that refuses a secret column passed through a
+  set operation did not read that shape. A statement could then test a secret
+  value by the rows it returned, through a table or a view that renames the
+  column. A set operation now counts every column its inputs hand up as a use
+  of that column. 5.35.2 and earlier versions had the gap on PostgreSQL 18.
+
+### Changed
+
+- **On SQLite a call of `changes()`, `total_changes()` or
+  `last_insert_rowid()` is refused also where the app has a table of the same
+  name.** The counter answers for the connection that runs the statement,
+  which is `rails_query`'s own. 5.35.1 and 5.35.2 ran such a call when a table
+  carried the counter's name. Read the counter on the app's own connection, in
+  `bin/rails runner` or the console.
+
+### Fixed
+
+- **On PostgreSQL a read with `TABLESAMPLE` runs.** The name of the sampling
+  method (`BERNOULLI`, `SYSTEM`) was read as a call of a VOLATILE function, and
+  the statement was refused. The statement never calls it, so it is no longer
+  read as a call. A VOLATILE function called anywhere in the statement, one
+  named like a sampling method included, is still refused. 5.35.2 refused the
+  read.
+- **On PostgreSQL an `EXISTS` inside an `EXISTS` over a table with a secret
+  column runs.** The plan puts a Result node over the inner scan, and the plan
+  check counted every column of that scan as passed through, so the statement
+  was refused with a sentence saying it passed the secret column on. A Result
+  node is now read like a join: a column counts only where the Result names
+  it. A plain read of a few columns under a condition that holds no column
+  (`WHERE EXISTS (...)`) runs for the same reason. 5.35.2 refused them.
+- **On PostgreSQL `EXPLAIN (GENERIC_PLAN)` answers the plan.** The plan check
+  planned the statement under it without the option, so a statement with `$1`
+  in it answered an SQL error. It is now planned with the option. A server
+  older than PostgreSQL 16 has no such option and still answers its error.
+  5.35.2 answered the error.
+- **On PostgreSQL the `pg_sequences` view can be read.** It reads each
+  sequence's value through `pg_sequence_last_value`, a VOLATILE function that
+  writes nothing, and the statement was refused. The function now joins the
+  list of read-only VOLATILE functions. `nextval`, `setval`, `currval` and
+  `lastval` are still refused. 5.35.2 refused the view.
+- **A query leaves a transaction the app opened with a raw `BEGIN` open, with
+  its writes.** Active Record does not count such a transaction, so on
+  PostgreSQL the query sent its own `BEGIN` and then `ROLLBACK`, which ended
+  the app's transaction and threw its writes away; the answer also missed the
+  rows the transaction had written. PostgreSQL now reads the server's own
+  transaction status and guards inside a savepoint there, under the same
+  read-only transaction and statement timeout. On MySQL and MariaDB the answer
+  is the refusal an open transaction gets ("MySQL cannot make a transaction
+  that is already open read-only"), where 5.35.2 answered the server's error
+  1568, and no `BEGIN`, which would commit the app's transaction, is sent. On
+  a SQLite file the statement runs on the app's own connection and reads the
+  transaction's rows, where 5.35.2 answered from the file without them.
+  5.35.2 and every earlier version ended the transaction on PostgreSQL.
+- **On PostgreSQL a statement another session cancels is answered as the SQL
+  error it is.** A `pg_cancel_backend` from another session raises the same
+  error class as the statement timeout, and 5.35.2 answered "Query exceeded
+  <N> second timeout". The server's message tells the two apart, so a cancel
+  now answers "SQL error: canceling statement due to user request". A real
+  timeout keeps its sentence. A server that writes its messages in another
+  language still answers a cancel as the timeout.
+- **A query that reads a setting `rails_query` sets for each statement says
+  so, and gives the session's own value.** `SHOW statement_timeout` answered
+  the bound the tool set for the statement (`2s`) with nothing to say it was
+  not the session's (`50s`), and so did `transaction_read_only` on
+  PostgreSQL, and the statement limit (`max_execution_time` or
+  `max_statement_time`) and `lock_wait_timeout` on MySQL and MariaDB, by `@@`
+  or by `SHOW VARIABLES`. The answer now ends with a note, for example
+  "statement_timeout here is the value rails_query sets for each statement it
+  runs. The session's own: statement_timeout 50s." 5.35.2 and earlier gave no
+  note.
+- **On PostgreSQL 13 and 14 a temporary table runs, with its secret column
+  filtered.** Before PostgreSQL 15 a plan names the session's temporary schema
+  by its number (`pg_temp_3`), where the column reads name it `pg_temp`, so
+  5.35.2 refused every statement over a temporary table there as one whose
+  columns could not be read. A whole row of a temporary table that holds a
+  secret column stays refused.
+- **On SQLite a column whose own name starts with `pragma_` runs.** A
+  `pragma_*` name is now refused where SQLite reads it as the pragma function:
+  called, or where a table stands (after `FROM`, `JOIN` or `IN`, after a comma
+  of a `FROM` list, inside a parenthesis that opens one, or after a schema and a
+  dot there), bare, quoted or as a string. Anywhere else it is a column's or an
+  alias's name, and the statement runs. 5.35.1 and 5.35.2 refused such a name
+  wherever it stood, so `SELECT id FROM t WHERE pragma_flag = 1` was refused.
+- **On SQLite a column is no longer refused or filtered as a secret column
+  whose name differs from its own past ASCII alone.** SQLite folds ASCII letters
+  alone, so `"é"` and `"É"` are two columns, and the secret column rule now
+  compares names that way there. With `"É"` in `query_redacted_columns`,
+  `SELECT "é" FROM t` runs and `SELECT *` filters `É` alone; every earlier
+  version refused `é` too and filtered both. A name is still read with every
+  letter folded for what it means, so a column that folds to a built-in name or
+  one the heuristic flags stays secret, and so does one a configured name folds
+  to when no column spells that name as SQLite folds it. PostgreSQL, MySQL and
+  MariaDB fold every letter as before.
+- **On SQLite a statement that names a view over a pragma function or a
+  counter that tells of the connection is refused, by the view and the
+  function.** The view's definition runs on `rails_query`'s own connection, so
+  `CREATE VIEW v AS SELECT name FROM pragma_database_list` answered without
+  the app's attached databases, and a view calling `changes()` answered for the
+  wrong connection, both as a success. 5.35.1 and 5.35.2 refused the function
+  written in the statement alone. A view over a pragma function that describes
+  the schema or the database file, such as `pragma_table_info`, runs.
+- **Every preset names each database's adapter and lists the databases.** On
+  `preset: standard`, which runs no `multi_database` introspector, the static
+  tier called the primary's adapter `unknown` in `rails_onboard` and in the
+  generated files, named no adapter beside a second database, and left the
+  `- Databases:` line out of CLAUDE.md and `.claude/rules/rails-context.md`.
+  The context now carries the app databases list on every preset, so these
+  answer what `preset: full` answers. 5.35.2 and earlier versions had the gap.
+- **A model whose class body raises is named with what it raised.** Ruby
+  registers a class before its body runs, so a model file that raised partway
+  down its class was listed as `[VERIFIED]` with only what ran before the
+  raise, and with no word that loading it failed. It is now named with the
+  error, as a file that raises before its class opens has been since 5.35.2.
+- **A booted model keeps its STI hierarchy while nothing has queried its
+  database.** A model whose table is in a second database, and so not in
+  `db/schema.rb`, lost its STI parent, children and type column until a first
+  query connected that database. The table is now read as not known to lack
+  the type column, as the static tier reads it, and a model with no STI parent
+  or child still answers no STI. 5.35.2 and earlier versions had the gap.
+- **The static mailer list adds the actions a mailer inherits from the app's
+  own mailers.** A `ShopMailer < BaseMailer` listed only the actions in its
+  own file, where Rails delivers the parent's public methods too and the
+  booted tier lists them. Each name now takes the visibility the nearest class
+  gives it, so a method the child makes private stays out. 5.35.2 and earlier
+  versions had the gap.
+- **`rails_get_schema` says when two databases share `db/schema.rb`.** Rails
+  dumps both the first database and the one named `primary` to that file, so
+  it holds whichever was dumped last. A table of the other database was called
+  missing from the connected one, with advice to run `rails db:migrate`, which
+  changes nothing. The answer now says "_main and primary both dump to
+  db/schema.rb, so it may describe primary. Not in main: events._". 5.35.2 and
+  earlier versions had the gap.
+- **The conventions section says how many entries each of its lists of five
+  leaves out.** `rails_get_config(section: "conventions")` shows the first five
+  authorization checks, denials, flash notices, flash alerts and not-found
+  patterns, and now ends a longer list with `- _...and N more._`. Every earlier
+  version cut each list at five and said nothing about the rest.
+- **`rails_runtime_info` shows Sidekiq's queue counts as the app's only when
+  Sidekiq is the Active Job adapter.** Under another adapter the jobs section
+  says live queue stats are only read from Sidekiq and names that adapter. When
+  the app also has Sidekiq workers of its own, Sidekiq's counts follow under a
+  `### Sidekiq` heading that says they are those workers' counts. Since 4.3.1
+  any app with Sidekiq loaded got Sidekiq's counts under the adapter's name,
+  where they read as that adapter's queue.
+- **The packaged gem holds only what a user of the gem runs or reads.** That
+  is `lib/`, `exe/`, `app/`, `config/`, the README, the changelog, the license,
+  `SECURITY.md`, the user docs in `docs/`, and the files those docs link to
+  (`CONTRIBUTING.md` and three ADRs), so every link works in the unpacked gem.
+  Every earlier version also packed the files that serve the repository alone:
+  `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `CODE_OF_CONDUCT.md`,
+  `docs/RELEASING.md`, the other ADRs, `docs/agents/`, the docs site config,
+  `.rspec`, `.rubocop.yml`, `.ruby-version`, `Rakefile`, `server.json` and the
+  gemspec. A tool that indexes an app's bundle could read the two assistant
+  files as instructions about the app.
+
 ## [5.35.2] - 2026-10-14
 
 ### Security

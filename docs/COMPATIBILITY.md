@@ -363,7 +363,10 @@ row estimates and index usage say they are not available there. CI's
 8.4 and MariaDB 10.6 and 11.4 on Rails 8.0, through mysql2 and Trilogy. It also
 runs PostgreSQL 16 with MySQL 8.0 and MariaDB 10.6 on Rails 7.0, which has no
 Trilogy adapter, and with MySQL 8.4 and MariaDB 11.4 on Rails 8.1; see
-[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-servers).
+[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-servers). The
+`postgresql_versions` job runs the PostgreSQL examples on PostgreSQL 14, 15,
+17 and 18 as well, since the plan checks read the plan the server prints and
+its shape changes between major versions.
 
 Postgres itself - live query safety (read-only transactions, the
 `BLOCKED_FUNCTIONS` guard against `pg_read_file`/`dblink`/`COPY ... PROGRAM`,
