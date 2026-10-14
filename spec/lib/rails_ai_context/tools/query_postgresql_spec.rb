@@ -965,13 +965,13 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
   end
 
-  it "refuses a VOLATILE function the app defined under a name on the read-only list, and runs the built-in ones" do
+  it "refuses every call of a listed name while the database holds a VOLATILE function of it in another language, and runs the built-in ones" do
     conn.execute("CREATE OR REPLACE FUNCTION public.pg_sequence_last_value(regclass) RETURNS bigint VOLATILE LANGUAGE sql AS 'SELECT 7::bigint'")
     conn.execute(%(CREATE SCHEMA IF NOT EXISTS rac_ext; CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA rac_ext))
     [ "SELECT public.pg_sequence_last_value('rac_pg_accounts'::regclass) AS v", "SELECT pg_sequence_last_value('rac_pg_accounts'::regclass) AS v" ].each do |sql|
       response = run(sql)
       expect([ response.error?, response.content.first[:text] ]).to eq([ true, "Blocked: the database holds a VOLATILE function named pg_sequence_last_value " \
-        "that rails_query cannot vouch for, so it runs no call of that name. Its list of read-only VOLATILE functions trusts the name for the server's " \
+        "that rails_query cannot vouch for, so rails_query runs no call of that name. Its list of read-only VOLATILE functions trusts the name for the server's " \
         "own function or an extension's C function alone." ]), sql
     end
     [ "SELECT pg_sleep_for('0 seconds') IS NOT NULL AS s", "SELECT gen_random_uuid() IS NOT NULL AS u", "SELECT random() < 2 AS r",

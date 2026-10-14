@@ -991,6 +991,7 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(read("SHOW VARIABLES LIKE '%timeout'", :mysql, [ [ "Lock_wait_timeout", "2" ] ])).to include("lock_wait_timeout")
       expect(read("SELECT v FROM information_schema.SESSION_VARIABLES WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
       expect(read("SELECT v FROM `information_schema`.`SESSION_VARIABLES` WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
+      expect(read(%(SELECT v FROM "information_schema"."SESSION_VARIABLES" WHERE n = 'LOCK_WAIT_TIMEOUT'), :mysql)).to include("lock_wait_timeout")
     end
 
     it "reads no setting from a string, a comment, an alias or a global value" do

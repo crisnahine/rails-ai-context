@@ -664,6 +664,9 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     it "keeps a mailer whose interface is class methods" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), "class ApplicationMailer < Mail::Notify::Mailer\nend\n")
+        File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), "class BaseMailer < ApplicationMailer\nend\n")
+        File.write(File.join(dir, "app", "mailers", "quiet_mailer.rb"), "class QuietMailer < BaseMailer\n  def self.ping = nil\nend\n")
         File.write(File.join(dir, "app", "mailers", "multi_notifications.rb"), <<~RUBY)
           class MultiNotifications < ApplicationMailer
             def self.deadline_passed(consultation)
@@ -677,6 +680,8 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(mailer).not_to be_nil
       expect(mailer[:actions]).to eq([])
       expect(mailer[:class_actions]).to eq(%w[deadline_passed])
+      expect(mailer).not_to have_key(:parent_class)
+      expect(result[:mailers].find { |m| m[:name] == "QuietMailer" }).to include(class_actions: %w[ping]).and(satisfy { |m| !m.key?(:parent_class) })
     end
 
     # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing
@@ -2173,7 +2178,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(entry).not_to be_nil
       expect(entry[:actions]).to eq([])
       expect(entry[:class_actions]).to eq(%w[blast])
-      expect(entry[:parent_class]).to eq("ApplicationMailer")
+      expect(entry).not_to have_key(:parent_class)
     end
 
     # Without eager loading, a mailer kept in app/services or app/models loads

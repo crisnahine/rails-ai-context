@@ -9,13 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **On PostgreSQL a VOLATILE function the app defined under a name on the
-  read-only list is refused.** The list of read-only VOLATILE functions trusted
-  a name in any schema, so a function of the app's own under one of those names
-  ran. A name now vouches for the built-in and for C code alone, such as an
-  extension's `uuid_generate_v4`; while the app defines a VOLATILE function of
-  that name in another language, every call of the name is refused. 5.35.2 and
-  earlier versions had the gap.
+- **On PostgreSQL a name on the read-only VOLATILE list vouches for the server's
+  own function and an extension's C function alone.** The list trusted a name in
+  any schema, so a VOLATILE function the app defined under one of those names
+  ran. While the database holds a VOLATILE function of a listed name in another
+  language outside `pg_catalog`, every call of the name is now refused, and the
+  refusal says so. 5.35.2 and earlier versions had the gap.
 - **On PostgreSQL 18 a set operation over a secret column is refused, as it is
   on older servers.** PostgreSQL 18 plans a set operation over the tables
   themselves, and the plan check that refuses a secret column passed through a
@@ -158,8 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a method the child makes private, under `private` or with `private :name`,
   stays out. The methods of `ApplicationMailer` itself stay out too, as the
   booted tier leaves them out, and on both tiers a mailer with no action of its
-  own no longer says it inherits its actions from `ApplicationMailer`. 5.35.2
-  and earlier versions had the gap.
+  own names where they come from only for a parent past the app's own mailers,
+  such as `Devise::Mailer`, and none past `ApplicationMailer`. 5.35.2 and
+  earlier versions had the gap.
 - **`rails_get_schema` says when two databases share `db/schema.rb`.** Rails
   dumps both the first database and the one named `primary` to that file, so it
   holds whichever was dumped last. A table of the other database was called

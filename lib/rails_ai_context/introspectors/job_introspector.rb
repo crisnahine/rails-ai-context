@@ -812,8 +812,24 @@ module RailsAiContext
       # Where a mailer with no actions keeps its interface, such as `self.` methods that
       # fan a notification out to many recipients.
       def no_action_detail(mailer)
+        walked = []
+        outside = mailer.superclass
+        while outside && app_defined?(outside)
+          walked << outside.name
+          outside = outside.superclass
+        end
         { class_actions: callable_class_methods(mailer.singleton_methods(false).map(&:to_s)).sort,
-          parent_class: mailer.superclass&.name }.reject { |_k, v| v.nil? || v == [] }
+          parent_class: inherited_from(walked, outside&.name) }.reject { |_k, v| v.nil? || v == [] }
+      end
+
+      # The parent past the app's own mailers that a mailer with no action of its own takes them from. None past the app
+      # base, whose methods and everything above it are no actions, and none from Rails itself.
+      def inherited_from(walked, outside)
+        return nil if walked.any? { |name| ActionResolver.app_base_name?(name, kind: :mailer) }
+
+        name = outside.to_s.delete_prefix("::")
+        name unless name.empty? || name.start_with?("ActionMailer::", "AbstractController::") ||
+                    ActionResolver.app_base_name?(name, kind: :mailer)
       end
 
       def callable_class_methods(names)
@@ -1197,7 +1213,8 @@ module RailsAiContext
           .select { |m| m[:scope] == :class && m[:visibility] == :public }
           .map { |m| m[:name] }
         entry[:class_actions] = class_actions.sort if (class_actions = callable_class_methods(class_actions)).any?
-        entry[:parent_class] = klass.parent_class if klass.parent_class
+        source = inherited_from(ancestors.map(&:name), (ancestors.last || klass).parent_class)
+        entry[:parent_class] = source if source
         entry
       end
 

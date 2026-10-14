@@ -163,9 +163,7 @@ module RailsAiContext
         return [ "- **Actions:** #{actions.join(', ')}" ] if actions.any?
 
         parent = mailer[:parent_class]
-        # The app base's own methods are no actions of the mailers under it.
-        inherited = parent && !Introspectors::ActionResolver.app_base_name?(parent, kind: :mailer)
-        reason = inherited ? "none declared here; inherited from `#{parent}`" : "none declared here"
+        reason = parent ? "none declared here; inherited from `#{parent}`" : "none declared here"
         lines = [ "- **Actions:** #{RailsAiContext::Confidence.unavailable(reason)}" ]
         class_actions = Array(mailer[:class_actions])
         lines << "- **Class methods:** #{class_actions.join(', ')}" if class_actions.any?
