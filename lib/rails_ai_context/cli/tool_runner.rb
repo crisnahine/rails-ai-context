@@ -147,7 +147,7 @@ module RailsAiContext
       end
 
       # The turned-off answer when skip_tools lists the tool a typed name spells, nil otherwise.
-      def self.skipped_tool_message(name)
+      def self.turned_off_message(name)
         skipped = candidate_names(name) & Server.skipped_tools
         Server.skipped_tool_message(skipped.first) if skipped.any?
       end
@@ -184,7 +184,7 @@ module RailsAiContext
         found = tools.find { |t| self.class.short_name(t.tool_name) == name }
         return [ found, nil ] if found
 
-        skipped = self.class.skipped_tool_message(name)
+        skipped = self.class.turned_off_message(name)
         raise ToolNotFoundError, skipped if skipped
 
         # Fuzzy suggestion

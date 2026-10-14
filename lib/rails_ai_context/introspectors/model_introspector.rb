@@ -723,6 +723,7 @@ module RailsAiContext
         detailed = extract_detailed_macros_from_ast(source_data)
         details.merge!(detailed)
         details[:ignored_columns] = model.ignored_columns.map(&:to_s).presence
+        # Reflection answers here, over an `establish_connection` the source walk read.
         details[:own_connection] = (true if own_connection?(model, details))
 
         details.compact
@@ -1372,8 +1373,6 @@ module RailsAiContext
           end
         end
 
-        # A model connects_to names is on that database, as the booted tier reads it.
-        macros.delete(:own_connection) if macros[:database]
         constants = extract_constants_from_source(source_path)
         macros[:constants] = constants if constants&.any?
 

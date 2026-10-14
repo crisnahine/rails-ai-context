@@ -207,7 +207,7 @@ composite unique index; `[in index after x]` marks a column that only trails
 
 ### `rails_get_model_details`
 
-AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing. On the static tier a model whose table the dump of its database does not declare says so: "`widgets` missing from db/schema.rb".
+AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing. On the static tier a model of the primary database whose table db/schema.rb does not declare says so: "`widgets` missing from db/schema.rb".
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

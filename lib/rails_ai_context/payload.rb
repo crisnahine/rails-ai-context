@@ -261,15 +261,16 @@ module RailsAiContext
       model_tables(schema, model).empty?
     end
 
-    # The dump of the model's database a static read parsed, such as "db/schema.rb", when it leaves out the
-    # model's table. Nil when it holds the table, or the tables came from the migrations or were not read.
+    # The primary's schema.rb, such as "db/schema.rb", when the static tier read its tables from it and it leaves out
+    # the table of a model on the primary. Nil otherwise: no other dump or replay is judged.
     def table_absent_from(schema, model)
       return unless model.is_a?(Hash) && model[:table_name] && !model[:table_name].to_s.include?(".") && !model[:own_connection]
-      return unless schema.is_a?(Hash) && schema[:tables].is_a?(Hash) && parsed_schema?(schema) && model_tables(schema, model).empty?
+      return unless model[:database].nil? || model.dig(:database, :writing).to_s == "primary"
+      # A concern or base the static tier could not read may set the table name.
+      return if Array(model[:concerns_unread]).any? || Array(model[:bases_unread]).any?
+      return unless schema.is_a?(Hash) && parsed_schema?(schema) && model_tables(schema, model).empty?
 
-      writing = model.dig(:database, :writing)&.to_s
-      source = writing && writing != "primary" ? secondary_databases(schema).find { |name, _| name.to_s == writing }&.last : schema
-      source[:parsed_from] if source.is_a?(Hash)
+      schema[:declared_in]
     end
 
     # Why the primary's dump leaves out a schema-qualified table, or nil.

@@ -105,6 +105,16 @@ RSpec.describe RailsAiContext::Payload do
   end
 
   # A dump can leave out a view, so only a live listing that lacks the table says it is missing.
+  describe ".table_absent_from" do
+    let(:tables) { { "users" => { columns: [] } } }
+
+    it "names the schema.rb a static read parsed, and judges no live listing" do
+      model = { table_name: "ghosts" }
+      expect(described_class.table_absent_from({ adapter: "static_parse", declared_in: "db/schema.rb", tables: tables }, model)).to eq("db/schema.rb")
+      expect(described_class.table_absent_from({ adapter: "postgresql", declared_in: "db/schema.rb", tables: tables }, model)).to be_nil
+    end
+  end
+
   describe ".missing_table?" do
     let(:schema) do
       { adapter: "postgresql", tables: { "users" => { columns: [] } },

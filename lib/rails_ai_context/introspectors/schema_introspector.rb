@@ -633,7 +633,6 @@ module RailsAiContext
           end
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
-          parsed[:parsed_from] = relative_dump_path(path)
           found[name] = parsed.merge(database_files(path, migrate_dir_for_dump(path)))
         end
         replay_secondary_migrations(dumps, unread)
@@ -812,8 +811,7 @@ module RailsAiContext
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: schema.enums,
           generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})",
-          parsed_from: relative_dump_path(path)
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         result[:search_path] = schema.search_path unless schema.search_path == PgNaming::DEFAULT_SEARCH_PATH
         result[:extensions] = schema.extensions.sort if schema.extensions.any?
@@ -873,8 +871,7 @@ module RailsAiContext
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: parsed[:enums],
           generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})",
-          parsed_from: relative_dump_path(path)
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
         }
         result[:search_path] = parsed[:names].path unless parsed[:names].path == PgNaming::DEFAULT_SEARCH_PATH
         result[:extensions] = parsed[:extensions].sort if parsed[:extensions].any?

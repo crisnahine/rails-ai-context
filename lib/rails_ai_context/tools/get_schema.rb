@@ -398,9 +398,9 @@ module RailsAiContext
         lines
       end
 
-      # The dump a static parse read.
+      # The dump a static parse read, from its own note when nothing else names it.
       private_class_method def self.dump_name(schema)
-        schema[:declared_in] || schema[:parsed_from] || "db/schema.rb"
+        schema[:declared_in] || schema[:note].to_s[/\AParsed from (\S+)/, 1] || "db/schema.rb"
       end
 
       # A table the shared dump declares that the connected database lacks may be the other database's,
