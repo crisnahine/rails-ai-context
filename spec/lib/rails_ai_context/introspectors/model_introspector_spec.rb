@@ -5593,6 +5593,10 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
       expect(details[:own_connection]).to be(true)
       expect(described_class.new(Rails.application).send(:extract_model_details, Post)).not_to have_key(:own_connection)
+      # Reflection answers on this tier, over an establish_connection the source names under a condition never met.
+      read = described_class.new(Rails.application)
+      allow(read).to receive(:extract_macros_from_ast).and_return({ own_connection: true })
+      expect(read.send(:extract_model_details, Post)).not_to have_key(:own_connection)
     ensure
       LegacyItem.remove_connection if defined?(LegacyItem)
     end

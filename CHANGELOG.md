@@ -14,11 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dump on disk and no migrations of its own, or with `database_tasks: false` and
   no committed dump, was left out of both. `rails_onboard` now lists it as
   "(tables not read)", and `rails_get_schema` says why: "Its tables are not
-  listed: db/extra_schema.rb is not on disk." A replica stays out of all three,
-  and so does a database whose dump is the primary's. For a `schema_dump` the
-  gem cannot follow, the reason now reads "`schema_dump` in its database.yml
-  entry names no file to read" on both tools. 5.36.1 and earlier versions had
-  the gap.
+  listed: db/extra_schema.rb is not on disk". A replica stays out of all three,
+  and so does a database whose dump is the primary's. The schema rules file
+  gives the primary no heading of its own when it is the only database with
+  tables. For a `schema_dump` the gem cannot follow, the reason now reads
+  "`schema_dump` in its database.yml entry names no file to read" on both tools.
+  5.36.1 and earlier versions had the gap.
 - **On the static tier a model of the primary database whose table db/schema.rb
   does not declare says so.** `rails_get_model_details`, `rails_onboard` and the
   generated files named the conventional table, `widgets`, with no word that

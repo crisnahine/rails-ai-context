@@ -589,7 +589,8 @@ module RailsAiContext
           return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
         end
 
-        if secondary_database_dumps.any?
+        # A database with no file on disk says nothing of where the app keeps its tables.
+        if secondary_database_dumps.any? { |_, db| db.key?(:dump) || db.key?(:migrations_paths) }
           return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no #{relative_dump_path(schema_dump_name)} or migrations found." }
         end
 
@@ -652,7 +653,7 @@ module RailsAiContext
           next if db.primary || db.replica || dumps.key?(db.name) || primary.include?(db.dump&.path)
 
           reason = db.missing_dump(app.root)
-          dumps[db.name] = { tables: {}, total_tables: 0, unread: true, note: "Its tables are not listed: #{reason}." } if reason
+          dumps[db.name] = { tables: {}, total_tables: 0, unread: true, note: "Its tables are not listed: #{reason}" } if reason
         end
       end
 

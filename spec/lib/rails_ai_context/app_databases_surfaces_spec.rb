@@ -284,9 +284,16 @@ RSpec.describe "the app databases on preset standard" do
     found = answers("missing_dump")
 
     expect(found[:onboard]).to include("(1 table), plus the extra database on SQLite (tables not read), plus the legacy database on SQLite (tables not read).")
-    expect(found[:schema]).to include("- **extra**: Its tables are not listed: db/extra_schema.rb is not on disk.",
+    expect(found[:schema]).to include("- **extra**: Its tables are not listed: db/extra_schema.rb is not on disk\n",
                                       "- **legacy**: Its tables are not listed: its database.yml entry turns `database_tasks` off")
+    expect(found[:file]).to include("_Its tables are not listed: db/extra_schema.rb is not on disk._\n")
     expect(found[:onboard] + found[:schema]).not_to include("extra_replica")
+    rules = Dir.mktmpdir do |dir|
+      RailsAiContext::Serializers::ClaudeRulesSerializer.new(found[:context]).call(dir)
+      File.read(File.join(dir, ".claude/rules/rails-schema.md"))
+    end
+    # Only the primary has tables, so the listing needs no heading per database.
+    expect(rules).to include("# Database Tables (1)").and(satisfy { |text| !text.include?("## primary") })
   end
 
   it "lists no database whose dump is the primary's, though that dump is not on disk" do

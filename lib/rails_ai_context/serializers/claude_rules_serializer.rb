@@ -66,9 +66,10 @@ module RailsAiContext
         live = " Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data." if served?("rails_get_schema")
         lines << "_Snapshot - may be stale after migrations.#{live}_"
 
+        headed = databases.size > 1 || databases.first.first
         databases.each do |name, tables|
           lines << ""
-          lines.concat(database_heading_lines(name, tables, secondary)) if secondary.any?
+          lines.concat(database_heading_lines(name, tables, secondary)) if headed
           lines.concat(table_reference_lines(tables, name, schema))
         end
 
