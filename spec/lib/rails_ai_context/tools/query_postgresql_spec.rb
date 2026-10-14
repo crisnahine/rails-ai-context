@@ -1040,6 +1040,12 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   it "plans an EXPLAIN (GENERIC_PLAN) as the server does, and still refuses what its statement would leak" do
+    # The option came with PostgreSQL 16; an older server answers an error of its own.
+    if conn.select_value("SHOW server_version_num").to_i < 160_000
+      expect(run("EXPLAIN (GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE id = $1").error?).to be(true)
+      next
+    end
+
     [ "EXPLAIN (GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE id = $1", "explain (verbose, generic_plan true) SELECT id FROM rac_pg_accounts WHERE id = $1",
       "EXPLAIN (GENERIC_PLAN on, COSTS off) SELECT id, email FROM rac_pg_accounts WHERE id = $1 AND email = $2" ].each do |sql|
       response = run(sql)
