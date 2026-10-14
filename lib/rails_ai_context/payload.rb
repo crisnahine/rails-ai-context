@@ -135,10 +135,9 @@ module RailsAiContext
       words ? " (#{words})" : ""
     end
 
-    # The multi_database section. A payload that holds none (a preset without it) gets the same list
-    # from the app databases, so no mark or name depends on the preset.
+    # The multi_database section, which the introspector seam fills on every preset.
     def multi_database(context)
-      section(context, :multi_database) || Introspectors::MultiDatabaseIntrospector.new(RailsAiContext.default_app).listing
+      section(context, :multi_database) || {}
     end
 
     def databases(context)

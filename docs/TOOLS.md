@@ -147,10 +147,7 @@ dump was not read is named with "(tables not read)" and left out of the table
 count, and the summary says so: "5 tables in 2 databases, the warehouse
 database not read". It ends with the app's custom rake tasks (Rakefile,
 `lib/tasks`, `rakelib`), each with its arguments, description and file: the
-first 15 at `standard`, every one at `full`. A known limit: on
-`preset: standard` on the static tier the stack line reads the primary's
-adapter as `unknown`, and a database's heading in the generated files can name
-no adapter.
+first 15 at `standard`, every one at `full`.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
 command and its USAGE line), the `lib/templates` files that replace a built-in
 generator's template, and the Railties under `lib/` with their initializers.
@@ -184,10 +181,9 @@ or `schema_format` says.
 A database only another environment configures carries a mark, as in
 `cache (production only)`, and a first database that is not named `primary`
 is listed under its own name where another database is the one named
-`primary`. Both are the same under every `preset`. With the
-`multi_database` introspector off, as on `preset: standard`, `rails_get_schema`,
-`rails_onboard`, `rails_performance_check` and the generated files read them
-from the app databases list.
+`primary`. Both are the same under every `preset`, and so is each database's
+adapter: with the `multi_database` introspector off, as on `preset: standard`,
+the context still carries the app databases list.
 
 Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
 with the column, so a lookup on it alone can use one; `[unique]` means a unique
