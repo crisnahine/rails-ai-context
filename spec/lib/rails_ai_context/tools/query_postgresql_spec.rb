@@ -566,6 +566,19 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP TABLE IF EXISTS rac_pg_mixed")
   end
 
+  it "keeps refusing a column whose name differs from a configured secret one's past ASCII alone, and filters both" do
+    RailsAiContext.configuration.query_redacted_columns += [ "\u00c9" ]
+    conn.execute("DROP TABLE IF EXISTS rac_pg_accents")
+    conn.execute(%(CREATE TABLE rac_pg_accents (id int, "\u00e9" text, "\u00c9" text)))
+    conn.execute("INSERT INTO rac_pg_accents VALUES (1, 'lower', 'upper-secret')")
+
+    refused([ %(SELECT "\u00e9" FROM rac_pg_accents), %(SELECT "\u00c9" AS x FROM rac_pg_accents), "SELECT \u00c9 FROM rac_pg_accents" ], "Blocked: ")
+    expect(run("SELECT * FROM rac_pg_accents").content.first[:text]).to include("[FILTERED]").and(satisfy { |t| !t.match?(/lower|upper-secret/) })
+  ensure
+    RailsAiContext.configuration.query_redacted_columns -= [ "\u00c9" ]
+    conn.execute("DROP TABLE IF EXISTS rac_pg_accents")
+  end
+
   it "filters both columns of a name a join returns twice, at the top and through a subquery" do
     [ "SELECT * FROM rac_pg_accounts a JOIN rac_pg_accounts b ON true",
       "SELECT * FROM (SELECT * FROM rac_pg_accounts a JOIN rac_pg_accounts b ON true) x" ].each do |sql|

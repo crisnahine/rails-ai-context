@@ -481,7 +481,7 @@ RSpec.describe RailsAiContext::SqlGate do
   end
 
   describe "SQLite pragma functions" do
-    let(:relations) { { "pragma_notes" => %w[id body], "logs" => %w[id pragma_flag pragma_foreign_keys pragma_database_list changes last_insert_rowid] } }
+    let(:relations) { { "pragma_notes" => %w[id body], "changes" => %w[id], "logs" => %w[id pragma_flag pragma_foreign_keys pragma_database_list changes last_insert_rowid] } }
 
     it "runs every one that describes the schema or the database file, and refuses the rest on SQLite alone" do
       %w[table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check integrity_check quick_check
@@ -495,9 +495,21 @@ RSpec.describe RailsAiContext::SqlGate do
       end
       expect(runs?("SELECT changes, total_changes FROM counters")).to be(true)
       expect(runs?("SELECT id, body FROM pragma_notes")).to be(true)
-      # A column's name is no table's: one named like a pragma function or a counter is refused with it.
+      # A column's name is no table's, so the column runs and the function where a table stands stays refused.
+      [ "SELECT id FROM logs WHERE pragma_flag = 1", "SELECT l.pragma_foreign_keys, pragma_database_list, changes FROM logs l",
+        "SELECT id FROM logs WHERE pragma_flag IN (1, 2) ORDER BY pragma_flag, id", "SELECT 'pragma_foreign_keys' AS n",
+        "SELECT id FROM logs JOIN logs AS m USING (pragma_flag)", "SELECT id FROM logs AS pragma_database_list",
+        "SELECT count(*) OVER (PARTITION BY id, pragma_flag) FROM logs" ].each do |sql|
+        expect(runs?(sql)).to be(true), sql
+      end
       [ "SELECT name, file FROM pragma_database_list", "SELECT * FROM pragma_foreign_keys", "SELECT * FROM 'pragma_foreign_keys'",
-        "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT id FROM logs WHERE pragma_flag = 1" ].each do |sql|
+        "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT * FROM logs, pragma_database_list",
+        "SELECT * FROM logs l, `pragma_database_list` d", "SELECT * FROM logs LEFT JOIN [pragma_foreign_keys]",
+        "SELECT * FROM logs JOIN logs m ON m.id = logs.id, pragma_foreign_keys", "SELECT * FROM main.pragma_database_list",
+        %(SELECT * FROM "main"."pragma_database_list"), "SELECT * FROM (pragma_database_list)", "SELECT * FROM logs, (pragma_foreign_keys)",
+        "SELECT 1 WHERE 'main' IN pragma_database_list", "SELECT 1 WHERE 1 IN main.pragma_foreign_keys",
+        "SELECT pragma_database_list() AS n", "SELECT * FROM pragma_function_list ()",
+        "SELECT (SELECT name FROM pragma_database_list) AS n FROM logs", "SELECT changes() AS n FROM changes" ].each do |sql|
         expect(refusal(sql)).to include("tells of the connection that runs it"), sql
       end
     end
