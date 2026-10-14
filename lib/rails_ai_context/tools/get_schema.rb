@@ -403,13 +403,13 @@ module RailsAiContext
 
       # A table the shared dump declares that the connected database lacks may be the other database's,
       # so it is no sign the connected one is behind.
-      private_class_method def self.shared_dump_line(schema)
+      private_class_method def self.shared_dump_lines(schema)
         absent = schema[:connected_tables]&.zero? ? (schema[:tables] || {}).keys.map(&:to_s) : declared_not_connected(schema)
-        return nil if absent.empty?
+        return [] if absent.empty?
 
         shared = schema[:shared_dump]
-        "_#{shared[:primary]} and #{shared[:other]} both dump to #{dump_name(schema)}, so it may describe #{shared[:other]}. " \
-          "Not in #{shared[:primary]}: #{names_phrase(absent)}._"
+        [ "_#{shared[:primary]} and #{shared[:other]} both dump to #{dump_name(schema)}, so it may describe #{shared[:other]}. " \
+          "Not in #{shared[:primary]}: #{names_phrase(absent)}._" ]
       end
 
       private_class_method def self.names_phrase(names)
@@ -425,7 +425,7 @@ module RailsAiContext
         # has the table the database is missing.
         missing = declared_not_connected(schema)
         if schema[:shared_dump]
-          lines.concat([ shared_dump_line(schema) ].compact)
+          lines.concat(shared_dump_lines(schema))
         else
           if missing.any?
             declared_total = Array(schema[:declared_tables]).size

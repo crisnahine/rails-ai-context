@@ -16,9 +16,6 @@ module RailsAiContext
     # Rows from a guarded read; unbounded when no timeout could hold it.
     Rows = Data.define(:columns, :rows, :unbounded)
 
-    # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL., and current_setting('..').
-    SETTING_READ = /(?:\bshow\s+|@@(?:(?:session|local)\.)?|current_setting\s*\(\s*')(\w+)/i
-
     Family = Data.define(:key, :name) do
       def known?
         key != :unknown
@@ -151,11 +148,10 @@ module RailsAiContext
         runtime.index_tables(connection, schemas)
       end
 
-      # The settings the tool sets for a statement that the statement reads, or that a SHOW VARIABLES row names, each
-      # with the session's own value. Read with no bound: reading a setting waits on no lock.
+      # The settings the tool sets for a statement among those it reads (SqlGate.settings_read), each with the session's
+      # own value. Read with no bound: reading a setting waits on no lock.
       # @return [Hash{String => String}]
-      def own_settings(connection, sql, shown = [])
-        read = (sql.scan(SETTING_READ).flatten + shown).map(&:downcase)
+      def own_settings(connection, read)
         return {} if read.empty?
 
         runtime.bound_settings(connection).filter_map do |name, query|

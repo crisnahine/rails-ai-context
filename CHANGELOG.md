@@ -9,13 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **On PostgreSQL 18 a set operation over a secret column is refused, as it
-  is on older servers.** PostgreSQL 18 plans a set operation over the tables
+- **On PostgreSQL 18 a set operation over a secret column is refused, as it is
+  on older servers.** PostgreSQL 18 plans a set operation over the tables
   themselves, and the plan check that refuses a secret column passed through a
-  set operation did not read that shape. A statement could then test a secret
-  value by the rows it returned, through a table or a view that renames the
-  column. A set operation now counts every column its inputs hand up as a use
-  of that column. 5.35.2 and earlier versions had the gap on PostgreSQL 18.
+  set operation did not read that shape. A set operation now counts every column
+  its inputs hand up as a use of that column. 5.35.2 and earlier versions had
+  the gap on PostgreSQL 18.
 
 ### Changed
 
@@ -25,16 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which is `rails_query`'s own. 5.35.1 and 5.35.2 ran such a call when a table
   carried the counter's name. Read the counter on the app's own connection, in
   `bin/rails runner` or the console.
-- **The packaged gem holds only what a user of the gem runs or reads.** That
-  is `lib/`, `exe/`, `app/`, `config/`, the README, the changelog, the license,
+- **The packaged gem holds only what a user of the gem runs or reads.** That is
+  `lib/`, `exe/`, `app/`, `config/`, the README, the changelog, the license,
   `SECURITY.md`, the user docs in `docs/`, and the files those docs link to
   (`CONTRIBUTING.md` and three ADRs), so every link works in the unpacked gem.
-  Every earlier version also packed the files that serve the repository alone:
-  `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `CODE_OF_CONDUCT.md`,
-  `docs/RELEASING.md`, the other ADRs, `docs/agents/`, the docs site config,
-  `.rspec`, `.rubocop.yml`, `.ruby-version`, `Rakefile`, `server.json` and the
-  gemspec. A tool that indexes an app's bundle could read the two assistant
-  files as instructions about the app.
+  5.35.2 also packed the files that serve the repository alone: `AGENTS.md`,
+  `CLAUDE.md`, `CONTEXT.md`, `CODE_OF_CONDUCT.md`, `docs/RELEASING.md`, the
+  other ADRs, `docs/agents/`, the docs site config, `.rspec`, `.rubocop.yml`,
+  `.ruby-version`, `Rakefile` and `server.json`. A tool that indexes an app's
+  bundle could read the two assistant files as instructions about the app.
 
 ### Fixed
 
@@ -87,11 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bound the tool set for the statement (`2s`) with nothing to say it was not the
   session's (`50s`), and so did `transaction_read_only` on PostgreSQL, and the
   statement limit (`max_execution_time` or `max_statement_time`) and
-  `lock_wait_timeout` on MySQL and MariaDB, by `@@` or by `SHOW VARIABLES`. The
-  answer now ends with a note, for example "statement_timeout here is the value
-  rails_query sets for each statement it runs. The session's own:
-  statement_timeout 50s." A name used as an alias or a column, and a global
-  value on MySQL and MariaDB, get no note. 5.35.2 and earlier gave no note.
+  `lock_wait_timeout` on MySQL and MariaDB, by `@@` (the name backquoted or
+  not), by `SHOW VARIABLES` or by MariaDB's
+  `information_schema.SESSION_VARIABLES`. The answer now ends with a note, for
+  example "statement_timeout here is the value rails_query sets for each
+  statement it runs. The session's own: statement_timeout 50s." A name used as
+  an alias or a column, one in a string or a comment, and a global value on
+  MySQL and MariaDB get no note. 5.35.2 and earlier gave no note.
 - **On PostgreSQL 13 and 14 a temporary table runs, with its secret column
   filtered.** Before PostgreSQL 15 a plan names the session's temporary schema
   by its number (`pg_temp_3`), where the column reads name it `pg_temp`, so
@@ -8605,7 +8605,7 @@ Every introspector that scans `.rb` files has been migrated from regex-based pat
 
 ### Added - 8 new introspectors closing RAILS_NERVOUS_SYSTEM.md gaps
 
-An audit against [`RAILS_NERVOUS_SYSTEM.md`](RAILS_NERVOUS_SYSTEM.md) identified 9 framework sections where introspection was missing or partial. This release ships the 8 introspectors needed to close them (the 9th - §11 Query interface - was already covered by `:conventions` via `load_async` / `.async_*` scanning). All are wired into `PRESETS[:full]`. The gem now exposes **39 introspectors** (up from 31).
+An audit against `RAILS_NERVOUS_SYSTEM.md` identified 9 framework sections where introspection was missing or partial. This release ships the 8 introspectors needed to close them (the 9th - §11 Query interface - was already covered by `:conventions` via `load_async` / `.async_*` scanning). All are wired into `PRESETS[:full]`. The gem now exposes **39 introspectors** (up from 31).
 
 - **`InitializerIntrospector` (`:initializers`, §2).** Enumerates `Rails.application.initializers` - every initializer's name, owner, declared `before:` / `after:` ordering edges, and the `source_location` of its block. Also summarizes each `config/initializers/*.rb` file (initializer count + the top `config.*` setters it touches) so AI can jump straight to user-owned boot code.
 - **`AutoloadIntrospector` (`:autoload`, §3).** Zeitwerk presence, both `Rails.autoloaders.main` and `.once` with their collapsed dirs + ignored paths + root dirs, raw `autoload_paths` / `autoload_once_paths` / `eager_load_paths`, the resolved `eager_load` boolean, plus custom inflection rules extracted from `config/initializers/*.rb` (`inflect.acronym` / `.plural` / `.singular` / `.irregular` / `.uncountable` / `.human`). Paths are root-relative.

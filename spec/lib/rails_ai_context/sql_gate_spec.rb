@@ -512,7 +512,10 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT (SELECT name FROM pragma_database_list) AS n FROM logs", "SELECT changes() AS n FROM changes",
         "SELECT id FROM logs a JOIN logs b USING (id), pragma_query_only", %(SELECT id FROM logs a JOIN logs b USING (id), main."pragma_database_list"),
         "SELECT id FROM logs a NATURAL JOIN logs b, pragma_database_list", "SELECT id FROM logs a CROSS JOIN logs b, pragma_query_only",
-        "SELECT id FROM logs INDEXED BY logs_by_id, pragma_query_only", "SELECT id FROM logs NOT INDEXED, pragma_query_only" ].each do |sql|
+        "SELECT id FROM logs INDEXED BY logs_by_id, pragma_query_only", "SELECT id FROM logs NOT INDEXED, pragma_query_only",
+        "SELECT id FROM logs AS window, pragma_query_only", "SELECT id FROM logs window, [pragma_database_list]",
+        "WITH window AS (SELECT 1 AS one) SELECT one FROM window, pragma_query_only",
+        "SELECT id FROM logs a NATURAL JOIN logs window, main.pragma_query_only" ].each do |sql|
         expect(refusal(sql)).to include("tells of the connection that runs it"), sql
       end
     end
@@ -972,6 +975,26 @@ RSpec.describe RailsAiContext::SqlGate do
     it "says one that reads an encrypts column is not released" do
       expect(refusal("SELECT taxed FROM users"))
         .to include("`taxed` is a generated column that reads `tax_number`", "config.query_allowed_columns does not release it")
+    end
+  end
+
+  describe ".settings_read" do
+    def read(sql, family, rows = [])
+      described_class.settings_read(sql, families.fetch(family), rows)
+    end
+
+    it "reads a setting the statement names where the name is code, and the names a list of the session's settings shows" do
+      expect(read("SELECT @@lock_wait_timeout, @@SESSION.`max_execution_time` AS m, @@LOCAL.x", :mysql)).to eq(%w[lock_wait_timeout max_execution_time x])
+      expect(read("SELECT current_setting('statement_timeout') AS t", :postgresql)).to eq(%w[statement_timeout])
+      expect(read("SHOW VARIABLES LIKE '%timeout'", :mysql, [ [ "Lock_wait_timeout", "2" ] ])).to include("lock_wait_timeout")
+      expect(read("SELECT v FROM information_schema.SESSION_VARIABLES WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
+    end
+
+    it "reads no setting from a string, a comment, an alias or a global value" do
+      expect(read("SELECT '@@lock_wait_timeout' AS w /* @@max_execution_time */ # SHOW lock_wait_timeout", :mysql)).to eq([])
+      expect(read("SELECT 'show statement_timeout' AS s -- current_setting('statement_timeout')", :postgresql)).to eq([])
+      expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout", :mysql)).to eq(%w[global])
+      expect(read("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout", "50" ] ])).to eq(%w[global])
     end
   end
 

@@ -5,12 +5,16 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::ReadLogs do
   let(:log_dir) { File.join(Rails.root, "log") }
 
-  # test.log is the booted app's own log, which later specs read: put it back as it was.
+  # test.log is the booted app's own log, which later specs read: put it back as it was. The app writes it too, so
+  # its loggers write nowhere while an example counts its lines.
   around do |example|
     path = File.join(Rails.root, "log", "test.log")
     saved = File.binread(path) if File.exist?(path)
+    loggers = [ Rails.logger, ActiveRecord::Base.logger ]
+    Rails.logger = ActiveRecord::Base.logger = Logger.new(nil)
     example.run
   ensure
+    Rails.logger, ActiveRecord::Base.logger = loggers
     saved ? File.binwrite(path, saved) : FileUtils.rm_f(path)
   end
 

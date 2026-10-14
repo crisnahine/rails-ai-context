@@ -317,6 +317,12 @@ Proof sources:
    on the v5.35.1 code and on the fixed code, with every changed answer traced
    to its fix; and for each fix an example that fails on the v5.35.1 code, on a
    real server where the fix is a server's.
+   In the v5.36.0 release QA: for each fix an example that fails on the v5.35.2
+   code, on a real server where the fix is a server's; `rails_query` through
+   its tool call on real PostgreSQL 13 to 18 (13 on a local server, the others
+   in CI), MySQL 8.0 and 8.4 and MariaDB 10.6 and 11.4, through mysql2 and
+   Trilogy, on Rails 7.0, 8.0 and 8.1; and the unit suite and the E2E harness
+   on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

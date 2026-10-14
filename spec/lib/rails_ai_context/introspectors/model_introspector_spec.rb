@@ -6557,7 +6557,10 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
   describe "STI on the booted tier" do
     it "reads the type column the model names, not a fixed one" do
-      parent = Class.new { def self.name = "Vehicle" }
+      parent = Class.new do
+        def self.name = "Vehicle"
+        def self.abstract_class? = false
+      end
       model = double("Car", inheritance_column: "kind", connected?: true, table_exists?: true,
                      columns_hash: { "kind" => double }, descendants: [], superclass: parent)
 
@@ -6568,20 +6571,26 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
     # Rails connects a model's database on its first query, a table of a second database is not in db/schema.rb,
     # and the models of a second database inherit from an abstract base that connects to it.
-    it "keeps the hierarchy of a table db/schema.rb does not hold while nothing has queried its database" do
+    it "keeps the hierarchy of a table db/schema.rb does not hold while nothing has queried its database, and none where STI is off" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         FileUtils.mkdir_p(File.join(dir, "db"))
         File.write(File.join(dir, "db", "schema.rb"), "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n")
         { "zz_analytics_record" => "class ZzAnalyticsRecord < ApplicationRecord\n  self.abstract_class = true\nend\n",
           "zz_vehicle" => "class ZzVehicle < ZzAnalyticsRecord\nend\n", "zz_car" => "class ZzCar < ZzVehicle\nend\n",
-          "zz_lone" => "class ZzLone < ZzAnalyticsRecord\nend\n" }.each { |file, source| File.write(File.join(dir, "app", "models", "#{file}.rb"), source) }
+          "zz_lone" => "class ZzLone < ZzAnalyticsRecord\nend\n", "zz_phone" => "class ZzPhone < ZzGadget\nend\n",
+          "zz_gadget" => "class ZzGadget < ZzAnalyticsRecord\n  self.inheritance_column = nil\nend\n" }.each { |file, source| File.write(File.join(dir, "app", "models", "#{file}.rb"), source) }
         base = stub_const("ZzAnalyticsRecord", Class.new(ApplicationRecord) { self.abstract_class = true })
         vehicle = stub_const("ZzVehicle", Class.new(base) { self.table_name = "zz_vehicles" })
         car = stub_const("ZzCar", Class.new(vehicle))
         lone = stub_const("ZzLone", Class.new(base) { self.table_name = "zz_lones" })
-        allow(ActiveRecord::Base).to receive(:descendants).and_return([ base, vehicle, car, lone ])
-        { vehicle => [ car ], car => [], lone => [] }.each do |model, descendants|
+        gadget = stub_const("ZzGadget", Class.new(base) do
+          self.table_name = "zz_gadgets"
+          self.inheritance_column = nil
+        end)
+        phone = stub_const("ZzPhone", Class.new(gadget))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([ base, vehicle, car, lone, gadget, phone ])
+        { vehicle => [ car ], car => [], lone => [], gadget => [ phone ], phone => [] }.each do |model, descendants|
           allow(model).to receive_messages(connected?: false, table_exists?: false, descendants: descendants)
         end
 
@@ -6590,6 +6599,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(models["ZzVehicle"][:sti]).to eq(sti_base: true, sti_children: [ "ZzCar" ], type_column: "type")
         expect(models["ZzCar"][:sti]).to eq(sti_base: false, sti_parent: "ZzVehicle", type_column: "type")
         expect(models["ZzLone"]).not_to have_key(:sti)
+        expect([ models["ZzGadget"], models["ZzPhone"] ].map { |model| [ model[:table_name], model.key?(:sti) ] }).to eq([ [ "zz_gadgets", false ] ] * 2)
       end
     end
   end

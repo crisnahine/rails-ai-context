@@ -602,7 +602,7 @@ module RailsAiContext
             path_name = SourceScan.concerns_name(path_name, source)
           end
           # A class whose body raised is registered holding what ran before the raise.
-          if (raised = EagerLoad.raised(record.path))
+          if EagerLoad.raised(record.path)
             half_built = DeclaredConstant.named(model_source(record.path).to_s, path_name)
             models.reject! { |model| model.name == half_built }
             known.delete(half_built)
@@ -624,7 +624,7 @@ module RailsAiContext
           # Never required here either: a file that does not compile, or
           # whose class body needs one that does not (see EagerLoad). Why is
           # the answer for that model.
-          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path) || raised)
+          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path))
             @unloadable[class_name] = reason
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
             next
@@ -1142,7 +1142,7 @@ module RailsAiContext
 
         parent = model.superclass
         # An abstract base (ApplicationRecord, or the one a second database connects through) holds no rows of its own.
-        sti_parent = parent.name if parent && parent != ActiveRecord::Base && !(parent.respond_to?(:abstract_class?) && parent.abstract_class?)
+        sti_parent = parent.name if parent && parent != ActiveRecord::Base && !parent.abstract_class?
         # A table db/schema.rb does not hold is in another database, so only a class family says it is STI.
         return nil if !connected && !SchemaReader.for(app.root).table?(model.table_name) && sti_parent.nil? && children.empty?
 

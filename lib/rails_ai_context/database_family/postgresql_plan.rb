@@ -16,7 +16,7 @@ module RailsAiContext
       SYSTEM_SCHEMA = /\A(?:pg_catalog|information_schema|pg_toast(?:_temp_\d+)?)\z/
 
       # Before PostgreSQL 15 a plan names the session's temporary schema by its number, where the catalog reads say pg_temp.
-      # No session can plan another session's temporary table, so the number is always the session's own.
+      # Another session's temporary table can be planned but never read, so a statement over one fails when it runs.
       OWN_TEMP_SCHEMA = /\Apg_temp_\d+\z/
 
       APPENDS = [ "Append", "Merge Append" ].freeze

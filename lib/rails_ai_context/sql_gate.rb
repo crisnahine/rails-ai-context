@@ -126,7 +126,12 @@ module RailsAiContext
     SQLITE_PRAGMA_NAME = /\A["'`\[]?pragma_(\w+)["'`\]]?\z/i
     # The clauses after which a comma at the same depth starts another table of a FROM list.
     FROM_LIST_CLAUSES = %w[from join on using].freeze
-    CLAUSE_WORDS = %w[select from join on where group order having limit window values using returning set union intersect except].freeze
+    CLAUSE_WORDS = %w[select from join on where group order having limit values using returning set union intersect except].freeze
+
+    # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL. (backquoted or not), current_setting('..').
+    SETTING_READ = /(?:\bshow\s+|@@(?:(?:session|local)\.)?|current_setting\s*\(\s*')`?(\w+)/i
+    # A list of the session's settings, which names each in its rows or in the filter the statement puts on it.
+    SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\bsession_variables\b/i
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
@@ -323,6 +328,29 @@ module RailsAiContext
       end
 
       out.strip
+    end
+
+    # The session settings a statement reads: by name where the name is code, outside a string and a comment, and
+    # every name a list of the session's settings shows in its rows or its filter.
+    def self.settings_read(sql, family, rows)
+      text = comment_free(sql, family)
+      code = mask_quoted(text, family) { |kind, _span| kind == :string }
+      read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
+      read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if code.match?(SETTINGS_LIST)
+      read.map(&:downcase)
+    end
+
+    # Every quoted span the block picks blanked to spaces of the same length, so positions still line up.
+    def self.mask_quoted(text, family, backslash: family.backslash_escapes?)
+      scanner = Scanner.new(text)
+      out = +""
+
+      until scanner.eos?
+        kind, span = quoted(scanner, family, backslash: backslash)
+        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : yield(kind, span) ? " " * span.length : span)
+      end
+
+      out
     end
 
     # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
@@ -690,15 +718,7 @@ module RailsAiContext
     # only and positions still line up. only: the one kind to blank, :string or :quoted. With a block, the spans it picks.
     def mask_quoted(text, only = nil, &picks)
       picks ||= ->(kind, _span) { only.nil? || kind == only }
-      scanner = Scanner.new(text)
-      out = +""
-
-      until scanner.eos?
-        kind, span = self.class.quoted(scanner, @family, backslash: @backslash)
-        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : picks.call(kind, span) ? " " * span.length : span)
-      end
-
-      out
+      self.class.mask_quoted(text, @family, backslash: @backslash, &picks)
     end
 
     # [kind, text] for each token of comment-free text: :word (bare, a keyword or a name), :quoted (a name in
