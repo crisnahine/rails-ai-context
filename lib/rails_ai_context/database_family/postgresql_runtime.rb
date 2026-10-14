@@ -44,8 +44,8 @@ module RailsAiContext
 
       # Planning only: EXPLAIN without ANALYZE runs nothing, not even a VOLATILE function.
       # A timeout and an SQL error are raised, so the caller never runs what it could not plan.
-      def plan(conn, sql, timeout)
-        json = read_only(conn, "EXPLAIN (VERBOSE, FORMAT JSON) #{sql}", timeout).rows.first&.first
+      def plan(conn, sql, timeout, generic: false)
+        json = read_only(conn, "EXPLAIN (VERBOSE, FORMAT JSON#{", GENERIC_PLAN" if generic}) #{sql}", timeout).rows.first&.first
         data = JSON.parse(json.to_s)
         data.is_a?(Array) && data.first.is_a?(Hash) ? data.first["Plan"] : nil
       rescue JSON::ParserError
