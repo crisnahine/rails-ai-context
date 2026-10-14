@@ -50,6 +50,21 @@ RSpec.describe RailsAiContext::Tools::Query do
         answer(sql, **options).content.first[:text]
       end
 
+      it "keeps refusing a column named like a configured secret one but for case past ASCII, and filters it" do
+        RailsAiContext.configuration.query_redacted_columns += [ "\u00c9" ]
+        conn.execute("DROP TABLE IF EXISTS rac_my_accents")
+        conn.execute("CREATE TABLE rac_my_accents (id int, `\u00e9` varchar(20))")
+        conn.execute("INSERT INTO rac_my_accents VALUES (1, 'lower-secret')")
+
+        [ "SELECT `\u00e9` FROM rac_my_accents", "SELECT `\u00c9` FROM rac_my_accents", "SELECT \u00c9 AS x FROM rac_my_accents" ].each do |sql|
+          expect(text(sql)).to start_with("Blocked: query references secret column"), sql
+        end
+        expect(text("SELECT * FROM rac_my_accents")).to include("[FILTERED]").and(satisfy { |t| !t.include?("lower-secret") })
+      ensure
+        RailsAiContext.configuration.query_redacted_columns -= [ "\u00c9" ]
+        conn.execute("DROP TABLE IF EXISTS rac_my_accents")
+      end
+
       describe "a table in another database of the server" do
         def drop_others
           conn.execute("DROP VIEW IF EXISTS rac_my_across")

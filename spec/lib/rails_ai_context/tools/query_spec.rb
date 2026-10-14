@@ -1893,6 +1893,41 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "a SQLite column whose name differs from a secret column's by a letter past ASCII" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryAccentSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryAccentSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "accents.sqlite3"))
+      QueryAccentSpecRecord.connection.tap do |c|
+        c.execute(%(CREATE TABLE accents (id integer, "é" text, "É" text)))
+        c.execute("INSERT INTO accents VALUES (1, 'lower', 'upper-secret')")
+      end
+    end
+
+    before do
+      RailsAiContext.configuration.query_redacted_columns += [ "É" ]
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryAccentSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def text(sql)
+      RailsAiContext::RunCache.around { described_class.call(sql: sql) }.content.first[:text]
+    end
+
+    it "reads the other column, since SQLite folds ASCII letters alone, and keeps the secret one refused and filtered" do
+      expect(text(%(SELECT "é" FROM accents))).to include("| lower")
+      answer = text("SELECT * FROM accents")
+      expect(answer).to include("lower", "[FILTERED]")
+      expect(answer).not_to include("upper-secret")
+      expect(text(%(SELECT "É" AS x FROM accents))).to start_with("Blocked: query references secret column `É`.")
+    end
+  end
+
   describe "a literal that reads like an injection or a locking clause" do
     it "runs a literal holding OR 1=1" do
       response = described_class.call(sql: "SELECT 'a' AS v WHERE 'x' LIKE '%OR 1=1%' OR 1 = 1")
@@ -2080,16 +2115,15 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
     end
 
-    it "filters a generated column whose name differs from an innocent one's by the case of a letter past ASCII" do
+    it "filters a generated column whose name differs from an innocent one's by the case of a letter past ASCII, and runs the innocent one" do
       conn.execute(%(CREATE TABLE accents (id INTEGER, passwd TEXT, "É" TEXT AS (passwd) STORED, "é" TEXT AS (id) STORED)))
       conn.execute("INSERT INTO accents (id, passwd) VALUES (1, 'pw-value')")
 
-      # The secret column rule folds a name as Ruby does, so the innocent twin is kept secret with it.
-      [ %(SELECT "É" FROM accents), %(SELECT "é" FROM accents) ].each do |sql|
-        named = answer(sql)
-        expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("is a generated column that reads `passwd`") ]), sql
-      end
-      expect(text("SELECT * FROM accents")).to include("| 1  | [FILTERED] | [FILTERED] | [FILTERED] |")
+      # SQLite folds ASCII letters alone, so the twin is another column.
+      named = answer(%(SELECT "É" FROM accents))
+      expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("`É` is a generated column that reads `passwd`") ])
+      expect(text(%(SELECT "é" FROM accents))).to include("| 1")
+      expect(text("SELECT * FROM accents")).to include("| 1  | [FILTERED] | [FILTERED] | 1 |")
     end
 
     it "reads a quoted generated column's name with its own quote character alone un-doubled" do
