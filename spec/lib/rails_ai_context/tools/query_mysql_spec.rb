@@ -474,11 +474,13 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(text("SELECT @@LOCAL.lock_wait_timeout AS w")).to include("rails_query sets")
         expect(text("SELECT @@`lock_wait_timeout` AS w")).to include("rails_query sets")
         expect(text("SELECT @@SESSION.`lock_wait_timeout` AS w")).to include("rails_query sets")
+        expect(text("SELECT @@session . lock_wait_timeout AS w")).to include("rails_query sets")
         expect(text("SHOW SESSION VARIABLES LIKE 'lock_wait_timeout'")).to include("rails_query sets")
         expect(text("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'")).not_to include("rails_query sets")
         if conn.mariadb?
           read = "SELECT VARIABLE_VALUE FROM information_schema.%s WHERE VARIABLE_NAME = 'LOCK_WAIT_TIMEOUT'"
           expect(text(format(read, "SESSION_VARIABLES"))).to include("lock_wait_timeout here is the value")
+          expect(text(format(read, "`SESSION_VARIABLES`"))).to include("lock_wait_timeout here is the value")
           expect(text(format(read, "GLOBAL_VARIABLES"))).not_to include("rails_query sets")
         end
       ensure

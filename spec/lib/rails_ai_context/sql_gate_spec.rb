@@ -986,9 +986,11 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "reads a setting the statement names where the name is code, and the names a list of the session's settings shows" do
       expect(read("SELECT @@lock_wait_timeout, @@SESSION.`max_execution_time` AS m, @@LOCAL.x", :mysql)).to eq(%w[lock_wait_timeout max_execution_time x])
+      expect(read("SELECT @@session . lock_wait_timeout AS w", :mysql)).to eq(%w[lock_wait_timeout])
       expect(read("SELECT current_setting('statement_timeout') AS t", :postgresql)).to eq(%w[statement_timeout])
       expect(read("SHOW VARIABLES LIKE '%timeout'", :mysql, [ [ "Lock_wait_timeout", "2" ] ])).to include("lock_wait_timeout")
       expect(read("SELECT v FROM information_schema.SESSION_VARIABLES WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
+      expect(read("SELECT v FROM `information_schema`.`SESSION_VARIABLES` WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
     end
 
     it "reads no setting from a string, a comment, an alias or a global value" do

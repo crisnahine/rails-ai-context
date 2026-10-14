@@ -1174,7 +1174,8 @@ module RailsAiContext
       # The public methods of a mailer and of its app parents, each with the visibility the nearest gives it; tagged
       # STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
       def mailer_entry(klass, ancestors)
-        lineage = [ klass, *ancestors ]
+        # The app base's public methods are no actions, as the booted tier subtracts them; its callbacks still filter.
+        lineage = [ klass, *ancestors.take_while { |declaring| !ActionResolver.app_base_name?(declaring.name, kind: :mailer) } ]
         visibility = {}
         lineage.each do |declaring|
           own = ActionResolver.own_methods(declaring.methods, declaring.name).select { |m| m[:scope] == :instance }
@@ -1185,7 +1186,7 @@ module RailsAiContext
         end
         actions = ActionResolver.deliverable_actions(
           visibility.select { |name, seen| seen == :public && !name.start_with?("_") }.keys.sort,
-          lineage.flat_map { |declaring| declaring.macros.select { |m| ACTION_CALLBACKS.include?(m[:macro]) }.flat_map { |m| m[:args] } }
+          [ klass, *ancestors ].flat_map { |declaring| declaring.macros.select { |m| ACTION_CALLBACKS.include?(m[:macro]) }.flat_map { |m| m[:args] } }
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,

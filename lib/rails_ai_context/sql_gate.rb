@@ -129,9 +129,9 @@ module RailsAiContext
     CLAUSE_WORDS = %w[select from join on where group order having limit values using returning set union intersect except].freeze
 
     # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL. (backquoted or not), current_setting('..').
-    SETTING_READ = /(?:\bshow\s+(?!global\b)|@@(?!global\.)(?:(?:session|local)\.)?|current_setting\s*\(\s*')`?(\w+)/i
+    SETTING_READ = /(?:\bshow\s+(?!global\b)|@@(?!global\s*\.)(?:(?:session|local)\s*\.\s*)?|current_setting\s*\(\s*')`?(\w+)/i
     # A list of the session's settings, which names each in its rows or in the filter the statement puts on it.
-    SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\binformation_schema\s*\.\s*session_variables\b/i
+    SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\b["`]?information_schema["`]?\s*\.\s*["`]?session_variables\b/i
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
@@ -335,8 +335,9 @@ module RailsAiContext
     def self.settings_read(sql, family, rows)
       text = comment_free(sql, family)
       code = mask_quoted(text, family) { true }
+      names = mask_quoted(text, family) { |kind, _span| kind == :string }
       read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
-      read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if code.match?(SETTINGS_LIST)
+      read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if names.match?(SETTINGS_LIST)
       read.map(&:downcase)
     end
 
@@ -959,6 +960,9 @@ module RailsAiContext
           "unredacted. Name the other columns you need; `#{col}` is never returned."
       end
       if (fn = volatile_function(called))
+        return "Blocked: the app defines a VOLATILE function named #{fn}, so rails_query runs no call of that name. The built-in one " \
+          "is on its list of read-only VOLATILE functions, and one the app wrote is not." if PG_VOLATILE_ALLOWLIST.include?(fn)
+
         "Blocked: function #{fn} is VOLATILE (pg_proc.provolatile = 'v') and not on " \
           "rails_query's list of read-only VOLATILE functions, so it is not run. Some VOLATILE " \
           "functions change server or session state in ways a read-only transaction does not " \

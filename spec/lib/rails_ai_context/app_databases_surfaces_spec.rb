@@ -169,72 +169,63 @@ end
 RSpec.describe "two databases that share db/schema.rb" do
   include AppDatabasesTiers
 
-  it "says the dump may describe the other database, and calls no table of it missing" do
+  let(:posts) { { "posts" => { columns: [], indexes: [], foreign_keys: [] } } }
+  let(:main_and_primary) do
+    <<~YAML
+      test:
+        main:
+          adapter: sqlite3
+          database: db/main.sqlite3
+        primary:
+          adapter: sqlite3
+          database: db/primary.sqlite3
+    YAML
+  end
+
+  # A rails_get_schema answer for an app booted on its first database, main, whose db/schema.rb declares zz_events.
+  def schema_answer(database_yml, live, **args)
     Dir.mktmpdir do |root|
       FileUtils.mkdir_p(File.join(root, "db"))
       FileUtils.mkdir_p(File.join(root, "config"))
-      File.write(File.join(root, "config", "database.yml"), <<~YAML)
-        test:
-          main:
-            adapter: sqlite3
-            database: db/main.sqlite3
-          primary:
-            adapter: sqlite3
-            database: db/primary.sqlite3
-      YAML
+      File.write(File.join(root, "config", "database.yml"), database_yml)
       File.write(File.join(root, "db", "schema.rb"),
                  "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"zz_events\" do |t|\n  end\nend\n")
       app = RailsAiContext::StaticApp.new(root)
       ActiveRecord::Base.connection.execute("SELECT 1")
-
-      answers = [ nil, { "posts" => { columns: [], indexes: [], foreign_keys: [] } } ].map do |live|
-        on_tier(:booted, root, connected: "main") do
-          introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
-          allow(introspector).to receive_messages(table_names: live.keys, extract_tables: live) if live
-          allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
-          [ RailsAiContext::Tools::GetSchema.call(detail: "summary"), (RailsAiContext::Tools::GetSchema.call(table: "zz_events") if live) ]
-            .map { |response| response&.content&.first&.dig(:text) }
-        end
+      on_tier(:booted, root, connected: "main") do
+        introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
+        allow(introspector).to receive_messages(table_names: live.keys, extract_tables: live) if live
+        allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
+        RailsAiContext::Tools::GetSchema.call(**args).content.first[:text]
       end
-      summaries, tables = answers.transpose
-
-      expect(summaries).to all(include("_main and primary both dump to db/schema.rb, so it may describe primary. Not in main: zz_events._"))
-      expect(tables.compact).to eq([ "Table 'zz_events' is declared in db/schema.rb and not in main. main and primary both dump to db/schema.rb, so it may describe primary." ])
-      expect(answers.flatten.compact).to all(satisfy { |text| !text.include?("rails db:migrate") })
     end
   end
 
+  it "says the dump may describe the other database, and calls no table of it missing" do
+    note = "main and primary both dump to db/schema.rb, so it may describe primary. Not in main: zz_events."
+    no_migrate = satisfy { |text| !text.include?("rails db:migrate") }
+
+    [ nil, posts ].each { |live| expect(schema_answer(main_and_primary, live, detail: "summary")).to include("_#{note}_").and(no_migrate) }
+    expect(schema_answer(main_and_primary, posts, table: "zz_events")).to eq("Table 'zz_events' is declared in db/schema.rb. #{note}")
+  end
+
   it "shares nothing with a database another environment configures" do
-    Dir.mktmpdir do |root|
-      FileUtils.mkdir_p(File.join(root, "db"))
-      FileUtils.mkdir_p(File.join(root, "config"))
-      File.write(File.join(root, "config", "database.yml"), <<~YAML)
-        test:
-          main:
-            adapter: sqlite3
-            database: db/main.sqlite3
-        development:
-          main:
-            adapter: sqlite3
-            database: db/main_dev.sqlite3
-          primary:
-            adapter: sqlite3
-            database: db/primary.sqlite3
-      YAML
-      File.write(File.join(root, "db", "schema.rb"),
-                 "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"zz_events\" do |t|\n  end\nend\n")
-      app = RailsAiContext::StaticApp.new(root)
-      ActiveRecord::Base.connection.execute("SELECT 1")
+    other_environment = <<~YAML
+      test:
+        main:
+          adapter: sqlite3
+          database: db/main.sqlite3
+      development:
+        main:
+          adapter: sqlite3
+          database: db/main_dev.sqlite3
+        primary:
+          adapter: sqlite3
+          database: db/primary.sqlite3
+    YAML
 
-      answer = on_tier(:booted, root, connected: "main") do
-        introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
-        allow(introspector).to receive_messages(table_names: %w[posts], extract_tables: { "posts" => { columns: [], indexes: [], foreign_keys: [] } })
-        allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
-        RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
-      end
-
-      expect(answer).to include("Missing: zz_events. Run `rails db:migrate`.").and(satisfy { |text| !text.include?("both dump to") })
-    end
+    expect(schema_answer(other_environment, posts, detail: "summary"))
+      .to include("Missing: zz_events. Run `rails db:migrate`.").and(satisfy { |text| !text.include?("both dump to") })
   end
 end
 
@@ -278,6 +269,14 @@ RSpec.describe "the app databases on preset standard" do
     allow_any_instance_of(RailsAiContext::Introspectors::MultiDatabaseIntrospector).to receive(:call).and_raise("boom")
 
     expect(answers("rails8")[:onboard]).to include("databases of their own: cache (production only), queue (production only)")
+  end
+
+  it "keeps every other section where listing the app databases raises" do
+    allow_any_instance_of(RailsAiContext::Introspectors::MultiDatabaseIntrospector).to receive(:listing).and_raise("boom")
+
+    found = answers("rails8")
+    expect(found[:context]).to include(:schema).and(satisfy { |context| !context.key?(:multi_database) })
+    expect(found[:onboard]).to include("Rails application")
   end
 
   it "names the first database by its own name where another database is named primary" do

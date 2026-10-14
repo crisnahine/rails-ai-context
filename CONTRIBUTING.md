@@ -109,6 +109,7 @@ RAC_TEST_MYSQL_URL=trilogy://root:secret@127.0.0.1:3306/rac \
 The specs create and drop tables and views whose names start with `rac_`, and leave the `postgres_fdw` extension installed on PostgreSQL, so point them at a scratch database.
 CI's `database_servers` job runs them on PostgreSQL 16 in every leg. Rails 8.0 runs two legs: MySQL 8.0 with MariaDB 10.6, and MySQL 8.4 with MariaDB 11.4. Rails 7.0 runs MySQL 8.0 with MariaDB 10.6, and Rails 8.1 runs MySQL 8.4 with MariaDB 11.4.
 Rails 7.0 has no Trilogy adapter, so its leg runs PostgreSQL and mysql2 only.
+The `postgresql_versions` job runs the PostgreSQL specs on PostgreSQL 13, 14, 15, 17 and 18 on Rails 8.0, since the plan checks read the plan the server prints.
 The job builds mysql2 against MariaDB's client library (`libmariadb-dev`, through `BUNDLE_BUILD__MYSQL2`), which signs in to MySQL and to MariaDB. A MySQL client from 9.0 on cannot sign in to MariaDB.
 
 ### Static fixture

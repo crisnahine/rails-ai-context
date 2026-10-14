@@ -372,10 +372,10 @@ module RailsAiContext
 
           sidekiq_adapter = adapter_name == "sidekiq" && defined?(Sidekiq)
           unless sidekiq_adapter
-            # The adapter's name says the app has a queue backend, one the tool reads no stats from.
             if adapter_name.start_with?("not ")
               lines << "_Queue stats unavailable: no queue adapter detected._"
             else
+              # The adapter's name says the app has a queue backend, one the tool reads no stats from.
               lines << "_Live queue stats are only implemented for Sidekiq; this app uses the #{adapter_name} adapter._"
             end
           end

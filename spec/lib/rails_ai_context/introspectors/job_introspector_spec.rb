@@ -2278,6 +2278,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
         File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), <<~RUBY)
           class ApplicationMailer < ActionMailer::Base
+            def money(amount) = amount
           end
         RUBY
         File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), <<~RUBY)
