@@ -973,6 +973,11 @@ module RailsAiContext
     # pin it. A column handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
     def laundered_secret_column(plan)
       top = secret_base_columns(plan, plan.output.flatten)
+      # A set operation compares every column its inputs hand up, so a row of guesses tests a secret value.
+      plan.nodes.select { |node| node["Node Type"] == "SetOp" }.each do |node|
+        handed = ([ node ] + Array(node["Plans"])).flat_map { |held| Array(held["Output"]) }
+        (col = @secrets.in_schema.find { |name| names?(handed, name) }) and return col
+      end
       plan.nodes.each do |node|
         reader = plan.reader(node)
         secret_base_columns(plan, Array(node["Output"])).each do |var|

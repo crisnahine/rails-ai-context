@@ -972,6 +972,19 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
   end
 
+  it "refuses a set operation over a secret column in every plan shape, and runs one over the other columns" do
+    conn.execute("CREATE VIEW rac_pg_fenced AS SELECT id, salt AS d FROM rac_pg_accounts OFFSET 0")
+    guess = "SELECT 1, 'a@example.com', 'salt-value', 'token-value', 'salt-value'"
+    refused([ "SELECT * FROM rac_pg_accounts EXCEPT #{guess}", "SELECT * FROM rac_pg_accounts EXCEPT ALL #{guess}",
+              "SELECT * FROM rac_pg_accounts INTERSECT #{guess}", "#{guess} INTERSECT ALL SELECT * FROM rac_pg_accounts",
+              "SELECT * FROM rac_pg_renamed EXCEPT SELECT 1, 'salt-value'", "SELECT count(*) AS n FROM (SELECT * FROM rac_pg_renamed EXCEPT SELECT 1, 'salt-value') s",
+              "SELECT * FROM rac_pg_fenced EXCEPT SELECT 1, 'salt-value'", "SELECT 1, 'salt-value' INTERSECT SELECT * FROM rac_pg_fenced" ],
+            "Blocked: the query passes the secret column")
+    refused([ "SELECT * FROM rac_pg_accounts a WHERE a.id = 1 EXCEPT SELECT * FROM rac_pg_accounts b WHERE b.id = 2" ], "Blocked: the query")
+    response = run("SELECT id, email FROM rac_pg_accounts EXCEPT SELECT 2, 'x'")
+    expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("a@example.com") ])
+  end
+
   it "plans an EXPLAIN (GENERIC_PLAN) as the server does, and still refuses what its statement would leak" do
     [ "EXPLAIN (GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE id = $1", "explain (verbose, generic_plan true) SELECT id FROM rac_pg_accounts WHERE id = $1",
       "EXPLAIN (GENERIC_PLAN on, COSTS off) SELECT id, email FROM rac_pg_accounts WHERE id = $1 AND email = $2" ].each do |sql|
