@@ -225,12 +225,6 @@ module RailsAiContext
       @columns.key?(self.class.fold(relation))
     end
 
-    # Whether a relation the rule read has a column of this name.
-    def column?(name)
-      down = self.class.fold(name)
-      @columns.each_value.any? { |columns| columns.include?(down) }
-    end
-
     def secret?(name)
       down = self.class.fold(name)
       return false if down.empty?

@@ -155,10 +155,6 @@ and the maintainer chose 5.35.2 for them, outside step 1 of `docs/RELEASING.md`.
   lock before it prepares the statement, so no lock stops the statement from
   there on. The locked answer is given for a lock the query process is still
   waiting on when it gives up or when the deadline passes.
-- **On SQLite a column whose name starts with `pragma_` can be queried.**
-  5.35.1 read such a name as a pragma function and refused the statement as
-  one that tells of the connection that runs it. A name the secret column rule
-  reads as a column of the database now runs, as on 5.35.0.
 - **On a SQLite file database a statement that names something the app's
   connection alone holds runs on that connection.** While that connection
   holds a temp object or an attachment, a statement runs there when it names a

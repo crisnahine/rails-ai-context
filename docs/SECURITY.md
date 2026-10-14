@@ -196,9 +196,9 @@ connection: its temp objects and its attached databases. When it holds any of
 them, a statement runs there if it names one of them, the temp catalog
 (`sqlite_temp_master`, `sqlite_temp_schema`) or the `temp` schema, or if it
 calls a pragma function (`pragma_table_info(...)`, `pragma_table_list` and the
-rest) or `dbstat`, whose argument can name any of them. The child has none of these and
-would answer an empty list, the rows of a main table of the same name, or
-"unknown database". A table that only an attached database holds needs no
+rest) or `dbstat`, whose argument can name any of them. The child has none of
+these and would answer an empty list, the rows of a main table of the same
+name, or "unknown database". A table that only an attached database holds needs no
 match: the child cannot prepare a statement that reads it, which is the third
 case. A stated limit: a name is matched anywhere in the statement's text, in
 any letter case and inside a string too, so a statement that holds such a name

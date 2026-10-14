@@ -538,11 +538,15 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
               "SELECT (SELECT count(*) #{body} WHERE (rac_pg_accounts.*)::text LIKE '%token-v%') AS n" ],
             "Blocked: the query serialises a whole row of `rac_pg_accounts`")
     guess = "(1, 'a@example.com', 'salt-valud', 'x', 'y')"
-    refused([ "SELECT (SELECT max(harmless) FROM rac_pg_renamed) AS n", "SELECT #{guess} < (SELECT * #{body} GROUP BY 1, 2, 3, 4, 5) AS o",
-              "SELECT (SELECT count(*) #{body} a NATURAL JOIN rac_pg_accounts b) AS n",
-              "SELECT (SELECT count(*) FROM (SELECT DISTINCT * #{body}) x) AS n" ], "Blocked: the query's plan uses the secret column `")
-    refused([ "SELECT count(*) FILTER (WHERE #{guess} < (SELECT * #{body})) AS n FROM generate_series(1, 1) g" ],
-            "Blocked: the query passes the secret column `")
+    # Which secret column a refusal names first depends on the other tables the database holds.
+    { "Blocked: the query's plan uses the secret column" => [ "SELECT (SELECT max(harmless) FROM rac_pg_renamed) AS n",
+                                                             "SELECT #{guess} < (SELECT * #{body} GROUP BY 1, 2, 3, 4, 5) AS o",
+                                                             "SELECT (SELECT count(*) #{body} a NATURAL JOIN rac_pg_accounts b) AS n",
+                                                             "SELECT (SELECT count(*) FROM (SELECT DISTINCT * #{body}) x) AS n" ],
+      "Blocked: the query passes the secret column" => [ "SELECT count(*) FILTER (WHERE #{guess} < (SELECT * #{body})) AS n FROM generate_series(1, 1) g" ] }.each do |rule, statements|
+      refused(statements, rule)
+      statements.each { |sql| expect(run(sql).content.first[:text]).to match(/\A#{Regexp.escape(rule)} `(salt|api_token|shadow)`/), sql }
+    end
   end
 
   it "filters a quoted mixed-case secret column in place, and refuses what would rename or compare it" do

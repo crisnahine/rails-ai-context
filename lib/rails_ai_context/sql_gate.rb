@@ -557,7 +557,7 @@ module RailsAiContext
       cleaned.to_enum(:scan, SQLITE_CONNECTION_STATE).filter_map do
         pragma, counter = Regexp.last_match.captures
         name = counter&.downcase || ("pragma_#{pragma.downcase}" unless SQLITE_FILE_PRAGMAS.include?(pragma.downcase))
-        name unless name.nil? || @secrets.knows?(name) || @secrets.column?(name)
+        name unless name.nil? || @secrets.knows?(name)
       end.first
     end
 
