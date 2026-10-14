@@ -164,6 +164,44 @@ RSpec.describe "a dump on disk under a database's name" do
   end
 end
 
+# Rails dumps both the first database and the one named primary to db/schema.rb,
+# so the file holds whichever was dumped last.
+RSpec.describe "two databases that share db/schema.rb" do
+  include AppDatabasesTiers
+
+  it "says the dump may describe the other database, and calls no table of it missing" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "db"))
+      FileUtils.mkdir_p(File.join(root, "config"))
+      File.write(File.join(root, "config", "database.yml"), <<~YAML)
+        test:
+          main:
+            adapter: sqlite3
+            database: db/main.sqlite3
+          primary:
+            adapter: sqlite3
+            database: db/primary.sqlite3
+      YAML
+      File.write(File.join(root, "db", "schema.rb"),
+                 "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"zz_events\" do |t|\n  end\nend\n")
+      app = RailsAiContext::StaticApp.new(root)
+      ActiveRecord::Base.connection.execute("SELECT 1")
+
+      answers = [ nil, { "posts" => { columns: [], indexes: [], foreign_keys: [] } } ].map do |live|
+        on_tier(:booted, root, connected: "main") do
+          introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
+          allow(introspector).to receive_messages(table_names: live.keys, extract_tables: live) if live
+          allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
+          RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+        end
+      end
+
+      expect(answers).to all(include("_main and primary both dump to db/schema.rb, so it may describe primary. Not in main: zz_events._"))
+      expect(answers).to all(satisfy { |text| !text.include?("rails db:migrate") })
+    end
+  end
+end
+
 # `preset: standard` runs no multi_database introspector; the context carries the app databases list alone.
 RSpec.describe "the app databases on preset standard" do
   around do |example|

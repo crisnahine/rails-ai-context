@@ -167,7 +167,10 @@ generator's template, and the Railties under `lib/` with their initializers.
 Database schema with column types, indexes, defaults, encrypted hints. Booted,
 a table `db/schema.rb` declares and the connected database does not have is
 named as a migration that has not run, and the listing header says when the
-two table counts disagree.
+two table counts disagree. Where two databases both dump to `db/schema.rb` (the
+first one and the one named `primary`), the file may hold the other one's
+tables, so such a table is named as not in the connected database, with no
+word of a migration.
 
 The other databases are listed after the primary's tables: every database any
 environment in `config/database.yml` configures, so a Rails 8 app's queue,
