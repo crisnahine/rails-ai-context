@@ -458,6 +458,20 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(text("SELECT * FROM rac_my_contacts")).to include("the view `rac_my_contacts` is not queried: its definition could not be read")
       end
 
+      it "says the statement limit and lock_wait_timeout it shows are its own, and gives the session's" do
+        RailsAiContext.configuration.query_timeout = 2
+        limit, own = conn.mariadb? ? [ "max_statement_time", "50.0" ] : [ "max_execution_time", "50000" ]
+        conn.execute("SET SESSION #{limit} = #{conn.mariadb? ? 50 : 50_000}, lock_wait_timeout = 600")
+        note = "#{limit} and lock_wait_timeout here are the values rails_query sets for each statement it runs. " \
+          "The session's own: #{limit} #{own}, lock_wait_timeout 600."
+
+        expect(text("SELECT @@#{limit} AS l, @@lock_wait_timeout AS w")).to include(note)
+        expect(text("SHOW VARIABLES LIKE '%wait_timeout'")).to match(/\| lock_wait_timeout +\| 2 /).and include("lock_wait_timeout here is the value")
+        expect(text("SHOW VARIABLES LIKE 'version'")).not_to include("rails_query sets")
+      ensure
+        conn.execute("SET SESSION #{limit} = 0, lock_wait_timeout = 31536000")
+      end
+
       it "answers a timeout as an error, inside the timeout" do
         RailsAiContext.configuration.query_timeout = 0.5
         response = nil

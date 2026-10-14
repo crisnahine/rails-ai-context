@@ -41,7 +41,14 @@ module RailsAiContext
       # before the first statement in the block. Unscoped, it applies to the next transaction only.
       def in_read_only_transaction(conn, sql, session)
         result = nil
-        conn.execute("SET TRANSACTION READ ONLY")
+        begin
+          conn.execute("SET TRANSACTION READ ONLY")
+        rescue ActiveRecord::StatementInvalid => e
+          # 1568: a transaction is open that Active Record does not count, which a BEGIN would commit.
+          raise Unsupported, IN_TRANSACTION if DatabaseFamily.native_code(e) == 1568
+
+          raise
+        end
         conn.transaction do
           # Rails replaces a connection it lost before BEGIN, and a new session has neither guard.
           raise ActiveRecord::ConnectionNotEstablished, REPLACED unless conn.select_value("SELECT CONNECTION_ID()").to_i == session.to_i
@@ -50,6 +57,12 @@ module RailsAiContext
           raise ActiveRecord::Rollback
         end
         result
+      end
+
+      # The settings bounded sets for each statement => the read of the session's own value.
+      def bound_settings(conn)
+        limit = conn.mariadb? ? "max_statement_time" : "max_execution_time"
+        { limit => "SELECT @@SESSION.#{limit}", "lock_wait_timeout" => "SELECT @@SESSION.lock_wait_timeout" }
       end
 
       def explain(conn, sql, timeout)
