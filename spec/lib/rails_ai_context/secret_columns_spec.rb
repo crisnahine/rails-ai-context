@@ -130,6 +130,42 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
+    it "finds on SQLite every relation, view and table named with a capital past ASCII, as it holds them" do
+      secrets = described_class.new(
+        relations: { "t" => %w[id passwd], "R\u00c9" => %w[id passwd], "V\u00c9" => %w[x], "W\u00c9" => %w[x], "F\u00c9" => %w[body passwd] },
+        views: { "V\u00c9" => "SELECT passwd AS x FROM t", "W\u00c9" => %(SELECT x FROM "V\u00c9") },
+        index_tables: { "F\u00c9" => [ :virtual, "F\u00c9" ], "G\u00c9" => [ :virtual, "G\u00c9", %(USING fts5vocab("F\u00c9", row)) ] },
+        encrypted: [ "\u00c9TAT" ], family: families.fetch(:sqlite)
+      )
+      view_refusal = "its definition names the secret column `passwd`"
+
+      expect([ secrets.knows?("R\u00c9"), secrets.encrypted?("\u00c9TAT"), secrets.relation_secret?("R\u00c9"), secrets.of_relation("R\u00c9") ])
+        .to eq([ true, true, true, %w[passwd] ])
+      expect(secrets.relation_named_in(%(SELECT id FROM "R\u00c9"))).to eq("R\u00c9")
+      expect(secrets.refused_view_in(%(SELECT x FROM "V\u00c9"))).to eq([ "V\u00c9", view_refusal ])
+      expect(secrets.refused_view_in(%(SELECT x FROM "W\u00c9"))).to eq([ "W\u00c9", "it reads the view `V\u00c9`: #{view_refusal}" ])
+      expect([ secrets.placed_view_refusal("V\u00c9", "V\u00c9"), secrets.stored_view?("V\u00c9") ]).to eq([ view_refusal, true ])
+      expect(secrets.view_definitions_in(%(SELECT x FROM "W\u00c9")).keys).to contain_exactly("W\u00c9", "V\u00c9")
+      expect(secrets.unread_table_in(%(SELECT * FROM "F\u00c9"))).to match([ "F\u00c9", a_string_starting_with("it is a virtual table") ])
+      expect(secrets.unread_table_in(%(SELECT * FROM "G\u00c9"))).to eq([ "G\u00c9", "its definition names `F\u00c9`, which is not read" ])
+    end
+
+    it "reads on SQLite a definition, an expression and a configured name with a capital past ASCII as SQLite does" do
+      secrets = described_class.new(
+        relations: { "t" => %W[id passwd \u00c9TAT g], "H\u00c9" => %W[V\u00c9] },
+        views: { "V\u00c9" => "SELECT passwd AS x FROM t", "N\u00c9" => nil },
+        generated: { "t" => { "g" => %("\u00c9TAT" || 'x') } },
+        index_tables: { "H\u00c9" => [ :virtual, "H\u00c9", %(USING fts5("V\u00c9")) ] },
+        family: families.fetch(:sqlite), config: config.dup.tap { |c| c.query_redacted_columns = [ "\u00c9TAT" ] }
+      )
+
+      expect(secrets.placed_view_refusal("main.N\u00c9", "N\u00c9")).to start_with("its definition could not be read")
+      expect([ secrets.secret?("g"), secrets.generated_from("g") ]).to eq([ true, "\u00c9tat" ])
+      # A column named like a refused view is no view, and the configured name a column spells is no twin's.
+      expect(secrets.unread_table_in(%(SELECT * FROM "H\u00c9"))).to be_nil
+      expect([ secrets.secret?("\u00c9TAT"), secrets.secret?("\u00e9tat") ]).to eq([ true, false ])
+    end
+
     it "folds every letter on PostgreSQL and MySQL, as before, so a twin past ASCII is refused with the secret one" do
       %i[postgresql mysql].each do |family|
         secrets = rule(family, %W[id \u00e9 \u00c9], redacted: [ "\u00c9" ])
@@ -351,6 +387,18 @@ RSpec.describe RailsAiContext::SecretColumns do
         "cannot be told and no statement that names it runs."
       )
       expect { rule("SELECT * FROM d1.v") }.to raise_error(described_class::Unreadable, /\AThe view `v` leads through more databases/)
+    end
+
+    context "with databases named with a capital past ASCII" do
+      let(:server) do
+        { "own" => [ { "notes" => %w[id body] }, { "F\u00e9e" => %(SELECT x FROM "D\u00c91".v) } ],
+          "D\u00c91" => [ {}, { "v" => %(SELECT x FROM "D\u00c92".v) } ], "D\u00c92" => [ {}, { "v" => %(SELECT x FROM "D\u00c93".v) } ],
+          "D\u00c93" => [ {}, { "v" => %(SELECT door_token AS x FROM "D\u00c94".t) } ], "D\u00c94" => [ { "t" => %w[id door_token] }, {} ] }
+      end
+
+      it "names the view that leads too deep" do
+        expect { rule("SELECT * FROM F\u00e9e") }.to raise_error(described_class::Unreadable, /\AThe view `F\u00e9e` leads through more databases/)
+      end
     end
   end
 

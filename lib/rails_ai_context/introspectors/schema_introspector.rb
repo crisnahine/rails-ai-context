@@ -633,10 +633,11 @@ module RailsAiContext
           end
 
           parsed[:note] = "Parsed from #{relative_dump_path(path)} (from committed dump, not a live connection)"
+          parsed[:parsed_from] = relative_dump_path(path)
           found[name] = parsed.merge(database_files(path, migrate_dir_for_dump(path)))
         end
         replay_secondary_migrations(dumps, unread)
-        with_nothing_to_read(dumps)
+        add_databases_with_nothing_to_read(dumps)
         unread.each do |name, (path, state)|
           dumps[name] ||= { tables: {}, total_tables: 0, note: "#{relative_dump_path(path)} #{state}, so its tables are not listed" }
                           .merge(database_files(path, migrate_dir_for_dump(path)), state == NO_TABLES ? {} : { unread: true })
@@ -646,10 +647,10 @@ module RailsAiContext
       end
 
       # A database with no dump on disk and no migrations of its own is still one of the app's: its entry says why.
-      def with_nothing_to_read(dumps)
+      def add_databases_with_nothing_to_read(dumps)
         primary = dump_candidates.map(&:last)
         app_databases.each do |db|
-          next if db.primary || db.replica || !db.tasks || dumps.key?(db.name) || primary.include?(db.dump&.path)
+          next if db.primary || db.replica || dumps.key?(db.name) || primary.include?(db.dump&.path)
 
           reason = db.missing_dump(app.root)
           dumps[db.name] = { tables: {}, total_tables: 0, unread: true, note: "Its tables are not listed: #{reason}." } if reason
@@ -811,7 +812,8 @@ module RailsAiContext
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: schema.enums,
           generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})",
+          parsed_from: relative_dump_path(path)
         }
         result[:search_path] = schema.search_path unless schema.search_path == PgNaming::DEFAULT_SEARCH_PATH
         result[:extensions] = schema.extensions.sort if schema.extensions.any?
@@ -871,7 +873,8 @@ module RailsAiContext
           check_constraints: SchemaConventions.check_constraints_of(tables),
           enum_types: parsed[:enums],
           generated_columns: SchemaConventions.generated_columns_of(tables),
-          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})"
+          note: "Parsed from #{relative_dump_path(path)} (#{connection_state})",
+          parsed_from: relative_dump_path(path)
         }
         result[:search_path] = parsed[:names].path unless parsed[:names].path == PgNaming::DEFAULT_SEARCH_PATH
         result[:extensions] = parsed[:extensions].sort if parsed[:extensions].any?

@@ -283,8 +283,17 @@ RSpec.describe "the app databases on preset standard" do
   it "names a database with no dump, no migrations and no file, and says its tables were not read" do
     found = answers("missing_dump")
 
-    expect(found[:onboard]).to include("plus the extra database on SQLite (tables not read)")
-    expect(found[:schema]).to include("extra").and(include("db/extra_schema.rb is not on disk"))
+    expect(found[:onboard]).to include("(1 table), plus the extra database on SQLite (tables not read), plus the legacy database on SQLite (tables not read).")
+    expect(found[:schema]).to include("- **extra**: Its tables are not listed: db/extra_schema.rb is not on disk.",
+                                      "- **legacy**: Its tables are not listed: its database.yml entry turns `database_tasks` off")
+    expect(found[:onboard] + found[:schema]).not_to include("extra_replica")
+  end
+
+  it "lists no database whose dump is the primary's, though that dump is not on disk" do
+    found = answers("shared_dump_unread")
+
+    expect(found[:onboard]).to include("Rails application on SQLite (1 table).")
+    expect(found[:onboard] + found[:schema]).not_to include("tables not read")
   end
 
   it "names the first database by its own name where another database is named primary" do
@@ -318,18 +327,28 @@ RSpec.describe "a model whose table the schema dump does not declare, on the sta
     RailsAiContext.tier, config.introspectors, config.app_root = previous
   end
 
-  it "says the table is not in db/schema.rb, and names a declared table plainly" do
+  it "says the table is missing from the dump it read, and names a declared table plainly" do
     Dir.mktmpdir do |root|
       { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
-        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n",
+        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\n  create_table \"sdg_goals\" do |t|\n  end\nend\n",
+        "app/models/sdg.rb" => "module SDG\n  def self.table_name_prefix\n    \"sdg_\"\n  end\nend\n",
+        "app/models/sdg/goal.rb" => "class SDG::Goal < ApplicationRecord\nend\n",
+        "app/models/legacy_record.rb" => "class LegacyRecord < ApplicationRecord\n  self.abstract_class = true\n  establish_connection :legacy\nend\n",
+        "app/models/legacy_user.rb" => "class LegacyUser < LegacyRecord\nend\n",
+        "app/models/ledger.rb" => "class Ledger < ApplicationRecord\n  establish_connection :legacy\nend\n",
+        "app/models/report.rb" => "class Report < ApplicationRecord\n  self.table_name = \"reporting.reports\"\nend\n",
         "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
         "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
         "app/models/widget.rb" => "class Widget < ApplicationRecord\nend\n",
-        "config/database.yml" => "test:\n  primary:\n    adapter: sqlite3\n    database: db/test.sqlite3\n  analytics:\n    adapter: sqlite3\n    database: db/analytics.sqlite3\n",
         "db/analytics_schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"visits\" do |t|\n  end\nend\n",
         "app/models/analytics_record.rb" => "class AnalyticsRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to database: { writing: :analytics }\nend\n",
         "app/models/visit.rb" => "class Visit < AnalyticsRecord\nend\n",
-        "app/models/event.rb" => "class Event < AnalyticsRecord\nend\n" }.each do |path, source|
+        "app/models/event.rb" => "class Event < AnalyticsRecord\nend\n",
+        "config/database.yml" => "test:\n  primary:\n    adapter: sqlite3\n    database: db/test.sqlite3\n  analytics:\n    adapter: sqlite3\n    database: db/analytics.sqlite3\n" \
+                                 "  archive:\n    adapter: sqlite3\n    database: db/archive.sqlite3\n    migrations_paths: db/archive_migrate\n",
+        "db/archive_migrate/20240101000000_create_records.rb" => "class CreateRecords < ActiveRecord::Migration[8.0]\n  def change\n    create_table :records\n  end\nend\n",
+        "app/models/archive_record.rb" => "class ArchiveRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to database: { writing: :archive }\nend\n",
+        "app/models/relic.rb" => "class Relic < ArchiveRecord\nend\n" }.each do |path, source|
         FileUtils.mkdir_p(File.dirname(File.join(root, path)))
         File.write(File.join(root, path), source)
       end
@@ -339,15 +358,26 @@ RSpec.describe "a model whose table the schema dump does not declare, on the sta
         [ RailsAiContext::Tools::GetModelDetails, RailsAiContext::Tools::Onboard ].each { |tool| allow(tool).to receive_messages(cached_context: context) }
         [ RailsAiContext::Tools::GetModelDetails.call(model: "Widget"), RailsAiContext::Tools::GetModelDetails.call(model: "Post"),
           RailsAiContext::Tools::Onboard.call(detail: "standard"), RailsAiContext::Tools::GetModelDetails.call(model: "Event"),
-          RailsAiContext::Tools::GetModelDetails.call(model: "Visit") ].map { |response| response.content.first[:text] }
+          RailsAiContext::Tools::GetModelDetails.call(model: "Visit"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Relic"), RailsAiContext::Tools::GetModelDetails.call(model: "SDG::Goal"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "LegacyUser"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Ledger"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Report") ].map { |response| response.content.first[:text] }
       end
 
-      widget, post, onboard, event, visit = texts
-      expect(event).to include("**Table:** `events`, not in db/analytics_schema.rb")
-      expect(visit).to include("**Table:** `visits`").and(satisfy { |text| !text.include?(", not in") })
-      expect(widget).to include("**Table:** `widgets`, not in db/schema.rb")
-      expect(post).to include("**Table:** `posts`").and(satisfy { |text| !text.include?("not in db/schema.rb") })
-      expect(onboard).to include("**Widget** (table `widgets`, not in db/schema.rb)")
+      widget, post, onboard, event, visit, relic, goal, legacy_user, ledger, report = texts
+      expect(event).to include("**Table:** `events` missing from db/analytics_schema.rb")
+      expect(visit).to include("**Table:** `visits`").and(satisfy { |text| !text.include?("missing from") })
+      expect(widget).to include("**Table:** `widgets` missing from db/schema.rb").and(satisfy { |text| !text.include?('table:"widgets"') })
+      expect(post).to include("**Table:** `posts`", 'rails_get_schema(table:"posts")').and(satisfy { |text| !text.include?("missing from") })
+      expect(onboard).to include("**Event** (table `events` missing from db/analytics_schema.rb)", "**SDG::Goal** (table: `sdg_goals`)")
+      # A replay can miss a table raw SQL creates, so the migrations are never named as leaving one out.
+      expect(relic).to include("**Table:** `relics`").and(satisfy { |text| !text.include?("missing from") })
+      expect(goal).to include("**Table:** `sdg_goals`").and(satisfy { |text| !text.include?("missing from") })
+      # A connection of its own reads a database no dump here names.
+      expect([ legacy_user, ledger ]).to all(include("**Table:** `").and(satisfy { |text| !text.include?("missing from") }))
+      # schema.rb holds only the search path's tables, so it says nothing of another schema's.
+      expect(report).to include("**Table:** `reporting.reports`").and(satisfy { |text| !text.include?("missing from") })
     end
   end
 end

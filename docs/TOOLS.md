@@ -143,14 +143,15 @@ Narrative app walkthrough for getting up to speed. The stack line counts the
 tables of every database the app's own schema dumps declare, as
 `rails_get_schema` reads them; the databases Rails 8 gives Solid Queue, Solid
 Cache and Solid Cable get one line, without their tables. A database whose
-dump was not read, or that has no dump on disk and no migrations of its own, is
-named with "(tables not read)" and left out of the table count, and the summary says so: "5 tables in 2 databases, the warehouse
-database not read". It ends with the app's custom rake tasks (Rakefile,
-`lib/tasks`, `rakelib`), each with its arguments, description and file: the
-first 15 at `standard`, every one at `full`.
-Then the app's own generators under `lib/generators` (the `bin/rails generate`
-command and its USAGE line), the `lib/templates` files that replace a built-in
-generator's template, and the Railties under `lib/` with their initializers.
+dump was not read, or that has no dump on disk and no migrations of its own,
+is named with "(tables not read)" and left out of the table count, and the
+summary says so: "5 tables in 2 databases, the warehouse database not read".
+It ends with the app's custom rake tasks (Rakefile, `lib/tasks`, `rakelib`),
+each with its arguments, description and file: the first 15 at `standard`,
+every one at `full`. Then the app's own generators under `lib/generators` (the
+`bin/rails generate` command and its USAGE line), the `lib/templates` files
+that replace a built-in generator's template, and the Railties under `lib/`
+with their initializers.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -176,10 +177,12 @@ The other databases are listed after the primary's tables: every database any
 environment in `config/database.yml` configures, so a Rails 8 app's queue,
 cache and cable dumps are read even where only production configures them,
 then any committed dump no environment names. A dump too large to read, or
-holding no tables, is named with the reason. A secondary's dump is read from
-its own path, else from the other format's file under its name
-(`db/queue_schema.rb` or `db/queue_structure.sql`), whatever `database_tasks`
-or `schema_format` says.
+holding no tables, is named with the reason, and so is a database with no dump
+on disk and no migrations of its own, one with `database_tasks: false`
+included. A replica is not listed. A secondary's dump is read from its own
+path, else from the other format's file under its name (`db/queue_schema.rb`
+or `db/queue_structure.sql`), whatever `database_tasks` or `schema_format`
+says.
 
 A database only another environment configures carries a mark, as in
 `cache (production only)`, and a first database that is not named `primary`
@@ -204,7 +207,7 @@ composite unique index; `[in index after x]` marks a column that only trails
 
 ### `rails_get_model_details`
 
-AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing. On the static tier a model whose table the schema it read does not declare says so, naming the dump of the model's own database: "`widgets`, not in db/schema.rb".
+AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing. On the static tier a model whose table the dump of its database does not declare says so: "`widgets` missing from db/schema.rb".
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -481,8 +484,8 @@ database's name is read whatever `database_tasks` or `schema_dump` says. A
 database whose tables could not be read is listed under **Not checked** with
 the reason: its dump is not on disk or is over `max_schema_file_size`, or its
 `config/database.yml` entry turns `database_tasks` or `schema_dump` off and no
-dump is on disk, or "`schema_dump` in its database.yml entry names no file this
-check reads". A database another environment configures carries its mark:
+dump is on disk, or "`schema_dump` in its database.yml entry names no file to
+read". A database another environment configures carries its mark:
 `**Not checked:** warehouse (production only, db/warehouse_schema.rb is not on disk)`.
 
 | Parameter | Type | Default | Description |

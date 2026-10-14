@@ -127,7 +127,7 @@ module RailsAiContext
       def table_note(schema, model_data)
         return "`#{model_data[:table_name]}` not found" if Payload.missing_table?(schema, model_data)
         if (source = Payload.table_absent_from(schema, model_data))
-          return "`#{model_data[:table_name]}`, not in #{source}"
+          return "`#{model_data[:table_name]}` missing from #{source}"
         end
         return nil if model_data[:table_name] || !model_data[:table_set_by]
 

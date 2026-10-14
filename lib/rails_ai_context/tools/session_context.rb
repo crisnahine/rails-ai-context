@@ -91,8 +91,8 @@ module RailsAiContext
           usage = "Pass `tool:params`, e.g. `get_schema:users`."
           return "`mark` names no tool. #{usage}" if name.to_s.empty?
 
-          skipped = RailsAiContext::CLI::ToolRunner.candidate_names(name) & RailsAiContext::Server.skipped_tools
-          return RailsAiContext::Server.skipped_tool_message(skipped.first) if skipped.any?
+          skipped = RailsAiContext::CLI::ToolRunner.skipped_tool_message(name)
+          return skipped if skipped
 
           names = RailsAiContext::Server.exposed_tools.map(&:tool_name) | RailsAiContext::Server.retired_names
           short_names = names.map { |tool_name| RailsAiContext::CLI::ToolRunner.short_name(tool_name) }

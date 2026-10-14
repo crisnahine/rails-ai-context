@@ -58,11 +58,11 @@ module RailsAiContext
         "#{dump.path.delete_prefix("#{root.to_s.chomp('/')}/")} is not on disk"
       end
 
-      def no_dump_reason
+      private def no_dump_reason
         return "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" unless tasks
         return "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" unless settings["schema_dump"]
 
-        "`schema_dump` in its database.yml entry names no file this check reads"
+        "`schema_dump` in its database.yml entry names no file to read"
       end
 
       # Raises Unreachable, naming the database, when no connection to it answers.

@@ -1527,8 +1527,8 @@ end
           { name: "archive", reason: "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" },
           { name: "legacy", reason: "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" },
           { name: "quiet", reason: "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" },
-          { name: "computed", reason: "`schema_dump` in its database.yml entry names no file this check reads" },
-          { name: "outside", reason: "`schema_dump` in its database.yml entry names no file this check reads" },
+          { name: "computed", reason: "`schema_dump` in its database.yml entry names no file to read" },
+          { name: "outside", reason: "`schema_dump` in its database.yml entry names no file to read" },
           { name: "reporting", reason: "db/reporting_schema.rb is not on disk" }
         ])
       end

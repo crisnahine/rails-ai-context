@@ -1,0 +1,8 @@
+test:
+  animals:
+    adapter: sqlite3
+    database: storage/animals_test.sqlite3
+  primary:
+    adapter: sqlite3
+    database: storage/test.sqlite3
+    migrations_paths: db/primary_migrate

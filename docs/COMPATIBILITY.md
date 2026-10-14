@@ -328,9 +328,11 @@ Proof sources:
    and 11.4, the booted and static mailer lists compared on one app, and the
    unit suite and the E2E harness on Linux, macOS and Windows.
    In the v5.36.2 release QA: each fix's example failing on the v5.36.1 code;
-   the three issues' repros run through the CLI on a minimal app on the v5.36.1
-   code and on the fix; and the unit suite and the E2E harness on Linux, macOS
-   and Windows.
+   the issues' repros run through the CLI on a minimal app on the v5.36.1 code
+   and on the fix; the static answers of 11 corpus apps compared between the
+   two; MariaDB 10.6 and 11.4 through mysql2 built against MariaDB's client
+   library on Linux; `rails_runtime_info` against a real Sidekiq and Redis; and
+   the unit suite and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

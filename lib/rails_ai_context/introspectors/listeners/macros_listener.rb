@@ -107,6 +107,8 @@ module RailsAiContext
             open_aasm(node) if node.block || node.arguments
           elsif GEM_MACROS.include?(node.name)
             record_gem_macro(node)
+          elsif node.name == :establish_connection
+            @results << { macro: :establish_connection, location: node.location.start_line }
           elsif node.name == :connects_to
             # Under a condition the app may never call it, so no table is routed to its database.
             condition = current_condition

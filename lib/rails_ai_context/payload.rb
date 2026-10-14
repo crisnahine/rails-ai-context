@@ -261,18 +261,15 @@ module RailsAiContext
       model_tables(schema, model).empty?
     end
 
-    # Where a schema read from disk says nothing of the model's table: "db/schema.rb", or "the migrations in db/migrate".
-    # Nil when the read holds the table, was no read from disk, or is not the model's database.
+    # The dump of the model's database a static read parsed, such as "db/schema.rb", when it leaves out the
+    # model's table. Nil when it holds the table, or the tables came from the migrations or were not read.
     def table_absent_from(schema, model)
       return unless model.is_a?(Hash) && model[:table_name] && !model[:table_name].to_s.include?(".") && !model[:own_connection]
       return unless schema.is_a?(Hash) && schema[:tables].is_a?(Hash) && parsed_schema?(schema) && model_tables(schema, model).empty?
 
       writing = model.dig(:database, :writing)&.to_s
       source = writing && writing != "primary" ? secondary_databases(schema).find { |name, _| name.to_s == writing }&.last : schema
-      return unless source.is_a?(Hash) && !source[:unread]
-
-      read = source[:note].to_s.match(/\AParsed from (\S+)|\AReconstructed from (the migrations in .+?) \(/)
-      read && (read[1] || read[2])
+      source[:parsed_from] if source.is_a?(Hash)
     end
 
     # Why the primary's dump leaves out a schema-qualified table, or nil.
