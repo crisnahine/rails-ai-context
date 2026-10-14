@@ -66,9 +66,11 @@ Gem::Specification.new do |spec|
       []
     end
     listed = Dir.glob("**/*", File::FNM_DOTMATCH).select { |f| File.file?(f) } if listed.empty?
-    listed.reject do |f|
-      (File.expand_path(f) == __FILE__) ||
-        f.start_with?(*%w[bin/ demo/ gemfiles/ test/ spec/ features/ .git .github appveyor Gemfile])
+    # What a user of the gem runs or reads; contributor and assistant files
+    # (AGENTS.md, CLAUDE.md, docs/adr) would read as instructions about the app that bundles it.
+    listed.select do |f|
+      f.match?(%r{\A(lib|exe|app|config)/|\A(README|CHANGELOG|SECURITY)\.md\z|\ALICENSE\z|\Adocs/[^/]+\.md\z}) &&
+        f != "docs/RELEASING.md"
     end
   end
 

@@ -67,6 +67,18 @@ RSpec.describe "rails-ai-context.gemspec" do
     expect(spec.files.grep(%r{\A(demo|gemfiles)/})).to be_empty
   end
 
+  # A tool that indexes an app's bundle reads AGENTS.md or CLAUDE.md in a gem's directory as instructions about that app.
+  it "packages what a user of the gem runs or reads, and none of the files that serve the repository alone" do
+    root = File.expand_path("../../..", __dir__)
+    tracked = IO.popen([ "git", "-C", root, "ls-files", "-z" ], &:read).split("\x0")
+    code = tracked.grep(%r{\A(lib|exe|app|config)/})
+    user_docs = %w[README.md CHANGELOG.md LICENSE SECURITY.md] + tracked.grep(%r{\Adocs/[^/]+\.md\z}) - %w[docs/RELEASING.md]
+    linked = File.read(File.join(root, "README.md")).scan(/\]\(((?!https?:)[^)#]+)/).flatten.uniq
+
+    expect(spec.files).to match_array(code + user_docs)
+    expect(spec.files).to include(*linked)
+  end
+
   # Thor 1.0 and 1.1 raise NameError on require under Ruby 3.1 and later.
   it "requires a thor that loads on every supported Ruby" do
     thor = spec.runtime_dependencies.find { |dep| dep.name == "thor" }
