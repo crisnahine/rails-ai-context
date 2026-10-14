@@ -848,7 +848,7 @@ module RailsAiContext
 
       def source_mailers
         @source_mailers ||= begin
-          scanned = source_classes("app/mailers", macros: ACTION_CALLBACKS + MAILER_DECLARATIONS)
+          scanned = source_classes("app/mailers", macros: ACTION_CALLBACKS + MAILER_DECLARATIONS + VISIBILITY_CALLS)
           candidates = scanned.reject { |klass| framework_hook?(klass) } +
                        mailers_outside_mailer_dirs(scanned.map(&:file))
           # A mixin under app/mailers holds a mailer's actions (an Emails::* module); a class
@@ -1067,6 +1067,9 @@ module RailsAiContext
       # app wrote it, the methods it defines, and who inherits it.
       MAILER_DECLARATIONS = %i[layout helper helper_method include default default_url_options=].freeze
 
+      # `private :name` in a mailer hides a method it inherits, and `public :name` shows one.
+      VISIBILITY_CALLS = %i[private protected public].freeze
+
       def mailer_base_record(name, file, source, macros, methods, heirs)
         declares = SourceIntrospector.outside_defs(macros, methods).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
           .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
@@ -1174,8 +1177,10 @@ module RailsAiContext
         lineage = [ klass, *ancestors ]
         visibility = {}
         lineage.each do |declaring|
-          ActionResolver.own_methods(declaring.methods, declaring.name).each do |m|
-            visibility[m[:name]] ||= m[:visibility] if m[:scope] == :instance
+          own = ActionResolver.own_methods(declaring.methods, declaring.name).select { |m| m[:scope] == :instance }
+          own.each { |m| visibility[m[:name]] ||= m[:visibility] }
+          declaring.macros.each do |m|
+            m[:args].each { |name| visibility[name.to_s] ||= m[:macro] } if VISIBILITY_CALLS.include?(m[:macro])
           end
         end
         actions = ActionResolver.deliverable_actions(

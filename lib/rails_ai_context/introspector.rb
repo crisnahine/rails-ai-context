@@ -60,8 +60,9 @@ module RailsAiContext
       end
       context[:_warnings] = warnings if warnings.any?
 
-      # Every reader names a database's adapter from this section, so a preset without it still carries the list.
-      context[:multi_database] = Introspectors::MultiDatabaseIntrospector.new(app).listing unless context.key?(:multi_database)
+      # Every reader names a database's adapter from this section, so a preset without it, or one where it failed,
+      # still carries the list. The failure stays in the warnings.
+      context[:multi_database] = Introspectors::MultiDatabaseIntrospector.new(app).listing unless Payload.section(context, :multi_database)
       resolve_schema_adapter(context)
 
       context

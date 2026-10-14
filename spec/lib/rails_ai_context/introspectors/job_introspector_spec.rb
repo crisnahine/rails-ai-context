@@ -2297,10 +2297,20 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           end
         RUBY
 
+        File.write(File.join(dir, "app", "mailers", "reopen_mailer.rb"), <<~RUBY)
+          class ReopenMailer < BaseMailer
+            def visible(order_id) = mail(to: "a@example.com")
+
+            private :receipt
+            public :locale_for_account
+          end
+        RUBY
+
         static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mailers]
         shop = static.find { |m| m[:name] == "ShopMailer" }
         expect(shop[:actions]).to eq(%w[locale_for_account receipt shipped])
         expect(shop[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+        expect(static.find { |m| m[:name] == "ReopenMailer" }[:actions]).to eq(%w[locale_for_account refund visible])
       end
     end
   end

@@ -237,6 +237,13 @@ RSpec.describe "the app databases on preset standard" do
     expect(found[:file]).to include("cable (production only): Solid Cable (1 table)", "- queue (production only): 1 total, 0 pending in db/queue_migrate")
   end
 
+  it "keeps the marks on a preset whose multi_database introspector failed" do
+    RailsAiContext.configuration.introspectors = RailsAiContext::Configuration::PRESETS[:full].dup
+    allow_any_instance_of(RailsAiContext::Introspectors::MultiDatabaseIntrospector).to receive(:call).and_raise("boom")
+
+    expect(answers("rails8")[:onboard]).to include("databases of their own: cache (production only), queue (production only)")
+  end
+
   it "names the first database by its own name where another database is named primary" do
     found = answers("animals_first")
 

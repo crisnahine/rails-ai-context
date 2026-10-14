@@ -1141,10 +1141,8 @@ module RailsAiContext
         children = DeclaredConstant.carried(model.descendants).map(&:name).sort
 
         parent = model.superclass
-        sti_parent = if parent && parent != ActiveRecord::Base &&
-                        (!defined?(ApplicationRecord) || parent != ApplicationRecord)
-          parent.name
-        end
+        # An abstract base (ApplicationRecord, or the one a second database connects through) holds no rows of its own.
+        sti_parent = parent.name if parent && parent != ActiveRecord::Base && !(parent.respond_to?(:abstract_class?) && parent.abstract_class?)
         # A table db/schema.rb does not hold is in another database, so only a class family says it is STI.
         return nil if !connected && !SchemaReader.for(app.root).table?(model.table_name) && sti_parent.nil? && children.empty?
 
