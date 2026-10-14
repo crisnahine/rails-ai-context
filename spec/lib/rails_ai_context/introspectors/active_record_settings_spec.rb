@@ -22,6 +22,13 @@ RSpec.describe RailsAiContext::Introspectors::ActiveRecordSettings do
     expect(result.first[:schema_format]).to eq(:sql)
   end
 
+  it "keeps a literal schema_format when a later one is computed, since only the table settings are judged that way" do
+    result = settings("config/application.rb" => "class Application < Rails::Application\n  config.active_record.schema_format = :sql\nend\n",
+                      "config/initializers/a.rb" => "Rails.application.config.active_record.schema_format = ENV.fetch(\"SF\", \"sql\").to_sym\n")
+
+    expect(result).to eq([ { schema_format: :sql }, [] ])
+  end
+
   it "takes ActiveRecord.schema_format when config sets none" do
     expect(settings("config/initializers/zz.rb" => "ActiveRecord.schema_format = :sql\n").first[:schema_format]).to eq(:sql)
   end

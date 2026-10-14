@@ -53,7 +53,7 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [ {}, [] ], label: "active_record_settings")
       end
 
-      # A later assignment the reader cannot read hides an earlier literal one, since it runs after it.
+      # A later table setting the reader cannot read hides an earlier literal one, since it runs after it.
       def collect(settings, found, unread)
         settings.sort_by.with_index { |(entry, _), i| [ entry[:location], i ] }.each do |entry, name|
           allowed = SETTINGS[name]
@@ -63,7 +63,7 @@ module RailsAiContext
           if allowed.is_a?(Array) ? allowed.include?(value) : value.is_a?(allowed) && entry[:literal]
             found[name] = value
             unread.delete(name)
-          else
+          elsif TableName::TABLE_SETTINGS.include?(name)
             found.delete(name)
             unread << name
           end
