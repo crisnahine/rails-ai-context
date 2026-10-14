@@ -231,7 +231,7 @@ Not redaction itself: `Redaction` scrubs secret values out of text (logs, config
 
 ## SQL gate
 
-What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is a second guard, and the gate's checks run before it on every database family (ADR-0008). A name the gate refuses belongs to one family and is refused there alone. The gate also tells which session settings a statement reads by name, for the note that says the value shown is the one `rails_query` sets.
+What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is a second guard, and the gate's checks run before it on every database family (ADR-0008). A name the gate refuses belongs to one family and is refused there alone. The gate also tells which session settings a statement reads by name, for the settings note, which says the value shown is the one `rails_query` sets.
 
 ## Served tool
 

@@ -337,7 +337,7 @@ module RailsAiContext
     def self.settings_read(sql, family, rows)
       text = comment_free(sql, family)
       code = mask_quoted(text, family) { true }
-      # MySQL reads a double-quoted span as a string, or under ANSI_QUOTES as a name, which only a bare word can be here.
+      # On MySQL a double-quoted span other than a bare word is a string.
       strings_blanked = mask_quoted(text, family) do |kind, span|
         kind == :string || (family.mysql? && span.start_with?('"') && !span.match?(BARE_QUOTED_WORD))
       end

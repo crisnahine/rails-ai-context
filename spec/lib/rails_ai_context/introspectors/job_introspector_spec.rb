@@ -2183,7 +2183,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(entry).not_to have_key(:parent_class)
     end
 
-    # Rails' own base gives a mailer no action, so it is no answer to where they come from.
+    # Rails' own base gives a mailer no action, so it is no answer to where a mailer's actions come from.
     it "names no parent for a mailer straight under ActionMailer::Base" do
       entry = with_mailer("PlainMailer", "class PlainMailer < ActionMailer::Base\n  def self.ping = nil\nend\n") do
         mailers.find { |m| m[:name] == "PlainMailer" }
