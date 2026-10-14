@@ -128,6 +128,8 @@ module RailsAiContext
     FROM_LIST_CLAUSES = %w[from join on using].freeze
     CLAUSE_WORDS = %w[select from join on where group order having limit values using returning set union intersect except].freeze
 
+    # A double-quoted bare word, which MySQL under ANSI_QUOTES reads as a name and otherwise as a string.
+    BARE_QUOTED_WORD = /\A"\w+"\z/
     # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL. (backquoted or not), current_setting('..').
     SETTING_READ = /(?:\bshow\s+(?!global\b)|@@(?!global\s*\.)(?:(?:session|local)\s*\.\s*)?|current_setting\s*\(\s*')`?(\w+)/i
     # A list of the session's settings, which names each in its rows or in the filter the statement puts on it.
@@ -337,7 +339,7 @@ module RailsAiContext
       code = mask_quoted(text, family) { true }
       # MySQL reads a double-quoted span as a string, or under ANSI_QUOTES as a name, which only a bare word can be here.
       strings_blanked = mask_quoted(text, family) do |kind, span|
-        kind == :string || (family.mysql? && span.start_with?('"') && !span.match?(/\A"\w+"\z/))
+        kind == :string || (family.mysql? && span.start_with?('"') && !span.match?(BARE_QUOTED_WORD))
       end
       read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
       read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if strings_blanked.match?(SETTINGS_LIST)
@@ -467,7 +469,7 @@ module RailsAiContext
         return never_read_refusal(m.captures.compact.first)
       end
       if (m = listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, :string)))
-        text_only = ->(kind, span) { kind == :string || (span.start_with?('"') && !span.match?(/\A"\w+"\z/)) }
+        text_only = ->(kind, span) { kind == :string || (span.start_with?('"') && !span.match?(BARE_QUOTED_WORD)) }
         return "#{never_read_refusal(m[1])} A name before a dot is read as that schema, so an alias named `#{m[1]}` needs another name." if
           listed(SYSTEM_SCHEMAS, mask_quoted(cleaned, &text_only))
 
@@ -964,7 +966,7 @@ module RailsAiContext
       end
       if (fn = volatile_function(called)) && PG_VOLATILE_ALLOWLIST.include?(fn)
         "Blocked: the database holds a VOLATILE function named #{fn} that rails_query cannot vouch for, so rails_query runs no " \
-          "call of that name. Its list of read-only VOLATILE functions trusts the name for the server's own function or an extension's C function alone."
+          "call of that name. Its list of read-only VOLATILE functions trusts the name for the server's own function or a C function alone."
       elsif fn
         "Blocked: function #{fn} is VOLATILE (pg_proc.provolatile = 'v') and not on " \
           "rails_query's list of read-only VOLATILE functions, so it is not run. Some VOLATILE " \
@@ -1078,7 +1080,7 @@ module RailsAiContext
       exprs.each_with_object(Set.new) { |expr, names| expr.scan(/([A-Za-z_]\w*)\s*\(/) { |(fn)| names << fn.downcase } }
     end
 
-    # A name on the read-only list vouches for the server's own function and C code alone: while the database holds a
+    # A name on the read-only list vouches for the server's own function or a C function alone: while the database holds a
     # VOLATILE function of that name in another language outside pg_catalog, every call of the name is refused.
     def volatile_function(called)
       return nil if called.empty?

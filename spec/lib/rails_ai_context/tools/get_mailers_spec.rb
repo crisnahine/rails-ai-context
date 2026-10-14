@@ -477,7 +477,6 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("- **Class methods:** deadline_passed")
     end
 
-
     # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing
     # else. The parent is the answer to where its emails are; the override is
     # not an interface anybody calls.

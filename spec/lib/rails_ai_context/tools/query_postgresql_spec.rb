@@ -972,7 +972,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       response = run(sql)
       expect([ response.error?, response.content.first[:text] ]).to eq([ true, "Blocked: the database holds a VOLATILE function named pg_sequence_last_value " \
         "that rails_query cannot vouch for, so rails_query runs no call of that name. Its list of read-only VOLATILE functions trusts the name for the server's " \
-        "own function or an extension's C function alone." ]), sql
+        "own function or a C function alone." ]), sql
     end
     [ "SELECT pg_sleep_for('0 seconds') IS NOT NULL AS s", "SELECT gen_random_uuid() IS NOT NULL AS u", "SELECT random() < 2 AS r",
       "SELECT rac_ext.uuid_generate_v4() IS NOT NULL AS c" ].each do |sql|
