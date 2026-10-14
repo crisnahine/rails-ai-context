@@ -95,8 +95,8 @@ module RailsAiContext
 
       # @raise [TimedOut, ActiveRecord::StatementInvalid] when PostgreSQL cannot plan the statement
       # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when the answer is no plan
-      def plan(connection, sql, timeout:)
-        runtime.plan(connection, sql, timeout)
+      def plan(connection, sql, timeout:, generic: false)
+        runtime.plan(connection, sql, timeout, generic: generic)
       end
 
       # @return [Array<Array(Integer, String, String)>] [result column index, table column, relation] from the
@@ -146,6 +146,17 @@ module RailsAiContext
       #   [:pages, :shadow, :vocabulary or :virtual, its virtual table, and for the last two kinds their definition]
       def index_tables(connection, schemas = [])
         runtime.index_tables(connection, schemas)
+      end
+
+      # The settings the tool sets for a statement among those it reads (SqlGate.settings_read), each with the session's
+      # own value. Read with no bound: reading a setting waits on no lock.
+      # @return [Hash{String => String}]
+      def own_settings(connection, read)
+        return {} if read.empty?
+
+        runtime.bound_settings(connection).filter_map do |name, query|
+          [ name, connection.select_value(query).to_s ] if read.include?(name)
+        end.to_h
       end
 
       # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
@@ -268,15 +279,26 @@ module RailsAiContext
     def timed_out?(error)
       # A connection the server dropped is a QueryAborted on Rails 7.1 and later, and it is no timeout.
       return false if defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed)
-      return true if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
+      return !canceled?(error.cause) if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
       # A wait on a lock that the database's own lock timeout ended.
       return true if error.is_a?(ActiveRecord::LockWaitTimeout)
 
+      TIMEOUT_CODES.include?(native_code(error))
+    end
+
+    # PostgreSQL gives its timeout and a cancel another session sent one error code, and only the server's
+    # message tells them apart. A server that writes its messages in another language reads as the timeout.
+    def canceled?(driver_error)
+      result = driver_error.result if driver_error.respond_to?(:result)
+      result.respond_to?(:error_field) && result.error_field(PG::PG_DIAG_MESSAGE_PRIMARY).to_s.end_with?("due to user request")
+    end
+
+    # @return [Integer, nil] the MySQL or MariaDB error number the driver's error carries
+    def native_code(error)
       cause = error.cause
-      code = if cause.respond_to?(:error_number) then cause.error_number
+      if cause.respond_to?(:error_number) then cause.error_number
       elsif cause.respond_to?(:error_code) then cause.error_code
       end
-      TIMEOUT_CODES.include?(code)
     end
   end
 end

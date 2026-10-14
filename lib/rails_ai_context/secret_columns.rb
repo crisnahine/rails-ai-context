@@ -56,20 +56,21 @@ module RailsAiContext
         raise unreadable(connection) unless relations
 
         relations = relations.merge(CATALOG_CREDENTIALS) if family.plan_checks?
-        new(relations: relations, encrypted: encrypted_from(context), connection: connection, **definitions_from(connection, schemas))
+        new(relations: relations, encrypted: encrypted_from(context), connection: connection, family: family,
+            **definitions_from(connection, schemas))
       end
       statement.to_s.strip.empty? ? secrets : secrets.cover(statement)
     end
 
-    # A name or a statement as the databases compare names: case folded, a dotted capital I read as i (MySQL does,
-    # Ruby's downcase keeps the dot), and runs of spaces squeezed, so a name is found in text squeezed or not.
-    def self.fold(text)
-      text.to_s.downcase.delete("\u0307").squeeze(" ")
+    # A name or a statement as the databases compare names: case folded (ASCII alone with `ascii:`, as SQLite folds),
+    # a dotted capital I read as i as MySQL reads it, and runs of spaces squeezed, so text squeezed or not matches.
+    def self.fold(text, ascii: false)
+      ascii ? text.to_s.downcase(:ascii).squeeze(" ") : text.to_s.downcase.delete("\u0307").squeeze(" ")
     end
 
     # Matches the name as a whole identifier in folded text, whatever characters it holds and however it is quoted.
-    def self.identifier(name)
-      name = fold(name)
+    def self.identifier(name, ascii: false)
+      name = fold(name, ascii: ascii)
       spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``"), name.gsub("'", "''") ].uniq.map { |spelling| Regexp.escape(spelling) }
       /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
     end
@@ -158,9 +159,11 @@ module RailsAiContext
     # Each argument is what the DatabaseFamily::Family read of the same name answers. views is nil when the
     # database's views are not known. connection: where more schemas are read from; with none the rule keeps what it was given.
     def initialize(relations: {}, encrypted: [], views: nil, traced_views: [], generated: {}, index_tables: {}, connection: nil,
-                   config: RailsAiContext.configuration)
-      fold = self.class.method(:fold)
-      @redacted = (Array(config.query_redacted_columns) + BUILT_IN_NAMES).to_set(&fold)
+                   family: nil, config: RailsAiContext.configuration)
+      @ascii = family&.sqlite? || false
+      fold = method(:fold)
+      @configured = Array(config.query_redacted_columns)
+      @redacted = (@configured + BUILT_IN_NAMES).to_set(&fold)
       @allowed = Array(config.query_allowed_columns).to_set(&fold)
       @encrypted = Array(encrypted).to_set(&fold)
       @connection = connection
@@ -222,22 +225,25 @@ module RailsAiContext
 
     # Whether the relation's columns were read. A PostgreSQL relation is asked for as `schema.relation`.
     def knows?(relation)
-      @columns.key?(self.class.fold(relation))
+      @columns.key?(fold(relation))
     end
 
     def secret?(name)
-      down = self.class.fold(name)
+      down = fold(name)
       return false if down.empty?
       return true if encrypted?(down)
       return false if @allowed.include?(down)
 
-      @generated.key?(down) || @redacted.include?(down) || heuristic?(down) || RailsAiContext::Redaction.secret_name?(down)
+      # What a name means is read with every letter folded, whatever the database folds.
+      meaning = self.class.fold(name)
+      @generated.key?(down) || @redacted.include?(down) || @secret_meanings.include?(meaning) || heuristic?(meaning) ||
+        RailsAiContext::Redaction.secret_name?(meaning)
     end
 
     # True for an `encrypts` column and for a generated column that reads one: neither is released by name.
     # Generated columns of one name on two tables are one name here, encrypted when either reads such a column.
     def encrypted?(name, through = [])
-      down = self.class.fold(name)
+      down = fold(name)
       return true if @encrypted.include?(down)
 
       !through.include?(down) && @generated.fetch(down, []).any? { |source| encrypted?(source, through + [ down ]) }
@@ -245,14 +251,14 @@ module RailsAiContext
 
     # @return [String, nil] a secret column a generated column's expression reads, an `encrypts` one first
     def generated_from(name)
-      sources = @generated.fetch(self.class.fold(name), [])
+      sources = @generated.fetch(fold(name), [])
       sources.find { |source| encrypted?(source) } || sources.first
     end
 
     # [view, why] for the first refused view the text names, or nil. A view's definition renames a
     # column outside the statement, where no check on the statement reads it.
     def refused_view_in(text)
-      down = self.class.fold(text)
+      down = fold(text)
       view, why = @refused_views.find { |name, _why| names?(down, name) }
       [ spelled(view), why ] if view
     end
@@ -260,7 +266,7 @@ module RailsAiContext
     # Why the view at exactly this place is refused, or nil. The plan names a relation as `schema.relation`, so a table
     # is not taken for a view of its name in another schema; a view with no definition read is told by its bare name.
     def placed_view_refusal(relation, name)
-      placed, bare = self.class.fold(relation), self.class.fold(name)
+      placed, bare = fold(relation), fold(name)
       return @refused_views[placed] if @views&.key?(placed)
 
       @refused_views[bare] if @views&.key?(bare) && @views[bare].nil?
@@ -268,21 +274,21 @@ module RailsAiContext
 
     # Whether the relation is a view whose rows the plan does not trace to their table columns.
     def stored_view?(relation)
-      placed = self.class.fold(relation)
+      placed = fold(relation)
       !@views.nil? && @views.key?(placed) && !@traced.include?(placed)
     end
 
     # [table, why] for the first table the text names that is never read, or nil: the file's pages, a shadow
     # table, and a virtual table or its vocabulary when the virtual table holds a secret column.
     def unread_table_in(text)
-      down = self.class.fold(text)
+      down = fold(text)
       table, why = @unread_tables.find { |name, _why| names?(down, name) }
       [ spelled(table), why ] if table
     end
 
     # The first relation holding a secret column that the statement's text names, or nil.
     def relation_named_in(text)
-      down = self.class.fold(text)
+      down = fold(text)
       relation = @by_relation.each_key.find { |name| names?(down, name) }
       relation && spelled(relation)
     end
@@ -290,20 +296,25 @@ module RailsAiContext
     # The first secret name the statement's text names, or nil. Case-insensitive
     # and word-bounded, so a table or alias that merely holds a secret word passes.
     def named_in(text)
-      down = self.class.fold(text)
+      down = fold(text)
       @named.each { |name, pattern| return name if down.match?(pattern) }
       nil
+    end
+
+    # view => its definition, for each view the text names and each one their definitions name.
+    def view_definitions_in(text)
+      views_reached(text).keys.filter_map { |view| [ spelled(view), @views[view] ] if @views[view] }.to_h
     end
 
     # The schema's real secret columns, read by the PostgreSQL plan checks.
     attr_reader :in_schema
 
     def of_relation(relation)
-      @by_relation.fetch(self.class.fold(relation), [])
+      @by_relation.fetch(fold(relation), [])
     end
 
     def relation_secret?(relation)
-      @by_relation.key?(self.class.fold(relation))
+      @by_relation.key?(fold(relation))
     end
 
     private
@@ -325,11 +336,11 @@ module RailsAiContext
     # view => the view the text names that leads to it, for each view the text names and each one their
     # definitions name. A view the plan reads through is no start: its relations are in the plan.
     def views_reached(text)
-      down = self.class.fold(text)
+      down = fold(text)
       reached = @views.to_h.keys.select { |view| !@traced.include?(view) && names?(down, view) }.to_h { |view| [ view, view ] }
       waiting = reached.keys
       while (view = waiting.shift)
-        definition = self.class.fold(@views[view])
+        definition = fold(@views[view])
         (@views.keys - reached.keys).each do |other|
           next unless names?(definition, other)
 
@@ -341,8 +352,8 @@ module RailsAiContext
     end
 
     def too_deep(found, followed, family)
-      found = found.map { |schema| self.class.fold(schema) }
-      view = followed.find { |name, _start| (dotted_names(self.class.fold(@views[name])) & found).any? }&.last
+      found = found.map { |schema| fold(schema) }
+      view = followed.find { |name, _start| (dotted_names(fold(@views[name])) & found).any? }&.last
       Unreadable.new("The view `#{spelled(view)}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows, " \
         "so the secret columns it could read cannot be told and no statement that names it runs.")
     end
@@ -353,7 +364,7 @@ module RailsAiContext
     end
 
     def learn(relations:, views: nil, traced_views: [], generated: {}, index_tables: {})
-      fold = self.class.method(:fold)
+      fold = method(:fold)
       [ relations, views, index_tables ].each { |named| named&.each_key { |name| @spelled[fold.call(name)] ||= name.to_s } }
       relations.each { |relation, names| @columns[fold.call(relation)].concat(Array(names).map(&fold)) }
       generated.each do |relation, expressions|
@@ -383,12 +394,15 @@ module RailsAiContext
     end
 
     def flag_secret_columns(columns)
+      # A configured name that no column spells as the database folds it still holds the columns it folds to.
+      known = columns.values.flatten.to_set
+      @secret_meanings = (BUILT_IN_NAMES + @configured.reject { |name| known.include?(fold(name)) }).to_set { |name| self.class.fold(name) }
       @by_relation = columns.each_with_object({}) do |(relation, names), acc|
         flagged = names.uniq.select { |c| secret?(c) }
         acc[relation] = flagged unless flagged.empty?
       end
       @in_schema = @by_relation.values.flatten.uniq.freeze
-      @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, self.class.identifier(c) ] }
+      @named = ((@redacted.to_a - @allowed.to_a) | @encrypted.to_a | @in_schema).map { |c| [ c, identifier(c) ] }
     end
 
     # Whether another secret column was found that a generated column reads. Every source of a name is kept.
@@ -396,8 +410,8 @@ module RailsAiContext
       found = false
       generated.each_value do |expressions|
         expressions.each do |column, expression|
-          column = self.class.fold(column)
-          down = self.class.fold(expression)
+          column = fold(column)
+          down = fold(expression)
           sources = @named.filter_map { |name, pattern| name if name != column && down.match?(pattern) } - @generated.fetch(column, [])
           next if sources.empty?
 
@@ -410,7 +424,7 @@ module RailsAiContext
 
     # view name => why it is refused, followed through views built on refused views.
     def refused_views(views)
-      views = views.to_h { |view, definition| [ self.class.fold(view), self.class.fold(definition) ] }
+      views = views.to_h { |view, definition| [ fold(view), fold(definition) ] }
       refused = views.transform_values { |definition| refusal_of(definition) }.compact
       loop do
         nested = views.filter_map do |view, definition|
@@ -439,7 +453,7 @@ module RailsAiContext
               "table reads a column by its position, with no name written"
           end
         end
-        unread[self.class.fold(table)] = why if why
+        unread[fold(table)] = why if why
       end
     end
 
@@ -453,10 +467,10 @@ module RailsAiContext
     # its rows, or its words, are theirs.
     def built_on_unread(index_tables)
       index_tables.each_with_object({}) do |(table, (kind, owner, definition)), built|
-        table = self.class.fold(table)
+        table = fold(table)
         next if definition.nil? || @unread_tables.key?(table)
 
-        down = self.class.fold("#{owner if kind == :vocabulary} #{relation_words(table, definition)}")
+        down = fold("#{owner if kind == :vocabulary} #{relation_words(table, definition)}")
         view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
         other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
         built[table] = "its definition names the view `#{spelled(view)}`, which is not queried: #{why}" if view
@@ -476,7 +490,7 @@ module RailsAiContext
       mod_name = mod.delete(%q("'`[]))
       columns = mod_name.match?(/\Afts[345]\z/i) ? @columns[table] : []
       named = arguments.to_s.scan(MODULE_ARGUMENT).reject do |argument|
-        !argument.include?("=") && columns.include?(self.class.fold(argument[LEADING_NAME].to_s.delete(%q("'`[])).strip))
+        !argument.include?("=") && columns.include?(fold(argument[LEADING_NAME].to_s.delete(%q("'`[])).strip))
       end
       # A vocabulary's last argument is its type (row, col or instance), which SQLite reads as no relation.
       named.pop if mod_name.casecmp?("fts5vocab") && named.size > 1
@@ -496,7 +510,15 @@ module RailsAiContext
     end
 
     def names?(down, name)
-      down.match?(self.class.identifier(name))
+      down.match?(identifier(name))
+    end
+
+    def fold(text)
+      self.class.fold(text, ascii: @ascii)
+    end
+
+    def identifier(name)
+      self.class.identifier(name, ascii: @ascii)
     end
 
     def heuristic?(down)

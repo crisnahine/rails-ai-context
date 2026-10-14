@@ -812,19 +812,30 @@ module RailsAiContext
       # Where a mailer with no actions keeps its interface, such as `self.` methods that
       # fan a notification out to many recipients.
       def no_action_detail(mailer)
+        walked = []
+        outside = mailer.superclass
+        while outside && app_defined?(outside)
+          walked << outside.name
+          outside = outside.superclass
+        end
         { class_actions: callable_class_methods(mailer.singleton_methods(false).map(&:to_s)).sort,
-          parent_class: mailer.superclass&.name }.reject { |_k, v| v.nil? || v == [] }
+          parent_class: inherited_from(walked, outside&.name) }.reject { |_k, v| v.nil? || v == [] }
+      end
+
+      # The parent past the app's own mailers that a mailer with no action of its own takes them from. None past the app
+      # base, whose methods and everything above it are no actions, and none from Rails itself.
+      def inherited_from(walked, outside)
+        return nil if walked.any? { |name| ActionResolver.app_base_name?(name, kind: :mailer) }
+
+        name = outside.to_s.delete_prefix("::")
+        name unless name.empty? || name.start_with?("ActionMailer::", "AbstractController::") ||
+                    ActionResolver.app_base_name?(name, kind: :mailer)
       end
 
       def callable_class_methods(names)
         names.reject { |n| n.start_with?("_") || MAILER_CLASS_CONFIG.include?(n) }
       end
 
-      # A mailer's actions are its public instance methods, and the AST sees
-      # one file at a time. `action_methods` counts the public methods a mailer
-      # inherits too, so a public helper on a base class is an action the
-      # booted tier reports and this one cannot - the entries are tagged STATIC
-      # for that reason.
       # ActionMailer's interceptor and observer hooks. A class or module under
       # app/mailers that implements one is registered with the framework, not
       # delivered by it: reporting OpenProject's Interceptors::DefaultHeaders
@@ -853,7 +864,7 @@ module RailsAiContext
 
       def source_mailers
         @source_mailers ||= begin
-          scanned = source_classes("app/mailers", macros: ACTION_CALLBACKS + MAILER_DECLARATIONS)
+          scanned = source_classes("app/mailers", macros: ACTION_CALLBACKS + MAILER_DECLARATIONS + VISIBILITY_CALLS)
           candidates = scanned.reject { |klass| framework_hook?(klass) } +
                        mailers_outside_mailer_dirs(scanned.map(&:file))
           # A mixin under app/mailers holds a mailer's actions (an Emails::* module); a class
@@ -863,7 +874,8 @@ module RailsAiContext
           bases = abstract_mailer_bases(klasses.reject(&:mixin))
           mailers = klasses.reject { |klass| bases.include?(klass.name) }
 
-          { mailers: mailers.map { |klass| mailer_entry(klass) }.sort_by { |m| m[:name] },
+          by_name = klasses.reject(&:mixin).to_h { |klass| [ klass.name, klass ] }
+          { mailers: mailers.map { |klass| mailer_entry(klass, app_ancestors(klass, by_name, parent_of)) }.sort_by { |m| m[:name] },
             bases: bases.map do |base|
               klass = klasses.find { |k| k.name == base }
               heirs = mailers.reject(&:mixin).map(&:name).select { |name| inherits_from?(name, base, parent_of) }
@@ -1071,6 +1083,9 @@ module RailsAiContext
       # app wrote it, the methods it defines, and who inherits it.
       MAILER_DECLARATIONS = %i[layout helper helper_method include default default_url_options=].freeze
 
+      # `private :name` in a mailer hides a method it inherits, and `public :name` shows one.
+      VISIBILITY_CALLS = %i[private protected public].freeze
+
       def mailer_base_record(name, file, source, macros, methods, heirs)
         declares = SourceIntrospector.outside_defs(macros, methods).select { |m| (MAILER_DECLARATIONS + ACTION_CALLBACKS).include?(m[:macro]) }
           .sort_by { |m| m[:offset] }.map { |m| written(source, m) }
@@ -1098,6 +1113,20 @@ module RailsAiContext
       def candidate_body(name)
         @candidate_bodies ||= {}
         @candidate_bodies[name] ||= SourceIntrospector.outside_defs(job_candidates[name].ast[:macros], job_candidates[name].ast[:methods])
+      end
+
+      # The app's own classes a class inherits from, nearest first.
+      def app_ancestors(klass, by_name, parent_of)
+        chain = []
+        name = klass.name
+        while chain.size < SuperclassChain::MAX_DEPTH
+          superclass, nesting = parent_of[name]
+          name = SuperclassChain.resolve_in_scope(name, superclass, nesting: nesting) { |candidate| candidate if by_name.key?(candidate) }
+          break if name.nil? || name == klass.name || chain.any? { |ancestor| ancestor.name == name }
+
+          chain << by_name[name]
+        end
+        chain
       end
 
       def inherits_from?(name, base, parent_of, seen = [])
@@ -1158,12 +1187,22 @@ module RailsAiContext
         false
       end
 
-      # What the static tier can say a mailer offers. A class with no action of its own is
-      # still a mailer: its actions come from a parent or mixin, or it offers class methods.
-      def mailer_entry(klass)
+      # The public methods of a mailer and of its app parents below the app base, each with the visibility the nearest
+      # gives it; tagged STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
+      def mailer_entry(klass, ancestors)
+        # The app base's public methods are no actions, as the booted tier subtracts them; its callbacks still filter.
+        action_chain = [ klass, *ancestors.take_while { |declaring| !ActionResolver.app_base_name?(declaring.name, kind: :mailer) } ]
+        visibility = {}
+        action_chain.each do |declaring|
+          own = ActionResolver.own_methods(declaring.methods, declaring.name).select { |m| m[:scope] == :instance }
+          own.each { |m| visibility[m[:name]] ||= m[:visibility] }
+          declaring.macros.each do |m|
+            m[:args].each { |name| visibility[name.to_s] ||= m[:macro] } if VISIBILITY_CALLS.include?(m[:macro])
+          end
+        end
         actions = ActionResolver.deliverable_actions(
-          ActionResolver.own_actions(klass.methods, class_name: klass.name),
-          klass.macros.select { |m| ACTION_CALLBACKS.include?(m[:macro]) }.flat_map { |m| m[:args] }
+          visibility.select { |name, seen| seen == :public && !name.start_with?("_") }.keys.sort,
+          [ klass, *ancestors ].flat_map { |declaring| declaring.macros.select { |m| ACTION_CALLBACKS.include?(m[:macro]) }.flat_map { |m| m[:args] } }
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,
@@ -1174,7 +1213,8 @@ module RailsAiContext
           .select { |m| m[:scope] == :class && m[:visibility] == :public }
           .map { |m| m[:name] }
         entry[:class_actions] = class_actions.sort if (class_actions = callable_class_methods(class_actions)).any?
-        entry[:parent_class] = klass.parent_class if klass.parent_class
+        source = inherited_from(ancestors.map(&:name), (ancestors.last || klass).parent_class)
+        entry[:parent_class] = source if source
         entry
       end
 

@@ -204,6 +204,51 @@ jobs:
           RAC_TEST_MARIADB_URL: trilogy://root:rac@127.0.0.1:3307/rac
         run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb
 
+  # The plan checks read the plan PostgreSQL prints, and its shape changes between major versions.
+  postgresql_versions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql: ["13", "14", "15", "17", "18"]
+
+    name: PostgreSQL ${{ matrix.postgresql }}
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgresql }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rac
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      BUNDLE_GEMFILE: gemfiles/database_servers.gemfile
+      BUNDLE_BUILD__MYSQL2: --with-mysql-config=/usr/bin/mariadb_config
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the client library mysql2 builds against
+        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: PostgreSQL
+        env:
+          RAC_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/rac
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -81,6 +81,8 @@ module RailsAiContext
               # `order_comments` are the same request.
               declared = table_key.to_s.underscore
               if declared_not_connected(schema).include?(declared)
+                return text_response("Table '#{declared}' is declared in #{dump_name(schema)}. #{shared_dump_note(schema, [ declared ])}") if schema[:shared_dump]
+
                 return text_response(
                   "Table '#{declared}' is declared in #{schema[:declared_in] || "db/schema.rb"} and missing from the connected database. " \
                   "#{pending_for_table(schema, declared)}" \
@@ -401,6 +403,25 @@ module RailsAiContext
         schema[:declared_in] || schema[:note].to_s[/\AParsed from (\S+)/, 1] || "db/schema.rb"
       end
 
+      # A table the shared dump declares that the connected database lacks may be the other database's,
+      # so it is no sign the connected one is behind.
+      private_class_method def self.shared_dump_lines(schema)
+        absent = schema[:connected_tables]&.zero? ? (schema[:tables] || {}).keys.map(&:to_s) : declared_not_connected(schema)
+        return [] if absent.empty?
+
+        [ "_#{shared_dump_note(schema, absent)}_" ]
+      end
+
+      private_class_method def self.shared_dump_note(schema, absent)
+        shared = schema[:shared_dump]
+        "#{shared[:primary]} and #{shared[:other]} both dump to #{dump_name(schema)}, so it may describe #{shared[:other]}. " \
+          "Not in #{shared[:primary]}: #{names_phrase(absent)}."
+      end
+
+      private_class_method def self.names_phrase(names)
+        "#{names.sort.first(5).join(', ')}#{" (+#{names.size - 5} more)" if names.size > 5}"
+      end
+
       private_class_method def self.static_source_lines(schema)
         lines = note_lines(schema)
         lines << "**Dialect:** #{schema[:dialect]}" if schema[:dialect] && schema[:dialect] != "unknown"
@@ -409,17 +430,20 @@ module RailsAiContext
         # db/schema.rb, and nothing joined the two: at that migration the app
         # has the table the database is missing.
         missing = declared_not_connected(schema)
-        if missing.any?
-          declared_total = Array(schema[:declared_tables]).size
-          connected_total = Introspectors::SchemaConventions.table_count(schema[:tables] || {})
-          lines << "_#{schema[:declared_in] || "db/schema.rb"} declares #{count_phrase(declared_total, "table")}; the connected database has " \
-                   "#{connected_total}. Missing: #{missing.sort.first(5).join(', ')}" \
-                   "#{missing.size > 5 ? " (+#{missing.size - 5} more)" : ""}. Run `rails db:migrate`._"
-        end
-        # A database that holds none of the tables the dump lists is created
-        # but not migrated, and the listing above is the dump's.
-        if schema[:connected_tables]&.zero? && (declared_total = Introspectors::SchemaConventions.table_count(schema[:tables] || {})).positive?
-          lines << "_#{dump_name(schema)} declares #{count_phrase(declared_total, "table")}; the connected database has none of them. Run `rails db:migrate`._"
+        if schema[:shared_dump]
+          lines.concat(shared_dump_lines(schema))
+        else
+          if missing.any?
+            declared_total = Array(schema[:declared_tables]).size
+            connected_total = Introspectors::SchemaConventions.table_count(schema[:tables] || {})
+            lines << "_#{schema[:declared_in] || "db/schema.rb"} declares #{count_phrase(declared_total, "table")}; the connected database has " \
+                     "#{connected_total}. Missing: #{names_phrase(missing)}. Run `rails db:migrate`._"
+          end
+          # A database that holds none of the tables the dump lists is created
+          # but not migrated, and the listing above is the dump's.
+          if schema[:connected_tables]&.zero? && (declared_total = Introspectors::SchemaConventions.table_count(schema[:tables] || {})).positive?
+            lines << "_#{dump_name(schema)} declares #{count_phrase(declared_total, "table")}; the connected database has none of them. Run `rails db:migrate`._"
+          end
         end
         if schema[:pending_unknown]
           lines << "**Pending migrations:** not known: #{schema[:pending_unknown]}"

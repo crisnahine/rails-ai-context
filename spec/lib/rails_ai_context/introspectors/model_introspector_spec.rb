@@ -2617,6 +2617,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Ruby has made the class and registered it by the time its body raises, so
+  # it looks loaded while holding only what ran before the raise.
+  describe "a model file whose class body raises partway down" do
+    let(:dir) { Dir.mktmpdir }
+    let(:loader) { Zeitwerk::Loader.new.tap { |l| l.push_dir(File.join(dir, "app", "models")); l.setup } }
+
+    before do
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "zz_half_built.rb"), <<~RUBY)
+        class ZzHalfBuilt < ApplicationRecord
+          self.table_name = "posts"
+          belongs_to :user
+          raise ArgumentError, "boom in class body"
+          has_many :comments
+        end
+      RUBY
+      allow(Rails.autoloaders).to receive(:main).and_return(loader)
+    end
+
+    after do
+      loader.unload
+      loader.unregister if loader.respond_to?(:unregister)
+      Object.send(:remove_const, :ZzHalfBuilt) if Object.const_defined?(:ZzHalfBuilt, false) && !Object.autoload?(:ZzHalfBuilt)
+      FileUtils.remove_entry(dir)
+    end
+
+    it "is named with what it raised and not reflected" do
+      result = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dir)).call }
+
+      expect(result["ZzHalfBuilt"]).to eq(error: "boom in class body", file: "app/models/zz_half_built.rb", table_name: "posts")
+    end
+  end
+
   # A root outside app/models holds generators and gem subclasses too; one of
   # them that will not load is not a model, and static leaves it out.
   describe "a class outside the model directories that cannot load" do
@@ -6524,13 +6557,50 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
   describe "STI on the booted tier" do
     it "reads the type column the model names, not a fixed one" do
-      parent = Class.new { def self.name = "Vehicle" }
+      parent = Class.new do
+        def self.name = "Vehicle"
+        def self.abstract_class? = false
+      end
       model = double("Car", inheritance_column: "kind", connected?: true, table_exists?: true,
                      columns_hash: { "kind" => double }, descendants: [], superclass: parent)
 
       sti = described_class.new(Rails.application).send(:extract_sti_info, model)
 
       expect(sti).to eq(sti_base: false, sti_parent: "Vehicle", type_column: "kind")
+    end
+
+    # Rails connects a model's database on its first query, a table of a second database is not in db/schema.rb,
+    # and the models of a second database inherit from an abstract base that connects to it.
+    it "keeps the hierarchy of a table db/schema.rb does not hold while nothing has queried its database, and none where STI is off" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n")
+        { "zz_analytics_record" => "class ZzAnalyticsRecord < ApplicationRecord\n  self.abstract_class = true\nend\n",
+          "zz_vehicle" => "class ZzVehicle < ZzAnalyticsRecord\nend\n", "zz_car" => "class ZzCar < ZzVehicle\nend\n",
+          "zz_lone" => "class ZzLone < ZzAnalyticsRecord\nend\n", "zz_phone" => "class ZzPhone < ZzGadget\nend\n",
+          "zz_gadget" => "class ZzGadget < ZzAnalyticsRecord\n  self.inheritance_column = nil\nend\n" }.each { |file, source| File.write(File.join(dir, "app", "models", "#{file}.rb"), source) }
+        base = stub_const("ZzAnalyticsRecord", Class.new(ApplicationRecord) { self.abstract_class = true })
+        vehicle = stub_const("ZzVehicle", Class.new(base) { self.table_name = "zz_vehicles" })
+        car = stub_const("ZzCar", Class.new(vehicle))
+        lone = stub_const("ZzLone", Class.new(base) { self.table_name = "zz_lones" })
+        gadget = stub_const("ZzGadget", Class.new(base) do
+          self.table_name = "zz_gadgets"
+          self.inheritance_column = nil
+        end)
+        phone = stub_const("ZzPhone", Class.new(gadget))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([ base, vehicle, car, lone, gadget, phone ])
+        { vehicle => [ car ], car => [], lone => [], gadget => [ phone ], phone => [] }.each do |model, descendants|
+          allow(model).to receive_messages(connected?: false, table_exists?: false, descendants: descendants)
+        end
+
+        models = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dir)).call }
+
+        expect(models["ZzVehicle"][:sti]).to eq(sti_base: true, sti_children: [ "ZzCar" ], type_column: "type")
+        expect(models["ZzCar"][:sti]).to eq(sti_base: false, sti_parent: "ZzVehicle", type_column: "type")
+        expect(models["ZzLone"]).not_to have_key(:sti)
+        expect([ models["ZzGadget"], models["ZzPhone"] ].map { |model| [ model[:table_name], model.key?(:sti) ] }).to eq([ [ "zz_gadgets", false ] ] * 2)
+      end
     end
   end
 

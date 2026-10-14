@@ -7,6 +7,9 @@ module RailsAiContext
     module MysqlRuntime
       module_function
 
+      # A transaction is open that Active Record does not count, which a BEGIN would commit.
+      TRANSACTION_ALREADY_OPEN = 1568
+
       IN_TRANSACTION = "MySQL cannot make a transaction that is already open read-only, so the statement " \
         "was not sent. Run it outside the transaction."
 
@@ -41,7 +44,13 @@ module RailsAiContext
       # before the first statement in the block. Unscoped, it applies to the next transaction only.
       def in_read_only_transaction(conn, sql, session)
         result = nil
-        conn.execute("SET TRANSACTION READ ONLY")
+        begin
+          conn.execute("SET TRANSACTION READ ONLY")
+        rescue ActiveRecord::StatementInvalid => e
+          raise Unsupported, IN_TRANSACTION if DatabaseFamily.native_code(e) == TRANSACTION_ALREADY_OPEN
+
+          raise
+        end
         conn.transaction do
           # Rails replaces a connection it lost before BEGIN, and a new session has neither guard.
           raise ActiveRecord::ConnectionNotEstablished, REPLACED unless conn.select_value("SELECT CONNECTION_ID()").to_i == session.to_i
@@ -50,6 +59,12 @@ module RailsAiContext
           raise ActiveRecord::Rollback
         end
         result
+      end
+
+      # The settings bounded sets for each statement => the read of the session's own value.
+      def bound_settings(conn)
+        limit = conn.mariadb? ? "max_statement_time" : "max_execution_time"
+        { limit => "SELECT @@SESSION.#{limit}", "lock_wait_timeout" => "SELECT @@SESSION.lock_wait_timeout" }
       end
 
       def explain(conn, sql, timeout)
@@ -90,7 +105,7 @@ module RailsAiContext
         []
       end
 
-      def plan(_conn, _sql, _timeout)
+      def plan(_conn, _sql, _timeout, **)
         nil
       end
 

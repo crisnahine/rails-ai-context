@@ -67,6 +67,31 @@ RSpec.describe "rails-ai-context.gemspec" do
     expect(spec.files.grep(%r{\A(demo|gemfiles)/})).to be_empty
   end
 
+  # A tool that indexes an app's bundle reads AGENTS.md or CLAUDE.md in a gem's directory as instructions about that app.
+  it "packages what a user of the gem runs or reads, and none of the files that serve the repository alone" do
+    root = File.expand_path("../../..", __dir__)
+    tracked = IO.popen([ "git", "-C", root, "ls-files", "-z" ], &:read).split("\x0")
+    code = tracked.grep(%r{\A(lib|exe|app|config)/})
+    user_docs = %w[README.md CHANGELOG.md LICENSE SECURITY.md] + tracked.grep(%r{\Adocs/[^/]+\.md\z}) - %w[docs/RELEASING.md]
+
+    expect(spec.files).to include(*code, *user_docs)
+    expect(spec.files - code - user_docs).to all(satisfy { |f| links_from_package(root).include?(f) })
+    expect(spec.files).not_to include("AGENTS.md", "CLAUDE.md", "CONTEXT.md", "docs/RELEASING.md", "docs/agents/domain.md")
+  end
+
+  it "packages every file a packaged Markdown file links to" do
+    expect(spec.files).to include(*links_from_package(File.expand_path("../../..", __dir__)))
+  end
+
+  # Each relative link of a packaged Markdown file, as a path from the repository root.
+  def links_from_package(root)
+    spec.files.grep(/\.md\z/).flat_map do |doc|
+      File.read(File.join(root, doc)).scan(/\]\(((?!https?:|mailto:|#)[^)#\s]+)/).flatten.map do |link|
+        File.expand_path(link, File.join(root, File.dirname(doc))).delete_prefix("#{root}/")
+      end
+    end.uniq
+  end
+
   # Thor 1.0 and 1.1 raise NameError on require under Ruby 3.1 and later.
   it "requires a thor that loads on every supported Ruby" do
     thor = spec.runtime_dependencies.find { |dep| dep.name == "thor" }

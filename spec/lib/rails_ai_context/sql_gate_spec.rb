@@ -481,7 +481,7 @@ RSpec.describe RailsAiContext::SqlGate do
   end
 
   describe "SQLite pragma functions" do
-    let(:relations) { { "pragma_notes" => %w[id body], "logs" => %w[id pragma_flag pragma_foreign_keys pragma_database_list changes last_insert_rowid] } }
+    let(:relations) { { "pragma_notes" => %w[id body], "changes" => %w[id], "logs" => %w[id pragma_flag pragma_foreign_keys pragma_database_list changes last_insert_rowid] } }
 
     it "runs every one that describes the schema or the database file, and refuses the rest on SQLite alone" do
       %w[table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check integrity_check quick_check
@@ -495,9 +495,28 @@ RSpec.describe RailsAiContext::SqlGate do
       end
       expect(runs?("SELECT changes, total_changes FROM counters")).to be(true)
       expect(runs?("SELECT id, body FROM pragma_notes")).to be(true)
-      # A column's name is no table's: one named like a pragma function or a counter is refused with it.
+      # A column's name is no table's, so the column runs and the function where a table stands stays refused.
+      [ "SELECT id FROM logs WHERE pragma_flag = 1", "SELECT l.pragma_foreign_keys, pragma_database_list, changes FROM logs l",
+        "SELECT id FROM logs WHERE pragma_flag IN (1, 2) ORDER BY pragma_flag, id", "SELECT 'pragma_foreign_keys' AS n",
+        "SELECT id FROM logs JOIN logs AS m USING (pragma_flag)", "SELECT id FROM logs AS pragma_database_list",
+        "SELECT count(*) OVER (PARTITION BY id, pragma_flag) FROM logs" ].each do |sql|
+        expect(runs?(sql)).to be(true), sql
+      end
       [ "SELECT name, file FROM pragma_database_list", "SELECT * FROM pragma_foreign_keys", "SELECT * FROM 'pragma_foreign_keys'",
-        "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT id FROM logs WHERE pragma_flag = 1" ].each do |sql|
+        "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT * FROM logs, pragma_database_list",
+        "SELECT * FROM logs l, `pragma_database_list` d", "SELECT * FROM logs LEFT JOIN [pragma_foreign_keys]",
+        "SELECT * FROM logs JOIN logs m ON m.id = logs.id, pragma_foreign_keys", "SELECT * FROM main.pragma_database_list",
+        %(SELECT * FROM "main"."pragma_database_list"), "SELECT * FROM (pragma_database_list)", "SELECT * FROM logs, (pragma_foreign_keys)",
+        "SELECT 1 WHERE 'main' IN pragma_database_list", "SELECT 1 WHERE 1 IN main.pragma_foreign_keys",
+        "SELECT pragma_database_list() AS n", "SELECT * FROM pragma_function_list ()",
+        "SELECT (SELECT name FROM pragma_database_list) AS n FROM logs", "SELECT changes() AS n FROM changes",
+        "SELECT id FROM logs a JOIN logs b USING (id), pragma_query_only", %(SELECT id FROM logs a JOIN logs b USING (id), main."pragma_database_list"),
+        "SELECT id FROM logs a NATURAL JOIN logs b, pragma_database_list", "SELECT id FROM logs a CROSS JOIN logs b, pragma_query_only",
+        "SELECT id FROM logs INDEXED BY logs_by_id, pragma_query_only", "SELECT id FROM logs NOT INDEXED, pragma_query_only",
+        "SELECT id FROM logs AS window, pragma_query_only", "SELECT id FROM logs window, [pragma_database_list]",
+        "WITH window AS (SELECT 1 AS one) SELECT one FROM window, pragma_query_only",
+        "SELECT id FROM logs a NATURAL JOIN logs window, main.pragma_query_only", "SELECT * FROM (logs l, pragma_query_only)",
+        "SELECT * FROM (SELECT 1) s, (logs, pragma_query_only)" ].each do |sql|
         expect(refusal(sql)).to include("tells of the connection that runs it"), sql
       end
     end
@@ -960,6 +979,32 @@ RSpec.describe RailsAiContext::SqlGate do
     end
   end
 
+  describe ".settings_read" do
+    def read(sql, family, rows = [])
+      described_class.settings_read(sql, families.fetch(family), rows)
+    end
+
+    it "reads a setting the statement names where the name is code, and the names a list of the session's settings shows" do
+      expect(read("SELECT @@lock_wait_timeout, @@SESSION.`max_execution_time` AS m, @@LOCAL.x", :mysql)).to eq(%w[lock_wait_timeout max_execution_time x])
+      expect(read("SELECT @@session . lock_wait_timeout AS w", :mysql)).to eq(%w[lock_wait_timeout])
+      expect(read("SELECT current_setting('statement_timeout') AS t", :postgresql)).to eq(%w[statement_timeout])
+      expect(read("SHOW VARIABLES LIKE '%timeout'", :mysql, [ [ "Lock_wait_timeout", "2" ] ])).to include("lock_wait_timeout")
+      expect(read("SELECT v FROM information_schema.SESSION_VARIABLES WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
+      expect(read("SELECT v FROM `information_schema`.`SESSION_VARIABLES` WHERE n = 'LOCK_WAIT_TIMEOUT'", :mysql)).to include("lock_wait_timeout")
+      expect(read(%(SELECT v FROM "information_schema"."SESSION_VARIABLES" WHERE n = 'LOCK_WAIT_TIMEOUT'), :mysql)).to include("lock_wait_timeout")
+    end
+
+    it "reads no setting from a string, a comment, an alias or a global value" do
+      expect(read("SELECT '@@lock_wait_timeout' AS w /* @@max_execution_time */ # SHOW lock_wait_timeout", :mysql)).to eq([])
+      expect(read("SELECT 'show statement_timeout' AS s -- current_setting('statement_timeout')", :postgresql)).to eq([])
+      expect(read('SELECT 1 AS "show statement_timeout"', :postgresql)).to eq([])
+      expect(read("SELECT v FROM session_variables WHERE n = 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout" ] ])).to eq([])
+      expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout, @@global . max_execution_time", :mysql)).to eq([])
+      expect(read(%(SELECT "information_schema.session_variables" AS lock_wait_timeout), :mysql)).to eq([])
+      expect(read("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout", "50" ] ])).to eq([])
+    end
+  end
+
   describe RailsAiContext::SqlGate::Budget do
     let(:clock) { [ 100.0 ] }
 
@@ -1191,6 +1236,12 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(plan_refusal(scan([ "u.id" ], "Filter" => [ %((u."api token$" = 'x'::text)) ]))).to include("`api token$`")
         expect(plan_refusal(scan([ %(upper(u."Api Token$")) ]))).to include("`api token$`")
       end
+    end
+
+    it "names the session's temporary schema pg_temp, as PostgreSQL 15 and later print it and the catalog reads list it" do
+      scan = { "Node Type" => "Seq Scan", "Relation Name" => "jotted", "Schema" => "pg_temp_3", "Alias" => "j", "Output" => [ "j.id" ] }
+      expect(RailsAiContext::DatabaseFamily::PostgresqlPlan.new(scan).relations).to eq([ %w[pg_temp pg_temp.jotted] ])
+      expect(RailsAiContext::DatabaseFamily::PostgresqlPlan.new(scan.merge("Schema" => "pg_temp_3x")).relations).to eq([ %w[pg_temp_3x pg_temp_3x.jotted] ])
     end
 
     # Plans PostgreSQL 16 gave over a postgres_fdw table.
@@ -1545,15 +1596,15 @@ RSpec.describe RailsAiContext::SqlGate do
         .and include("not on rails_query's list of read-only VOLATILE functions")
     end
 
-    it "asks pg_proc nothing when every function named only reads" do
+    it "runs functions that only read once pg_proc shows the app defines none of their names" do
       top = { "Node Type" => "Result", "Output" => [ "pg_total_relation_size('orders')", "pg_database_size('app')", "pg_is_in_recovery()" ] }
       expect(plan_refusal(top)).to be_nil
-      expect(connection).not_to have_received(:select_values)
+      expect(connection).to have_received(:select_values).with(a_string_including("'pg_is_in_recovery'", "pg_catalog"))
     end
 
     it "plans the statement a leading EXPLAIN ANALYZE would run" do
       refusal("EXPLAIN ANALYZE SELECT 1 AS x", :postgresql)
-      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", a_value_within(1).of(5))
+      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", a_value_within(1).of(5), generic: false)
     end
 
     it "plans nothing off PostgreSQL" do
@@ -1598,7 +1649,7 @@ RSpec.describe RailsAiContext::SqlGate do
         described_class.new(family: families.fetch(:postgresql), secrets: RailsAiContext::SecretColumns.new, connection: connection, budget: budget)
           .check("SELECT nextval('s')")
 
-        expect(runtime).to have_received(:plan).with(connection, "SELECT nextval('s')", a_value_within(0.1).of(2))
+        expect(runtime).to have_received(:plan).with(connection, "SELECT nextval('s')", a_value_within(0.1).of(2), generic: false)
         expect(runtime).to have_received(:bounded).with(connection, a_value_between(1, 1.8))
         expect(budget.spend { |left| left }).to be_between(1, 1.8)
       end
@@ -1616,10 +1667,22 @@ RSpec.describe RailsAiContext::SqlGate do
 
       it "plans whatever a leading EXPLAIN would run, in either spelling of its options" do
         [ "EXPLAIN VALUES (1)", "EXPLAIN (ANALYZE, VERBOSE) VALUES (1)", "EXPLAIN ANALYZE VERBOSE VALUES (1)" ].each { |sql| check(sql, :postgresql) }
-        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", a_value_within(1).of(5)).exactly(3).times
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", a_value_within(1).of(5), generic: false).exactly(3).times
 
         check("EXPLAIN (ANALYZE) (SELECT 1)", :postgresql)
-        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5))
+        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5), generic: false)
+      end
+
+      it "plans the statement under EXPLAIN (GENERIC_PLAN) generically, reading the option's last value as the server does" do
+        [ "EXPLAIN (GENERIC_PLAN) VALUES ($1)", "EXPLAIN (COSTS off, generic_plan TRUE) VALUES ($1)", "EXPLAIN (GENERIC_PLAN 1, VERBOSE) VALUES ($1)",
+          "EXPLAIN (GENERIC_PLAN 'on') VALUES ($1)", "EXPLAIN (GENERIC_PLAN false, GENERIC_PLAN) VALUES ($1)" ].each do |sql|
+          check(sql, :postgresql)
+        end
+        expect(runtime).to have_received(:plan).with(connection, "VALUES ($1)", a_value_within(1).of(5), generic: true).exactly(5).times
+
+        [ "EXPLAIN (GENERIC_PLAN off) VALUES (2)", "EXPLAIN (GENERIC_PLAN 'false') VALUES (2)", "EXPLAIN (VERBOSE) VALUES (2)",
+          "EXPLAIN (GENERIC_PLAN, GENERIC_PLAN no) VALUES (2)" ].each { |sql| check(sql, :postgresql) }
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (2)", a_value_within(1).of(5), generic: false).exactly(4).times
       end
 
       # SHOW reads a setting and PostgreSQL has no DESCRIBE, so neither has a plan to read.

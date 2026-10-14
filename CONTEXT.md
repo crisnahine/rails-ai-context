@@ -167,7 +167,7 @@ A gem the context calls out because it shapes how the app is built, counted only
 
 ## Payload
 
-The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test instead of silently emptying a section everywhere. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload rather than re-filtering it. One reader fills a section a preset leaves out: `Payload.multi_database` reads the app databases list when the `multi_database` introspector did not run, so a database's mark and the first database's own name do not depend on the preset.
+The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test where it would otherwise empty a section everywhere without a word. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload and do not filter it again. The seam fills one section a preset leaves out: where the `multi_database` introspector did not run or failed, the context carries the app databases list under `multi_database`, so a database's adapter, its mark and the first database's own name do not depend on the preset. A list that cannot be read is a warning, as a failed section is.
 
 ## Standalone
 
@@ -231,7 +231,7 @@ Not redaction itself: `Redaction` scrubs secret values out of text (logs, config
 
 ## SQL gate
 
-What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is a second guard, and the gate's checks run before it on every database family (ADR-0008). A name the gate refuses belongs to one family and is refused there alone.
+What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is a second guard, and the gate's checks run before it on every database family (ADR-0008). A name the gate refuses belongs to one family and is refused there alone. The gate also tells which session settings a statement reads by name, for the note that says the value shown is the one `rails_query` sets.
 
 ## Served tool
 

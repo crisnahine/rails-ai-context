@@ -50,6 +50,21 @@ RSpec.describe RailsAiContext::Tools::Query do
         answer(sql, **options).content.first[:text]
       end
 
+      it "keeps refusing a column named like a configured secret one but for case past ASCII, and filters it" do
+        RailsAiContext.configuration.query_redacted_columns += [ "\u00c9" ]
+        conn.execute("DROP TABLE IF EXISTS rac_my_accents")
+        conn.execute("CREATE TABLE rac_my_accents (id int, `\u00e9` varchar(20))")
+        conn.execute("INSERT INTO rac_my_accents VALUES (1, 'lower-secret')")
+
+        [ "SELECT `\u00e9` FROM rac_my_accents", "SELECT `\u00c9` FROM rac_my_accents", "SELECT \u00c9 AS x FROM rac_my_accents" ].each do |sql|
+          expect(text(sql)).to start_with("Blocked: query references secret column"), sql
+        end
+        expect(text("SELECT * FROM rac_my_accents")).to include("[FILTERED]").and(satisfy { |t| !t.include?("lower-secret") })
+      ensure
+        RailsAiContext.configuration.query_redacted_columns -= [ "\u00c9" ]
+        conn.execute("DROP TABLE IF EXISTS rac_my_accents")
+      end
+
       describe "a table in another database of the server" do
         def drop_others
           conn.execute("DROP VIEW IF EXISTS rac_my_across")
@@ -441,6 +456,35 @@ RSpec.describe RailsAiContext::Tools::Query do
       it "refuses a view whose definition the account may not read" do
         allow(runtime).to receive(:view_definitions).and_wrap_original { |original, c| original.call(c).transform_values { "" } }
         expect(text("SELECT * FROM rac_my_contacts")).to include("the view `rac_my_contacts` is not queried: its definition could not be read")
+      end
+
+      it "says the statement limit and lock_wait_timeout it shows are its own, and gives the session's" do
+        RailsAiContext.configuration.query_timeout = 2
+        limit, own = conn.mariadb? ? [ "max_statement_time", "50.0" ] : [ "max_execution_time", "50000" ]
+        conn.execute("SET SESSION #{limit} = #{conn.mariadb? ? 50 : 50_000}, lock_wait_timeout = 600")
+        note = "#{limit} and lock_wait_timeout here are the values rails_query sets for each statement it runs. " \
+          "The session's own: #{limit} #{own}, lock_wait_timeout 600."
+
+        expect(text("SELECT @@#{limit} AS l, @@lock_wait_timeout AS w")).to include(note)
+        expect(text("SHOW VARIABLES LIKE '%wait_timeout'")).to match(/\| lock_wait_timeout +\| 2 /).and include("lock_wait_timeout here is the value")
+        expect(text("SHOW VARIABLES LIKE 'version'")).not_to include("rails_query sets")
+        expect(text("SELECT 1 AS lock_wait_timeout")).not_to include("rails_query sets")
+        expect(text("SELECT @@GLOBAL.lock_wait_timeout AS w")).not_to include("rails_query sets")
+        expect(text("SELECT '@@lock_wait_timeout' AS w")).not_to include("rails_query sets")
+        expect(text("SELECT @@LOCAL.lock_wait_timeout AS w")).to include("rails_query sets")
+        expect(text("SELECT @@`lock_wait_timeout` AS w")).to include("rails_query sets")
+        expect(text("SELECT @@SESSION.`lock_wait_timeout` AS w")).to include("rails_query sets")
+        expect(text("SELECT @@session . lock_wait_timeout AS w")).to include("rails_query sets")
+        expect(text("SHOW SESSION VARIABLES LIKE 'lock_wait_timeout'")).to include("rails_query sets")
+        expect(text("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'")).not_to include("rails_query sets")
+        if conn.mariadb?
+          read = "SELECT VARIABLE_VALUE FROM information_schema.%s WHERE VARIABLE_NAME = 'LOCK_WAIT_TIMEOUT'"
+          expect(text(format(read, "SESSION_VARIABLES"))).to include("lock_wait_timeout here is the value")
+          expect(text(format(read, "`SESSION_VARIABLES`"))).to include("lock_wait_timeout here is the value")
+          expect(text(format(read, "GLOBAL_VARIABLES"))).not_to include("rails_query sets")
+        end
+      ensure
+        conn.execute("SET SESSION #{limit} = 0, lock_wait_timeout = 31536000")
       end
 
       it "answers a timeout as an error, inside the timeout" do

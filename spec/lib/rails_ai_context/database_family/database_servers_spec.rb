@@ -161,6 +161,21 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(conn.select_value("SELECT COUNT(*) FROM rac_server_rows").to_i).to eq(5)
     end
 
+    # The server commits an open transaction when it reads a BEGIN, so none may be sent here.
+    it "refuses a guarded read inside a transaction the app opened with a raw BEGIN, bounds a block of reads there, and leaves it open" do
+      conn.execute("BEGIN")
+      conn.execute("INSERT INTO rac_server_rows VALUES (4)")
+      expect { family.read_only(conn, "SELECT id FROM rac_server_rows", timeout: 5) }
+        .to raise_error(described_class::Unsupported, /already open/)
+      expect(family.bounded(conn, timeout: 5) { conn.select_value("SELECT COUNT(*) FROM rac_server_rows") }.to_i).to eq(4)
+      expect { family.bounded(conn, timeout: 0.5) { conn.select_all("SELECT id FROM rac_server_rows WHERE SLEEP(1) = 0") } }
+        .to raise_error(described_class::TimedOut)
+      conn.execute("INSERT INTO rac_server_rows VALUES (5)")
+      conn.execute("ROLLBACK")
+
+      expect(conn.select_value("SELECT COUNT(*) FROM rac_server_rows").to_i).to eq(3)
+    end
+
     it "reads the view definitions and generated column expressions the rule checks" do
       conn.execute("ALTER TABLE rac_server_rows ADD COLUMN twice int AS (id * 2) VIRTUAL")
 
@@ -215,6 +230,22 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "raises a cancel another session sends while the trace waits on a lock as the cancel, which is no timeout" do
+      sql = "SELECT * FROM (SELECT * FROM rac_server_view OFFSET 0) x"
+      plan = family.plan(conn, sql, timeout: 5)
+      pid = conn.select_value("SELECT pg_backend_pid()")
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
+        canceler = Thread.new { sleep 0.5 and locker.raw_connection.exec("SELECT pg_cancel_backend(#{pid})") }
+
+        expect { family.bounded(conn, timeout: 5) { family.column_sources(conn, sql, plan: plan) } }
+          .to raise_error { |error| expect([ error.class, error.message ]).to match([ satisfy { |c| c != described_class::TimedOut }, /user request/ ]) }
+      ensure
+        canceler&.join
+      end
+    end
+
     it "reads a lock wait the session's own lock_timeout ended as the timeout" do
       conn.execute("SET lock_timeout = '200ms'")
       second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
@@ -250,6 +281,33 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(conn.select_value("SELECT count(*) FROM rac_server_rows").to_i).to eq(5)
     end
 
+    it "guards a read inside a transaction the app opened with a raw BEGIN, and leaves it open with its writes" do
+      conn.execute("BEGIN")
+      conn.execute("INSERT INTO rac_server_rows VALUES (4)")
+
+      expect { family.read_only(conn, "INSERT INTO rac_server_rows VALUES (9)", timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid)
+      expect { family.read_only(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut)
+      expect(family.read_only(conn, "SELECT count(*) FROM rac_server_rows", timeout: 5).rows.flatten.map(&:to_i)).to eq([ 4 ])
+      expect(family.bounded(conn, timeout: 5) { conn.select_value("SELECT current_setting('transaction_read_only')") }).to eq("on")
+
+      expect(conn.select_rows("SELECT current_setting('transaction_read_only'), current_setting('statement_timeout')")).to eq([ %w[off 0] ])
+      conn.execute("INSERT INTO rac_server_rows VALUES (5)")
+      conn.execute("COMMIT")
+      expect(conn.select_value("SELECT count(*) FROM rac_server_rows").to_i).to eq(5)
+    end
+
+    it "raises a statement another session canceled as the error it is, and a timeout as the timeout" do
+      pid = conn.select_value("SELECT pg_backend_pid()")
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |other|
+        canceler = Thread.new { sleep 0.5 and other.execute("SELECT pg_cancel_backend(#{pid})") }
+        expect { family.read_only(conn, "SELECT pg_sleep(5)", timeout: 5) }
+          .to raise_error(ActiveRecord::StatementInvalid, /user request/) { |e| expect(e).not_to be_a(described_class::TimedOut) }
+      ensure
+        canceler&.join
+      end
+      expect { family.read_only(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut)
+    end
+
     it "raises planning's SQL error" do
       expect { family.plan(conn, "SELECT nope FROM rac_server_rows", timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid)
     end
@@ -258,8 +316,11 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       conn.execute("ALTER TABLE rac_server_rows ADD COLUMN twice int GENERATED ALWAYS AS (id * 2) STORED")
       conn.execute("CREATE MATERIALIZED VIEW rac_server_stored AS SELECT id AS n FROM rac_server_rows")
 
+      # Before PostgreSQL 16 pg_get_viewdef qualifies each column with its table.
+      table = conn.database_version < 16_00_00 ? "rac_server_rows." : ""
+      view, stored = "SELECT #{table}id FROM rac_server_rows;", "SELECT #{table}id AS n FROM rac_server_rows;"
       expect(family.view_definitions(conn).transform_values(&:squish)).to include(
-        "rac_server_view" => "SELECT id FROM rac_server_rows;", "rac_server_stored" => "SELECT id AS n FROM rac_server_rows;"
+        "rac_server_view" => view, "public.rac_server_view" => view, "rac_server_stored" => stored, "public.rac_server_stored" => stored
       )
       expect(family.traced_views(conn)).to include("rac_server_view")
       expect(family.traced_views(conn)).not_to include("rac_server_stored")

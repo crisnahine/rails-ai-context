@@ -544,7 +544,18 @@ module RailsAiContext
 
       def declaration_keys
         declared = declared_table_names
-        { declared_tables: declared, declared_in: (relative_dump_path(schema_file_path) if declared) }
+        keys = { declared_tables: declared, declared_in: (relative_dump_path(schema_file_path) if declared) }
+        shared = declared && shared_dump
+        shared ? keys.merge(shared_dump: shared) : keys
+      end
+
+      # Rails dumps both the first database and the one named primary to schema.rb, so the
+      # file holds whichever was dumped last.
+      def shared_dump
+        dump = File.expand_path(schema_file_path)
+        primary = app_databases.primary
+        other = app_databases.find { |db| db.here && db != primary && db.dump && File.expand_path(db.dump.path) == dump }
+        { primary: primary.name, other: other.name } if primary && other
       end
 
       # The configured dump first (database.yml's schema_dump, schema_format), then the default files.

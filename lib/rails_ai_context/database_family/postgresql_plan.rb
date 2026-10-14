@@ -10,10 +10,14 @@ module RailsAiContext
       NAME = /(?:([A-Za-z_]\w*)|"((?:""|[^"])+)")/
       BASE_VAR = /\A#{NAME}\.#{NAME}\z/
       # Nodes whose every read of a child's column is an expression of their own that names it.
-      READS_BY_NAME = [ "Aggregate", "Hash Join", "Merge Join", "Nested Loop" ].freeze
+      READS_BY_NAME = [ "Aggregate", "Hash Join", "Merge Join", "Nested Loop", "Result" ].freeze
 
       # Catalogs and TOAST tables: the never-read list and the catalog credentials hold what is secret there.
       SYSTEM_SCHEMA = /\A(?:pg_catalog|information_schema|pg_toast(?:_temp_\d+)?)\z/
+
+      # Before PostgreSQL 15 a plan names the session's temporary schema by its number, where the catalog reads say pg_temp.
+      # Another session's temporary table can be planned but never read, so a statement over one fails when it runs.
+      OWN_TEMP_SCHEMA = /\Apg_temp_\d+\z/
 
       APPENDS = [ "Append", "Merge Append" ].freeze
       REMOTE_NAME = /"(?:""|[^"])+"|[^\s()."]+/
@@ -95,7 +99,7 @@ module RailsAiContext
       # no relation of its own: postgres_fdw names its tables there, each with its alias, as `(schema.table alias)`.
       def scanned(node)
         rel = node["Relation Name"]
-        return [ [ node["Schema"], rel.to_s, (node["Alias"] || rel).to_s ] ] if rel
+        return [ [ node["Schema"]&.sub(OWN_TEMP_SCHEMA, "pg_temp"), rel.to_s, (node["Alias"] || rel).to_s ] ] if rel
 
         node["Relations"].to_s.scan(REMOTE_RELATION).map do |parts|
           schema, name, as = parts.map { |part| part&.delete_prefix('"')&.delete_suffix('"')&.gsub('""', '"') }

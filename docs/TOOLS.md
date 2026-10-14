@@ -147,10 +147,7 @@ dump was not read is named with "(tables not read)" and left out of the table
 count, and the summary says so: "5 tables in 2 databases, the warehouse
 database not read". It ends with the app's custom rake tasks (Rakefile,
 `lib/tasks`, `rakelib`), each with its arguments, description and file: the
-first 15 at `standard`, every one at `full`. A known limit: on
-`preset: standard` on the static tier the stack line reads the primary's
-adapter as `unknown`, and a database's heading in the generated files can name
-no adapter.
+first 15 at `standard`, every one at `full`.
 Then the app's own generators under `lib/generators` (the `bin/rails generate`
 command and its USAGE line), the `lib/templates` files that replace a built-in
 generator's template, and the Railties under `lib/` with their initializers.
@@ -170,7 +167,10 @@ generator's template, and the Railties under `lib/` with their initializers.
 Database schema with column types, indexes, defaults, encrypted hints. Booted,
 a table `db/schema.rb` declares and the connected database does not have is
 named as a migration that has not run, and the listing header says when the
-two table counts disagree.
+two table counts disagree. Where two databases both dump to `db/schema.rb` (the
+first one and the one named `primary`), the file may hold the other one's
+tables, so such a table is named as not in the connected database, with no
+word of a migration.
 
 The other databases are listed after the primary's tables: every database any
 environment in `config/database.yml` configures, so a Rails 8 app's queue,
@@ -184,10 +184,9 @@ or `schema_format` says.
 A database only another environment configures carries a mark, as in
 `cache (production only)`, and a first database that is not named `primary`
 is listed under its own name where another database is the one named
-`primary`. Both are the same under every `preset`. With the
-`multi_database` introspector off, as on `preset: standard`, `rails_get_schema`,
-`rails_onboard`, `rails_performance_check` and the generated files read them
-from the app databases list.
+`primary`. Both are the same under every `preset`, and so is each database's
+adapter: with the `multi_database` introspector off, as on `preset: standard`,
+the context still carries the app databases list.
 
 Column hints follow the leftmost-prefix rule: `[indexed]` means some index leads
 with the column, so a lookup on it alone can use one; `[unique]` means a unique
@@ -655,7 +654,7 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 
 ### `rails_get_mailers`
 
-ActionMailer mailers: every mailer class with its delivery actions and delivery method. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
+ActionMailer mailers: every mailer class with its delivery actions and delivery method. The actions include the public methods a mailer inherits from the app's own mailers below `ApplicationMailer`, on both tiers. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
 
 Each mailer also shows its own `default`, `layout`, `helper` and action and
 deliver callbacks as written, the template formats of each action under
@@ -833,6 +832,8 @@ Live database pool stats, table sizes, pending migrations, cache stats, queue de
 Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index usage from PostgreSQL. On MySQL, MariaDB and SQLite the full detail says "_Index usage is not available for the MySQL database family._", or SQLite. On an adapter with no database family the database section says table sizes and index usage are not available for that adapter. A read that failed or took longer than `query_timeout` is said in one line: "_Table sizes were not read: the read failed or took longer than query_timeout._", and at `detail: "full"` "_Index usage was not read: the read failed or took longer than query_timeout._"
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there. Solid Cache's stats are read from its database, so when that is a SQLite file that is not there, the cache section says the database does not exist yet and creates nothing.
+
+The jobs section names the Active Job adapter the running environment uses. Queue counts are read from Sidekiq alone: they are the app's when Sidekiq is that adapter, and under another adapter they are shown under their own heading only when the app has Sidekiq workers of its own, as those workers' counts.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

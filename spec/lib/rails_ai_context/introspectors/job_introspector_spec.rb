@@ -664,6 +664,9 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     it "keeps a mailer whose interface is class methods" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), "class ApplicationMailer < Mail::Notify::Mailer\nend\n")
+        File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), "class BaseMailer < ApplicationMailer\nend\n")
+        File.write(File.join(dir, "app", "mailers", "quiet_mailer.rb"), "class QuietMailer < BaseMailer\n  def self.ping = nil\nend\n")
         File.write(File.join(dir, "app", "mailers", "multi_notifications.rb"), <<~RUBY)
           class MultiNotifications < ApplicationMailer
             def self.deadline_passed(consultation)
@@ -677,6 +680,8 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(mailer).not_to be_nil
       expect(mailer[:actions]).to eq([])
       expect(mailer[:class_actions]).to eq(%w[deadline_passed])
+      expect(mailer).not_to have_key(:parent_class)
+      expect(result[:mailers].find { |m| m[:name] == "QuietMailer" }).to include(class_actions: %w[ping]).and(satisfy { |m| !m.key?(:parent_class) })
     end
 
     # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing
@@ -2173,7 +2178,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(entry).not_to be_nil
       expect(entry[:actions]).to eq([])
       expect(entry[:class_actions]).to eq(%w[blast])
-      expect(entry[:parent_class]).to eq("ApplicationMailer")
+      expect(entry).not_to have_key(:parent_class)
     end
 
     # Without eager loading, a mailer kept in app/services or app/models loads
@@ -2272,31 +2277,52 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    # Rails dispatches on every public instance method a mailer inherits, not
-    # only the ones its own file defines. The AST sees one file at a time, so
-    # a public helper on a base class is an action the booted tier reports and
-    # the static tier cannot. Pinned because the gap is real and undocumented,
-    # not because it is acceptable.
-    it "misses an inherited public helper the booted tier calls an action" do
+    # Rails dispatches on every public instance method a mailer inherits from its parents.
+    it "adds the public methods a mailer inherits from the app's own mailers, less what it makes private" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
-        File.write(File.join(dir, "app", "mailers", "billing_base_mailer.rb"), <<~RUBY)
-          class BillingBaseMailer < ActionMailer::Base
-            def locale_for_account(account) = account
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), <<~RUBY)
+          class ApplicationMailer < ActionMailer::Base
+            before_action :stamp
+
+            def money(amount) = amount
           end
         RUBY
-        File.write(File.join(dir, "app", "mailers", "invoice_mailer.rb"), <<~RUBY)
-          class InvoiceMailer < BillingBaseMailer
-            def invoice(id)
-              mail(to: "test@example.com")
-            end
+        File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), <<~RUBY)
+          class BaseMailer < ApplicationMailer
+            before_action :track
+
+            def receipt(order_id) = mail(to: "a@example.com")
+            def refund(order_id) = mail(to: "a@example.com")
+            def locale_for_account(account) = account
+            def track = nil
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "shop_mailer.rb"), <<~RUBY)
+          class ShopMailer < BaseMailer
+            def shipped(order_id) = mail(to: "a@example.com")
+            def stamp = nil
+
+            private
+
+            def refund(order_id) = nil
+          end
+        RUBY
+
+        File.write(File.join(dir, "app", "mailers", "reopen_mailer.rb"), <<~RUBY)
+          class ReopenMailer < BaseMailer
+            def visible(order_id) = mail(to: "a@example.com")
+
+            private :receipt
+            public :locale_for_account
           end
         RUBY
 
         static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mailers]
-        invoice = static.find { |m| m[:name] == "InvoiceMailer" }
-        expect(invoice[:actions]).to eq(%w[invoice])
-        expect(invoice[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+        shop = static.find { |m| m[:name] == "ShopMailer" }
+        expect(shop[:actions]).to eq(%w[locale_for_account receipt shipped])
+        expect(shop[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+        expect(static.find { |m| m[:name] == "ReopenMailer" }[:actions]).to eq(%w[locale_for_account refund visible])
       end
     end
   end

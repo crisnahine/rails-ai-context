@@ -97,6 +97,48 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
   end
 
+  describe "a name as each family folds it" do
+    let(:families) { { sqlite: RailsAiContext::DatabaseFamily::SQLITE, postgresql: RailsAiContext::DatabaseFamily::POSTGRESQL,
+                       mysql: RailsAiContext::DatabaseFamily::MYSQL } }
+
+    def rule(family, columns, redacted: [], encrypted: [])
+      config.query_redacted_columns += redacted
+      described_class.new(relations: { "t" => columns }, encrypted: encrypted, family: families.fetch(family))
+    end
+
+    it "keeps two columns apart on SQLite that differ past ASCII alone, and names the one the statement wrote" do
+      secrets = rule(:sqlite, %W[id \u00e9 \u00c9], redacted: [ "\u00c9" ])
+      expect(secrets.secret?("\u00e9")).to be(false)
+      expect(secrets.named_in(%(SELECT "\u00e9" FROM t))).to be_nil
+      expect(secrets.secret?("\u00c9")).to be(true)
+      [ %(SELECT "\u00c9" FROM t), "SELECT \u00c9 AS x FROM t", "SELECT [\u00c9] FROM t", "SELECT `\u00c9` FROM t" ].each do |sql|
+        expect(secrets.named_in(sql)).to eq("\u00c9"), sql
+      end
+    end
+
+    it "folds ASCII letters on SQLite, so a secret name in any case of them stays refused" do
+      secrets = rule(:sqlite, %w[id Api_Key Ssn_Code], redacted: %w[SSN_CODE])
+      %w[api_key API_KEY ssn_code sSn_cOdE].each { |name| expect(secrets.named_in("SELECT #{name} FROM t")).not_to be_nil, name }
+      expect(secrets.secret?("SSN_code")).to be(true)
+    end
+
+    it "keeps secret on SQLite what a name means with every letter folded, and a configured name no column spells exactly" do
+      secrets = rule(:sqlite, %W[id api_\u212Aey AP\u0130_TOKEN pr\u0130vate_key \u00c9_ssn], redacted: [ "\u00e9_ssn" ], encrypted: %w[tax])
+      %W[api_\u212Aey AP\u0130_TOKEN pr\u0130vate_key \u00c9_ssn tax TAX].each do |name|
+        expect(secrets.secret?(name)).to be(true), name
+        expect(secrets.named_in(%(SELECT "#{name}" FROM t))).not_to be_nil, name
+      end
+    end
+
+    it "folds every letter on PostgreSQL and MySQL, as before, so a twin past ASCII is refused with the secret one" do
+      %i[postgresql mysql].each do |family|
+        secrets = rule(family, %W[id \u00e9 \u00c9], redacted: [ "\u00c9" ])
+        expect(secrets.secret?("\u00e9")).to be(true), family.to_s
+        expect(secrets.named_in(%(SELECT "\u00e9" FROM t))).not_to be_nil, family.to_s
+      end
+    end
+  end
+
   describe "#named_in" do
     let(:relations) { { "users" => %w[id email auth_token], "keys" => %w[id salt] } }
 

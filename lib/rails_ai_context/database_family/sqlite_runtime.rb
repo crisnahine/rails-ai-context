@@ -32,8 +32,9 @@ module RailsAiContext
 
       def read_only(conn, sql, timeout)
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-        # A child opens the file itself and would answer without the rows of a transaction open here.
-        if !conn.transaction_open? && (path = fork_path(conn)) && !DatabaseFamily.bounding { held_here?(conn, sql) }
+        # A child opens the file itself and would answer without the rows of a transaction open here, one the app
+        # opened with a raw BEGIN too, which only the connection itself knows of.
+        if !conn.raw_connection.transaction_active? && (path = fork_path(conn)) && !DatabaseFamily.bounding { held_here?(conn, sql) }
           result = in_child(conn, path, sql, deadline)
           return Rows.new(result.columns, result.rows, false) if result
         end
@@ -85,6 +86,11 @@ module RailsAiContext
         DatabaseFamily.bounding(&reads)
       end
 
+      # PRAGMA query_only, the one setting it sets, is refused by name.
+      def bound_settings(_conn)
+        {}
+      end
+
       def explain(conn, sql, timeout)
         result = read_only(conn, "EXPLAIN QUERY PLAN #{sql}", timeout)
         scans = []
@@ -113,7 +119,7 @@ module RailsAiContext
         []
       end
 
-      def plan(_conn, _sql, _timeout)
+      def plan(_conn, _sql, _timeout, **)
         nil
       end
 

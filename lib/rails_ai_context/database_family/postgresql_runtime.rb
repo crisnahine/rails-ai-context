@@ -9,6 +9,12 @@ module RailsAiContext
       module_function
 
       def read_only(conn, sql, timeout)
+        # An EXPLAIN answers text, and one of a generic plan holds $1, which Rails 7.0's select_all sends as an empty bind.
+        if sql.match?(/\A\s*EXPLAIN\b/i)
+          result = bounded(conn, timeout) { conn.execute(sql) }
+          return Rows.new(result.fields, result.values, false)
+        end
+
         result = bounded(conn, timeout) { conn.select_all(sql) }
         Rows.new(result.columns, result.rows, false)
       end
@@ -18,14 +24,39 @@ module RailsAiContext
       def bounded(conn, timeout)
         result = nil
         DatabaseFamily.bounding do
-          conn.transaction(requires_new: true) do
+          rolling_back(conn) do
             conn.execute("SET TRANSACTION READ ONLY")
             conn.execute("SET LOCAL statement_timeout = '#{[ (timeout * 1000).to_i, 1 ].max}'")
             result = yield
-            raise ActiveRecord::Rollback
           end
         end
         result
+      end
+
+      # PG::PQTRANS_IDLE, which needs the pg gem loaded.
+      TRANSACTION_IDLE = 0
+
+      # The server's own transaction status decides: Active Record does not count a transaction the app opened with a
+      # raw BEGIN, and its own BEGIN and ROLLBACK there would end the app's.
+      def rolling_back(conn)
+        if conn.raw_connection.transaction_status == TRANSACTION_IDLE
+          conn.transaction(requires_new: true) do
+            yield
+            raise ActiveRecord::Rollback
+          end
+        else
+          conn.execute("SAVEPOINT rac_bounded")
+          begin
+            yield
+          ensure
+            DatabaseFamily.restore(conn, "ROLLBACK TO SAVEPOINT rac_bounded; RELEASE SAVEPOINT rac_bounded")
+          end
+        end
+      end
+
+      # The settings bounded sets for each statement => the read of the session's own value.
+      def bound_settings(_conn)
+        { "statement_timeout" => "SHOW statement_timeout", "transaction_read_only" => "SHOW transaction_read_only" }
       end
 
       def explain(conn, sql, timeout)
@@ -44,8 +75,8 @@ module RailsAiContext
 
       # Planning only: EXPLAIN without ANALYZE runs nothing, not even a VOLATILE function.
       # A timeout and an SQL error are raised, so the caller never runs what it could not plan.
-      def plan(conn, sql, timeout)
-        json = read_only(conn, "EXPLAIN (VERBOSE, FORMAT JSON) #{sql}", timeout).rows.first&.first
+      def plan(conn, sql, timeout, generic: false)
+        json = read_only(conn, "EXPLAIN (VERBOSE, FORMAT JSON#{", GENERIC_PLAN" if generic}) #{sql}", timeout).rows.first&.first
         data = JSON.parse(json.to_s)
         data.is_a?(Array) && data.first.is_a?(Hash) ? data.first["Plan"] : nil
       rescue JSON::ParserError
@@ -82,8 +113,12 @@ module RailsAiContext
           [ i, names[col], relation ] if names[col]
         end
       rescue StandardError => e
-        # The driver raises its own class here. Half a trace is no answer, so a timeout is raised as the call's.
-        raise TimedOut, e.message if defined?(PG::QueryCanceled) && e.is_a?(PG::QueryCanceled)
+        # The driver raises its own class here. Half a trace is no answer, so a timeout is raised as the call's, and a cancel as itself.
+        if defined?(PG::QueryCanceled) && e.is_a?(PG::QueryCanceled)
+          raise if DatabaseFamily.canceled?(e)
+
+          raise TimedOut, e.message
+        end
         raise if e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e)
 
         []

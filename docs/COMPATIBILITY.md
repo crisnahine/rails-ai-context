@@ -317,6 +317,12 @@ Proof sources:
    on the v5.35.1 code and on the fixed code, with every changed answer traced
    to its fix; and for each fix an example that fails on the v5.35.1 code, on a
    real server where the fix is a server's.
+   In the v5.36.0 release QA: for each fix an example that fails on the v5.35.2
+   code, on a real server where the fix is a server's; `rails_query` through
+   its tool call in CI on PostgreSQL 16, MySQL 8.0 and 8.4 and MariaDB 10.6 and
+   11.4 on Rails 7.0 (mysql2), 8.0 and 8.1 (mysql2 and Trilogy), and on
+   PostgreSQL 13, 14, 15, 17 and 18 on Rails 8.0; and the unit suite and the
+   E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
@@ -363,7 +369,10 @@ row estimates and index usage say they are not available there. CI's
 8.4 and MariaDB 10.6 and 11.4 on Rails 8.0, through mysql2 and Trilogy. It also
 runs PostgreSQL 16 with MySQL 8.0 and MariaDB 10.6 on Rails 7.0, which has no
 Trilogy adapter, and with MySQL 8.4 and MariaDB 11.4 on Rails 8.1; see
-[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-servers).
+[CONTRIBUTING.md](../CONTRIBUTING.md#real-database-servers). The
+`postgresql_versions` job runs the PostgreSQL examples on PostgreSQL 13, 14,
+15, 17 and 18 as well, since the plan checks read the plan the server prints and
+its shape changes between major versions.
 
 Postgres itself - live query safety (read-only transactions, the
 `BLOCKED_FUNCTIONS` guard against `pg_read_file`/`dblink`/`COPY ... PROGRAM`,

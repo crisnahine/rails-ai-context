@@ -121,7 +121,17 @@ module RailsAiContext
       integrity_check quick_check user_version application_id schema_version page_size page_count freelist_count
       encoding auto_vacuum journal_mode compile_options pragma_list
     ].to_set.freeze
-    SQLITE_CONNECTION_STATE = /\bpragma_(\w+)|\b(changes|total_changes|last_insert_rowid)\s*\(/i
+    SQLITE_COUNTER_CALL = /(?<![\w$])["'`\[]?(changes|total_changes|last_insert_rowid)["'`\]]?\s*\(/i
+    # A pragma function's name, bare or quoted, as one token.
+    SQLITE_PRAGMA_NAME = /\A["'`\[]?pragma_(\w+)["'`\]]?\z/i
+    # The clauses after which a comma at the same depth starts another table of a FROM list.
+    FROM_LIST_CLAUSES = %w[from join on using].freeze
+    CLAUSE_WORDS = %w[select from join on where group order having limit values using returning set union intersect except].freeze
+
+    # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL. (backquoted or not), current_setting('..').
+    SETTING_READ = /(?:\bshow\s+(?!global\b)|@@(?!global\s*\.)(?:(?:session|local)\s*\.\s*)?|current_setting\s*\(\s*')`?(\w+)/i
+    # A list of the session's settings, which names each in its rows or in the filter the statement puts on it.
+    SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\b["`]?information_schema["`]?\s*\.\s*["`]?session_variables\b/i
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
@@ -176,6 +186,7 @@ module RailsAiContext
       pg_is_in_recovery pg_is_wal_replay_paused pg_get_wal_replay_pause_state
       pg_current_wal_lsn pg_current_wal_insert_lsn pg_current_wal_flush_lsn
       pg_last_wal_receive_lsn pg_last_wal_replay_lsn pg_last_xact_replay_timestamp
+      pg_sequence_last_value
     ].freeze
 
     # Any character past ASCII is an identifier character to SQLite and MySQL, a no-break space included.
@@ -228,6 +239,13 @@ module RailsAiContext
     # Every other statement is planned, as is whatever a leading EXPLAIN would run.
     NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
     EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
+    # A generic plan leaves $1 unbound, so the statement under it is planned only with the option. The server reads
+    # the option's last value, quoted or not, and anything but a false spelling of it is true.
+    EXPLAIN_OPTIONS = /\A\s*EXPLAIN\s*\(([^)]*)\)/i
+    GENERIC_PLAN_OPTION = /\bGENERIC_PLAN(?:\s+'?(\w*)'?)?\s*(?=,|\z)/i
+    FALSE_SPELLING = /\A(?:f(?:a(?:l(?:se?)?)?)?|no?|off?|0)\z/i
+    # The handler a sampling method names is never called by the statement, and the plan prints its arguments.
+    SAMPLING_METHOD = /\bTABLESAMPLE\s+(?:\w+\s*\.\s*)?\w+(?=\s*\()/i
 
     # A statement's text under a pointer. A lookbehind sees the text before the pointer, and where each dollar
     # tag last stands is read in one pass: a search for its closer from every opener is quadratic.
@@ -274,7 +292,9 @@ module RailsAiContext
       text, refusal = text_verdict(sql)
       return refuse(refusal) if refusal
       planned = @family.plan_checks? && !text.match?(NO_PLAN)
-      plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left) } if planned
+      if planned
+        plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left, generic: generic_plan?(text)) }
+      end
       if planned && plan.nil?
         return refuse("Blocked: the query is not run because its plan could not be read. On PostgreSQL " \
           "the plan shows which columns a query returns, so no query runs without one.")
@@ -308,6 +328,33 @@ module RailsAiContext
       end
 
       out.strip
+    end
+
+    # The session settings a statement reads: by name where the name is code, outside a quoted span and a comment,
+    # and every name a list of the session's settings shows in its rows or its filter.
+    def self.settings_read(sql, family, rows)
+      text = comment_free(sql, family)
+      code = mask_quoted(text, family) { true }
+      # MySQL reads a double-quoted span as a string, or under ANSI_QUOTES as a name, which only a bare word can be here.
+      strings_blanked = mask_quoted(text, family) do |kind, span|
+        kind == :string || (family.mysql? && span.start_with?('"') && !span.match?(/\A"\w+"\z/))
+      end
+      read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
+      read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if strings_blanked.match?(SETTINGS_LIST)
+      read.map(&:downcase)
+    end
+
+    # Every quoted span the block picks blanked to spaces of the same length, so positions still line up.
+    def self.mask_quoted(text, family, backslash: family.backslash_escapes?)
+      scanner = Scanner.new(text)
+      out = +""
+
+      until scanner.eos?
+        kind, span = quoted(scanner, family, backslash: backslash)
+        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : yield(kind, span) ? " " * span.length : span)
+      end
+
+      out
     end
 
     # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
@@ -429,8 +476,8 @@ module RailsAiContext
       end
       table, why = @secrets.unread_table_in(cleaned)
       return "Blocked: `#{table}` is not read: #{why}." if table
-      if (state = connection_state(cleaned))
-        return "Blocked: `#{state}` tells of the connection that runs it. rails_query runs a statement on a connection of its own and " \
+      if (state, view = connection_state(cleaned))
+        return "Blocked: `#{state}`#{", which the view `#{view}` reads," if view} tells of the connection that runs it. rails_query runs a statement on a connection of its own and " \
           "sets some of that connection's values itself, so the answer would not be the app's. A pragma function that describes the " \
           "schema or the database file runs, for example `pragma_table_info`."
       end
@@ -551,14 +598,55 @@ module RailsAiContext
         "#{" To read one setting, run SHOW with its name." if name.match?(/settings/i)}"
     end
 
+    # [name, view] for the first function that tells of the connection in the statement, or in a view it reaches,
+    # which SQLite runs on the same connection.
     def connection_state(cleaned)
       return nil unless @family.sqlite?
 
-      cleaned.to_enum(:scan, SQLITE_CONNECTION_STATE).filter_map do
-        pragma, counter = Regexp.last_match.captures
-        name = counter&.downcase || ("pragma_#{pragma.downcase}" unless SQLITE_FILE_PRAGMAS.include?(pragma.downcase))
-        name unless name.nil? || @secrets.knows?(name)
-      end.first
+      state = connection_state_in(cleaned)
+      return [ state, nil ] if state
+
+      @secrets.view_definitions_in(cleaned).each { |view, definition| (state = connection_state_in(definition)) and return [ state, view ] }
+      nil
+    end
+
+    # A counter is told by its call, a pragma function by its call or where a table stands (after FROM, JOIN, IN, a
+    # comma of a FROM list, a parenthesis that opens one, or a schema and a dot there); anywhere else it is a column.
+    def connection_state_in(cleaned)
+      # A table named like a counter does not hide the function, as one named like a pragma function does.
+      counter = cleaned[SQLITE_COUNTER_CALL, 1]
+      return counter.downcase if counter
+
+      list = tokens(cleaned)
+      clauses = [ nil ]
+      at_table = []
+      table_next = false
+      list.each_with_index do |(kind, text), i|
+        at_table << table_next
+        pragma = text.to_s[SQLITE_PRAGMA_NAME, 1]&.downcase if %i[word quoted string].include?(kind)
+        name = "pragma_#{pragma}" if pragma && !SQLITE_FILE_PRAGMAS.include?(pragma)
+        return name if name && (table_next || list[i + 1] == [ :punct, "(" ]) && !@secrets.knows?(name)
+
+        word = text.downcase if kind == :word
+        case [ kind, text ]
+        when [ :punct, "(" ]
+          clauses.push(table_next == :from ? "from" : nil)
+          table_next = table_next == :from && :from
+        when [ :punct, ")" ]
+          clauses.pop if clauses.size > 1
+          table_next = false
+        when [ :punct, "," ] then table_next = FROM_LIST_CLAUSES.include?(clauses.last) && :from
+        when [ :punct, "." ] then table_next = i.positive? && at_table[i - 1]
+        else table_next = (%w[from join].include?(word) && :from) || (word == "in" && :in)
+        end
+        clauses[-1] = word if CLAUSE_WORDS.include?(word)
+      end
+      nil
+    end
+
+    def generic_plan?(text)
+      value = text[EXPLAIN_OPTIONS, 1]&.scan(GENERIC_PLAN_OPTION)&.last or return false
+      value.first.to_s.empty? || !value.first.match?(FALSE_SPELLING)
     end
 
     def dump_refusal(function)
@@ -634,15 +722,7 @@ module RailsAiContext
     # only and positions still line up. only: the one kind to blank, :string or :quoted. With a block, the spans it picks.
     def mask_quoted(text, only = nil, &picks)
       picks ||= ->(kind, _span) { only.nil? || kind == only }
-      scanner = Scanner.new(text)
-      out = +""
-
-      until scanner.eos?
-        kind, span = self.class.quoted(scanner, @family, backslash: @backslash)
-        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : picks.call(kind, span) ? " " * span.length : span)
-      end
-
-      out
+      self.class.mask_quoted(text, @family, backslash: @backslash, &picks)
     end
 
     # [kind, text] for each token of comment-free text: :word (bare, a keyword or a name), :quoted (a name in
@@ -853,7 +933,7 @@ module RailsAiContext
       foreign = plan.nodes.select { |node| node["Remote SQL"] }
       conds.concat(foreign.map { |node| remote_uses(node) }, local_names(foreign))
       # EXPLAIN prints no row of a VALUES list and no LIMIT, so the functions the text names are read too.
-      called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text) ])
+      called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text).gsub(SAMPLING_METHOD, "TABLESAMPLE ") ])
 
       # A view reaches a relation or a function the text check did not see.
       sources = plan.nodes.flat_map { |node| node.values_at("Relation Name", "Function Name") }.compact + called.to_a
@@ -882,7 +962,10 @@ module RailsAiContext
           "or set operation whose output the tool cannot map to a column, so it could leave " \
           "unredacted. Name the other columns you need; `#{col}` is never returned."
       end
-      if (fn = volatile_function(called))
+      if (fn = volatile_function(called)) && PG_VOLATILE_ALLOWLIST.include?(fn)
+        "Blocked: the database holds a VOLATILE function named #{fn} that rails_query cannot vouch for, so rails_query runs no " \
+          "call of that name. Its list of read-only VOLATILE functions trusts the name for the server's own function or an extension's C function alone."
+      elsif fn
         "Blocked: function #{fn} is VOLATILE (pg_proc.provolatile = 'v') and not on " \
           "rails_query's list of read-only VOLATILE functions, so it is not run. Some VOLATILE " \
           "functions change server or session state in ways a read-only transaction does not " \
@@ -966,6 +1049,11 @@ module RailsAiContext
     # pin it. A column handed to a node that reads by name and names it nowhere (`count(*)`) is read by nothing.
     def laundered_secret_column(plan)
       top = secret_base_columns(plan, plan.output.flatten)
+      # A set operation compares every column its inputs hand up, so a row of guesses tests a secret value.
+      plan.nodes.select { |node| node["Node Type"] == "SetOp" }.each do |node|
+        handed = ([ node ] + Array(node["Plans"])).flat_map { |held| Array(held["Output"]) }
+        (col = @secrets.in_schema.find { |name| names?(handed, name) }) and return col
+      end
       plan.nodes.each do |node|
         reader = plan.reader(node)
         secret_base_columns(plan, Array(node["Output"])).each do |var|
@@ -990,15 +1078,18 @@ module RailsAiContext
       exprs.each_with_object(Set.new) { |expr, names| expr.scan(/([A-Za-z_]\w*)\s*\(/) { |(fn)| names << fn.downcase } }
     end
 
+    # A name on the read-only list vouches for the server's own function and C code alone: while the database holds a
+    # VOLATILE function of that name in another language outside pg_catalog, every call of the name is refused.
     def volatile_function(called)
-      names = called - PG_VOLATILE_ALLOWLIST
-      return nil if names.empty?
+      return nil if called.empty?
 
-      quoted = names.map { |n| @connection.quote(n) }.join(", ")
+      quoted, listed = [ called, PG_VOLATILE_ALLOWLIST ].map { |names| names.map { |n| @connection.quote(n) }.join(", ") }
       @budget.spend do |left|
         @family.bounded(@connection, timeout: left) do
           @connection.select_values(
-            "SELECT DISTINCT lower(proname) FROM pg_proc WHERE lower(proname) IN (#{quoted}) AND provolatile = 'v'"
+            "SELECT DISTINCT lower(p.proname) FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang " \
+            "WHERE lower(p.proname) IN (#{quoted}) AND p.provolatile = 'v' AND (lower(p.proname) NOT IN (#{listed}) " \
+            "OR (p.pronamespace <> 'pg_catalog'::regnamespace AND l.lanname NOT IN ('c', 'internal')))"
           ).first
         end
       end

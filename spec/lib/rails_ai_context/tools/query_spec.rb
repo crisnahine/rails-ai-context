@@ -1477,7 +1477,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     it "runs regular queries through the MySQL family" do
       expect(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
 
-      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to include("1")
+      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to start_with("| x |").and include("| 1 |")
     end
 
     it "issues EXPLAIN FORMAT=TRADITIONAL (not the bare EXPLAIN MySQL 8.3+/9.x would render as TREE)" do
@@ -1874,6 +1874,106 @@ RSpec.describe RailsAiContext::Tools::Query do
           "the database file runs, for example `pragma_table_info`." ]), sql
       end
     end
+
+    it "runs a column named like a pragma function or a counter, and refuses the function where a table stands" do
+      conn = ActiveRecord::Base.connection
+      conn.execute("CREATE TABLE rac_pragma_cols (id integer, pragma_flag integer, pragma_foreign_keys integer, " \
+        "pragma_database_list integer, changes integer, last_insert_rowid integer)")
+      conn.execute("INSERT INTO rac_pragma_cols VALUES (1, 1, 2, 3, 4, 5)")
+      expect(answer("SELECT id FROM rac_pragma_cols WHERE pragma_flag = 1")).to match([ false, a_string_including("| 1") ])
+      expect(answer("SELECT r.pragma_foreign_keys, pragma_database_list, changes FROM rac_pragma_cols r")).to match([ false, a_string_including("| 2") ])
+      [ "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT * FROM pragma_foreign_keys",
+        "SELECT * FROM 'pragma_foreign_keys'", "SELECT name, file FROM pragma_database_list",
+        "SELECT id FROM rac_pragma_cols, pragma_database_list", "SELECT id FROM rac_pragma_cols JOIN main.pragma_foreign_keys",
+        "SELECT id FROM rac_pragma_cols WHERE id IN pragma_foreign_keys" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_including("tells of the connection that runs it") ]), sql
+      end
+    ensure
+      ActiveRecord::Base.connection.execute("DROP TABLE IF EXISTS rac_pragma_cols")
+    end
+  end
+
+  describe "a SQLite view over a pragma function or a counter, on a file-backed database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryPragmaViewRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryPragmaViewRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "app.sqlite3"))
+      QueryPragmaViewRecord.connection.tap do |c|
+        c.execute("CREATE TABLE rows (id integer)")
+        c.execute("CREATE VIEW dbs AS SELECT name FROM pragma_database_list")
+        c.execute("CREATE VIEW over_dbs AS SELECT * FROM dbs")
+        c.execute("CREATE VIEW counted AS SELECT changes() AS n, id FROM rows")
+        c.execute(%(CREATE VIEW quoted_count AS SELECT "changes"() AS n, [last_insert_rowid] () AS r))
+        c.execute("CREATE VIEW columns_of AS SELECT name FROM pragma_table_info('rows')")
+        c.execute("CREATE VIEW flags AS SELECT id AS pragma_flag FROM rows")
+        c.execute("ATTACH DATABASE '#{File.join(dir, "side.sqlite3")}' AS side")
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryPragmaViewRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "refuses a statement that names a view reading a connection's own value, by the view and the function" do
+      expect(conn.select_values("SELECT name FROM dbs")).to include("side")
+      { "SELECT name FROM dbs" => %w[dbs pragma_database_list], "SELECT * FROM over_dbs" => %w[dbs pragma_database_list],
+        "SELECT n FROM counted" => %w[counted changes], "SELECT n FROM quoted_count" => %w[quoted_count changes] }.each do |sql, (view, name)|
+        expect(answer(sql)).to eq([ true, "Blocked: `#{name}`, which the view `#{view}` reads, tells of the connection that runs it. rails_query " \
+          "runs a statement on a connection of its own and sets some of that connection's values itself, so the answer would not be the " \
+          "app's. A pragma function that describes the schema or the database file runs, for example `pragma_table_info`." ]), sql
+      end
+    end
+
+    it "runs a view over a pragma function that describes the schema, and one with a column named like a pragma function" do
+      expect(answer("SELECT name FROM columns_of")).to match([ false, a_string_including("| id") ])
+      expect(answer("SELECT pragma_flag FROM flags")).to match([ false, a_string_including("0 rows") ])
+    end
+  end
+
+  describe "a SQLite column whose name differs from a secret column's by a letter past ASCII" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryAccentSpecRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryAccentSpecRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "accents.sqlite3"))
+      QueryAccentSpecRecord.connection.tap do |c|
+        c.execute(%(CREATE TABLE accents (id integer, "é" text, "É" text)))
+        c.execute("INSERT INTO accents VALUES (1, 'lower', 'upper-secret')")
+      end
+    end
+
+    before do
+      RailsAiContext.configuration.query_redacted_columns += [ "É" ]
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryAccentSpecRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def text(sql)
+      RailsAiContext::RunCache.around { described_class.call(sql: sql) }.content.first[:text]
+    end
+
+    it "reads the other column, since SQLite folds ASCII letters alone, and keeps the secret one refused and filtered" do
+      expect(text(%(SELECT "é" FROM accents))).to include("| lower")
+      answer = text("SELECT * FROM accents")
+      expect(answer).to include("lower", "[FILTERED]")
+      expect(answer).not_to include("upper-secret")
+      expect(text(%(SELECT "É" AS x FROM accents))).to start_with("Blocked: query references secret column `É`.")
+    end
   end
 
   describe "a literal that reads like an injection or a locking clause" do
@@ -2063,16 +2163,15 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
     end
 
-    it "filters a generated column whose name differs from an innocent one's by the case of a letter past ASCII" do
+    it "filters a generated column whose name differs from an innocent one's by the case of a letter past ASCII, and runs the innocent one" do
       conn.execute(%(CREATE TABLE accents (id INTEGER, passwd TEXT, "É" TEXT AS (passwd) STORED, "é" TEXT AS (id) STORED)))
       conn.execute("INSERT INTO accents (id, passwd) VALUES (1, 'pw-value')")
 
-      # The secret column rule folds a name as Ruby does, so the innocent twin is kept secret with it.
-      [ %(SELECT "É" FROM accents), %(SELECT "é" FROM accents) ].each do |sql|
-        named = answer(sql)
-        expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("is a generated column that reads `passwd`") ]), sql
-      end
-      expect(text("SELECT * FROM accents")).to include("| 1  | [FILTERED] | [FILTERED] | [FILTERED] |")
+      # SQLite folds ASCII letters alone, so the twin is another column.
+      named = answer(%(SELECT "É" FROM accents))
+      expect([ named.error?, named.content.first[:text] ]).to match([ true, a_string_including("`É` is a generated column that reads `passwd`") ])
+      expect(text(%(SELECT "é" FROM accents))).to include("| 1")
+      expect(text("SELECT * FROM accents")).to include("| 1  | [FILTERED] | [FILTERED] | 1 |")
     end
 
     it "reads a quoted generated column's name with its own quote character alone un-doubled" do

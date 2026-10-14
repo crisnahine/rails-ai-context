@@ -284,19 +284,19 @@ module RailsAiContext
 
         if auth_checks.any? || auth_denials.any?
           sections << "" << "### Authorization"
-          auth_checks.uniq.first(5).each { |c| sections << "- Check: `#{c}`" }
-          auth_denials.uniq.first(5).each { |d| sections << "- Deny: #{d}" }
+          sections.concat(capped_list(auth_checks.uniq) { |c| "- Check: `#{c}`" })
+          sections.concat(capped_list(auth_denials.uniq) { |d| "- Deny: #{d}" })
         end
 
         if flash_notices.any? || flash_alerts.any?
           sections << "" << "### Flash Messages"
-          flash_notices.uniq.first(5).each { |n| sections << "- Success: notice: \"#{n}\"" }
-          flash_alerts.uniq.first(5).each { |a| sections << "- Failure: alert: \"#{a}\"" }
+          sections.concat(capped_list(flash_notices.uniq) { |n| "- Success: notice: \"#{n}\"" })
+          sections.concat(capped_list(flash_alerts.uniq) { |a| "- Failure: alert: \"#{a}\"" })
         end
 
         if not_found_patterns.any?
           sections << "" << "### Error Handling"
-          not_found_patterns.first(5).each { |p| sections << "- Not found: #{p}" }
+          sections.concat(capped_list(not_found_patterns) { |p| "- Not found: #{p}" })
         end
 
         if create_flows.any?
@@ -400,6 +400,11 @@ module RailsAiContext
         sections
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_app_patterns")
+      end
+
+      private_class_method def self.capped_list(items, cap = 5, &line)
+        shown = items.first(cap).map(&line)
+        items.size > cap ? shown << "- _...and #{items.size - cap} more._" : shown
       end
 
       private_class_method def self.detect_locale_info

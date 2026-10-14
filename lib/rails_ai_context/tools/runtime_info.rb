@@ -370,8 +370,21 @@ module RailsAiContext
           end
           lines << "**Adapter:** #{adapter_name}"
 
-          # Sidekiq stats (if available)
-          if defined?(Sidekiq)
+          sidekiq_adapter = adapter_name == "sidekiq" && defined?(Sidekiq)
+          unless sidekiq_adapter
+            if adapter_name.start_with?("not ")
+              lines << "_Queue stats unavailable: no queue adapter detected._"
+            else
+              # The adapter's name says the app has a queue backend, one the tool reads no stats from.
+              lines << "_Live queue stats are only implemented for Sidekiq; this app uses the #{adapter_name} adapter._"
+            end
+          end
+
+          # Sidekiq's counts are the app's jobs under its adapter, else only its own Sidekiq::Job workers.
+          if sidekiq_adapter || (defined?(Sidekiq) && Payload.workers(cached_context).any?)
+            unless sidekiq_adapter
+              lines.push("", "### Sidekiq", "_Counts for the Sidekiq workers the app runs outside Active Job; its #{adapter_name} jobs are not in them._")
+            end
             begin
               require "sidekiq/api"
               stats = Sidekiq::Stats.new
@@ -395,14 +408,6 @@ module RailsAiContext
               end
             rescue => e
               lines << "_Sidekiq stats error: #{e.message}_"
-            end
-          else
-            # Name the adapter the app actually uses so "no stats" reads as a
-            # tool limitation, not as the app having no queue backend.
-            if adapter_name.start_with?("not ")
-              lines << "_Queue stats unavailable: no queue adapter detected._"
-            else
-              lines << "_Live queue stats are only implemented for Sidekiq; this app uses the #{adapter_name} adapter._"
             end
           end
 
