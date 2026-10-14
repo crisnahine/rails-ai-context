@@ -121,7 +121,7 @@ module RailsAiContext
       integrity_check quick_check user_version application_id schema_version page_size page_count freelist_count
       encoding auto_vacuum journal_mode compile_options pragma_list
     ].to_set.freeze
-    SQLITE_COUNTER_CALL = /\b(changes|total_changes|last_insert_rowid)\s*\(/i
+    SQLITE_COUNTER_CALL = /(?<![\w$])["'`\[]?(changes|total_changes|last_insert_rowid)["'`\]]?\s*\(/i
     # A pragma function's name, bare or quoted, as one token.
     SQLITE_PRAGMA_NAME = /\A["'`\[]?pragma_(\w+)["'`\]]?\z/i
     # The clauses after which a comma at the same depth starts another table of a FROM list.
@@ -131,7 +131,7 @@ module RailsAiContext
     # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL. (backquoted or not), current_setting('..').
     SETTING_READ = /(?:\bshow\s+(?!global\b)|@@(?!global\.)(?:(?:session|local)\.)?|current_setting\s*\(\s*')`?(\w+)/i
     # A list of the session's settings, which names each in its rows or in the filter the statement puts on it.
-    SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\bsession_variables\b/i
+    SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\binformation_schema\s*\.\s*session_variables\b/i
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
@@ -330,11 +330,11 @@ module RailsAiContext
       out.strip
     end
 
-    # The session settings a statement reads: by name where the name is code, outside a string and a comment, and
-    # every name a list of the session's settings shows in its rows or its filter.
+    # The session settings a statement reads: by name where the name is code, outside a quoted span and a comment,
+    # and every name a list of the session's settings shows in its rows or its filter.
     def self.settings_read(sql, family, rows)
       text = comment_free(sql, family)
-      code = mask_quoted(text, family) { |kind, _span| kind == :string }
+      code = mask_quoted(text, family) { true }
       read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
       read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if code.match?(SETTINGS_LIST)
       read.map(&:downcase)
@@ -1071,15 +1071,18 @@ module RailsAiContext
       exprs.each_with_object(Set.new) { |expr, names| expr.scan(/([A-Za-z_]\w*)\s*\(/) { |(fn)| names << fn.downcase } }
     end
 
+    # A name on the read-only list vouches for the built-in and for C code alone: while the app defines a VOLATILE
+    # function of that name in another language, every call of the name is refused.
     def volatile_function(called)
-      names = called - PG_VOLATILE_ALLOWLIST
-      return nil if names.empty?
+      return nil if called.empty?
 
-      quoted = names.map { |n| @connection.quote(n) }.join(", ")
+      quoted, listed = [ called, PG_VOLATILE_ALLOWLIST ].map { |names| names.map { |n| @connection.quote(n) }.join(", ") }
       @budget.spend do |left|
         @family.bounded(@connection, timeout: left) do
           @connection.select_values(
-            "SELECT DISTINCT lower(proname) FROM pg_proc WHERE lower(proname) IN (#{quoted}) AND provolatile = 'v'"
+            "SELECT DISTINCT lower(p.proname) FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang " \
+            "WHERE lower(p.proname) IN (#{quoted}) AND p.provolatile = 'v' AND (lower(p.proname) NOT IN (#{listed}) " \
+            "OR (p.pronamespace <> 'pg_catalog'::regnamespace AND l.lanname NOT IN ('c', 'internal')))"
           ).first
         end
       end

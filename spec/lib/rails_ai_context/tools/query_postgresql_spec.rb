@@ -964,6 +964,19 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
   end
 
+  it "refuses a VOLATILE function the app defined under a name on the read-only list, and runs the built-in ones" do
+    conn.execute("CREATE OR REPLACE FUNCTION public.pg_sequence_last_value(regclass) RETURNS bigint VOLATILE LANGUAGE sql AS 'SELECT 7::bigint'")
+    conn.execute(%(CREATE SCHEMA IF NOT EXISTS rac_ext; CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA rac_ext))
+    refused([ "SELECT public.pg_sequence_last_value('rac_pg_accounts'::regclass) AS v" ], "Blocked: function pg_sequence_last_value is VOLATILE")
+    [ "SELECT pg_sleep_for('0 seconds') IS NOT NULL AS s", "SELECT gen_random_uuid() IS NOT NULL AS u", "SELECT random() < 2 AS r",
+      "SELECT rac_ext.uuid_generate_v4() IS NOT NULL AS c" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("true") ]), sql
+    end
+  ensure
+    conn.execute(%(DROP FUNCTION IF EXISTS public.pg_sequence_last_value(regclass); DROP EXTENSION IF EXISTS "uuid-ossp"; DROP SCHEMA IF EXISTS rac_ext))
+  end
+
   describe "TABLESAMPLE" do
     before do
       conn.execute("CREATE OR REPLACE FUNCTION public.bernoulli(int) RETURNS int VOLATILE LANGUAGE sql AS 'SELECT $1'")

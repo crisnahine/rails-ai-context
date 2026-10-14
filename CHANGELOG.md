@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **On PostgreSQL a VOLATILE function the app defined under a name on the
+  read-only list is refused.** The list of read-only VOLATILE functions trusted
+  a name in any schema, so a function of the app's own under one of those names
+  ran. A name now vouches for the built-in and for C code alone, such as an
+  extension's `uuid_generate_v4`; while the app defines a VOLATILE function of
+  that name in another language, every call of the name is refused. 5.35.2 and
+  earlier versions had the gap.
 - **On PostgreSQL 18 a set operation over a secret column is refused, as it is
   on older servers.** PostgreSQL 18 plans a set operation over the tables
   themselves, and the plan check that refuses a secret column passed through a

@@ -515,7 +515,8 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT id FROM logs INDEXED BY logs_by_id, pragma_query_only", "SELECT id FROM logs NOT INDEXED, pragma_query_only",
         "SELECT id FROM logs AS window, pragma_query_only", "SELECT id FROM logs window, [pragma_database_list]",
         "WITH window AS (SELECT 1 AS one) SELECT one FROM window, pragma_query_only",
-        "SELECT id FROM logs a NATURAL JOIN logs window, main.pragma_query_only" ].each do |sql|
+        "SELECT id FROM logs a NATURAL JOIN logs window, main.pragma_query_only", "SELECT * FROM (logs l, pragma_query_only)",
+        "SELECT * FROM (SELECT 1) s, (logs, pragma_query_only)" ].each do |sql|
         expect(refusal(sql)).to include("tells of the connection that runs it"), sql
       end
     end
@@ -993,6 +994,8 @@ RSpec.describe RailsAiContext::SqlGate do
     it "reads no setting from a string, a comment, an alias or a global value" do
       expect(read("SELECT '@@lock_wait_timeout' AS w /* @@max_execution_time */ # SHOW lock_wait_timeout", :mysql)).to eq([])
       expect(read("SELECT 'show statement_timeout' AS s -- current_setting('statement_timeout')", :postgresql)).to eq([])
+      expect(read('SELECT 1 AS "show statement_timeout"', :postgresql)).to eq([])
+      expect(read("SELECT v FROM session_variables WHERE n = 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout" ] ])).to eq([])
       expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout", :mysql)).to eq([])
       expect(read("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout", "50" ] ])).to eq([])
     end
@@ -1589,10 +1592,10 @@ RSpec.describe RailsAiContext::SqlGate do
         .and include("not on rails_query's list of read-only VOLATILE functions")
     end
 
-    it "asks pg_proc nothing when every function named only reads" do
+    it "runs functions that only read once pg_proc shows the app defines none of their names" do
       top = { "Node Type" => "Result", "Output" => [ "pg_total_relation_size('orders')", "pg_database_size('app')", "pg_is_in_recovery()" ] }
       expect(plan_refusal(top)).to be_nil
-      expect(connection).not_to have_received(:select_values)
+      expect(connection).to have_received(:select_values).with(a_string_including("'pg_is_in_recovery'", "pg_catalog"))
     end
 
     it "plans the statement a leading EXPLAIN ANALYZE would run" do
