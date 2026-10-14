@@ -1477,7 +1477,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     it "runs regular queries through the MySQL family" do
       expect(RailsAiContext::DatabaseFamily::MysqlRuntime).to receive(:read_only).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
 
-      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to include("1")
+      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to start_with("| x |").and include("| 1 |")
     end
 
     it "issues EXPLAIN FORMAT=TRADITIONAL (not the bare EXPLAIN MySQL 8.3+/9.x would render as TREE)" do
