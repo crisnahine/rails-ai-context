@@ -305,3 +305,49 @@ RSpec.describe "the app databases on preset standard" do
     expect(rules).to include("## animals (PostgreSQL, 2 tables)", "## primary (MySQL, 1 table)", "- Databases: 2 (animals, primary)")
   end
 end
+
+# The static tier reads db/schema.rb and knows which tables it declares.
+RSpec.describe "a model whose table the schema dump does not declare, on the static tier" do
+  around do |example|
+    config = RailsAiContext.configuration
+    previous = [ RailsAiContext.tier, config.introspectors, config.app_root ]
+    RailsAiContext.tier = :static
+    config.introspectors = RailsAiContext::Configuration::PRESETS[:standard].dup
+    example.run
+  ensure
+    RailsAiContext.tier, config.introspectors, config.app_root = previous
+  end
+
+  it "says the table is not in db/schema.rb, and names a declared table plainly" do
+    Dir.mktmpdir do |root|
+      { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
+        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+        "app/models/widget.rb" => "class Widget < ApplicationRecord\nend\n",
+        "config/database.yml" => "test:\n  primary:\n    adapter: sqlite3\n    database: db/test.sqlite3\n  analytics:\n    adapter: sqlite3\n    database: db/analytics.sqlite3\n",
+        "db/analytics_schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"visits\" do |t|\n  end\nend\n",
+        "app/models/analytics_record.rb" => "class AnalyticsRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to database: { writing: :analytics }\nend\n",
+        "app/models/visit.rb" => "class Visit < AnalyticsRecord\nend\n",
+        "app/models/event.rb" => "class Event < AnalyticsRecord\nend\n" }.each do |path, source|
+        FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+        File.write(File.join(root, path), source)
+      end
+      RailsAiContext.configuration.app_root = root
+      texts = RailsAiContext::RunCache.around do
+        context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+        [ RailsAiContext::Tools::GetModelDetails, RailsAiContext::Tools::Onboard ].each { |tool| allow(tool).to receive_messages(cached_context: context) }
+        [ RailsAiContext::Tools::GetModelDetails.call(model: "Widget"), RailsAiContext::Tools::GetModelDetails.call(model: "Post"),
+          RailsAiContext::Tools::Onboard.call(detail: "standard"), RailsAiContext::Tools::GetModelDetails.call(model: "Event"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Visit") ].map { |response| response.content.first[:text] }
+      end
+
+      widget, post, onboard, event, visit = texts
+      expect(event).to include("**Table:** `events`, not in db/analytics_schema.rb")
+      expect(visit).to include("**Table:** `visits`").and(satisfy { |text| !text.include?(", not in") })
+      expect(widget).to include("**Table:** `widgets`, not in db/schema.rb")
+      expect(post).to include("**Table:** `posts`").and(satisfy { |text| !text.include?("not in db/schema.rb") })
+      expect(onboard).to include("**Widget** (table `widgets`, not in db/schema.rb)")
+    end
+  end
+end
