@@ -234,8 +234,11 @@ module RailsAiContext
     # Every other statement is planned, as is whatever a leading EXPLAIN would run.
     NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
     EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
-    # A generic plan leaves $1 unbound, so the statement under it is planned only with the option.
-    GENERIC_PLAN = /\A\s*EXPLAIN\s*\([^)]*\bGENERIC_PLAN(?:\s+(true|on|1))?\s*[,)]/i
+    # A generic plan leaves $1 unbound, so the statement under it is planned only with the option. The server reads
+    # the option's last value, quoted or not, and anything but a false spelling of it is true.
+    EXPLAIN_OPTIONS = /\A\s*EXPLAIN\s*\(([^)]*)\)/i
+    GENERIC_PLAN_OPTION = /\bGENERIC_PLAN(?:\s+'?(\w*)'?)?\s*(?=,|\z)/i
+    FALSE_SPELLING = /\A(?:f(?:a(?:l(?:se?)?)?)?|no?|off?|0)\z/i
     # The handler a sampling method names is never called by the statement, and the plan prints its arguments.
     SAMPLING_METHOD = /\bTABLESAMPLE\s+(?:\w+\s*\.\s*)?\w+(?=\s*\()/i
 
@@ -285,7 +288,7 @@ module RailsAiContext
       return refuse(refusal) if refusal
       planned = @family.plan_checks? && !text.match?(NO_PLAN)
       if planned
-        plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left, generic: text.match?(GENERIC_PLAN)) }
+        plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left, generic: generic_plan?(text)) }
       end
       if planned && plan.nil?
         return refuse("Blocked: the query is not run because its plan could not be read. On PostgreSQL " \
@@ -607,6 +610,11 @@ module RailsAiContext
         clauses[-1] = word if CLAUSE_WORDS.include?(word)
       end
       nil
+    end
+
+    def generic_plan?(text)
+      value = text[EXPLAIN_OPTIONS, 1]&.scan(GENERIC_PLAN_OPTION)&.last or return false
+      value.first.to_s.empty? || !value.first.match?(FALSE_SPELLING)
     end
 
     def dump_refusal(function)

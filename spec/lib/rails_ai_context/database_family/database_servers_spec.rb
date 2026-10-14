@@ -230,6 +230,22 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       end
     end
 
+    it "raises a cancel another session sends while the trace waits on a lock as the cancel, which is no timeout" do
+      sql = "SELECT * FROM (SELECT * FROM rac_server_view OFFSET 0) x"
+      plan = family.plan(conn, sql, timeout: 5)
+      pid = conn.select_value("SELECT pg_backend_pid()")
+      second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|
+        locker.execute("BEGIN")
+        locker.execute("LOCK TABLE rac_server_rows IN ACCESS EXCLUSIVE MODE")
+        canceler = Thread.new { sleep 0.5 and locker.raw_connection.exec("SELECT pg_cancel_backend(#{pid})") }
+
+        expect { family.bounded(conn, timeout: 5) { family.column_sources(conn, sql, plan: plan) } }
+          .to raise_error { |error| expect([ error.class, error.message ]).to match([ satisfy { |c| c != described_class::TimedOut }, /user request/ ]) }
+      ensure
+        canceler&.join
+      end
+    end
+
     it "reads a lock wait the session's own lock_timeout ended as the timeout" do
       conn.execute("SET lock_timeout = '200ms'")
       second_session(ENV.fetch("RAC_TEST_PG_URL")) do |locker|

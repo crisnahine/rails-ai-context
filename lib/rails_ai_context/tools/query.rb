@@ -198,8 +198,8 @@ module RailsAiContext
         # a parser still reads the block); the unbounded note stays off CSV.
         cut = !schema_metadata && result.respond_to?(:truncated) && result.truncated
         truncation = cut ? truncation_note([ row_limit, HARD_ROW_CAP ].min, format) : ""
-        # SHOW VARIABLES names each setting in its first column.
-        shown = schema_metadata ? result.rows.map { |row| row.first.to_s } : []
+        # SHOW VARIABLES names each setting in its first column; SHOW GLOBAL VARIABLES shows no value the tool set.
+        shown = schema_metadata && !sql.match?(/\bshow\s+global\b/i) ? result.rows.map { |row| row.first.to_s } : []
         settings = settings_note(family.own_settings(connection, sql, shown), format)
         output = if format == "csv"
           format_csv(redacted) + truncation + settings

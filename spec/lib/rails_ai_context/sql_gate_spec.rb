@@ -1643,14 +1643,16 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5), generic: false)
       end
 
-      it "plans the statement under EXPLAIN (GENERIC_PLAN) generically, and with any other value of the option as written" do
-        [ "EXPLAIN (GENERIC_PLAN) VALUES ($1)", "EXPLAIN (COSTS off, generic_plan TRUE) VALUES ($1)", "EXPLAIN (GENERIC_PLAN 1, VERBOSE) VALUES ($1)" ].each do |sql|
+      it "plans the statement under EXPLAIN (GENERIC_PLAN) generically, reading the option's last value as the server does" do
+        [ "EXPLAIN (GENERIC_PLAN) VALUES ($1)", "EXPLAIN (COSTS off, generic_plan TRUE) VALUES ($1)", "EXPLAIN (GENERIC_PLAN 1, VERBOSE) VALUES ($1)",
+          "EXPLAIN (GENERIC_PLAN 'on') VALUES ($1)", "EXPLAIN (GENERIC_PLAN false, GENERIC_PLAN) VALUES ($1)" ].each do |sql|
           check(sql, :postgresql)
         end
-        expect(runtime).to have_received(:plan).with(connection, "VALUES ($1)", a_value_within(1).of(5), generic: true).exactly(3).times
+        expect(runtime).to have_received(:plan).with(connection, "VALUES ($1)", a_value_within(1).of(5), generic: true).exactly(5).times
 
-        [ "EXPLAIN (GENERIC_PLAN off) VALUES (2)", "EXPLAIN (GENERIC_PLAN 'on') VALUES (2)", "EXPLAIN (VERBOSE) VALUES (2)" ].each { |sql| check(sql, :postgresql) }
-        expect(runtime).to have_received(:plan).with(connection, "VALUES (2)", a_value_within(1).of(5), generic: false).exactly(3).times
+        [ "EXPLAIN (GENERIC_PLAN off) VALUES (2)", "EXPLAIN (GENERIC_PLAN 'false') VALUES (2)", "EXPLAIN (VERBOSE) VALUES (2)",
+          "EXPLAIN (GENERIC_PLAN, GENERIC_PLAN no) VALUES (2)" ].each { |sql| check(sql, :postgresql) }
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (2)", a_value_within(1).of(5), generic: false).exactly(4).times
       end
 
       # SHOW reads a setting and PostgreSQL has no DESCRIBE, so neither has a plan to read.

@@ -1048,7 +1048,9 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
 
     [ "EXPLAIN (GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE id = $1", "explain (verbose, generic_plan true) SELECT id FROM rac_pg_accounts WHERE id = $1",
-      "EXPLAIN (GENERIC_PLAN on, COSTS off) SELECT id, email FROM rac_pg_accounts WHERE id = $1 AND email = $2" ].each do |sql|
+      "EXPLAIN (GENERIC_PLAN on, COSTS off) SELECT id, email FROM rac_pg_accounts WHERE id = $1 AND email = $2",
+      "EXPLAIN (GENERIC_PLAN 'on') SELECT id FROM rac_pg_accounts WHERE id = $1",
+      "EXPLAIN (GENERIC_PLAN false, GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE id = $1" ].each do |sql|
       response = run(sql)
       expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("$1") ]), sql
     end
