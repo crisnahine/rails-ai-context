@@ -575,11 +575,10 @@ module RailsAiContext
       nil
     end
 
-    # A counter is told by its call. A pragma function is told where it can run: called, or where a table stands
-    # (after FROM, JOIN, IN, a comma of a FROM list, a parenthesis that opens one, or a schema and a dot there).
-    # A name anywhere else is a column's or an alias's, which SQLite never reads as the function.
+    # A counter is told by its call, a pragma function by its call or where a table stands (after FROM, JOIN, IN, a
+    # comma of a FROM list, a parenthesis that opens one, or a schema and a dot there); anywhere else it is a column.
     def connection_state_in(cleaned)
-      # A table of a counter's name does not hide the function, as one of a pragma function's name does.
+      # A table named like a counter does not hide the function, as one named like a pragma function does.
       counter = cleaned[SQLITE_COUNTER_CALL, 1]
       return counter.downcase if counter
 
@@ -594,12 +593,16 @@ module RailsAiContext
         return name if name && (table_next || list[i + 1] == [ :punct, "(" ]) && !@secrets.knows?(name)
 
         word = text.downcase if kind == :word
-        table_next = case [ kind, text ]
-        when [ :punct, "(" ] then clauses.push(table_next == :from ? "from" : nil) && (table_next == :from && :from)
-        when [ :punct, ")" ] then (clauses.pop if clauses.size > 1) && false
-        when [ :punct, "," ] then FROM_LIST_CLAUSES.include?(clauses.last) && :from
-        when [ :punct, "." ] then at_table[i - 1] if i.positive?
-        else (%w[from join].include?(word) && :from) || (word == "in" && :in)
+        case [ kind, text ]
+        when [ :punct, "(" ]
+          clauses.push(table_next == :from ? "from" : nil)
+          table_next = table_next == :from && :from
+        when [ :punct, ")" ]
+          clauses.pop if clauses.size > 1
+          table_next = false
+        when [ :punct, "," ] then table_next = FROM_LIST_CLAUSES.include?(clauses.last) && :from
+        when [ :punct, "." ] then table_next = i.positive? && at_table[i - 1]
+        else table_next = (%w[from join].include?(word) && :from) || (word == "in" && :in)
         end
         clauses[-1] = word if CLAUSE_WORDS.include?(word)
       end

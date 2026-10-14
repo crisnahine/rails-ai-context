@@ -18,7 +18,7 @@ module RailsAiContext
       def bounded(conn, timeout)
         result = nil
         DatabaseFamily.bounding do
-          rolled_back(conn) do
+          rolling_back(conn) do
             conn.execute("SET TRANSACTION READ ONLY")
             conn.execute("SET LOCAL statement_timeout = '#{[ (timeout * 1000).to_i, 1 ].max}'")
             result = yield
@@ -29,7 +29,7 @@ module RailsAiContext
 
       # The server's own transaction status (0 is idle) decides: Active Record does not count a transaction the app
       # opened with a raw BEGIN, and its own BEGIN and ROLLBACK there would end the app's.
-      def rolled_back(conn)
+      def rolling_back(conn)
         if conn.raw_connection.transaction_status.zero?
           conn.transaction(requires_new: true) do
             yield

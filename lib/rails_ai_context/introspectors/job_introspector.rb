@@ -820,10 +820,6 @@ module RailsAiContext
         names.reject { |n| n.start_with?("_") || MAILER_CLASS_CONFIG.include?(n) }
       end
 
-      # A mailer's actions are its public instance methods, its app parents'
-      # included. A public method a gem's base class or a mixin gives it is an
-      # action the booted tier reports and this one cannot, so the entries are
-      # tagged STATIC.
       # ActionMailer's interceptor and observer hooks. A class or module under
       # app/mailers that implements one is registered with the framework, not
       # delivered by it: reporting OpenProject's Interceptors::DefaultHeaders
@@ -1172,10 +1168,8 @@ module RailsAiContext
         false
       end
 
-      # What the static tier can say a mailer offers. A class with no action of its own is
-      # still a mailer: its actions come from a mixin, or it offers class methods.
-      # Rails dispatches on what the mailer inherits too, so each name takes the
-      # visibility the nearest of its app classes gives it.
+      # The public methods of a mailer and of its app parents, each with the visibility the nearest gives it; tagged
+      # STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
       def mailer_entry(klass, ancestors = [])
         lineage = [ klass, *ancestors ]
         visibility = {}

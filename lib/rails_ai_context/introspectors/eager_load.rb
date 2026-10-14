@@ -119,19 +119,21 @@ module RailsAiContext
       # makes the two disagree, and a wrong name silently loads nothing.
       def load_individually(path, files)
         loader = Rails.autoloaders.main
-        raised = RunCache.fetch([ :eager_load_raised ]) { {} }
         files.each do |file|
           cpath_for(loader, path, file).constantize
         rescue StandardError, ScriptError => e
-          raised[real(file)] = e.message.to_s.lines.first.to_s.strip
+          raised_files[real(file)] = e.message.to_s.lines.first.to_s.strip
         end
       end
 
-      # What loading a file raised this run, by its real path, or nil. Ruby
-      # registers a class before its body runs, so one whose body raised looks
-      # loaded with only what ran before the raise.
+      # What loading a file raised this run, by its real path, or nil: Ruby registers a class before its body
+      # runs, so one whose body raised looks loaded with only what ran before the raise.
       def raised(file)
-        RunCache.fetch([ :eager_load_raised ]) { {} }[file]
+        raised_files[file]
+      end
+
+      def raised_files
+        RunCache.fetch([ :eager_load_raised ]) { {} }
       end
 
       # SourceScan records, each loaded by the constant its file holds. Without

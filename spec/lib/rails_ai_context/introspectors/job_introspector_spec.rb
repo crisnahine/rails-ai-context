@@ -2272,14 +2272,14 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    # Rails dispatches on every public instance method a mailer inherits, not
-    # only the ones its own file defines.
+    # Rails dispatches on every public instance method a mailer inherits from its parents.
     it "adds the public methods a mailer inherits from the app's own mailers, less what it makes private" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
-        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), "class ApplicationMailer < ActionMailer::Base
-end
-")
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), <<~RUBY)
+          class ApplicationMailer < ActionMailer::Base
+          end
+        RUBY
         File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), <<~RUBY)
           class BaseMailer < ApplicationMailer
             def receipt(order_id) = mail(to: "a@example.com")

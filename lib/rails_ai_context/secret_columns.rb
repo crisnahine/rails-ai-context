@@ -62,9 +62,8 @@ module RailsAiContext
       statement.to_s.strip.empty? ? secrets : secrets.cover(statement)
     end
 
-    # A name or a statement as the databases compare names: case folded, a dotted capital I read as i (MySQL does,
-    # Ruby's downcase keeps the dot), and runs of spaces squeezed, so a name is found in text squeezed or not.
-    # SQLite folds ASCII letters alone, so `ascii:` keeps every other letter as written.
+    # A name or a statement as the databases compare names: case folded (ASCII alone with `ascii:`, as SQLite folds),
+    # a dotted capital I read as i as MySQL reads it, and runs of spaces squeezed, so text squeezed or not matches.
     def self.fold(text, ascii: false)
       ascii ? text.to_s.downcase(:ascii).squeeze(" ") : text.to_s.downcase.delete("\u0307").squeeze(" ")
     end
@@ -237,7 +236,7 @@ module RailsAiContext
 
       # What a name means is read with every letter folded, whatever the database folds.
       meaning = self.class.fold(name)
-      @generated.key?(down) || @redacted.include?(down) || @loose.include?(meaning) || heuristic?(meaning) ||
+      @generated.key?(down) || @redacted.include?(down) || @secret_meanings.include?(meaning) || heuristic?(meaning) ||
         RailsAiContext::Redaction.secret_name?(meaning)
     end
 
@@ -397,7 +396,7 @@ module RailsAiContext
     def flag_secret_columns(columns)
       # A configured name that no column spells as the database folds it still holds the columns it folds to.
       known = columns.values.flatten.to_set
-      @loose = (BUILT_IN_NAMES + @configured.reject { |name| known.include?(fold(name)) }).to_set { |name| self.class.fold(name) }
+      @secret_meanings = (BUILT_IN_NAMES + @configured.reject { |name| known.include?(fold(name)) }).to_set { |name| self.class.fold(name) }
       @by_relation = columns.each_with_object({}) do |(relation, names), acc|
         flagged = names.uniq.select { |c| secret?(c) }
         acc[relation] = flagged unless flagged.empty?

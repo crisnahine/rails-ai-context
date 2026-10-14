@@ -7,6 +7,9 @@ module RailsAiContext
     module MysqlRuntime
       module_function
 
+      # A transaction is open that Active Record does not count, which a BEGIN would commit.
+      TRANSACTION_ALREADY_OPEN = 1568
+
       IN_TRANSACTION = "MySQL cannot make a transaction that is already open read-only, so the statement " \
         "was not sent. Run it outside the transaction."
 
@@ -44,8 +47,7 @@ module RailsAiContext
         begin
           conn.execute("SET TRANSACTION READ ONLY")
         rescue ActiveRecord::StatementInvalid => e
-          # 1568: a transaction is open that Active Record does not count, which a BEGIN would commit.
-          raise Unsupported, IN_TRANSACTION if DatabaseFamily.native_code(e) == 1568
+          raise Unsupported, IN_TRANSACTION if DatabaseFamily.native_code(e) == TRANSACTION_ALREADY_OPEN
 
           raise
         end

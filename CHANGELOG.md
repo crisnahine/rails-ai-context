@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which is `rails_query`'s own. 5.35.1 and 5.35.2 ran such a call when a table
   carried the counter's name. Read the counter on the app's own connection, in
   `bin/rails runner` or the console.
+- **The packaged gem holds only what a user of the gem runs or reads.** That
+  is `lib/`, `exe/`, `app/`, `config/`, the README, the changelog, the license,
+  `SECURITY.md`, the user docs in `docs/`, and the files those docs link to
+  (`CONTRIBUTING.md` and three ADRs), so every link works in the unpacked gem.
+  Every earlier version also packed the files that serve the repository alone:
+  `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `CODE_OF_CONDUCT.md`,
+  `docs/RELEASING.md`, the other ADRs, `docs/agents/`, the docs site config,
+  `.rspec`, `.rubocop.yml`, `.ruby-version`, `Rakefile`, `server.json` and the
+  gemspec. A tool that indexes an app's bundle could read the two assistant
+  files as instructions about the app.
 
 ### Fixed
 
@@ -94,16 +104,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dot there), bare, quoted or as a string. Anywhere else it is a column's or an
   alias's name, and the statement runs. 5.35.1 and 5.35.2 refused such a name
   wherever it stood, so `SELECT id FROM t WHERE pragma_flag = 1` was refused.
-- **On SQLite a column is no longer refused or filtered as a secret column
-  whose name differs from its own past ASCII alone.** SQLite folds ASCII letters
-  alone, so `"é"` and `"É"` are two columns, and the secret column rule now
-  compares names that way there. With `"É"` in `query_redacted_columns`,
-  `SELECT "é" FROM t` runs and `SELECT *` filters `É` alone; every earlier
-  version refused `é` too and filtered both. A name is still read with every
-  letter folded for what it means, so a column that folds to a built-in name or
-  one the heuristic flags stays secret, and so does one a configured name folds
-  to when no column spells that name as SQLite folds it. PostgreSQL, MySQL and
-  MariaDB fold every letter as before.
+- **On SQLite a secret column name covers only the columns SQLite reads it as.**
+  SQLite folds ASCII letters alone, so `"é"` and `"É"` are two columns, and the
+  secret column rule now compares names that way there. With `"É"` in
+  `query_redacted_columns`, `SELECT "é" FROM t` runs and `SELECT *` filters `É`
+  alone; every earlier version refused `é` too and filtered both. A name is
+  still read with every letter folded for what it means, so a column that folds
+  to a built-in name or one the heuristic flags stays secret, and so does one a
+  configured name folds to when no column spells that name as SQLite folds it.
+  PostgreSQL, MySQL and MariaDB fold every letter as before.
 - **On SQLite a statement that names a view over a pragma function or a
   counter that tells of the connection is refused, by the view and the
   function.** The view's definition runs on `rails_query`'s own connection, so
@@ -124,6 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   down its class was listed as `[VERIFIED]` with only what ran before the
   raise, and with no word that loading it failed. It is now named with the
   error, as a file that raises before its class opens has been since 5.35.2.
+  5.35.2 and earlier versions listed it.
 - **A booted model keeps its STI hierarchy while nothing has queried its
   database.** A model whose table is in a second database, and so not in
   `db/schema.rb`, lost its STI parent, children and type column until a first
@@ -155,17 +165,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `### Sidekiq` heading that says they are those workers' counts. Since 4.3.1
   any app with Sidekiq loaded got Sidekiq's counts under the adapter's name,
   where they read as that adapter's queue.
-- **The packaged gem holds only what a user of the gem runs or reads.** That
-  is `lib/`, `exe/`, `app/`, `config/`, the README, the changelog, the license,
-  `SECURITY.md`, the user docs in `docs/`, and the files those docs link to
-  (`CONTRIBUTING.md` and three ADRs), so every link works in the unpacked gem.
-  Every earlier version also packed the files that serve the repository alone:
-  `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `CODE_OF_CONDUCT.md`,
-  `docs/RELEASING.md`, the other ADRs, `docs/agents/`, the docs site config,
-  `.rspec`, `.rubocop.yml`, `.ruby-version`, `Rakefile`, `server.json` and the
-  gemspec. A tool that indexes an app's bundle could read the two assistant
-  files as instructions about the app.
-
 ## [5.35.2] - 2026-10-14
 
 ### Security
