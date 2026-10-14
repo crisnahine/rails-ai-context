@@ -311,7 +311,7 @@ A view over one of these is refused with "its definition names `<table>`, which 
 
 ### "Blocked: `pragma_foreign_keys` tells of the connection that runs it"
 
-On SQLite `rails_query` runs a statement on a connection of its own, so a value that belongs to a connection would not be the app's. The pragma functions that describe the schema or the database file run: `pragma_table_info`, `pragma_index_list`, `pragma_foreign_key_list`, `pragma_integrity_check`, `pragma_page_count` and the others [SECURITY.md](SECURITY.md#layer-1---the-sql-gate-statement-checks) lists. Every other `pragma_*` function is refused, and so are `changes()`, `total_changes()` and `last_insert_rowid()`. Read those on the app's own connection, in `bin/rails runner` or the console. A `pragma_*` name is refused wherever it stands, so a column whose own name starts with `pragma_` is refused too: read it in the console as well.
+On SQLite `rails_query` runs a statement on a connection of its own, so a value that belongs to a connection would not be the app's. The pragma functions that describe the schema or the database file run: `pragma_table_info`, `pragma_index_list`, `pragma_foreign_key_list`, `pragma_integrity_check`, `pragma_page_count` and the others [SECURITY.md](SECURITY.md#layer-1---the-sql-gate-statement-checks) lists. Every other `pragma_*` function is refused, and so are `changes()`, `total_changes()` and `last_insert_rowid()`. Read those on the app's own connection, in `bin/rails runner` or the console. A column whose own name starts with `pragma_` runs. Its name is refused only where SQLite would read the function: called, or where a table stands.
 
 ### "Blocked: the statement is ... bytes long"
 

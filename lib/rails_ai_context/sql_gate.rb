@@ -121,7 +121,12 @@ module RailsAiContext
       integrity_check quick_check user_version application_id schema_version page_size page_count freelist_count
       encoding auto_vacuum journal_mode compile_options pragma_list
     ].to_set.freeze
-    SQLITE_CONNECTION_STATE = /\bpragma_(\w+)|\b(changes|total_changes|last_insert_rowid)\s*\(/i
+    SQLITE_COUNTER_CALL = /\b(changes|total_changes|last_insert_rowid)\s*\(/i
+    # A pragma function's name, bare or quoted, as one token.
+    SQLITE_PRAGMA_NAME = /\A["'`\[]?pragma_(\w+)["'`\]]?\z/i
+    # The clauses after which a comma at the same depth starts another table of a FROM list.
+    FROM_LIST_CLAUSES = %w[from join on].freeze
+    CLAUSE_WORDS = %w[select from join on where group order having limit window values using returning set union intersect except].freeze
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
     # column that carries the credential (SecretColumns::CATALOG_CREDENTIALS) as a secret column.
@@ -551,14 +556,37 @@ module RailsAiContext
         "#{" To read one setting, run SHOW with its name." if name.match?(/settings/i)}"
     end
 
+    # A counter is told by its call. A pragma function is told where it can run: called, or where a table stands
+    # (after FROM, JOIN, IN, a comma of a FROM list, a parenthesis that opens one, or a schema and a dot there).
+    # A name anywhere else is a column's or an alias's, which SQLite never reads as the function.
     def connection_state(cleaned)
       return nil unless @family.sqlite?
 
-      cleaned.to_enum(:scan, SQLITE_CONNECTION_STATE).filter_map do
-        pragma, counter = Regexp.last_match.captures
-        name = counter&.downcase || ("pragma_#{pragma.downcase}" unless SQLITE_FILE_PRAGMAS.include?(pragma.downcase))
-        name unless name.nil? || @secrets.knows?(name)
-      end.first
+      # A table of a counter's name does not hide the function, as one of a pragma function's name does.
+      counter = cleaned[SQLITE_COUNTER_CALL, 1]
+      return counter.downcase if counter
+
+      list = tokens(cleaned)
+      clauses = [ nil ]
+      at_table = []
+      table_next = false
+      list.each_with_index do |(kind, text), i|
+        at_table << table_next
+        pragma = text.to_s[SQLITE_PRAGMA_NAME, 1]&.downcase if %i[word quoted string].include?(kind)
+        name = "pragma_#{pragma}" if pragma && !SQLITE_FILE_PRAGMAS.include?(pragma)
+        return name if name && (table_next || list[i + 1] == [ :punct, "(" ]) && !@secrets.knows?(name)
+
+        word = text.downcase if kind == :word
+        table_next = case [ kind, text ]
+        when [ :punct, "(" ] then clauses.push(table_next == :from ? "from" : nil) && (table_next == :from && :from)
+        when [ :punct, ")" ] then (clauses.pop if clauses.size > 1) && false
+        when [ :punct, "," ] then FROM_LIST_CLAUSES.include?(clauses.last) && :from
+        when [ :punct, "." ] then at_table[i - 1] if i.positive?
+        else (%w[from join].include?(word) && :from) || (word == "in" && :in)
+        end
+        clauses[-1] = word if CLAUSE_WORDS.include?(word)
+      end
+      nil
     end
 
     def dump_refusal(function)

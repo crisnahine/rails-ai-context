@@ -1874,6 +1874,23 @@ RSpec.describe RailsAiContext::Tools::Query do
           "the database file runs, for example `pragma_table_info`." ]), sql
       end
     end
+
+    it "runs a column named like a pragma function or a counter, and refuses the function where a table stands" do
+      conn = ActiveRecord::Base.connection
+      conn.execute("CREATE TABLE rac_pragma_cols (id integer, pragma_flag integer, pragma_foreign_keys integer, " \
+        "pragma_database_list integer, changes integer, last_insert_rowid integer)")
+      conn.execute("INSERT INTO rac_pragma_cols VALUES (1, 1, 2, 3, 4, 5)")
+      expect(answer("SELECT id FROM rac_pragma_cols WHERE pragma_flag = 1")).to match([ false, a_string_including("| 1") ])
+      expect(answer("SELECT r.pragma_foreign_keys, pragma_database_list, changes FROM rac_pragma_cols r")).to match([ false, a_string_including("| 2") ])
+      [ "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT * FROM pragma_foreign_keys",
+        "SELECT * FROM 'pragma_foreign_keys'", "SELECT name, file FROM pragma_database_list",
+        "SELECT id FROM rac_pragma_cols, pragma_database_list", "SELECT id FROM rac_pragma_cols JOIN main.pragma_foreign_keys",
+        "SELECT id FROM rac_pragma_cols WHERE id IN pragma_foreign_keys" ].each do |sql|
+        expect(answer(sql)).to match([ true, a_string_including("tells of the connection that runs it") ]), sql
+      end
+    ensure
+      ActiveRecord::Base.connection.execute("DROP TABLE IF EXISTS rac_pragma_cols")
+    end
   end
 
   describe "a literal that reads like an injection or a locking clause" do
