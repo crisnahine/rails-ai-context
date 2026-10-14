@@ -18,14 +18,36 @@ module RailsAiContext
       def bounded(conn, timeout)
         result = nil
         DatabaseFamily.bounding do
-          conn.transaction(requires_new: true) do
+          rolled_back(conn) do
             conn.execute("SET TRANSACTION READ ONLY")
             conn.execute("SET LOCAL statement_timeout = '#{[ (timeout * 1000).to_i, 1 ].max}'")
             result = yield
-            raise ActiveRecord::Rollback
           end
         end
         result
+      end
+
+      # The server's own transaction status (0 is idle) decides: Active Record does not count a transaction the app
+      # opened with a raw BEGIN, and its own BEGIN and ROLLBACK there would end the app's.
+      def rolled_back(conn)
+        if conn.raw_connection.transaction_status.zero?
+          conn.transaction(requires_new: true) do
+            yield
+            raise ActiveRecord::Rollback
+          end
+        else
+          conn.execute("SAVEPOINT rac_bounded")
+          begin
+            yield
+          ensure
+            DatabaseFamily.restore(conn, "ROLLBACK TO SAVEPOINT rac_bounded; RELEASE SAVEPOINT rac_bounded")
+          end
+        end
+      end
+
+      # The settings bounded sets for each statement => the read of the session's own value.
+      def bound_settings(_conn)
+        { "statement_timeout" => "SHOW statement_timeout", "transaction_read_only" => "SHOW transaction_read_only" }
       end
 
       def explain(conn, sql, timeout)
@@ -82,8 +104,12 @@ module RailsAiContext
           [ i, names[col], relation ] if names[col]
         end
       rescue StandardError => e
-        # The driver raises its own class here. Half a trace is no answer, so a timeout is raised as the call's.
-        raise TimedOut, e.message if defined?(PG::QueryCanceled) && e.is_a?(PG::QueryCanceled)
+        # The driver raises its own class here. Half a trace is no answer, so a timeout is raised as the call's, and a cancel as itself.
+        if defined?(PG::QueryCanceled) && e.is_a?(PG::QueryCanceled)
+          raise if DatabaseFamily.canceled?(e)
+
+          raise TimedOut, e.message
+        end
         raise if e.is_a?(ActiveRecord::StatementInvalid) && DatabaseFamily.timed_out?(e)
 
         []

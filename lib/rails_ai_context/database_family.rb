@@ -148,6 +148,15 @@ module RailsAiContext
         runtime.index_tables(connection, schemas)
       end
 
+      # Each setting the family sets for a statement, among those the text names, with the session's own value.
+      # Read with no bound: reading a setting waits on no lock.
+      # @return [Hash{String => String}]
+      def own_settings(connection, text)
+        runtime.bound_settings(connection).filter_map do |name, read|
+          [ name, connection.select_value(read).to_s ] if text.match?(/\b#{name}\b/i)
+        end.to_h
+      end
+
       # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
       def table_sizes(connection)
         runtime.table_sizes(connection)
@@ -268,15 +277,26 @@ module RailsAiContext
     def timed_out?(error)
       # A connection the server dropped is a QueryAborted on Rails 7.1 and later, and it is no timeout.
       return false if defined?(ActiveRecord::ConnectionFailed) && error.is_a?(ActiveRecord::ConnectionFailed)
-      return true if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
+      return !canceled?(error.cause) if defined?(ActiveRecord::QueryAborted) && error.is_a?(ActiveRecord::QueryAborted)
       # A wait on a lock that the database's own lock timeout ended.
       return true if error.is_a?(ActiveRecord::LockWaitTimeout)
 
+      TIMEOUT_CODES.include?(native_code(error))
+    end
+
+    # PostgreSQL gives its timeout and a cancel another session sent one error code, and only the server's
+    # message tells them apart. A server that writes its messages in another language reads as the timeout.
+    def canceled?(driver_error)
+      result = driver_error.result if driver_error.respond_to?(:result)
+      result.respond_to?(:error_field) && result.error_field(PG::PG_DIAG_MESSAGE_PRIMARY).to_s.end_with?("due to user request")
+    end
+
+    # @return [Integer, nil] the MySQL or MariaDB error number the driver's error carries
+    def native_code(error)
       cause = error.cause
-      code = if cause.respond_to?(:error_number) then cause.error_number
+      if cause.respond_to?(:error_number) then cause.error_number
       elsif cause.respond_to?(:error_code) then cause.error_code
       end
-      TIMEOUT_CODES.include?(code)
     end
   end
 end

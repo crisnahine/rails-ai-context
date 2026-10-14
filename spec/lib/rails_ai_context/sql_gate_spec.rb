@@ -1193,6 +1193,12 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "names the session's temporary schema pg_temp, as PostgreSQL 15 and later print it and the catalog reads list it" do
+      scan = { "Node Type" => "Seq Scan", "Relation Name" => "jotted", "Schema" => "pg_temp_3", "Alias" => "j", "Output" => [ "j.id" ] }
+      expect(RailsAiContext::DatabaseFamily::PostgresqlPlan.new(scan).relations).to eq([ %w[pg_temp pg_temp.jotted] ])
+      expect(RailsAiContext::DatabaseFamily::PostgresqlPlan.new(scan.merge("Schema" => "pg_temp_3x")).relations).to eq([ %w[pg_temp_3x pg_temp_3x.jotted] ])
+    end
+
     # Plans PostgreSQL 16 gave over a postgres_fdw table.
     describe "a foreign scan" do
       # A join or an aggregate the remote server runs names its tables with their schema.

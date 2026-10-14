@@ -277,6 +277,8 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
           def adapter_name = "PostgreSQL"
 
+          def raw_connection = Struct.new(:transaction_status).new(0)
+
           def execute(sql) = @statements << sql
 
           def select_all(_sql) = ActiveRecord::Result.new(%w[x], [ [ 1 ] ])
@@ -322,6 +324,8 @@ RSpec.describe RailsAiContext::DatabaseFamily do
         def initialize = @statements = []
 
         def adapter_name = "PostgreSQL"
+
+        def raw_connection = Struct.new(:transaction_status).new(0)
 
         def execute(sql) = @statements << sql
 
@@ -499,6 +503,22 @@ RSpec.describe RailsAiContext::DatabaseFamily do
             .to raise_error(ActiveRecord::StatementInvalid, /readonly/)
           conn.execute("INSERT INTO big VALUES (2002)")
         end
+
+        expect(conn.select_value("SELECT count(*) FROM big")).to eq(2002)
+      end
+
+      it "answers from the rows of a transaction the app opened with a raw BEGIN, bounds the statement there, and leaves it open" do
+        slow_rows = "SELECT a.n FROM big a, big d WHERE d.n <= 200 AND (SELECT count(*) FROM big b WHERE b.n <> a.n + d.n) >= 0"
+        conn.execute("BEGIN")
+        conn.execute("INSERT INTO big VALUES (2001)")
+
+        result = described_class::SQLITE.read_only(conn, "SELECT count(*) FROM big", timeout: 5)
+        expect([ result.rows, result.unbounded ]).to eq([ [ [ 2001 ] ], true ])
+        expect { described_class::SQLITE.read_only(conn, "INSERT INTO big VALUES (9)", timeout: 5) }
+          .to raise_error(ActiveRecord::StatementInvalid, /readonly/)
+        expect { described_class::SQLITE.read_only(conn, slow_rows, timeout: 0.5) }.to raise_error(described_class::TimedOut)
+        conn.execute("INSERT INTO big VALUES (2002)")
+        conn.execute("COMMIT")
 
         expect(conn.select_value("SELECT count(*) FROM big")).to eq(2002)
       end

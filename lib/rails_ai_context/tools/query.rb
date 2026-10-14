@@ -198,10 +198,13 @@ module RailsAiContext
         # a parser still reads the block); the unbounded note stays off CSV.
         cut = !schema_metadata && result.respond_to?(:truncated) && result.truncated
         truncation = cut ? truncation_note([ row_limit, HARD_ROW_CAP ].min, format) : ""
+        # SHOW VARIABLES names each setting in its first column.
+        named = schema_metadata ? [ sql, *result.rows.map { |row| row.first.to_s } ].join("\n") : sql
+        settings = settings_note(family.own_settings(connection, named), format)
         output = if format == "csv"
-          format_csv(redacted) + truncation
+          format_csv(redacted) + truncation + settings
         else
-          (definition ? format_definition(redacted) : format_table(redacted)) + truncation + unbounded_note(result)
+          (definition ? format_definition(redacted) : format_table(redacted)) + truncation + settings + unbounded_note(result)
         end
 
         text_response(output)
@@ -228,6 +231,15 @@ module RailsAiContext
         ". The #{table} table is on the #{holder} database, which #{RailsAiContext.environment_name} does not configure."
       rescue StandardError => e
         RailsAiContext.debug_fail(e, "", label: "held_elsewhere")
+      end
+
+      # A statement runs with settings rails_query sets for it, which a statement that reads them answers.
+      private_class_method def self.settings_note(own, format)
+        return "" if own.empty?
+
+        note = "#{own.keys.join(" and ")} here #{own.size > 1 ? "are the values" : "is the value"} rails_query sets for each " \
+          "statement it runs. The session's own: #{own.map { |name, value| "#{name} #{value}" }.join(", ")}."
+        format == "csv" ? "\n\n#{note}" : "\n\n_#{note}_"
       end
 
       private_class_method def self.unbounded_note(result)

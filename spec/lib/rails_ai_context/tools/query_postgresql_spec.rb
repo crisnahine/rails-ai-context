@@ -671,6 +671,47 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
   end
 
+  it "answers a statement another session canceled as the error it is" do
+    RailsAiContext.configuration.query_timeout = 20
+    pid = conn.select_value("SELECT pg_backend_pid()")
+    response = nil
+    second_session(ENV.fetch("RAC_TEST_PG_URL")) do |other|
+      canceler = Thread.new { sleep 1 and other.execute("SELECT pg_cancel_backend(#{pid})") }
+      response = run("SELECT pg_sleep(10)")
+    ensure
+      canceler&.join
+    end
+
+    expect(response.error?).to be(true)
+    expect(response.content.first[:text]).to start_with("SQL error: ").and include("canceling statement due to user request")
+  end
+
+  it "answers from a transaction the app opened with a raw BEGIN, and leaves it open with its writes" do
+    conn.execute("BEGIN")
+    conn.execute("INSERT INTO rac_pg_accounts (id, email) VALUES (99, 'mine@example.com')")
+
+    expect(run("SELECT count(*) AS n FROM rac_pg_accounts").content.first[:text]).to include("| 2 |")
+    expect(conn.raw_connection.transaction_status).to eq(PG::PQTRANS_INTRANS)
+    conn.execute("COMMIT")
+    expect(conn.select_value("SELECT count(*) FROM rac_pg_accounts WHERE id = 99")).to eq(1)
+  end
+
+  it "says the statement_timeout and transaction_read_only it shows are its own, and gives the session's" do
+    RailsAiContext.configuration.query_timeout = 2
+    conn.execute("SET statement_timeout = '50s'")
+    note = "statement_timeout here is the value rails_query sets for each statement it runs. The session's own: statement_timeout 50s."
+    both = "statement_timeout and transaction_read_only here are the values rails_query sets for each statement it runs. " \
+      "The session's own: statement_timeout 50s, transaction_read_only off."
+
+    expect(run("SHOW statement_timeout").content.first[:text]).to include("| 2s", note)
+    expect(run("SELECT current_setting('transaction_read_only') AS ro, current_setting('statement_timeout') AS t").content.first[:text])
+      .to include("| on", both)
+    expect(described_class.call(sql: "SHOW statement_timeout", format: "csv").content.first[:text]).to end_with("2s\n\n#{note}")
+    expect(run("SHOW lock_timeout").content.first[:text]).not_to include("rails_query sets")
+  ensure
+    conn.execute("RESET statement_timeout")
+  end
+
   # The lock holds planning past the timeout and is gone before the statement's own timeout would end.
   # It is taken after the schema read, so the read that waits on it is planning.
   it "runs nothing when another connection holds a lock on the table past the timeout" do

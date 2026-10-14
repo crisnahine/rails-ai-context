@@ -15,6 +15,10 @@ module RailsAiContext
       # Catalogs and TOAST tables: the never-read list and the catalog credentials hold what is secret there.
       SYSTEM_SCHEMA = /\A(?:pg_catalog|information_schema|pg_toast(?:_temp_\d+)?)\z/
 
+      # Before PostgreSQL 15 a plan names the session's temporary schema by its number, where the catalog reads say pg_temp.
+      # No session can plan another session's temporary table, so the number is always the session's own.
+      OWN_TEMP_SCHEMA = /\Apg_temp_\d+\z/
+
       APPENDS = [ "Append", "Merge Append" ].freeze
       REMOTE_NAME = /"(?:""|[^"])+"|[^\s()."]+/
       REMOTE_RELATION = /\((?:(#{REMOTE_NAME})\.)?(#{REMOTE_NAME})(?: (#{REMOTE_NAME}))?\)/
@@ -95,7 +99,7 @@ module RailsAiContext
       # no relation of its own: postgres_fdw names its tables there, each with its alias, as `(schema.table alias)`.
       def scanned(node)
         rel = node["Relation Name"]
-        return [ [ node["Schema"], rel.to_s, (node["Alias"] || rel).to_s ] ] if rel
+        return [ [ node["Schema"]&.sub(OWN_TEMP_SCHEMA, "pg_temp"), rel.to_s, (node["Alias"] || rel).to_s ] ] if rel
 
         node["Relations"].to_s.scan(REMOTE_RELATION).map do |parts|
           schema, name, as = parts.map { |part| part&.delete_prefix('"')&.delete_suffix('"')&.gsub('""', '"') }
