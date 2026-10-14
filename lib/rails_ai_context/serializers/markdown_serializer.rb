@@ -512,7 +512,7 @@ module RailsAiContext
         end
 
         if data[:recent]&.any?
-          lines << "### Recent Migrations#{": primary" if secondary.any?}"
+          lines << "### Recent Migrations#{": #{Payload.primary_label(context)}" if secondary.any?}"
           data[:recent].each do |m|
             actions = m[:actions]&.any? ? " (#{m[:actions].join(', ')})" : ""
             lines << "- `#{m[:version]}` #{m[:name]}#{actions}"

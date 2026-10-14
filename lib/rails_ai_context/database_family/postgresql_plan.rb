@@ -16,6 +16,8 @@ module RailsAiContext
       SYSTEM_SCHEMA = /\A(?:pg_catalog|information_schema|pg_toast(?:_temp_\d+)?)\z/
 
       APPENDS = [ "Append", "Merge Append" ].freeze
+      REMOTE_NAME = /"(?:""|[^"])+"|[^\s()."]+/
+      REMOTE_RELATION = /\((?:(#{REMOTE_NAME})\.)?(#{REMOTE_NAME})(?: (#{REMOTE_NAME}))?\)/
 
       # aliases: alias => the relations it stands for, each as `schema.relation` where the plan gives a schema that is no system one.
       attr_reader :nodes, :aliases
@@ -25,17 +27,19 @@ module RailsAiContext
         @top = top
         @nodes = []
         @parents = {}.compare_by_identity
+        @appended = {}.compare_by_identity
         collect(top)
         # The alias defaults to the relation name when the query gave none, which is how `users.*` resolves.
         # Keyed as EXPLAIN prints it: `t` and "T" are two aliases.
         @names = {}
         @aliases = @nodes.each_with_object({}) do |node, map|
-          rel = node["Relation Name"] or next
-          key = [ (node["Schema"] unless node["Schema"].to_s.match?(SYSTEM_SCHEMA)), rel ].compact.join(".").downcase
-          @names[key] = rel.to_s.downcase
-          as = (node["Alias"] || rel).to_s
-          # The members of an Append over partitions are `name_1`, `name_2`, and a node over them names their columns by `name`.
-          [ as, as[/\A(.+)_\d+\z/m, 1] ].compact.each { |name| (map[name] ||= []) << key }
+          scanned(node).each do |schema, rel, as|
+            key = [ (schema unless schema.to_s.match?(SYSTEM_SCHEMA)), rel ].compact.join(".").downcase
+            @names[key] = rel.downcase
+            # The members of an Append over partitions are `name_1`, `name_2`, and a node over them names their columns by `name`.
+            # Anywhere else `name_1` is the plan's own name for a second use of `name`, which stands for another relation.
+            [ as, (as[/\A(.+)_\d+\z/m, 1] if @appended[node]) ].compact.each { |name| (map[name] ||= []) << key }
+          end
         end
         @aliases.each_value(&:uniq!)
       end
@@ -48,15 +52,13 @@ module RailsAiContext
       # @return [Array<Array(String, String)>] [schema, `schema.relation`] for each relation the plan reads
       #   outside the system schemas
       def relations
-        @nodes.filter_map do |node|
-          schema = node["Schema"]
-          [ schema, "#{schema}.#{node["Relation Name"]}".downcase ] if schema && node["Relation Name"] && !schema.match?(SYSTEM_SCHEMA)
+        @nodes.flat_map { |node| scanned(node) }.filter_map do |schema, rel, _as|
+          [ schema, "#{schema}.#{rel}".downcase ] if schema && !schema.match?(SYSTEM_SCHEMA)
         end.uniq
       end
 
-      # The expressions that can stand at each result column: entry i is result column i, with any sort or group key
-      # past the result width. An Append prints no Output, and each of its members hands up a row of its own.
-      # @return [Array<Array<String>>]
+      # @return [Array<Array<String>>] the expressions that can stand at result column i, with any sort or group key
+      #   past the result width. An Append prints no Output, and each of its members hands up a row of its own.
       def output
         return Array(@top["Output"]).map { |expr| [ expr ] } if @top.key?("Output") || !APPENDS.include?(@top["Node Type"])
 
@@ -67,11 +69,11 @@ module RailsAiContext
         members.all? { |member| member["Relation Name"] } && columns.size == 1 ? outputs.transpose : []
       end
 
-      # @return [Array<Array(String, String)>] [relation, column], downcased, for a plain Var of a base relation:
-      #   one for each relation its alias stands for
+      # @return [Array<Array(String, String)>] [relation, column] for a plain Var of a base relation, the column
+      #   folded as the secret column rule folds a name: one for each relation its alias stands for
       def base_columns(expr)
         m = expr.to_s.strip.match(BASE_VAR) or return []
-        column = (m[3] || m[4].gsub('""', '"')).downcase
+        column = SecretColumns.fold(m[3] || m[4].gsub('""', '"'))
         Array(aliases[m[1] || m[2].gsub('""', '"')]).map { |rel| [ rel, column ] }
       end
 
@@ -89,11 +91,24 @@ module RailsAiContext
 
       private
 
+      # [schema, relation, alias] of each relation the node scans. A join or an aggregate that a foreign server runs has
+      # no relation of its own: postgres_fdw names its tables there, each with its alias, as `(schema.table alias)`.
+      def scanned(node)
+        rel = node["Relation Name"]
+        return [ [ node["Schema"], rel.to_s, (node["Alias"] || rel).to_s ] ] if rel
+
+        node["Relations"].to_s.scan(REMOTE_RELATION).map do |parts|
+          schema, name, as = parts.map { |part| part&.delete_prefix('"')&.delete_suffix('"')&.gsub('""', '"') }
+          [ schema, name, as || name ]
+        end
+      end
+
       def collect(node, parent = nil)
         return unless node.is_a?(Hash)
 
         @nodes << node
         @parents[node] = parent
+        @appended[node] = true if parent && (@appended[parent] || APPENDS.include?(parent["Node Type"]))
         Array(node["Plans"]).each { |child| collect(child, node) }
       end
 

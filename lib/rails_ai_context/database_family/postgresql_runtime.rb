@@ -116,12 +116,12 @@ module RailsAiContext
         schemas.empty? ? "n.nspname = ANY (current_schemas(false))" : "#{SCHEMA} IN (#{schemas.map { |name| conn.quote(name) }.join(", ")})"
       end
 
-      # Every relation that stores rows: tables, partitioned tables, materialized views and foreign tables.
+      # Every relation a plan can name that stores rows: tables, partitioned tables, materialized views, foreign tables and sequences.
       # One read that takes no lock on any of them.
       def relation_columns(conn, schemas = [])
         rows = conn.select_rows(
           "SELECT #{SCHEMA}, c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
-          "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'm', 'f') AND a.attnum > 0 " \
+          "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'm', 'f', 'S') AND a.attnum > 0 " \
           "AND NOT a.attisdropped AND #{in_schemas(conn, schemas)} ORDER BY c.relname, a.attnum"
         )
         rows.each_with_object({}) do |(schema, relation, column), found|

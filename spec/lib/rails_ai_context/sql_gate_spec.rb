@@ -82,12 +82,14 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "refuses a statement over the length it checks, and checks one just under it" do
-      long = "SELECT id FROM posts WHERE body = '#{"x" * described_class::MAX_BYTES}'"
+    it "refuses a statement one byte over the length it checks, and checks one of that length" do
+      template = "SELECT id FROM posts WHERE body = ''"
+      of = ->(bytes) { template.sub("''", "'#{"x" * (bytes - template.bytesize)}'") }
+      long = of.call(described_class::MAX_BYTES + 1)
       %i[sqlite mysql postgresql].each do |family|
-        expect(refusal(long, family)).to eq("Blocked: the statement is #{long.bytesize} bytes long, and rails_query checks a statement of 1000000 bytes at most.")
+        expect(refusal(long, family)).to eq("Blocked: the statement is 1000001 bytes long, and rails_query checks a statement of 1000000 bytes at most.")
+        expect(runs?(of.call(described_class::MAX_BYTES), family)).to be(true), family.to_s
       end
-      expect(runs?("SELECT id FROM posts WHERE id IN (#{(1..142_000).to_a.join(",")})")).to be(true)
     end
 
     it "reads a run of opening brackets and a nest of VALUES lists in time that grows with their length" do
@@ -99,7 +101,7 @@ RSpec.describe RailsAiContext::SqlGate do
                                      budget: described_class::Budget.new(5), text_timeout: 600)
           started = Process.clock_gettime(cpu)
           gate.check(sql)
-          # Quadratic, either shape took minutes at this length.
+          # A reader whose time grows with the square of the length takes minutes here.
           expect(Process.clock_gettime(cpu) - started).to be < 20, "#{key}: #{sql[0, 30]}"
         end
       end
@@ -133,6 +135,15 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "refuses a DO block as a statement it does not run" do
       expect(refusal("DO $$ BEGIN PERFORM 1; END $$", :postgresql)).to include("Only SELECT")
+    end
+
+    it "refuses a write that follows a WITH clause as the write it is, on every family" do
+      { "WITH x AS (SELECT 1 AS n) INSERT INTO posts (id) SELECT n FROM x" => "INSERT", "WITH x AS (SELECT 1 AS n) insert or ignore into posts (id) SELECT n FROM x" => "insert",
+        "WITH x AS (SELECT 1 AS n) REPLACE INTO posts (id) SELECT n FROM x" => "REPLACE",
+        "WITH x AS (SELECT 1 AS n) MERGE INTO posts p USING x ON p.id = x.n WHEN MATCHED THEN DO NOTHING" => "MERGE" }.each do |sql, keyword|
+        families.each_key { |family| expect(refusal(sql, family)).to eq("Blocked: contains #{keyword}"), "#{family}: #{sql}" }
+      end
+      expect(refusal("WITH x AS (SELECT 1 AS n) SELECT n INTO posts FROM x WHERE 'INSERT' = 'x'")).to eq("Blocked: SELECT INTO creates a table")
     end
 
     it "refuses SELECT INTO and a disk write" do
@@ -254,6 +265,18 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(refusal(%(SELECT id FROM posts WHERE title LIKE "%@mysql.com"), :mysql)).to eq(quoted.call("mysql"))
       expect(refusal(%(SELECT id FROM hosts WHERE name = "sys.internal"), :mysql)).to eq(quoted.call("sys"))
       expect(refusal(%(SELECT User FROM "mysql".user), :mysql)).to end_with("so an alias named `mysql` needs another name.")
+    end
+
+    it "refuses a square bracket outside a string or a quoted name on the MySQL family, where MariaDB's MSSQL mode reads it as a name's quote" do
+      bracket = "Blocked: a `[` outside a string or a quoted name is not run. MariaDB reads it as the start of a quoted name when the " \
+        "session's sql_mode holds MSSQL, and rails_query does not read the session's mode. Quote a name in backticks."
+      [ "SELECT [User] FROM [mysql].[user]", "SELECT 1 AS ['], User, Host FROM mysql.user -- ']", "SELECT id FROM [users]",
+        "SELECT 'it''s' AS q, [id] FROM users", "SELECT `a` , [b] FROM users" ].each { |sql| expect(refusal(sql, :mysql)).to eq(bracket), sql }
+      [ "SELECT '[' AS q, id FROM users WHERE note <> ']'", "SELECT `a[b` FROM users", %(SELECT id FROM users WHERE note = "[x]") ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
+      end
+      expect(runs?("SELECT [id] FROM [users]", :sqlite)).to be(true)
+      expect(runs?("SELECT tags[1] FROM posts", :postgresql)).to be(true)
     end
 
     it "refuses the PostgreSQL relations that hold a stored credential" do
@@ -410,6 +433,21 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "refuses a user variable assignment and LAST_INSERT_ID with an argument on the MySQL family, and runs what only reads them" do
+      [ "SELECT @n := @n + 1 AS n FROM users", "SELECT @a:=5", "SELECT id FROM users, (SELECT @n := 0) x" ].each do |sql|
+        expect(refusal(sql, :mysql)).to eq("Blocked: a user variable assignment (`:=`) is not run. It leaves a value on the pooled connection " \
+          "after the query returns, which a read-only transaction does not stop."), sql
+      end
+      [ "SELECT LAST_INSERT_ID(7)", "SELECT last_insert_id ( 'x' )", "SELECT id FROM users WHERE id = LAST_INSERT_ID(id + 1)" ].each do |sql|
+        expect(refusal(sql, :mysql)).to eq("Blocked: LAST_INSERT_ID with an argument is not run. It sets a value that stays on the pooled connection " \
+          "after the query returns, which a read-only transaction does not stop. LAST_INSERT_ID() with no argument runs."), sql
+      end
+      [ "SELECT LAST_INSERT_ID()", "SELECT LAST_INSERT_ID( )", "SELECT @n AS n", "SELECT id FROM users WHERE note = 'a := b'" ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
+      end
+      expect(runs?("SELECT make_interval(days := 2)", :postgresql)).to be(true)
+    end
+
     %w[GET_LOCK RELEASE_LOCK RELEASE_ALL_LOCKS IS_FREE_LOCK IS_USED_LOCK].each do |fn|
       it "refuses the MySQL session function #{fn}" do
         expect(refusal("SELECT #{fn}('x')", :mysql)).to include("session function #{fn}")
@@ -443,7 +481,7 @@ RSpec.describe RailsAiContext::SqlGate do
   end
 
   describe "SQLite pragma functions" do
-    let(:relations) { { "pragma_notes" => %w[id body] } }
+    let(:relations) { { "pragma_notes" => %w[id body], "logs" => %w[id pragma_flag pragma_foreign_keys pragma_database_list changes last_insert_rowid] } }
 
     it "runs every one that describes the schema or the database file, and refuses the rest on SQLite alone" do
       %w[table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check integrity_check quick_check
@@ -457,6 +495,11 @@ RSpec.describe RailsAiContext::SqlGate do
       end
       expect(runs?("SELECT changes, total_changes FROM counters")).to be(true)
       expect(runs?("SELECT id, body FROM pragma_notes")).to be(true)
+      # A column's name is no table's: one named like a pragma function or a counter is refused with it.
+      [ "SELECT name, file FROM pragma_database_list", "SELECT * FROM pragma_foreign_keys", "SELECT * FROM 'pragma_foreign_keys'",
+        "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT id FROM logs WHERE pragma_flag = 1" ].each do |sql|
+        expect(refusal(sql)).to include("tells of the connection that runs it"), sql
+      end
     end
   end
 
@@ -499,10 +542,12 @@ RSpec.describe RailsAiContext::SqlGate do
   describe "column-alias lists" do
     let(:body) { "(SELECT * FROM users)" }
 
+    # A bracket is refused first on the MySQL family, whatever stands in the brackets.
     def refused_everywhere(statements)
       statements.each do |sql|
         %i[sqlite mysql postgresql].each do |family|
-          expect(refusal(sql, family)).to start_with("Blocked: a column-alias list"), "#{family}: #{sql}"
+          start = family == :mysql && sql.include?("[") ? "Blocked: a `[` outside a string" : "Blocked: a column-alias list"
+          expect(refusal(sql, family)).to start_with(start), "#{family}: #{sql}"
         end
       end
     end
@@ -602,10 +647,13 @@ RSpec.describe RailsAiContext::SqlGate do
         "SELECT (a, b) = (c, d) FROM t", "SELECT ROW(a, b) FROM t", "SELECT id FROM t CROSS JOIN LATERAL f(a, b)",
         "WITH u AS (SELECT a, b FROM t) SELECT coalesce(a, b) AS c FROM u", "SELECT id FROM (SELECT id FROM t) x JOIN u USING (id)",
         "SELECT * FROM (SELECT id FROM t) x WHERE (id) IN (id)", "SELECT x.id FROM (SELECT id FROM t) AS x ORDER BY (id)"
-      ].each { |sql| %i[sqlite mysql postgresql].each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" } }
+      ].each do |sql|
+        run_on = sql.include?("[") ? %i[sqlite postgresql] : %i[sqlite mysql postgresql]
+        run_on.each { |family| expect(runs?(sql, family)).to be(true), "#{family}: #{sql}" }
+      end
     end
 
-    it "still refuses a secret name inside a VALUES body" do
+    it "refuses a secret name inside a VALUES body" do
       expect(refusal("SELECT * FROM (VALUES (password_digest)) AS v(a, b)")).to include("secret column `password_digest`")
     end
   end
@@ -760,17 +808,18 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "reads a statement that holds no backslash once, and one that holds a backslash under both readings" do
+      # Each reading takes the comments out once for its checks, and the text to run is made once more.
       reads = 0
-      allow_any_instance_of(described_class).to receive(:text_refusal).and_wrap_original do |original, *args|
+      allow(described_class).to receive(:comment_free).and_wrap_original do |original, *args, **options|
         reads += 1
-        original.call(*args)
+        original.call(*args, **options)
       end
       counts = [ "SELECT id FROM posts WHERE title = 'x' OR title = 'y'", %q(SELECT id FROM posts WHERE title = 'a\\b') ].map do |sql|
         reads = 0
         expect(runs?(sql, :mysql)).to be(true), sql
         reads
       end
-      expect(counts).to eq([ 1, 2 ])
+      expect(counts).to eq([ 2, 3 ])
     end
 
     it "ends the refusal with a full stop before it names the reading" do
@@ -778,13 +827,13 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(refusal(%q(SELECT '\' , user FROM mysql.user -- '), :mysql)).to include("needs another name. That is how MySQL reads")
     end
 
-    it "keeps a refusal both readings give as it was" do
+    it "gives a refusal both readings give with no word of the session's mode" do
       expect(refusal("SELECT user FROM mysql.user", :mysql)).not_to include("NO_BACKSLASH_ESCAPES")
       expect(refusal(%q(SELECT '\' , x FROM performance_schema.threads -- '), :mysql)).to start_with("Blocked: `performance_schema` is not read.")
       expect(refusal(%q(SELECT '\' , passwd AS x FROM users -- '), :mysql)).to start_with("Blocked: query references secret column `passwd`")
     end
 
-    it "runs a statement with an escaped quote or an escaped backslash in a string, and reads the other families as before" do
+    it "runs a statement with an escaped quote or an escaped backslash in a string, and reads a backslash as an ordinary character on SQLite" do
       [ %q(SELECT 'it\'s' AS v), %q(SELECT 'a\\b' AS v), %q(SELECT id FROM posts WHERE title = 'it\'s' AND id > 1),
         "SELECT id FROM posts WHERE title LIKE '%@mysql.com'", %q(SELECT "say \"hi\"" AS v) ].each do |sql|
         expect(runs?(sql, :mysql)).to be(true), sql
@@ -861,7 +910,7 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(refusal("DESCRIBE 'api_key'", :postgresql)).to include("the plan could not be obtained")
       end
 
-      it "still refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
+      it "refuses a real identifier beside a literal, a quoted identifier and a positional parameter" do
         expect(refusal("SELECT 'x' || api_secret AS y FROM t", :postgresql)).to include("api_secret")
         expect(refusal('SELECT "api_key" FROM t', :postgresql)).to include("api_key")
         expect(refusal(%(SELECT 1 AS "a'b", upper(api_key), 'x' FROM users), :postgresql)).to include("api_key")
@@ -901,7 +950,8 @@ RSpec.describe RailsAiContext::SqlGate do
     it "refuses a statement naming it and says how to release it" do
       text = refusal("SELECT shadow FROM users")
       expect(text).to include("secret column `shadow`", "`shadow` is a generated column that reads `passwd`")
-      expect(text).to include('add "shadow" to config.query_allowed_columns')
+      expect(text).to end_with('add "shadow" to query_allowed_columns in .rails-ai-context.yml (or in config/initializers/rails_ai_context.rb ' \
+                               "where the app bundles the gem).")
     end
 
     it "says one that reads an encrypts column is not released" do
@@ -969,7 +1019,7 @@ RSpec.describe RailsAiContext::SqlGate do
     end
 
     it "reads a string prefix letter that follows a non-ASCII character as the end of a name on PostgreSQL" do
-      [ "SELECT id FROM posts WHERE title = E'x'", "SELECT id AS idée'x' FROM posts", "SELECT 1 AS 名B'1010'",
+      [ "SELECT id FROM posts WHERE title =\u00a0E'x'", "SELECT id AS idée'x' FROM posts", "SELECT 1 AS 名B'1010'",
         "SELECT 1 AS 名x'1F'", "SELECT 1 AS 名U&'x'" ].each do |sql|
         expect(check(sql, :postgresql).sql).to eq(sql), sql
       end
@@ -986,6 +1036,19 @@ RSpec.describe RailsAiContext::SqlGate do
     it "takes a version comment out whole off MySQL, and keeps what it holds on MySQL" do
       expect(text("SELECT 1 /*!50000 , 2 */")).to eq("SELECT 1")
       expect(text("SELECT 1 /*!50000 , 2 */", :mysql)).to eq("SELECT 1   , 2")
+    end
+
+    it "reads a block comment inside a block comment as PostgreSQL nests them, and ends one at the first closer on the other families" do
+      nested = "SELECT 1 /* a /* b */ , 2 */ AS n"
+      expect(text(nested, :postgresql)).to eq("SELECT 1   AS n")
+      expect(text("SELECT /* /* /* x */ */ */ 1 /**/ AS /*/ y */ n", :postgresql)).to eq("SELECT   1   AS   n")
+      %i[sqlite mysql].each { |family| expect(text(nested, family)).to eq("SELECT 1   , 2 */ AS n"), family.to_s }
+    end
+
+    it "reads a block comment that never closes to the end of the text, nested or plain" do
+      expect(text("SELECT 1 /* a /* b */ AS n", :postgresql)).to eq("SELECT 1")
+      expect(text("SELECT 1 /* a /* b AS n", :postgresql)).to eq("SELECT 1")
+      expect(text("SELECT 1 /* a AS n", :sqlite)).to eq("SELECT 1")
     end
 
     it "reads a hash comment and a dash-dash needing a space on MySQL alone" do
@@ -1130,6 +1193,74 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    # Plans PostgreSQL 16 gave over a postgres_fdw table.
+    describe "a foreign scan" do
+      # A join or an aggregate the remote server runs names its tables with their schema.
+      let(:relations) { super().merge("public.users" => %w[id email api_token], "public.posts" => %w[id title], "public.others" => %w[id api_token]) }
+
+      before { allow(connection).to receive(:select_rows).and_return([]) }
+
+      def foreign(remote, output = [ "u.id" ])
+        scan(output, "Node Type" => "Foreign Scan", "Remote SQL" => remote)
+      end
+
+      it "refuses a condition, a sort and a group key on a secret column that the scan sends to the remote server" do
+        [ "SELECT id FROM public.users WHERE ((api_token ~~ 'F%'))", "SELECT id FROM public.users ORDER BY api_token ASC NULLS LAST",
+          "SELECT r1.id FROM (public.users r1 INNER JOIN public.users r2 ON (((r1.api_token = r2.api_token))))" ].each do |remote|
+          expect(plan_refusal(foreign(remote))).to include("plan uses the secret column `api_token`"), remote
+        end
+        grouped = { "Node Type" => "Foreign Scan", "Output" => [ "(count(*))", "u.api_token" ], "Relations" => "Aggregate on (public.users u)",
+                    "Remote SQL" => "SELECT count(*), api_token FROM public.users GROUP BY 2" }
+        expect(plan_refusal(grouped)).to include("plan uses the secret column `api_token`")
+      end
+
+      it "runs a scan that fetches a secret column for redaction to filter, and one whose remote condition holds its name as a string" do
+        expect(plan_refusal(foreign("SELECT id, api_token FROM public.users", %w[u.id u.api_token]))).to be_nil
+        expect(plan_refusal(foreign("SELECT id, api_token FROM public.users WHERE ((id = 1)) ORDER BY email ASC NULLS LAST", %w[u.id u.api_token]))).to be_nil
+        expect(plan_refusal(foreign("SELECT id FROM public.users WHERE ((email = 'api_token'))"))).to be_nil
+      end
+
+      it "reads the relations of a join the remote server runs: a whole row is refused and a result column is traced to its table" do
+        join = { "Node Type" => "Foreign Scan", "Output" => [ "row_to_json(a.*)" ], "Relations" => %((public.users a) INNER JOIN (public.posts "B c")),
+                 "Remote SQL" => "SELECT r1.id FROM (public.users r1 INNER JOIN public.posts r2 ON (((r1.id = r2.id))))" }
+        expect(plan_refusal(join)).to include("whole row of `users`")
+        expect(plan_refusal(join.merge("Output" => [ %(row_to_json("B c".*)) ]))).to be_nil
+        renamed = join.merge("Output" => %w[users.id users_1.api_token], "Relations" => "(public.users) INNER JOIN (public.users users_1)")
+        expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime.planned_sources(renamed).map { |i, column, _| [ i, column ] }).to eq([ [ 0, "id" ], [ 1, "api_token" ] ])
+        nested = join.merge("Output" => [ "to_jsonb(z.*)" ], "Relations" => "Aggregate on (((public.posts x) INNER JOIN (public.posts y)) LEFT JOIN (public.users z))")
+        expect(plan_refusal(nested)).to include("whole row of `users`")
+        expect(plan_refusal(join.merge("Relations" => "(users a) INNER JOIN (posts b)"))).to include("whole row of `users`")
+        quoted = join.merge("Output" => [ %(row_to_json("a ""b""".*)) ], "Relations" => %((public.users "a ""b""") INNER JOIN (public.posts p)))
+        expect(plan_refusal(quoted)).to include("whole row of `users`")
+      end
+
+      it "names the schema of each table of such a join, for the secret column rule to read" do
+        join = { "Node Type" => "Foreign Scan", "Output" => [ "x.id" ], "Relations" => %(("Far.S"."In (it)" x) INNER JOIN (public.posts p)) }
+        expect(RailsAiContext::DatabaseFamily::PostgresqlPlan.new(join).relations).to eq([ [ "Far.S", "far.s.in (it)" ], %w[public public.posts] ])
+      end
+
+      it "reads a secret column by the name its column_name option gives it on the remote server" do
+        allow(connection).to receive(:select_rows).and_return([ %w[users api_token tok], %w[users email mail], %w[others api_token id] ])
+        expect(plan_refusal(foreign("SELECT id FROM public.far WHERE ((tok ~~ 'F%'))"))).to include("plan uses the secret column `api_token`")
+        expect(plan_refusal(foreign("SELECT id, tok FROM public.far WHERE ((mail ~~ 'F%')) AND ((id = 1))", %w[u.id u.api_token]))).to be_nil
+        grouped = { "Node Type" => "Foreign Scan", "Output" => [ "(count(*))", "u.id" ], "Remote SQL" => "SELECT count(*), id FROM public.far GROUP BY 2" }
+        expect(plan_refusal(grouped.merge("Relations" => "Aggregate on (public.users u)"))).to be_nil
+        expect(plan_refusal(grouped.merge("Relations" => "Aggregate on (public.others o)"))).to include("plan uses the secret column `api_token`")
+      end
+    end
+
+    context "with secret columns whose names hold two spaces in a row or a dotted capital I" do
+      let(:relations) { { "users" => [ "id", "api  token", "apİ_key" ] } }
+
+      it "refuses each one a child passes through that the top node does not expose" do
+        [ %(users."api  token"), %(users."Api  Token"), %(users."apİ_key") ].each do |var|
+          top = { "Node Type" => "CTE Scan", "Output" => [ "c.id", "c.t" ],
+                  "Plans" => [ { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users", "Output" => [ "users.id", var ] } ] }
+          expect(plan_refusal(top)).to include("through a CTE, subquery or set operation"), var
+        end
+      end
+    end
+
     it "refuses a secret column a child passes through that the top node does not expose" do
       top = { "Node Type" => "CTE Scan", "Output" => [ "c.id", "c.t" ],
               "Plans" => [ { "Node Type" => "Seq Scan", "Relation Name" => "users", "Alias" => "users",
@@ -1210,6 +1341,52 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    # PostgreSQL 16 numbers the second use of an alias: `p_1` is the `p` of a subquery.
+    describe "an alias that ends in an underscore and digits" do
+      let(:relations) { { "posts" => %w[id title], "users" => %w[id email api_token], "ev" => %w[id note], "ev_2" => %w[id api_token] } }
+
+      def scan_as(relation, as, extra = {})
+        { "Node Type" => "Seq Scan", "Parent Relationship" => "Outer", "Relation Name" => relation, "Alias" => as, "Output" => [ "#{as}.*" ] }.merge(extra)
+      end
+
+      def over(output, *children)
+        { "Node Type" => "Nested Loop", "Output" => output, "Plans" => children }
+      end
+
+      it "runs a whole row of a relation with no secret column whose alias a subquery uses again for one that holds one" do
+        again = scan_as("users", "p_1", "Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns $0)", "Filter" => "(p_1.id = 1)").except("Output")
+        expect(plan_refusal({ "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "One-Time Filter" => "$0", "Plans" => [ again, scan_as("posts", "p") ] })).to be_nil
+      end
+
+      it "runs a whole row of a table beside a table named like its numbered alias" do
+        expect(plan_refusal(over([ "to_json(ev.*)" ], scan_as("ev", "ev"), scan_as("ev_2", "ev_2", "Output" => [ "ev_2.id" ])))).to be_nil
+      end
+
+      it "refuses the whole row a subquery reads under the numbered alias, by the relation it reads" do
+        inner = scan_as("users", "p_1", "Parent Relationship" => "InitPlan", "Subplan Name" => "InitPlan 1 (returns $0)", "Output" => [ "row_to_json(p_1.*)" ])
+        expect(plan_refusal(scan_as("posts", "p", "Output" => [ "$0" ], "Plans" => [ inner ]))).to include("whole row of `users`")
+      end
+
+      it "refuses a whole row of the relation that holds a secret column when a relation with none is scanned first under a numbered alias" do
+        plan = over([ "row_to_json(x.*)" ], scan_as("posts", "x_7", "Output" => %w[x_7.id x_7.title]), scan_as("users", "x", "Parent Relationship" => "Inner"))
+        expect(plan_refusal(plan)).to include("whole row of `users`")
+      end
+
+      it "refuses a whole row a node over an Append reads when the member that holds the secret column is scanned second" do
+        members = [ scan_as("posts", "p_1", "Parent Relationship" => "Member", "Output" => %w[p_1.id p_1.title]),
+                    scan_as("users", "p_2", "Parent Relationship" => "Member", "Output" => %w[p_2.id p_2.email]) ]
+        plan = { "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "Plans" => [ { "Node Type" => "Append", "Parent Relationship" => "Outer", "Plans" => members } ] }
+        expect(plan_refusal(plan)).to include("whole row of `users`")
+      end
+
+      it "refuses a whole row over a Merge Append whose members each sit under a Sort" do
+        sorted = ->(relation, as, columns) { { "Node Type" => "Sort", "Parent Relationship" => "Member", "Output" => columns, "Plans" => [ scan_as(relation, as, "Output" => columns) ] } }
+        members = [ sorted.call("posts", "p_1", %w[p_1.id p_1.title]), sorted.call("users", "p_2", %w[p_2.id p_2.email]) ]
+        plan = { "Node Type" => "Result", "Output" => [ "row_to_json(p.*)" ], "Plans" => [ { "Node Type" => "Merge Append", "Parent Relationship" => "Outer", "Plans" => members } ] }
+        expect(plan_refusal(plan)).to include("whole row of `users`")
+      end
+    end
+
     # Plans PostgreSQL 16 gave over rac_p (id, email, salt), partitioned in two, and over an inheritance parent.
     describe "a partitioned table or an inheritance parent that holds a secret column" do
       let(:relations) do
@@ -1269,7 +1446,7 @@ RSpec.describe RailsAiContext::SqlGate do
         expect(plan_refusal(uneven)).to include("passes the secret column `salt` through")
       end
 
-      it "still refuses the secret column as a sort key, through a materialized CTE and through a set operation" do
+      it "refuses the secret column as a sort key, through a materialized CTE and through a set operation" do
         by_salt = { "Node Type" => "Sort", "Output" => %w[x.id x.email x.salt], "Sort Key" => [ "x.salt" ], "Plans" => [ append("x", "Parent Relationship" => "Outer") ] }
         expect(plan_refusal(by_salt)).to include("plan uses the secret column `salt`")
         cte = { "Node Type" => "CTE Scan", "CTE Name" => "c", "Alias" => "c", "Output" => %w[c.id c.email c.salt],

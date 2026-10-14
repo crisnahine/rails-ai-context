@@ -79,10 +79,10 @@ module RailsAiContext
         JOB_DIRS.each { |kind| EagerLoad.dir(app.root, kind: kind) }
 
         ActiveJob::Base.descendants.filter_map do |job|
-          next if job.name.nil? || job.name == "ApplicationJob" ||
+          next if job.name.nil? || job.name == "ApplicationJob" || DeclaredConstant.renamed?(job) ||
                   job.name.start_with?("ActionMailer", "ActiveStorage::", "ActionMailbox::", "Turbo::", "Sentry::")
           next unless app_defined?(job)
-          if SuperclassChain.abstract_base?(job.name, inherited: job.descendants.any?)
+          if SuperclassChain.abstract_base?(job.name, inherited: DeclaredConstant.carried(job.descendants).any?)
             reflected_bases << { name: job.name, file: source_file_for(job), active_job: true }
             next
           end
@@ -743,7 +743,7 @@ module RailsAiContext
       def booted_mailer_base(mailer)
         file = source_file_for(mailer)
         source = file && SafeFile.read(File.join(app.root.to_s, file))
-        heirs = mailer.descendants.filter_map(&:name)
+        heirs = DeclaredConstant.carried(mailer.descendants).map(&:name)
         return { name: mailer.name, file: file, inherited_by: heirs.sort.presence }.compact unless source
 
         walked = SourceIntrospector.walk_source(source, {
@@ -765,7 +765,7 @@ module RailsAiContext
         ActionMailer::Base.descendants.filter_map do |mailer|
           # `descendants` is every mailer in the process, and a gem's is not
           # the app's however it is named.
-          next if mailer.name.nil? || !app_defined?(mailer)
+          next if mailer.name.nil? || DeclaredConstant.renamed?(mailer) || !app_defined?(mailer)
 
           # Reflection with the app-base subtraction: `action_methods` stops
           # subtracting at the framework base, so a public helper on a
@@ -776,7 +776,7 @@ module RailsAiContext
           )
           # A base other mailers inherit from is where the helpers they share
           # live. Rails dispatches on those, and no reader sends one.
-          if SuperclassChain.abstract_base?(mailer.name, inherited: mailer.descendants.any?)
+          if SuperclassChain.abstract_base?(mailer.name, inherited: DeclaredConstant.carried(mailer.descendants).any?)
             bases << booted_mailer_base(mailer)
             next
           end
@@ -1279,7 +1279,7 @@ module RailsAiContext
         EagerLoad.dir(app.root, kind: "app/channels")
 
         ActionCable::Channel::Base.descendants.filter_map do |channel|
-          next if channel.name.nil? || channel.name == "ApplicationCable::Channel"
+          next if channel.name.nil? || channel.name == "ApplicationCable::Channel" || DeclaredConstant.renamed?(channel)
 
           file = source_file_for(channel)
           macros = channel_sources.find { |klass| klass.file == file }&.macros ||

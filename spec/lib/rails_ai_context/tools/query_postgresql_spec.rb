@@ -13,8 +13,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     described_class.reset_cache!
     stub_const("RacPgQueryRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
     RacPgQueryRecord.establish_connection(ENV.fetch("RAC_TEST_PG_URL"))
-    conn.execute("DROP VIEW IF EXISTS rac_pg_renamed")
-    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts")
+    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts CASCADE")
     conn.execute("CREATE TABLE rac_pg_accounts (id int, email text, salt text, api_token text, shadow text GENERATED ALWAYS AS (salt) STORED)")
     conn.execute("INSERT INTO rac_pg_accounts VALUES (1, 'a@example.com', 'salt-value', 'token-value')")
     conn.execute("CREATE VIEW rac_pg_renamed AS SELECT id, salt AS harmless FROM rac_pg_accounts")
@@ -23,8 +22,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   after do
-    conn.execute("DROP VIEW IF EXISTS rac_pg_renamed")
-    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts")
+    conn.execute("DROP TABLE IF EXISTS rac_pg_accounts CASCADE")
     RacPgQueryRecord.remove_connection
     RailsAiContext.configuration.query_timeout = 5
   end
@@ -61,7 +59,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     statements.each do |sql|
       response = run(sql)
       expect(response.error?).to be(true), sql
-      expect(response.content.first[:text]).to start_with(start), sql
+      expect(response.content.first[:text]).to start_with(start), "#{sql}: #{response.content.first[:text]}"
       expect(response.content.first[:text]).not_to include("salt-value", "token-value"), sql
     end
   end
@@ -116,6 +114,40 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     expect([ response.error?, response.content.first[:text].include?('{"id":1}') ]).to eq([ false, true ])
   ensure
     conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+  end
+
+  describe "an alias a statement uses twice, and a table named like a numbered alias" do
+    before do
+      conn.execute("DROP TABLE IF EXISTS rac_pg_plain, rac_pg_ev, rac_pg_ev_2 CASCADE")
+      conn.execute("CREATE TABLE rac_pg_plain (id int)")
+      conn.execute("CREATE TABLE rac_pg_ev (id int, note text)")
+      conn.execute("CREATE TABLE rac_pg_ev_2 (id int, api_token text)")
+      conn.execute("INSERT INTO rac_pg_plain VALUES (1)")
+      conn.execute("INSERT INTO rac_pg_ev VALUES (1, 'first event')")
+      conn.execute("INSERT INTO rac_pg_ev_2 VALUES (1, 'token-value')")
+    end
+
+    after { conn.execute("DROP TABLE IF EXISTS rac_pg_plain, rac_pg_ev, rac_pg_ev_2 CASCADE") }
+
+    it "runs a whole row of the relation that holds no secret column" do
+      { "SELECT row_to_json(p) AS j FROM rac_pg_plain p WHERE EXISTS (SELECT 1 FROM rac_pg_accounts p WHERE p.id = 1)" => '{"id":1}',
+        "SELECT row_to_json(p) AS j, (SELECT count(*) FROM rac_pg_accounts p) AS n FROM rac_pg_plain p" => '{"id":1}',
+        "SELECT row_to_json(p) AS j FROM rac_pg_plain p WHERE p.id IN (SELECT p.id FROM rac_pg_accounts p)" => '{"id":1}',
+        "SELECT to_json(rac_pg_ev.*) AS j FROM rac_pg_ev JOIN rac_pg_ev_2 ON rac_pg_ev.id = rac_pg_ev_2.id" => "first event" }.each do |sql, shown|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including(shown) ]), sql
+      end
+    end
+
+    it "refuses a whole row of the relation that holds one, and names that relation" do
+      refused([ "SELECT (SELECT row_to_json(p) FROM rac_pg_accounts p LIMIT 1) AS j FROM rac_pg_plain p",
+                "SELECT row_to_json(p) AS j FROM rac_pg_accounts p WHERE EXISTS (SELECT 1 FROM rac_pg_plain p WHERE p.id = 1)",
+                "SELECT row_to_json(x) AS j FROM rac_pg_plain x_7 JOIN rac_pg_accounts x ON true",
+                "SELECT row_to_json(x_7) AS j FROM rac_pg_plain x JOIN rac_pg_accounts x_7 ON true" ],
+              "Blocked: the query serialises a whole row of `rac_pg_accounts`")
+      refused([ "SELECT to_json(rac_pg_ev_2.*) AS j FROM rac_pg_ev JOIN rac_pg_ev_2 ON rac_pg_ev.id = rac_pg_ev_2.id" ],
+              "Blocked: the query serialises a whole row of `rac_pg_ev_2`")
+    end
   end
 
   describe "a relation outside the search path" do
@@ -230,7 +262,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
 
     it "refuses a statement that names a materialized view four schemas from the rows, by the view" do
       refused([ "SELECT * FROM rac_pg_far", "SELECT x FROM rac_pg_far", "SELECT f.id FROM rac_pg_accounts a JOIN rac_pg_far f ON f.id = a.id" ],
-              "The view `rac_pg_far` leads through more schemas than rails_query follows (3 rounds), so the secret columns it could read " \
+              "The view `rac_pg_far` leads through more schemas than rails_query follows, so the secret columns it could read " \
               "cannot be told and no statement that names it runs.")
     end
 
@@ -319,7 +351,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       end
     end
 
-    it "still refuses its whole row, and an expression over the secret column a temporary view renames" do
+    it "refuses its whole row, and an expression over the secret column a temporary view renames" do
       refused([ "SELECT row_to_json(s) FROM rac_pg_scratch s", "SELECT s::text FROM pg_temp.rac_pg_scratch s" ],
               "Blocked: the query serialises a whole row of `rac_pg_scratch`")
       refused([ "SELECT upper(t) FROM rac_pg_scratched", "SELECT max(t) FROM rac_pg_scratched" ],
@@ -347,7 +379,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
               "Blocked: the view `rac_pg_stored_nested` is not queried: it reads the view `rac_pg_renamed`: its definition names the secret column `salt`.")
     end
 
-    it "runs when its definition names none, and a view the plan traces still runs" do
+    it "runs when its definition names none, as a view the plan traces does" do
       [ "SELECT * FROM rac_pg_stored_plain", "SELECT * FROM rac_pg_renamed" ].each do |sql|
         response = run(sql)
         expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
@@ -397,7 +429,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       refused([ "SELECT *, p::text AS row FROM rac_pg_parts p" ], "Blocked: the query serialises a whole row of")
     end
 
-    it "still refuses what would carry the secret column past the redaction" do
+    it "refuses what would carry the secret column past the redaction" do
       refused([ "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parts) SELECT * FROM c", "SELECT * FROM rac_pg_parts EXCEPT SELECT 0, '', ''",
                 "SELECT (1, 'p1@example.com', 'salt-valud') < (SELECT * FROM rac_pg_parts LIMIT 1) AS o",
                 "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_parent) SELECT * FROM c" ],
@@ -506,11 +538,15 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
               "SELECT (SELECT count(*) #{body} WHERE (rac_pg_accounts.*)::text LIKE '%token-v%') AS n" ],
             "Blocked: the query serialises a whole row of `rac_pg_accounts`")
     guess = "(1, 'a@example.com', 'salt-valud', 'x', 'y')"
-    refused([ "SELECT (SELECT max(harmless) FROM rac_pg_renamed) AS n", "SELECT #{guess} < (SELECT * #{body} GROUP BY 1, 2, 3, 4, 5) AS o",
-              "SELECT (SELECT count(*) #{body} a NATURAL JOIN rac_pg_accounts b) AS n",
-              "SELECT (SELECT count(*) FROM (SELECT DISTINCT * #{body}) x) AS n" ], "Blocked: the query's plan uses the secret column `salt`")
-    refused([ "SELECT count(*) FILTER (WHERE #{guess} < (SELECT * #{body})) AS n FROM generate_series(1, 1) g" ],
-            "Blocked: the query passes the secret column `salt` through")
+    # Which secret column a refusal names first depends on the other tables the database holds.
+    { "Blocked: the query's plan uses the secret column" => [ "SELECT (SELECT max(harmless) FROM rac_pg_renamed) AS n",
+                                                             "SELECT #{guess} < (SELECT * #{body} GROUP BY 1, 2, 3, 4, 5) AS o",
+                                                             "SELECT (SELECT count(*) #{body} a NATURAL JOIN rac_pg_accounts b) AS n",
+                                                             "SELECT (SELECT count(*) FROM (SELECT DISTINCT * #{body}) x) AS n" ],
+      "Blocked: the query passes the secret column" => [ "SELECT count(*) FILTER (WHERE #{guess} < (SELECT * #{body})) AS n FROM generate_series(1, 1) g" ] }.each do |rule, statements|
+      refused(statements, rule)
+      statements.each { |sql| expect(run(sql).content.first[:text]).to match(/\A#{Regexp.escape(rule)} `(salt|api_token|shadow)`/), sql }
+    end
   end
 
   it "filters a quoted mixed-case secret column in place, and refuses what would rename or compare it" do
@@ -736,10 +772,121 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
   end
 
   it "answers PostgreSQL's own error for a string prefix letter that follows a non-ASCII character" do
-    [ "SELECT id FROM rac_pg_accounts WHERE email = E'x'", "SELECT id AS idée'x' FROM rac_pg_accounts", "SELECT 1 AS 名B'1010'" ].each do |sql|
+    [ "SELECT id FROM rac_pg_accounts WHERE email =\u00a0E'x'", "SELECT id AS idée'x' FROM rac_pg_accounts", "SELECT 1 AS 名B'1010'" ].each do |sql|
       response = run(sql)
       expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("SQL error: PG::") ]), sql
     end
+  end
+
+  it "refuses a comparison with a row whose secret column's name holds two spaces in a row or a dotted capital I" do
+    conn.execute("DROP TABLE IF EXISTS rac_pg_spaced, rac_pg_dotted")
+    conn.execute(%(CREATE TABLE rac_pg_spaced (id int, "api  token" text)))
+    conn.execute(%(CREATE TABLE rac_pg_dotted (id int, "apİ_key" text)))
+    conn.execute("INSERT INTO rac_pg_spaced VALUES (1, 'token-value')")
+    conn.execute("INSERT INTO rac_pg_dotted VALUES (1, 'token-value')")
+    refused([ "SELECT (1, 'token-valud') < (SELECT * FROM rac_pg_spaced) AS o" ], "Blocked: the query passes the secret column `api token` through")
+    refused([ "SELECT (1, 'token-valud') < (SELECT * FROM rac_pg_dotted) AS o" ], "Blocked: the query passes the secret column `api_key` through")
+  ensure
+    conn.execute("DROP TABLE IF EXISTS rac_pg_spaced, rac_pg_dotted")
+  end
+
+  describe "a foreign table that holds a secret column, behind a view that renames it" do
+    def drop
+      conn.execute("DROP SERVER IF EXISTS rac_pg_loop CASCADE")
+      conn.execute("DROP TABLE IF EXISTS rac_pg_remote, rac_pg_remote_titles CASCADE")
+      conn.execute(%(DROP SCHEMA IF EXISTS "Rac.Far" CASCADE))
+    end
+
+    before do
+      drop
+      url = URI.parse(ENV.fetch("RAC_TEST_PG_URL"))
+      conn.execute("CREATE TABLE rac_pg_remote (id int, label text, api_token text)")
+      conn.execute("INSERT INTO rac_pg_remote VALUES (1, 'far row', 'token-value')")
+      begin
+        conn.execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw")
+        conn.execute("CREATE SERVER rac_pg_loop FOREIGN DATA WRAPPER postgres_fdw " \
+          "OPTIONS (dbname #{conn.quote(conn.current_database)}, port #{conn.quote(conn.select_value("SHOW port"))})")
+        conn.execute("CREATE USER MAPPING FOR CURRENT_USER SERVER rac_pg_loop OPTIONS (user #{conn.quote(url.user)}, password #{conn.quote(url.password.to_s)})")
+        conn.execute("CREATE FOREIGN TABLE rac_pg_foreign (id int, label text, api_token text) SERVER rac_pg_loop OPTIONS (table_name 'rac_pg_remote')")
+        conn.execute("CREATE VIEW rac_pg_far AS SELECT id, label, api_token AS t FROM rac_pg_foreign")
+        conn.execute("CREATE FOREIGN TABLE rac_pg_foreign_renamed (id int, api_token text OPTIONS (column_name 'label')) SERVER rac_pg_loop OPTIONS (table_name 'rac_pg_remote')")
+        conn.execute("CREATE VIEW rac_pg_far_renamed AS SELECT id, api_token AS t FROM rac_pg_foreign_renamed")
+        conn.select_value("SELECT count(*) FROM rac_pg_foreign")
+      rescue ActiveRecord::StatementInvalid => e
+        skip "postgres_fdw cannot reach this server from itself: #{e.message.lines.first}"
+      end
+    end
+
+    after { drop }
+
+    it "traces a join the remote server runs: a whole row of the table is refused and its secret column is filtered under another name" do
+      conn.execute("INSERT INTO rac_pg_remote SELECT g, 'row ' || g, 'token-value-' || g FROM generate_series(2, 3000) g")
+      refused([ "SELECT row_to_json(a) AS j FROM rac_pg_foreign a JOIN rac_pg_foreign b ON a.id = b.id WHERE a.id = 1",
+                "SELECT a::text AS w FROM rac_pg_foreign a JOIN rac_pg_foreign b ON a.id = b.id WHERE a.id = 1" ],
+              "Blocked: the query serialises a whole row of `rac_pg_foreign`")
+      response = run("SELECT a.id, b.t FROM rac_pg_far a JOIN rac_pg_far b ON a.id = b.id WHERE a.id = 1")
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("[FILTERED]") ])
+      expect(response.content.first[:text]).not_to include("token-value")
+    end
+
+    it "reads the secret columns of a table in another schema that only the remote join names" do
+      [ "INSERT INTO rac_pg_remote SELECT g, 'row ' || g, 'token-value-' || g FROM generate_series(2, 3000) g",
+        "CREATE TABLE rac_pg_remote_titles (id int, title text)", "INSERT INTO rac_pg_remote_titles SELECT g, 'title ' || g FROM generate_series(1, 3000) g",
+        "CREATE FOREIGN TABLE rac_pg_titles (id int, title text) SERVER rac_pg_loop OPTIONS (table_name 'rac_pg_remote_titles')",
+        %(CREATE SCHEMA "Rac.Far"),
+        %(CREATE FOREIGN TABLE "Rac.Far"."In (it)" (id int, label text, api_token text) SERVER rac_pg_loop OPTIONS (schema_name 'public', table_name 'rac_pg_remote')),
+        %(CREATE VIEW rac_pg_whole AS SELECT x FROM "Rac.Far"."In (it)" x) ].each { |sql| conn.execute(sql) }
+
+      refused([ "SELECT b.x::text AS j FROM rac_pg_titles a JOIN rac_pg_whole b ON a.id = (b.x).id WHERE a.id = 1",
+                "SELECT b.x FROM rac_pg_titles a JOIN rac_pg_whole b ON a.id = (b.x).id WHERE a.id = 1" ], "Blocked: ")
+    end
+
+    it "refuses a condition, a sort and a group on the secret column that the scan sends to the remote server" do
+      refused([ "SELECT id FROM rac_pg_far WHERE t LIKE 'token-v%'", "SELECT id FROM rac_pg_far WHERE t IS NOT NULL", "SELECT id FROM rac_pg_far ORDER BY t",
+                "SELECT id FROM rac_pg_far ORDER BY t LIMIT 1", "SELECT count(*) FROM rac_pg_far WHERE t LIKE 'token-v%'", "SELECT count(*) FROM rac_pg_far GROUP BY t" ],
+              "Blocked: the query's plan uses the secret column `api_token`")
+    end
+
+    it "refuses a condition on a secret column that carries another name on the remote server" do
+      refused([ "SELECT id FROM rac_pg_far_renamed WHERE t LIKE 'far%'", "SELECT id FROM rac_pg_far_renamed ORDER BY t" ],
+              "Blocked: the query's plan uses the secret column `api_token`")
+      response = run("SELECT * FROM rac_pg_far_renamed WHERE id = 1")
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("[FILTERED]") ])
+      expect(response.content.first[:text]).not_to include("far row")
+    end
+
+    it "filters the secret column in place, and runs a condition and a sort on the other columns" do
+      { "SELECT * FROM rac_pg_far" => "[FILTERED]", "SELECT * FROM rac_pg_foreign WHERE label = 'far row' ORDER BY id LIMIT 3" => "[FILTERED]",
+        "SELECT id, label FROM rac_pg_far WHERE label <> 'api_token' ORDER BY label" => "far row", "SELECT count(*) AS n, label FROM rac_pg_far GROUP BY label" => "far row" }.each do |sql, shown|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including(shown) ]), sql
+        expect(response.content.first[:text]).not_to include("token-value"), sql
+      end
+    end
+  end
+
+  it "runs a statement with a block comment inside a block comment, and nothing the comment holds" do
+    { "SELECT 41 /* a /* b */ c */ AS n" => "41", "SELECT email /* /* */ , salt AS s */ FROM rac_pg_accounts" => "a@example.com",
+      "SELECT 41 AS n /* /* */ */ -- */ , (SELECT salt FROM rac_pg_accounts)" => "41" }.each do |sql, shown|
+      [ {}, { explain: true } ].each do |options|
+        response = RailsAiContext::RunCache.around { described_class.call(sql: sql, **options) }
+        expect(response.error?).to be(false), "#{sql}: #{response.content.first[:text]}"
+        expect(response.content.first[:text]).not_to include("salt-value"), sql
+        expect(response.content.first[:text]).to include(shown), sql if options.empty?
+      end
+    end
+  end
+
+  it "reads a sequence like a table that holds no secret column" do
+    conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
+    conn.execute("CREATE SEQUENCE rac_pg_seq START 41")
+    [ "SELECT last_value FROM rac_pg_seq", "SELECT * FROM rac_pg_seq", "SELECT s.last_value + 0 AS same FROM rac_pg_seq s" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("41") ]), sql
+    end
+    refused([ "SELECT nextval('rac_pg_seq') AS n" ], "Blocked: function nextval is VOLATILE")
+  ensure
+    conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
   end
 
   it "runs SHOW, which has no plan" do

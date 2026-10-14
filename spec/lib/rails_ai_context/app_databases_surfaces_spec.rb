@@ -107,6 +107,20 @@ RSpec.describe "an app whose first database is not the one named primary" do
       end
     end
 
+    it "advises on a table of the database named primary by that database's family and with no row count of the first database, on the #{tier} tier" do
+      on_tier(tier, root) do
+        schema = RailsAiContext::Introspectors::SchemaIntrospector.new(app).static_call
+        context = { models: {}, schema: schema.merge(adapter: "postgresql"), database_stats: { tables: [ { table: "orders", approximate_rows: 5 } ] } }
+        allow(RailsAiContext::Tools::MigrationAdvisor).to receive_messages(cached_context: context, rails_app: app)
+        index = RailsAiContext::Tools::MigrationAdvisor.call(action: "add_index", table: "orders", column: "state").content.first[:text]
+        column = RailsAiContext::Tools::MigrationAdvisor.call(action: "add_column", table: "orders", column: "state", type: "string", options: "null: false")
+                                                        .content.first[:text]
+
+        expect(index).to include("**Note:** MySQL/MariaDB add indexes to InnoDB tables via online DDL by default")
+        expect(column).to include("`null: false` without a default fails if `orders` holds any rows")
+      end
+    end
+
     it "tells the generated files the first database's own name on the #{tier} tier" do
       on_tier(tier, root) do
         expect(RailsAiContext::Introspectors::MultiDatabaseIntrospector.new(app).call[:primary_name]).to eq("animals")
@@ -147,5 +161,48 @@ RSpec.describe "a dump on disk under a database's name" do
         expect(performance).not_to have_key(:unchecked_databases)
       end
     end
+  end
+end
+
+# `preset: standard` runs no multi_database section.
+RSpec.describe "the app databases where the payload holds no multi_database section" do
+  around do |example|
+    config = RailsAiContext.configuration
+    previous = [ RailsAiContext.tier, ENV.fetch("RAILS_ENV", nil), config.introspectors, config.app_root ]
+    RailsAiContext.tier = :static
+    ENV["RAILS_ENV"] = "test"
+    config.introspectors = RailsAiContext::Configuration::PRESETS[:standard].dup
+    example.run
+  ensure
+    RailsAiContext.tier, ENV["RAILS_ENV"], config.introspectors, config.app_root = previous
+  end
+
+  def answers(fixture)
+    root = File.expand_path("../../fixtures/app_databases/#{fixture}", __dir__)
+    RailsAiContext.configuration.app_root = root
+    RailsAiContext::RunCache.around do
+      context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+      tools = [ RailsAiContext::Tools::GetSchema, RailsAiContext::Tools::Onboard ]
+      tools.each { |tool| allow(tool).to receive_messages(cached_context: context) }
+      { context: context, schema: tools.first.call(detail: "summary").content.first[:text],
+        onboard: tools.last.call(detail: "standard").content.first[:text],
+        file: RailsAiContext::Serializers::MarkdownSerializer.new(context).call }
+    end
+  end
+
+  it "marks the databases only production configures in rails_get_schema, rails_onboard and the generated file" do
+    found = answers("rails8")
+
+    expect(found[:context]).not_to have_key(:multi_database)
+    expect(found[:schema]).to include("- **cache** (production only): 1 table", "- **queue** (production only): 1 table")
+    expect(found[:onboard]).to include("databases of their own: cache (production only), queue (production only), cable (production only).")
+    expect(found[:file]).to include("cable (production only): Solid Cable (1 table)", "- queue (production only): 1 total, 0 pending in db/queue_migrate")
+  end
+
+  it "names the first database by its own name where another database is named primary" do
+    found = answers("animals_first")
+
+    expect(found[:onboard]).to include("plus the primary database on MySQL (1 table).")
+    expect(found[:file]).to include("## Database Schema: animals (2 tables)", "## Database Schema: primary (1 table)", "- Total: 0 (animals)")
   end
 end

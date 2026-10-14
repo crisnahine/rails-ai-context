@@ -19,10 +19,19 @@ module RailsAiContext
           sharding: detect_sharding,
           model_connections: detect_model_connections,
           multi_db: dbs.size > 1
-        }.merge({ example_adapters: example_adapters, primary_name: primary_name }.compact)
+        }.merge(from_configuration)
+      end
+
+      # What the section says of each database by name, read from configuration alone.
+      def listing
+        { databases: discover_databases }.merge(from_configuration)
       end
 
       private
+
+      def from_configuration
+        { example_adapters: example_adapters, primary_name: primary_name }.compact
+      end
 
       # The primary's database.yml name where it is not "primary": a generated file tells it from a database that is.
       def primary_name

@@ -75,7 +75,6 @@ module RailsAiContext
           foreign_keys: tables.values.flat_map { |table| Array(table[:foreign_keys]).map { |fk| { from: fk[:from_table], to: fk[:to_table], column: fk[:column] } } } }
       end
 
-      # Why a database with no dump on disk has none.
       def no_dump_reason(db)
         return "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" unless db.tasks
         return "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" unless db.settings["schema_dump"]

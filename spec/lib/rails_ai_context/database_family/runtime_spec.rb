@@ -438,6 +438,36 @@ RSpec.describe RailsAiContext::DatabaseFamily do
       expect(generated["accounts"].keys).to eq(%w[shadow kept])
       expect(generated["accounts"]["shadow"]).to match(/\bpasswd\b/).and satisfy { |text| text.scan(/\bpasswd\b/).size == 1 }
     end
+
+    it "lists the shadow tables of the schemas it is given and of no other" do
+      @conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body)")
+      @conn.execute("ATTACH DATABASE '#{File.join(dir, "side.sqlite3")}' AS side")
+      @conn.execute("CREATE VIRTUAL TABLE side.docs_more USING fts5(body)")
+
+      expect(described_class::SQLITE.index_tables(@conn)).to include("docs_data" => [ :shadow, "docs" ])
+      expect(described_class::SQLITE.index_tables(@conn).keys).not_to include("docs_more_data")
+      expect(described_class::SQLITE.index_tables(@conn, %w[main SIDE])).to include("docs_more_data" => [ :shadow, "docs_more" ])
+    end
+
+    it "types a virtual table by the module after its own name, whatever that name spells" do
+      @conn.execute(%(CREATE VIRTUAL TABLE "v USING fts5vocab(q, r)" USING fts5(body)))
+      @conn.execute(%(CREATE VIRTUAL TABLE "v words" USING fts5vocab("v USING fts5vocab(q, r)", row)))
+
+      expect(described_class::SQLITE.index_tables(@conn)).to include(
+        "v USING fts5vocab(q, r)" => [ :virtual, "v USING fts5vocab(q, r)", " USING fts5(body)" ],
+        "v words" => [ :vocabulary, "v USING fts5vocab(q, r)", %( USING fts5vocab("v USING fts5vocab(q, r)", row)) ]
+      )
+    end
+
+    it "types a table whose stored definition does not open as SQLite writes one by no module named inside it" do
+      @conn.execute("CREATE VIRTUAL TABLE odd USING fts5(body)")
+      @conn.execute("PRAGMA writable_schema = ON")
+      @conn.execute(%(UPDATE sqlite_master SET sql = 'CREATE VIRTUAL TABLE IF NOT EXISTS "o USING fts5vocab(q)" USING fts5(body)' WHERE name = 'odd'))
+
+      expect(described_class::SQLITE.index_tables(@conn)["odd"].first).to eq(:virtual)
+    ensure
+      @conn.execute("PRAGMA writable_schema = OFF")
+    end
   end
 
   describe "a SQLite statement" do
@@ -483,7 +513,7 @@ RSpec.describe RailsAiContext::DatabaseFamily do
           expect { described_class::SQLITE.read_only(conn, sql, timeout: 5) }
             .to raise_error(ActiveRecord::StatementInvalid, /no such function: x/) { |e| expect(e).not_to be_a(described_class::TimedOut) }
         end
-        expect(sent).to eq([])
+        expect(sent).to eq([ "PRAGMA database_list", "SELECT name FROM sqlite_temp_master" ])
       end
 
       it "raises the SQL error of a statement neither connection can prepare" do

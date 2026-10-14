@@ -36,10 +36,11 @@ module RailsAiContext
     # A wildcard in a select list. `count(*)` reads no column, so it is left out.
     WILDCARD = /(?:\b(?:SELECT|DISTINCT|ALL)\b|[,.])\s*\*/i
 
-    # A name as a statement writes it before a dot: in backticks, double quotes or brackets, or bare.
-    QUOTED_NAME = /`(?:``|[^`])+`|"(?:""|[^"])+"|\[[^\]]+\]/
+    # A name before a dot, matched in reversed text from the dot backward: bare, or in backticks or double quotes
+    # with the quote doubled inside. A schema name on MySQL, MariaDB or PostgreSQL is 64 characters at most.
+    NAME_END = /\.(?=\s*(?:[\p{Word}$`"]|[^\x00-\x7F]))/
     BARE_NAME = /(?:[\p{Word}$]|[^\x00-\x7F])+/
-    CLOSERS = { "`" => "`", '"' => '"', "[" => "]" }.freeze
+    QUOTED_NAME = /`((?>(?:``|[^`]){1,64}))`(?!`)|"((?>(?:""|[^"]){1,64}))"(?!")/
 
     # How many times the schemas a statement and the view definitions name are followed into more view definitions.
     ROUNDS = 3
@@ -60,9 +61,8 @@ module RailsAiContext
       statement.to_s.strip.empty? ? secrets : secrets.cover(statement)
     end
 
-    # A name or a statement as the databases compare names: case folded. MySQL reads a dotted capital I
-    # as i, where Ruby's downcase keeps the dot as a combining mark. Runs of spaces are squeezed in both,
-    # so a name is found in text whether or not the text was squeezed before it came here.
+    # A name or a statement as the databases compare names: case folded, a dotted capital I read as i (MySQL does,
+    # Ruby's downcase keeps the dot), and runs of spaces squeezed, so a name is found in text squeezed or not.
     def self.fold(text)
       text.to_s.downcase.delete("\u0307").squeeze(" ")
     end
@@ -70,7 +70,7 @@ module RailsAiContext
     # Matches the name as a whole identifier in folded text, whatever characters it holds and however it is quoted.
     def self.identifier(name)
       name = fold(name)
-      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``") ].uniq.map { |spelling| Regexp.escape(spelling) }
+      spellings = [ name, name.gsub('"', '""'), name.gsub("`", "``"), name.gsub("'", "''") ].uniq.map { |spelling| Regexp.escape(spelling) }
       /(?<!\p{Word})(?:#{spellings.join("|")})(?!\p{Word})/
     end
 
@@ -171,6 +171,7 @@ module RailsAiContext
       @index_tables = {}
       @asked = Set.new
       @read = []
+      @spelled = {}
       learn(relations: relations, views: views, traced_views: traced_views, generated: generated, index_tables: index_tables)
     end
 
@@ -182,8 +183,7 @@ module RailsAiContext
       reach(SqlGate.comment_free(statement, DatabaseFamily.of(@connection)))
     end
 
-    # Reads the schemas given and the ones the text names, then the ones the definitions of the views it names
-    # name, and so on through the views those name, ROUNDS reads deep. A view no text names is not followed.
+    # Reads the schemas given and those the text names, then follows the views the text names ROUNDS definitions deep.
     # @raise [Unreadable] when a view the text names leads deeper, or a schema's columns cannot be read
     def reach(text, schemas = [])
       return self unless @connection
@@ -253,12 +253,12 @@ module RailsAiContext
     # column outside the statement, where no check on the statement reads it.
     def refused_view_in(text)
       down = self.class.fold(text)
-      @refused_views.find { |view, _why| names?(down, view) }
+      view, why = @refused_views.find { |name, _why| names?(down, name) }
+      [ spelled(view), why ] if view
     end
 
-    # Why the view at exactly this place is refused, or nil. PostgreSQL's plan names a relation as `schema.relation`,
-    # so a table is not taken for a view of its name in another schema. Views known by name alone (their
-    # definitions could not be read) are told by the bare name.
+    # Why the view at exactly this place is refused, or nil. The plan names a relation as `schema.relation`, so a table
+    # is not taken for a view of its name in another schema; a view with no definition read is told by its bare name.
     def placed_view_refusal(relation, name)
       placed, bare = self.class.fold(relation), self.class.fold(name)
       return @refused_views[placed] if @views&.key?(placed)
@@ -276,13 +276,15 @@ module RailsAiContext
     # table, and a virtual table or its vocabulary when the virtual table holds a secret column.
     def unread_table_in(text)
       down = self.class.fold(text)
-      @unread_tables.find { |table, _why| names?(down, table) }
+      table, why = @unread_tables.find { |name, _why| names?(down, name) }
+      [ spelled(table), why ] if table
     end
 
     # The first relation holding a secret column that the statement's text names, or nil.
     def relation_named_in(text)
       down = self.class.fold(text)
-      @by_relation.each_key.find { |relation| names?(down, relation) }
+      relation = @by_relation.each_key.find { |name| names?(down, name) }
+      relation && spelled(relation)
     end
 
     # The first secret name the statement's text names, or nil. Case-insensitive
@@ -306,19 +308,16 @@ module RailsAiContext
 
     private
 
-    # Every name that stands before a dot: a schema, a table or an alias. One pass over the text, since a
-    # regexp that finds them is quadratic on a Ruby with no match cache; an opener with no closer is no name.
+    # Every name that stands before a dot, read backward from the dot, so a quote character inside a string before it
+    # changes nothing. A name in brackets is not read: SQLite reads every schema, and the gate refuses a bracket on MySQL.
     def dotted_names(text)
-      scanner = StringScanner.new(text)
-      bytes = text.b
-      last = CLOSERS.transform_values { |closer| bytes.rindex(closer) || -1 }
+      scanner = StringScanner.new(text.reverse)
       names = []
-      until scanner.eos?
-        quoted = last.fetch(scanner.peek(1), -1) > scanner.pos ? scanner.scan(QUOTED_NAME) : nil
-        name = quoted ? quoted[1..-2] : scanner.scan(BARE_NAME)
-        next scanner.getch unless name
-
-        names << name.gsub(/([`"])\1/, '\1') if scanner.match?(/\s*\./)
+      while scanner.skip_until(NAME_END)
+        scanner.skip(/\s+/)
+        if (bare = scanner.check(BARE_NAME)) then names << bare.reverse
+        elsif scanner.check(QUOTED_NAME) then names << (scanner[1]&.gsub("``", "`") || scanner[2].gsub('""', '"')).reverse
+        end
       end
       names
     end
@@ -344,12 +343,18 @@ module RailsAiContext
     def too_deep(found, followed, family)
       found = found.map { |schema| self.class.fold(schema) }
       view = followed.find { |name, _start| (dotted_names(self.class.fold(@views[name])) & found).any? }&.last
-      Unreadable.new("The view `#{view}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows " \
-        "(#{ROUNDS} rounds), so the secret columns it could read cannot be told and no statement that names it runs.")
+      Unreadable.new("The view `#{spelled(view)}` leads through more #{family.postgresql? ? "schemas" : "databases"} than rails_query follows, " \
+        "so the secret columns it could read cannot be told and no statement that names it runs.")
+    end
+
+    # The name as the database spells it, for a sentence: the rule itself holds every name folded.
+    def spelled(name)
+      @spelled.fetch(name, name)
     end
 
     def learn(relations:, views: nil, traced_views: [], generated: {}, index_tables: {})
       fold = self.class.method(:fold)
+      [ relations, views, index_tables ].each { |named| named&.each_key { |name| @spelled[fold.call(name)] ||= name.to_s } }
       relations.each { |relation, names| @columns[fold.call(relation)].concat(Array(names).map(&fold)) }
       generated.each do |relation, expressions|
         @columns[fold.call(relation)].concat(expressions.keys.map(&fold))
@@ -414,7 +419,7 @@ module RailsAiContext
         end
         return refused if nested.empty?
 
-        nested.each { |view, inner| refused[view] = "it reads the view `#{inner}`: #{refused[inner]}" }
+        nested.each { |view, inner| refused[view] = "it reads the view `#{spelled(inner)}`: #{refused[inner]}" }
       end
     end
 
@@ -438,23 +443,44 @@ module RailsAiContext
       end
     end
 
-    # The value of a full-text table's `content=` option, quoted or bare.
-    CONTENT_OPTION = /\bcontent\s*=\s*("(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]|[^\s,)]+)/i
+    # A name or a string in any of the four quotings SQLite reads.
+    SQLITE_QUOTED = /"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]*\]/
 
-    # virtual table => why it is not read, for each one whose definition names a refused view or a table that
-    # is not read: its rows, or its words, are theirs. A definition names a relation in its `content=` option
-    # and, for a vocabulary, as its table: any other word of it is a column or an option of its own.
+    # One argument of a virtual table's module: up to the next comma outside quotes, brackets and parentheses.
+    MODULE_ARGUMENT = /(?:#{SQLITE_QUOTED}|\([^()]*\)|[^,])+/
+
+    # virtual table => why it is not read, for each one built on a refused view or on a table that is not read:
+    # its rows, or its words, are theirs.
     def built_on_unread(index_tables)
       index_tables.each_with_object({}) do |(table, (kind, owner, definition)), built|
         table = self.class.fold(table)
         next if definition.nil? || @unread_tables.key?(table)
 
-        down = self.class.fold(kind == :vocabulary ? owner : definition.scan(CONTENT_OPTION).join(" "))
+        down = self.class.fold("#{owner if kind == :vocabulary} #{relation_words(table, definition)}")
         view, why = @refused_views.find { |name, _why| name != table && names?(down, name) }
         other = @unread_tables.keys.find { |name| name != table && names?(down, name) } unless view
-        built[table] = "its definition names the view `#{view}`, which is not queried: #{why}" if view
-        built[table] = "its definition names `#{other}`, which is not read" if other
+        built[table] = "its definition names the view `#{spelled(view)}`, which is not queried: #{why}" if view
+        built[table] = "its definition names `#{spelled(other)}`, which is not read" if other
       end
+    end
+
+    # The name an argument of a virtual table's module opens with: one quoted name whole, or its first word.
+    LEADING_NAME = /\A\s*(?:#{SQLITE_QUOTED}|[^\s"'`\[]+)/
+
+    # What a virtual table's definition can name a relation with: its module, and every argument but the columns a
+    # full-text table declares (a column named like a view is no view). An argument with `=` is an option, kept whole.
+    def relation_words(table, definition)
+      mod, arguments = definition.match(/\A\s*USING\s+([^\s(]+)\s*(?:\((.*)\))?\s*\z/mi)&.captures
+      return definition unless mod
+
+      mod_name = mod.delete(%q("'`[]))
+      columns = mod_name.match?(/\Afts[345]\z/i) ? @columns[table] : []
+      named = arguments.to_s.scan(MODULE_ARGUMENT).reject do |argument|
+        !argument.include?("=") && columns.include?(self.class.fold(argument[LEADING_NAME].to_s.delete(%q("'`[])).strip))
+      end
+      # A vocabulary's last argument is its type (row, col or instance), which SQLite reads as no relation.
+      named.pop if mod_name.casecmp?("fts5vocab") && named.size > 1
+      [ mod, *named ].join(" ")
     end
 
     def refusal_of(definition)
@@ -463,9 +489,9 @@ module RailsAiContext
       elsif (column = named_in(definition))
         "its definition names the secret column `#{column}`"
       elsif (table = @unread_tables.keys.find { |name| names?(definition, name) })
-        "its definition reads `#{table}`, which is not read"
+        "its definition names `#{spelled(table)}`, which is not read"
       elsif definition.match?(WILDCARD) && (relation = @by_relation.keys.find { |name| names?(definition, name) })
-        "its definition has a wildcard and names `#{relation}`, which holds the secret column `#{@by_relation[relation].first}`"
+        "its definition has a wildcard and names `#{spelled(relation)}`, which holds the secret column `#{@by_relation[relation].first}`"
       end
     end
 

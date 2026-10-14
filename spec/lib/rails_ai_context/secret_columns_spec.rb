@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "delegate"
 
 RSpec.describe RailsAiContext::SecretColumns do
   let(:config) { RailsAiContext.configuration }
@@ -178,10 +179,10 @@ RSpec.describe RailsAiContext::SecretColumns do
         "v$" => [ "SELECT * FROM v$", %(SELECT * FROM "v$" WHERE p1 > ''), "SELECT * FROM `V$`" ],
         "two  words" => [ %(SELECT * FROM "two words"), "SELECT * FROM [two words]", %(SELECT * FROM "two  words"), "SELECT * FROM `Two  Words`" ],
         'quo"ted' => [ %(SELECT * FROM "quo""ted") ],
-        "back`tick" => [ "SELECT * FROM `back``tick`" ]
+        "back`tick" => [ "SELECT * FROM `back``tick`" ],
+        "it's" => [ %(SELECT * FROM "it's"), "SELECT * FROM 'it''s'" ]
       }.each do |view, statements|
-        # The name is answered as the rule folds it, with a run of spaces as one.
-        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view.squeeze(" ")), sql }
+        statements.each { |sql| expect(refused({ view => definition }, sql)&.first).to eq(view), sql }
       end
       expect(refused({ "v$" => definition }, "SELECT * FROM v$x")).to be_nil
     end
@@ -264,7 +265,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     # database => [its tables, its views]. far leads through d1, d2 and d3 to d4; near starts at d2.
     let(:server) do
       {
-        "own" => [ { "notes" => %w[id body] }, { "far" => "SELECT x FROM d1.v", "near" => "SELECT x FROM d2.v", "peek" => "SELECT body FROM twin.notes" } ],
+        "own" => [ { "notes" => %w[id body] }, { "Far" => "SELECT x FROM d1.v", "near" => "SELECT x FROM d2.v", "peek" => "SELECT body FROM twin.notes" } ],
         "d1" => [ {}, { "v" => "SELECT x FROM d2.v" } ], "d2" => [ {}, { "v" => "SELECT x FROM d3.v" } ],
         "d3" => [ {}, { "v" => "SELECT door_token AS x FROM d4.t" } ], "d4" => [ { "t" => %w[id door_token] }, {} ],
         "twin" => [ { "notes" => %w[id body api_token] }, {} ]
@@ -304,7 +305,7 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "refuses a statement that names a view which leads a fourth database deep, by the view" do
       expect { rule("SELECT * FROM far") }.to raise_error(
         described_class::Unreadable,
-        "The view `far` leads through more databases than rails_query follows (3 rounds), so the secret columns it could read " \
+        "The view `Far` leads through more databases than rails_query follows, so the secret columns it could read " \
         "cannot be told and no statement that names it runs."
       )
       expect { rule("SELECT * FROM d1.v") }.to raise_error(described_class::Unreadable, /\AThe view `v` leads through more databases/)
@@ -314,6 +315,16 @@ RSpec.describe RailsAiContext::SecretColumns do
   describe ".for" do
     let(:conn) { ActiveRecord::Base.connection }
     let(:runtime) { RailsAiContext::DatabaseFamily::SqliteRuntime }
+
+    # The app's connection as the connection of another of its databases: its pool answers that database's entry
+    # and stays the real pool for the rest, so a reconnect inside an example still finds what it asks for.
+    def as_database(name)
+      pool = Class.new(SimpleDelegator) { attr_accessor :db_config }.new(conn.pool)
+      pool.db_config = double(env_name: "test", name: name)
+      allow(conn).to receive(:pool).and_return(pool)
+      conn
+    end
+
     let(:context) do
       {
         schema: { tables: {
@@ -360,6 +371,31 @@ RSpec.describe RailsAiContext::SecretColumns do
       expect(secrets.refused_view_in("SELECT * FROM plain")).to be_nil
     end
 
+    it "names a refused view, a table that is not read and a relation in a sentence as the database spells them" do
+      secrets = described_class.new(relations: { "Hq_Users" => %w[id password_digest] },
+                                    views: { "Hq  Odd View" => "SELECT id, password_digest AS s FROM Hq_Users", "Over It" => "SELECT s FROM `Hq  Odd View`",
+                                             "All_Of" => "SELECT * FROM Hq_Users", "Page_Peek" => "SELECT data FROM Raw_Pages" },
+                                    index_tables: { "Raw_Pages" => [ :pages, nil ],
+                                                    "View_Words" => [ :virtual, "View_Words", %( USING fts5(w, content="Hq  Odd View")) ],
+                                                    "Page_Words" => [ :virtual, "Page_Words", " USING fts5(w, content=Raw_Pages)" ],
+                                                    "Page_Terms" => [ :virtual, "Page_Terms", " USING fts5vocab(Raw_Pages)" ],
+                                                    "Odd_Words" => [ :virtual, "Odd_Words", %("o USING fts5vocab(a, b)" USING fts5(w, content=Raw_Pages)) ] })
+
+      expect(secrets.refused_view_in("select s from `hq  odd view`")).to eq([ "Hq  Odd View", "its definition names the secret column `password_digest`" ])
+      expect(secrets.refused_view_in("SELECT s FROM `over it`").last).to start_with("it reads the view `Hq  Odd View`: ")
+      expect(secrets.refused_view_in("select * from all_of").last)
+        .to eq("its definition has a wildcard and names `Hq_Users`, which holds the secret column `password_digest`")
+      expect(secrets.refused_view_in("select data from page_peek").last).to eq("its definition names `Raw_Pages`, which is not read")
+      expect(secrets.unread_table_in("select data from raw_pages").first).to eq("Raw_Pages")
+      expect(secrets.unread_table_in("select w from view_words").last).to start_with("its definition names the view `Hq  Odd View`, which is not queried: ")
+      expect(secrets.unread_table_in("select w from page_words").last).to eq("its definition names `Raw_Pages`, which is not read")
+      # A vocabulary's last argument is its type; one argument alone is no type.
+      expect(secrets.unread_table_in("select term from page_terms").last).to eq("its definition names `Raw_Pages`, which is not read")
+      # A definition that does not open with its module is read whole.
+      expect(secrets.unread_table_in("select w from odd_words").last).to eq("its definition names `Raw_Pages`, which is not read")
+      expect(secrets.relation_named_in("select count(*) from hq_users")).to eq("Hq_Users")
+    end
+
     it "reads the connection's schema once per run, however many checks ask" do
       allow(runtime).to receive(:relation_columns).and_return("users" => %w[api_token])
       RailsAiContext::RunCache.around do
@@ -376,28 +412,52 @@ RSpec.describe RailsAiContext::SecretColumns do
 
     it "keeps one answer per database within a run" do
       allow(runtime).to receive_messages(unqualified_schemas: [], relation_columns: {}, view_definitions: {}, generated_columns: {}, index_tables: {})
-      other = conn.dup
-      allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       RailsAiContext::RunCache.around do
-        expect(described_class.for(conn, context: context)).to be(described_class.for(conn, context: context))
-        expect(described_class.for(other, context: context)).not_to be(described_class.for(conn, context: context))
+        primary = described_class.for(conn, context: context)
+        expect(described_class.for(conn, context: context)).to be(primary)
+        expect(described_class.for(as_database("queue"), context: context)).not_to be(primary)
       end
     end
 
-    it "asks for every name a statement writes before a dot, in any quotes" do
+    it "asks for every name a statement writes before a dot: bare, in backticks or in double quotes" do
       asked = []
       allow(runtime).to receive(:schemas_named) { |_conn, names| asked.concat(names) && [] }
       statement = %(SELECT a.id, `b``x`.id, "c""y".id, [d e].id, ünï$1.id, f  .id FROM t WHERE note = 'g.h' AND 1.5 > 0 AND `open)
 
       RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: statement) }
 
-      expect(asked).to contain_exactly("a", "b`x", 'c"y', "d e", "ünï$1", "f", "g", "1")
+      expect(asked).to include("a", "b`x", 'c"y', "ünï$1", "f", "g", "1")
+      expect(asked).not_to include("id", "t", "note", "h", "5", "open", "d e", "e")
+    end
+
+    it "asks for a name that stands after a quote character written inside a string" do
+      statements = {
+        %(SELECT '"' AS q, v.id FROM far_one.v v WHERE '"' = '"') => "far_one",
+        %(SELECT '`' AS q, id FROM `far_two`.`t`) => "far_two",
+        %(SELECT 'a`b' AS q, id FROM `far_three`.t) => "far_three",
+        %(SELECT '[' AS q, id FROM far_four.t WHERE ']' = ']') => "far_four",
+        %(SELECT id FROM far_five.t WHERE '".c' <> 'x' AND '"' = '"') => "far_five",
+        %(SELECT 'it''s [' AS q, id FROM far_six.t WHERE note <> ']') => "far_six",
+        %(SELECT 'a"b' AS q, id FROM "far_seven".t) => "far_seven",
+        %(SELECT '`' AS q, id FROM `far``eight`.t) => "far`eight",
+        %(SELECT '`' AS q, id FROM ```far_nine`.t) => "`far_nine",
+        %(SELECT '"' AS q, id FROM "far""ten"\n . t) => 'far"ten'
+      }
+
+      statements.each do |statement, name|
+        asked = []
+        allow(runtime).to receive(:schemas_named) { |_conn, names| asked.concat(names) && [] }
+        RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: statement) }
+
+        expect(asked).to include(name), statement
+      end
     end
 
     # A regexp over the whole text is quadratic on a Ruby with no match cache (before 3.2).
     it "reads those names in time that grows with the statement" do
       clock = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
-      texts = [ "'#{"a" * 40_000}'", "`" * 40_001, "[a " * 13_000, "\"a " * 13_000, "'#{"é " * 20_000}'" ].map { |long| "SELECT #{long} FROM t WHERE t.id = 1" }
+      texts = [ "'#{"a" * 40_000}'", "`" * 40_001, "[a " * 13_000, "\"a " * 13_000, "'#{"é " * 20_000}'", "." * 40_000, "a ." * 13_000,
+                "`a`." * 10_000, "\"\"." * 13_000, "`` a" * 10_000 + "`." ].map { |long| "SELECT #{long} FROM t WHERE t.id = 1" }
       allow(runtime).to receive(:schemas_named).and_return([])
 
       started = Process.clock_gettime(clock)
@@ -445,11 +505,9 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     it "raises for another database whose tables cannot be read, naming it, and reads no schema from the context" do
-      other = conn.dup
-      allow(other).to receive(:pool).and_return(double(db_config: double(env_name: "test", name: "queue")))
       allow(runtime).to receive(:relation_columns).and_raise(ActiveRecord::StatementInvalid, "gone")
 
-      expect { described_class.for(other, context: context) }.to raise_error(
+      expect { described_class.for(as_database("queue"), context: context) }.to raise_error(
         described_class::Unreadable,
         "The columns of the queue database could not be read, so its secret columns cannot be told and no query runs on it."
       )

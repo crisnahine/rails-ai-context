@@ -167,7 +167,7 @@ A gem the context calls out because it shapes how the app is built, counted only
 
 ## Payload
 
-The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test instead of silently emptying a section everywhere. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload rather than re-filtering it.
+The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test instead of silently emptying a section everywhere. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload rather than re-filtering it. One reader fills a section a preset leaves out: `Payload.multi_database` reads the app databases list when the `multi_database` introspector did not run, so a database's mark and the first database's own name do not depend on the preset.
 
 ## Standalone
 
@@ -235,7 +235,7 @@ What decides whether `rails_query` runs a statement: the checks on its text, and
 
 ## Served tool
 
-A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at. An answer or a guide step names or runs a tool only when the app serves the gem's own tool under that name: a custom tool in a built-in's place is listed, and nothing gives it the built-in's arguments. A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, and the **config sections** go with the built-in.
+A tool the server answers for under the app's configuration: the built-ins `skip_tools` leaves, then each custom tool whose name no tool before it claims. An app's own class that inherits the gem's base tool counts with the built-ins once it is loaded, whether or not `custom_tools` lists it. Every surface reads the one set: `tools/list`, the CLI's list and lookup, the tool guide, the context files, `rails_get_context`'s includes and every tool name an answer prints. A tool outside it is never offered, run or pointed at. An answer or a guide step names or runs a tool only when the app serves the gem's own tool under that name: a custom tool in a built-in's place is listed, and nothing gives it the built-in's arguments. A custom tool named `rails_get_config` takes the built-in's place when `skip_tools` lists that name, and the **config sections** go with the built-in.
 
 ## Config section
 

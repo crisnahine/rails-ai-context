@@ -1750,16 +1750,13 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
   # counted as the app's: an app with 118 Sidekiq workers and no ActiveJob of
   # its own reported "1 job", and that job was Chewy's indexing worker.
   describe "whose jobs these are" do
-    # Stubbed rather than `load`-ed. A real subclass stays in
-    # ActiveJob::Base.descendants for the rest of the run and keeps its name
-    # even after remove_const, so a leftover from here would be counted as the
-    # app's own job by a later example - the very bug under test.
+    # A double under its own constant stands for each job, so an example decides where Ruby says it was defined.
     before { allow(Object).to receive(:const_source_location).and_call_original }
 
     def job(name, defined_in:, subclasses: [])
       allow(Object).to receive(:const_source_location).with(name)
         .and_return(defined_in && [ defined_in, 1 ])
-      double(name, name: name, queue_name: "default", priority: nil, descendants: subclasses)
+      double(name, name: name, queue_name: "default", priority: nil, descendants: subclasses).tap { |fake| stub_const(name, fake) }
     end
 
     # The fixture app's own job files are merged in from source; these
@@ -1814,16 +1811,16 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     # booted app reporting one job more than the same app read statically is a
     # disagreement about what the app runs.
     it "drops an abstract base another job inherits from" do
-      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ "ImportUsersJob" ])
       child = job("ImportUsersJob", defined_in: app_job_file)
+      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ child ])
 
       expect(names_reported_for(base, child)).to eq(%w[ImportUsersJob])
     end
 
     # Only an Active Job record is checked against the queues a worker polls.
     it "marks a reflected job and a reflected base as Active Job" do
-      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ "ImportUsersJob" ])
       child = job("ImportUsersJob", defined_in: app_job_file)
+      base = job("ImportJobBase", defined_in: app_job_file, subclasses: [ child ])
       allow(ActiveJob::Base).to receive(:descendants).and_return([ base, child ])
 
       result = described_class.new(Rails.application).call

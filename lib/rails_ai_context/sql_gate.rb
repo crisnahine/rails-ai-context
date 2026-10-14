@@ -38,8 +38,8 @@ module RailsAiContext
       end
     end
 
-    # The checks read a megabyte in two seconds at the slowest (a nest of parentheses, a run of dollar signs), and
-    # the longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB.
+    # The longest statement written by hand is far under it: 100,000 ids in an IN list are 700 KB. The checks on a
+    # statement's text have text_timeout seconds to read one.
     MAX_BYTES = 1_000_000
 
     # The text checks ran past the time they have.
@@ -64,7 +64,7 @@ module RailsAiContext
     # refused by the CREATE keyword - SHOW CREATE USER prints credential hashes.
     SHOW_CREATE_DEFINITION = /\A\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\b/i
     BLOCKED_CLAUSES  = /\bFOR\s+(?:UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b|\bLOCK\s+IN\s+SHARE\s+MODE\b/i
-    # The lists below hold each name under the family that has it, so a name is refused where it can be read.
+    # A list keyed by family holds each name under the family that has it, so a name is refused where it can be read.
 
     # Other sessions' statements, replication hosts and users, and the row data a log holds.
     BLOCKED_SHOWS = { mysql: /\bSHOW\s+(?:(?:FULL|ALL)\s+)?(?:GRANTS|PROCESSLIST|BINLOG|BINARY|RELAYLOG|SLAVES?|MASTER|REPLICAS?|ENGINE|
@@ -161,6 +161,10 @@ module RailsAiContext
       master_pos_wait | source_pos_wait
     )\s*\(/ix }.freeze
 
+    # A value either one sets stays on the pooled connection, in or out of a read-only transaction.
+    VARIABLE_ASSIGNMENT = { mysql: /:=/ }.freeze
+    SETS_LAST_INSERT_ID = { mysql: /\blast_insert_id\s*\(\s*[^\s)]/i }.freeze
+
     # VOLATILE built-ins that only read: pg_proc marks a reader of live server
     # state VOLATILE too. Any other VOLATILE function in the plan is refused.
     PG_VOLATILE_ALLOWLIST = %w[
@@ -251,9 +255,8 @@ module RailsAiContext
       end
     end
 
-    # family decides the lexing and whether the plan checks run. budget is the seconds the reads the
-    # gate sends (the plan, the pg_proc lookup) share with the caller's other reads. text_timeout is the seconds
-    # the checks on the statement's text have to themselves.
+    # budget: the seconds the reads the gate sends (the plan, the catalog lookups) share with the caller's other reads.
+    # text_timeout: the seconds the checks on the statement's text have to themselves.
     def initialize(family:, secrets:, connection:, budget:, text_timeout: RailsAiContext.configuration.query_timeout)
       @text_timeout = text_timeout
       @family = family
@@ -321,9 +324,16 @@ module RailsAiContext
       end
     end
 
-    # The comment that opens where the scanner stands, as the family reads it, or nil.
+    # Skips the comment that opens where the scanner stands, as the family reads it. One that never closes runs to the end.
+    # @return [Boolean] whether one opened there
     def self.comment(scanner, family)
-      scanner.scan(/\/\*.*?(?:\*\/|\z)/m) || scanner.scan(family.line_comment)
+      return !scanner.skip(family.line_comment).nil? unless scanner.skip(/\/\*/)
+
+      depth = 1
+      marks = family.nested_comments? ? /\/\*|\*\// : /\*\//
+      depth += scanner.matched == "/*" ? 1 : -1 while depth.positive? && scanner.skip_until(marks)
+      scanner.terminate if depth.positive?
+      true
     end
 
     private
@@ -372,6 +382,11 @@ module RailsAiContext
       # file functions stay on the raw text: no read-only transaction stops them.
       masked = mask_quoted(cleaned)
       return "Blocked: multiple statements (no semicolons)" if masked.match?(MULTI_STATEMENT)
+      # MariaDB in its MSSQL mode reads [name] as a quoted name, and no statement of this family holds a bracket otherwise.
+      if @family.mysql? && masked.include?("[")
+        return "Blocked: a `[` outside a string or a quoted name is not run. MariaDB reads it as the start of a quoted name when the " \
+          "session's sql_mode holds MSSQL, and rails_query does not read the session's mode. Quote a name in backticks."
+      end
       # PostgreSQL's read-only transaction refuses a locking read, so a literal there is data.
       # MySQL's runs FOR SHARE and LOCK IN SHARE MODE, so there the raw text decides.
       locking = @family.refuses_locking_reads? ? masked : cleaned
@@ -388,7 +403,11 @@ module RailsAiContext
       return "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" if cleaned.match?(BLOCKED_OUTPUT)
       # No second statement is left by here, so an INTO after a SELECT belongs to it.
       select = masked.index(/\bSELECT\b/i)
-      return "Blocked: SELECT INTO creates a table" if select && masked.rindex(/\bINTO\b/i).to_i > select
+      if select && masked.rindex(/\bINTO\b/i).to_i > select
+        # After a WITH clause the INTO can be a write's own.
+        write = masked[/\b(?:INSERT|MERGE|REPLACE(?!\s*\())\b(?=[^;]*\bINTO\b)/i]
+        return write ? "Blocked: contains #{write}" : "Blocked: SELECT INTO creates a table"
+      end
 
       if (m = listed(BLOCKED_FUNCTIONS, cleaned))
         return "Blocked: dangerous function #{m[0]} (filesystem/network primitive)"
@@ -427,6 +446,14 @@ module RailsAiContext
       if (m = listed(BLOCKED_SESSION, cleaned))
         return "Blocked: session function #{m[0].sub(/\s*\(\z/, "")} leaves state (a named lock) on the pooled " \
           "connection after the query returns. rails_query will not run it."
+      end
+      if listed(VARIABLE_ASSIGNMENT, masked)
+        return "Blocked: a user variable assignment (`:=`) is not run. It leaves a value on the pooled connection after the query " \
+          "returns, which a read-only transaction does not stop."
+      end
+      if listed(SETS_LAST_INSERT_ID, cleaned)
+        return "Blocked: LAST_INSERT_ID with an argument is not run. It sets a value that stays on the pooled connection after the " \
+          "query returns, which a read-only transaction does not stop. LAST_INSERT_ID() with no argument runs."
       end
 
       tokens = tokens(cleaned)
@@ -590,8 +617,8 @@ module RailsAiContext
           "A model declares `#{offending}` with `encrypts`, so config.query_allowed_columns does not release it."
         end
       else
-        "#{"#{reads}. " if source}If `#{offending}` is not secret in your app, add \"#{offending}\" to " \
-          "config.query_allowed_columns in an initializer."
+        "#{"#{reads}. " if source}If `#{offending}` is not secret in your app, add \"#{offending}\" to query_allowed_columns in " \
+          ".rails-ai-context.yml (or in config/initializers/rails_ai_context.rb where the app bundles the gem)."
       end
       "Blocked: query references secret column `#{offending}`. " \
         "Name the columns you need; `#{offending}` is secret and never " \
@@ -773,9 +800,8 @@ module RailsAiContext
       end
     end
 
-    # :star for a select-list wildcard inside parentheses, :table for `TABLE t` there on a family that has the
-    # statement, :in for SQLite's `x IN t` anywhere, else nil. `count(*)` reads no column and EXISTS returns
-    # none, so both are left alone.
+    # :star for a select-list wildcard inside parentheses, :table for `TABLE t` there off SQLite, :in for SQLite's
+    # `x IN t` anywhere, else nil. `count(*)` reads no column and EXISTS returns none, so both are left alone.
     def subquery_wildcard(tokens)
       enclosing = []
       tokens.each_with_index do |token, i|
@@ -824,6 +850,8 @@ module RailsAiContext
         outputs.concat(Array(node["Output"]).map { |e| e.to_s.gsub(PLAN_LITERAL, "''") })
         PLAN_COND_KEYS.each { |k| conds.concat(Array(node[k]).map { |e| e.to_s.gsub(PLAN_LITERAL, "''") }) }
       end
+      foreign = plan.nodes.select { |node| node["Remote SQL"] }
+      conds.concat(foreign.map { |node| remote_uses(node) }, local_names(foreign))
       # EXPLAIN prints no row of a VALUES list and no LIMIT, so the functions the text names are read too.
       called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text) ])
 
@@ -860,6 +888,32 @@ module RailsAiContext
           "functions change server or session state in ways a read-only transaction does not " \
           "stop; only those known to just read state (sizes, lock status, recovery and WAL " \
           "position, random values) are allowed."
+      end
+    end
+
+    # What the statement a foreign scan sends does with a column past fetching it: its joins, conditions and sorts.
+    # GROUP BY names a key by its place in the select list, so a grouped statement is read whole.
+    def remote_uses(node)
+      remote = node["Remote SQL"].to_s.gsub(PLAN_LITERAL, "''")
+      past_select = remote.sub(/\ASELECT\b.*?\bFROM\b/m, "")
+      past_select.match?(/\bGROUP\s+BY\b/i) ? remote : past_select
+    end
+
+    # The foreign columns a remote statement uses under the name their column_name option gives them, by their own
+    # names. A join or an aggregate the remote server runs names its tables under "Relations".
+    def local_names(foreign)
+      return [] if foreign.empty?
+
+      renamed = @budget.spend do |left|
+        @family.bounded(@connection, timeout: left) do
+          @connection.select_rows(
+            "SELECT c.relname, a.attname, o.option_value FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " \
+            "CROSS JOIN LATERAL pg_options_to_table(a.attfdwoptions) o WHERE o.option_name = 'column_name' AND NOT a.attisdropped"
+          )
+        end
+      end
+      renamed.filter_map do |table, local, far|
+        local if foreign.any? { |node| names?(node.values_at("Relation Name", "Relations").map(&:to_s), table) && names?([ remote_uses(node) ], far) }
       end
     end
 

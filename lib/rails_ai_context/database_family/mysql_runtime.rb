@@ -20,9 +20,8 @@ module RailsAiContext
       REPLACED = "the connection was replaced before the statement was sent, and the new session has no " \
         "read-only transaction and no time limit, so the statement was not sent"
 
-      # The statement limit does not cover SHOW, so lock_wait_timeout (whole seconds) ends a wait on a
-      # metadata lock. Both session values are read first and put back after the block.
-      # Yields the id of the session that holds them.
+      # The statement limit does not cover SHOW, so lock_wait_timeout (whole seconds) ends a wait on a metadata lock.
+      # Both session values are put back after the block, which is given the id of the session that holds them.
       def bounded(conn, timeout)
         limit, value = if conn.mariadb? then [ "max_statement_time", [ timeout.to_f, 0.001 ].max ]
         else [ "max_execution_time", [ (timeout * 1000).to_i, 1 ].max ]

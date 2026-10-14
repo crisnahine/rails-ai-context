@@ -151,11 +151,13 @@ RSpec.describe "full mode's root files" do
       context[:schema][:secondary_databases] = {
         "primary" => { adapter: "static_parse", total_tables: 1, tables: { "orders" => { columns: [ { name: "id", type: "integer" } ] } } }
       }
-      context[:migrations] = { total: 3, pending: [ { version: "20261009140925", name: "AddTitle" } ], recent: [],
+      context[:migrations] = { total: 3, pending: [ { version: "20261009140925", name: "AddTitle" } ],
+                               recent: [ { version: "20261008120000", name: "CreateAnimals" } ],
                                secondary_databases: { "primary" => { total: 1, pending: [] } } }
 
       expect(output).to include("## Database Schema: animals (1 table)", "## Database Schema: primary (1 table)",
-                                "- Total: 3 (animals)", "### Pending Migrations: animals (1)")
+                                "- Total: 3 (animals)", "### Pending Migrations: animals (1)",
+                                "### Recent Migrations: animals\n- `20261008120000` CreateAnimals")
     end
   end
 end

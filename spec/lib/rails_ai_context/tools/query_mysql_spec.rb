@@ -73,7 +73,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         def refused(statements, start)
           statements.each do |sql|
             response = answer(sql)
-            expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with(start) ]), sql
+            expect([ response.error?, response.content.first[:text] ]).to match([ true, start.is_a?(Regexp) ? start : a_string_starting_with(start) ]), sql
             expect(response.content.first[:text]).not_to include("tok-value", "pw2-value", "far-value"), sql
           end
         end
@@ -90,6 +90,19 @@ RSpec.describe RailsAiContext::Tools::Query do
           refused([ "SELECT * FROM (SELECT * #{from}) s", "SELECT s.id FROM (SELECT * #{from}) s WHERE s.email LIKE 'b%'" ], "Blocked: ")
         end
 
+        it "refuses it the same when a string in the statement holds a quote character" do
+          from = "FROM rac_my_other.acc"
+          refused([ %(SELECT '"' AS q, session_token AS x #{from} WHERE '"' = '"'), "SELECT '`' AS q, session_token AS x FROM `rac_my_other`.`acc`",
+                    "SELECT 'a`b' AS q, session_token AS x FROM `rac_my_other`.acc", "SELECT '[' AS q, session_token AS x #{from} WHERE ']' = ']'",
+                    %(SELECT session_token AS x #{from} WHERE '".c' <> 'x' AND '"' = '"') ],
+                  "Blocked: query references secret column `session_token`")
+          refused([ %(SELECT '"' AS q, v.* FROM rac_my_other.v v WHERE '"' = '"'), "SELECT '`' AS q, p FROM `rac_my_other`.`v`",
+                    "SELECT '[' AS q, upper(p) AS u FROM rac_my_other.v WHERE ']' = ']'" ],
+                  "Blocked: the view `v` is not queried: its definition names the secret column `passwd`")
+          refused([ %(SELECT '"' AS q, f FROM rac_my_other.chain WHERE '"' = '"') ],
+                  "Blocked: the view `chain` is not queried: its definition names the secret column `far_token`")
+        end
+
         it "refuses a view over it, in either database, and a view that leads to a third database" do
           refused([ "SELECT * FROM rac_my_across", "SELECT t FROM rac_my_across" ],
                   "Blocked: the view `rac_my_across` is not queried: its definition names the secret column `session_token`")
@@ -99,10 +112,13 @@ RSpec.describe RailsAiContext::Tools::Query do
         end
 
         it "refuses a view over it whatever the view's name holds: two spaces in a row, one, a tab, a newline, a backtick, capitals" do
-          names = [ "rac my  far", "rac my far", "rac my\tfar", "rac my\nfar", "rac my`far", "Rac_My_FAR" ].map { |name| "`#{name.gsub("`", "``")}`" }
+          views = [ "rac my  far", "rac my far", "rac my\tfar", "rac my\nfar", "rac my`far", "Rac_My_FAR" ]
+          names = views.map { |name| "`#{name.gsub("`", "``")}`" }
           names.each { |name| conn.execute("CREATE VIEW #{name} AS SELECT id, session_token AS t FROM rac_my_other.acc") }
-          names.each do |name|
-            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], "Blocked: the view `")
+          names.zip(views) do |name, view|
+            # Two names that differ by a run of spaces alone are one name to the rule, which names the first it read.
+            shown = views.select { |other| other.squeeze(" ") == view.squeeze(" ") }
+            refused([ "SELECT * FROM #{name}", "SELECT t FROM #{name}", "SELECT f.t FROM #{name} f" ], /\ABlocked: the view `#{Regexp.union(shown)}` is not queried/)
           end
         ensure
           names.each { |name| conn.execute("DROP VIEW IF EXISTS #{name}") }
@@ -119,9 +135,9 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         it "reads the other database's columns in the same budget, and no system schema" do
           sent = []
-          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-          answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
-          ActiveSupport::Notifications.unsubscribe(subscriber)
+          ActiveSupport::Notifications.subscribed(->(*, payload) { sent << payload[:sql] }, "sql.active_record") do
+            answer("SELECT o.id FROM rac_my_other.acc o JOIN information_schema.TABLES t ON t.TABLE_NAME = 'acc'")
+          end
 
           expect(sent.grep(/SCHEMATA/).size).to eq(1)
           expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_other'\)/).size).to eq(3)
@@ -131,9 +147,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         it "reads a third database when the statement names the view that leads there" do
           sent = []
-          subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| sent << payload[:sql] }
-          answer("SELECT f FROM rac_my_other.chain")
-          ActiveSupport::Notifications.unsubscribe(subscriber)
+          ActiveSupport::Notifications.subscribed(->(*, payload) { sent << payload[:sql] }, "sql.active_record") { answer("SELECT f FROM rac_my_other.chain") }
 
           expect(sent.grep(/TABLE_SCHEMA IN \('rac_my_third'\)/).size).to eq(3)
         end
@@ -196,9 +210,9 @@ RSpec.describe RailsAiContext::Tools::Query do
 
         it "refuses a statement that names a view four databases from the rows, by the view" do
           refused([ "SELECT * FROM rac_my_far", "SELECT x FROM rac_my_far", "SELECT f.id FROM rac_my_accounts a JOIN rac_my_far f ON f.id = a.id" ],
-                  "The view `rac_my_far` leads through more databases than rails_query follows (3 rounds), so the secret columns it could " \
+                  "The view `rac_my_far` leads through more databases than rails_query follows, so the secret columns it could " \
                   "read cannot be told and no statement that names it runs.")
-          refused([ "SELECT * FROM rac_my_c1.v" ], "The view `v` leads through more databases than rails_query follows (3 rounds)")
+          refused([ "SELECT * FROM rac_my_c1.v" ], "The view `v` leads through more databases than rails_query follows, so the")
         end
 
         it "follows a view three databases from the rows, and refuses it for the secret column it renames" do
@@ -319,6 +333,27 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("Blocked: `mysql` is not read.") ])
       ensure
         conn.execute("SET SESSION sql_mode = '#{default}'") if default
+      end
+
+      it "refuses a square bracket when the session's sql_mode holds MSSQL, where it quotes a name", if: server == "MariaDB" do
+        default = conn.select_value("SELECT @@SESSION.sql_mode")
+        conn.execute("SET SESSION sql_mode = 'MSSQL'")
+        [ "SELECT [User], [Host] FROM [mysql].[user]", "SELECT 1 AS ['], passwd AS x FROM rac_my_accounts -- ']",
+          "SELECT 1 AS ['], User, Host FROM mysql.user -- ']", "SELECT [passwd] AS x FROM [rac_my_accounts]", "SELECT [p1] FROM [rac_my_renamed]" ].each do |sql|
+          response = answer(sql)
+          expect([ response.error?, response.content.first[:text] ]).to match([ true, a_string_starting_with("Blocked: a `[` outside a string") ]), sql
+        end
+        expect(text("SELECT email FROM rac_my_accounts WHERE email <> '[x]'")).to include("a@example.com")
+      ensure
+        conn.execute("SET SESSION sql_mode = '#{default}'") if default
+      end
+
+      it "leaves no user variable and no LAST_INSERT_ID value on the app's connection" do
+        expect(answer("SELECT @rac_my_v := 5 AS v").error?).to be(true)
+        expect(answer("SELECT LAST_INSERT_ID(7) AS v").error?).to be(true)
+
+        expect(conn.select_rows("SELECT @rac_my_v, LAST_INSERT_ID()").first.map(&:to_s)).to eq([ "", "0" ])
+        expect(text("SELECT LAST_INSERT_ID() AS v")).to include("| 0 |")
       end
 
       it "filters both columns of a name a join returns twice, and has no derived table of duplicate names" do

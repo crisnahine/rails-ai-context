@@ -629,10 +629,9 @@ module RailsAiContext
             next unless klass < ActiveRecord::Base && !klass.abstract_class?
             models << klass
             known << class_name
-          rescue NameError, LoadError, ScriptError => e
-            # A syntax-broken file costs itself, not the whole listing, but
-            # its name is recorded: a file that exists for a class reflection
-            # lacks is not the same answer as no such model.
+          rescue StandardError, ScriptError => e
+            # A file that raises as it loads costs itself alone, and its name is recorded:
+            # a file that exists for a class reflection lacks is no missing model.
             @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
           end
@@ -987,7 +986,7 @@ module RailsAiContext
         bases = abstract_bases(model)
         return bases unless model.superclass == ActiveRecord::Base
 
-        bases | ActiveRecord::Base.subclasses.select { |klass| klass.name && klass.abstract_class? }
+        bases | DeclaredConstant.carried(ActiveRecord::Base.subclasses).select(&:abstract_class?)
       end
 
       def every_model_modules
@@ -1137,13 +1136,7 @@ module RailsAiContext
 
         return nil unless has_type_column
 
-        children = if model.respond_to?(:descendants)
-          model.descendants.map(&:name).compact.sort
-        elsif model.respond_to?(:subclasses)
-          model.subclasses.map(&:name).compact.sort
-        else
-          []
-        end
+        children = DeclaredConstant.carried(model.descendants).map(&:name).sort
 
         parent = model.superclass
         sti_parent = if parent && parent != ActiveRecord::Base &&

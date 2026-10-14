@@ -242,7 +242,7 @@ module RailsAiContext
         else
           "the row limit of #{cap}; pass limit: up to 1000 to see more"
         end
-        note = "#{cap} rows shown; the query returned more (#{detail})."
+        note = "#{count_phrase(cap, "row")} shown; the query returned more (#{detail})."
         format == "csv" ? "\n\n#{note}" : "\n\n_#{note}_"
       end
 
