@@ -430,7 +430,11 @@ RSpec.describe "a model whose table the schema dump does not declare, on the sta
                        "app/models/thing.rb" => "class Thing < ApplicationRecord\nend\n" }, [ "Thing" ]),
       static_answers({ "db/schema.rb" => nil, "app/models/relic.rb" => "class Relic < ApplicationRecord\nend\n",
                        "db/migrate/20240101000000_create_posts.rb" => "class CreatePosts < ActiveRecord::Migration[8.0]\n  def change\n    create_table :posts\n  end\nend\n" },
-                     [ "Relic" ])
+                     [ "Relic" ]),
+      static_answers({ "app/models/base_thing.rb" => "class BaseThing < ApplicationRecord\n  self.table_name = ENV.fetch(\"T\", \"base_things\")\nend\n",
+                       "app/models/gadget.rb" => "class Gadget < BaseThing\nend\n" }, [ "Gadget" ]),
+      static_answers({ "app/models/base_record.rb" => "class BaseRecord < ApplicationRecord\n  self.abstract_class = true\n  self.table_name_prefix = ENV.fetch(\"P\", \"\")\nend\n",
+                       "app/models/piece.rb" => "class Piece < BaseRecord\nend\n" }, [ "Piece" ])
     ].reduce(:merge)
 
     answers.each { |name, text| expect([ name, text[/^\*\*Table:\*\* .*$/] ]).to match([ name, a_string_matching(/\A\*\*Table:\*\* `[a-z_]+`\z/) ]) }
@@ -443,6 +447,17 @@ RSpec.describe "a model whose table the schema dump does not declare, on the sta
                             [ "Outer::Inner::Item", "Outer::Fixed" ])
     expect(judged.values.map { |text| text[/^\*\*Table:\*\* .*$/] })
       .to eq([ "**Table:** `in_items` missing from db/schema.rb", "**Table:** `fixed_items` missing from db/schema.rb" ])
+
+    # A nearer literal affix decides over a computed one further out.
+    nearer = [
+      static_answers({ "config/initializers/prefix.rb" => "ActiveRecord::Base.table_name_prefix = ENV.fetch(\"P\", \"\")\n",
+                       "app/models/admin.rb" => "module Admin\n  def self.table_name_prefix\n    \"admin_\"\n  end\nend\n",
+                       "app/models/admin/widget.rb" => "class Admin::Widget < ApplicationRecord\nend\n" }, [ "Admin::Widget" ]),
+      static_answers({ "app/models/base_record.rb" => "class BaseRecord < ApplicationRecord\n  self.abstract_class = true\n  self.table_name_prefix = ENV.fetch(\"P\", \"\")\nend\n",
+                       "app/models/part.rb" => "class Part < BaseRecord\n  self.table_name_prefix = \"x_\"\nend\n" }, [ "Part" ])
+    ].reduce(:merge)
+    expect(nearer.values.map { |text| text[/^\*\*Table:\*\* .*$/] })
+      .to eq([ "**Table:** `admin_widgets` missing from db/schema.rb", "**Table:** `x_parts` missing from db/schema.rb" ])
   end
 
   it "says so in rails_onboard" do

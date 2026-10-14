@@ -537,30 +537,45 @@ module RailsAiContext
       end
 
       # The setting that shapes this class's table with a value only the running app computes, such as
-      # "SDG.table_name_prefix"; nil when every one that shapes it was read.
+      # "SDG.table_name_prefix", read in the order resolve_table_name reads them; nil when each was read.
       def unread_table_setting(class_name, candidates, seen = [])
         return nil if seen.include?(class_name) || candidates.dig(class_name, :table_name)
+        return "#{class_name}.table_name" if unread_setting?(candidates, class_name, :table_name)
 
-        own = Array(candidates.dig(class_name, :unread_settings)).first
-        return "#{class_name}.#{own}" if own
+        parent = sti_parent(class_name, candidates, seen)
+        inherited = parent && resolve_table_name(parent, candidates, seen + [ class_name ])
+        return unread_table_setting(parent, candidates, seen + [ class_name ]) unless inherited.nil? || inherited.empty?
 
-        %i[table_name_prefix table_name_suffix].each do |key|
-          scope = class_name.split("::")[0..-2]
-          while scope.any?
-            namespace = scope.join("::")
-            break if candidates.dig(namespace, key)
-            return "#{namespace}.#{key}" if Array(candidates.dig(namespace, :unread_settings)).include?(key)
+        unread_affix(class_name, candidates, :table_name_prefix) || unread_affix(class_name, candidates, :table_name_suffix) ||
+          unread_class_setting(class_name, candidates, :pluralize_table_names)
+      end
 
-            scope.pop
-          end
+      def unread_affix(class_name, candidates, key)
+        scope = class_name.split("::")[0..-2]
+        while scope.any?
+          namespace = scope.join("::")
+          return "#{namespace}.#{key}" if unread_setting?(candidates, namespace, key)
+          return nil if candidates.dig(namespace, key) || (key == :table_name_prefix && isolated_prefixes[namespace])
+
+          scope.pop
         end
+        unread_class_setting(class_name, candidates, key)
+      end
+
+      # A class attribute: the class's own, else its superclass chain's, else the app's.
+      def unread_class_setting(class_name, candidates, key, seen = [])
+        return "#{class_name}.#{key}" if unread_setting?(candidates, class_name, key)
+        return nil unless candidates.dig(class_name, key).nil?
 
         parent = candidates.dig(class_name, :superclass)
-        resolved = parent && resolve_superclass(parent, class_name, candidates)
-        return unread_table_setting(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
+        resolved = parent && !seen.include?(class_name) && resolve_superclass(parent, class_name, candidates)
+        return unread_class_setting(resolved, candidates, key, seen + [ class_name ]) if resolved && candidates.key?(resolved)
 
-        setting = ActiveRecordSettings.unread(app.root).find { |name| TableName::TABLE_SETTINGS.include?(name) }
-        "ActiveRecord::Base.#{setting}" if setting
+        "ActiveRecord::Base.#{key}" if ActiveRecordSettings.unread(app.root).include?(key)
+      end
+
+      def unread_setting?(candidates, scope, key)
+        Array(candidates.dig(scope, :unread_settings)).include?(key)
       end
 
       def isolated_prefixes
