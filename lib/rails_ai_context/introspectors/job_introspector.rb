@@ -820,11 +820,10 @@ module RailsAiContext
         names.reject { |n| n.start_with?("_") || MAILER_CLASS_CONFIG.include?(n) }
       end
 
-      # A mailer's actions are its public instance methods, and the AST sees
-      # one file at a time. `action_methods` counts the public methods a mailer
-      # inherits too, so a public helper on a base class is an action the
-      # booted tier reports and this one cannot - the entries are tagged STATIC
-      # for that reason.
+      # A mailer's actions are its public instance methods, its app parents'
+      # included. A public method a gem's base class or a mixin gives it is an
+      # action the booted tier reports and this one cannot, so the entries are
+      # tagged STATIC.
       # ActionMailer's interceptor and observer hooks. A class or module under
       # app/mailers that implements one is registered with the framework, not
       # delivered by it: reporting OpenProject's Interceptors::DefaultHeaders
@@ -863,7 +862,8 @@ module RailsAiContext
           bases = abstract_mailer_bases(klasses.reject(&:mixin))
           mailers = klasses.reject { |klass| bases.include?(klass.name) }
 
-          { mailers: mailers.map { |klass| mailer_entry(klass) }.sort_by { |m| m[:name] },
+          by_name = klasses.reject(&:mixin).to_h { |klass| [ klass.name, klass ] }
+          { mailers: mailers.map { |klass| mailer_entry(klass, app_ancestors(klass, by_name, parent_of)) }.sort_by { |m| m[:name] },
             bases: bases.map do |base|
               klass = klasses.find { |k| k.name == base }
               heirs = mailers.reject(&:mixin).map(&:name).select { |name| inherits_from?(name, base, parent_of) }
@@ -1100,6 +1100,20 @@ module RailsAiContext
         @candidate_bodies[name] ||= SourceIntrospector.outside_defs(job_candidates[name].ast[:macros], job_candidates[name].ast[:methods])
       end
 
+      # The app's own classes a class inherits from, nearest first.
+      def app_ancestors(klass, by_name, parent_of)
+        chain = []
+        name = klass.name
+        while chain.size < SuperclassChain::MAX_DEPTH
+          superclass, nesting = parent_of[name]
+          name = SuperclassChain.resolve_in_scope(name, superclass, nesting: nesting) { |candidate| candidate if by_name.key?(candidate) }
+          break if name.nil? || name == klass.name || chain.any? { |ancestor| ancestor.name == name }
+
+          chain << by_name[name]
+        end
+        chain
+      end
+
       def inherits_from?(name, base, parent_of, seen = [])
         return false if seen.include?(name) || seen.size >= SuperclassChain::MAX_DEPTH
 
@@ -1159,11 +1173,20 @@ module RailsAiContext
       end
 
       # What the static tier can say a mailer offers. A class with no action of its own is
-      # still a mailer: its actions come from a parent or mixin, or it offers class methods.
-      def mailer_entry(klass)
+      # still a mailer: its actions come from a mixin, or it offers class methods.
+      # Rails dispatches on what the mailer inherits too, so each name takes the
+      # visibility the nearest of its app classes gives it.
+      def mailer_entry(klass, ancestors = [])
+        lineage = [ klass, *ancestors ]
+        visibility = {}
+        lineage.each do |declaring|
+          ActionResolver.own_methods(declaring.methods, declaring.name).each do |m|
+            visibility[m[:name]] ||= m[:visibility] if m[:scope] == :instance
+          end
+        end
         actions = ActionResolver.deliverable_actions(
-          ActionResolver.own_actions(klass.methods, class_name: klass.name),
-          klass.macros.select { |m| ACTION_CALLBACKS.include?(m[:macro]) }.flat_map { |m| m[:args] }
+          visibility.select { |name, seen| seen == :public && !name.start_with?("_") }.keys.sort,
+          lineage.flat_map { |declaring| declaring.macros.select { |m| ACTION_CALLBACKS.include?(m[:macro]) }.flat_map { |m| m[:args] } }
         )
 
         entry = { name: klass.name, file: klass.file, actions: actions,

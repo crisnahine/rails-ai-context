@@ -167,7 +167,7 @@ A gem the context calls out because it shapes how the app is built, counted only
 
 ## Payload
 
-The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test instead of silently emptying a section everywhere. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload rather than re-filtering it. One reader fills a section a preset leaves out: `Payload.multi_database` reads the app databases list when the `multi_database` introspector did not run, so a database's mark and the first database's own name do not depend on the preset.
+The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test instead of silently emptying a section everywhere. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload rather than re-filtering it. The seam fills one section a preset leaves out: where the `multi_database` introspector did not run, the context carries the app databases list under `multi_database`, so a database's adapter, its mark and the first database's own name do not depend on the preset.
 
 ## Standalone
 

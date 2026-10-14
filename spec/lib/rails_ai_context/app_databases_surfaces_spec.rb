@@ -164,8 +164,46 @@ RSpec.describe "a dump on disk under a database's name" do
   end
 end
 
-# `preset: standard` runs no multi_database section.
-RSpec.describe "the app databases where the payload holds no multi_database section" do
+# Rails dumps both the first database and the one named primary to db/schema.rb,
+# so the file holds whichever was dumped last.
+RSpec.describe "two databases that share db/schema.rb" do
+  include AppDatabasesTiers
+
+  it "says the dump may describe the other database, and calls no table of it missing" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "db"))
+      FileUtils.mkdir_p(File.join(root, "config"))
+      File.write(File.join(root, "config", "database.yml"), <<~YAML)
+        test:
+          main:
+            adapter: sqlite3
+            database: db/main.sqlite3
+          primary:
+            adapter: sqlite3
+            database: db/primary.sqlite3
+      YAML
+      File.write(File.join(root, "db", "schema.rb"),
+                 "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"zz_events\" do |t|\n  end\nend\n")
+      app = RailsAiContext::StaticApp.new(root)
+      ActiveRecord::Base.connection.execute("SELECT 1")
+
+      answers = [ nil, { "posts" => { columns: [], indexes: [], foreign_keys: [] } } ].map do |live|
+        on_tier(:booted, root, connected: "main") do
+          introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
+          allow(introspector).to receive_messages(table_names: live.keys, extract_tables: live) if live
+          allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
+          RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+        end
+      end
+
+      expect(answers).to all(include("_main and primary both dump to db/schema.rb, so it may describe primary. Not in main: zz_events._"))
+      expect(answers).to all(satisfy { |text| !text.include?("rails db:migrate") })
+    end
+  end
+end
+
+# `preset: standard` runs no multi_database introspector; the context carries the app databases list alone.
+RSpec.describe "the app databases on preset standard" do
   around do |example|
     config = RailsAiContext.configuration
     previous = [ RailsAiContext.tier, ENV.fetch("RAILS_ENV", nil), config.introspectors, config.app_root ]
@@ -193,7 +231,7 @@ RSpec.describe "the app databases where the payload holds no multi_database sect
   it "marks the databases only production configures in rails_get_schema, rails_onboard and the generated file" do
     found = answers("rails8")
 
-    expect(found[:context]).not_to have_key(:multi_database)
+    expect(found[:context][:multi_database].keys).to contain_exactly(:databases)
     expect(found[:schema]).to include("- **cache** (production only): 1 table", "- **queue** (production only): 1 table")
     expect(found[:onboard]).to include("databases of their own: cache (production only), queue (production only), cable (production only).")
     expect(found[:file]).to include("cable (production only): Solid Cable (1 table)", "- queue (production only): 1 total, 0 pending in db/queue_migrate")
@@ -204,5 +242,16 @@ RSpec.describe "the app databases where the payload holds no multi_database sect
 
     expect(found[:onboard]).to include("plus the primary database on MySQL (1 table).")
     expect(found[:file]).to include("## Database Schema: animals (2 tables)", "## Database Schema: primary (1 table)", "- Total: 0 (animals)")
+  end
+
+  it "names each database's adapter and lists the databases, as preset full does" do
+    found = answers("animals_first")
+    rules = Dir.mktmpdir do |dir|
+      RailsAiContext::Serializers::ClaudeRulesSerializer.new(found[:context]).call(dir)
+      %w[rails-schema rails-context].map { |name| File.read(File.join(dir, ".claude/rules/#{name}.md")) }.join
+    end
+
+    expect(found[:onboard]).to include("animals_first is a Rails application on PostgreSQL (2 tables), plus the primary database on MySQL (1 table).")
+    expect(rules).to include("## animals (PostgreSQL, 2 tables)", "## primary (MySQL, 1 table)", "- Databases: 2 (animals, primary)")
   end
 end

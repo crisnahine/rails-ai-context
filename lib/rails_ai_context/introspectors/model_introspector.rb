@@ -601,6 +601,12 @@ module RailsAiContext
             source = model_source(record.path).to_s
             path_name = SourceScan.concerns_name(path_name, source)
           end
+          # A class whose body raised is registered holding what ran before the raise.
+          if (raised = EagerLoad.raised(record.path))
+            half_built = DeclaredConstant.named(model_source(record.path).to_s, path_name)
+            models.reject! { |model| model.name == half_built }
+            known.delete(half_built)
+          end
           next if known.include?(path_name)
           next if config.excluded_models.include?(path_name)
           next if path_name != record.path_name && mixin_path?(record.path_name.underscore, source)
@@ -618,7 +624,7 @@ module RailsAiContext
           # Never required here either: a file that does not compile, or
           # whose class body needs one that does not (see EagerLoad). Why is
           # the answer for that model.
-          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path))
+          if (reason = @left_out.to_h[record.path] || EagerLoad.skipped(record.path) || raised)
             @unloadable[class_name] = reason
             @outside_model_dirs << class_name unless model_dir_file?(record.path)
             next
@@ -1128,13 +1134,9 @@ module RailsAiContext
 
       def extract_sti_info(model)
         type_column = model.inheritance_column.to_s
-        has_type_column = if model.connected? && model.table_exists?
-          model.columns_hash.key?(type_column)
-        else
-          SchemaReader.for(app.root).column?(model.table_name, type_column)
-        end
-
-        return nil unless has_type_column
+        connected = model.connected? && model.table_exists?
+        return nil if type_column.empty?
+        return nil if connected ? !model.columns_hash.key?(type_column) : lacks_column?(model.table_name, type_column)
 
         children = DeclaredConstant.carried(model.descendants).map(&:name).sort
 
@@ -1143,6 +1145,8 @@ module RailsAiContext
                         (!defined?(ApplicationRecord) || parent != ApplicationRecord)
           parent.name
         end
+        # A table db/schema.rb does not hold is in another database, so only a class family says it is STI.
+        return nil if !connected && !SchemaReader.for(app.root).table?(model.table_name) && sti_parent.nil? && children.empty?
 
         {
           sti_base: sti_parent.nil? && children.any?,
