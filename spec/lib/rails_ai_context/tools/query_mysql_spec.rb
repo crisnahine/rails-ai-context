@@ -470,6 +470,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(text("SHOW VARIABLES LIKE 'version'")).not_to include("rails_query sets")
         expect(text("SELECT 1 AS lock_wait_timeout")).not_to include("rails_query sets")
         expect(text("SELECT @@GLOBAL.lock_wait_timeout AS w")).not_to include("rails_query sets")
+        expect(text("SELECT @@LOCAL.lock_wait_timeout AS w")).to include("rails_query sets")
         expect(text("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'")).not_to include("rails_query sets")
       ensure
         conn.execute("SET SESSION #{limit} = 0, lock_wait_timeout = 31536000")

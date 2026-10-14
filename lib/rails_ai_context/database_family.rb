@@ -16,6 +16,9 @@ module RailsAiContext
     # Rows from a guarded read; unbounded when no timeout could hold it.
     Rows = Data.define(:columns, :rows, :unbounded)
 
+    # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL., and current_setting('..').
+    SETTING_READ = /(?:\bshow\s+|@@(?:(?:session|local)\.)?|current_setting\s*\(\s*')(\w+)/i
+
     Family = Data.define(:key, :name) do
       def known?
         key != :unknown
@@ -148,17 +151,15 @@ module RailsAiContext
         runtime.index_tables(connection, schemas)
       end
 
-      # Each setting the family sets for a statement, among those the text names, with the session's own value.
-      # Read with no bound: reading a setting waits on no lock.
+      # The settings the tool sets for a statement that the statement reads, or that a SHOW VARIABLES row names, each
+      # with the session's own value. Read with no bound: reading a setting waits on no lock.
       # @return [Hash{String => String}]
-      # The settings the statement reads that the tool sets for it: SHOW, current_setting('..'), @@.., or a row of
-      # SHOW VARIABLES by its name. A name used as an alias or a column is no read of the setting.
       def own_settings(connection, sql, shown = [])
-        return {} unless shown.any? || sql.match?(/\bshow\b|@@|current_setting/i)
+        read = (sql.scan(SETTING_READ).flatten + shown).map(&:downcase)
+        return {} if read.empty?
 
-        runtime.bound_settings(connection).filter_map do |name, read|
-          read_here = sql.match?(/(?:\bshow\s+|@@(?:session\.)?|current_setting\s*\(\s*')#{name}\b/i)
-          [ name, connection.select_value(read).to_s ] if read_here || shown.any? { |row| row.casecmp?(name) }
+        runtime.bound_settings(connection).filter_map do |name, query|
+          [ name, connection.select_value(query).to_s ] if read.include?(name)
         end.to_h
       end
 

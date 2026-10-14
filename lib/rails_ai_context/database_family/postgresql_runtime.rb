@@ -9,6 +9,12 @@ module RailsAiContext
       module_function
 
       def read_only(conn, sql, timeout)
+        # An EXPLAIN answers text, and one of a generic plan holds $1, which Rails 7.0's select_all sends as an empty bind.
+        if sql.match?(/\A\s*EXPLAIN\b/i)
+          result = bounded(conn, timeout) { conn.execute(sql) }
+          return Rows.new(result.fields, result.values, false)
+        end
+
         result = bounded(conn, timeout) { conn.select_all(sql) }
         Rows.new(result.columns, result.rows, false)
       end

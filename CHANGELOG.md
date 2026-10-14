@@ -77,11 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5.35.2 and every earlier version ended the transaction on PostgreSQL.
 - **On PostgreSQL a statement another session cancels is answered as the SQL
   error it is.** A `pg_cancel_backend` from another session raises the same
-  error class as the statement timeout, and 5.35.2 answered "Query exceeded
-  <N> second timeout". The server's message tells the two apart, so a cancel
-  now answers "SQL error: canceling statement due to user request". A real
-  timeout keeps its sentence. A server that writes its messages in another
-  language still answers a cancel as the timeout.
+  error class as the statement timeout, and 5.35.2 answered "Query exceeded <N>
+  second timeout". The server's message tells the two apart, so a cancel now
+  answers `SQL error: PG::QueryCanceled: ERROR:  canceling statement due to user
+  request`. A real timeout keeps its sentence. A server that writes its messages
+  in another language still answers a cancel as the timeout.
 - **A query that reads a setting `rails_query` sets for each statement says so,
   and gives the session's own value.** `SHOW statement_timeout` answered the
   bound the tool set for the statement (`2s`) with nothing to say it was not the

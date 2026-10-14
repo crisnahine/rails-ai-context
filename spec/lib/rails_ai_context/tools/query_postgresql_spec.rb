@@ -696,7 +696,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     end
 
     expect(response.error?).to be(true)
-    expect(response.content.first[:text]).to start_with("SQL error: ").and include("canceling statement due to user request")
+    expect(response.content.first[:text]).to eq("SQL error: PG::QueryCanceled: ERROR:  canceling statement due to user request")
   end
 
   it "answers from a transaction the app opened with a raw BEGIN, and leaves it open with its writes" do
