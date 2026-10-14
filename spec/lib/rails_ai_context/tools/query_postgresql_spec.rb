@@ -721,6 +721,7 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
       .to include("| on", both)
     expect(described_class.call(sql: "SHOW statement_timeout", format: "csv").content.first[:text]).to end_with("2s\n\n#{note}")
     expect(run("SHOW lock_timeout").content.first[:text]).not_to include("rails_query sets")
+    expect(run("SELECT 1 AS statement_timeout").content.first[:text]).not_to include("rails_query sets")
   ensure
     conn.execute("RESET statement_timeout")
   end

@@ -468,6 +468,7 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(text("SELECT @@#{limit} AS l, @@lock_wait_timeout AS w")).to include(note)
         expect(text("SHOW VARIABLES LIKE '%wait_timeout'")).to match(/\| lock_wait_timeout +\| 2 /).and include("lock_wait_timeout here is the value")
         expect(text("SHOW VARIABLES LIKE 'version'")).not_to include("rails_query sets")
+        expect(text("SELECT 1 AS lock_wait_timeout")).not_to include("rails_query sets")
       ensure
         conn.execute("SET SESSION #{limit} = 0, lock_wait_timeout = 31536000")
       end

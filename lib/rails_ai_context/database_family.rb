@@ -151,9 +151,12 @@ module RailsAiContext
       # Each setting the family sets for a statement, among those the text names, with the session's own value.
       # Read with no bound: reading a setting waits on no lock.
       # @return [Hash{String => String}]
-      def own_settings(connection, text)
+      # The settings the statement reads that the tool sets for it: SHOW, current_setting('..'), @@.., or a row of
+      # SHOW VARIABLES by its name. A name used as an alias or a column is no read of the setting.
+      def own_settings(connection, sql, shown = [])
         runtime.bound_settings(connection).filter_map do |name, read|
-          [ name, connection.select_value(read).to_s ] if text.match?(/\b#{name}\b/i)
+          read_here = sql.match?(/(?:\bshow\s+|@@(?:session\.)?|current_setting\s*\(\s*')#{name}\b/i)
+          [ name, connection.select_value(read).to_s ] if read_here || shown.any? { |row| row.casecmp?(name) }
         end.to_h
       end
 

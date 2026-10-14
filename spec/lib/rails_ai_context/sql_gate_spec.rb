@@ -509,7 +509,10 @@ RSpec.describe RailsAiContext::SqlGate do
         %(SELECT * FROM "main"."pragma_database_list"), "SELECT * FROM (pragma_database_list)", "SELECT * FROM logs, (pragma_foreign_keys)",
         "SELECT 1 WHERE 'main' IN pragma_database_list", "SELECT 1 WHERE 1 IN main.pragma_foreign_keys",
         "SELECT pragma_database_list() AS n", "SELECT * FROM pragma_function_list ()",
-        "SELECT (SELECT name FROM pragma_database_list) AS n FROM logs", "SELECT changes() AS n FROM changes" ].each do |sql|
+        "SELECT (SELECT name FROM pragma_database_list) AS n FROM logs", "SELECT changes() AS n FROM changes",
+        "SELECT id FROM logs a JOIN logs b USING (id), pragma_query_only", %(SELECT id FROM logs a JOIN logs b USING (id), main."pragma_database_list"),
+        "SELECT id FROM logs a NATURAL JOIN logs b, pragma_database_list", "SELECT id FROM logs a CROSS JOIN logs b, pragma_query_only",
+        "SELECT id FROM logs INDEXED BY logs_by_id, pragma_query_only", "SELECT id FROM logs NOT INDEXED, pragma_query_only" ].each do |sql|
         expect(refusal(sql)).to include("tells of the connection that runs it"), sql
       end
     end

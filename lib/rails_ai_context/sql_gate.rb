@@ -125,7 +125,7 @@ module RailsAiContext
     # A pragma function's name, bare or quoted, as one token.
     SQLITE_PRAGMA_NAME = /\A["'`\[]?pragma_(\w+)["'`\]]?\z/i
     # The clauses after which a comma at the same depth starts another table of a FROM list.
-    FROM_LIST_CLAUSES = %w[from join on].freeze
+    FROM_LIST_CLAUSES = %w[from join on using].freeze
     CLAUSE_WORDS = %w[select from join on where group order having limit window values using returning set union intersect except].freeze
 
     # Catalogs refused when a statement names them. A view over one runs, and the plan checks hold the
