@@ -157,7 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists them. Each name now takes the visibility the nearest class gives it, so
   a method the child makes private, under `private` or with `private :name`,
   stays out. The methods of `ApplicationMailer` itself stay out too, as the
-  booted tier leaves them out. 5.35.2 and earlier versions had the gap.
+  booted tier leaves them out, and on both tiers a mailer with no action of its
+  own no longer says it inherits its actions from `ApplicationMailer`. 5.35.2
+  and earlier versions had the gap.
 - **`rails_get_schema` says when two databases share `db/schema.rb`.** Rails
   dumps both the first database and the one named `primary` to that file, so it
   holds whichever was dumped last. A table of the other database was called

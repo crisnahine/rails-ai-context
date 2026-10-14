@@ -466,7 +466,8 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       allow(described_class).to receive(:cached_context).and_return(
         { jobs: { mailers: [
           { name: "DeviseMailer", actions: [], parent_class: "Devise::Mailer" },
-          { name: "MultiNotifications", actions: [], class_actions: %w[deadline_passed] }
+          { name: "MultiNotifications", actions: [], class_actions: %w[deadline_passed] },
+          { name: "MailHandler", actions: [], class_actions: %w[receive], parent_class: "ApplicationMailer" }
         ] } }
       )
     end
@@ -475,6 +476,12 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       text = described_class.call.content.first[:text]
       expect(text).to include("[UNAVAILABLE: none declared here; inherited from `Devise::Mailer`]")
       expect(text).to include("- **Class methods:** deadline_passed")
+    end
+
+    # The app base's own methods are no actions of the mailers under it.
+    it "names no inheritance from the app's base" do
+      text = described_class.call.content.first[:text]
+      expect(text[/## MailHandler\n.*\n/]).to eq("## MailHandler\n- **Actions:** [UNAVAILABLE: none declared here]\n")
     end
 
     # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing

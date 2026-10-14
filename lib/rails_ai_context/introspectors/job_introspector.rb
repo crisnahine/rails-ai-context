@@ -1171,13 +1171,13 @@ module RailsAiContext
         false
       end
 
-      # The public methods of a mailer and of its app parents, each with the visibility the nearest gives it; tagged
-      # STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
+      # The public methods of a mailer and of its app parents below the app base, each with the visibility the nearest
+      # gives it; tagged STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
       def mailer_entry(klass, ancestors)
         # The app base's public methods are no actions, as the booted tier subtracts them; its callbacks still filter.
-        lineage = [ klass, *ancestors.take_while { |declaring| !ActionResolver.app_base_name?(declaring.name, kind: :mailer) } ]
+        action_chain = [ klass, *ancestors.take_while { |declaring| !ActionResolver.app_base_name?(declaring.name, kind: :mailer) } ]
         visibility = {}
-        lineage.each do |declaring|
+        action_chain.each do |declaring|
           own = ActionResolver.own_methods(declaring.methods, declaring.name).select { |m| m[:scope] == :instance }
           own.each { |m| visibility[m[:name]] ||= m[:visibility] }
           declaring.macros.each do |m|

@@ -998,7 +998,8 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(read("SELECT 'show statement_timeout' AS s -- current_setting('statement_timeout')", :postgresql)).to eq([])
       expect(read('SELECT 1 AS "show statement_timeout"', :postgresql)).to eq([])
       expect(read("SELECT v FROM session_variables WHERE n = 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout" ] ])).to eq([])
-      expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout", :mysql)).to eq([])
+      expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout, @@global . max_execution_time", :mysql)).to eq([])
+      expect(read(%(SELECT "information_schema.session_variables" AS lock_wait_timeout), :mysql)).to eq([])
       expect(read("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout", "50" ] ])).to eq([])
     end
   end

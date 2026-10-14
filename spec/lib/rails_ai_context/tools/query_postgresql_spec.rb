@@ -572,7 +572,8 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute(%(CREATE TABLE rac_pg_accents (id int, "\u00e9" text, "\u00c9" text)))
     conn.execute("INSERT INTO rac_pg_accents VALUES (1, 'lower', 'upper-secret')")
 
-    refused([ %(SELECT "\u00e9" FROM rac_pg_accents), %(SELECT "\u00c9" AS x FROM rac_pg_accents), "SELECT \u00c9 FROM rac_pg_accents" ], "Blocked: ")
+    refused([ %(SELECT "\u00e9" FROM rac_pg_accents), %(SELECT "\u00c9" AS x FROM rac_pg_accents), "SELECT \u00c9 FROM rac_pg_accents" ],
+            "Blocked: query references secret column `\u00e9`.")
     expect(run("SELECT * FROM rac_pg_accents").content.first[:text]).to include("[FILTERED]").and(satisfy { |t| !t.match?(/lower|upper-secret/) })
   ensure
     RailsAiContext.configuration.query_redacted_columns -= [ "\u00c9" ]
@@ -968,8 +969,10 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("CREATE OR REPLACE FUNCTION public.pg_sequence_last_value(regclass) RETURNS bigint VOLATILE LANGUAGE sql AS 'SELECT 7::bigint'")
     conn.execute(%(CREATE SCHEMA IF NOT EXISTS rac_ext; CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA rac_ext))
     [ "SELECT public.pg_sequence_last_value('rac_pg_accounts'::regclass) AS v", "SELECT pg_sequence_last_value('rac_pg_accounts'::regclass) AS v" ].each do |sql|
-      expect([ run(sql).error?, run(sql).content.first[:text] ]).to eq([ true, "Blocked: the app defines a VOLATILE function named pg_sequence_last_value, " \
-        "so rails_query runs no call of that name. The built-in one is on its list of read-only VOLATILE functions, and one the app wrote is not." ]), sql
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to eq([ true, "Blocked: the database holds a VOLATILE function named pg_sequence_last_value " \
+        "that rails_query cannot vouch for, so it runs no call of that name. Its list of read-only VOLATILE functions trusts the name for the server's " \
+        "own function or an extension's C function alone." ]), sql
     end
     [ "SELECT pg_sleep_for('0 seconds') IS NOT NULL AS s", "SELECT gen_random_uuid() IS NOT NULL AS u", "SELECT random() < 2 AS r",
       "SELECT rac_ext.uuid_generate_v4() IS NOT NULL AS c" ].each do |sql|

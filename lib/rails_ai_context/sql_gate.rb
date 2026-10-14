@@ -335,9 +335,10 @@ module RailsAiContext
     def self.settings_read(sql, family, rows)
       text = comment_free(sql, family)
       code = mask_quoted(text, family) { true }
-      names = mask_quoted(text, family) { |kind, _span| kind == :string }
+      # MySQL reads a double-quoted span as a string.
+      strings_blanked = mask_quoted(text, family) { |kind, span| kind == :string || (family.mysql? && span.start_with?('"')) }
       read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
-      read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if names.match?(SETTINGS_LIST)
+      read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if strings_blanked.match?(SETTINGS_LIST)
       read.map(&:downcase)
     end
 
@@ -959,10 +960,10 @@ module RailsAiContext
           "or set operation whose output the tool cannot map to a column, so it could leave " \
           "unredacted. Name the other columns you need; `#{col}` is never returned."
       end
-      if (fn = volatile_function(called))
-        return "Blocked: the app defines a VOLATILE function named #{fn}, so rails_query runs no call of that name. The built-in one " \
-          "is on its list of read-only VOLATILE functions, and one the app wrote is not." if PG_VOLATILE_ALLOWLIST.include?(fn)
-
+      if (fn = volatile_function(called)) && PG_VOLATILE_ALLOWLIST.include?(fn)
+        "Blocked: the database holds a VOLATILE function named #{fn} that rails_query cannot vouch for, so it runs no call of " \
+          "that name. Its list of read-only VOLATILE functions trusts the name for the server's own function or an extension's C function alone."
+      elsif fn
         "Blocked: function #{fn} is VOLATILE (pg_proc.provolatile = 'v') and not on " \
           "rails_query's list of read-only VOLATILE functions, so it is not run. Some VOLATILE " \
           "functions change server or session state in ways a read-only transaction does not " \

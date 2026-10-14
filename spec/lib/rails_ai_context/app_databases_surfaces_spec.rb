@@ -276,6 +276,7 @@ RSpec.describe "the app databases on preset standard" do
 
     found = answers("rails8")
     expect(found[:context]).to include(:schema).and(satisfy { |context| !context.key?(:multi_database) })
+    expect(found[:context][:_warnings]).to include({ introspector: "multi_database", error: "boom" })
     expect(found[:onboard]).to include("Rails application")
   end
 

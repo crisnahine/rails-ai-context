@@ -21,11 +21,14 @@ module RailsAiContext
     end
 
     # Every reader names a database's adapter from this section, so a preset without it, or one where it failed,
-    # still carries the list. The failure stays in the warnings.
+    # still carries the list. A list that cannot be read is a warning, as a failed section is.
     private def fill_multi_database(context)
       context[:multi_database] = Introspectors::MultiDatabaseIntrospector.new(app).listing
     rescue StandardError, ScriptError => e
       RailsAiContext.log_warn "[rails-ai-context] app databases listing failed: #{e.message}"
+      failed = { error: e.message }.tap { |data| portable_errors!(data) }
+      warnings = (context[:_warnings] ||= [])
+      warnings << { introspector: "multi_database", error: failed[:error] } if warnings.none? { |w| w[:introspector] == "multi_database" }
     end
 
     private def introspect_all

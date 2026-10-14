@@ -2278,6 +2278,8 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
         File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), <<~RUBY)
           class ApplicationMailer < ActionMailer::Base
+            before_action :stamp
+
             def money(amount) = amount
           end
         RUBY
@@ -2294,6 +2296,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         File.write(File.join(dir, "app", "mailers", "shop_mailer.rb"), <<~RUBY)
           class ShopMailer < BaseMailer
             def shipped(order_id) = mail(to: "a@example.com")
+            def stamp = nil
 
             private
 
