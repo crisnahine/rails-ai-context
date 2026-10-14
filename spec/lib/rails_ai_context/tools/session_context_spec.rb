@@ -125,6 +125,18 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(RailsAiContext::Tools::BaseTool.session_queries).to be_empty
     end
 
+    it "says a tool skip_tools turned off is turned off, by its full or short name" do
+      skipped = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = [ "rails_get_env" ]
+      [ "rails_get_env", "env:x" ].each do |mark|
+        result = described_class.call(mark: mark)
+        expect([ result.error?, result.content.first[:text] ]).to eq([ true, RailsAiContext::Server.skipped_tool_message("rails_get_env") ]), mark
+      end
+      expect(RailsAiContext::Tools::BaseTool.session_queries).to be_empty
+    ensure
+      RailsAiContext.configuration.skip_tools = skipped
+    end
+
     it "suggests a retired name for a mark that is near one" do
       result = described_class.call(mark: "gem:auth")
 
