@@ -66,11 +66,18 @@ Gem::Specification.new do |spec|
       []
     end
     listed = Dir.glob("**/*", File::FNM_DOTMATCH).select { |f| File.file?(f) } if listed.empty?
-    # What a user of the gem runs or reads; contributor and assistant files
-    # (AGENTS.md, CLAUDE.md, docs/adr) would read as instructions about the app that bundles it.
+    # What a user of the gem runs or reads, and the files those docs link to;
+    # assistant files (AGENTS.md, CLAUDE.md) would read as instructions about the app that bundles it.
+    linked = %w[
+      CONTRIBUTING.md
+      docs/adr/0005-workspace-mcp-entries.md
+      docs/adr/0006-strong-params-resolve-as-ruby-runs.md
+      docs/adr/0007-every-install-question-has-a-flag.md
+    ]
     listed.select do |f|
-      f.match?(%r{\A(lib|exe|app|config)/|\A(README|CHANGELOG|SECURITY)\.md\z|\ALICENSE\z|\Adocs/[^/]+\.md\z}) &&
-        f != "docs/RELEASING.md"
+      linked.include?(f) ||
+        (f.match?(%r{\A(lib|exe|app|config)/|\A(README|CHANGELOG|SECURITY)\.md\z|\ALICENSE\z|\Adocs/[^/]+\.md\z}) &&
+          f != "docs/RELEASING.md")
     end
   end
 

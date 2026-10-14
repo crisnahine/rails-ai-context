@@ -73,10 +73,26 @@ RSpec.describe "rails-ai-context.gemspec" do
     tracked = IO.popen([ "git", "-C", root, "ls-files", "-z" ], &:read).split("\x0")
     code = tracked.grep(%r{\A(lib|exe|app|config)/})
     user_docs = %w[README.md CHANGELOG.md LICENSE SECURITY.md] + tracked.grep(%r{\Adocs/[^/]+\.md\z}) - %w[docs/RELEASING.md]
-    linked = File.read(File.join(root, "README.md")).scan(/\]\(((?!https?:)[^)#]+)/).flatten.uniq
 
-    expect(spec.files).to match_array(code + user_docs)
-    expect(spec.files).to include(*linked)
+    expect(spec.files).to include(*code, *user_docs)
+    expect(spec.files - code - user_docs).to all(satisfy { |f| linked_from_package(root, tracked).include?(f) })
+    expect(spec.files).not_to include("AGENTS.md", "CLAUDE.md", "CONTEXT.md", "docs/RELEASING.md", "docs/agents/domain.md")
+  end
+
+  it "packages every repository file a packaged Markdown file links to" do
+    root = File.expand_path("../../..", __dir__)
+    tracked = IO.popen([ "git", "-C", root, "ls-files", "-z" ], &:read).split("\x0")
+
+    expect(spec.files).to include(*linked_from_package(root, tracked))
+  end
+
+  # Tracked files a packaged Markdown file links to, relative to the linking file.
+  def linked_from_package(root, tracked)
+    spec.files.grep(/\.md\z/).flat_map do |doc|
+      File.read(File.join(root, doc)).scan(/\]\(((?!https?:|mailto:|#)[^)#\s]+)/).flatten.map do |link|
+        File.expand_path(link, File.join(root, File.dirname(doc))).delete_prefix("#{root}/")
+      end
+    end.uniq & tracked
   end
 
   # Thor 1.0 and 1.1 raise NameError on require under Ruby 3.1 and later.
