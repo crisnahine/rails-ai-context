@@ -85,6 +85,38 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(text).to include("Database")
     end
 
+    context "when Sidekiq is loaded" do
+      let(:stats) do
+        double(enqueued: 12, processed: 3400, failed: 7, scheduled_size: 0, retry_size: 0, dead_size: 0)
+      end
+
+      before do
+        stub_const("Sidekiq::Stats", class_double("Sidekiq::Stats", new: stats))
+        allow(described_class).to receive(:require).with("sidekiq/api").and_return(true)
+      end
+
+      def jobs_text(adapter, workers: [])
+        allow(ActiveJob::Base).to receive(:queue_adapter_name).and_return(adapter)
+        allow(described_class).to receive(:cached_context).and_return({ jobs: { workers: workers } })
+        described_class.call(section: "jobs").content.first[:text]
+      end
+
+      it "shows Sidekiq's counts when Sidekiq is the adapter" do
+        expect(jobs_text("sidekiq")).to include("**Adapter:** sidekiq", "**Enqueued:** 12")
+      end
+
+      it "shows no Sidekiq counts under another adapter" do
+        text = jobs_text("async")
+        expect(text).to include("this app uses the async adapter")
+        expect(text).not_to include("Enqueued")
+      end
+
+      it "names Sidekiq's counts as its own workers' under another adapter" do
+        text = jobs_text("async", workers: [ { name: "HardWorker" } ])
+        expect(text).to include("this app uses the async adapter", "### Sidekiq", "**Enqueued:** 12")
+      end
+    end
+
     it "handles graceful degradation when Sidekiq not loaded" do
       result = described_class.call(section: "jobs")
       text = result.content.first[:text]

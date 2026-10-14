@@ -834,6 +834,8 @@ Table sizes come from PostgreSQL, MySQL (base tables only) and SQLite, and index
 
 The pool and the cache are read inside the MCP server process, and the answer says so: the pool's counts are that process's own connections, and a `MemoryStore`'s entries are its own, since each app server process holds its own. A store the processes share (Redis, Memcached, Solid Cache, a file store) is the app's. Another environment that configures a shared store is named, as where the app's cache lives there. Solid Cache's stats are read from its database, so when that is a SQLite file that is not there, the cache section says the database does not exist yet and creates nothing.
 
+The jobs section names the Active Job adapter the running environment uses. Queue counts are read from Sidekiq alone: they are the app's when Sidekiq is that adapter, and under another adapter they are shown under their own heading only when the app has Sidekiq workers of its own, as those workers' counts.
+
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |

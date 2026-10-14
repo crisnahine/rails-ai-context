@@ -370,8 +370,22 @@ module RailsAiContext
           end
           lines << "**Adapter:** #{adapter_name}"
 
-          # Sidekiq stats (if available)
-          if defined?(Sidekiq)
+          sidekiq_adapter = adapter_name == "sidekiq" && defined?(Sidekiq)
+          unless sidekiq_adapter
+            # Name the adapter the app actually uses so "no stats" reads as a
+            # tool limitation, not as the app having no queue backend.
+            if adapter_name.start_with?("not ")
+              lines << "_Queue stats unavailable: no queue adapter detected._"
+            else
+              lines << "_Live queue stats are only implemented for Sidekiq; this app uses the #{adapter_name} adapter._"
+            end
+          end
+
+          # Sidekiq's counts are the app's jobs under its adapter, else only its own Sidekiq::Job workers.
+          if sidekiq_adapter || (defined?(Sidekiq) && sidekiq_workers?)
+            unless sidekiq_adapter
+              lines.push("", "### Sidekiq", "_Counts for the Sidekiq workers the app runs outside Active Job; its #{adapter_name} jobs are not in them._")
+            end
             begin
               require "sidekiq/api"
               stats = Sidekiq::Stats.new
@@ -396,20 +410,17 @@ module RailsAiContext
             rescue => e
               lines << "_Sidekiq stats error: #{e.message}_"
             end
-          else
-            # Name the adapter the app actually uses so "no stats" reads as a
-            # tool limitation, not as the app having no queue backend.
-            if adapter_name.start_with?("not ")
-              lines << "_Queue stats unavailable: no queue adapter detected._"
-            else
-              lines << "_Live queue stats are only implemented for Sidekiq; this app uses the #{adapter_name} adapter._"
-            end
           end
 
           lines << ""
           lines
         rescue => e
           [ "## Background Jobs", "", "_Not available: #{e.message}_", "" ]
+        end
+
+        def sidekiq_workers?
+          jobs = cached_context[:jobs]
+          jobs.is_a?(Hash) && Array(jobs[:workers]).any?
         end
       end
     end
