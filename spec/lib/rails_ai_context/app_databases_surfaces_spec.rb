@@ -192,12 +192,48 @@ RSpec.describe "two databases that share db/schema.rb" do
           introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
           allow(introspector).to receive_messages(table_names: live.keys, extract_tables: live) if live
           allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
-          RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+          [ RailsAiContext::Tools::GetSchema.call(detail: "summary"), (RailsAiContext::Tools::GetSchema.call(table: "zz_events") if live) ]
+            .map { |response| response&.content&.first&.dig(:text) }
         end
       end
+      summaries, tables = answers.transpose
 
-      expect(answers).to all(include("_main and primary both dump to db/schema.rb, so it may describe primary. Not in main: zz_events._"))
-      expect(answers).to all(satisfy { |text| !text.include?("rails db:migrate") })
+      expect(summaries).to all(include("_main and primary both dump to db/schema.rb, so it may describe primary. Not in main: zz_events._"))
+      expect(tables.compact).to eq([ "Table 'zz_events' is declared in db/schema.rb and not in main. main and primary both dump to db/schema.rb, so it may describe primary." ])
+      expect(answers.flatten.compact).to all(satisfy { |text| !text.include?("rails db:migrate") })
+    end
+  end
+
+  it "shares nothing with a database another environment configures" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "db"))
+      FileUtils.mkdir_p(File.join(root, "config"))
+      File.write(File.join(root, "config", "database.yml"), <<~YAML)
+        test:
+          main:
+            adapter: sqlite3
+            database: db/main.sqlite3
+        development:
+          main:
+            adapter: sqlite3
+            database: db/main_dev.sqlite3
+          primary:
+            adapter: sqlite3
+            database: db/primary.sqlite3
+      YAML
+      File.write(File.join(root, "db", "schema.rb"),
+                 "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"zz_events\" do |t|\n  end\nend\n")
+      app = RailsAiContext::StaticApp.new(root)
+      ActiveRecord::Base.connection.execute("SELECT 1")
+
+      answer = on_tier(:booted, root, connected: "main") do
+        introspector = RailsAiContext::Introspectors::SchemaIntrospector.new(app)
+        allow(introspector).to receive_messages(table_names: %w[posts], extract_tables: { "posts" => { columns: [], indexes: [], foreign_keys: [] } })
+        allow(RailsAiContext::Tools::GetSchema).to receive_messages(cached_context: { schema: introspector.call }, rails_app: app)
+        RailsAiContext::Tools::GetSchema.call(detail: "summary").content.first[:text]
+      end
+
+      expect(answer).to include("Missing: zz_events. Run `rails db:migrate`.").and(satisfy { |text| !text.include?("both dump to") })
     end
   end
 end

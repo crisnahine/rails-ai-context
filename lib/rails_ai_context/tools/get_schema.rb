@@ -81,6 +81,11 @@ module RailsAiContext
               # `order_comments` are the same request.
               declared = table_key.to_s.underscore
               if declared_not_connected(schema).include?(declared)
+                if schema[:shared_dump]
+                  return text_response("Table '#{declared}' is declared in #{dump_name(schema)} and not in #{schema[:shared_dump][:primary]}. " \
+                                       "#{shared_dump_phrase(schema)}")
+                end
+
                 return text_response(
                   "Table '#{declared}' is declared in #{schema[:declared_in] || "db/schema.rb"} and missing from the connected database. " \
                   "#{pending_for_table(schema, declared)}" \
@@ -407,9 +412,12 @@ module RailsAiContext
         absent = schema[:connected_tables]&.zero? ? (schema[:tables] || {}).keys.map(&:to_s) : declared_not_connected(schema)
         return [] if absent.empty?
 
+        [ "_#{shared_dump_phrase(schema)} Not in #{schema[:shared_dump][:primary]}: #{names_phrase(absent)}._" ]
+      end
+
+      private_class_method def self.shared_dump_phrase(schema)
         shared = schema[:shared_dump]
-        [ "_#{shared[:primary]} and #{shared[:other]} both dump to #{dump_name(schema)}, so it may describe #{shared[:other]}. " \
-          "Not in #{shared[:primary]}: #{names_phrase(absent)}._" ]
+        "#{shared[:primary]} and #{shared[:other]} both dump to #{dump_name(schema)}, so it may describe #{shared[:other]}."
       end
 
       private_class_method def self.names_phrase(names)

@@ -33,10 +33,13 @@ module RailsAiContext
         result
       end
 
-      # The server's own transaction status (0 is idle) decides: Active Record does not count a transaction the app
-      # opened with a raw BEGIN, and its own BEGIN and ROLLBACK there would end the app's.
+      # PG::PQTRANS_IDLE, which needs the pg gem loaded.
+      TRANSACTION_IDLE = 0
+
+      # The server's own transaction status decides: Active Record does not count a transaction the app opened with a
+      # raw BEGIN, and its own BEGIN and ROLLBACK there would end the app's.
       def rolling_back(conn)
-        if conn.raw_connection.transaction_status.zero?
+        if conn.raw_connection.transaction_status == TRANSACTION_IDLE
           conn.transaction(requires_new: true) do
             yield
             raise ActiveRecord::Rollback

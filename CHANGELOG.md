@@ -151,11 +151,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a method the child makes private, under `private` or with `private :name`,
   stays out. 5.35.2 and earlier versions had the gap.
 - **`rails_get_schema` says when two databases share `db/schema.rb`.** Rails
-  dumps both the first database and the one named `primary` to that file, so
-  it holds whichever was dumped last. A table of the other database was called
+  dumps both the first database and the one named `primary` to that file, so it
+  holds whichever was dumped last. A table of the other database was called
   missing from the connected one, with advice to run `rails db:migrate`, which
   changes nothing. The answer now says "_main and primary both dump to
-  db/schema.rb, so it may describe primary. Not in main: events._". 5.35.2 and
+  db/schema.rb, so it may describe primary. Not in main: events._", and asked
+  for that table it says the same, with no word of a migration. 5.35.2 and
   earlier versions had the gap.
 - **The conventions section says how many entries each of its lists of five
   leaves out.** `rails_get_config(section: "conventions")` shows the first five

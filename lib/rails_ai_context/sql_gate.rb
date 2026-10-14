@@ -129,7 +129,7 @@ module RailsAiContext
     CLAUSE_WORDS = %w[select from join on where group order having limit values using returning set union intersect except].freeze
 
     # How a statement reads a session setting by name: SHOW, @@, @@SESSION. or @@LOCAL. (backquoted or not), current_setting('..').
-    SETTING_READ = /(?:\bshow\s+|@@(?:(?:session|local)\.)?|current_setting\s*\(\s*')`?(\w+)/i
+    SETTING_READ = /(?:\bshow\s+(?!global\b)|@@(?!global\.)(?:(?:session|local)\.)?|current_setting\s*\(\s*')`?(\w+)/i
     # A list of the session's settings, which names each in its rows or in the filter the statement puts on it.
     SETTINGS_LIST = /\A\s*show\s+(?:(?:session|local)\s+)?variables\b|\bsession_variables\b/i
 

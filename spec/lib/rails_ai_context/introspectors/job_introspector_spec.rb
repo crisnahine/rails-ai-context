@@ -2282,9 +2282,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         RUBY
         File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), <<~RUBY)
           class BaseMailer < ApplicationMailer
+            before_action :track
+
             def receipt(order_id) = mail(to: "a@example.com")
             def refund(order_id) = mail(to: "a@example.com")
             def locale_for_account(account) = account
+            def track = nil
           end
         RUBY
         File.write(File.join(dir, "app", "mailers", "shop_mailer.rb"), <<~RUBY)

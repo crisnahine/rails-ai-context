@@ -210,7 +210,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        postgresql: ["14", "15", "17", "18"]
+        postgresql: ["13", "14", "15", "17", "18"]
 
     name: PostgreSQL ${{ matrix.postgresql }}
 

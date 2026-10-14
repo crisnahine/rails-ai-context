@@ -654,7 +654,7 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 
 ### `rails_get_mailers`
 
-ActionMailer mailers: every mailer class with its delivery actions and delivery method. The actions include the public methods a mailer inherits from the app's own mailers, on both tiers. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from rather than left out. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
+ActionMailer mailers: every mailer class with its delivery actions and delivery method. The actions include the public methods a mailer inherits from the app's own mailers, on both tiers. A mailer that declares no action of its own - one taking them from a gem base or a mixin, or one called through class methods - is listed with where its actions come from. A base other mailers inherit from is not one: it leaves the listing, and a line above names the ones left out. Asked for by name, a base answers with what every mailer below it inherits - its layout, helpers, defaults, callbacks and mixins as the app wrote them, the methods it defines - and which mailers inherit it.
 
 Each mailer also shows its own `default`, `layout`, `helper` and action and
 deliver callbacks as written, the template formats of each action under

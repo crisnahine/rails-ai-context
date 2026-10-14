@@ -381,7 +381,7 @@ module RailsAiContext
           end
 
           # Sidekiq's counts are the app's jobs under its adapter, else only its own Sidekiq::Job workers.
-          if sidekiq_adapter || (defined?(Sidekiq) && sidekiq_workers?)
+          if sidekiq_adapter || (defined?(Sidekiq) && Payload.workers(cached_context).any?)
             unless sidekiq_adapter
               lines.push("", "### Sidekiq", "_Counts for the Sidekiq workers the app runs outside Active Job; its #{adapter_name} jobs are not in them._")
             end
@@ -415,11 +415,6 @@ module RailsAiContext
           lines
         rescue => e
           [ "## Background Jobs", "", "_Not available: #{e.message}_", "" ]
-        end
-
-        def sidekiq_workers?
-          jobs = cached_context[:jobs]
-          jobs.is_a?(Hash) && Array(jobs[:workers]).any?
         end
       end
     end

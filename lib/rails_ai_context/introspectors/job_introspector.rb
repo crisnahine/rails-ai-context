@@ -1173,7 +1173,7 @@ module RailsAiContext
 
       # The public methods of a mailer and of its app parents, each with the visibility the nearest gives it; tagged
       # STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
-      def mailer_entry(klass, ancestors = [])
+      def mailer_entry(klass, ancestors)
         lineage = [ klass, *ancestors ]
         visibility = {}
         lineage.each do |declaring|

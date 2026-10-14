@@ -993,8 +993,8 @@ RSpec.describe RailsAiContext::SqlGate do
     it "reads no setting from a string, a comment, an alias or a global value" do
       expect(read("SELECT '@@lock_wait_timeout' AS w /* @@max_execution_time */ # SHOW lock_wait_timeout", :mysql)).to eq([])
       expect(read("SELECT 'show statement_timeout' AS s -- current_setting('statement_timeout')", :postgresql)).to eq([])
-      expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout", :mysql)).to eq(%w[global])
-      expect(read("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout", "50" ] ])).to eq(%w[global])
+      expect(read("SELECT 1 AS lock_wait_timeout, @@GLOBAL.lock_wait_timeout", :mysql)).to eq([])
+      expect(read("SHOW GLOBAL VARIABLES LIKE 'lock_wait_timeout'", :mysql, [ [ "lock_wait_timeout", "50" ] ])).to eq([])
     end
   end
 
