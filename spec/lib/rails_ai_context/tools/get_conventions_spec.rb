@@ -351,6 +351,32 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
     end
   end
 
+  describe "App Patterns - capped lists" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(controllers_dir)
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(described_class).to receive(:cached_context).and_return({ conventions: {} })
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "says how many flash messages it leaves out" do
+      actions = (1..6).map { |n| "  def a#{n}\n    redirect_to root_path, notice: \"Notice #{n}.\"\n  end\n" }
+      alerts = (1..5).map { |n| "  def b#{n}\n    redirect_to root_path, alert: \"Alert #{n}.\"\n  end\n" }
+      File.write(File.join(controllers_dir, "pages_controller.rb"),
+        "class PagesController < ApplicationController\n#{(actions + alerts).join}end\n")
+
+      text = described_class.call.content.first[:text]
+      flash = text[/### Flash Messages\n(.*?)(?=\n###|\z)/m, 1]
+      expect(flash).to include("Notice 5.").and include("- _...and 1 more._")
+      expect(flash).not_to include("Notice 6.")
+      expect(flash.scan("more._").size).to eq(1)
+    end
+  end
+
   describe "App Patterns - create action flow detection" do
     let(:tmpdir) { Dir.mktmpdir }
     let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
