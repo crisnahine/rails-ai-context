@@ -434,8 +434,8 @@ module RailsAiContext
       end
       table, why = @secrets.unread_table_in(cleaned)
       return "Blocked: `#{table}` is not read: #{why}." if table
-      if (state = connection_state(cleaned))
-        return "Blocked: `#{state}` tells of the connection that runs it. rails_query runs a statement on a connection of its own and " \
+      if (state, view = connection_state(cleaned))
+        return "Blocked: `#{state}`#{", which the view `#{view}` reads," if view} tells of the connection that runs it. rails_query runs a statement on a connection of its own and " \
           "sets some of that connection's values itself, so the answer would not be the app's. A pragma function that describes the " \
           "schema or the database file runs, for example `pragma_table_info`."
       end
@@ -556,12 +556,22 @@ module RailsAiContext
         "#{" To read one setting, run SHOW with its name." if name.match?(/settings/i)}"
     end
 
-    # A counter is told by its call. A pragma function is told where it can run: called, or where a table stands
-    # (after FROM, JOIN, IN, a comma of a FROM list, a parenthesis that opens one, or a schema and a dot there).
-    # A name anywhere else is a column's or an alias's, which SQLite never reads as the function.
+    # [name, view] for the first function that tells of the connection in the statement, or in a view it reaches,
+    # which SQLite runs on the same connection.
     def connection_state(cleaned)
       return nil unless @family.sqlite?
 
+      state = connection_state_in(cleaned)
+      return [ state, nil ] if state
+
+      @secrets.view_definitions_in(cleaned).each { |view, definition| (state = connection_state_in(definition)) and return [ state, view ] }
+      nil
+    end
+
+    # A counter is told by its call. A pragma function is told where it can run: called, or where a table stands
+    # (after FROM, JOIN, IN, a comma of a FROM list, a parenthesis that opens one, or a schema and a dot there).
+    # A name anywhere else is a column's or an alias's, which SQLite never reads as the function.
+    def connection_state_in(cleaned)
       # A table of a counter's name does not hide the function, as one of a pragma function's name does.
       counter = cleaned[SQLITE_COUNTER_CALL, 1]
       return counter.downcase if counter

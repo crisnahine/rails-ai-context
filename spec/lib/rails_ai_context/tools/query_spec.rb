@@ -1893,6 +1893,53 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "a SQLite view over a pragma function or a counter, on a file-backed database" do
+    let(:dir) { Dir.mktmpdir }
+    let(:conn) do
+      stub_const("QueryPragmaViewRecord", Class.new(ActiveRecord::Base) { self.abstract_class = true })
+      QueryPragmaViewRecord.establish_connection(adapter: "sqlite3", database: File.join(dir, "app.sqlite3"))
+      QueryPragmaViewRecord.connection.tap do |c|
+        c.execute("CREATE TABLE rows (id integer)")
+        c.execute("CREATE VIEW dbs AS SELECT name FROM pragma_database_list")
+        c.execute("CREATE VIEW over_dbs AS SELECT * FROM dbs")
+        c.execute("CREATE VIEW counted AS SELECT changes() AS n, id FROM rows")
+        c.execute("CREATE VIEW columns_of AS SELECT name FROM pragma_table_info('rows')")
+        c.execute("CREATE VIEW flags AS SELECT id AS pragma_flag FROM rows")
+        c.execute("ATTACH DATABASE '#{File.join(dir, "side.sqlite3")}' AS side")
+      end
+    end
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connection).and_return(conn)
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    after do
+      QueryPragmaViewRecord.remove_connection
+      FileUtils.rm_rf(dir)
+    end
+
+    def answer(sql)
+      response = RailsAiContext::RunCache.around { described_class.call(sql: sql) }
+      [ response.error?, response.content.first[:text] ]
+    end
+
+    it "refuses a statement that names a view reading a connection's own value, by the view and the function" do
+      expect(conn.select_values("SELECT name FROM dbs")).to include("side")
+      { "SELECT name FROM dbs" => %w[dbs pragma_database_list], "SELECT * FROM over_dbs" => %w[dbs pragma_database_list],
+        "SELECT n FROM counted" => %w[counted changes] }.each do |sql, (view, name)|
+        expect(answer(sql)).to eq([ true, "Blocked: `#{name}`, which the view `#{view}` reads, tells of the connection that runs it. rails_query " \
+          "runs a statement on a connection of its own and sets some of that connection's values itself, so the answer would not be the " \
+          "app's. A pragma function that describes the schema or the database file runs, for example `pragma_table_info`." ]), sql
+      end
+    end
+
+    it "runs a view over a pragma function that describes the schema, and one with a column named like a pragma function" do
+      expect(answer("SELECT name FROM columns_of")).to match([ false, a_string_including("| id") ])
+      expect(answer("SELECT pragma_flag FROM flags")).to match([ false, a_string_including("0 rows") ])
+    end
+  end
+
   describe "a SQLite column whose name differs from a secret column's by a letter past ASCII" do
     let(:dir) { Dir.mktmpdir }
     let(:conn) do

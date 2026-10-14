@@ -302,6 +302,11 @@ module RailsAiContext
       nil
     end
 
+    # view => its definition, for each view the text names and each one their definitions name.
+    def view_definitions_in(text)
+      views_reached(text).keys.filter_map { |view| [ spelled(view), @views[view] ] if @views[view] }.to_h
+    end
+
     # The schema's real secret columns, read by the PostgreSQL plan checks.
     attr_reader :in_schema
 
