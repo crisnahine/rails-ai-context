@@ -52,10 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. A plain read of a few columns under a condition that holds no column
   (`WHERE EXISTS (...)`) runs for the same reason. 5.35.2 refused them.
 - **On PostgreSQL `EXPLAIN (GENERIC_PLAN)` answers the plan.** The plan check
-  planned the statement under it without the option, so a statement with `$1`
-  in it answered an SQL error. It is now planned with the option. A server
-  older than PostgreSQL 16 has no such option and still answers its error.
-  5.35.2 answered the error.
+  planned the statement under it without the option, so a statement with `$1` in
+  it answered an SQL error. It is now planned with the option, read as the
+  server reads it: its last value counts, quoted or not. A server older than
+  PostgreSQL 16 has no such option and still answers its error. 5.35.2 answered
+  the error.
 - **On PostgreSQL the `pg_sequences` view can be read.** It reads each
   sequence's value through `pg_sequence_last_value`, a VOLATILE function that
   writes nothing, and the statement was refused. The function now joins the
@@ -81,16 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now answers "SQL error: canceling statement due to user request". A real
   timeout keeps its sentence. A server that writes its messages in another
   language still answers a cancel as the timeout.
-- **A query that reads a setting `rails_query` sets for each statement says
-  so, and gives the session's own value.** `SHOW statement_timeout` answered
-  the bound the tool set for the statement (`2s`) with nothing to say it was
-  not the session's (`50s`), and so did `transaction_read_only` on
-  PostgreSQL, and the statement limit (`max_execution_time` or
-  `max_statement_time`) and `lock_wait_timeout` on MySQL and MariaDB, by `@@`
-  or by `SHOW VARIABLES`. The answer now ends with a note, for example
-  "statement_timeout here is the value rails_query sets for each statement it
-  runs. The session's own: statement_timeout 50s." 5.35.2 and earlier gave no
-  note.
+- **A query that reads a setting `rails_query` sets for each statement says so,
+  and gives the session's own value.** `SHOW statement_timeout` answered the
+  bound the tool set for the statement (`2s`) with nothing to say it was not the
+  session's (`50s`), and so did `transaction_read_only` on PostgreSQL, and the
+  statement limit (`max_execution_time` or `max_statement_time`) and
+  `lock_wait_timeout` on MySQL and MariaDB, by `@@` or by `SHOW VARIABLES`. The
+  answer now ends with a note, for example "statement_timeout here is the value
+  rails_query sets for each statement it runs. The session's own:
+  statement_timeout 50s." A name used as an alias or a column, and a global
+  value on MySQL and MariaDB, get no note. 5.35.2 and earlier gave no note.
 - **On PostgreSQL 13 and 14 a temporary table runs, with its secret column
   filtered.** Before PostgreSQL 15 a plan names the session's temporary schema
   by its number (`pg_temp_3`), where the column reads name it `pg_temp`, so
@@ -124,10 +125,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every preset names each database's adapter and lists the databases.** On
   `preset: standard`, which runs no `multi_database` introspector, the static
   tier called the primary's adapter `unknown` in `rails_onboard` and in the
-  generated files, named no adapter beside a second database, and left the
-  `- Databases:` line out of CLAUDE.md and `.claude/rules/rails-context.md`.
-  The context now carries the app databases list on every preset, so these
-  answer what `preset: full` answers. 5.35.2 and earlier versions had the gap.
+  generated files, named no adapter beside a second database, and left the `-
+  Databases:` line out of CLAUDE.md and `.claude/rules/rails-context.md`. The
+  context now carries the app databases list on every preset, and where the
+  `multi_database` introspector failed, so these answer what `preset: full`
+  answers. 5.35.2 and earlier versions had the gap.
 - **A model whose class body raises is named with what it raised.** Ruby
   registers a class before its body runs, so a model file that raised partway
   down its class was listed as `[VERIFIED]` with only what ran before the
@@ -137,15 +139,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A booted model keeps its STI hierarchy while nothing has queried its
   database.** A model whose table is in a second database, and so not in
   `db/schema.rb`, lost its STI parent, children and type column until a first
-  query connected that database. The table is now read as not known to lack
-  the type column, as the static tier reads it, and a model with no STI parent
-  or child still answers no STI. 5.35.2 and earlier versions had the gap.
-- **The static mailer list adds the actions a mailer inherits from the app's
-  own mailers.** A `ShopMailer < BaseMailer` listed only the actions in its
-  own file, where Rails delivers the parent's public methods too and the
-  booted tier lists them. Each name now takes the visibility the nearest class
-  gives it, so a method the child makes private stays out. 5.35.2 and earlier
-  versions had the gap.
+  query connected that database. The table is now read as not known to lack the
+  type column, as the static tier reads it, and a model with no STI parent or
+  child still answers no STI. An abstract base, such as the class a second
+  database connects through, is no STI parent. 5.35.2 and earlier versions had
+  the gap.
+- **The static mailer list adds the actions a mailer inherits from the app's own
+  mailers.** A `ShopMailer < BaseMailer` listed only the actions in its own
+  file, where Rails delivers the parent's public methods too and the booted tier
+  lists them. Each name now takes the visibility the nearest class gives it, so
+  a method the child makes private, under `private` or with `private :name`,
+  stays out. 5.35.2 and earlier versions had the gap.
 - **`rails_get_schema` says when two databases share `db/schema.rb`.** Rails
   dumps both the first database and the one named `primary` to that file, so
   it holds whichever was dumped last. A table of the other database was called
@@ -165,6 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `### Sidekiq` heading that says they are those workers' counts. Since 4.3.1
   any app with Sidekiq loaded got Sidekiq's counts under the adapter's name,
   where they read as that adapter's queue.
+
 ## [5.35.2] - 2026-10-14
 
 ### Security
