@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.1] - 2026-10-15
+
+### Fixed
+
+- **On PostgreSQL the refusal of a name on the read-only VOLATILE list says the
+  list trusts the server's own function or a C function.** 5.36.0 answered "an
+  extension's C function", narrower than the rule it applies: any C function of
+  that name is trusted, since only a superuser can create one.
+- **The docs say which reads of a `rails_query` call run with no time limit.**
+  `docs/TOOLS.md` and `docs/SECURITY.md` said every statement a call sends is
+  bounded, and the reads of a setting's own value for the settings note, new in
+  5.36.0, are not. They wait on no lock. `docs/SECURITY.md` also said `PRAGMA
+  query_only` is refused by name: a `PRAGMA` statement is no read, and the
+  `pragma_query_only` function is the one refused by name.
+- **`docs/TOOLS.md` says when `rails_get_mailers` names where a mailer's actions
+  come from.** A mailer with no action of its own names a gem base it reaches
+  without passing `ApplicationMailer`, such as `Devise::Mailer`. It names none
+  past `ApplicationMailer` and never Rails' own base, on both tiers, as 5.36.0
+  does. The page said any gem base was named.
+
 ## [5.36.0] - 2026-10-14
 
 ### Security

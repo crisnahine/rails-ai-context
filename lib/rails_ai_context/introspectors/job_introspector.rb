@@ -822,14 +822,17 @@ module RailsAiContext
           parent_class: inherited_from(walked, outside&.name) }.reject { |_k, v| v.nil? || v == [] }
       end
 
-      # The parent past the app's own mailers that a mailer with no action of its own takes them from. None past the app
-      # base, whose methods and everything above it are no actions, and none from Rails itself.
-      def inherited_from(walked, outside)
-        return nil if walked.any? { |name| ActionResolver.app_base_name?(name, kind: :mailer) }
+      # The parent past the app's own mailers that a mailer with no action of its own takes its actions from. None past
+      # the app base, whose methods and everything above it are no actions, and none from Rails' own base.
+      def inherited_from(walked, parent_name)
+        return nil if walked.any? { |name| app_mailer_base?(name) }
 
-        name = outside.to_s.delete_prefix("::")
-        name unless name.empty? || name.start_with?("ActionMailer::", "AbstractController::") ||
-                    ActionResolver.app_base_name?(name, kind: :mailer)
+        name = parent_name.to_s.delete_prefix("::")
+        name unless name.empty? || name.start_with?("ActionMailer::", "AbstractController::") || app_mailer_base?(name)
+      end
+
+      def app_mailer_base?(name)
+        ActionResolver.app_base_name?(name, kind: :mailer)
       end
 
       def callable_class_methods(names)
@@ -1191,7 +1194,7 @@ module RailsAiContext
       # gives it; tagged STATIC, since a gem's base or a mixin can add actions only the booted tier sees.
       def mailer_entry(klass, ancestors)
         # The app base's public methods are no actions, as the booted tier subtracts them; its callbacks still filter.
-        action_chain = [ klass, *ancestors.take_while { |declaring| !ActionResolver.app_base_name?(declaring.name, kind: :mailer) } ]
+        action_chain = [ klass, *ancestors.take_while { |declaring| !app_mailer_base?(declaring.name) } ]
         visibility = {}
         action_chain.each do |declaring|
           own = ActionResolver.own_methods(declaring.methods, declaring.name).select { |m| m[:scope] == :instance }

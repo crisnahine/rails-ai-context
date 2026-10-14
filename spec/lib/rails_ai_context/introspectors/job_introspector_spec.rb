@@ -661,12 +661,13 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     # Whitehall's MultiNotifications fans one notification out to every author
     # through `self.` methods. Dropping a mailer with no instance action hid a
     # class three models call.
-    it "keeps a mailer whose interface is class methods" do
+    it "keeps a mailer whose interface is class methods, and names no parent past the app's own mailers or from Rails" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
         File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), "class ApplicationMailer < Mail::Notify::Mailer\nend\n")
         File.write(File.join(dir, "app", "mailers", "base_mailer.rb"), "class BaseMailer < ApplicationMailer\nend\n")
         File.write(File.join(dir, "app", "mailers", "quiet_mailer.rb"), "class QuietMailer < BaseMailer\n  def self.ping = nil\nend\n")
+        File.write(File.join(dir, "app", "mailers", "plain_mailer.rb"), "class PlainMailer < ActionMailer::Base\n  def self.ping = nil\nend\n")
         File.write(File.join(dir, "app", "mailers", "multi_notifications.rb"), <<~RUBY)
           class MultiNotifications < ApplicationMailer
             def self.deadline_passed(consultation)
@@ -680,8 +681,9 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(mailer).not_to be_nil
       expect(mailer[:actions]).to eq([])
       expect(mailer[:class_actions]).to eq(%w[deadline_passed])
-      expect(mailer).not_to have_key(:parent_class)
-      expect(result[:mailers].find { |m| m[:name] == "QuietMailer" }).to include(class_actions: %w[ping]).and(satisfy { |m| !m.key?(:parent_class) })
+      quiet, plain = %w[QuietMailer PlainMailer].map { |name| result[:mailers].find { |m| m[:name] == name } }
+      expect([ mailer, quiet, plain ].map { |m| m.key?(:parent_class) }).to eq([ false, false, false ])
+      expect([ quiet, plain ].map { |m| m[:class_actions] }).to eq([ %w[ping], %w[ping] ])
     end
 
     # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing
@@ -2178,6 +2180,16 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(entry).not_to be_nil
       expect(entry[:actions]).to eq([])
       expect(entry[:class_actions]).to eq(%w[blast])
+      expect(entry).not_to have_key(:parent_class)
+    end
+
+    # Rails' own base gives a mailer no action, so it is no answer to where a mailer's actions come from.
+    it "names no parent for a mailer straight under ActionMailer::Base" do
+      entry = with_mailer("PlainMailer", "class PlainMailer < ActionMailer::Base\n  def self.ping = nil\nend\n") do
+        mailers.find { |m| m[:name] == "PlainMailer" }
+      end
+
+      expect(entry).to include(actions: [], class_actions: %w[ping])
       expect(entry).not_to have_key(:parent_class)
     end
 

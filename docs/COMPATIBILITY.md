@@ -323,6 +323,10 @@ Proof sources:
    11.4 on Rails 7.0 (mysql2), 8.0 and 8.1 (mysql2 and Trilogy), and on
    PostgreSQL 13, 14, 15, 17 and 18 on Rails 8.0; and the unit suite and the
    E2E harness on Linux, macOS and Windows.
+   In the v5.36.1 release QA: every issue repro of 5.36.0 run again on the
+   published code on PostgreSQL 13 to 18, MySQL 8.0 and 8.4 and MariaDB 10.6
+   and 11.4, the booted and static mailer lists compared on one app, and the
+   unit suite and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
