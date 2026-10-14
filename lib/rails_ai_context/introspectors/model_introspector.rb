@@ -111,7 +111,7 @@ module RailsAiContext
           # the rescue meant to contain the first.
           outside = outside_parent(class_name, candidates)
           table = resolve_table_name(class_name, candidates, outside: outside)
-          table_set_by = outside unless table
+          table_set_by = table ? unread_table_setting(class_name, candidates) : outside
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
                                                     table_name: table, table_set_by: table_set_by,
                                                     primary_key: resolve_primary_key(class_name, candidates),
@@ -534,6 +534,33 @@ module RailsAiContext
           scope.pop
         end
         candidates.dig(class_name, key) || ActiveRecordSettings.for(app.root)[key] || ""
+      end
+
+      # The setting that shapes this class's table with a value only the running app computes, such as
+      # "SDG.table_name_prefix"; nil when every one that shapes it was read.
+      def unread_table_setting(class_name, candidates, seen = [])
+        return nil if seen.include?(class_name) || candidates.dig(class_name, :table_name)
+
+        own = Array(candidates.dig(class_name, :unread_settings)).first
+        return "#{class_name}.#{own}" if own
+
+        %i[table_name_prefix table_name_suffix].each do |key|
+          scope = class_name.split("::")[0..-2]
+          while scope.any?
+            namespace = scope.join("::")
+            break if candidates.dig(namespace, key)
+            return "#{namespace}.#{key}" if Array(candidates.dig(namespace, :unread_settings)).include?(key)
+
+            scope.pop
+          end
+        end
+
+        parent = candidates.dig(class_name, :superclass)
+        resolved = parent && resolve_superclass(parent, class_name, candidates)
+        return unread_table_setting(resolved, candidates, seen + [ class_name ]) if resolved && candidates.key?(resolved)
+
+        setting = ActiveRecordSettings.unread(app.root).find { |name| TableName::TABLE_SETTINGS.include?(name) }
+        "ActiveRecord::Base.#{setting}" if setting
       end
 
       def isolated_prefixes

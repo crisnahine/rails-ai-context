@@ -19,6 +19,7 @@ module RailsAiContext
       module_function
 
       NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil, pluralize_table_names: nil, primary_key: nil }.freeze
+      TABLE_SETTINGS = %i[table_name table_name_prefix table_name_suffix pluralize_table_names].freeze
 
       # {"RssPolling" => "rss_polling_"}: the engine prefix no model file says.
       # ponytail: reads `lib/**/engine.rb` only; walk lib wholesale if an app needs more.
@@ -38,14 +39,17 @@ module RailsAiContext
       #
       # @param source [String] the file's source
       # @param name [String] the qualified name of the class or module
-      # @return [Hash] the five, each nil when this scope declares none
+      # @return [Hash] the five, each nil when this scope declares none, and under `unread_settings`
+      #   the table settings it declares with a value only the running app computes
       # @param root [String, nil] the app, whose configured affixes a table
       #   name interpolating table_name_prefix or table_name_suffix reads
       def declarations(source, name, root = nil)
         read(source, name) do |body|
           own = { table_name_prefix: affix(body, :table_name_prefix), table_name_suffix: affix(body, :table_name_suffix) }
-          { table_name: assigned(body, :table_name=) || interpolated(body, own, root) }.merge(own)
-            .merge(pluralize_table_names: boolean_assigned(body, :pluralize_table_names=), primary_key: primary_key_assigned(body))
+          read = { table_name: assigned(body, :table_name=) || interpolated(body, own, root) }.merge(own)
+                 .merge(pluralize_table_names: boolean_assigned(body, :pluralize_table_names=), primary_key: primary_key_assigned(body))
+          unread = TABLE_SETTINGS.select { |setting| read[setting].nil? && declares?(body, setting) }
+          unread.any? ? read.merge(unread_settings: unread) : read
         end || NONE
       end
 
@@ -227,6 +231,13 @@ module RailsAiContext
         names if names.all?
       end
 
+      def declares?(body, setting)
+        body.any? do |node|
+          ((node.is_a?(Prism::CallNode) && node.name == :"#{setting}=") || (node.is_a?(Prism::DefNode) && node.name == setting)) &&
+            node.receiver.is_a?(Prism::SelfNode)
+        end
+      end
+
       def boolean_assigned(body, name)
         call = body.find do |node|
           node.is_a?(Prism::CallNode) && node.name == name && node.receiver.is_a?(Prism::SelfNode)
@@ -286,7 +297,7 @@ module RailsAiContext
       end
 
       private_class_method :affix, :read, :body_of, :built_body, :descend, :statements, :segment,
-                           :assigned, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes,
+                           :assigned, :declares?, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes,
                            :interpolated, :affixed_node, :affix_read,
                            :engine_files, :collect_isolate_calls
     end

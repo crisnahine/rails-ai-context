@@ -104,7 +104,6 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
-  # A dump can leave out a view, so only a live listing that lacks the table says it is missing.
   describe ".table_absent_from" do
     let(:tables) { { "users" => { columns: [] } } }
 
@@ -115,6 +114,7 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
+  # A dump can leave out a view, so only a live listing that lacks the table says it is missing.
   describe ".missing_table?" do
     let(:schema) do
       { adapter: "postgresql", tables: { "users" => { columns: [] } },

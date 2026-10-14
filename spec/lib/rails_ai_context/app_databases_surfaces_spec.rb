@@ -403,6 +403,48 @@ RSpec.describe "a model whose table the schema dump does not declare, on the sta
     end
   end
 
+  def static_answers(files, models)
+    Dir.mktmpdir do |root|
+      { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n" }.merge(files).compact.each do |path, source|
+        FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+        File.write(File.join(root, path), source)
+      end
+      RailsAiContext.configuration.app_root = root
+      RailsAiContext::RunCache.around do
+        context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+        allow(RailsAiContext::Tools::GetModelDetails).to receive_messages(cached_context: context)
+        models.to_h { |name| [ name, RailsAiContext::Tools::GetModelDetails.call(model: name).content.first[:text] ] }
+      end
+    end
+  end
+
+  it "judges no table name a setting shapes that the static tier could not read, nor tables read from the migrations", :aggregate_failures do
+    answers = [
+      static_answers({ "app/models/sdg.rb" => "module SDG\n  def self.table_name_prefix\n    ENV.fetch(\"P\", \"sdg_\")\n  end\nend\n",
+                       "app/models/sdg/goal.rb" => "class SDG::Goal < ApplicationRecord\nend\n" }, [ "SDG::Goal" ]),
+      static_answers({ "app/models/widget.rb" => "class Widget < ApplicationRecord\n  self.pluralize_table_names = ENV[\"X\"] == \"1\"\nend\n" }, [ "Widget" ]),
+      static_answers({ "app/models/gizmo.rb" => "class Gizmo < ApplicationRecord\n  self.table_name = ENV.fetch(\"T\", \"gizmos\")\nend\n" }, [ "Gizmo" ]),
+      static_answers({ "config/initializers/prefix.rb" => "ActiveRecord::Base.table_name_prefix = ENV.fetch(\"P\", \"\")\n",
+                       "app/models/thing.rb" => "class Thing < ApplicationRecord\nend\n" }, [ "Thing" ]),
+      static_answers({ "db/schema.rb" => nil, "app/models/relic.rb" => "class Relic < ApplicationRecord\nend\n",
+                       "db/migrate/20240101000000_create_posts.rb" => "class CreatePosts < ActiveRecord::Migration[8.0]\n  def change\n    create_table :posts\n  end\nend\n" },
+                     [ "Relic" ])
+    ].reduce(:merge)
+
+    answers.each { |name, text| expect([ name, text[/^\*\*Table:\*\* .*$/] ]).to match([ name, a_string_matching(/\A\*\*Table:\*\* `[a-z_]+`\z/) ]) }
+
+    # The innermost module that declares the prefix decides it, and a literal table_name needs no prefix.
+    judged = static_answers({ "app/models/outer.rb" => "module Outer\n  def self.table_name_prefix\n    ENV.fetch(\"P\", \"o_\")\n  end\nend\n",
+                              "app/models/outer/inner.rb" => "module Outer::Inner\n  def self.table_name_prefix\n    \"in_\"\n  end\nend\n",
+                              "app/models/outer/inner/item.rb" => "class Outer::Inner::Item < ApplicationRecord\nend\n",
+                              "app/models/outer/fixed.rb" => "class Outer::Fixed < ApplicationRecord\n  self.table_name = \"fixed_items\"\nend\n" },
+                            [ "Outer::Inner::Item", "Outer::Fixed" ])
+    expect(judged.values.map { |text| text[/^\*\*Table:\*\* .*$/] })
+      .to eq([ "**Table:** `in_items` missing from db/schema.rb", "**Table:** `fixed_items` missing from db/schema.rb" ])
+  end
+
   it "says so in rails_onboard" do
     Dir.mktmpdir do |root|
       { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
