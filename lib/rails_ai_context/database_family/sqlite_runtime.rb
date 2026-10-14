@@ -113,7 +113,7 @@ module RailsAiContext
         []
       end
 
-      def plan(_conn, _sql, _timeout)
+      def plan(_conn, _sql, _timeout, **)
         nil
       end
 

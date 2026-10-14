@@ -10,7 +10,7 @@ module RailsAiContext
       NAME = /(?:([A-Za-z_]\w*)|"((?:""|[^"])+)")/
       BASE_VAR = /\A#{NAME}\.#{NAME}\z/
       # Nodes whose every read of a child's column is an expression of their own that names it.
-      READS_BY_NAME = [ "Aggregate", "Hash Join", "Merge Join", "Nested Loop" ].freeze
+      READS_BY_NAME = [ "Aggregate", "Hash Join", "Merge Join", "Nested Loop", "Result" ].freeze
 
       # Catalogs and TOAST tables: the never-read list and the catalog credentials hold what is secret there.
       SYSTEM_SCHEMA = /\A(?:pg_catalog|information_schema|pg_toast(?:_temp_\d+)?)\z/

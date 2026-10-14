@@ -95,8 +95,8 @@ module RailsAiContext
 
       # @raise [TimedOut, ActiveRecord::StatementInvalid] when PostgreSQL cannot plan the statement
       # @return [Hash, nil] the PostgreSQL JSON plan's top node; nil on other families or when the answer is no plan
-      def plan(connection, sql, timeout:)
-        runtime.plan(connection, sql, timeout)
+      def plan(connection, sql, timeout:, generic: false)
+        runtime.plan(connection, sql, timeout, generic: generic)
       end
 
       # @return [Array<Array(Integer, String, String)>] [result column index, table column, relation] from the

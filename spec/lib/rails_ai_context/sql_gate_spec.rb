@@ -1553,7 +1553,7 @@ RSpec.describe RailsAiContext::SqlGate do
 
     it "plans the statement a leading EXPLAIN ANALYZE would run" do
       refusal("EXPLAIN ANALYZE SELECT 1 AS x", :postgresql)
-      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", a_value_within(1).of(5))
+      expect(RailsAiContext::DatabaseFamily::PostgresqlRuntime).to have_received(:plan).with(connection, "SELECT 1 AS x", a_value_within(1).of(5), generic: false)
     end
 
     it "plans nothing off PostgreSQL" do
@@ -1598,7 +1598,7 @@ RSpec.describe RailsAiContext::SqlGate do
         described_class.new(family: families.fetch(:postgresql), secrets: RailsAiContext::SecretColumns.new, connection: connection, budget: budget)
           .check("SELECT nextval('s')")
 
-        expect(runtime).to have_received(:plan).with(connection, "SELECT nextval('s')", a_value_within(0.1).of(2))
+        expect(runtime).to have_received(:plan).with(connection, "SELECT nextval('s')", a_value_within(0.1).of(2), generic: false)
         expect(runtime).to have_received(:bounded).with(connection, a_value_between(1, 1.8))
         expect(budget.spend { |left| left }).to be_between(1, 1.8)
       end
@@ -1616,10 +1616,20 @@ RSpec.describe RailsAiContext::SqlGate do
 
       it "plans whatever a leading EXPLAIN would run, in either spelling of its options" do
         [ "EXPLAIN VALUES (1)", "EXPLAIN (ANALYZE, VERBOSE) VALUES (1)", "EXPLAIN ANALYZE VERBOSE VALUES (1)" ].each { |sql| check(sql, :postgresql) }
-        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", a_value_within(1).of(5)).exactly(3).times
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (1)", a_value_within(1).of(5), generic: false).exactly(3).times
 
         check("EXPLAIN (ANALYZE) (SELECT 1)", :postgresql)
-        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5))
+        expect(runtime).to have_received(:plan).with(connection, "(SELECT 1)", a_value_within(1).of(5), generic: false)
+      end
+
+      it "plans the statement under EXPLAIN (GENERIC_PLAN) generically, and with any other value of the option as written" do
+        [ "EXPLAIN (GENERIC_PLAN) VALUES ($1)", "EXPLAIN (COSTS off, generic_plan TRUE) VALUES ($1)", "EXPLAIN (GENERIC_PLAN 1, VERBOSE) VALUES ($1)" ].each do |sql|
+          check(sql, :postgresql)
+        end
+        expect(runtime).to have_received(:plan).with(connection, "VALUES ($1)", a_value_within(1).of(5), generic: true).exactly(3).times
+
+        [ "EXPLAIN (GENERIC_PLAN off) VALUES (2)", "EXPLAIN (GENERIC_PLAN 'on') VALUES (2)", "EXPLAIN (VERBOSE) VALUES (2)" ].each { |sql| check(sql, :postgresql) }
+        expect(runtime).to have_received(:plan).with(connection, "VALUES (2)", a_value_within(1).of(5), generic: false).exactly(3).times
       end
 
       # SHOW reads a setting and PostgreSQL has no DESCRIBE, so neither has a plan to read.

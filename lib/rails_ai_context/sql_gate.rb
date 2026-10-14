@@ -176,6 +176,7 @@ module RailsAiContext
       pg_is_in_recovery pg_is_wal_replay_paused pg_get_wal_replay_pause_state
       pg_current_wal_lsn pg_current_wal_insert_lsn pg_current_wal_flush_lsn
       pg_last_wal_receive_lsn pg_last_wal_replay_lsn pg_last_xact_replay_timestamp
+      pg_sequence_last_value
     ].freeze
 
     # Any character past ASCII is an identifier character to SQLite and MySQL, a no-break space included.
@@ -228,6 +229,10 @@ module RailsAiContext
     # Every other statement is planned, as is whatever a leading EXPLAIN would run.
     NO_PLAN = /\A\s*(?:SHOW|DESCRIBE|DESC)\b/i
     EXPLAIN_PREFIX = /\A\s*EXPLAIN\s+(?:\([^)]*\)\s*)?(?:ANALYZE\s+)?(?:VERBOSE\s+)?/i
+    # A generic plan leaves $1 unbound, so the statement under it is planned only with the option.
+    GENERIC_PLAN = /\A\s*EXPLAIN\s*\([^)]*\bGENERIC_PLAN(?:\s+(true|on|1))?\s*[,)]/i
+    # The handler a sampling method names is never called by the statement, and the plan prints its arguments.
+    SAMPLING_METHOD = /\bTABLESAMPLE\s+(?:\w+\s*\.\s*)?\w+(?=\s*\()/i
 
     # A statement's text under a pointer. A lookbehind sees the text before the pointer, and where each dollar
     # tag last stands is read in one pass: a search for its closer from every opener is quadratic.
@@ -274,7 +279,9 @@ module RailsAiContext
       text, refusal = text_verdict(sql)
       return refuse(refusal) if refusal
       planned = @family.plan_checks? && !text.match?(NO_PLAN)
-      plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left) } if planned
+      if planned
+        plan = @budget.spend { |left| @family.plan(@connection, text.sub(EXPLAIN_PREFIX, ""), timeout: left, generic: text.match?(GENERIC_PLAN)) }
+      end
       if planned && plan.nil?
         return refuse("Blocked: the query is not run because its plan could not be read. On PostgreSQL " \
           "the plan shows which columns a query returns, so no query runs without one.")
@@ -853,7 +860,7 @@ module RailsAiContext
       foreign = plan.nodes.select { |node| node["Remote SQL"] }
       conds.concat(foreign.map { |node| remote_uses(node) }, local_names(foreign))
       # EXPLAIN prints no row of a VALUES list and no LIMIT, so the functions the text names are read too.
-      called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text) ])
+      called = function_names(raw.map { |expr| expr.gsub(PLAN_LITERAL, "''") } + [ mask_sql_literals(text).gsub(SAMPLING_METHOD, "TABLESAMPLE ") ])
 
       # A view reaches a relation or a function the text check did not see.
       sources = plan.nodes.flat_map { |node| node.values_at("Relation Name", "Function Name") }.compact + called.to_a

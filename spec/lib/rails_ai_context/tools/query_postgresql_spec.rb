@@ -889,6 +889,103 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
     conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
   end
 
+  it "reads the pg_sequences view, and still refuses the calls that move or read a sequence's session value" do
+    conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
+    conn.execute("CREATE SEQUENCE rac_pg_seq START 41")
+    conn.execute("SELECT nextval('rac_pg_seq')")
+    [ "SELECT sequencename, last_value FROM pg_sequences WHERE sequencename = 'rac_pg_seq'", "SELECT * FROM pg_sequences",
+      "SELECT pg_sequence_last_value('rac_pg_seq') AS v" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("41") ]), sql
+    end
+    [ [ "nextval", "SELECT nextval('rac_pg_seq') AS n" ], [ "setval", "SELECT setval('rac_pg_seq', 1) AS n" ],
+      [ "currval", "SELECT currval('rac_pg_seq') AS n" ], [ "lastval", "SELECT lastval() AS n" ],
+      [ "nextval", "SELECT last_value FROM pg_sequences WHERE nextval('rac_pg_seq') > 0" ] ].each do |function, sql|
+      refused([ sql ], "Blocked: function #{function} is VOLATILE")
+    end
+    expect(conn.select_value("SELECT last_value FROM rac_pg_seq").to_i).to eq(41)
+  ensure
+    conn.execute("DROP SEQUENCE IF EXISTS rac_pg_seq")
+  end
+
+  describe "TABLESAMPLE" do
+    before do
+      conn.execute("CREATE OR REPLACE FUNCTION public.bernoulli(int) RETURNS int VOLATILE LANGUAGE sql AS 'SELECT $1'")
+      conn.execute("CREATE OR REPLACE FUNCTION public.system(int) RETURNS int VOLATILE LANGUAGE sql AS 'SELECT $1'")
+    end
+
+    after { conn.execute("DROP FUNCTION IF EXISTS public.bernoulli(int), public.system(int)") }
+
+    it "runs a sampled read, whose sampling method the statement never calls" do
+      [ "SELECT id, email FROM rac_pg_accounts TABLESAMPLE BERNOULLI (100) ORDER BY id LIMIT 2",
+        "SELECT id, email FROM rac_pg_accounts TABLESAMPLE SYSTEM (100)", "SELECT id, email FROM rac_pg_accounts tablesample system(100) REPEATABLE (1)",
+        "SELECT id, email FROM rac_pg_accounts a TABLESAMPLE pg_catalog.bernoulli (100) WHERE a.id = 1" ].each do |sql|
+        response = run(sql)
+        expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("a@example.com") ]), sql
+      end
+      text = run("SELECT * FROM rac_pg_accounts TABLESAMPLE SYSTEM (100)").content.first[:text]
+      expect(text).to include("a@example.com", "[FILTERED]")
+      expect(text).not_to include("salt-value", "token-value")
+    end
+
+    it "refuses a VOLATILE function named like a sampling method wherever the statement calls it" do
+      { "bernoulli" => [ "SELECT bernoulli(1) AS b", "SELECT id FROM rac_pg_accounts TABLESAMPLE BERNOULLI (100) WHERE bernoulli(1) = 1",
+                         "SELECT id FROM rac_pg_accounts TABLESAMPLE SYSTEM (bernoulli(100))",
+                         "SELECT id FROM rac_pg_accounts TABLESAMPLE SYSTEM (100) REPEATABLE (bernoulli(1))",
+                         "SELECT 1 AS one LIMIT (SELECT bernoulli(1))", "SELECT * FROM (VALUES (bernoulli(1)), (2)) v" ],
+        "system" => [ "SELECT system(1) AS s", "SELECT id FROM rac_pg_accounts TABLESAMPLE SYSTEM (100) LIMIT (SELECT system(1))" ] }.each do |function, statements|
+        refused(statements, "Blocked: function #{function} is VOLATILE")
+      end
+    end
+  end
+
+  it "runs a nested uncorrelated EXISTS over a table with a secret column, and still refuses each shape that passes one through" do
+    conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+    conn.execute("CREATE TABLE rac_pg_plain (id int)")
+    conn.execute("INSERT INTO rac_pg_plain VALUES (7)")
+    gate = "EXISTS (SELECT 1 FROM rac_pg_accounts r WHERE r.id = 1)"
+    [ "SELECT q.id FROM rac_pg_plain q WHERE EXISTS (SELECT 1 FROM rac_pg_accounts p WHERE #{gate})",
+      "SELECT q.id FROM rac_pg_plain q WHERE EXISTS (SELECT 1 FROM rac_pg_accounts p WHERE EXISTS (SELECT 1 FROM rac_pg_accounts r WHERE #{gate}))",
+      "SELECT q.id, (SELECT count(*) FROM rac_pg_accounts p WHERE #{gate}) AS n FROM rac_pg_plain q",
+      "SELECT q.id FROM rac_pg_plain q WHERE EXISTS (SELECT 1 FROM rac_pg_accounts p WHERE #{gate} OFFSET 0)",
+      "SELECT p.id + 6 AS id FROM rac_pg_accounts p WHERE #{gate}" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("7") ]), sql
+    end
+    [ "SELECT * FROM rac_pg_accounts p WHERE #{gate}", "SELECT x.* FROM rac_pg_plain q, LATERAL (SELECT * FROM rac_pg_accounts p WHERE #{gate} OFFSET 0) x" ].each do |sql|
+      text = run(sql).content.first[:text]
+      expect(text).to include("a@example.com", "[FILTERED]"), sql
+      expect(text).not_to include("salt-value", "token-value"), sql
+    end
+    expect(run("SELECT max(x.email) AS m FROM (SELECT * FROM rac_pg_accounts p WHERE #{gate} OFFSET 0) x").content.first[:text]).to include("a@example.com")
+
+    guess = "(1, 'a@example.com', 'salt-valud', 'x', 'y')"
+    refused([ "SELECT #{guess} < (SELECT * FROM rac_pg_accounts p WHERE #{gate}) AS o",
+              "SELECT q.id FROM rac_pg_plain q WHERE #{guess} < (SELECT * FROM rac_pg_accounts p WHERE #{gate})",
+              "SELECT q.id FROM rac_pg_plain q WHERE #{guess} < ANY (SELECT * FROM rac_pg_accounts p WHERE #{gate})",
+              "SELECT q.id FROM rac_pg_plain q WHERE EXISTS (SELECT 1 FROM rac_pg_accounts p WHERE #{gate} AND #{guess} < (SELECT * FROM rac_pg_accounts))",
+              "SELECT id FROM (SELECT * FROM rac_pg_accounts p WHERE #{gate} EXCEPT SELECT * FROM rac_pg_accounts WHERE false) s",
+              "WITH c AS MATERIALIZED (SELECT * FROM rac_pg_accounts p WHERE #{gate}) SELECT id, email FROM c",
+              "SELECT * FROM rac_pg_accounts p WHERE #{gate} ORDER BY 3", "SELECT id FROM rac_pg_accounts p WHERE #{gate} AND p::text LIKE '%salt-v%'" ],
+            "Blocked: the query")
+  ensure
+    conn.execute("DROP TABLE IF EXISTS rac_pg_plain")
+  end
+
+  it "plans an EXPLAIN (GENERIC_PLAN) as the server does, and still refuses what its statement would leak" do
+    [ "EXPLAIN (GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE id = $1", "explain (verbose, generic_plan true) SELECT id FROM rac_pg_accounts WHERE id = $1",
+      "EXPLAIN (GENERIC_PLAN on, COSTS off) SELECT id, email FROM rac_pg_accounts WHERE id = $1 AND email = $2" ].each do |sql|
+      response = run(sql)
+      expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("$1") ]), sql
+    end
+    expect(run("EXPLAIN (GENERIC_PLAN false) SELECT id FROM rac_pg_accounts WHERE id = $1").content.first[:text]).to include("there is no parameter $1")
+
+    refused([ "EXPLAIN (GENERIC_PLAN) SELECT row_to_json(a) FROM rac_pg_accounts a WHERE id = $1",
+              "EXPLAIN (GENERIC_PLAN) SELECT * FROM rac_pg_accounts WHERE id = $1 ORDER BY 3",
+              "EXPLAIN (GENERIC_PLAN) SELECT id FROM rac_pg_accounts WHERE salt = $1",
+              "EXPLAIN (GENERIC_PLAN) SELECT lo_get($1::oid) AS v" ], "Blocked: ")
+  end
+
   it "runs SHOW, which has no plan" do
     expect(run("SHOW server_version").error?).to be(false)
   end
