@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.2] - 2026-10-15
+
+### Fixed
+
+- **`rails_onboard` and `rails_get_schema` name a database that has no dump, no
+  migrations and no file.** A database database.yml configures with nothing on
+  disk was left out of both, while `rails_performance_check` named it. It is now
+  listed as "(tables not read)", with the reason: "Its tables are not listed:
+  db/extra_schema.rb is not on disk." 5.36.1 and earlier versions had the gap.
+- **On the static tier a model whose table the schema it read does not declare
+  says so.** `rails_get_model_details`, `rails_onboard` and the generated files
+  named the conventional table, `widgets`, with no word that db/schema.rb holds
+  no such table. They now answer "`widgets`, not in db/schema.rb", naming the
+  dump of the model's own database. 5.36.1 and earlier versions had the gap.
+- **`rails_session_context(mark:)` says a tool skip_tools turned off is turned
+  off.** It answered "Unknown tool" for a tool the gem has, where a call of the
+  tool says it is turned off. Both now give the same answer, by the tool's full
+  or short name. 5.36.1 and earlier versions had the gap.
+
 ## [5.36.1] - 2026-10-15
 
 ### Fixed

@@ -143,8 +143,8 @@ Narrative app walkthrough for getting up to speed. The stack line counts the
 tables of every database the app's own schema dumps declare, as
 `rails_get_schema` reads them; the databases Rails 8 gives Solid Queue, Solid
 Cache and Solid Cable get one line, without their tables. A database whose
-dump was not read is named with "(tables not read)" and left out of the table
-count, and the summary says so: "5 tables in 2 databases, the warehouse
+dump was not read, or that has no dump on disk and no migrations of its own, is
+named with "(tables not read)" and left out of the table count, and the summary says so: "5 tables in 2 databases, the warehouse
 database not read". It ends with the app's custom rake tasks (Rakefile,
 `lib/tasks`, `rakelib`), each with its arguments, description and file: the
 first 15 at `standard`, every one at `full`.
@@ -204,7 +204,7 @@ composite unique index; `[in index after x]` marks a column that only trails
 
 ### `rails_get_model_details`
 
-AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing.
+AST-parsed model internals. The model heading and each scope carry a confidence tag: `[VERIFIED]` or `[INFERRED]` on a booted app, `[STATIC]` without a boot. The method list says how many of the model's methods it is showing. On the static tier a model whose table the schema it read does not declare says so, naming the dump of the model's own database: "`widgets`, not in db/schema.rb".
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -852,7 +852,7 @@ Session-aware context tracking across tool calls within a conversation. Pass `ac
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `action` | enum | - | `status` (queried tools with timestamps), `summary` (short recap), `reset` (clear this conversation's record) |
-| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken. A retired name such as `get_gems` is recorded as `rails_get_config` with its section |
+| `mark` | string | - | Record a tool and its params as already queried (e.g., `get_schema:users`). The tool must be one the server has; a short name such as `schema` is taken, and a tool skip_tools turned off answers that it is turned off. A retired name such as `get_gems` is recorded as `rails_get_config` with its section |
 
 Each conversation has its own record: over HTTP, one server process serves every client, and each client's `Mcp-Session-Id` keeps its calls, and its `reset`, to itself. A tool that answers by calling others (`rails_get_context`, `rails_diagnose`, `rails_review_changes`) is recorded as the one call the client made.
 
