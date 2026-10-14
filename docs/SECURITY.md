@@ -180,16 +180,17 @@ A SQLite database whose file is not there is refused by name before anything
 connects, with or without a `database` argument, since connecting would create
 the file. The answer names `bin/rails db:prepare`.
 
-A SQLite statement runs on the app's own connection, under `PRAGMA query_only = ON`,
-in five cases: an in-memory database, a platform without `fork`, a statement
-the child process could not prepare, a transaction open on the app's
-connection, and a statement that names something the app's connection alone
-holds. The third is a statement that needs a table, function, virtual-table module,
-collation or encryption key only the app's own connection has. That case is
-told from which step failed in the child, and the error's text is not read. A
-statement the child prepared and that fails while it runs is answered with its
-SQL error and is not run again. The fourth is there because the child opens
-the file itself and would answer without the rows of the open transaction.
+A SQLite statement runs on the app's own connection, under
+`PRAGMA query_only = ON`, in five cases: an in-memory database, a platform
+without `fork`, a statement the child process could not prepare, a transaction
+open on the app's connection, and a statement that names something the app's
+connection alone holds. The third is a statement that needs a table, function,
+virtual-table module, collation or encryption key only the app's own
+connection has. That case is told from which step failed in the child, and the
+error's text is not read. A statement the child prepared and that fails while
+it runs is answered with its SQL error and is not run again. The fourth is
+there because the child opens the file itself and would answer without the
+rows of the open transaction.
 
 The fifth is told before the child starts, by two reads on the app's
 connection: its temp objects and its attached databases. When it holds any of
@@ -198,11 +199,11 @@ them, a statement runs there if it names one of them, the temp catalog
 calls a pragma function (`pragma_table_info(...)`, `pragma_table_list` and the
 rest) or `dbstat`, whose argument can name any of them. The child has none of
 these and would answer an empty list, the rows of a main table of the same
-name, or "unknown database". A table that only an attached database holds needs no
-match: the child cannot prepare a statement that reads it, which is the third
-case. A stated limit: a name is matched anywhere in the statement's text, in
-any letter case and inside a string too, so a statement that holds such a name
-as plain data runs on the app's connection as well.
+name, or "unknown database". A table that only an attached database holds
+needs no match: the child cannot prepare a statement that reads it, which is
+the third case. A stated limit: a name is matched anywhere in the statement's
+text, in any letter case and inside a string too, so a statement that holds
+such a name as plain data runs on the app's connection as well.
 
 On the app's own connection a statement that returns rows slowly ends with the
 timeout answer a few rows after `query_timeout` passes. The sqlite3 driver

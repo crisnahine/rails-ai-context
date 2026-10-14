@@ -481,7 +481,7 @@ RSpec.describe RailsAiContext::SqlGate do
   end
 
   describe "SQLite pragma functions" do
-    let(:relations) { { "pragma_notes" => %w[id body], "logs" => %w[id pragma_flag pragma_database_list changes last_insert_rowid] } }
+    let(:relations) { { "pragma_notes" => %w[id body], "logs" => %w[id pragma_flag pragma_foreign_keys pragma_database_list changes last_insert_rowid] } }
 
     it "runs every one that describes the schema or the database file, and refuses the rest on SQLite alone" do
       %w[table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check integrity_check quick_check
@@ -496,8 +496,8 @@ RSpec.describe RailsAiContext::SqlGate do
       expect(runs?("SELECT changes, total_changes FROM counters")).to be(true)
       expect(runs?("SELECT id, body FROM pragma_notes")).to be(true)
       # A column's name is no table's: one named like a pragma function or a counter is refused with it.
-      [ "SELECT name, file FROM pragma_database_list", "SELECT changes() AS n", "SELECT last_insert_rowid() AS n",
-        "SELECT id FROM logs WHERE pragma_flag = 1" ].each do |sql|
+      [ "SELECT name, file FROM pragma_database_list", "SELECT * FROM pragma_foreign_keys", "SELECT * FROM 'pragma_foreign_keys'",
+        "SELECT changes() AS n", "SELECT last_insert_rowid() AS n", "SELECT id FROM logs WHERE pragma_flag = 1" ].each do |sql|
         expect(refusal(sql)).to include("tells of the connection that runs it"), sql
       end
     end
