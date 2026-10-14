@@ -1,0 +1,7 @@
+test:
+  primary:
+    adapter: sqlite3
+    database: storage/test.sqlite3
+  extra:
+    adapter: sqlite3
+    database: storage/extra_test.sqlite3

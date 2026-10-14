@@ -280,6 +280,13 @@ RSpec.describe "the app databases on preset standard" do
     expect(found[:onboard]).to include("Rails application")
   end
 
+  it "names a database with no dump, no migrations and no file, and says its tables were not read" do
+    found = answers("missing_dump")
+
+    expect(found[:onboard]).to include("plus the extra database on SQLite (tables not read)")
+    expect(found[:schema]).to include("extra").and(include("db/extra_schema.rb is not on disk"))
+  end
+
   it "names the first database by its own name where another database is named primary" do
     found = answers("animals_first")
 

@@ -60,11 +60,11 @@ module RailsAiContext
 
       # { tables:, foreign_keys: } from the database's dump, or { reason: } saying why there is none to read.
       def read_dump(db)
-        return { reason: no_dump_reason(db) } unless db.dump
+        reason = db.missing_dump(root)
+        return { reason: reason } if reason
 
         path = db.dump.path
         shown = path.delete_prefix("#{root.to_s.chomp('/')}/")
-        return { reason: "#{shown} is not on disk" } unless File.exist?(path)
 
         content = SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { reason: "#{shown} is over max_schema_file_size" } unless content
@@ -73,13 +73,6 @@ module RailsAiContext
         tables = StructureSqlReader.parse(content)[:tables]
         { tables: tables,
           foreign_keys: tables.values.flat_map { |table| Array(table[:foreign_keys]).map { |fk| { from: fk[:from_table], to: fk[:to_table], column: fk[:column] } } } }
-      end
-
-      def no_dump_reason(db)
-        return "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" unless db.tasks
-        return "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" unless db.settings["schema_dump"]
-
-        "`schema_dump` in its database.yml entry names no file this check reads"
       end
 
       # The models section when the run has one; otherwise the model tier is

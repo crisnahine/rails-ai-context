@@ -636,12 +636,24 @@ module RailsAiContext
           found[name] = parsed.merge(database_files(path, migrate_dir_for_dump(path)))
         end
         replay_secondary_migrations(dumps, unread)
+        with_nothing_to_read(dumps)
         unread.each do |name, (path, state)|
           dumps[name] ||= { tables: {}, total_tables: 0, note: "#{relative_dump_path(path)} #{state}, so its tables are not listed" }
                           .merge(database_files(path, migrate_dir_for_dump(path)), state == NO_TABLES ? {} : { unread: true })
         end
         names = app_databases.names
         dumps.sort_by { |name, _| names.index(name) || names.size }.to_h
+      end
+
+      # A database with no dump on disk and no migrations of its own is still one of the app's: its entry says why.
+      def with_nothing_to_read(dumps)
+        primary = dump_candidates.map(&:last)
+        app_databases.each do |db|
+          next if db.primary || db.replica || !db.tasks || dumps.key?(db.name) || primary.include?(db.dump&.path)
+
+          reason = db.missing_dump(app.root)
+          dumps[db.name] = { tables: {}, total_tables: 0, unread: true, note: "Its tables are not listed: #{reason}." } if reason
+        end
       end
 
       # Where a secondary database's schema lives, app-relative, so a rule
