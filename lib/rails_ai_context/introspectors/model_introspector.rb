@@ -1134,13 +1134,9 @@ module RailsAiContext
 
       def extract_sti_info(model)
         type_column = model.inheritance_column.to_s
-        has_type_column = if model.connected? && model.table_exists?
-          model.columns_hash.key?(type_column)
-        else
-          SchemaReader.for(app.root).column?(model.table_name, type_column)
-        end
-
-        return nil unless has_type_column
+        connected = model.connected? && model.table_exists?
+        return nil if type_column.empty?
+        return nil if connected ? !model.columns_hash.key?(type_column) : lacks_column?(model.table_name, type_column)
 
         children = DeclaredConstant.carried(model.descendants).map(&:name).sort
 
@@ -1149,6 +1145,8 @@ module RailsAiContext
                         (!defined?(ApplicationRecord) || parent != ApplicationRecord)
           parent.name
         end
+        # A table db/schema.rb does not hold is in another database, so only a class family says it is STI.
+        return nil if !connected && !SchemaReader.for(app.root).table?(model.table_name) && sti_parent.nil? && children.empty?
 
         {
           sti_base: sti_parent.nil? && children.any?,

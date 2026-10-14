@@ -6565,6 +6565,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
       expect(sti).to eq(sti_base: false, sti_parent: "Vehicle", type_column: "kind")
     end
+
+    # Rails connects a model's database on its first query, and a table of a
+    # second database is not in db/schema.rb.
+    it "keeps the hierarchy of a table db/schema.rb does not hold while nothing has queried its database" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n")
+        { "zz_vehicle" => "class ZzVehicle < ApplicationRecord\nend\n", "zz_car" => "class ZzCar < ZzVehicle\nend\n",
+          "zz_lone" => "class ZzLone < ApplicationRecord\nend\n" }.each { |file, source| File.write(File.join(dir, "app", "models", "#{file}.rb"), source) }
+        vehicle = stub_const("ZzVehicle", Class.new(ApplicationRecord) { self.table_name = "zz_vehicles" })
+        car = stub_const("ZzCar", Class.new(vehicle))
+        lone = stub_const("ZzLone", Class.new(ApplicationRecord) { self.table_name = "zz_lones" })
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([ vehicle, car, lone ])
+        { vehicle => [ car ], car => [], lone => [] }.each do |model, descendants|
+          allow(model).to receive_messages(connected?: false, table_exists?: false, descendants: descendants)
+        end
+
+        models = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dir)).call }
+
+        expect(models["ZzVehicle"][:sti]).to eq(sti_base: true, sti_children: [ "ZzCar" ], type_column: "type")
+        expect(models["ZzCar"][:sti]).to eq(sti_base: false, sti_parent: "ZzVehicle", type_column: "type")
+        expect(models["ZzLone"]).not_to have_key(:sti)
+      end
+    end
   end
 
   describe "STI on the static tier" do
