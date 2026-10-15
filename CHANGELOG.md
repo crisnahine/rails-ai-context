@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.2] - 2026-10-15
+
+### Fixed
+
+- **`rails_onboard` and `rails_get_schema` name every database
+  `rails_performance_check` names.** A database database.yml configures with no
+  dump on disk and no migrations of its own, or with `database_tasks: false` and
+  no committed dump, was left out of both. `rails_onboard` now lists it as
+  "(tables not read)", and `rails_get_schema` says why: "Its tables are not
+  listed: db/extra_schema.rb is not on disk". A replica stays out of all three,
+  and so does a database whose dump is the primary's. The schema rules file
+  gives the primary no heading of its own when it is the only database with
+  tables. For a `schema_dump` the gem cannot follow, the reason now reads
+  "`schema_dump` in its database.yml entry names no file to read" on
+  `rails_get_schema` and `rails_performance_check`. 5.36.1 and earlier versions
+  had the gap.
+- **On the static tier a model of the primary database whose table db/schema.rb
+  does not declare says so.** `rails_get_model_details`, `rails_onboard` and the
+  generated files named the conventional table, `widgets`, with no word that
+  db/schema.rb holds no such table, and model details pointed to
+  `rails_get_schema` for it. They now answer "`widgets` missing from
+  db/schema.rb", and model details leaves out the pointer for a table it says is
+  missing. A model whose table or database the static tier cannot be sure of is
+  left unjudged: one of another database, one on a connection of its own
+  (`establish_connection` in its class or a base), one whose table name a
+  computed `table_name`, affix or `pluralize_table_names` shapes, one with a
+  concern or base the static tier could not read, a table in another schema, and
+  tables read from db/structure.sql or the migrations, since a replay can miss a
+  table raw SQL creates. 5.36.1 and earlier versions had the gap.
+- **The static tier reads the table name prefix of a module whose name camelize
+  does not give.** A module file such as app/models/sdg.rb that declares
+  `module SDG` with `table_name_prefix` was keyed as `Sdg`, so `SDG::Goal` got
+  the table `goals` where Rails reads `sdg_goals`. The module is now named as it
+  declares itself. 5.36.1 and earlier versions had the gap.
+- **The static tier builds no table name from an affix it could not read.**
+  `ActiveRecord::Base.table_name_prefix = ENV.fetch("P", "")` gave every model a
+  table such as `[INFERRED]widgets`. An affix or `pluralize_table_names` the app
+  computes is now left out of the guessed name, and a later computed assignment
+  hides an earlier literal one, as it does when the app runs. 5.36.1 and earlier
+  versions had the gap.
+- **`rails_session_context(mark:)` says a tool skip_tools turned off is turned
+  off.** It answered "Unknown tool" for a tool the gem has, where a call of the
+  tool says it is turned off. Both now give the same answer, by the tool's full
+  or short name. 5.36.1 and earlier versions had the gap.
+
 ## [5.36.1] - 2026-10-15
 
 ### Fixed

@@ -50,6 +50,21 @@ module RailsAiContext
         AppDatabases.settings_of(config)
       end
 
+      # Why there is no dump of this database to read, or nil when its dump is on disk.
+      def missing_dump(root)
+        return no_dump_reason unless dump
+        return nil if File.exist?(dump.path)
+
+        "#{dump.path.delete_prefix("#{root.to_s.chomp('/')}/")} is not on disk"
+      end
+
+      private def no_dump_reason
+        return "its database.yml entry turns `database_tasks` off, so Rails writes it no dump" unless tasks
+        return "its database.yml entry turns `schema_dump` off, so Rails writes it no dump" unless settings["schema_dump"]
+
+        "`schema_dump` in its database.yml entry names no file to read"
+      end
+
       # Raises Unreachable, naming the database, when no connection to it answers.
       def with_connection(&block)
         with_pool do |pool|

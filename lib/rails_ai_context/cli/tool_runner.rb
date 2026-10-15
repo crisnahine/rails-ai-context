@@ -146,6 +146,12 @@ module RailsAiContext
         [ name, "rails_#{name}", "rails_get_#{name}" ]
       end
 
+      # The turned-off answer when skip_tools lists the tool a typed name spells, nil otherwise.
+      def self.turned_off_message(name)
+        skipped = candidate_names(name) & Server.skipped_tools
+        Server.skipped_tool_message(skipped.first) if skipped.any?
+      end
+
       private
 
       # The schema a call is checked against, as InputSchema#to_h gives it on every
@@ -178,8 +184,8 @@ module RailsAiContext
         found = tools.find { |t| self.class.short_name(t.tool_name) == name }
         return [ found, nil ] if found
 
-        skipped = self.class.candidate_names(name) & Server.skipped_tools
-        raise ToolNotFoundError, Server.skipped_tool_message(skipped.first) if skipped.any?
+        skipped = self.class.turned_off_message(name)
+        raise ToolNotFoundError, skipped if skipped
 
         # Fuzzy suggestion
         short_names = (tools.map(&:tool_name) | Server.retired_names).map { |tool_name| self.class.short_name(tool_name) }

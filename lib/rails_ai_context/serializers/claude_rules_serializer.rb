@@ -45,8 +45,9 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Every database's tables, the primary's first. With more than one, each
-      # gets a heading, since a table name can be in two of them. A database
+      # Every database's tables, the primary's first. Each gets a heading unless the
+      # primary is the only one, since a table name can be in two and a lone other
+      # database is not the one a reader assumes. A database
       # a Rails framework keeps to itself (Rails 8's queue, cache and cable)
       # is no part of it: its tables are the framework's, CLAUDE.md names it,
       # and its dump says nothing this listing would help with.
@@ -66,9 +67,10 @@ module RailsAiContext
         live = " Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data." if served?("rails_get_schema")
         lines << "_Snapshot - may be stale after migrations.#{live}_"
 
+        primary_alone = databases.size == 1 && databases.first.first.nil?
         databases.each do |name, tables|
           lines << ""
-          lines.concat(database_heading_lines(name, tables, secondary)) if secondary.any?
+          lines.concat(database_heading_lines(name, tables, secondary)) unless primary_alone
           lines.concat(table_reference_lines(tables, name, schema))
         end
 

@@ -284,7 +284,8 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
   # or four times in one run; the tree walk behind it was redone every time.
   describe "one source asked again" do
     it "walks the tree once" do
-      source = "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n"
+      # Its own source, so the parse cache cannot evict an entry another example made first.
+      source = "# #{SecureRandom.hex(8)}\nmodule Billing\n  class Invoice < ApplicationRecord\n  end\nend\n"
       walks = 0
       allow(described_class).to receive(:constants).and_wrap_original do |original, root, **options, &block|
         walks += 1 if block

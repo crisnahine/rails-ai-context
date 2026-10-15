@@ -589,7 +589,8 @@ module RailsAiContext
           return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
         end
 
-        if secondary_database_dumps.any?
+        # A database with no file on disk says nothing of where the app keeps its tables.
+        if secondary_database_dumps.any? { |_, db| db.key?(:dump) || db.key?(:migrations_paths) }
           return { total_tables: 0, tables: {}, note: "The primary database has no tables yet: no #{relative_dump_path(schema_dump_name)} or migrations found." }
         end
 
@@ -636,12 +637,24 @@ module RailsAiContext
           found[name] = parsed.merge(database_files(path, migrate_dir_for_dump(path)))
         end
         replay_secondary_migrations(dumps, unread)
+        add_databases_with_nothing_to_read(dumps)
         unread.each do |name, (path, state)|
           dumps[name] ||= { tables: {}, total_tables: 0, note: "#{relative_dump_path(path)} #{state}, so its tables are not listed" }
                           .merge(database_files(path, migrate_dir_for_dump(path)), state == NO_TABLES ? {} : { unread: true })
         end
         names = app_databases.names
         dumps.sort_by { |name, _| names.index(name) || names.size }.to_h
+      end
+
+      # A database with no dump on disk and no migrations of its own is still one of the app's: its entry says why.
+      def add_databases_with_nothing_to_read(dumps)
+        primary = dump_candidates.map(&:last)
+        app_databases.each do |db|
+          next if db.primary || db.replica || dumps.key?(db.name) || primary.include?(db.dump&.path)
+
+          reason = db.missing_dump(app.root)
+          dumps[db.name] = { tables: {}, total_tables: 0, unread: true, note: "Its tables are not listed: #{reason}" } if reason
+        end
       end
 
       # Where a secondary database's schema lives, app-relative, so a rule

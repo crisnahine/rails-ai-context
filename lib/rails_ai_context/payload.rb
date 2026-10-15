@@ -217,9 +217,14 @@ module RailsAiContext
       return [] unless model.is_a?(Hash) && model[:table_name]
 
       found = table_holders(schema, model[:table_name]).map { |db, _, data| [ db || "primary", data ] }
-      writing = model.dig(:database, :writing)&.to_s || ("primary" unless model[:database])
+      writing = writing_database(model)
       written = found.select { |db, _| db == writing }.first(1)
       written.any? ? written : found
+    end
+
+    # The database a model writes to, "primary" with no connects_to, nil where the static tier cannot tell.
+    def writing_database(model)
+      model.dig(:database, :writing)&.to_s || ("primary" unless model[:database])
     end
 
     def model_databases(schema, model)
@@ -259,6 +264,18 @@ module RailsAiContext
       end
 
       model_tables(schema, model).empty?
+    end
+
+    # The primary's schema.rb, such as "db/schema.rb", when the static tier read its tables from it and it leaves out
+    # the table of a model on the primary. Nil otherwise: no other dump or replay is judged.
+    def table_absent_from(schema, model)
+      return unless model.is_a?(Hash) && model[:table_name] && !model[:table_name].to_s.include?(".") && !model[:own_connection]
+      return unless writing_database(model) == "primary"
+      # A setting, concern or base the static tier could not read may set the table name.
+      return if model[:table_set_by] || Array(model[:concerns_unread]).any? || Array(model[:bases_unread]).any?
+      return unless schema.is_a?(Hash) && parsed_schema?(schema) && model_tables(schema, model).empty?
+
+      schema[:declared_in]
     end
 
     # Why the primary's dump leaves out a schema-qualified table, or nil.

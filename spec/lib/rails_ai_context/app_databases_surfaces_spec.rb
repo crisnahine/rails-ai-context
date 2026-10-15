@@ -280,6 +280,29 @@ RSpec.describe "the app databases on preset standard" do
     expect(found[:onboard]).to include("Rails application")
   end
 
+  it "names a database with no dump, no migrations and no file, and says its tables were not read" do
+    found = answers("missing_dump")
+
+    expect(found[:onboard]).to include("(1 table), plus the extra database on SQLite (tables not read), plus the legacy database on SQLite (tables not read).")
+    expect(found[:schema]).to include("- **extra**: Its tables are not listed: db/extra_schema.rb is not on disk\n",
+                                      "- **legacy**: Its tables are not listed: its database.yml entry turns `database_tasks` off")
+    expect(found[:file]).to include("_Its tables are not listed: db/extra_schema.rb is not on disk._\n")
+    expect(found[:onboard] + found[:schema]).not_to include("extra_replica")
+    rules = Dir.mktmpdir do |dir|
+      RailsAiContext::Serializers::ClaudeRulesSerializer.new(found[:context]).call(dir)
+      File.read(File.join(dir, ".claude/rules/rails-schema.md"))
+    end
+    # Only the primary has tables, so the listing needs no heading per database.
+    expect(rules).to include("# Database Tables (1)").and(satisfy { |text| !text.include?("## primary") })
+  end
+
+  it "lists no database whose dump is the primary's, though that dump is not on disk" do
+    found = answers("shared_dump_unread")
+
+    expect(found[:onboard]).to include("Rails application on SQLite (1 table).")
+    expect(found[:onboard] + found[:schema]).not_to include("tables not read")
+  end
+
   it "names the first database by its own name where another database is named primary" do
     found = answers("animals_first")
 
@@ -296,5 +319,167 @@ RSpec.describe "the app databases on preset standard" do
 
     expect(found[:onboard]).to include("animals_first is a Rails application on PostgreSQL (2 tables), plus the primary database on MySQL (1 table).")
     expect(rules).to include("## animals (PostgreSQL, 2 tables)", "## primary (MySQL, 1 table)", "- Databases: 2 (animals, primary)")
+  end
+end
+
+# The static tier reads db/schema.rb and knows which tables it declares.
+RSpec.describe "a model whose table the schema dump does not declare, on the static tier" do
+  around do |example|
+    config = RailsAiContext.configuration
+    previous = [ RailsAiContext.tier, config.introspectors, config.app_root ]
+    RailsAiContext.tier = :static
+    config.introspectors = RailsAiContext::Configuration::PRESETS[:standard].dup
+    example.run
+  ensure
+    RailsAiContext.tier, config.introspectors, config.app_root = previous
+  end
+
+  it "says the table is missing from db/schema.rb for a model of the primary, and judges no other database" do
+    Dir.mktmpdir do |root|
+      { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
+        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\n  create_table \"sdg_goals\" do |t|\n  end\nend\n",
+        "app/models/sdg.rb" => "module SDG\n  def self.table_name_prefix\n    \"sdg_\"\n  end\nend\n",
+        "app/models/sdg/goal.rb" => "class SDG::Goal < ApplicationRecord\nend\n",
+        "app/models/legacy_record.rb" => "class LegacyRecord < ApplicationRecord\n  self.abstract_class = true\n  establish_connection :legacy\nend\n",
+        "app/models/legacy_user.rb" => "class LegacyUser < LegacyRecord\nend\n",
+        "app/models/ledger.rb" => "class Ledger < ApplicationRecord\n  establish_connection :legacy\nend\n",
+        "app/models/report.rb" => "class Report < ApplicationRecord\n  self.table_name = \"reporting.reports\"\nend\n",
+        "app/models/shard_record.rb" => "class ShardRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to shards: { default: { writing: :analytics } }\nend\n",
+        "app/models/tenant.rb" => "class Tenant < ShardRecord\nend\n",
+        "app/models/primary_record.rb" => "class PrimaryRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to database: { writing: :primary }\nend\n",
+        "app/models/bookkeeping.rb" => "class Bookkeeping < PrimaryRecord\n  establish_connection :legacy\nend\n",
+        "app/models/attachment.rb" => "class Attachment < ApplicationRecord\n  include Vendor::TableSetter\nend\n",
+        "app/models/big_base.rb" => "class BigBase < ApplicationRecord\n  self.abstract_class = true\n#{"  # padding\n" * 400}end\n",
+        "app/models/gadget.rb" => "class Gadget < BigBase\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+        "app/models/widget.rb" => "class Widget < ApplicationRecord\nend\n",
+        "db/analytics_schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"visits\" do |t|\n  end\nend\n",
+        "app/models/analytics_record.rb" => "class AnalyticsRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to database: { writing: :analytics }\nend\n",
+        "app/models/visit.rb" => "class Visit < AnalyticsRecord\nend\n",
+        "app/models/event.rb" => "class Event < AnalyticsRecord\nend\n",
+        "config/database.yml" => "test:\n  primary:\n    adapter: sqlite3\n    database: db/test.sqlite3\n  analytics:\n    adapter: sqlite3\n    database: db/analytics.sqlite3\n" \
+                                 "  archive:\n    adapter: sqlite3\n    database: db/archive.sqlite3\n    migrations_paths: db/archive_migrate\n",
+        "db/archive_migrate/20240101000000_create_records.rb" => "class CreateRecords < ActiveRecord::Migration[8.0]\n  def change\n    create_table :records\n  end\nend\n",
+        "app/models/archive_record.rb" => "class ArchiveRecord < ApplicationRecord\n  self.abstract_class = true\n  connects_to database: { writing: :archive }\nend\n",
+        "app/models/relic.rb" => "class Relic < ArchiveRecord\nend\n" }.each do |path, source|
+        FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+        File.write(File.join(root, path), source)
+      end
+      RailsAiContext.configuration.app_root = root
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(2_000)
+      texts = RailsAiContext::RunCache.around do
+        context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+        [ RailsAiContext::Tools::GetModelDetails, RailsAiContext::Tools::Onboard ].each { |tool| allow(tool).to receive_messages(cached_context: context) }
+        [ RailsAiContext::Tools::GetModelDetails.call(model: "Widget"), RailsAiContext::Tools::GetModelDetails.call(model: "Post"),
+          RailsAiContext::Tools::Onboard.call(detail: "standard"), RailsAiContext::Tools::GetModelDetails.call(model: "Event"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Visit"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Relic"), RailsAiContext::Tools::GetModelDetails.call(model: "SDG::Goal"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "LegacyUser"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Ledger"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Report"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Tenant"), RailsAiContext::Tools::GetModelDetails.call(model: "Bookkeeping"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Attachment"),
+          RailsAiContext::Tools::GetModelDetails.call(model: "Gadget") ].map { |response| response.content.first[:text] }
+      end
+
+      widget, post, onboard, event, visit, relic, goal, legacy_user, ledger, report, tenant, bookkeeping, attachment, gadget = texts
+      # The static tier cannot always tell which database a model writes to, so only the primary's dump is judged.
+      expect([ event, visit, tenant ]).to all(include("**Table:** `").and(satisfy { |text| !text.include?("missing from") }))
+      expect(widget).to include("**Table:** `widgets` missing from db/schema.rb").and(satisfy { |text| !text.include?('table:"widgets"') })
+      expect(post).to include("**Table:** `posts`", 'rails_get_schema(table:"posts")').and(satisfy { |text| !text.include?("missing from") })
+      expect(onboard).not_to include("missing from db/analytics")
+      # A replay can miss a table raw SQL creates, so the migrations are never named as leaving one out.
+      expect(relic).to include("**Table:** `relics`").and(satisfy { |text| !text.include?("missing from") })
+      expect(goal).to include("**Table:** `sdg_goals`").and(satisfy { |text| !text.include?("missing from") })
+      # A connection of its own reads a database no dump here names.
+      # The nearest establish_connection wins over a base's connects_to, as in Rails.
+      expect([ legacy_user, ledger, bookkeeping ]).to all(include("**Table:** `").and(satisfy { |text| !text.include?("missing from") }))
+      # A concern or base the static tier could not read may set the table name.
+      expect(attachment).to include("**Table:** `attachments`", "Vendor::TableSetter").and(satisfy { |text| !text.include?("missing from") })
+      expect(gadget).to include("**Table:** `big_bases`", "BigBase").and(satisfy { |text| !text.include?("missing from") })
+      # schema.rb holds only the search path's tables, so it says nothing of another schema's.
+      expect(report).to include("**Table:** `reporting.reports`").and(satisfy { |text| !text.include?("missing from") })
+    end
+  end
+
+  def static_answers(files, models)
+    Dir.mktmpdir do |root|
+      { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\nend\n" }.merge(files).compact.each do |path, source|
+        FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+        File.write(File.join(root, path), source)
+      end
+      RailsAiContext.configuration.app_root = root
+      RailsAiContext::RunCache.around do
+        context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+        allow(RailsAiContext::Tools::GetModelDetails).to receive_messages(cached_context: context)
+        models.to_h { |name| [ name, RailsAiContext::Tools::GetModelDetails.call(model: name).content.first[:text] ] }
+      end
+    end
+  end
+
+  it "judges no table name a setting shapes that the static tier could not read, nor tables read from the migrations", :aggregate_failures do
+    answers = [
+      static_answers({ "app/models/sdg.rb" => "module SDG\n  def self.table_name_prefix\n    ENV.fetch(\"P\", \"sdg_\")\n  end\nend\n",
+                       "app/models/sdg/goal.rb" => "class SDG::Goal < ApplicationRecord\nend\n" }, [ "SDG::Goal" ]),
+      static_answers({ "app/models/widget.rb" => "class Widget < ApplicationRecord\n  self.pluralize_table_names = ENV[\"X\"] == \"1\"\nend\n" }, [ "Widget" ]),
+      static_answers({ "app/models/gizmo.rb" => "class Gizmo < ApplicationRecord\n  self.table_name = ENV.fetch(\"T\", \"gizmos\")\nend\n" }, [ "Gizmo" ]),
+      static_answers({ "config/initializers/prefix.rb" => "ActiveRecord::Base.table_name_prefix = ENV.fetch(\"P\", \"\")\n",
+                       "app/models/thing.rb" => "class Thing < ApplicationRecord\nend\n" }, [ "Thing" ]),
+      static_answers({ "db/schema.rb" => nil, "app/models/relic.rb" => "class Relic < ApplicationRecord\nend\n",
+                       "db/migrate/20240101000000_create_posts.rb" => "class CreatePosts < ActiveRecord::Migration[8.0]\n  def change\n    create_table :posts\n  end\nend\n" },
+                     [ "Relic" ]),
+      static_answers({ "app/models/base_thing.rb" => "class BaseThing < ApplicationRecord\n  self.table_name = ENV.fetch(\"T\", \"base_things\")\nend\n",
+                       "app/models/gadget.rb" => "class Gadget < BaseThing\nend\n" }, [ "Gadget" ]),
+      static_answers({ "app/models/base_record.rb" => "class BaseRecord < ApplicationRecord\n  self.abstract_class = true\n  self.table_name_prefix = ENV.fetch(\"P\", \"\")\nend\n",
+                       "app/models/piece.rb" => "class Piece < BaseRecord\nend\n" }, [ "Piece" ])
+    ].reduce(:merge)
+
+    answers.each { |name, text| expect([ name, text[/^\*\*Table:\*\* .*$/] ]).to match([ name, a_string_matching(/\A\*\*Table:\*\* `[a-z_]+`\z/) ]) }
+
+    # The innermost module that declares the prefix decides it, and a literal table_name needs no prefix.
+    judged = static_answers({ "app/models/outer.rb" => "module Outer\n  def self.table_name_prefix\n    ENV.fetch(\"P\", \"o_\")\n  end\nend\n",
+                              "app/models/outer/inner.rb" => "module Outer::Inner\n  def self.table_name_prefix\n    \"in_\"\n  end\nend\n",
+                              "app/models/outer/inner/item.rb" => "class Outer::Inner::Item < ApplicationRecord\nend\n",
+                              "app/models/outer/fixed.rb" => "class Outer::Fixed < ApplicationRecord\n  self.table_name = \"fixed_items\"\nend\n" },
+                            [ "Outer::Inner::Item", "Outer::Fixed" ])
+    expect(judged.values.map { |text| text[/^\*\*Table:\*\* .*$/] })
+      .to eq([ "**Table:** `in_items` missing from db/schema.rb", "**Table:** `fixed_items` missing from db/schema.rb" ])
+
+    # A nearer literal affix decides over a computed one further out.
+    nearer = [
+      static_answers({ "config/initializers/prefix.rb" => "ActiveRecord::Base.table_name_prefix = ENV.fetch(\"P\", \"\")\n",
+                       "app/models/admin.rb" => "module Admin\n  def self.table_name_prefix\n    \"admin_\"\n  end\nend\n",
+                       "app/models/admin/widget.rb" => "class Admin::Widget < ApplicationRecord\nend\n" }, [ "Admin::Widget" ]),
+      static_answers({ "app/models/base_record.rb" => "class BaseRecord < ApplicationRecord\n  self.abstract_class = true\n  self.table_name_prefix = ENV.fetch(\"P\", \"\")\nend\n",
+                       "app/models/part.rb" => "class Part < BaseRecord\n  self.table_name_prefix = \"x_\"\nend\n" }, [ "Part" ])
+    ].reduce(:merge)
+    expect(nearer.values.map { |text| text[/^\*\*Table:\*\* .*$/] })
+      .to eq([ "**Table:** `admin_widgets` missing from db/schema.rb", "**Table:** `x_parts` missing from db/schema.rb" ])
+  end
+
+  it "says so in rails_onboard" do
+    Dir.mktmpdir do |root|
+      { "config/application.rb" => "module Demo\n  class Application < Rails::Application\n  end\nend\n",
+        "db/schema.rb" => "ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table \"posts\" do |t|\n  end\n  create_table \"sdg_goals\" do |t|\n  end\nend\n",
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+        "app/models/sdg.rb" => "module SDG\n  def self.table_name_prefix\n    \"sdg_\"\n  end\nend\n",
+        "app/models/sdg/goal.rb" => "class SDG::Goal < ApplicationRecord\nend\n",
+        "app/models/widget.rb" => "class Widget < ApplicationRecord\nend\n" }.each do |path, source|
+        FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+        File.write(File.join(root, path), source)
+      end
+      RailsAiContext.configuration.app_root = root
+      onboard = RailsAiContext::RunCache.around do
+        context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(root)).call
+        allow(RailsAiContext::Tools::Onboard).to receive_messages(cached_context: context)
+        RailsAiContext::Tools::Onboard.call(detail: "standard").content.first[:text]
+      end
+
+      expect(onboard).to include("**Widget** (table `widgets` missing from db/schema.rb)", "**Post** (table: `posts`)", "**SDG::Goal** (table: `sdg_goals`)")
+    end
   end
 end

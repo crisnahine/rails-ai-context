@@ -1,0 +1,15 @@
+test:
+  primary:
+    adapter: sqlite3
+    database: storage/test.sqlite3
+  extra:
+    adapter: sqlite3
+    database: storage/extra_test.sqlite3
+  extra_replica:
+    adapter: sqlite3
+    database: storage/extra_test.sqlite3
+    replica: true
+  legacy:
+    adapter: sqlite3
+    database: storage/legacy_test.sqlite3
+    database_tasks: false

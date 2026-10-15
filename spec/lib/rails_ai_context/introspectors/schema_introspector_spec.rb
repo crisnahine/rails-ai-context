@@ -1372,7 +1372,25 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
-    it "lists no replica or database_tasks: false entry as a database of its own" do
+    it "keeps an app with no primary dump and no migrations unavailable when its other database has no file either" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML)
+          #{RailsAiContext.environment_name}:
+            primary:
+              adapter: sqlite3
+              database: db/dev.sqlite3
+            extra:
+              adapter: sqlite3
+              database: db/extra.sqlite3
+        YAML
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result).to include(unavailable: "No db/schema.rb or migrations found")
+      end
+    end
+
+    it "lists no replica, and a database_tasks: false entry with no dump only as not read" do
       Dir.mktmpdir do |dir|
         write_app(dir, "config/database.yml" => <<~YAML,
                     #{RailsAiContext.environment_name}:
@@ -1396,7 +1414,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result[:secondary_databases].keys).to eq([ "analytics" ])
+        expect(result[:secondary_databases].keys).to eq([ "analytics", "reporting" ])
+        expect(result[:secondary_databases]["reporting"]).to include(tables: {}, unread: true)
         expect(RailsAiContext::AppDatabases.for(dir).secondaries.map(&:name)).to eq([ "analytics" ])
       end
     end
