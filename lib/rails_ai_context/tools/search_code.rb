@@ -23,6 +23,11 @@ module RailsAiContext
       BINARY_PROBE_BYTES = 64 * 1024
 
       TEST_DIRS = %w[test/ spec/ features/].freeze
+
+      # A trace lists this many internal calls and sibling methods, then says how many it left out.
+      INTERNAL_CALLS_SHOWN = 15
+      SIBLINGS_SHOWN = 10
+
       MATCH_FIELD_SEPARATOR = "\x1f"
       # A comment line by the file's own syntax. `#{` and ` * ` are Ruby code;
       # `#id` is a selector in a stylesheet and an element in Haml or Slim.
@@ -768,7 +773,8 @@ module RailsAiContext
 
               if internal_calls.any?
                 lines << "" << "## Calls internally"
-                internal_calls.first(15).each { |c| lines << "- `#{c}`" }
+                internal_calls.first(INTERNAL_CALLS_SHOWN).each { |c| lines << "- `#{c}`" }
+                lines << "- _...and #{internal_calls.size - INTERNAL_CALLS_SHOWN} more_" if internal_calls.size > INTERNAL_CALLS_SHOWN
               end
             end
 
@@ -776,7 +782,8 @@ module RailsAiContext
             siblings = extract_sibling_methods(File.join(root, r[:file]), cleaned)
             if siblings.any?
               lines << "" << "## Sibling methods (same file)"
-              siblings.first(10).each { |s| lines << "- `#{s}`" }
+              siblings.first(SIBLINGS_SHOWN).each { |s| lines << "- `#{s}`" }
+              lines << "- _...and #{siblings.size - SIBLINGS_SHOWN} more_" if siblings.size > SIBLINGS_SHOWN
             end
 
             lines << ""

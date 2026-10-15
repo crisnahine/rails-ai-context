@@ -84,6 +84,48 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
     end
   end
 
+  describe "a change_table migration" do
+    def actions_of(body)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
+        File.write(File.join(dir, "db", "migrate", "20260101000000_change_widgets.rb"), <<~RUBY)
+          class ChangeWidgets < ActiveRecord::Migration[8.0]
+            def change
+          #{body.gsub(/^/, "    ")}
+            end
+          end
+        RUBY
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call
+      end
+    end
+
+    it "lists change_table and the columns its block adds, and counts them in the stats" do
+      result = actions_of("change_table :widgets, bulk: true do |t|\n  t.string :a\n  t.string :b\nend")
+
+      expect(result[:recent].first[:actions]).to include("change_table", "add_column")
+      expect(result[:migration_stats][:total_add_column]).to eq(1)
+    end
+
+    it "reads index and remove calls on whatever the block calls its table" do
+      result = actions_of("change_table :widgets do |table|\n  table.index :a\n  table.remove :b\nend")
+
+      expect(result[:recent].first[:actions]).to include("change_table", "add_index", "remove_column")
+      expect(result[:recent].first[:actions]).not_to include("add_column")
+    end
+
+    it "reads a reference as add_reference, and a call that changes no column as nothing" do
+      result = actions_of("change_table :widgets do |t|\n  t.references :user\n  t.rename_index :a, :b\n  t.column_exists? :c\nend")
+
+      expect(result[:recent].first[:actions]).to contain_exactly("change_table", "add_reference")
+    end
+
+    it "does not read a create_table block's columns as added columns" do
+      result = actions_of("create_table :widgets do |t|\n  t.string :a\nend")
+
+      expect(result[:recent].first[:actions]).to eq([ "create_table" ])
+    end
+  end
+
   describe "static tier" do
     it "is declared files-only" do
       expect(described_class.static_tier).to eq(:files_only)

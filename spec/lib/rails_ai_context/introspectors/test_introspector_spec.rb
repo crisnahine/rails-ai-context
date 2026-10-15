@@ -338,6 +338,24 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(payload[:test_files].keys).to eq(%w[models])
     end
 
+    it "counts only _spec.rb files under spec/ in an RSpec suite, where a _test.rb is a helper" do
+      write_file("spec/spec_helper.rb")
+      write_file("spec/models/user_spec.rb")
+      write_file("spec/support/matchers_test.rb")
+      write_file("spec/system/page_test.rb")
+
+      expect(payload[:test_files]).to eq("models" => { location: "spec/models", count: 1 })
+      expect(payload[:system_tests]).to be_nil
+    end
+
+    it "still counts a _spec.rb under test/ in a Minitest suite" do
+      write_file("test/test_helper.rb")
+      write_file("test/models/user_test.rb")
+      write_file("test/models/post_spec.rb")
+
+      expect(payload[:test_files]).to eq("models" => { location: "test/models", count: 2 })
+    end
+
     it "counts only test files under a system directory" do
       write_file("spec/system/login_spec.rb")
       write_file("spec/system/page_objects/dashboard.rb")

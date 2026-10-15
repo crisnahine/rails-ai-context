@@ -172,6 +172,14 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, false, label: "uses_async_queries?")
       end
 
+      # Files a directory holds besides Ruby, which SourceScan leaves out.
+      NON_RUBY_FILES = {
+        "app/javascript" => "**/*.js",
+        "app/javascript/controllers" => "**/*.js",
+        "app/views" => "**/*.{erb,haml,slim,jbuilder,builder}",
+        "lib/tasks" => "**/*.rake"
+      }.freeze
+
       def scan_directory_structure
         important_dirs = %w[
           app/models app/controllers app/views app/jobs
@@ -190,7 +198,8 @@ module RailsAiContext
         # carries file counts, so the biggest code area had no number anywhere.
         (important_dirs | app_child_dirs).each_with_object({}) do |dir, hash|
           count = SourceScan.paths(root, kind: dir, skip_concerns: false).count
-          count += Dir.glob(File.join(root, dir, "**/*.js")).size if dir.include?("javascript")
+          glob = NON_RUBY_FILES[dir]
+          count += PathResolver.dirs_for(root, dir).sum { |path| Dir.glob(File.join(path, glob)).size } if glob
 
           hash[dir] = count if count > 0
         end

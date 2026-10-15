@@ -186,7 +186,7 @@ module RailsAiContext
         # Likely cause - enriched with specific inference when possible
         lines << "## Likely Cause"
         lines << classification[:likely]
-        specific = infer_specific_cause(parsed, classification, file, action)
+        specific = infer_specific_cause(parsed, classification, file, action, line)
         lines << "" << "**Specific:** #{specific}" if specific
         lines << ""
 
@@ -614,8 +614,18 @@ module RailsAiContext
           lines << "## #{title}" << "_Could not load: #{e.message}_" << ""
         end
 
+        # Regex because a lone source line is no program a listener can walk.
+        def nil_receiver(file, line, method)
+          call = /((?:@@?|\$)?\w+)\.#{Regexp.escape(method)}(?![\w?!])/
+          located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
+          failing = line.to_i.positive? && located.ok? && RailsAiContext::SafeFile.read(located.realpath).to_s.lines[line.to_i - 1]
+          return failing[call, 1] if failing
+
+          response_text(compose(GetEditContext, file: file, near: method))[call, 1]
+        end
+
         # Infer a specific diagnosis from the error + context
-        def infer_specific_cause(parsed, classification, file, action)
+        def infer_specific_cause(parsed, classification, file, action, line = nil)
           msg = parsed[:message].to_s
           method = parsed[:method_name]
 
@@ -629,12 +639,8 @@ module RailsAiContext
             # Check if calling on an association
             if method && file
               begin
-                ctx = compose(GetEditContext, file: file, near: method)
-                code = response_text(ctx)
-                # Find the receiver: something.method_name
-                receiver_match = code.match(/(\w+)\.#{Regexp.escape(method)}/)
-                if receiver_match
-                  receiver = receiver_match[1]
+                receiver = nil_receiver(file, line, method)
+                if receiver
                   return "`#{receiver}` is nil when `.#{method}` is called. " \
                          "This variable may not be set in all code paths - check if it's assigned before use, " \
                          "or use `#{receiver}&.#{method}` for safe navigation."

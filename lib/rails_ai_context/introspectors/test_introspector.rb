@@ -10,8 +10,6 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
-      TEST_FILE_GLOB = "*_{spec,test}.rb"
-
       # An engine's test/dummy is tested by the engine's suite.
       def suite_root
         @suite_root ||= PathResolver.test_root(root)
@@ -54,6 +52,17 @@ module RailsAiContext
         RailsAiContext::TestFramework.for(suite_root)
       rescue => e
         RailsAiContext.debug_fail(e, "unknown", label: "detect_framework")
+      end
+
+      # RSpec runs *_spec.rb only, so a *_test.rb under spec/ is a helper.
+      def test_file_glob(base)
+        base == "spec" && rspec_suite? ? "*_spec.rb" : "*_{spec,test}.rb"
+      end
+
+      def rspec_suite?
+        return @rspec_suite if defined?(@rspec_suite)
+
+        @rspec_suite = RailsAiContext::TestFramework.suites(suite_root).include?("rspec")
       end
 
       # First listed wins: an app holding the same thing under spec/ and test/
@@ -247,7 +256,7 @@ module RailsAiContext
           dir = File.join(suite_root, rel)
           next unless Dir.exist?(dir)
 
-          count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
+          count = Dir.glob(File.join(dir, "**/#{test_file_glob(rel.split("/").first)}")).size
           [ rel, count ] if count > 0
         end
         return nil if rows.empty?
@@ -479,11 +488,11 @@ module RailsAiContext
             dir = File.join(base_dir, entry)
             next unless File.directory?(dir)
 
-            count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
+            count = Dir.glob(File.join(dir, "**/#{test_file_glob(base)}")).size
             rows[entry] << [ "#{base}/#{entry}", count ] if count > 0
           end
 
-          loose = Dir.glob(File.join(base_dir, TEST_FILE_GLOB)).size
+          loose = Dir.glob(File.join(base_dir, test_file_glob(base))).size
           rows[base] << [ base, loose ] if loose > 0
         end
 

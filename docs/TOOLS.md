@@ -826,7 +826,7 @@ Each diff passes through the redaction every tool's source does, read as the fil
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `ref` | string | `HEAD` | Git ref to diff against: a branch, a tag, `HEAD~3` or a commit SHA. `HEAD` reviews uncommitted changes. Any other ref reviews the commits since HEAD left it, as a pull request does: the file list and each file's diff run from the commit the two last shared to HEAD. A ref that names no commit is refused |
-| `files` | array | - | Review only these changed files (omit for all) |
+| `files` | array | - | Review only these changed files, or the changed files under these directories (omit for all). A path matches whole, so `Gemfile` is not `Gemfile.lock` |
 
 ### `rails_runtime_info`
 

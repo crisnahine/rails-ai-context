@@ -428,6 +428,27 @@ end
       end
     end
 
+    it "counts the rake tasks beside the .rb files of lib/tasks, and the templates of app/views" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "lib", "tasks", "billing"))
+        FileUtils.mkdir_p(File.join(dir, "app", "views", "orders"))
+        FileUtils.mkdir_p(File.join(dir, "app", "javascript"))
+        File.write(File.join(dir, "app", "javascript", "application.js"), "import \"controllers\"\n")
+        File.write(File.join(dir, "lib", "tasks", "helper.rb"), "module TaskHelper\nend\n")
+        File.write(File.join(dir, "lib", "tasks", "cleanup.rake"), "task :cleanup\n")
+        File.write(File.join(dir, "lib", "tasks", "billing", "close.rake"), "task :close\n")
+        File.write(File.join(dir, "app", "views", "orders", "show.html.erb"), "<p>hi</p>\n")
+        File.write(File.join(dir, "app", "views", "orders", "index.json.jbuilder"), "json.ok true\n")
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        structure = described_class.new(app).call[:directory_structure]
+
+        expect(structure["lib/tasks"]).to eq(3)
+        expect(structure["app/views"]).to eq(2)
+        expect(structure["app/javascript"]).to eq(1)
+      end
+    end
+
     it "detects STI under a namespaced parent" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))

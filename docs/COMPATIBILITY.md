@@ -333,6 +333,13 @@ Proof sources:
    two; MariaDB 10.6 and 11.4 through mysql2 built against MariaDB's client
    library on Linux; `rails_runtime_info` against a real Sidekiq and Redis; and
    the unit suite and the E2E harness on Linux, macOS and Windows.
+   In the v5.36.3 release QA: each fix's example failing on the v5.36.2 code;
+   the issues' repros run through the CLI on a minimal app, and on copies of two
+   large apps (both in the static tier, one also booted) against counts taken
+   from their files; the introspector, tool and integration specs on Ruby 3.1
+   with Rails 7.0 and 7.2, Ruby 3.3 with Rails 7.1, Ruby 3.4 with Rails 8.0 and
+   8.1, and Ruby 4.0 with Rails 8.1; and the unit suite and the E2E harness on
+   Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

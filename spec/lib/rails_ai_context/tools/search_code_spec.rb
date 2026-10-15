@@ -1155,6 +1155,30 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
+    it "says how many sibling methods and internal calls it left out" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      helpers = (1..17).map { |i| "  def c#{i}; end" }.join("\n")
+      source = "class Widget\n  def run\n#{(1..17).map { |i| "    c#{i}" }.join("\n")}\n  end\n#{helpers}\nend\n"
+
+      with_search_app("app/models/widget.rb" => source) do
+        text = described_class.call(pattern: "run", match_type: "trace").content.first[:text]
+
+        expect(text[/## Calls internally\n(.*?)\n\n/m, 1].lines.last.strip).to eq("- _...and 2 more_")
+        expect(text[/## Sibling methods \(same file\)\n(.*?)\n\n/m, 1].lines.last.strip).to eq("- _...and 7 more_")
+      end
+    end
+
+    it "lists every sibling method and internal call when none is left out" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      source = "class Widget\n  def run\n    c1\n  end\n  def c1; end\n  def c2; end\nend\n"
+
+      with_search_app("app/models/widget.rb" => source) do
+        text = described_class.call(pattern: "run", match_type: "trace").content.first[:text]
+
+        expect(text).not_to include("more_")
+      end
+    end
+
     it "does not count a comment mentioning the method as a call site" do
       allow(RailsAiContext).to receive(:tier).and_return(:static)
 

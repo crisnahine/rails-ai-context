@@ -158,6 +158,44 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).not_to include("name_error")
     end
 
+    describe "the nil receiver" do
+      def diagnose(source, line:)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+          File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), source)
+          app = double(root: Pathname.new(dir))
+          [ described_class, RailsAiContext::Tools::GetEditContext ].each { |tool| allow(tool).to receive(:rails_app).and_return(app) }
+          described_class.call(error: "NoMethodError: undefined method `name' for nil:NilClass",
+            file: "app/controllers/widgets_controller.rb", line: line).content.first[:text]
+        end
+      end
+
+      it "keeps the @ of an instance variable receiver" do
+        text = diagnose("class WidgetsController\n  def show\n    @widget.name\n  end\nend\n", line: 3)
+
+        expect(text).to include("`@widget` is nil when `.name` is called")
+        expect(text).to include("`@widget&.name`")
+      end
+
+      it "reads the receiver from the line the error names, not from the first call of that method" do
+        text = diagnose("class WidgetsController\n  def show\n    user.name\n    @widget.name\n  end\nend\n", line: 4)
+
+        expect(text).to include("`@widget` is nil when `.name` is called")
+      end
+
+      it "names no receiver when the failing line does not call the method on a plain name" do
+        text = diagnose("class WidgetsController\n  def show\n    user.name\n    build(@widget).name\n  end\nend\n", line: 4)
+
+        expect(text).not_to include("`user` is nil")
+      end
+
+      it "does not take the receiver of a longer method that starts with the method's name" do
+        text = diagnose("class WidgetsController\n  def show\n    user.name_for(@widget.name)\n  end\nend\n", line: 3)
+
+        expect(text).to include("`@widget` is nil when `.name` is called")
+      end
+    end
+
     it "classifies an undefined method on a model against its real associations and columns" do
       result = described_class.call(error: "undefined method 'bogus_assoc' for an instance of Post")
       text = result.content.first[:text]

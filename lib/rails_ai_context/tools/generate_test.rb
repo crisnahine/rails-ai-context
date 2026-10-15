@@ -793,7 +793,7 @@ module RailsAiContext
             names = res[:login].map { |login| login[:filter][:name] }.join(" and ")
             "this app's #{res[:helper]} is not known to get a request past #{names}, so send what #{names} checks"
           else
-            "this app's tests define no sign-in helper, so sign a user in first the way the app's login does"
+            "no `sign_in` or `log_in` helper in this app's test helpers, so sign a user in first the way the app's login does"
           end
           [ "  # TODO: #{login_phrase(ctrl_class, res)}, so each request here is redirected or refused until the test signs in: #{how}." ]
         end

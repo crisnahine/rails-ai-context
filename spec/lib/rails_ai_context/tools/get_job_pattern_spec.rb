@@ -873,6 +873,26 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text_for(job: "NightlyJob")).to include("**Schedule:** 1h (from config/sidekiq.yml)")
     end
 
+    it "reads a sidekiq-scheduler entry in the file sidekiq is started with, one file per environment" do
+      write("config/sidekiq_production.yml", <<~YAML)
+        :queues:
+          - low
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              cron: "0 0 * * *"
+      YAML
+      write("config/sidekiq_staging.yml", <<~YAML)
+        :scheduler:
+          :schedule:
+            NightlyJob:
+              cron: "0 6 * * *"
+      YAML
+      text = text_for(job: "NightlyJob")
+      expect(text).to include("0 0 * * * (from config/sidekiq_production.yml)")
+      expect(text).to include("0 6 * * * (from config/sidekiq_staging.yml)")
+    end
+
     it "reads a schedule an ERB tag builds as computed, and every: with options as written" do
       write("config/sidekiq.yml", <<~YAML)
         :scheduler:

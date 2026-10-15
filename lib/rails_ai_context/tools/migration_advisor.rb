@@ -570,7 +570,7 @@ module RailsAiContext
           lines << "```ruby"
           lines << "class Add#{written.camelize}To#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    add_reference :#{table}, :#{reference}#{foreign_key}"
+          lines << "    add_reference :#{table}, :#{reference}#{key_type_option(schema, to_table)}#{foreign_key}"
           lines << "  end"
           lines << "end"
           lines << "```"
@@ -615,6 +615,27 @@ module RailsAiContext
 
         def table_in_schema?(schema, name)
           Payload.schema_tables(schema).any? { |_, table, _| table.to_s == name.to_s }
+        end
+
+        # The primary key type of a table when it is not the integer Rails defaults to.
+        def custom_key_type(table_data)
+          keys = Array(table_data && table_data[:columns]).select { |c| c[:primary_key] }
+          type = keys.first[:type].to_s if keys.size == 1
+          type unless type.nil? || %w[bigint integer].include?(type)
+        end
+
+        # ", type: :uuid" for a reference to a table keyed that way; a table the schema lacks is keyed as the app's tables are.
+        def key_type_option(schema, to_table)
+          target = to_table && schema_known?(schema) && Payload.schema_table(schema, to_table)
+          type = target ? custom_key_type(target) : app_key_type(schema)
+          type ? ", type: :#{type}" : ""
+        end
+
+        # The key type more than half of the app's tables share, when it is not Rails' default.
+        def app_key_type(schema)
+          tables = schema.is_a?(Hash) && schema[:tables].is_a?(Hash) ? schema[:tables].values : []
+          type, count = tables.map { |data| custom_key_type(data) }.tally.max_by(&:last)
+          type if type && count * 2 > tables.size
         end
 
         def generate_change_type(table, column, type, options)
@@ -667,7 +688,9 @@ module RailsAiContext
           lines << "```ruby"
           lines << "class Create#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    create_table :#{table} do |t|"
+          schema = cached_context[:schema]
+          key_type = app_key_type(schema)
+          lines << "    create_table :#{table}#{", id: :#{key_type}" if key_type} do |t|"
 
           if columns_str
             columns_str.split(",").each do |col|
@@ -675,7 +698,7 @@ module RailsAiContext
               name = parts[0]&.strip
               type = parts[1]&.strip || "string"
               if type == "references"
-                lines << "      t.references :#{name}, foreign_key: true"
+                lines << "      t.references :#{name}#{key_type_option(schema, name.to_s.pluralize)}, foreign_key: true"
               else
                 lines << "      t.#{type} :#{name}"
               end

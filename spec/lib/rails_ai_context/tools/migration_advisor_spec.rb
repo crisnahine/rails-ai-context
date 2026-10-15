@@ -754,4 +754,54 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("generate it once per database: `--database shard_one`, `--database shard_two`")
     end
   end
+
+  describe "an app whose tables use uuid primary keys" do
+    def keyed(type)
+      { columns: [ { name: "id", type: type, primary_key: true }, { name: "name", type: "string" } ], primary_key: "id" }
+    end
+
+    def advise(key_types, **params)
+      tables = key_types.transform_values { |type| keyed(type) }
+      allow(described_class).to receive(:cached_context).and_return({ schema: { tables: tables }, models: {} })
+      described_class.call(**params).content.first[:text]
+    end
+
+    let(:uuid_app) { { "users" => "uuid", "widgets" => "uuid" } }
+
+    it "gives a reference the key type of the table it points at" do
+      text = advise(uuid_app, action: "add_association", table: "widgets", column: "owner", type: "users")
+
+      expect(text).to include("add_reference :widgets, :owner, type: :uuid, foreign_key: { to_table: :users }")
+    end
+
+    it "gives a reference to a table with the default key no type" do
+      text = advise({ "users" => "bigint", "widgets" => "uuid" }, action: "add_association", table: "widgets", column: "owner", type: "users")
+
+      expect(text).to include("add_reference :widgets, :owner, foreign_key: { to_table: :users }")
+    end
+
+    it "creates a table with the key type most of the app's tables use" do
+      text = advise(uuid_app, action: "create_table", table: "gadgets", column: "name:string")
+
+      expect(text).to include("create_table :gadgets, id: :uuid do |t|")
+    end
+
+    it "keys the references of a created table the way the tables they point at are keyed" do
+      text = advise(uuid_app, action: "create_table", table: "gadgets", column: "user:references")
+
+      expect(text).to include("t.references :user, type: :uuid, foreign_key: true")
+    end
+
+    it "keys a reference to a table the schema lacks the way the app's tables are keyed" do
+      text = advise(uuid_app, action: "create_table", table: "gadgets", column: "owner:references")
+
+      expect(text).to include("t.references :owner, type: :uuid, foreign_key: true")
+    end
+
+    it "creates a table with the default key where the tables are not keyed alike" do
+      text = advise({ "users" => "uuid", "widgets" => "bigint" }, action: "create_table", table: "gadgets", column: "name:string")
+
+      expect(text).to include("create_table :gadgets do |t|")
+    end
+  end
 end

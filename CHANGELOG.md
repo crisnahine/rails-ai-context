@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.3] - 2026-10-15
+
+### Fixed
+
+- **`rails_diagnose` names an instance variable receiver with its `@`, and takes it from the line the error names.**
+  `@widget.name` read as `widget`, so the advice named a variable the action does
+  not have. The receiver also came from the first call of the method in the file,
+  not from the line. A line that does not call the method on a plain name now
+  gets no receiver instead of another line's. 5.36.2 and earlier versions had the
+  gap.
+- **`rails_generate_test` says which sign-in helper names it looked for.** The
+  TODO read "this app's tests define no sign-in helper" for a suite that signs in
+  through a helper with another name. It now reads "no `sign_in` or `log_in`
+  helper in this app's test helpers".
+- **A `change_table` migration lists what its block does.** `rails://migrations`
+  showed `"actions": []` for a migration that adds columns through
+  `change_table`, and `migration_stats` left it out of `total_add_column`. The
+  table calls in the block (`t.string`, `t.references`, `t.index`, `t.remove` and
+  the others) are read from the AST. A `create_table` block's columns are not
+  counted.
+- **`rails_search_code` trace says how many sibling methods and internal calls it
+  left out.** It listed 10 siblings and 15 internal calls and stopped. The list
+  now ends with "_...and N more_".
+- **`rails_get_job_pattern` reads sidekiq-scheduler entries from every
+  `config/sidekiq*.yml`.** A schedule kept in `config/sidekiq_production.yml`,
+  one file per environment, showed no `Schedule`, so a worker that runs every
+  night read like dead code. Each file's entry is shown with its file name.
+- **`rails_get_config(section:"conventions")` counts the rake tasks of
+  `lib/tasks` and the templates of `app/views`.** The directory counts took
+  `.rb` files only: `lib/tasks` read 2 files for 67, and `app/views` never
+  appeared.
+- **`rails_get_test_info` counts only `*_spec.rb` under `spec/` in an RSpec
+  suite.** A `*_test.rb` helper in `spec/support` was counted as a test file. A
+  Minitest suite still counts both `*_spec.rb` and `*_test.rb`.
+- **`rails_migration_advisor` writes a reference and a new table with the key
+  type the app uses.** On a schema of `id: :uuid` tables, `add_reference` made a
+  bigint column that PostgreSQL refuses to key to a uuid, and `create_table`
+  made the one bigint table. `add_reference` and `t.references` take the key type
+  of the table they point at (the app's type when the schema lacks that table),
+  and `create_table` takes the type most of the app's tables share.
+- **`rails_review_changes` matches `files` by whole path or directory.**
+  `files: ["Gemfile"]` also returned `Gemfile.lock`. A directory such as
+  `app/models` still matches the files under it.
+- **`rails_analyze_feature` says which directories it stopped reading.** It reads
+  the first 500 files of a directory, and a service, view or test past that was
+  missed with no word. The answer now ends with the directories it did not
+  finish. The "first 500 scanned" note no longer shows when exactly 500 files were
+  read.
+
 ## [5.36.2] - 2026-10-15
 
 ### Fixed

@@ -448,6 +448,55 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         end
       end
 
+      def analyze(tmp, feature, context: {})
+        allow(described_class).to receive(:cached_context).and_return(context)
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        described_class.call(feature: feature).content.first[:text]
+      end
+
+      def write_numbered(dir, count, body: "class Filler; end\n", ext: "rb")
+        FileUtils.mkdir_p(dir)
+        count.times { |i| File.write(File.join(dir, format("a%04d.%s", i, ext)), body) }
+      end
+
+      it "says which directory it stopped reading when a file past the cap is the one that matches" do
+        Dir.mktmpdir("rac_past_cap") do |tmp|
+          write_numbered(File.join(tmp, "app", "services"), described_class::MAX_SCAN_FILES)
+          File.write(File.join(tmp, "app", "services", "z_goal.rb"), "class ZGoal; end\n")
+          context = { models: { "Goal" => { table_name: "goals", associations: [] } }, schema: { tables: { "goals" => { columns: [] } } } }
+
+          text = analyze(tmp, "goal", context: context)
+
+          expect(text).not_to include("## Services")
+          expect(text).to include("were not checked")
+          expect(text).to include("app/services")
+        end
+      end
+
+      it "adds the note to a no-match answer, since the match may be in the files it did not read" do
+        Dir.mktmpdir("rac_past_cap_empty") do |tmp|
+          write_numbered(File.join(tmp, "app", "views"), described_class::MAX_SCAN_FILES + 1, ext: "html.erb")
+
+          text = analyze(tmp, "goal")
+
+          expect(text).to start_with("No matches found for 'goal'")
+          expect(text).to include("were not checked").and include("app/views")
+        end
+      end
+
+      it "says nothing at exactly the cap, where every file was read" do
+        Dir.mktmpdir("rac_at_cap") do |tmp|
+          write_numbered(File.join(tmp, "app", "services"), described_class::MAX_SCAN_FILES - 1)
+          File.write(File.join(tmp, "app", "services", "goal_service.rb"), "class GoalService; end\n")
+
+          text = analyze(tmp, "goal")
+
+          expect(text).to include("## Services (1)")
+          expect(text).not_to include("were not checked")
+          expect(text).not_to include("scanned")
+        end
+      end
+
       it "does NOT emit a truncation note when file count is below the cap" do
         Dir.mktmpdir("rac_below_cap") do |tmp|
           services_dir = File.join(tmp, "app", "services")

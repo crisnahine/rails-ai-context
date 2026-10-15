@@ -21,7 +21,7 @@ module RailsAiContext
           files: {
             type: "array",
             items: { type: "string" },
-            description: "Filter to specific files (relative to Rails root). Omit to review all changed files."
+            description: "Filter to files or directories (relative to Rails root). Omit to review all changed files."
           }
         }
       )
@@ -91,7 +91,7 @@ module RailsAiContext
         end
 
         changed = get_changed_files(base, root)
-        changed = changed.select { |f| files.any? { |filter| f.include?(filter) } } if files&.any?
+        changed = changed.select { |f| files.any? { |filter| path_matches?(f, filter) } } if files&.any?
 
         if changed.empty?
           return text_response("No changes found for ref '#{echo_input(ref)}'.#{files ? " Filter: #{echo_input(files.join(', '))}" : ""}")
@@ -212,6 +212,12 @@ module RailsAiContext
         def subfolder_app?(root)
           prefix, status = Open3.capture2("git", "rev-parse", "--show-prefix", chdir: root, err: File::NULL)
           status.success? && !prefix.strip.empty?
+        end
+
+        # A filter names one file or a directory, never part of a name: `Gemfile` is not `Gemfile.lock`.
+        def path_matches?(path, filter)
+          wanted = filter.delete_prefix("./").chomp("/")
+          path == wanted || path.start_with?("#{wanted}/")
         end
 
         # The Ruby folders count only Ruby files: the install writes app/models/AGENTS.md beside the models.

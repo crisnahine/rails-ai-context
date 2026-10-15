@@ -2485,6 +2485,18 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
                  "module SessionTestHelper\n  def #{helper}(user)\n  end\nend\n")
     end
 
+    it "says which helper names it looked for when the app signs in through another name" do
+      Dir.mktmpdir do |root|
+        write_helper(root, "authorize_request_for")
+
+        text = orders_test(root)
+
+        expect(text).to include("# TODO: OrdersController runs require_login")
+        expect(text).to include("no `sign_in` or `log_in` helper in this app's test helpers")
+        expect(text).not_to include("define no sign-in helper")
+      end
+    end
+
     it "signs in with the app's own helper and a users fixture where it answers the filter" do
       Dir.mktmpdir do |root|
         write_helper(root, "sign_in_as")

@@ -121,7 +121,32 @@ module RailsAiContext
           add_foreign_key remove_foreign_key
           add_timestamps create_join_table enable_extension execute
           add_check_constraint remove_check_constraint
-        ].select { |action| content.include?(action) }
+        ].select { |action| content.include?(action) } | change_table_actions(content)
+      end
+
+      # What each table call in a change_table block does; a column type adds a column, any other call does nothing.
+      CHANGE_TABLE_CALLS = {
+        index: "add_index", remove_index: "remove_index", remove: "remove_column", remove_timestamps: "remove_column",
+        remove_references: "remove_reference", remove_belongs_to: "remove_reference", references: "add_reference",
+        belongs_to: "add_reference", timestamps: "add_timestamps", rename: "rename_column", change: "change_column",
+        change_default: "change_column_default", change_null: "change_column_null", foreign_key: "add_foreign_key",
+        remove_foreign_key: "remove_foreign_key", check_constraint: "add_check_constraint",
+        remove_check_constraint: "remove_check_constraint"
+      }.freeze
+      COLUMN_CALLS = (Listeners::SchemaDslListener::COLUMN_TYPES.map(&:to_sym) + [ :column ] - CHANGE_TABLE_CALLS.keys).freeze
+
+      # A table call counts only inside a change_table block: the listener links each call to the block that encloses it.
+      def change_table_actions(content)
+        return [] unless content.include?("change_table")
+
+        hits = SourceIntrospector.walk_source(content, {
+          change_table: -> { Listeners::GenericMacroListener.new(:change_table, *CHANGE_TABLE_CALLS.keys, *COLUMN_CALLS, any_receiver: true) }
+        })[:change_table]
+        blocks = hits.select { |hit| hit[:macro] == :change_table }.to_set { |hit| hit[:offset] }
+        return [] if blocks.empty?
+
+        inside = hits.select { |hit| blocks.include?(hit[:parent_offset]) }
+        [ "change_table" ] | inside.map { |hit| CHANGE_TABLE_CALLS.fetch(hit[:macro], "add_column") }
       end
     end
   end

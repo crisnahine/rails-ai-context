@@ -26,24 +26,28 @@ module RailsAiContext
         end
       end
 
+      SIDEKIQ_CRON_FILES = %w[config/schedule.yml config/schedule.yaml config/sidekiq_cron.yml].freeze
+
       def sidekiq_cron(root)
-        %w[config/schedule.yml config/schedule.yaml config/sidekiq_cron.yml].flat_map do |file|
+        SIDEKIQ_CRON_FILES.flat_map do |file|
           named_tasks(yaml(root, file)).filter_map { |name, options| task(file, name, options, :cron) }
         end
       end
 
       # sidekiq-scheduler runs a job by its entry's name when no class is given.
+      # Sidekiq starts from any file `-C` names, and apps keep one per environment.
       def sidekiq_scheduler(root)
-        file = "config/sidekiq.yml"
-        data = yaml(root, file)
-        return [] unless data.is_a?(Hash)
+        (Dir.glob("config/sidekiq*.{yml,yaml}", base: root.to_s).sort - SIDEKIQ_CRON_FILES).flat_map do |file|
+          data = yaml(root, file)
+          next [] unless data.is_a?(Hash)
 
-        section = data["scheduler"].is_a?(Hash) ? data["scheduler"]["schedule"] : data["schedule"]
-        named_tasks(section).filter_map do |name, options|
-          next unless options.is_a?(Hash)
+          section = data["scheduler"].is_a?(Hash) ? data["scheduler"]["schedule"] : data["schedule"]
+          named_tasks(section).filter_map do |name, options|
+            next unless options.is_a?(Hash)
 
-          kind = SCHEDULER_KEYS.find { |key| options.key?(key.to_s) } or next
-          task(file, name, { "class" => name }.merge(options), kind)
+            kind = SCHEDULER_KEYS.find { |key| options.key?(key.to_s) } or next
+            task(file, name, { "class" => name }.merge(options), kind)
+          end
         end
       end
 

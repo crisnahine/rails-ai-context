@@ -223,6 +223,53 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
     # The diff was printed as git gave it, so a secret a change adds or takes
     # out reached the caller whole, as every other tool's source does not, and
     # a file on sensitive_patterns had its lines shown too.
+    describe "the files filter" do
+      def git(*args)
+        out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+                                      *args, chdir: @dir)
+        raise out unless status.success?
+
+        out
+      end
+
+      def write(relative, body)
+        FileUtils.mkdir_p(File.dirname(File.join(@dir, relative)))
+        File.write(File.join(@dir, relative), body)
+      end
+
+      around do |example|
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          %w[Gemfile Gemfile.lock app/models/user.rb app/models/user.rb.orig app/models/post.rb app/controllers/users_controller.rb].each { |path| write(path, "a\n") }
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          %w[Gemfile Gemfile.lock app/models/user.rb app/models/user.rb.orig app/models/post.rb app/controllers/users_controller.rb].each { |path| write(path, "b\n") }
+          example.run
+        end
+      end
+
+      before { allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@dir))) }
+
+      def reviewed(*files)
+        described_class.call(ref: "HEAD", files: files).content.first[:text].scan(/^### (\S+)/).flatten
+      end
+
+      it "matches a whole path, not a file whose name contains it" do
+        expect(reviewed("Gemfile")).to eq(%w[Gemfile])
+        expect(reviewed("app/models/user.rb")).to eq(%w[app/models/user.rb])
+      end
+
+      it "matches the files under a directory, with or without its trailing slash" do
+        expect(reviewed("app/models")).to contain_exactly("app/models/post.rb", "app/models/user.rb", "app/models/user.rb.orig")
+        expect(reviewed("app/models/")).to eq(reviewed("app/models"))
+      end
+
+      it "takes several paths" do
+        expect(reviewed("Gemfile", "app/controllers")).to contain_exactly("Gemfile", "app/controllers/users_controller.rb")
+      end
+    end
+
     describe "a diff that holds secrets" do
       let(:token) { "Xk2mQ9pLw7Rt#{'Z4ab'}" }
       let(:live_key) { "sk_live_#{'b' * 24}" }
