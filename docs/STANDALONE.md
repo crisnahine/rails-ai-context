@@ -140,6 +140,25 @@ Codex CLI is special - it `env_clear()`s the process before spawning MCP servers
 
 If you switch Ruby versions, re-run `rails-ai-context init` to update the snapshot.
 
+## Updating
+
+A gem installed with `gem install` stays at its version until you update it:
+
+```bash
+gem update rails-ai-context
+rails-ai-context init --defaults   # in each app: brings its MCP configs and context files up to the new version
+```
+
+Each Ruby has its own copy, so update under the Ruby your AI client starts the
+server with. Restart the AI client afterwards so its MCP server runs the new copy.
+
+The binary checks rubygems.org for a newer release at most once a day, in the
+background. When there is one, a command run in a terminal says so on stderr,
+and the MCP server tells the agent to pass it on, in its instructions and at the
+end of `rails_onboard`. `RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1` turns the check off.
+It stays off in CI and in a copy the app's bundle runs, where the lockfile picks
+the version.
+
 ## Switching between standalone and in-Gemfile
 
 You can switch freely:

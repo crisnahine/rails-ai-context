@@ -37,6 +37,10 @@ ENV["GIT_CONFIG_COUNT"] = "1"
 ENV["GIT_CONFIG_KEY_0"] = "maintenance.auto"
 ENV["GIT_CONFIG_VALUE_0"] = "false"
 
+# The binaries the suite starts would otherwise ask rubygems.org for the latest
+# version and write the answer under the developer's home.
+ENV["RAILS_AI_CONTEXT_NO_UPDATE_CHECK"] = "1"
+
 Dir[File.join(__dir__, "support", "**", "*.rb")].sort.each { |f| require f }
 
 RSpec.configure do |config|

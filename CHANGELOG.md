@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The standalone binary says when a newer release is out.** A copy installed
+  with `gem install` stayed at its version until someone thought to update it.
+  It now asks rubygems.org for the latest version at most once a day, in a
+  detached child process, and keeps the answer under `$XDG_STATE_HOME`
+  (`~/.local/state/rails-ai-context/latest`). A command run in a terminal prints
+  one line on stderr naming the Ruby to update under and the two commands to
+  run. The MCP server adds the line to its instructions and to the end of
+  `rails_onboard` for the agent to pass on, or asks for a restart when the new
+  version is already installed. `RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1` turns it
+  off. It is off in CI, on a prerelease, for an older version run on purpose
+  (`_5.30.0_`) and in a copy the app's bundle runs. Nothing is installed for you.
+
 ## [5.36.3] - 2026-10-15
 
 ### Fixed

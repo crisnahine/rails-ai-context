@@ -46,7 +46,9 @@ module RailsAiContext
         else
           compose_standard(ctx)
         end
-        text_response(body, suffix: introspection_warnings_note(ctx))
+        update = RailsAiContext::UpdateCheck.notice
+        RailsAiContext::UpdateCheck.told! if update
+        text_response(body, suffix: [ introspection_warnings_note(ctx), ("\n\n---\nTell the user: #{update}" if update) ].compact.join)
       end
 
       class << self

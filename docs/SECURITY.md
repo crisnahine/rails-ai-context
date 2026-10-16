@@ -18,7 +18,7 @@
 1. **Read-only by design** - All 35 tools are annotated as non-destructive in the MCP protocol
 2. **Defense in depth** - Multiple security layers, not single points of failure
 3. **Sensitive data blocking** - Configurable patterns prevent access to secrets
-4. **Offline by default** - No network calls except optional `rails_search_docs` with `fetch: true`
+4. **Offline by default** - No network calls except optional `rails_search_docs` with `fetch: true`, and the standalone binary's daily version check against rubygems.org (`RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1` turns it off)
 5. **Graceful degradation** - Missing optional dependencies don't expose errors or state
 
 ---

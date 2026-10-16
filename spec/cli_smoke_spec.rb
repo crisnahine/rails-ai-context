@@ -1814,7 +1814,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         # The entry's args name the installed wrapper; this checkout's binary
         # stands in for it here, run the same way.
         args = [ "-I", lib, exe, *entry["args"].drop(1) ]
-        served, = Open3.capture2(entry.fetch("env", {}), entry["command"], *args,
+        env = entry.fetch("env", {}).merge("RAILS_AI_CONTEXT_NO_UPDATE_CHECK" => "1")
+        served, = Open3.capture2(env, entry["command"], *args,
                                  chdir: Dir.home, unsetenv_others: true, stdin_data: request)
 
         tools = served.lines.filter_map { |line| JSON.parse(line) rescue nil }.find { |m| m["id"] == 2 }
