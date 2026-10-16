@@ -20,8 +20,9 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     db&.close
   end
 
+  # The timeout `rails new` writes: without it two leases opening one file at once race for the WAL switch and one gets SQLITE_BUSY.
   def config(env, name, database)
-    ActiveRecord::DatabaseConfigurations::HashConfig.new(env, name, { adapter: "sqlite3", database: database })
+    ActiveRecord::DatabaseConfigurations::HashConfig.new(env, name, { adapter: "sqlite3", database: database, timeout: 5000 })
   end
 
   def databases(extra = {}, elsewhere = {})
