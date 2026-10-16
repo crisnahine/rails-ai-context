@@ -201,7 +201,10 @@ class RailsAiContextCLI < Thor
     # One answer for any command's failure; Thor's refusals and SystemExit pass through.
     no_commands do
       def invoke_command(command, *args)
-        super
+        start_update_check
+        result = super
+        check_for_update
+        result
       rescue Thor::Error
         raise
       rescue StandardError, ScriptError => e
@@ -319,6 +322,7 @@ class RailsAiContextCLI < Thor
       # No Thor default: it would overwrite the config file's http_port.
       ::RailsAiContext.configuration.http_port = options[:port] if options[:port]
 
+      start_update_check&.refresh(env: STARTING_ENV)
       ::RailsAiContext.start_mcp_server(transport: transport)
     end
 
@@ -1323,6 +1327,29 @@ class RailsAiContextCLI < Thor
       found.each { |spec| spec.full_require_paths.each { |path| $LOAD_PATH << path unless $LOAD_PATH.include?(path) } }
       entry_boot.preboot_gem_specs = found.to_h { |spec| [ spec.name, spec ] }.merge(entry_boot.preboot_gem_specs)
     rescue Gem::LoadError
+      nil
+    end
+
+    # A notice on a terminal only: stdout may be piped, and an agent reads rails_onboard's copy instead.
+    def check_for_update
+      check = start_update_check or return
+      check.refresh(env: STARTING_ENV)
+      note = check.notice unless check.told?
+      $stderr.puts note if note && $stderr.tty?
+    rescue StandardError, ScriptError
+      nil
+    end
+
+    # Only this copy run outside a bundle checks; under bundle exec the app's lockfile picks the version.
+    # Started before the command, while Gem.path is still the one an app's boot replaces.
+    def start_update_check
+      return if STARTING_ENV["BUNDLE_BIN_PATH"]
+
+      @start_update_check ||= begin
+        require_relative "../lib/rails_ai_context/update_check"
+        ::RailsAiContext::UpdateCheck.tap(&:enable!)
+      end
+    rescue StandardError, ScriptError
       nil
     end
 

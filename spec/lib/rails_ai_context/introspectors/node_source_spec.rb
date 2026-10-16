@@ -19,6 +19,12 @@ RSpec.describe RailsAiContext::Introspectors::NodeSource do
     expect(described_class.text(node)).to include("state = 'open'")
   end
 
+  it "keeps the body of a heredoc the file never closes" do
+    node = call_node("where(<<~SQL, id)\n  state = 'open'\n")
+
+    expect(described_class.text(node)).to include("state = 'open'")
+  end
+
   it "answers the slice when the node opens no heredoc" do
     node = call_node("where(state: 'open')")
 

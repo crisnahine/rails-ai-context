@@ -266,6 +266,7 @@ server entry's `env`.
 | Variable | Read by | Effect |
 |:---------|:--------|:-------|
 | `RAILS_AI_CONTEXT_BOOT_TIMEOUT` | Every command that boots the app, and the `ai:serve`, `ai:serve_http` and `ai:tool` rake tasks | Seconds a boot may take before it counts as failed; a command that can then answers from the static tier. Default 20 for `serve` over stdio and `rails ai:serve`, whose client waits about 30 seconds for its first answer, and 60 for everything else. A value that is not a whole number warns and keeps the default |
+| `RAILS_AI_CONTEXT_NO_UPDATE_CHECK` | The standalone binary | Any non-empty value turns off the daily check for a newer release on rubygems.org. The check also stays off in CI, on a prerelease and in a copy the app's bundle runs |
 | `RAILS_AI_CONTEXT_SERVER_NAME` | The MCP server | The name it announces for one process, in place of the default `server_name`; a `server_name` the app sets wins. A workspace's MCP entries set it |
 | `DEBUG` | Every command and the MCP server | Any value prints the backtrace of a failed boot, a failed command and an exception that escapes a tool, and names the errors a fallback swallows |
 | `RAILS_ENV`, `RACK_ENV` | Every command | The Rails environment to boot, read the way Rails reads it; `--environment` sets it for one command. Default `development` |

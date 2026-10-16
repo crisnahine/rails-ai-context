@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.4] - 2026-10-16
+
+### Added
+
+- **The standalone binary says when a newer release is out.** A copy installed
+  with `gem install` stayed at its version until someone thought to update it.
+  It now asks rubygems.org for the latest version at most once a day, in a
+  detached child process, and keeps the answer under `$XDG_STATE_HOME`
+  (`~/.local/state/rails-ai-context/latest`). A command run in a terminal prints
+  one line on stderr naming the Ruby to update under and the two commands to
+  run. The MCP server adds the line to its instructions and to the end of
+  `rails_onboard` for the agent to pass on, or asks for a restart when the new
+  version is already installed. `RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1` turns it
+  off. It is off in CI, on a prerelease, for an older version run on purpose
+  (`_5.30.0_`) and in a copy the app's bundle runs. Nothing is installed for you.
+
+### Fixed
+
+- **The code reads prism 2 the way it reads prism 1.** prism's main branch
+  (2.0.0.rc1) parses with the running Ruby's grammar when it is given none,
+  replaced `MissingNode` with `ErrorRecoveryNode`, and leaves an unterminated
+  heredoc without a closing location. The gem now names the newest grammar
+  when it parses and lexes, reads either recovery node, and ends an
+  unterminated heredoc at its body. The gemspec still requires prism below 2.0.
+
 ## [5.36.3] - 2026-10-15
 
 ### Fixed

@@ -80,14 +80,14 @@ module RailsAiContext
     # A one-shot parse that stores nothing: for a scan reading thousands of
     # files once, whose entries would only evict what other readers reuse.
     def self.parse_uncached(source)
-      Prism.parse(source)
+      Prism.parse(source, version: NEWEST_GRAMMAR)
     end
 
     # Whether a file parses under `ruby:`'s grammar, with no tree built or
     # kept: the check before a loader requires each file it walks.
     def self.parse_success?(path, ruby: nil)
       version = prism_version(ruby)
-      version ? Prism.parse_file_success?(path, version: version) : Prism.parse_file_success?(path)
+      Prism.parse_file_success?(path, version: version || NEWEST_GRAMMAR)
     end
 
     # Parse a Ruby source string, cached by content digest, so every extractor
@@ -112,6 +112,8 @@ module RailsAiContext
     private_class_method :content_key
 
     OLDEST_GRAMMAR = "3.3"
+    # Named, because prism 2 parses with the running Ruby's grammar when given none.
+    NEWEST_GRAMMAR = "latest"
     GRAMMARS = Concurrent::Map.new # major.minor => whether the loaded prism parses it
 
     # The grammar prism parses `ruby` with: its own major.minor, the oldest prism
@@ -134,7 +136,7 @@ module RailsAiContext
     private_class_method :supported?
 
     def self.prism_parse(source, version)
-      version ? Prism.parse(source, version: version) : Prism.parse(source)
+      Prism.parse(source, version: version || NEWEST_GRAMMAR)
     end
     private_class_method :prism_parse
 

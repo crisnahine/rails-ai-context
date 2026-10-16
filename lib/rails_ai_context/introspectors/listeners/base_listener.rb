@@ -122,7 +122,7 @@ module RailsAiContext
         end
 
         def lex(text)
-          Prism.lex(text).value.map(&:first)
+          Prism.lex(text, version: AstCache::NEWEST_GRAMMAR).value.map(&:first)
         rescue StandardError
           []
         end

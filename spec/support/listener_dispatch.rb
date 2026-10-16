@@ -4,7 +4,7 @@
 module ListenerDispatch
   def parse_and_dispatch(source, *args, **options)
     listener = described_class.new(*args, **options)
-    result = Prism.parse(source)
+    result = Prism.parse(source, version: RailsAiContext::AstCache::NEWEST_GRAMMAR)
     listener.comments = result.comments
     RailsAiContext::Introspectors::ListenerRegistration
       .dispatcher_for(listener)

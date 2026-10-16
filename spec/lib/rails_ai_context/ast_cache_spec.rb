@@ -178,6 +178,14 @@ RSpec.describe RailsAiContext::AstCache do
       expect(described_class.parse_string(source).success?).to be false
     end
 
+    it "parses with the newest grammar when given no Ruby, whatever Ruby runs it" do
+      expect(described_class.parse_uncached(source).success?).to be false
+      path = File.join(Dir.mktmpdir, "grid.rb")
+      File.write(path, source)
+      expect(described_class.parse_success?(path)).to be false
+      expect(described_class.parse_success?(path, ruby: "3.3.0")).to be true
+    end
+
     it "reads a malformed version as no version" do
       [ nil, "", "jruby-9.4", "\xFF", "3" ].each do |ruby|
         expect(described_class.prism_version(ruby)).to be_nil

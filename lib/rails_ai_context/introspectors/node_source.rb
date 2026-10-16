@@ -18,12 +18,12 @@ module RailsAiContext
       # @return [String] the node's slice, followed by the body of every
       #   heredoc it opens whose body lies past its end
       def text(node)
-        trailing = heredocs(node).select { |doc| doc.closing_loc.end_offset > node.location.end_offset }
+        trailing = heredocs(node).select { |doc| body_end(doc).end_offset > node.location.end_offset }
         return node.slice if trailing.empty?
 
         first = trailing.min_by { |doc| body_start(doc).start_offset }
-        last = trailing.max_by { |doc| doc.closing_loc.end_offset }
-        "#{node.slice}\n#{body_start(first).join(last.closing_loc).slice}"
+        last = trailing.max_by { |doc| body_end(doc).end_offset }
+        "#{node.slice}\n#{body_start(first).join(body_end(last)).slice}"
       end
 
       def heredocs(node)
@@ -40,8 +40,13 @@ module RailsAiContext
       def body_start(doc)
         if doc.respond_to?(:content_loc) then doc.content_loc
         elsif doc.parts.any? then doc.parts.first.location
-        else doc.closing_loc
+        else body_end(doc)
         end
+      end
+
+      # The terminator; an unterminated heredoc has none from prism 2 on, and ends with its body.
+      def body_end(doc)
+        doc.closing_loc || (doc.content_loc if doc.respond_to?(:content_loc)) || doc.parts.last&.location || doc.location
       end
     end
   end

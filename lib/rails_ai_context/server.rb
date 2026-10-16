@@ -273,11 +273,15 @@ module RailsAiContext
     # code changed (BaseTool.stale_code_note).
     def self.instructions
       intro = "Ground truth engine for Rails apps. Live Prism AST introspection."
-      return "#{intro} Answers follow edits to the app's files." if CodeReloader.reloadable? || RailsAiContext.static_tier?
-
-      "#{intro} Answers follow edits to the app's files, except what reflection reads, such as associations: " \
-        "RAILS_ENV=#{RailsAiContext.environment_name} does not reload code, so that stays as of boot, and every " \
-        "answer says when app code changed since."
+      text = if CodeReloader.reloadable? || RailsAiContext.static_tier?
+        "#{intro} Answers follow edits to the app's files."
+      else
+        "#{intro} Answers follow edits to the app's files, except what reflection reads, such as associations: " \
+          "RAILS_ENV=#{RailsAiContext.environment_name} does not reload code, so that stays as of boot, and every " \
+          "answer says when app code changed since."
+      end
+      note = UpdateCheck.agent_note
+      note ? "#{text} #{note}" : text
     end
 
     # Anything that still escapes a tool (schema validation bugs, SDK-level

@@ -538,7 +538,7 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
 
         described_class.call(detail: "full")
 
-        expect(Prism).to have_received(:parse).with(source).once
+        expect(Prism).to have_received(:parse).with(source, version: RailsAiContext::AstCache::NEWEST_GRAMMAR).once
       end
 
       it "counts them in the summary" do
@@ -614,7 +614,7 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         text = described_class.call(detail: "standard").content.first[:text]
 
         expect(text).to include("- `kit_title` (OuterKit::Helpers, `lib/outer_kit.rb`)")
-        expect(Prism).to have_received(:parse).with(source).once
+        expect(Prism).to have_received(:parse).with(source, version: RailsAiContext::AstCache::NEWEST_GRAMMAR).once
       end
 
       it "lists the ones a module kept in its outer constant's lib file declares" do

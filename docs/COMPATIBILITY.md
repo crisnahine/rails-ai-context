@@ -340,6 +340,12 @@ Proof sources:
    with Rails 7.0 and 7.2, Ruby 3.3 with Rails 7.1, Ruby 3.4 with Rails 8.0 and
    8.1, and Ruby 4.0 with Rails 8.1; and the unit suite and the E2E harness on
    Linux, macOS and Windows.
+   In the v5.36.4 release QA: the update check run as the installed binary on
+   Ruby 3.1, 3.3, 3.4 and 4.0 against rubygems.org, through a terminal and over
+   MCP stdio on a fixture app, a large private app booted and another in the
+   static tier, with the app's pinned json and net-http still loaded; the
+   suite on prism 1.4.0 and on prism main under Ruby 3.2 and 3.4; and the unit
+   suite and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

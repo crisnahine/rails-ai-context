@@ -9,6 +9,9 @@ module RailsAiContext
       # and Que's `self.queue = "name"`, or a `def self.queue` returning one, which
       # Resque asks for when @queue is unset. A literal is kept as its value, anything else as source.
       class QueueAssignmentListener < BaseListener
+        # What a half-written `@queue =` parses its value as: MissingNode before prism 2, ErrorRecoveryNode from it.
+        RECOVERY_NODES = %i[MissingNode ErrorRecoveryNode].filter_map { |name| Prism.const_get(name) if Prism.const_defined?(name, false) }.freeze
+
         def initialize
           super
           @def_depth = 0
@@ -40,9 +43,8 @@ module RailsAiContext
 
         private
 
-        # A half-written `@queue =` parses with a MissingNode value.
         def record(node, value, form)
-          return if value.is_a?(Prism::MissingNode)
+          return if RECOVERY_NODES.any? { |type| value.is_a?(type) }
 
           literal = value.is_a?(Prism::SymbolNode) || value.is_a?(Prism::StringNode)
           @results << { form: form, queue: literal ? value.unescaped : nil, source: value.slice,
