@@ -159,15 +159,50 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
     end
 
     describe "the nil receiver" do
-      def diagnose(source, line:)
+      def diagnose(source, line:, error: "NoMethodError: undefined method `name' for nil:NilClass")
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
           File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), source)
           app = double(root: Pathname.new(dir))
           [ described_class, RailsAiContext::Tools::GetEditContext ].each { |tool| allow(tool).to receive(:rails_app).and_return(app) }
-          described_class.call(error: "NoMethodError: undefined method `name' for nil:NilClass",
-            file: "app/controllers/widgets_controller.rb", line: line).content.first[:text]
+          described_class.call(error: error, file: "app/controllers/widgets_controller.rb", line: line).content.first[:text]
         end
+      end
+
+      def filler(first, last) = (first..last).map { |i| "  def m#{i}\n    #{i}\n  end\n" }.join
+
+      it "shows the code around the line it was given, not the first mention of the method name" do
+        source = "class WidgetsController\n  # the name shown on the page\n#{filler(1, 4)}  def show\n    @widget.name.upcase\n  end\nend\n"
+        line = source.lines.index { |l| l.include?("@widget.name") } + 1
+        text = diagnose(source, line: line)
+
+        expect(text[/## Code Context.*?```ruby\n(.*?)```/m, 1]).to include("#{line.to_s.rjust(4)}      @widget.name.upcase")
+      end
+
+      it "reads a setter's receiver and shows its line when an earlier line holds the line number" do
+        source = "class WidgetsController\n  PAGE_SIZE = 16\n#{filler(1, 4)}  def update\n    @draft.title = params[:title]\n  end\nend\n"
+        line = source.lines.index { |l| l.include?("@draft.title") } + 1
+        text = diagnose(source, line: line, error: "NoMethodError: undefined method 'title=' for nil")
+
+        expect(text[/## Code Context.*?```ruby\n(.*?)```/m, 1]).to include("@draft.title = params[:title]")
+        expect(text).to include("`@draft` is nil when `.title=` is called")
+        expect(text).to include(%(rails_get_edit_context(file:"app/controllers/widgets_controller.rb", line:#{line})))
+      end
+
+      it "reads the receiver of an index call" do
+        text = diagnose("class WidgetsController\n  def show\n    @widget[:name]\n  end\nend\n", line: 3,
+          error: "NoMethodError: undefined method '[]' for nil")
+
+        expect(text).to include("`@widget` is nil")
+      end
+
+      it "takes no %w literal for an index call's receiver, and names none for a chained index" do
+        error = "NoMethodError: undefined method '[]' for nil"
+        literal = diagnose("class WidgetsController\n  def show\n    %w[a b].map { |t| user[t] }\n  end\nend\n", line: 3, error: error)
+        chained = diagnose("class WidgetsController\n  def show\n    params[:post][:title]\n  end\nend\n", line: 3, error: error)
+
+        expect(literal).to include("`user` is nil")
+        expect(chained).not_to include("**Specific:**")
       end
 
       it "keeps the @ of an instance variable receiver" do
@@ -201,6 +236,12 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       text = result.content.first[:text]
       expect(text).to include("undefined_method_on_model")
       expect(text).to include("No association/column named `bogus_assoc` on Post")
+    end
+
+    it "does not call the setter of a model's column a missing method" do
+      text = described_class.call(error: "undefined method 'title=' for an instance of Post").content.first[:text]
+
+      expect(text).not_to include("undefined_method_on_model")
     end
 
     it "handles the pre-3.3 receiver-inspect NoMethodError phrasing" do

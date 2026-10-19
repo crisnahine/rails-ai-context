@@ -312,7 +312,7 @@ RSpec.describe "Tool input normalization" do
     it "returns friendly message for empty near parameter" do
       result = klass.call(file: "app/models/user.rb", near: "")
       text = result.content.first[:text]
-      expect(text).to include("`near` parameter is required")
+      expect(text).to include("`near` or `line` parameter is required")
     end
   end
 

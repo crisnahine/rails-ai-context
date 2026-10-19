@@ -50,7 +50,7 @@ module RailsAiContext
     # a change and a walk that names it read the same tree.
     # sql: a structure dump, under whatever name database.yml's schema_dump gives it.
     # tt: a generator template override under lib/templates.
-    WATCHED_EXTNAMES = %w[.rb .rake .js .ts .erb .haml .slim .yml .sql .tt].freeze
+    WATCHED_EXTNAMES = %w[.rb .rake .js .jsx .mjs .cjs .ts .tsx .vue .svelte .erb .haml .slim .jbuilder .builder .ruby .yml .sql .tt].freeze
     WATCHED_EXTENSIONS = "**/*{#{WATCHED_EXTNAMES.join(",")}}"
 
     # jsbundling and cssbundling rewrite this on every frontend save, and no reader reads it.

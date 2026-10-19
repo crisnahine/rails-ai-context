@@ -180,6 +180,37 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
       expect(text).to include("required")
     end
 
+    it "shows the code around a line it is given, whatever near would match first" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        File.write(File.join(root, "app/models/gadget.rb"), "class Gadget\n  # name\n#{"  x = 1\n" * 20}  def label = name\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "app/models/gadget.rb", near: "name", line: 23).content.first[:text]
+
+        expect(text).to include("  23    def label = name")
+        expect(text).not_to include("# name")
+      end
+    end
+
+    it "keeps the window on a line deep in a long method, naming the method" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        File.write(File.join(root, "app/models/gadget.rb"), "class Gadget\n  def export\n#{"    x = 1\n" * 300}  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "app/models/gadget.rb", line: 200, context_lines: 2).content.first[:text]
+
+        expect(text).to include("(lines 198-202 of 304)").and include("**Context:** `class Gadget > def export`")
+      end
+    end
+
+    it "says a line past the end of the file is not in it when no near was given" do
+      text = described_class.call(file: "app/models/user.rb", line: 9999).content.first[:text]
+
+      expect(text).to include("Line 9999 is not in app/models/user.rb")
+    end
+
     it "respects custom context_lines parameter" do
       result = described_class.call(file: "app/models/user.rb", near: "scope :active", context_lines: 1)
       text = result.content.first[:text]

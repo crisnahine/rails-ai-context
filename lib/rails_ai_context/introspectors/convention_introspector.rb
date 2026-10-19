@@ -172,11 +172,12 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, false, label: "uses_async_queries?")
       end
 
+      SCRIPT_FILES = "**/*.{js,jsx,mjs,cjs,ts,tsx,vue,svelte}"
       # Files a directory holds besides Ruby, which SourceScan leaves out.
       NON_RUBY_FILES = {
-        "app/javascript" => "**/*.js",
-        "app/javascript/controllers" => "**/*.js",
-        "app/views" => "**/*.{erb,haml,slim,jbuilder,builder}",
+        "app/javascript" => SCRIPT_FILES,
+        "app/javascript/controllers" => SCRIPT_FILES,
+        "app/views" => "**/*.{erb,haml,slim,jbuilder,builder,ruby}",
         "lib/tasks" => "**/*.rake"
       }.freeze
 

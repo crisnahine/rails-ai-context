@@ -220,7 +220,7 @@ module RailsAiContext
 
         # Next steps
         next_steps = [
-          (pointer("rails_get_edit_context", %(file:"#{file}", near:"#{parsed[:method_name] || line || parsed[:exception_class]}"), "to see the code.") if file),
+          (pointer("rails_get_edit_context", line ? %(file:"#{file}", line:#{line}) : %(file:"#{file}", near:"#{parsed[:method_name] || parsed[:exception_class]}"), "to see the code.") if file),
           (pointer("rails_search_code", %(pattern:"#{parsed[:method_name]}", match_type:"trace"), "to trace the method.") if parsed[:method_name])
         ].compact.map { |step| "_Use #{step}_" }
         if next_steps.any?
@@ -283,7 +283,7 @@ module RailsAiContext
           end
 
           # Extract method name from "undefined method `foo`" or "undefined method 'foo'"
-          if (m = result[:message].match(/undefined method [`'](\w+[?!]?)[`']/))
+          if (m = result[:message].match(/undefined method [`'](\w+[?!=]?|\[\]=?)[`']/))
             result[:method_name] = m[1]
           end
 
@@ -497,7 +497,7 @@ module RailsAiContext
           known = known_model_methods(model_data)
           # "published?" / "save!" resolve through the bare attribute name, so
           # compare without the trailing punctuation too.
-          base_name = method_name.to_s.sub(/[?!]\z/, "")
+          base_name = method_name.to_s.sub(/[?!=]\z/, "")
           return nil if known.include?(base_name) || known.include?(method_name.to_s)
 
           suggestion = find_closest_match(base_name, known)
@@ -575,7 +575,7 @@ module RailsAiContext
 
           if file && line
             add_section(lines, "Code Context", report_error: true) do
-              compose(GetEditContext, file: file, near: parsed[:method_name] || line.to_s)
+              compose(GetEditContext, file: file, near: parsed[:method_name], line: line)
             end
           end
 
@@ -616,12 +616,18 @@ module RailsAiContext
 
         # Regex because a lone source line is no program a listener can walk.
         def nil_receiver(file, line, method)
-          call = /((?:@@?|\$)?\w+)\.#{Regexp.escape(method)}(?![\w?!])/
+          name = method.chomp("=")
+          # A `%w[` literal is no index call, and in `a[:b][:c]` the nil one may be `a[:b]`.
+          call = if method.start_with?("[") then /(?<![%\w@$])((?:@@?|\$)?\w+)\[[^\[\]]*\](?!\[)/
+          elsif method.end_with?("=") then /((?:@@?|\$)?\w+)\.#{Regexp.escape(name)}\s*=(?!=)/
+          else /((?:@@?|\$)?\w+)\.#{Regexp.escape(method)}(?![\w?!])/
+          end
           located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
           failing = line.to_i.positive? && located.ok? && RailsAiContext::SafeFile.read(located.realpath).to_s.lines[line.to_i - 1]
           return failing[call, 1] if failing
+          return nil if method.start_with?("[")
 
-          response_text(compose(GetEditContext, file: file, near: method))[call, 1]
+          response_text(compose(GetEditContext, file: file, near: ".#{name}"))[call, 1]
         end
 
         # Infer a specific diagnosis from the error + context

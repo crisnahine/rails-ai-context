@@ -6,7 +6,7 @@ module RailsAiContext
       tool_name "rails_get_edit_context"
       description "Get targeted code context for surgical edits: returns matching lines with surrounding code and line numbers. " \
         "Use when: you need to edit a specific method or section without reading the entire file. " \
-        "Requires file:\"app/models/user.rb\" and near:\"def activate\" to locate the code region."
+        "Requires file:\"app/models/user.rb\" and near:\"def activate\" (or line:42) to locate the code region."
 
       input_schema(
         properties: {
@@ -21,9 +21,13 @@ module RailsAiContext
           context_lines: {
             type: "integer",
             description: "Lines of context above and below the match. Default: 5."
+          },
+          line: {
+            type: "integer",
+            description: "Show context_lines either side of this line number instead of searching for `near` (e.g. a line from a stack trace)."
           }
         },
-        required: %w[file near]
+        required: %w[file]
       )
 
       guide_row(
@@ -35,14 +39,14 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(file:, near:, context_lines: 5, server_context: nil)
+      def self.call(file:, near: nil, context_lines: 5, line: nil, server_context: nil)
         # Reject empty parameters
         if file.nil? || file.strip.empty?
           return text_response("The `file` parameter is required. Provide a path relative to Rails root (e.g. 'app/models/post.rb').")
         end
 
-        if near.nil? || near.strip.empty?
-          return text_response("The `near` parameter is required. Provide a method name, keyword, or string to find.")
+        if line.nil? && (near.nil? || near.strip.empty?)
+          return text_response("The `near` or `line` parameter is required. Provide a method name, keyword, or string to find, or a line number.")
         end
 
         located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
@@ -79,10 +83,13 @@ module RailsAiContext
         # start brought back a window where a wrong guess brought "not found".
         redacted = RailsAiContext::Redaction.redact_source_lines(source_lines.map(&:rstrip), path: file)
 
-        # Find all matching lines
-        matches = []
-        redacted.each_with_index do |line, idx|
-          matches << idx if line.include?(near)
+        at_line = line.to_i.between?(1, source_lines.size)
+        matches = if at_line
+          [ line.to_i - 1 ]
+        elsif near.nil? || near.strip.empty?
+          return empty_response("Line #{echo_input(line.to_s)} is not in #{file} (#{count_phrase(source_lines.size, "line")}).")
+        else
+          redacted.each_index.select { |idx| redacted[idx].include?(near) }
         end
 
         if matches.empty?
@@ -94,9 +101,10 @@ module RailsAiContext
         start_idx = [ match_idx - context_lines, 0 ].max
         end_idx = [ match_idx + context_lines, source_lines.size - 1 ].min
 
-        # If match is inside a method, expand to include the full method
+        # If match is inside a method, expand to include the full method; a line asked for keeps its
+        # window, which a 300-line method would push out of a caller's cut.
         method_start = find_method_start(source_lines, match_idx)
-        method_end = find_method_end(source_lines, method_start) if method_start
+        method_end = find_method_end(source_lines, method_start) if method_start && !at_line
         if method_start && method_end && source_lines[match_idx].match?(/\A\s*def\s/)
           # Match IS a method definition - show the complete method, no extra context
           start_idx = method_start

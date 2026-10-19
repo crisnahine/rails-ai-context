@@ -203,29 +203,31 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).not_to include("postmark")
     end
 
-    # A gap is a claim that something has no test. A scan that stopped at
-    # MAX_SCAN_FILES cannot make it: on an app with more specs than the cap,
-    # the ones covering the feature are simply never reached, and every
-    # controller in it was reported as untested.
-    it "claims no test gap when the spec scan stopped at the cap" do
-      Dir.mktmpdir("rac_gap") do |tmp|
-        spec_dir = File.join(tmp, "spec", "requests")
-        FileUtils.mkdir_p(spec_dir)
-        (described_class::MAX_SCAN_FILES + 5).times do |i|
-          File.write(File.join(spec_dir, "aaa_filler#{i}_spec.rb"), "# widget\n")
+    # A gap is a claim that something has no test, so it needs every test's
+    # name: on an app with more specs than the cap, the ones covering the
+    # feature sort past the first 500.
+    [ true, false ].each do |tested|
+      it "#{tested ? "finds" : "misses"} the test of a controller past the first 500 specs, and claims a gap only when it is missing" do
+        Dir.mktmpdir("rac_gap") do |tmp|
+          spec_dir = File.join(tmp, "spec", "requests")
+          FileUtils.mkdir_p(spec_dir)
+          (described_class::MAX_SCAN_FILES + 5).times do |i|
+            File.write(File.join(spec_dir, "aaa_filler#{i}_spec.rb"), "# widget\n")
+          end
+          File.write(File.join(spec_dir, "widgets_controller_spec.rb"), "it 'lists' do\nend\n") if tested
+          FileUtils.mkdir_p(File.join(tmp, "app", "controllers"))
+          File.write(File.join(tmp, "app", "controllers", "widgets_controller.rb"),
+                     "class WidgetsController < ApplicationController\n  def index; end\nend\n")
+
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+          allow(described_class).to receive(:cached_context).and_return(
+            controllers: { controllers: { "WidgetsController" => { file: "app/controllers/widgets_controller.rb", actions: [ "index" ] } } }
+          )
+
+          text = described_class.call(feature: "widget").content.first[:text]
+
+          expect(text.include?("Controller `WidgetsController` - no test file found")).to be(!tested)
         end
-        FileUtils.mkdir_p(File.join(tmp, "app", "controllers"))
-        File.write(File.join(tmp, "app", "controllers", "widgets_controller.rb"),
-                   "class WidgetsController < ApplicationController\n  def index; end\nend\n")
-
-        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
-        allow(described_class).to receive(:cached_context).and_return(
-          controllers: { controllers: { "WidgetsController" => { file: "app/controllers/widgets_controller.rb", actions: [ "index" ] } } }
-        )
-
-        text = described_class.call(feature: "widget").content.first[:text]
-
-        expect(text).not_to include("no test file found")
       end
     end
 
@@ -395,11 +397,9 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           result = described_class.call(feature: "dos_service")
           text = result.content.first[:text]
 
-          expect(text).to include("first #{described_class::MAX_SCAN_FILES} scanned")
-          expect(text).to include("## Services")
-          # Listed body is bounded by the cap (each candidate is also a match here).
+          expect(text).to include("## Services (#{described_class::MAX_SCAN_FILES + 50} - first #{described_class::MAX_SCAN_FILES} listed)")
           listed = text.scan(/`app\/services\/dos_service_\d+\.rb`/).size
-          expect(listed).to be <= described_class::MAX_SCAN_FILES
+          expect(listed).to eq(described_class::MAX_SCAN_FILES)
         end
       end
 
@@ -441,7 +441,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
           # Each section asserted independently - a regression in any single
           # discover_* method would now fail the spec on its own line.
-          expect(text).to include("## Services (#{described_class::MAX_SCAN_FILES} - first #{described_class::MAX_SCAN_FILES} scanned)")
+          expect(text).to include("## Services (#{described_class::MAX_SCAN_FILES + 10} - first #{described_class::MAX_SCAN_FILES} listed)")
           expect(text).to include("## Environment Dependencies (first #{described_class::MAX_SCAN_FILES} per dir scanned)")
           expect(text).not_to include("## Mailers")
           expect(text).not_to include("## Channels")
@@ -459,28 +459,34 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         count.times { |i| File.write(File.join(dir, format("a%04d.%s", i, ext)), body) }
       end
 
-      it "says which directory it stopped reading when a file past the cap is the one that matches" do
+      it "lists a service, a view and a spec whose names match when they sort past the first 500 files" do
         Dir.mktmpdir("rac_past_cap") do |tmp|
           write_numbered(File.join(tmp, "app", "services"), described_class::MAX_SCAN_FILES)
-          File.write(File.join(tmp, "app", "services", "z_goal.rb"), "class ZGoal; end\n")
-          context = { models: { "Goal" => { table_name: "goals", associations: [] } }, schema: { tables: { "goals" => { columns: [] } } } }
+          write_numbered(File.join(tmp, "app", "views"), described_class::MAX_SCAN_FILES, ext: "html.erb")
+          write_numbered(File.join(tmp, "spec"), described_class::MAX_SCAN_FILES, ext: "_spec.rb")
+          FileUtils.mkdir_p([ File.join(tmp, "app", "services", "goals"), File.join(tmp, "app", "views", "goals") ])
+          File.write(File.join(tmp, "app", "services", "goals", "sync_goal.rb"), "class Goals::SyncGoal; end\n")
+          File.write(File.join(tmp, "app", "views", "goals", "show.html.erb"), "<p></p>\n")
+          File.write(File.join(tmp, "spec", "zz_goal_spec.rb"), "it 'syncs' do\nend\n")
 
-          text = analyze(tmp, "goal", context: context)
+          text = analyze(tmp, "goal")
 
-          expect(text).not_to include("## Services")
-          expect(text).to include("were not checked")
-          expect(text).to include("app/services")
+          expect(text).to include("## Services (1)").and include("`app/services/goals/sync_goal.rb`")
+          expect(text).to include("## Views (1)").and include("`goals/show.html.erb`")
+          expect(text).to include("## Tests (1)").and include("`spec/zz_goal_spec.rb`")
+          expect(text).not_to include("matched by name alone")
         end
       end
 
-      it "adds the note to a no-match answer, since the match may be in the files it did not read" do
+      it "says which directory it matched by name alone when a file past the cap holds the word" do
         Dir.mktmpdir("rac_past_cap_empty") do |tmp|
-          write_numbered(File.join(tmp, "app", "views"), described_class::MAX_SCAN_FILES + 1, ext: "html.erb")
+          write_numbered(File.join(tmp, "app", "services"), described_class::MAX_SCAN_FILES)
+          File.write(File.join(tmp, "app", "services", "z_sync.rb"), "class ZSync\n  # goal\nend\n")
 
           text = analyze(tmp, "goal")
 
           expect(text).to start_with("No matches found for 'goal'")
-          expect(text).to include("were not checked").and include("app/views")
+          expect(text).to include("past them in app/services were matched by name alone")
         end
       end
 
@@ -492,8 +498,8 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           text = analyze(tmp, "goal")
 
           expect(text).to include("## Services (1)")
-          expect(text).not_to include("were not checked")
-          expect(text).not_to include("scanned")
+          expect(text).not_to include("matched by name alone")
+          expect(text).not_to include("listed)")
         end
       end
 
@@ -515,7 +521,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           text = result.content.first[:text]
 
           expect(text).to include("## Services")
-          expect(text).not_to include("first #{described_class::MAX_SCAN_FILES} scanned")
+          expect(text).not_to include("first #{described_class::MAX_SCAN_FILES} listed")
         end
       end
     end

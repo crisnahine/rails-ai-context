@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.5] - 2026-10-19
+
+### Added
+
+- **`rails_get_edit_context` takes a `line`.** It shows `context_lines` either
+  side of that line, so a line from a stack trace needs no text to search for.
+  `near` is needed only without one.
+
+### Fixed
+
+- **`rails_diagnose` shows the code around the line it was given** (#495). It
+  searched for the method name and opened on its first mention, a comment
+  included, so the failing line was missing from the code shown in 18 of 30
+  real calls on one app. It also reads a setter's name (`title=`) and an index
+  call's (`[]`), and names their nil receiver.
+- **`rails_migration_advisor` points a foreign key at the key of a table not
+  keyed by `id`** (#496): `foreign_key: { primary_key: :bid }`, where
+  `foreign_key: true` made PostgreSQL refuse the migration. A table with a
+  composite primary key, and a `t.references` table the schema lacks, get no
+  foreign key and a line saying why.
+- **`rails_migration_advisor` types a reference the way the key it points at
+  is typed** (#501). A reference to an `integer` key gets `type: :integer`
+  and the key's `limit:` when it has one, and on MySQL one to an `unsigned`
+  key gets `unsigned: true`. It wrote Rails' default signed bigint, and MySQL
+  and MariaDB refuse a foreign key whose column differs from the key, so the
+  migration failed. PostgreSQL, which accepted the bigint, now gets the
+  matching type too. A `serial` key gives `integer` and a `smallserial` one
+  `smallint`, where the reference used to get a sequence of its own that
+  filled it with a made-up owner. SQLite, where every key is an integer,
+  still gets no type.
+- **`rails_analyze_feature` lists every service, view and spec whose name
+  matches** (#497), wherever it sorts. Only the files it reads stop at 500 per
+  directory, and the closing note says which directory past them was matched
+  by name alone. The test gap list reads the name of every test, so it is no
+  longer left out on a suite of more than 500.
+- **`conventions` counts the TypeScript, JSX and Vue files of `app/javascript`**
+  (#498), and the `.ruby` templates of `app/views`. Mastodon's `app/javascript`
+  read 78 files; it holds 922. An edit to one of those files, or to a
+  `.jbuilder` or `.builder` view, now refreshes the cached answers, as one to a
+  `.js` or `.erb` file did.
+- **`rails_migration_advisor`'s Strong Migrations warning for `add_association`
+  rewrites the `add_reference` it wrote** (#499). It named the reference as the
+  table (`add_foreign_key :listings, :owner`) and added a second key after the
+  migration had added one. On PostgreSQL it now gives the reference with
+  `disable_ddl_transaction!` and a concurrent index, the key in its own
+  `add_foreign_key ... validate: false` (strong_migrations before 2.5.2 flags any
+  foreign key inside `add_reference`), then `validate_foreign_key` with
+  the real table and column. On MySQL it moves the key to a separate
+  migration, as strong_migrations 2.7 and later require; an older locked version,
+  which does not check a MySQL key, gets no warning. A reference with no
+  foreign key gets only the concurrent index on PostgreSQL and nothing on
+  MySQL, and SQLite, which strong_migrations does not check, gets nothing. A
+  reference whose column already exists gets no warning, since its migration
+  fails first, and an undecided database gets one line when the reference has
+  a key.
+
 ## [5.36.4] - 2026-10-16
 
 ### Added

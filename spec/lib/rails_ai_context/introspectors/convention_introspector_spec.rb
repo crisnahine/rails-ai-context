@@ -428,12 +428,17 @@ end
       end
     end
 
-    it "counts the rake tasks beside the .rb files of lib/tasks, and the templates of app/views" do
+    it "counts the rake tasks beside the .rb files of lib/tasks, the templates of app/views and the TypeScript of app/javascript" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "lib", "tasks", "billing"))
         FileUtils.mkdir_p(File.join(dir, "app", "views", "orders"))
         FileUtils.mkdir_p(File.join(dir, "app", "javascript"))
         File.write(File.join(dir, "app", "javascript", "application.js"), "import \"controllers\"\n")
+        %w[mastodon/main.tsx mastodon/api.ts mastodon/old.jsx controllers/hello_controller.ts].each do |file|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "javascript", file)))
+          File.write(File.join(dir, "app", "javascript", file), "export {}\n")
+        end
+        File.write(File.join(dir, "app", "views", "orders", "feed.rss.ruby"), "builder\n")
         File.write(File.join(dir, "lib", "tasks", "helper.rb"), "module TaskHelper\nend\n")
         File.write(File.join(dir, "lib", "tasks", "cleanup.rake"), "task :cleanup\n")
         File.write(File.join(dir, "lib", "tasks", "billing", "close.rake"), "task :close\n")
@@ -444,8 +449,9 @@ end
         structure = described_class.new(app).call[:directory_structure]
 
         expect(structure["lib/tasks"]).to eq(3)
-        expect(structure["app/views"]).to eq(2)
-        expect(structure["app/javascript"]).to eq(1)
+        expect(structure["app/views"]).to eq(3)
+        expect(structure["app/javascript"]).to eq(5)
+        expect(structure["app/javascript/controllers"]).to eq(1)
       end
     end
 

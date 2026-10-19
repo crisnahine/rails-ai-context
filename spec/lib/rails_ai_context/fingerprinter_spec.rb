@@ -75,6 +75,20 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(before).not_to eq(after)
     end
 
+    it "detects a script or template the conventions count reads, past .js and .erb" do
+      root = app.root.to_s
+      files = %w[app/javascript/main.tsx app/javascript/old.jsx app/javascript/App.vue app/views/posts/feed.rss.ruby app/views/posts/show.json.jbuilder]
+      files.each do |file|
+        FileUtils.mkdir_p(File.join(root, File.dirname(file)))
+        File.write(File.join(root, file), "\n")
+      end
+      files.each do |file|
+        before = described_class.compute(app)
+        File.utime(Time.now + 5, Time.now + 5, File.join(root, file))
+        expect(described_class.compute(app)).not_to eq(before), file
+      end
+    end
+
     it "detects changes to .js stimulus controllers" do
       before = described_class.compute(app)
       File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "app/javascript/controllers/hello_controller.js"))

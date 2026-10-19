@@ -1079,7 +1079,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
       names = ->(source) { introspector.send(:extract_filters, child, source).map { |f| f[:name] } }
 
-      expect(child._process_action_callbacks.map(&:filter)).to eq(%i[set_locale audit load_thing])
+      # An app on load_defaults gives ActionController::Base its forgery protection callbacks.
+      expect(child._process_action_callbacks.map(&:filter) - ActionController::Base._process_action_callbacks.map(&:filter)).to eq(%i[set_locale audit load_thing])
       expect(names.call(without_skip)).to eq(%w[set_locale audit load_thing])
       expect(names.call(with_skip)).to eq(%w[set_locale audit load_thing require_login])
     end

@@ -148,10 +148,7 @@ module RailsAiContext
         lines.concat(column_mention_lines(column)) if %w[remove_column rename_column change_type].include?(action) && column
 
         # Strong Migrations warnings (only when the gem is present in the project).
-        # add_association accepts the associated table via either `column` or
-        # `type` (see generate_add_association) - resolve the same way here.
-        warning_column = action == "add_association" ? (column || type) : column
-        lines.concat(strong_migrations_warnings(action, table, warning_column, options)) if strong_migrations_gem_present?
+        lines.concat(strong_migrations_warnings(action, table, column, options)) if strong_migrations_gem_present?
 
         text_response(lines.join("\n"))
       end
@@ -532,7 +529,8 @@ module RailsAiContext
           reference = written.to_s.singularize
           lines = []
           fk_column = "#{reference}_id"
-          if column_exists?(table, fk_column)
+          fk_column_exists = column_exists?(table, fk_column)
+          if fk_column_exists
             lines << "**Warning:** Column `#{fk_column}` already exists on `#{table}`. This migration will fail. Use `add_index` if you only need an index."
             lines << ""
           end
@@ -563,20 +561,76 @@ module RailsAiContext
             lines << ""
           end
 
-          foreign_key = if across || to_table.nil? then ""
-          elsif to_table == reference.pluralize then ", foreign_key: true"
-          else ", foreign_key: { to_table: :#{to_table} }"
+          composite = to_table && !across && composite_key(schema, to_table)
+          if composite
+            lines << "**Foreign key:** `#{to_table}` has the composite primary key (#{composite.join(', ')}), " \
+                     "which one column cannot reference, so the reference below has none."
+            lines << ""
           end
+
+          fk_target = to_table unless across || composite
+          foreign_key = fk_target ? foreign_key_option(schema, fk_target, reference) : ""
+          reference_call = "add_reference :#{table}, :#{reference}#{key_type_option(schema, table, to_table)}"
           lines << "```ruby"
           lines << "class Add#{written.camelize}To#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    add_reference :#{table}, :#{reference}#{key_type_option(schema, to_table)}#{foreign_key}"
+          lines << "    #{reference_call}#{foreign_key}"
           lines << "  end"
           lines << "end"
           lines << "```"
           lines << ""
           lines << "**Reversible:** Yes"
           lines.concat(association_model_lines(table, reference, to_table))
+          # A migration that fails on its existing column has nothing to make safe.
+          lines.concat(association_strong_migrations_lines(table, reference, reference_call, fk_target, schema)) if strong_migrations_gem_present? && !fk_column_exists
+          lines
+        end
+
+        # The add_reference above as strong_migrations wants it on each
+        # database: the index and the foreign key are what it checks.
+        def association_strong_migrations_lines(table, reference, reference_call, fk_target, schema)
+          column_option = ", column: :#{reference}_id"
+          target_key = custom_primary_key(schema, fk_target) if fk_target
+          add_foreign_key_call = "add_foreign_key :#{table}, :#{fk_target}#{column_option}#{", primary_key: :#{target_key}" if target_key}"
+          warnings = case family(table).key
+          when :postgresql
+            # strong_migrations before 2.5.2 flags any key inside add_reference, so the key goes on its own.
+            unvalidated_key_step = " and `#{add_foreign_key_call}, validate: false`" if fk_target
+            steps = [
+              "**`add_reference` builds its index without `algorithm: :concurrently`**, which blocks writes" \
+              "#{", and its foreign key checks every existing row under a `SHARE ROW EXCLUSIVE` lock on both tables" if fk_target}. Instead:",
+              "  1. `disable_ddl_transaction!` at the top of the migration, then `#{reference_call}, index: { algorithm: :concurrently }`#{unvalidated_key_step}"
+            ]
+            steps << "  2. In a separate migration: `validate_foreign_key :#{table}, :#{fk_target}#{column_option}`" if fk_target
+            steps
+          when :mysql
+            if fk_target && strong_migrations_checks_mysql_foreign_keys?
+              [
+                "**`add_reference` with a foreign key blocks writes on both tables.** Add the reference without one, `#{reference_call}`, " \
+                "and the key in a separate migration. If every row is valid and migrations do not run through a connection pooler:",
+                "```ruby",
+                "class Add#{reference.camelize}ForeignKeyTo#{table.camelize} < ActiveRecord::Migration[#{rails_version}]",
+                "  def up",
+                "    safety_assured do",
+                "      execute \"SET SESSION foreign_key_checks = 0\"",
+                "      #{add_foreign_key_call}",
+                "    ensure",
+                "      execute \"SET SESSION foreign_key_checks = 1\"",
+                "    end",
+                "  end",
+                "",
+                "  def down",
+                "    remove_foreign_key :#{table}#{column_option}",
+                "  end",
+                "end",
+                "```"
+              ]
+            end
+          when :sqlite then nil # strong_migrations checks no foreign key on SQLite
+          else
+            [ "**The foreign key from `add_reference` validates existing rows**, which can block writes on both tables while it runs." ] if fk_target
+          end
+          strong_migrations_section(warnings)
         end
 
         # The belongs_to and has_many the reference wants, in the models that
@@ -617,18 +671,53 @@ module RailsAiContext
           Payload.schema_tables(schema).any? { |_, table, _| table.to_s == name.to_s }
         end
 
-        # The primary key type of a table when it is not the integer Rails defaults to.
-        def custom_key_type(table_data)
+        def key_column(table_data)
           keys = Array(table_data && table_data[:columns]).select { |c| c[:primary_key] }
-          type = keys.first[:type].to_s if keys.size == 1
-          type unless type.nil? || %w[bigint integer].include?(type)
+          keys.first if keys.size == 1
         end
 
-        # ", type: :uuid" for a reference to a table keyed that way; a table the schema lacks is keyed as the app's tables are.
-        def key_type_option(schema, to_table)
+        # The key type of a table when a reference would not get it by default: bigint never, integer unless counted as default.
+        def custom_key_type(table_data, integer_is_default: true)
+          type = key_column(table_data)&.dig(:type)&.to_s
+          type unless type.nil? || type == "bigint" || (integer_is_default && type == "integer")
+        end
+
+        # A reference takes the column type of a serial key, never a sequence of its own.
+        SERIAL_COLUMN_TYPES = { "serial" => "integer", "smallserial" => "smallint", "bigserial" => nil }.freeze
+
+        # The type, limit and sign a reference needs to match its key, which a MySQL foreign key requires;
+        # only SQLite types every integer alike. A table the schema lacks is keyed as the app's tables are.
+        def key_type_option(schema, table, to_table)
+          database = family(table).key
           target = to_table && schema_known?(schema) && Payload.schema_table(schema, to_table)
-          type = target ? custom_key_type(target) : app_key_type(schema)
-          type ? ", type: :#{type}" : ""
+          key = key_column(target) if target
+          type = target ? custom_key_type(target, integer_is_default: database == :sqlite) : app_key_type(schema)
+          type = SERIAL_COLUMN_TYPES.fetch(type, type)
+          limit = key[:limit] if key && type == "integer"
+          unsigned = key && key[:unsigned] && database == :mysql
+          "#{", type: :#{type}" if type}#{", limit: #{limit}" if limit}#{", unsigned: true" if unsigned}"
+        end
+
+        # Rails points a foreign key at the reference pluralized and at its
+        # `id`, so another table, or a table keyed by another column, is named.
+        def foreign_key_option(schema, to_table, reference)
+          key = custom_primary_key(schema, to_table)
+          options = [ ("to_table: :#{to_table}" if to_table != reference.pluralize), ("primary_key: :#{key}" if key) ].compact
+          options.empty? ? ", foreign_key: true" : ", foreign_key: { #{options.join(', ')} }"
+        end
+
+        def custom_primary_key(schema, to_table)
+          key = primary_key(schema, to_table)
+          key if key.is_a?(String) && key != "id"
+        end
+
+        def composite_key(schema, to_table)
+          key = primary_key(schema, to_table)
+          key if key.is_a?(Array)
+        end
+
+        def primary_key(schema, to_table)
+          schema_known?(schema) ? Payload.schema_table(schema, to_table)&.dig(:primary_key) : nil
         end
 
         # The key type more than half of the app's tables share, when it is not Rails' default.
@@ -698,7 +787,14 @@ module RailsAiContext
               name = parts[0]&.strip
               type = parts[1]&.strip || "string"
               if type == "references"
-                lines << "      t.references :#{name}#{key_type_option(schema, name.to_s.pluralize)}, foreign_key: true"
+                to_table = name.to_s.pluralize
+                missing = schema_known?(schema) && !table_in_schema?(schema, to_table)
+                composite = !missing && composite_key(schema, to_table)
+                foreign_key = if missing then " # no foreign key: the schema has no #{to_table} table"
+                elsif composite then " # no foreign key: #{to_table} has the composite primary key (#{composite.join(', ')})"
+                else foreign_key_option(schema, to_table, name)
+                end
+                lines << "      t.references :#{name}#{key_type_option(schema, table, to_table)}#{foreign_key}"
               else
                 lines << "      t.#{type} :#{name}"
               end
@@ -719,7 +815,8 @@ module RailsAiContext
         # at migration runtime, so AI agents see them at code-generation time. Only fires
         # when the gem is actually present in the project's Gemfile.lock.
         #
-        # Catalog covers the most common breaking-change patterns (columns, indexes, FKs).
+        # Catalog covers the most common breaking-change patterns (columns, indexes);
+        # add_association's warning lives with the reference it rewrites.
         # Not exhaustive - see https://github.com/ankane/strong_migrations#checks for the full list.
         def strong_migrations_warnings(action, table, column, options)
           warnings = case action
@@ -751,26 +848,6 @@ module RailsAiContext
                 "Use `add_index :#{table}, :#{column}, algorithm: :concurrently` and add `disable_ddl_transaction!` at the top of the migration."
               ]
             end
-          when "add_association"
-            case family(table).key
-            when :mysql
-              [
-                "**`add_foreign_key` blocks writes on both tables while validating existing rows.** MySQL/MariaDB has no `validate: false` + separate-validation two-step like Postgres.",
-                "If you're certain all rows are valid, wrap in `safety_assured` and drop `foreign_key_checks` for the duration:",
-                "  1. `execute \"SET SESSION foreign_key_checks = 0\"`",
-                "  2. `add_foreign_key :#{table}, :#{column}`",
-                "  3. `execute \"SET SESSION foreign_key_checks = 1\"`"
-              ]
-            when :postgresql
-              [
-                "**`add_foreign_key` validates existing rows by default**, which acquires a `SHARE ROW EXCLUSIVE` lock on both tables.",
-                "Safer two-step pattern:",
-                "  1. `add_foreign_key :#{table}, :#{column}, validate: false` (lock-free)",
-                "  2. In a separate migration: `validate_foreign_key :#{table}, :#{column}`"
-              ]
-            else
-              [ "**`add_foreign_key` validates existing rows by default**, which can block writes on both tables while it runs." ]
-            end
           when "add_column"
             if options.to_s.match?(/null:\s*false/) && !options.to_s.include?("default:")
               [
@@ -784,6 +861,10 @@ module RailsAiContext
             end
           end
 
+          strong_migrations_section(warnings)
+        end
+
+        def strong_migrations_section(warnings)
           return [] unless warnings&.any?
 
           [ "", "## Strong Migrations Warnings", "", "_The `strong_migrations` gem is in your Gemfile - these warnings match what it would raise at migration runtime._", "" ] + warnings
@@ -793,6 +874,14 @@ module RailsAiContext
           RailsAiContext::GemLock.for(rails_app.root).present?("strong_migrations")
         rescue => e
           RailsAiContext.debug_fail(e, false, label: "strong_migrations_gem_present?")
+        end
+
+        # strong_migrations checks a MySQL foreign key from 2.7 on; an unlocked or unreadable version is taken as current.
+        def strong_migrations_checks_mysql_foreign_keys?
+          version = RailsAiContext::GemLock.for(rails_app.root).version("strong_migrations")
+          version.nil? || Gem::Version.new(version).release >= Gem::Version.new("2.7")
+        rescue => e
+          RailsAiContext.debug_fail(e, true, label: "strong_migrations_checks_mysql_foreign_keys?")
         end
 
         # ignored_columns has to go on the class that owns the table, and

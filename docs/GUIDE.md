@@ -700,8 +700,9 @@ Returns just enough context to make a surgical Edit to a file. Returns the targe
 | Param | Type | Description |
 |-------|------|-------------|
 | `file` | string | **Required.** File path relative to Rails root (e.g. `app/models/post.rb`). |
-| `near` | string | **Required.** What to find - a method name, keyword, or string to locate (e.g. `scope`, `def index`). |
+| `near` | string | **Required** unless `line` is given. What to find - a method name, keyword, or string to locate (e.g. `scope`, `def index`). |
 | `context_lines` | integer | Lines of context above and below the match. Default: 5. |
+| `line` | integer | Show `context_lines` either side of this line number instead of searching for `near`. |
 
 **Examples:**
 

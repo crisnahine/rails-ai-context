@@ -33,12 +33,8 @@ module RailsAiContext
       # Map well-known feature keywords to gem-based patterns
       AUTH_KEYWORDS = %w[auth authentication login signup signin session devise omniauth].freeze
 
-      # Cap per-directory file scans to avoid unbounded work on large monorepos.
-      # Note: Dir.glob materialises the full path array before .first() truncates.
-      # the directory walk itself is unbounded; only per-file reading and processing
-      # is capped at MAX_SCAN_FILES. Applied to every discover_* method that walks
-      # the filesystem. Tool output notes when the cap is hit so the AI agent knows
-      # to narrow its feature keyword. v5.8.1 hardening; all glob sites in r2.
+      # Names are matched over every file a glob finds; only the files read per directory, and the
+      # matches listed per section, stop at MAX_SCAN_FILES, and the answer says where they did.
       MAX_SCAN_FILES = 500
       # The callers named under each service; rails_get_service_pattern(service:) lists more.
       CALLERS_SHOWN = 5
@@ -70,16 +66,16 @@ module RailsAiContext
         discover_services(root, pattern, lines, unread)
         discover_admin(root, pattern, lines)
         discover_jobs(ctx, pattern, lines)
-        discover_views(ctx, root, pattern, lines, unread)
+        discover_views(ctx, root, pattern, lines)
         discover_stimulus(ctx, pattern, lines)
-        _feature_tests, all_tests, tests_truncated = discover_tests(root, pattern, lines, unread)
+        all_tests = discover_tests(root, pattern, lines)
         discover_related_models(ctx, matched_models, lines)
         discover_concerns(ctx, matched_models, lines)
         discover_callbacks(ctx, matched_models, lines)
         discover_channels(ctx, pattern, lines)
         discover_mailers(ctx, pattern, lines)
-        discover_env_dependencies(root, pattern, matched_models, lines, unread)
-        discover_test_gaps(root, pattern, matched_models, ctx, all_tests || [], lines, unread, truncated: tests_truncated)
+        discover_env_dependencies(root, pattern, matched_models, lines)
+        discover_test_gaps(root, pattern, matched_models, ctx, all_tests, lines)
         discover_components(ctx, pattern, lines)
 
         # For auth-related keywords, also discover auth gems
@@ -103,11 +99,11 @@ module RailsAiContext
         text_response(lines.join("\n") + unread_note(unread))
       end
 
-      # Files past MAX_SCAN_FILES in a directory are never read, so a section that is missing may only be unread.
+      # Files past MAX_SCAN_FILES in a directory are matched by name alone, so a match by content may be missing.
       def self.unread_note(unread)
         return "" if unread.empty?
 
-        "\n\n_Only the first #{MAX_SCAN_FILES} files of a directory are read, so any past them in #{unread.sort.join(', ')} were not checked._"
+        "\n\n_Only the first #{MAX_SCAN_FILES} files of a directory are read, so any past them in #{unread.sort.join(', ')} were matched by name alone._"
       end
 
       # The names a keyword that matched nothing could have been.
@@ -123,12 +119,7 @@ module RailsAiContext
       class << self
         private
 
-        # The first MAX_SCAN_FILES of a glob; a directory holding more goes into `unread`.
-        def capped_glob(dir, pattern, real_root, label, unread)
-          files = safe_glob(dir, pattern, real_root)
-          unread << label if files.size > MAX_SCAN_FILES
-          files.first(MAX_SCAN_FILES)
-        end
+        def listed_suffix(found) = found.size > MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} listed" : ""
 
         # A conditional skip names the condition it is taken out on.
         def inherited_filter_label(filter)
@@ -281,17 +272,17 @@ module RailsAiContext
 
           real_root = File.realpath(root).to_s
           real_dir = File.realpath(dir).to_s
-          candidates = capped_glob(dir, "**/*.rb", real_root, "app/services", unread)
-          # Prefer basename match (fast, no file read) and only fall back to
-          # a content scan for files whose basename doesn't match. This
-          # avoids reading every service file's full contents on large apps.
-          found = candidates.select do |path|
-            next true if feature_word_match?(File.basename(path, ".rb"), pattern)
+          files = safe_glob(dir, "**/*.rb", real_root)
+          # A name matches without a read; only the files whose name does not are read for the word.
+          by_name, rest = files.partition { |path| feature_word_match?(File.basename(path, ".rb"), pattern) }
+          unread << "app/services" if rest.size > MAX_SCAN_FILES
+          by_content = rest.first(MAX_SCAN_FILES).select do |path|
             File.size(path) < 50_000 && feature_word_match?(RailsAiContext::SafeFile.read(path), pattern)
           end
+          found = files & (by_name + by_content)
           return if found.empty?
 
-          services = found.filter_map do |path|
+          services = found.first(MAX_SCAN_FILES).filter_map do |path|
             source = RailsAiContext::SafeFile.read(path) or next
             # The path carries the namespace Zeitwerk expects, as rails_get_service_pattern reads it.
             constant = path.delete_prefix("#{real_dir}/").delete_suffix(".rb").camelize
@@ -302,7 +293,7 @@ module RailsAiContext
           named = services.select { |s| s[:name] }
           callers, callers_truncated = GetServicePattern.callers_of(named.to_h { |s| [ s[:name], s[:path] ] }, real_root)
 
-          lines << "## Services (#{found.size}#{unread.include?("app/services") ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
+          lines << "## Services (#{found.size}#{listed_suffix(found)})"
           services.each do |service|
             relative = service[:path].sub("#{real_root}/", "")
             methods = service[:name] ? service_methods(service[:source], service[:name]) : []
@@ -368,20 +359,19 @@ module RailsAiContext
         end
 
         # --- AF3: Views + Partials ---
-        def discover_views(ctx, root, pattern, lines, unread)
+        def discover_views(ctx, root, pattern, lines)
           views_dir = File.join(root, "app", "views")
           return unless Dir.exist?(views_dir)
 
           real_root = File.realpath(root).to_s
           real_views_dir = File.realpath(views_dir).to_s
-          candidates = capped_glob(views_dir, "**/*.{erb,haml,slim,jbuilder}", real_root, "app/views", unread)
-          found = candidates.select do |path|
+          found = safe_glob(views_dir, "**/*.{erb,haml,slim,jbuilder}", real_root).select do |path|
             feature_word_match?(path.sub("#{real_views_dir}/", ""), pattern)
           end
           return if found.empty?
 
-          lines << "## Views (#{found.size}#{unread.include?("app/views") ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
-          found.each do |path|
+          lines << "## Views (#{found.size}#{listed_suffix(found)})"
+          found.first(MAX_SCAN_FILES).each do |path|
             relative = path.sub("#{real_views_dir}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
             line_count = source.lines.size
@@ -451,20 +441,17 @@ module RailsAiContext
           relative.sub(%r{(\A|/)(?:spec|test)_}, "\\1")
         end
 
-        # @return [Array(Array<String>, Array<String>, Boolean)] the tests the
-        #   feature word names, every test read (relative to the suite's root),
-        #   and whether a glob stopped at MAX_SCAN_FILES
-        def discover_tests(root, pattern, lines, unread)
+        # @return [Array<String>] every test in the suite, relative to the suite's root
+        def discover_tests(root, pattern, lines)
           real_root = File.realpath(root).to_s
           found = []
           all = []
-          truncated = false
 
           base = RailsAiContext::PathResolver.test_root(root)
           real_base = File.realpath(base).to_s
           [ File.join(base, "spec"), File.join(base, "test") ].each do |dir|
             next unless Dir.exist?(dir)
-            suffix_glob = capped_glob(dir, "**/*_{test,spec}.rb", real_base, File.basename(dir), unread)
+            suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_base)
             # The path, not the basename: the gap checker below matches this
             # way for the same reason, and a spec whose feature word is a
             # directory (billing/invoices/create_spec.rb) is the normal shape
@@ -472,20 +459,18 @@ module RailsAiContext
             suffix_glob.each do |path|
               found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
             end
-            prefix_glob = capped_glob(dir, "**/{test,spec}_*.rb", real_base, File.basename(dir), unread)
+            prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_base)
             prefix_glob.each do |path|
               found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
             end
             all.concat(suffix_glob, prefix_glob)
           end
-          truncated = unread.include?("spec") || unread.include?("test")
           found.uniq!
           all = all.uniq.map { |path| path.delete_prefix("#{real_base}/") }
-          return [ found, all, truncated ] if found.empty?
+          return all if found.empty?
 
-          header = "## Tests (#{found.size}#{truncated ? " - first #{MAX_SCAN_FILES} per glob scanned" : ""})"
-          lines << header
-          found.each do |path|
+          lines << "## Tests (#{found.size}#{listed_suffix(found)})"
+          found.first(MAX_SCAN_FILES).each do |path|
             relative = Pathname.new(path).relative_path_from(Pathname.new(real_root)).to_s
             source = RailsAiContext::SafeFile.read(path) or next
             test_count = source.each_line.count do |line|
@@ -494,19 +479,15 @@ module RailsAiContext
             lines << "- `#{relative}` (#{count_phrase(test_count, "test")})"
           end
           lines << ""
-          [ found, all, truncated ]
+          all
         rescue => e
-          RailsAiContext.debug_fail(e, [ [], [], false ], label: "discover_tests")
+          RailsAiContext.debug_fail(e, [], label: "discover_tests")
         end
 
         # --- Test coverage gaps ---
-        def discover_test_gaps(root, pattern, matched_models, ctx, test_files, lines, unread, truncated: false)
-          # A gap is a claim that something has no test, and a scan that stopped
-          # at MAX_SCAN_FILES cannot make it: Discourse has 1,672 spec files, so
-          # the first 500 missed the ones that cover the feature and every
-          # controller was reported as untested.
-          return if truncated
-
+        # A gap is a claim that something has no test, so it reads the name of every test in the suite:
+        # Discourse has 1,672 spec files, and the first 500 missed the ones that cover the feature.
+        def discover_test_gaps(root, pattern, matched_models, ctx, test_files, lines)
           gaps = []
           # Paths, not basenames: a namespaced name underscores to admin/badges,
           # which no basename can contain, so every namespaced controller was
@@ -540,7 +521,7 @@ module RailsAiContext
             path_dir = File.join(root, "app", dir)
             next unless Dir.exist?(path_dir)
 
-            capped_glob(path_dir, "**/*.rb", real_root, "app/#{dir}", unread).each do |path|
+            safe_glob(path_dir, "**/*.rb", real_root).each do |path|
               snake = File.basename(path, ".rb")
               next unless feature_word_match?(snake, pattern)
               next if test_basenames.any? { |t| t.include?(snake) }
@@ -667,15 +648,19 @@ module RailsAiContext
         end
 
         # --- AF9: Environment Dependencies ---
-        def discover_env_dependencies(root, pattern, matched_models, lines, unread)
+        def discover_env_dependencies(root, pattern, matched_models, lines)
           # Scan services, jobs, and model files for ENV references
           real_root = File.realpath(root).to_s
           dirs = %w[app/services app/jobs].map { |d| File.join(root, d) }.select { |d| Dir.exist?(d) }
           env_vars = Set.new
+          truncated = false
 
           dirs.each do |dir|
-            capped_glob(dir, "**/*.rb", real_root, dir.delete_prefix("#{root}/"), unread).each do |path|
-              next unless feature_word_match?(File.basename(path, ".rb"), pattern) || feature_word_match?(path, pattern)
+            matched = safe_glob(dir, "**/*.rb", real_root).select do |path|
+              feature_word_match?(File.basename(path, ".rb"), pattern) || feature_word_match?(path, pattern)
+            end
+            truncated ||= matched.size > MAX_SCAN_FILES
+            matched.first(MAX_SCAN_FILES).each do |path|
               source = RailsAiContext::SafeFile.read(path) or next
               source.scan(/ENV\[["']([^"']+)["']\]|ENV\.fetch\(["']([^"']+)["']\)/).each do |m|
                 env_vars << (m[0] || m[1])
@@ -684,7 +669,6 @@ module RailsAiContext
           end
           return if env_vars.empty?
 
-          truncated = dirs.any? { |dir| unread.include?(dir.delete_prefix("#{root}/")) }
           header = "## Environment Dependencies#{truncated ? " (first #{MAX_SCAN_FILES} per dir scanned)" : ""}"
           lines << header
           env_vars.sort.each { |v| lines << "- `#{v}`" }

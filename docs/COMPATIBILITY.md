@@ -346,6 +346,14 @@ Proof sources:
    static tier, with the app's pinned json and net-http still loaded; the
    suite on prism 1.4.0 and on prism main under Ruby 3.2 and 3.4; and the unit
    suite and the E2E harness on Linux, macOS and Windows.
+   In the v5.36.5 release QA: each fix's example failing on the code before
+   it; the advice `rails_migration_advisor` writes run as real migrations
+   under strong_migrations 1.8 to 2.8 and Active Record 7.0 to 8.1 against
+   PostgreSQL 13, 16 and 17, MySQL 8.0 and 8.4, MariaDB 10.6 and 11.4 and
+   SQLite, for bigint, integer, unsigned, serial and uuid keys; its answers on
+   three corpus apps in the static tier; the unit suite on Ruby 3.1 to 4.0
+   with Rails 7.0 to 8.1 on macOS, with seeds 1, 27377 and 90210 and defined
+   order; and the unit suite and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

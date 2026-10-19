@@ -467,12 +467,72 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).not_to include("Strong Migrations Warnings")
       end
 
-      it "warns about add_association needing two-step foreign key validation" do
-        response = described_class.call(action: "add_association", table: "users", column: "tenant")
-        text = response.content.first[:text]
-        expect(text).to include("Strong Migrations Warnings")
-        expect(text).to include("validate: false")
-        expect(text).to include("validate_foreign_key")
+      context "with an association to another table" do
+        before do
+          allow(described_class).to receive(:cached_context).and_return({
+            schema: { adapter: "PostgreSQL", tables: {
+              "users" => { columns: [ { name: "email", type: "string" } ] },
+              "listings" => { columns: [ { name: "title", type: "string" } ] }
+            } },
+            models: {}
+          })
+        end
+
+        it "rewrites the add_reference it wrote with a concurrent index and an unvalidated key, then validates that key" do
+          text = described_class.call(action: "add_association", table: "listings", column: "owner", type: "users").content.first[:text]
+          expect(text).to include("`add_reference :listings, :owner, index: { algorithm: :concurrently }` and `add_foreign_key :listings, :users, column: :owner_id, validate: false`")
+          expect(text).not_to include("validate: false }")
+          expect(text).to include("disable_ddl_transaction!")
+          expect(text).to include("`validate_foreign_key :listings, :users, column: :owner_id`")
+          expect(text).not_to include("add_foreign_key :listings, :owner")
+        end
+
+        it "names the table a plain reference points at" do
+          text = described_class.call(action: "add_association", table: "listings", column: "user").content.first[:text]
+          expect(text).to include("`add_reference :listings, :user, index: { algorithm: :concurrently }` and `add_foreign_key :listings, :users, column: :user_id, validate: false`")
+          expect(text).to include("`validate_foreign_key :listings, :users, column: :user_id`")
+        end
+
+        it "has nothing to rewrite when the reference's column already exists" do
+          allow(described_class).to receive(:cached_context).and_return({
+            schema: { adapter: "PostgreSQL", tables: {
+              "users" => { columns: [ { name: "email", type: "string" } ] },
+              "listings" => { columns: [ { name: "user_id", type: "bigint" } ] }
+            } },
+            models: {}
+          })
+
+          text = described_class.call(action: "add_association", table: "listings", column: "user").content.first[:text]
+          expect(text).to include("Column `user_id` already exists on `listings`")
+          expect(text).not_to include("Strong Migrations Warnings")
+        end
+
+        it "keeps a self-reference's table in the rewrite" do
+          text = described_class.call(action: "add_association", table: "listings", column: "parent").content.first[:text]
+          expect(text).to include("`add_reference :listings, :parent, index: { algorithm: :concurrently }` and `add_foreign_key :listings, :listings, column: :parent_id, validate: false`")
+          expect(text).to include("`validate_foreign_key :listings, :listings, column: :parent_id`")
+        end
+      end
+
+      it "keeps the key type and the primary key of a table keyed by a uuid column not named id" do
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "PostgreSQL", tables: {
+            "users" => { columns: [ { name: "uid", type: "uuid", primary_key: true } ], primary_key: "uid" },
+            "listings" => { columns: [ { name: "title", type: "string" } ] }
+          } },
+          models: {}
+        })
+
+        text = described_class.call(action: "add_association", table: "listings", column: "user").content.first[:text]
+        expect(text).to include("`add_reference :listings, :user, type: :uuid, index: { algorithm: :concurrently }` and `add_foreign_key :listings, :users, column: :user_id, primary_key: :uid, validate: false`")
+        expect(text).to include("`validate_foreign_key :listings, :users, column: :user_id`")
+      end
+
+      it "asks only for the concurrent index when the reference has no foreign key" do
+        text = described_class.call(action: "add_association", table: "users", column: "tenant").content.first[:text]
+        expect(text).to include("`add_reference :users, :tenant, index: { algorithm: :concurrently }`")
+        expect(text).not_to include("validate_foreign_key")
+        expect(text).not_to include("validate: false")
       end
 
       it "warns about NOT NULL add_column without default" do
@@ -493,7 +553,10 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       before do
         allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
         allow(described_class).to receive(:cached_context).and_return({
-          schema: { adapter: "Trilogy", tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+          schema: { adapter: "Trilogy", tables: {
+            "users" => { columns: [ { name: "email", type: "string" } ] },
+            "listings" => { columns: [ { name: "title", type: "string" } ] }
+          } },
           models: {}
         })
       end
@@ -512,12 +575,77 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).not_to include("**Note:** For large tables, consider `algorithm: :concurrently` (PostgreSQL) to avoid locking")
       end
 
-      it "warns about add_association using foreign_key_checks instead of the Postgres two-step validation" do
-        response = described_class.call(action: "add_association", table: "users", column: "tenant")
-        text = response.content.first[:text]
-        expect(text).to include("Strong Migrations Warnings")
-        expect(text).to include("foreign_key_checks")
+      it "moves the foreign key out of add_reference and adds it with foreign_key_checks off" do
+        allow(RailsAiContext::GemLock).to receive(:for).and_return(instance_double(RailsAiContext::GemLock::Spec, version: "2.7.0"))
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "Trilogy", tables: {
+            "users" => { columns: [ { name: "email", type: "string" } ], primary_key: "uuid" },
+            "listings" => { columns: [ { name: "title", type: "string" } ] }
+          } },
+          models: {}
+        })
+
+        text = described_class.call(action: "add_association", table: "listings", column: "owner", type: "users").content.first[:text]
+        expect(text).to include("Add the reference without one, `add_reference :listings, :owner`")
+        expect(text).to include("class AddOwnerForeignKeyToListings < ActiveRecord::Migration[")
+        expect(text).to include("      add_foreign_key :listings, :users, column: :owner_id, primary_key: :uuid\n    ensure\n      execute \"SET SESSION foreign_key_checks = 1\"")
+        expect(text).to include("    remove_foreign_key :listings, column: :owner_id")
         expect(text).not_to include("validate_foreign_key")
+      end
+
+      it "gives no warning for a reference with no foreign key" do
+        text = described_class.call(action: "add_association", table: "users", column: "tenant").content.first[:text]
+        expect(text).not_to include("Strong Migrations Warnings")
+      end
+
+      it "has nothing to rewrite when the reference's column already exists" do
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "Trilogy", tables: {
+            "users" => { columns: [ { name: "email", type: "string" } ] },
+            "listings" => { columns: [ { name: "owner_id", type: "bigint" } ] }
+          } },
+          models: {}
+        })
+
+        text = described_class.call(action: "add_association", table: "listings", column: "owner", type: "users").content.first[:text]
+        expect(text).to include("Column `owner_id` already exists on `listings`")
+        expect(text).not_to include("Strong Migrations Warnings")
+      end
+
+      it "gives no foreign key warning when the locked strong_migrations predates its MySQL check" do
+        allow(RailsAiContext::GemLock).to receive(:for).and_return(instance_double(RailsAiContext::GemLock::Spec, version: "2.6.0"))
+
+        text = described_class.call(action: "add_association", table: "listings", column: "owner", type: "users").content.first[:text]
+        expect(text).to include("add_reference :listings, :owner, foreign_key: { to_table: :users }")
+        expect(text).not_to include("Strong Migrations Warnings")
+      end
+
+      [ nil, "not-a-version", "2.7.0.rc1" ].each do |version|
+        it "keeps the foreign key warning when the locked strong_migrations is #{version.inspect}" do
+          allow(RailsAiContext::GemLock).to receive(:for).and_return(instance_double(RailsAiContext::GemLock::Spec, version: version))
+
+          text = described_class.call(action: "add_association", table: "listings", column: "owner", type: "users").content.first[:text]
+          expect(text).to include("class AddOwnerForeignKeyToListings")
+        end
+      end
+    end
+
+    context "when strong_migrations gem is present on a SQLite app" do
+      before do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "SQLite", tables: {
+            "users" => { columns: [ { name: "email", type: "string" } ] },
+            "listings" => { columns: [ { name: "title", type: "string" } ] }
+          } },
+          models: {}
+        })
+      end
+
+      it "gives no warning for an association, which strong_migrations does not check there" do
+        text = described_class.call(action: "add_association", table: "listings", column: "user").content.first[:text]
+        expect(text).to include("add_reference :listings, :user, foreign_key: true")
+        expect(text).not_to include("Strong Migrations Warnings")
       end
     end
 
@@ -525,7 +653,10 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       before do
         allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
         allow(described_class).to receive(:cached_context).and_return({
-          schema: { adapter: "PostgreSQL or MySQL", tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+          schema: { adapter: "PostgreSQL or MySQL", tables: {
+            "users" => { columns: [ { name: "email", type: "string" } ] },
+            "listings" => { columns: [ { name: "title", type: "string" } ] }
+          } },
           models: {}
         })
       end
@@ -540,6 +671,12 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
           text = described_class.call(**args).content.first[:text]
           expect(text).not_to match(/Postgre|MySQL|MariaDB|SQLite|concurrently|validate: false|foreign_key_checks/)
         end
+      end
+
+      it "gives a reference with a foreign key the advice every database shares" do
+        text = described_class.call(action: "add_association", table: "listings", column: "user").content.first[:text]
+        expect(text).to include("The foreign key from `add_reference` validates existing rows")
+        expect(text).not_to match(/Postgre|MySQL|MariaDB|SQLite|concurrently|validate: false|foreign_key_checks/)
       end
 
       it "still warns about a NOT NULL column without a default" do
@@ -687,6 +824,21 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
       same = described_class.call(action: "add_association", table: "users", column: "user").content.first[:text]
       expect(same).to include("add_reference :users, :user, foreign_key: true")
+
+      allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+      across = described_class.call(action: "add_association", table: "page_views", column: "user").content.first[:text]
+      expect(across).not_to match(/add_foreign_key|validate_foreign_key|foreign key from/)
+    end
+
+    it "keeps unsigned off a reference from a database that has no unsigned type" do
+      context = shard_context
+      context[:schema][:adapter] = "Mysql2"
+      context[:schema][:tables]["users"] = { columns: [ { name: "id", type: "integer", primary_key: true, unsigned: true } ], primary_key: "id" }
+      allow(described_class).to receive(:cached_context).and_return(context)
+      stub_databases("analytics" => { "adapter" => "postgresql" })
+
+      text = described_class.call(action: "add_association", table: "page_views", column: "user").content.first[:text]
+      expect(text).to include("add_reference :page_views, :user, type: :integer\n")
     end
 
     it "gives no command for a dump whose database no environment configures" do
@@ -755,6 +907,50 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
     end
   end
 
+  describe "a table whose primary key is not id" do
+    before do
+      tables = {
+        "batch_jobs" => { columns: [ { name: "bid", type: "string", primary_key: true }, { name: "state", type: "string" } ], primary_key: "bid" },
+        "listings" => { columns: [ { name: "id", type: "bigint", primary_key: true } ], primary_key: "id" },
+        "skus" => { columns: [ { name: "shop_id", type: "bigint", primary_key: true }, { name: "code", type: "bigint", primary_key: true } ],
+                    primary_key: %w[shop_id code] }
+      }
+      allow(described_class).to receive(:cached_context).and_return({ schema: { tables: tables }, models: {} })
+    end
+
+    def advise(**params) = described_class.call(**params).content.first[:text]
+
+    it "points a reference's foreign key at that key" do
+      text = advise(action: "add_association", table: "listings", column: "batch_job", type: "batch_jobs")
+
+      expect(text).to include("add_reference :listings, :batch_job, type: :string, foreign_key: { primary_key: :bid }")
+    end
+
+    it "points a role's foreign key at that key" do
+      text = advise(action: "add_association", table: "listings", column: "job", type: "batch_jobs")
+
+      expect(text).to include("add_reference :listings, :job, type: :string, foreign_key: { to_table: :batch_jobs, primary_key: :bid }")
+    end
+
+    it "points a created table's reference at that key" do
+      text = advise(action: "create_table", table: "runs", column: "batch_job:references")
+
+      expect(text).to include("t.references :batch_job, type: :string, foreign_key: { primary_key: :bid }")
+    end
+
+    it "writes no foreign key to a table with a composite primary key, and says why" do
+      added = advise(action: "add_association", table: "listings", column: "sku")
+      created = advise(action: "create_table", table: "runs", column: "sku:references")
+
+      expect(added).to include("`skus` has the composite primary key (shop_id, code), which one column cannot reference")
+      expect(added).to include("add_reference :listings, :sku\n")
+      expect(created).to include("t.references :sku # no foreign key: skus has the composite primary key (shop_id, code)")
+
+      allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+      expect(advise(action: "add_association", table: "listings", column: "sku")).not_to match(/add_foreign_key|validate_foreign_key|foreign key from/)
+    end
+  end
+
   describe "an app whose tables use uuid primary keys" do
     def keyed(type)
       { columns: [ { name: "id", type: type, primary_key: true }, { name: "name", type: "string" } ], primary_key: "id" }
@@ -795,7 +991,63 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
     it "keys a reference to a table the schema lacks the way the app's tables are keyed" do
       text = advise(uuid_app, action: "create_table", table: "gadgets", column: "owner:references")
 
-      expect(text).to include("t.references :owner, type: :uuid, foreign_key: true")
+      expect(text).to include("t.references :owner, type: :uuid # no foreign key: the schema has no owners table")
+    end
+
+    it "keys a reference to an integer-keyed table as integer outside SQLite, and leaves a created table's own key alone" do
+      integer_app = { "users" => "integer", "widgets" => "integer" }
+
+      expect(advise(integer_app, action: "add_association", table: "widgets", column: "owner", type: "users"))
+        .to include("add_reference :widgets, :owner, type: :integer, foreign_key: { to_table: :users }")
+      expect(advise(integer_app, action: "create_table", table: "gadgets", column: "user:references"))
+        .to include("t.references :user, type: :integer, foreign_key: true")
+      expect(advise(integer_app, action: "create_table", table: "gadgets", column: "name:string")).not_to include("id: :integer")
+    end
+
+    it "keys a reference to a serial key by the column type, not by a sequence of its own" do
+      serial_app = { "users" => "serial", "widgets" => "serial" }
+
+      expect(advise(serial_app, action: "add_association", table: "widgets", column: "owner", type: "users"))
+        .to include("add_reference :widgets, :owner, type: :integer, foreign_key: { to_table: :users }")
+      expect(advise(serial_app, action: "create_table", table: "gadgets", column: "owner:references"))
+        .to include("t.references :owner, type: :integer # no foreign key")
+      expect(advise(serial_app, action: "create_table", table: "gadgets", column: "name:string")).to include("create_table :gadgets, id: :serial do |t|")
+      expect(advise({ "users" => "bigserial", "widgets" => "bigserial" }, action: "add_association", table: "widgets", column: "owner", type: "users"))
+        .to include("add_reference :widgets, :owner, foreign_key: { to_table: :users }")
+      expect(advise({ "users" => "smallserial", "widgets" => "bigserial" }, action: "add_association", table: "widgets", column: "owner", type: "users"))
+        .to include("add_reference :widgets, :owner, type: :smallint, foreign_key: { to_table: :users }")
+    end
+
+    it "keeps a small integer key's limit on the reference" do
+      tables = { "users" => { columns: [ { name: "id", type: "integer", limit: 2, primary_key: true } ], primary_key: "id" }, "widgets" => keyed("integer") }
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "Mysql2", tables: tables }, models: {} })
+
+      text = described_class.call(action: "add_association", table: "widgets", column: "owner", type: "users").content.first[:text]
+      expect(text).to include("add_reference :widgets, :owner, type: :integer, limit: 2, foreign_key: { to_table: :users }")
+    end
+
+    it "keys a reference to an unsigned key as unsigned, which MySQL needs for the foreign key" do
+      tables = {
+        "users" => { columns: [ { name: "id", type: "integer", primary_key: true, unsigned: true } ], primary_key: "id" },
+        "teams" => { columns: [ { name: "id", type: "bigint", primary_key: true, unsigned: true } ], primary_key: "id" },
+        "editions" => keyed("integer")
+      }
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "Mysql2", tables: tables }, models: {} })
+      allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+
+      owner = described_class.call(action: "add_association", table: "editions", column: "owner", type: "users").content.first[:text]
+      expect(owner).to include("add_reference :editions, :owner, type: :integer, unsigned: true, foreign_key: { to_table: :users }")
+      expect(owner).to include("Add the reference without one, `add_reference :editions, :owner, type: :integer, unsigned: true`")
+      team = described_class.call(action: "add_association", table: "editions", column: "team").content.first[:text]
+      expect(team).to include("add_reference :editions, :team, unsigned: true, foreign_key: true")
+    end
+
+    it "gives a reference to an integer-keyed table no type on SQLite, where every key is an integer" do
+      tables = { "users" => keyed("integer"), "widgets" => keyed("integer") }
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "SQLite", tables: tables }, models: {} })
+
+      text = described_class.call(action: "add_association", table: "widgets", column: "owner", type: "users").content.first[:text]
+      expect(text).to include("add_reference :widgets, :owner, foreign_key: { to_table: :users }")
     end
 
     it "creates a table with the default key where the tables are not keyed alike" do

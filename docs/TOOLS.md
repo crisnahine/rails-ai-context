@@ -104,8 +104,9 @@ Method-aware code extraction with surrounding class context. Every line returned
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `file` | string | *required* | File path relative to Rails root |
-| `near` | string | *required* | What to find in the file: a method name, keyword or string (e.g. `def index`, `validates`, `STATUSES`) |
+| `near` | string | *required* unless `line` | What to find in the file: a method name, keyword or string (e.g. `def index`, `validates`, `STATUSES`) |
 | `context_lines` | integer | `5` | Lines of context above and below the match |
+| `line` | integer | - | Show `context_lines` either side of this line instead of searching for `near`; past the end of the file, `near` is searched for |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
