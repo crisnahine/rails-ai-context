@@ -339,7 +339,7 @@ module RailsAiContext
       Rack::MethodOverride ActionDispatch::Session::AbstractSecureStore
     ].freeze
 
-    # Each pattern ends on a whole namespace segment: Whitehall's own
+    # Each pattern ends on a whole namespace segment: an app's own
     # ActiveRecordLikeInterface is not ActiveRecord's.
     DEFAULT_EXCLUDED_CONCERNS = [
       /::Generated(Association|Attribute|Relation)Methods\z/,

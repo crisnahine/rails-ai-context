@@ -98,7 +98,7 @@ RSpec.describe RailsAiContext::AstCache do
     end
   end
 
-  # Canvas's config/initializers/active_record.rb reaches every model's
+  # An app's config/initializers/active_record.rb can reach every model's
   # concern walk: 1,996 reads and SHA256s of one unchanged file in a run.
   describe "an unchanged file" do
     it "is neither read nor hashed again" do

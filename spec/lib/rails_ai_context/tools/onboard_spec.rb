@@ -5,19 +5,19 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::Onboard do
   before { described_class.reset_cache! }
 
-  # Errbit: no ActiveRecord schema, so the stack line said "on unknown".
+  # A Mongoid app has no ActiveRecord schema, so the stack line said "on unknown".
   describe "a Mongoid app" do
     it "names Mongoid and the database mongoid.yml names" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config", "mongoid.yml"),
-                   "development:\n  clients:\n    default:\n      uri: mongodb://localhost/errbit_development\n")
+                   "development:\n  clients:\n    default:\n      uri: mongodb://localhost/tracker_development\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
-        allow(described_class).to receive(:cached_context).and_return({ app_name: "Errbit", models: {} })
+        allow(described_class).to receive(:cached_context).and_return({ app_name: "Tracker", models: {} })
 
         text = described_class.call(detail: "standard").content.first[:text]
 
-        expect(text).to include("on MongoDB through Mongoid (database errbit_development)")
+        expect(text).to include("on MongoDB through Mongoid (database tracker_development)")
       end
     end
   end

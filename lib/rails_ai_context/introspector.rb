@@ -172,8 +172,7 @@ module RailsAiContext
     # The module enclosing `class Application < Rails::Application` in
     # config/application.rb - what the booted tier answers as
     # module_parent_name. The directory is a different thing: it is
-    # "mastodon" for an app named Mastodon, and whatever the checkout was
-    # renamed to for any other.
+    # whatever the checkout was named or renamed to.
     def declared_app_name
       name = AppKind.application_class(app.root).to_s.deconstantize
       name.empty? ? nil : name

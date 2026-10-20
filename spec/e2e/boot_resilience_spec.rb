@@ -141,7 +141,7 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
     end
   end
 
-  # A real one: Mastodon's config/boot.rb aborts when RAILS_ENV is unset. The
+  # A real one: an app's config/boot.rb that aborts when RAILS_ENV is unset. The
   # binary owns this process and has a static tier to answer from, so an
   # initializer's exit is a boot failure here, not a decision about the app's
   # own process.

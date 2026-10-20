@@ -18,7 +18,7 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     described_class.parse(sql)[:tables][table][:indexes]
   end
 
-  # Discourse's categories: the key list was cut at the first ")" and split
+  # A categories index: the key list was cut at the first ")" and split
   # into words, so the expression read as four columns and `name` was lost.
   it "keeps an expression key whole and the column after it" do
     idx = indexes_for(<<~SQL).first

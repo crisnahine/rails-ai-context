@@ -94,7 +94,7 @@ RSpec.describe RailsAiContext::Redaction do
       [
         %(token_version: "v2-3"),
         %(api_key_released: "2.4.1"),
-        %(API_KEY_ENV = "_DISCOURSE_API"),
+        %(API_KEY_ENV = "_FORUM_API"),
         %(sign_in_token: 'sign_in_token')
       ].each { |line| expect(redact(line)).to eq(line) }
     end
@@ -158,7 +158,7 @@ RSpec.describe RailsAiContext::Redaction do
         "redis: redis-server --requirepass #{v} --port 6380" => "redis: redis-server --requirepass [FILTERED] --port 6380",
         "    command: redis-server --masterauth #{v}" => "    command: redis-server --masterauth [FILTERED]",
         "mongosh --username admin --password #{v}" => "mongosh --username admin --password [FILTERED]",
-        "gitlab-runner register --registration-token #{v}" => "gitlab-runner register --registration-token [FILTERED]",
+        "ci-runner register --registration-token #{v}" => "ci-runner register --registration-token [FILTERED]",
         "docker login --username ci --password #{v} registry.example.com" =>
           "docker login --username ci --password [FILTERED] registry.example.com",
         %(system("redis-server --requirepass #{v}")) => %(system("redis-server --requirepass [FILTERED]")),
@@ -305,10 +305,10 @@ RSpec.describe RailsAiContext::Redaction do
         %q(get "/health/api-key-tester?api_key=#{app.api_key}"),
         %q(visit "/orders/1?token=#{order.token}&locale=en"),
         %q(# https://slack.com/api/usergroups.list?token=[TOKEN]),
-        %q(# https://backend.demo.taler.net/orders/2026..?token=S3Q..),
+        %q(# https://backend.demo.example.net/orders/2026..?token=S3Q..),
         %q~def password=(value)~,
         %q({"@context":"https://example.org","@type":"x:Offer","id":"a@b"}),
-        %q("ostatus":"http://ostatus.org#","toot":"http://joinmastodon.org/ns#","x":"y@z")
+        %q("ostatus":"http://ostatus.org#","toot":"http://example.org/ns#","x":"y@z")
       ].each { |line| expect(redact(line)).to eq(line) }
     end
 
@@ -320,14 +320,14 @@ RSpec.describe RailsAiContext::Redaction do
         "SECRET_KEY_BASE=",
         "token = params[:token]",
         "user.password=params[:password]",
-        # Discourse's User#password= and Huginn's option placeholder.
+        # A User#password= definition and an option placeholder.
         "def password=(pw)",
         "'password' => 'your.password',",
         %(url = "https://x.test/?token=\#{token}")
       ].each { |line| expect(redact(line)).to eq(line) }
     end
 
-    # Forem's user_spec shows `password_confirmation: "newpassword123"` beside
+    # A user_spec can show `password_confirmation: "newpassword123"` beside
     # a filtered `password:`; a confirmation holds the same secret.
     it "filters every key that holds a password" do
       [
@@ -561,11 +561,11 @@ RSpec.describe RailsAiContext::Redaction do
         %(api_token: "{api_token}"),
         # From an auth provider and a payments controller:
         # env, parameter and cache-key names built from a secret word.
-        %(USER_TOKEN_KEY = "_DISCOURSE_USER_TOKEN"),
-        %(API_KEY_ENV = "_DISCOURSE_API"),
+        %(USER_TOKEN_KEY = "_FORUM_USER_TOKEN"),
+        %(API_KEY_ENV = "_FORUM_API"),
         %(PARAMETER_USER_API_KEY = "user_api_key"),
         %(LINK_TOKEN_KEY = 'app-bank-link-token'),
-        # Discourse's Zeitwerk inflections map a file name to its constant.
+        # Zeitwerk inflections map a file name to its constant.
         %("csrf_token_verifier" => "CSRFTokenVerifier",),
         %(#   "access_token": "SOME-ACCESS-KEY",)
       ].each { |line| expect(redact(line)).to eq(line) }
@@ -643,8 +643,7 @@ RSpec.describe RailsAiContext::Redaction do
     it "never rewrites a route, a message, a URL, a tiny value or an example" do
       expect(redact("post 'api/verify_token' => 'users#verify_token'")).to eq("post 'api/verify_token' => 'users#verify_token'")
       expect(redact("EXPIRING_TOKEN = '0'")).to eq("EXPIRING_TOKEN = '0'")
-      # From Mastodon and Discourse: a fetch option, an enum, header names, a
-      # locale string.
+      # A fetch option, an enum, header names, a locale string.
       expect(redact("  credentials: 'include',")).to eq("  credentials: 'include',")
       expect(redact("enum :method, { password: 'password', sign_in_token: 'sign_in_token' }"))
         .to eq("enum :method, { password: 'password', sign_in_token: 'sign_in_token' }")

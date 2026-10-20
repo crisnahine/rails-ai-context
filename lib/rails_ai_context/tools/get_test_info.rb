@@ -287,7 +287,7 @@ module RailsAiContext
 
       # System, feature and request tests that exercise a controller: named for
       # its route key, or reaching one of its routes by helper or literal path.
-      # Mastodon tests AboutController only through spec/system/about_spec.rb.
+      # An app may test AboutController only through spec/system/about_spec.rb.
       #
       # @return [Array<Array(String, String, String)>] [path, kind, source]
       private_class_method def self.exercising_tests(snake, primary)

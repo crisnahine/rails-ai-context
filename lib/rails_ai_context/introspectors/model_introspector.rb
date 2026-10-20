@@ -33,7 +33,7 @@ module RailsAiContext
         result = models.each_with_object({}) do |model, hash|
           hash[model.name] = extract_model_details(model)
         rescue => e
-          hash[model.name] = { error: e.message }
+          hash[model.name] = { error: e.message }.merge(raised_model_facts(model))
         end
 
         # A hybrid app (ActiveRecord primary, Mongoid gem present too) has
@@ -119,12 +119,9 @@ module RailsAiContext
                                                     sti: static_sti_info(class_name, sti_parents),
                                                     parent_model: sti_parents[class_name])
         rescue => e
-          # What the booted tier does with a model that raises: the entry says
-          # so and the rest of the section still answers. It keeps the two
-          # facts the unreadable branch keeps, because a consumer with no file
-          # derives app/models/<name>.rb, which is a path a pack model does
-          # not have.
-          result[class_name] = { error: e.message, file: candidate[:file], table_name: table }.compact
+          # Kept: the file, which a pack model cannot derive from its name, and
+          # the table and parent, or a subclass reads as a second table owner.
+          result[class_name] = { error: e.message, file: candidate[:file], table_name: table, parent_model: sti_parents[class_name] }.compact
         end
         tag_tenancy(models)
       end
@@ -200,7 +197,8 @@ module RailsAiContext
           entries[class_name] = {
             error: error,
             file: candidate&.dig(:file),
-            table_name: candidate && resolve_table_name(class_name, candidates)
+            table_name: candidate && resolve_table_name(class_name, candidates),
+            parent_model: candidate && sti_parent(class_name, candidates, [])
           }.compact
         end
       end
@@ -332,8 +330,8 @@ module RailsAiContext
         !!data && (Array(data[:associations]).any? || Array(data[:scopes]).any?)
       end
 
-      # ApplicationRecord, or the namespaced base a large app declares -
-      # GitLab has Ci::ApplicationRecord and SecApplicationRecord.
+      # ApplicationRecord, or the namespaced base a large app declares, such
+      # as Ci::ApplicationRecord or SecApplicationRecord.
       def model_base?(name)
         name == "ActiveRecord::Base" || name.split("::").last.end_with?("ApplicationRecord")
       end
@@ -584,7 +582,7 @@ module RailsAiContext
 
       # The booted tier rejects `abstract_class?`, so the static tier must too
       # or the same app gets two model counts. A namespaced base is one of
-      # these - GitLab has Ci::ApplicationRecord and SecApplicationRecord - and
+      # these (Ci::ApplicationRecord, SecApplicationRecord), and
       # the root application_record is not the only one to leave out.
       # Both forms Rails accepts. A generated ApplicationRecord says
       # `primary_abstract_class`, so reading the assignment alone left the app's
@@ -595,7 +593,7 @@ module RailsAiContext
       end
 
       # A file under any concerns/ that is not named for a class. One that is
-      # may be a model: Whitehall keeps one in app/models/concerns itself.
+      # may be a model: some apps keep one in app/models/concerns itself.
       def mixin_path?(relative, source)
         return false unless relative.split("/").include?("concerns")
 
@@ -689,6 +687,25 @@ module RailsAiContext
         models.uniq.sort_by(&:name)
       end
 
+      # The facts the static tier keeps for a model that raised.
+      def raised_model_facts(model)
+        { file: relative_to_root(model_source_path(model)), table_name: raised_table_name(model), parent_model: concrete_parent(model) }.compact
+      rescue => e
+        RailsAiContext.debug_fail(e, {}, label: "raised_model_facts")
+      end
+
+      # A computed table name may be what raised, and it costs only itself.
+      def raised_table_name(model)
+        model.table_name
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "raised_table_name")
+      end
+
+      def concrete_parent(model)
+        parent = model.superclass
+        parent.name if parent < ActiveRecord::Base && !parent.abstract_class?
+      end
+
       def extract_model_details(model)
         # AST-based source introspection (replaces all regex parsing)
         own_source = own_body(introspect_source(model), model.name)
@@ -750,8 +767,8 @@ module RailsAiContext
         sti_info = extract_sti_info(model)
         details[:sti] = sti_info if sti_info
 
-        parent = model.superclass
-        details[:parent_model] = parent.name if parent < ActiveRecord::Base && !parent.abstract_class?
+        parent = concrete_parent(model)
+        details[:parent_model] = parent if parent
 
         # AST-based enum options (replaces regex)
         enum_options = extract_enum_options_from_ast(source_data)
@@ -871,7 +888,7 @@ module RailsAiContext
       end
 
       # `self.belongs_to_required_by_default = false` in a class body wins over
-      # the app's default, and a subclass inherits its parent's (27 OFN models).
+      # the app's default, and a subclass inherits its parent's.
       def class_required_default(paths)
         paths.each do |path|
           source = path && model_source(path) or next
@@ -1753,7 +1770,7 @@ module RailsAiContext
       end
 
       # `<Plugin>::Patches::<Model>Patch` modules under the app's and its in-repo gems' lib/: an engine
-      # includes them in to_prepare (OpenProject's `patches`), outside any file the static walk reads.
+      # includes them in to_prepare (a plugin's `patches`), outside any file the static walk reads.
       def unread_patches(class_name, mixins)
         included = Array(mixins).map { |m| m[:name].to_s.delete_prefix("::") }
         patch_index.fetch(class_name, []) - included
@@ -1943,7 +1960,7 @@ module RailsAiContext
       # The class's own concerns and its bases', walked to agreement: a method
       # one's `included` block calls runs in the class wherever the method is
       # defined, so a base's concern can release what the class's own walk
-      # held back (OpenProject's WorkPackage::InexistentWorkPackage inherits
+      # held back (a WorkPackage::InexistentWorkPackage can inherit
       # journals that way), and the class's concern what a base's did.
       #
       # Each side is walked again only when the other has since learned a call
@@ -2331,7 +2348,7 @@ module RailsAiContext
       # A path the read could not answer falls through to the path walk, which raises. A class
       # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
-        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name, root: app.root),
+        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name),
                    callbacks: ConcernMembership.owned_by(data[:callbacks], class_name),
                    macros: ConcernMembership.owned_by(data[:macros], class_name),
                    scopes: ConcernMembership.owned_by(data[:scopes], class_name).map { |scope| scope.except(:owner) })
@@ -2416,7 +2433,7 @@ module RailsAiContext
         # Mongoid sets after_commit without prepend, as Rails 7.0 does, so it runs last declared first.
         callbacks = chain_order(settled, false)
         declared = macros.select { |m| m[:macro] == :field }.map { |m| mongoid_field(m) }
-        mixins = ConcernMembership.owned_by(data[:mixins], class_name, root: app.root)
+        mixins = ConcernMembership.owned_by(data[:mixins], class_name)
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,

@@ -126,7 +126,7 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
       end
     end
 
-    # Huginn's DATABASE_HOST and friends are read in database.yml's ERB tags.
+    # An app can read DATABASE_HOST and friends in database.yml's ERB tags.
     context "when a YAML file reads ENV in its ERB tags" do
       let(:fixture_path) { File.join(Rails.root, "config/pa_q_database.yml") }
 
@@ -154,7 +154,7 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
   end
 end
 
-# Canvas keeps 126MB of locale YAML, half of it spelling "ENV" as text, and
+# One app keeps 126MB of locale YAML, half of it spelling "ENV" as text, and
 # the scan read and parsed every file: 11s of a static run for no answer.
 RSpec.describe RailsAiContext::Introspectors::EnvReferences do
   it "reads no locale file and parses no YAML without an ERB tag" do

@@ -71,8 +71,8 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
     end
 
     # Without a booted app the list is read from config/locales unless the app
-    # assigns one, and those two answers are not the same question. Mastodon
-    # ships files for 106 locales and enables 97.
+    # assigns one, and those two answers are not the same question. An app
+    # can ship files for 106 locales and enable 97.
     context "when the list was read from the locale files" do
       let(:i18n_data) { super().merge(available_locales_source: "locale_files") }
 
@@ -119,7 +119,7 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       end
 
       # A language-name table gives every one of them the same key count, and
-      # repeating it per name ran to 138 copies of "(2 keys)" on Discourse.
+      # repeating it per name ran to 138 copies of "(2 keys)" on one app.
       it "states a shared key count once instead of per name" do
         text = described_class.call.content.first[:text]
         expect(text).to include("Each defines 1 key of its own: aa, zu")
@@ -176,7 +176,7 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       end
 
       # The filename convention is not the only way a file serves a locale:
-      # gem-provided files are named for the gem, and GitLab's zh-CN lives in
+      # gem-provided files are named for the gem, and an app's zh-CN can live in
       # devise.zh-cn.yml. The tool listed both and then said it had none.
       it "finds a locale's files when the filename does not spell the locale" do
         allow(described_class).to receive(:cached_context).and_return(

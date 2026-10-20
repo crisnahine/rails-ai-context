@@ -192,7 +192,7 @@ module RailsAiContext
 
       # The formats the controller answers: its respond_to blocks, and a
       # template of another format beside its views, which Rails renders for
-      # that format with no respond_to at all: bazaar's products/index.json.jbuilder
+      # that format with no respond_to at all: an app's products/index.json.jbuilder
       # answers products.json, yet the line read "html, turbo_stream". A
       # plain html-only controller gets no line.
       private_class_method def self.formats_phrase(info, ctx, name)

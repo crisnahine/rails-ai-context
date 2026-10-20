@@ -158,7 +158,7 @@ module RailsAiContext
       end
 
       # Routes drawn into each engine, under the path the app mounts it at and
-      # named through the engine's route proxy (`spree.admin_orders_path`).
+      # named through the engine's route proxy (`shop.admin_orders_path`).
       def engine_route_groups(engine_records, mounts)
         engine_records.group_by { |r| r[:engine] }.map do |engine, records|
           routes = records.select { |r| r[:type] == :route }

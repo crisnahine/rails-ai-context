@@ -432,7 +432,7 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     expect(described_class.each("/nonexistent/rails-ai-context-root", kind: "app/models").to_a).to eq([])
   end
 
-  # OpenProject's run asked for app/models five times and app/controllers
+  # One large app's run asked for app/models five times and app/controllers
   # four; the glob and a realpath per file were a fifth of its CPU.
   describe "within one introspection run" do
     it "walks a kind once, and again in the next run" do

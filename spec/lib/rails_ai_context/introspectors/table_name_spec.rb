@@ -39,7 +39,7 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       expect(described_class.explicit(source, "Widget")).to be_nil
     end
 
-    # OpenProject's Principal: `"#{table_name_prefix}users#{table_name_suffix}"`
+    # A Principal model written as `"#{table_name_prefix}users#{table_name_suffix}"`
     # reads the class attribute Rails sets from config.active_record.
     describe "a name interpolating only the class's own prefix and suffix" do
       let(:source) do
@@ -261,23 +261,23 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
     it "reads isolate_namespace from an in-repo engine" do
       result = app_with(
         "plugins/rss/plugin.rb" => "",
-        "plugins/rss/app/models/discourse_rss_polling/rss_feed.rb" => "module DiscourseRssPolling\n  class RssFeed < ActiveRecord::Base\n  end\nend\n",
-        "plugins/rss/lib/discourse_rss_polling/engine.rb" =>
-          "module DiscourseRssPolling\n  class Engine < ::Rails::Engine\n    isolate_namespace DiscourseRssPolling\n  end\nend\n"
+        "plugins/rss/app/models/forum_rss_polling/rss_feed.rb" => "module ForumRssPolling\n  class RssFeed < ActiveRecord::Base\n  end\nend\n",
+        "plugins/rss/lib/forum_rss_polling/engine.rb" =>
+          "module ForumRssPolling\n  class Engine < ::Rails::Engine\n    isolate_namespace ForumRssPolling\n  end\nend\n"
       ) { |dir| described_class.namespace_prefixes(dir) }
 
-      expect(result).to eq({ "DiscourseRssPolling" => "discourse_rss_polling_" })
+      expect(result).to eq({ "ForumRssPolling" => "forum_rss_polling_" })
     end
 
     it "underscores a multi-level namespace the way Rails does" do
       result = app_with(
         "modules/budgets/budgets.gemspec" => "",
         "modules/budgets/app/models/thing.rb" => "class Thing; end\n",
-        "modules/budgets/lib/open_project/budgets/engine.rb" =>
-          "module OpenProject\n  module Budgets\n    class Engine < ::Rails::Engine\n      isolate_namespace OpenProject::Budgets\n    end\n  end\nend\n"
+        "modules/budgets/lib/task_tracker/budgets/engine.rb" =>
+          "module TaskTracker\n  module Budgets\n    class Engine < ::Rails::Engine\n      isolate_namespace TaskTracker::Budgets\n    end\n  end\nend\n"
       ) { |dir| described_class.namespace_prefixes(dir) }
 
-      expect(result).to eq({ "OpenProject::Budgets" => "open_project_budgets_" })
+      expect(result).to eq({ "TaskTracker::Budgets" => "task_tracker_budgets_" })
     end
 
     it "prefers a literal table_name_prefix the namespace declares itself" do
@@ -320,6 +320,19 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       expect(described_class.model_for("Payment", "Shop::Order", models)).to eq("Shop::Payment")
       expect(described_class.model_for("::Payment", "Shop::Order", models)).to eq("Payment")
       expect(described_class.model_for("Missing", nil, models)).to be_nil
+    end
+
+    it "keeps two models whose names differ only in case apart" do
+      models = { "Checkin" => {}, "CheckIn" => {} }
+
+      expect(described_class.model_for("Checkin", nil, models)).to eq("Checkin")
+      expect(described_class.model_for("CheckIn", nil, models)).to eq("CheckIn")
+    end
+
+    it "takes an exact spelling outside the owner's namespace over a case-blind one inside it" do
+      models = { "Checkin" => {}, "Admin::CheckIn" => {} }
+
+      expect(described_class.model_for("Checkin", "Admin::Post", models)).to eq("Checkin")
     end
   end
 end

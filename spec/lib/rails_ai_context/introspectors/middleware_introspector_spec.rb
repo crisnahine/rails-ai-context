@@ -354,12 +354,12 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
     end
 
     it "lists a class the initializer unshifts onto Rails.application's own stack" do
-      FileUtils.mkdir_p(File.join(app.root.to_s, "lib/mastodon/middleware"))
+      FileUtils.mkdir_p(File.join(app.root.to_s, "lib/social/middleware"))
       File.write(File.join(init_dir, "prometheus_exporter.rb"), <<~RUBY)
-        Rails.application.middleware.unshift Mastodon::Middleware::PrometheusQueueTime, instrument: false
+        Rails.application.middleware.unshift Social::Middleware::PrometheusQueueTime, instrument: false
       RUBY
-      File.write(File.join(app.root.to_s, "lib/mastodon/middleware/prometheus_queue_time.rb"), <<~RUBY)
-        module Mastodon
+      File.write(File.join(app.root.to_s, "lib/social/middleware/prometheus_queue_time.rb"), <<~RUBY)
+        module Social
           module Middleware
             class PrometheusQueueTime
               def initialize(app)
@@ -377,14 +377,14 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       result = introspector.call
       names = result[:custom_middleware].map { |m| m[:class_name] }
 
-      expect(names).to include("Mastodon::Middleware::PrometheusQueueTime")
+      expect(names).to include("Social::Middleware::PrometheusQueueTime")
       expect(result[:middleware_from_initializers]).to include(
-        { middleware: "Mastodon::Middleware::PrometheusQueueTime", action: "unshift",
+        { middleware: "Social::Middleware::PrometheusQueueTime", action: "unshift",
           file: "config/initializers/prometheus_exporter.rb" }
       )
     ensure
       FileUtils.rm_f(File.join(init_dir, "prometheus_exporter.rb"))
-      FileUtils.rm_rf(File.join(app.root.to_s, "lib/mastodon"))
+      FileUtils.rm_rf(File.join(app.root.to_s, "lib/social"))
     end
 
     it "lists an inserted class that lives anywhere the app autoloads from" do

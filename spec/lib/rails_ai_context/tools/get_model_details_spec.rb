@@ -219,13 +219,13 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       allow(RailsAiContext).to receive(:static_tier?).and_return(true)
       allow(described_class).to receive(:cached_context).and_return({
         models: { "WorkPackage" => { confidence: "[STATIC]", table_name: "work_packages",
-                                     patches_unread: [ "OpenProject::Backlogs::Patches::WorkPackagePatch" ] } }
+                                     patches_unread: [ "TaskTracker::Backlogs::Patches::WorkPackagePatch" ] } }
       })
 
       text = described_class.call(model: "WorkPackage").content.first[:text]
 
       expect(text).to include("[UNAVAILABLE] 1 patch module not read, so what it adds to WorkPackage is missing here: " \
-                              "OpenProject::Backlogs::Patches::WorkPackagePatch")
+                              "TaskTracker::Backlogs::Patches::WorkPackagePatch")
     end
   end
 
@@ -362,7 +362,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
-  # Diaspora's Comment: lib/diaspora/fields/author.rb writes
+  # A Comment whose lib/fields/author.rb writes
   # `validates :author, presence: true` on the belongs_to Rails already guards.
   describe "a hand-written presence on a belongs_to name" do
     it "shows the hand-written rule and drops the implicit duplicate" do
@@ -1203,7 +1203,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
-  # Diaspora's Fetchable defines only `module ClassMethods`; its methods are
+  # A Fetchable concern that defines only `module ClassMethods`; its methods are
   # the concern's, and a nested class's are not.
   it "lists a concern's ClassMethods when it has no instance methods of its own" do
     Dir.mktmpdir do |dir|
@@ -1275,7 +1275,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
-  # Consul's Budget::Investment audits its translation class from its own body.
+  # A Budget::Investment can audit its translation class from its own body.
   it "names a macro the model body declares in another class's class_eval, apart from its own" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app", "models", "budget"))
@@ -1301,7 +1301,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
-  # Forem's Tag < ActsAsTaggableOn::Tag: the gem's class is an ActiveRecord model the app does not define.
+  # A Tag < ActsAsTaggableOn::Tag: the gem's class is an ActiveRecord model the app does not define.
   it "answers for a model whose parent class comes from a gem, and not for a plain class there" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -1338,7 +1338,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
-  # Forem's EmailMessage < Ahoy::Message lives in ahoy_messages, the table its gem parent sets.
+  # An EmailMessage < Ahoy::Message lives in ahoy_messages, the table its gem parent sets.
   describe "a model whose parent class comes from a gem" do
     def email_message_text(tables)
       Dir.mktmpdir do |dir|
@@ -1373,14 +1373,14 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
-  # Forem's EmailMessage < Ahoy::Message declares nothing; Country < ActiveHash::Base declares has_many and is no model.
+  # An EmailMessage < Ahoy::Message declares nothing; Country < ActiveHash::Base declares has_many and is no model.
   it "takes a gem-parent class as a model when the schema holds its table" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
       FileUtils.mkdir_p(File.join(dir, "db"))
       File.write(File.join(dir, "app", "models", "email_message.rb"), "class EmailMessage < Ahoy::Message\nend\n")
       File.write(File.join(dir, "app", "models", "country.rb"), "class Country < ActiveHash::Base\n  has_many :people\nend\n")
-      # OpenProject's Journable::HistoricActiveRecordRelation: a relation class whose parent's name is a table the app has.
+      # A Journable::HistoricActiveRecordRelation: a relation class whose parent's name is a table the app has.
       File.write(File.join(dir, "app", "models", "historic_relation.rb"), "class HistoricRelation < ActiveRecord::Relation\nend\n")
       File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
         ActiveRecord::Schema[8.0].define(version: 1) do
@@ -1428,13 +1428,13 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       models: { "WorkPackage" => { table_name: "work_packages", associations: [ { type: "has_many", name: "journals" } ],
                                    conditional_declarations: [ { declaration: "has_many :custom_comments",
                                                                  condition: "can_have_custom_comments?",
-                                                                 from_concern: "Redmine::Acts::Customizable" } ] } }
+                                                                 from_concern: "Tracker::Acts::Customizable" } ] } }
     )
 
     text = described_class.call(model: "WorkPackage", detail: "full").content.first[:text]
 
     expect(text).to include("## Not decided from the source (the method name or a condition)")
-    expect(text).to include("- `has_many :custom_comments` if `can_have_custom_comments?` _(Redmine::Acts::Customizable)_")
+    expect(text).to include("- `has_many :custom_comments` if `can_have_custom_comments?` _(Tracker::Acts::Customizable)_")
     expect(text).not_to include("custom_comments (computed)")
   end
 

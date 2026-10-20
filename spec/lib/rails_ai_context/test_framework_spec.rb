@@ -33,7 +33,7 @@ RSpec.describe RailsAiContext::TestFramework do
     expect(described_class.for(@root)).to eq("minitest")
   end
 
-  # Diaspora's Gemfile carries `gem "minitest"` with no test/ directory at all.
+  # A Gemfile can carry `gem "minitest"` with no test/ directory at all.
   # A gem in the bundle is not a suite.
   it "does not read a bundled minitest with no test tree as a suite" do
     write("spec/models/user_spec.rb")
@@ -107,7 +107,7 @@ RSpec.describe RailsAiContext::TestFramework do
     expect(described_class.command("no tests yet (minitest in the bundle)")).to eq("rails test")
   end
   describe ".candidates" do
-    # OpenFoodNetwork keeps spec/requests/payments_controller_spec.rb.
+    # An app can keep spec/requests/payments_controller_spec.rb.
     it "tries every controller suffix in both controller spec directories" do
       list = described_class.candidates("/nonexistent", :controller, "payments", {})
 

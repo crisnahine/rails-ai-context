@@ -111,7 +111,7 @@ module RailsAiContext
       end
 
       def in_class(root, path, source, name, action, scopes, visibility)
-        mixins = mixins_of(root, source, name)
+        mixins = mixins_of(source, name)
         prepended, included = mixins.partition { |mixin| mixin[:macro] == :prepend }
         in_modules(root, prepended, scopes, action, 0, visibility) ||
           own_def(root, path, source, name, action, visibility) ||
@@ -145,7 +145,7 @@ module RailsAiContext
           next unless source
 
           found = own_def(root, path, source, mod, action, visibility) ||
-                  in_modules(root, mixins_of(root, source, mod), namespaces(mod), action, depth + 1, visibility)
+                  in_modules(root, mixins_of(source, mod), namespaces(mod), action, depth + 1, visibility)
           return found if found
         end
         nil
@@ -171,9 +171,9 @@ module RailsAiContext
         parts.size.downto(1).map { |n| parts.first(n).join("::") }
       end
 
-      def mixins_of(root, source, owner)
+      def mixins_of(source, owner)
         walked = SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })
-        ConcernMembership.owned_by(walked[:mixins], owner, root: root)
+        ConcernMembership.owned_by(walked[:mixins], owner)
                          .select { |mixin| mixin[:ancestor] && !mixin[:inline] }
                          .uniq { |mixin| mixin[:name] }
       end

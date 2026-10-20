@@ -336,8 +336,8 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "skips a file named *_controller outside a controllers directory that is not Stimulus" do
       Dir.mktmpdir do |root|
-        FileUtils.mkdir_p(File.join(root, "app/javascript/mastodon/components"))
-        File.write(File.join(root, "app/javascript/mastodon/components/alerts_controller.tsx"),
+        FileUtils.mkdir_p(File.join(root, "app/javascript/social/components"))
+        File.write(File.join(root, "app/javascript/social/components/alerts_controller.tsx"),
                    %(import { useState } from "react";\nexport const Alerts = () => null;\n))
 
         expect(introspect(root)[:controllers]).to eq([])
@@ -482,7 +482,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
                    %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller {}\n))
         File.write(File.join(root, "frontend/src/stimulus/setup.ts"),
                    %(import SubtreeController from './controllers/dynamic/menus/subtree.controller';\n) +
-                   %(OpenProjectStimulusApplication.preregister('menus--subtree', SubtreeController);\n))
+                   %(AppStimulusApplication.preregister('menus--subtree', SubtreeController);\n))
 
         controller = controllers_in(root).first
 
@@ -731,7 +731,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
   end
 
   describe "a controller the app registers from a package" do
-    def errbit_shaped(root, pin: true)
+    def package_registered_app(root, pin: true)
       dir = File.join(root, "app/javascript/controllers")
       FileUtils.mkdir_p(dir)
       File.write(File.join(dir, "index.js"),
@@ -752,7 +752,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "lists it as registered from that package, with no file" do
       Dir.mktmpdir do |root|
-        errbit_shaped(root)
+        package_registered_app(root)
 
         expect(result_for(root)[:controllers]).to eq([ { name: "reveal", package: "@stimulus-components/reveal" } ])
       end
@@ -760,7 +760,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "counts it as the app using Stimulus" do
       Dir.mktmpdir do |root|
-        errbit_shaped(root)
+        package_registered_app(root)
 
         expect(described_class.used?(root)).to be(true)
         expect(described_class.controller_count(root)).to eq(1)
@@ -782,7 +782,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "does not read a Turbo stream action registration as a controller" do
       Dir.mktmpdir do |root|
-        errbit_shaped(root)
+        package_registered_app(root)
         File.write(File.join(root, "app/javascript/turbo_setup.js"),
                    %(import TurboPower from "turbo_power";\nTurboPower.register("redirect_to", TurboPower.Actions.redirect_to, StreamActions);\n))
         File.write(File.join(root, "package.json"), %({ "dependencies": { "turbo_power": "^0.7.0" } }))
@@ -793,7 +793,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "reads a pin written with parentheses" do
       Dir.mktmpdir do |root|
-        errbit_shaped(root, pin: false)
+        package_registered_app(root, pin: false)
         File.write(File.join(root, "config/importmap.rb"),
                    %(pin("@hotwired/stimulus-loading", to: "stimulus-loading.js")\npin("@stimulus-components/reveal")\n))
 
@@ -804,7 +804,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "does not read a bare specifier the app never installed as a package" do
       Dir.mktmpdir do |root|
-        errbit_shaped(root, pin: false)
+        package_registered_app(root, pin: false)
 
         expect(result_for(root)[:controllers]).to eq([])
         expect(described_class.used?(root)).to be(false)
@@ -876,14 +876,14 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
                      .map { |c| [ c[:name], c[:identifier_inferred] ] }
     end
 
-    def openproject_shaped(root)
+    def tsconfig_app(root)
       FileUtils.mkdir_p(File.join(root, "frontend/src/stimulus/controllers"))
       File.write(File.join(root, "frontend/src/stimulus/controllers/highlight.controller.ts"), stimulus_controller)
     end
 
     it "resolves a tsconfig paths alias with no baseUrl against the tsconfig's directory" do
       Dir.mktmpdir do |root|
-        openproject_shaped(root)
+        tsconfig_app(root)
         File.write(File.join(root, "frontend/tsconfig.json"), <<~JSON)
           {
             // comments and a trailing comma, as tsconfig allows
@@ -930,7 +930,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       described_class.new(double("app", root: Pathname.new(root))).call[:controllers].map { |c| c[:name] }
     end
 
-    def openproject_frontend(root)
+    def frontend_with_services(root)
       FileUtils.mkdir_p(File.join(root, "frontend/src/stimulus/controllers/dynamic/services"))
       File.write(File.join(root, "frontend/src/stimulus/controllers/dynamic/services/url-helpers.ts"), "export class UrlHelpers {}\n")
       File.write(File.join(root, "frontend/tsconfig.json"),
@@ -939,7 +939,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "does not count an Angular controller that imports a helper through a stimulus-named alias" do
       Dir.mktmpdir do |root|
-        openproject_frontend(root)
+        frontend_with_services(root)
         FileUtils.mkdir_p(File.join(root, "frontend/src/app/features/activity"))
         File.write(File.join(root, "frontend/src/app/features/activity/activity-base.controller.ts"),
                    %(import { Directive } from '@angular/core';\n) +
@@ -952,7 +952,7 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
     it "counts a controller that extends an app base class reached through the alias" do
       Dir.mktmpdir do |root|
-        openproject_frontend(root)
+        frontend_with_services(root)
         File.write(File.join(root, "frontend/src/stimulus/controllers/dialog-base.controller.ts"),
                    %(import { Controller } from '@hotwired/stimulus';\nexport default class DialogBase extends Controller {}\n))
         File.write(File.join(root, "frontend/src/stimulus/controllers/dynamic/preview.controller.ts"),

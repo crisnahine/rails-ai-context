@@ -172,9 +172,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerSettings do
     end
 
     it "says which ancestor it could not read instead of guessing" do
-      context = ctx("ShopController" => { parent_class: "Spree::StoreController" })
+      context = ctx("ShopController" => { parent_class: "Shop::StoreController" })
 
-      expect(described_class.resolve(context, "ShopController", root: @root)[:layout]).to eq(unread: "Spree::StoreController")
+      expect(described_class.resolve(context, "ShopController", root: @root)[:layout]).to eq(unread: "Shop::StoreController")
     end
 
     it "gives an API controller no layout" do

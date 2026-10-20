@@ -42,13 +42,13 @@ RSpec.describe RailsAiContext::Introspectors::HabtmJoinTables do
   # A namespaced owner's habtm finds the other side in its own namespace first.
   it "derives the other side's table from the owner's namespace outward" do
     tables = declared({
-      "app/models/spree/product.rb" => "module Spree\n  class Product < ApplicationRecord\n    has_and_belongs_to_many :taxons\n  end\nend\n"
+      "app/models/shop/product.rb" => "module Shop\n  class Product < ApplicationRecord\n    has_and_belongs_to_many :taxons\n  end\nend\n"
     }, {
-      "Spree::Product" => { table_name: "spree_products" }, "Spree::Taxon" => { table_name: "spree_taxons" },
+      "Shop::Product" => { table_name: "shop_products" }, "Shop::Taxon" => { table_name: "shop_taxons" },
       "Taxon" => { table_name: "legacy_taxons" }
     })
 
-    expect(tables).to eq(%w[spree_products_taxons])
+    expect(tables).to eq(%w[shop_products_taxons])
   end
 
   it "derives the table from the owner a patch targets, as Rails does" do

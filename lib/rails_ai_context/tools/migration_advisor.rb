@@ -633,30 +633,46 @@ module RailsAiContext
           strong_migrations_section(warnings)
         end
 
-        # The belongs_to and has_many the reference wants, in the models that
-        # read each table: a role names its class, and a self-reference is
+        # The belongs_to and has_many the reference wants, in the class each
+        # table belongs to: a role names its class, and a self-reference is
         # optional (a root has no parent) and names its children.
         def association_model_lines(table, reference, to_table)
-          models = Payload.models(cached_context)
-          owner = models_for_table(table, models).first || table.singularize.camelize
+          owner = table_owner(table)
           lines = [ "**Also add to models:**", "```ruby", "# #{model_path(owner)}" ]
           unless to_table
             lines << "belongs_to :#{reference}, class_name: \"...\" # the model of the table it points at"
             return lines << "```"
           end
 
-          target = models_for_table(to_table, models).first || to_table.singularize.camelize
-          class_option = reference.camelize == target ? "" : ", class_name: \"#{target}\""
+          target = table_owner(to_table)
+          class_option = class_name_option(owner, reference.camelize, target)
           if to_table == table
             lines << "belongs_to :#{reference}#{class_option}, optional: true"
-            lines << "has_many :children, class_name: \"#{target}\", foreign_key: :#{reference}_id, inverse_of: :#{reference}, dependent: :destroy"
+            lines << "has_many :children, class_name: \"#{class_name_for(target, target)}\", foreign_key: :#{reference}_id, inverse_of: :#{reference}, dependent: :destroy"
           else
             lines << "belongs_to :#{reference}#{class_option}"
             lines << "" << "# #{model_path(target)}"
             inverse = class_option.empty? ? "" : ", foreign_key: :#{reference}_id, inverse_of: :#{reference}"
-            lines << "has_many :#{table}#{inverse}, dependent: :destroy"
+            lines << "has_many :#{table}#{class_name_option(target, table.camelize.singularize, owner)}#{inverse}, dependent: :destroy"
           end
           lines << "```"
+        end
+
+        # Nothing when the association's own name already reaches the class.
+        def class_name_option(from, derived, wanted)
+          resolved_name(from, derived) == wanted ? "" : ", class_name: \"#{class_name_for(from, wanted)}\""
+        end
+
+        # A name a nearer model of the same name shadows is written from the root.
+        def class_name_for(from, wanted)
+          resolved_name(from, wanted) == wanted ? wanted : "::#{wanted}"
+        end
+
+        # The model Rails reaches by that name from `from`. Exact spellings only: an
+        # unknown acronym costs a redundant class_name, a loose match a missing one.
+        def resolved_name(from, name)
+          models = Payload.models(cached_context)
+          Introspectors::TableName.resolve_class(name, from) { |candidate| candidate if models.key?(candidate) }
         end
 
         def model_path(model)
@@ -823,7 +839,7 @@ module RailsAiContext
           when "remove_column"
             [
               "**`remove_column` is unsafe under load.** strong_migrations requires:",
-              "  1. Add the column to `self.ignored_columns += %w[#{column}]` in `#{model_file_for_table(table)}` first.",
+              "  1. Add the column to `self.ignored_columns += %w[#{column}]` in `#{model_path(table_owner(table))}` first.",
               "  2. Deploy that change.",
               "  3. THEN run the migration in a separate deploy.",
               "  Or wrap in `safety_assured do ... end` if you accept the risk."
@@ -884,14 +900,14 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, true, label: "strong_migrations_checks_mysql_foreign_keys?")
         end
 
-        # ignored_columns has to go on the class that owns the table, and
-        # every STI class records that same table, so a child that sorts
-        # earlier would otherwise win. The conventional name is the base.
-        def model_file_for_table(table)
+        # Every STI subclass records its base's table, so the owner is one whose
+        # parent is not on it; the conventional name settles two unrelated classes.
+        def table_owner(table)
+          models = Payload.models(cached_context)
           conventional = table.singularize.camelize
-          owners = models_for_table(table, Payload.models(cached_context))
-          name = owners.find { |owner| owner == conventional } || owners.first || conventional
-          Payload.model_file(cached_context, name)
+          readers = models_for_table(table, models)
+          roots = readers.reject { |name| readers.include?(models.dig(name, :parent_model)) }
+          roots.find { |name| name == conventional } || roots.first || readers.first || conventional
         end
 
         # The models on the table, and, when the change can touch a relation,

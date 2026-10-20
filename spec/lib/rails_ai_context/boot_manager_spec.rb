@@ -151,7 +151,7 @@ RSpec.describe RailsAiContext::BootManager do
 
       raised = nil
       begin
-        described_class.guard { abort "Mastodon now requires that these variables are set:" }
+        described_class.guard { abort "This app now requires that these variables are set:" }
       rescue SystemExit => e
         raised = e
       ensure
@@ -160,7 +160,7 @@ RSpec.describe RailsAiContext::BootManager do
 
       expect(raised).to be_a(SystemExit)
       expect(raised.status).to eq(1)
-      expect(errors.string).to include("Mastodon now requires that these variables are set:")
+      expect(errors.string).to include("This app now requires that these variables are set:")
       expect(errors.string).to include("[rails-ai-context] App called exit(1) during boot.")
     end
 

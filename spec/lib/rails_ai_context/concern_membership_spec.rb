@@ -90,13 +90,13 @@ RSpec.describe RailsAiContext::ConcernMembership do
     it "drops framework plumbing, the stdlib and the generated modules" do
       expect(described_class.candidate?("ActiveRecord::Core")).to be false
       expect(described_class.candidate?("Kernel")).to be false
-      # Diaspora's PeopleHelper includes it, and a reader cannot read the stdlib.
+      # A helper can include it, and a reader cannot read the stdlib.
       expect(described_class.candidate?("ERB::Util")).to be false
       expect(described_class.candidate?("Post::GeneratedAttributeMethods")).to be false
     end
   end
 
-  # Whitehall's lib/active_record_like_interface.rb is the app's own: a
+  # An app's lib/active_record_like_interface.rb is the app's own: a
   # default matched it because `ActiveRecord` had no namespace boundary.
   describe "the default excluded_concerns" do
     def excluded?(name)

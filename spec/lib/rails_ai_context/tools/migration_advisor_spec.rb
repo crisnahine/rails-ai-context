@@ -356,6 +356,156 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
     end
 
+    # A hint belongs on the class the table belongs to. Every STI subclass
+    # records the base's table, and one sorting first got it alone.
+    context "with the classes a hint names" do
+      let(:models) do
+        {
+          "CallForEvidence" => { table_name: "editions", file: "app/models/call_for_evidence.rb", parent_model: "Edition", sti: { sti_parent: "Edition" } },
+          "Consultation" => { table_name: "editions", file: "app/models/consultation.rb", parent_model: "Publication", sti: { sti_parent: "Publication" } },
+          "Edition" => { table_name: "editions", file: "app/models/edition.rb", sti: { sti_base: true, sti_children: %w[CallForEvidence Publication] } },
+          "Publication" => { table_name: "editions", file: "app/models/publication.rb", parent_model: "Edition", sti: { sti_parent: "Edition", sti_children: %w[Consultation] } },
+          "AdminUser" => { table_name: "users", file: "app/models/admin_user.rb", parent_model: "Person", sti: { sti_parent: "Person" } },
+          "User" => { table_name: "users", file: "app/models/user.rb", parent_model: "Person", sti: { sti_parent: "Person" } },
+          "Person" => { table_name: "users", file: "app/models/person.rb", sti: { sti_base: true, sti_children: %w[AdminUser User] } },
+          "DraftArchive" => { table_name: "archived_editions", file: "app/models/draft_archive.rb", parent_model: "Archive" },
+          "Archive" => { table_name: "archived_editions", file: "app/models/archive.rb", parent_model: "Edition" }
+        }
+      end
+
+      before do
+        described_class.reset_cache!
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(false)
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: models.values.filter_map { |data| data[:table_name] }.to_h { |name| [ name, { columns: [ { name: "email", type: "string" } ] } ] } },
+          models: models
+        })
+      end
+
+      def advice(**args)
+        described_class.call(action: "add_association", **args).content.first[:text]
+      end
+
+      it "puts belongs_to in the base class, past every level of subclass" do
+        text = advice(table: "editions", column: "owner", type: "users")
+
+        expect(text).to include("# app/models/edition.rb\nbelongs_to :owner, class_name: \"Person\"")
+        expect(text).not_to include("app/models/call_for_evidence.rb")
+        expect(text).not_to include("app/models/consultation.rb")
+      end
+
+      it "puts has_many in the base class of the table it points at" do
+        text = advice(table: "editions", column: "owner", type: "users")
+
+        expect(text).to include("# app/models/person.rb\nhas_many :editions, foreign_key: :owner_id, inverse_of: :owner")
+        expect(text).not_to include("app/models/admin_user.rb")
+      end
+
+      it "names the base class on a reference to its own STI table" do
+        text = advice(table: "editions", column: "parent")
+
+        expect(text).to include("# app/models/edition.rb\nbelongs_to :parent, class_name: \"Edition\", optional: true")
+        expect(text).to include("has_many :children, class_name: \"Edition\"")
+      end
+
+      # A subclass that sets its own table_name owns that table, though its
+      # parent reads another one.
+      it "keeps a subclass that reads a table of its own" do
+        text = advice(table: "archived_editions", column: "owner", type: "users")
+
+        expect(text).to include("# app/models/archive.rb\nbelongs_to :owner, class_name: \"Person\"")
+      end
+
+      # has_many :users reads as User, a subclass, where Person owns the table.
+      it "names the owner on a has_many whose name reads as another class" do
+        text = advice(table: "users", column: "reviewer", type: "editions")
+
+        expect(text).to include("# app/models/person.rb\nbelongs_to :reviewer, class_name: \"Edition\"")
+        expect(text).to include("# app/models/edition.rb\nhas_many :users, class_name: \"Person\", foreign_key: :reviewer_id, inverse_of: :reviewer")
+      end
+
+      it "points ignored_columns at the base when a subclass has the table's name" do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        text = described_class.call(action: "remove_column", table: "users", column: "email").content.first[:text]
+
+        expect(text).to include("`self.ignored_columns += %w[email]` in `app/models/person.rb`")
+      end
+
+      # A model that raised still names its table, so its subclasses are not
+      # the only classes on it.
+      context "when the base's details raised" do
+        let(:models) do
+          {
+            "AdminUser" => { table_name: "users", parent_model: "User" },
+            "Group" => { table_name: "users", parent_model: "Principal" },
+            "User" => { table_name: "users", parent_model: "Principal" },
+            "Principal" => { error: "boom", table_name: "users" },
+            "Edition" => { table_name: "editions" }
+          }
+        end
+
+        it "puts belongs_to in that base" do
+          text = advice(table: "users", column: "owner", type: "editions")
+
+          expect(text).to include("# app/models/principal.rb\nbelongs_to :owner, class_name: \"Edition\"")
+        end
+      end
+
+      # Rails looks a class name up inside the model's namespace first.
+      context "when a namespace holds a model of the same name" do
+        let(:models) do
+          {
+            "Comment" => { table_name: "comments" },
+            "Admin::Comment" => { table_name: "admin_comments" },
+            "Admin::Post" => { table_name: "posts" }
+          }
+        end
+
+        it "roots a class_name its namespace would read as another model" do
+          text = advice(table: "comments", column: "post", type: "posts")
+
+          expect(text).to include("# app/models/comment.rb\nbelongs_to :post, class_name: \"Admin::Post\"")
+          expect(text).to include("# app/models/admin/post.rb\nhas_many :comments, class_name: \"::Comment\", foreign_key: :post_id, inverse_of: :post")
+        end
+
+        it "writes no class_name the association's name already reaches" do
+          text = advice(table: "admin_comments", column: "post", type: "posts")
+
+          expect(text).to include("# app/models/admin/comment.rb\nbelongs_to :post\n")
+          expect(text).to include("# app/models/admin/post.rb\nhas_many :admin_comments, class_name: \"Admin::Comment\", dependent: :destroy")
+        end
+      end
+
+      # AIMatch is reached by `ai_match` only through an ActiveSupport acronym,
+      # never through a Zeitwerk-only one, and the static tier sees neither.
+      context "when a model's name spells an acronym" do
+        let(:models) { { "AIMatch" => { table_name: "ai_matches" }, "Listing" => { table_name: "listings" } } }
+
+        [ true, false ].each do |static|
+          it "names it where this process camelizes the name another way (static tier: #{static})" do
+            allow(RailsAiContext).to receive(:static_tier?).and_return(static)
+            text = advice(table: "listings", column: "ai_match", type: "ai_matches")
+
+            expect(text).to include("# app/models/listing.rb\nbelongs_to :ai_match, class_name: \"AIMatch\"")
+          end
+        end
+      end
+
+      # `check_in` camelizes to CheckIn, which no acronym turns into Checkin.
+      context "when a model's name joins the words of the association's" do
+        let(:models) { { "Checkin" => { table_name: "checkins" }, "Listing" => { table_name: "listings" } } }
+
+        [ true, false ].each do |static|
+          it "names it (static tier: #{static})" do
+            allow(RailsAiContext).to receive(:static_tier?).and_return(static)
+            text = advice(table: "listings", column: "check_in", type: "checkins")
+
+            expect(text).to include("# app/models/listing.rb\nbelongs_to :check_in, class_name: \"Checkin\"")
+          end
+        end
+      end
+    end
+
     it "omits the Affected Models heading when no model uses the table" do
       allow(described_class).to receive(:cached_context).and_return({
         schema: { tables: { "flipper_gates" => { columns: [] } } }, models: {}

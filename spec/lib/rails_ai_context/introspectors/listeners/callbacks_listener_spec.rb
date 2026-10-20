@@ -75,8 +75,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
   end
 
   it "names a callback whose argument is a class object" do
-    results = parse_and_dispatch("around_create Mastodon::Snowflake::Callbacks")
-    expect(results.first).to include(type: "around_create", method: "Mastodon::Snowflake::Callbacks")
+    results = parse_and_dispatch("around_create Social::Snowflake::Callbacks")
+    expect(results.first).to include(type: "around_create", method: "Social::Snowflake::Callbacks")
     expect(results.first[:confidence]).to eq("[VERIFIED]")
   end
 

@@ -122,7 +122,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("  test \"validates length of nickname\" do\n    skip \"set nickname to a length the validation rejects\"\n  end")
     end
 
-    # Whitehall keeps model tests in test/unit/app/models and controller tests
+    # Some apps keep model tests in test/unit/app/models and controller tests
     # in test/functional. A generated file headed test/models/... lands where
     # the app does not look.
     it "writes a model test where the app already keeps its model tests" do
@@ -226,7 +226,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
       end
 
-      # Consul names its system specs after controllers (spec/system/admin/
+      # An app can name its system specs after controllers (spec/system/admin/
       # budgets_spec.rb) and has more of them than controller specs. A system
       # spec is not where a controller's spec goes.
       it "does not take a system spec named after a controller as its spec" do
@@ -307,7 +307,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
-    # Whitehall: 106 of 107 functional tests are ActionController::TestCase
+    # In one app 106 of 107 functional tests are ActionController::TestCase
     # and build their records with factories. An integration test that skips
     # every member action for want of a fixture follows neither.
     it "writes a controller test in the test class and data style the app's own use" do
@@ -344,10 +344,10 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
-    # Plots2: Node's table is `node`, its fixtures are nodes.yml. Looking the
+    # A Node's table can be `node` while its fixtures are nodes.yml. Looking the
     # fixture up by table name found none and wrote a TODO and Node.new.
     describe "a fixture set not named after the table" do
-      def plots2_shaped(root, helper: nil)
+      def singular_table_app(root, helper: nil)
         FileUtils.mkdir_p(File.join(root, "test", "fixtures"))
         File.write(File.join(root, "test", "test_helper.rb"), helper.to_s)
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
@@ -355,7 +355,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
       it "finds the fixtures under the pluralized class name" do
         Dir.mktmpdir do |root|
-          plots2_shaped(root)
+          singular_table_app(root)
           File.write(File.join(root, "test", "fixtures", "nodes.yml"), "one:\n  title: A\n")
           allow(described_class).to receive(:cached_context).and_return({
             tests: { framework: "minitest", fixture_names: { "nodes" => [ "one" ] }, factory_names: {} },
@@ -371,7 +371,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
       it "finds the fixtures set_fixture_class maps to the model" do
         Dir.mktmpdir do |root|
-          plots2_shaped(root, helper: "class ActiveSupport::TestCase\n  set_fixture_class drupal_users: User\nend\n")
+          singular_table_app(root, helper: "class ActiveSupport::TestCase\n  set_fixture_class drupal_users: User\nend\n")
           File.write(File.join(root, "test", "fixtures", "drupal_users.yml"), "bob:\n  name: Bob\n")
           allow(described_class).to receive(:cached_context).and_return({
             tests: { framework: "minitest", fixture_names: { "drupal_users" => [ "bob" ] }, factory_names: {} },
@@ -387,7 +387,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       it "reads no fixture label through a fixture file symlinked out of the app" do
         Dir.mktmpdir do |outside|
           Dir.mktmpdir do |root|
-            plots2_shaped(root)
+            singular_table_app(root)
             File.write(File.join(outside, "nodes.yml"), "secret_label:\n  title: A\n")
             File.symlink(File.join(outside, "nodes.yml"), File.join(root, "test", "fixtures", "nodes.yml"))
             allow(described_class).to receive(:cached_context).and_return({
@@ -404,7 +404,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
 
     # A TestCase request names the action, so every dynamic path segment is
-    # a param: Whitehall's contacts sit under organisations, Plots2 routes
+    # a param: contacts can sit under organisations, or a route can be
     # `graph/file/:uid/:id`. Passing only :id raises UrlGenerationError.
     describe "a TestCase for a controller with more path segments than :id" do
       def testcase_app(root, routes, fixture_names: {}, factories: true)
@@ -440,7 +440,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
       end
 
-      # Whitehall finds the contact through its own contactable, and its
+      # A controller can find the contact through its own contactable, and its
       # contact factory attaches none, so the record is built under the
       # parent the route names: any other parent 404s every member action.
       it "attaches the record to the parent it is found through" do
@@ -478,7 +478,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
       end
 
-      # Plots2 routes `/openid/:username(/:provider)`: :provider is optional,
+      # A route like `/openid/:username(/:provider)`: :provider is optional,
       # so it is neither required of the test nor named as missing.
       it "asks only for the segments a route requires" do
         Dir.mktmpdir do |root|
@@ -695,7 +695,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).not_to match(/get\|post|\bany\b/)
     end
 
-    # Whitehall routes `resources :contacts`, but ContactsController has no
+    # An app can route `resources :contacts` while ContactsController has no
     # show method and no show template: a show test would fail with an
     # AbstractController::ActionNotFound the moment it ran.
     describe "a routed action the controller does not implement" do
@@ -747,7 +747,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         end
       end
 
-      # Whitehall's ContactsController gets reorder_for_home_page from a class
+      # A ContactsController can get reorder_for_home_page from a class
       # macro that builds it with define_method. The source-read action list
       # cannot see it, so its absence is not proven and it is not skipped.
       it "keeps an action something defines with define_method" do
@@ -837,7 +837,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
-    # Plots2 routes `graph/file/:uid/:id` to csvfiles#delete, and csvfiles has
+    # A route `graph/file/:uid/:id` to csvfiles#delete, where csvfiles has
     # a uid column: the record the test builds fills the segment itself.
     describe "a custom segment a record's column fills" do
       def files_app(extra_columns: [], routes:, parents: {})
@@ -896,18 +896,18 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "minitest", fixture_names: {} },
         models: {},
-        controllers: { controllers: { "Spree::Admin::OrdersController" => { actions: %w[index] } } },
-        routes: { by_controller: {}, engine_routes: [ { engine: "Spree::Core::Engine", mount: "/", routes: [
-          { verb: "GET", path: "/admin/orders", controller: "spree/admin/orders", action: "index", name: "spree.admin_orders" }
+        controllers: { controllers: { "Store::Admin::OrdersController" => { actions: %w[index] } } },
+        routes: { by_controller: {}, engine_routes: [ { engine: "Store::Core::Engine", mount: "/", routes: [
+          { verb: "GET", path: "/admin/orders", controller: "store/admin/orders", action: "index", name: "store.admin_orders" }
         ] } ] }
       })
 
-      text = described_class.call(controller: "Spree::Admin::OrdersController").content.first[:text]
+      text = described_class.call(controller: "Store::Admin::OrdersController").content.first[:text]
 
-      expect(text).to include("get spree.admin_orders_url")
+      expect(text).to include("get store.admin_orders_url")
     end
 
-    # Plots2's shortlink redirects when the user exists and raises when not;
+    # A shortlink action can redirect when the user exists and raise when not;
     # verify_email always redirects to /login. Asserting :success on either
     # is a test that fails the first time it runs.
     describe "the response an action gives, read from its body" do
@@ -1181,7 +1181,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
     # A route key names the model without its namespace. The model is looked
     # up from the controller's namespace outward, and else is the one model
-    # whose own name matches (a line_items route serving Spree::LineItem).
+    # whose own name matches (a line_items route serving Store::LineItem).
     describe "a model whose namespace the route key leaves out" do
       def generated_for(ctrl, key, models)
         allow(described_class).to receive(:cached_context).and_return({
@@ -1194,20 +1194,20 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
 
       it "builds the one model whose own name the route key names" do
-        text = generated_for("LineItemsController", "line_items", %w[Spree::LineItem User])
+        text = generated_for("LineItemsController", "line_items", %w[Store::LineItem User])
 
-        expect(text).to include("change(Spree::LineItem, :count).by(-1)")
+        expect(text).to include("change(Store::LineItem, :count).by(-1)")
         expect(text).not_to include("requires a persisted")
       end
 
       it "prefers the model in the controller's own namespace" do
-        text = generated_for("Admin::LineItemsController", "admin/line_items", %w[Admin::LineItem Spree::LineItem])
+        text = generated_for("Admin::LineItemsController", "admin/line_items", %w[Admin::LineItem Store::LineItem])
 
         expect(text).to include("change(Admin::LineItem, :count).by(-1)")
       end
 
       it "leaves a name two namespaces share unresolved" do
-        text = generated_for("LineItemsController", "line_items", %w[Spree::LineItem Shop::LineItem])
+        text = generated_for("LineItemsController", "line_items", %w[Store::LineItem Shop::LineItem])
 
         expect(text).to include("requires a persisted")
       end
@@ -1300,14 +1300,14 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
 
       # Devise names routes for its own kind (session), not the controller: a
-      # custom LoginsController for devise_for :spree_user has new_spree_user_session.
+      # custom LoginsController for devise_for :store_user has new_store_user_session.
       it "reads the mapping from Devise's route names whatever the controller is called" do
         Dir.mktmpdir do |root|
           text = devise_sessions_text(root, "rspec", "spec/controllers/people_controller_spec.rb",
                                       "RSpec.describe PeopleController, type: :controller do\nend\n",
-                                      ctrl: "LoginsController", scope: "spree_user")
+                                      ctrl: "LoginsController", scope: "store_user")
 
-          expect(text).to include('before { @request.env["devise.mapping"] = Devise.mappings[:spree_user] }')
+          expect(text).to include('before { @request.env["devise.mapping"] = Devise.mappings[:store_user] }')
         end
       end
 
@@ -1354,7 +1354,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
           "Status" => {
             associations: [], validations: [], scopes: [], enums: {},
             callbacks: {
-              "around_create" => %w[Mastodon::Snowflake::Callbacks],
+              "around_create" => %w[Social::Snowflake::Callbacks],
               "after_create" => [ "[inline_block]" ],
               "before_save" => %w[normalize]
             }
@@ -1364,7 +1364,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
       text = described_class.call(model: "Status").content.first[:text]
 
-      expect(text).to include(%(it "around_create calls Mastodon::Snowflake::Callbacks" do))
+      expect(text).to include(%(it "around_create calls Social::Snowflake::Callbacks" do))
       expect(text).to include(%(it "after_create runs its inline block" do))
       expect(text).to include(%(it "before_save calls :normalize" do))
       expect(text).not_to include("[inline_block]")

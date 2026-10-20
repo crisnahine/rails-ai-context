@@ -69,7 +69,7 @@ RSpec.describe RailsAiContext::Introspectors::ServiceClasses do
     end
   end
 
-  # Canvas keeps app/services/accessibility/concerns/course_statistics_queueable.rb.
+  # One app keeps app/services/accessibility/concerns/course_statistics_queueable.rb.
   # Only the top-level app/services/concerns was left out, so a mixin one
   # directory deeper was listed as a service an agent could call.
   it "leaves out a concern in any concerns directory under the root" do
@@ -108,7 +108,7 @@ RSpec.describe RailsAiContext::Introspectors::ServiceClasses do
     end
   end
 
-  # Whitehall's AssetManager::ServiceHelper is a module two services and a
+  # An AssetManager::ServiceHelper can be a module two services and a
   # job include. Something the app mixes in is not something it calls.
   context "with a helper module the app includes" do
     def tree(root)
@@ -207,7 +207,7 @@ RSpec.describe RailsAiContext::Introspectors::ServiceClasses do
     end
   end
 
-  # OpenProject keeps IncomingEmails::MailHandler, an ApplicationMailer, in
+  # An app can keep IncomingEmails::MailHandler, an ApplicationMailer, in
   # app/services; the mailers listing counts it by its chain, so the services
   # one must not count it too.
   context "with a mailer kept in app/services" do

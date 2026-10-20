@@ -477,12 +477,12 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       expect(text).to include("- **Class methods:** deadline_passed")
     end
 
-    # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing
-    # else. The parent is the answer to where its emails are; the override is
+    # An AppDeviseMailer that overrides `self.mailer_name` and nothing
+    # else: the parent is the answer to where its emails are; the override is
     # not an interface anybody calls.
     it "names the parent of a mailer that also carries class methods" do
       allow(described_class).to receive(:cached_context).and_return(
-        { jobs: { mailers: [ { name: "DiasporaDeviseMailer", actions: [], class_actions: %w[mailer_name],
+        { jobs: { mailers: [ { name: "AppDeviseMailer", actions: [], class_actions: %w[mailer_name],
                                parent_class: "Devise::Mailer" } ] } }
       )
 

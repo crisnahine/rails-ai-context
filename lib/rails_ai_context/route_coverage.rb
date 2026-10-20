@@ -78,7 +78,7 @@ module RailsAiContext
 
     # {controller => routes} across the app's table and every engine's the app
     # draws into: what reaches a controller, as opposed to what the app counts.
-    # An engine route carries `engine:` and its proxied name (`spree.admin_orders`).
+    # An engine route carries `engine:` and its proxied name (`shop.admin_orders`).
     def all_by_controller(routes)
       merged = by_controller(routes).transform_values { |entries| Array(entries).dup }
       Array(routes.is_a?(Hash) ? routes[:engine_routes] : nil).each do |group|

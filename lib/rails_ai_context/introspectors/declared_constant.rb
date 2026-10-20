@@ -6,7 +6,7 @@ module RailsAiContext
     #
     # Camelizing the path is right often enough to look right always, and
     # wrong wherever the app registers an inflection: `app/controllers/
-    # activitypub/` is `ActivityPub` in Mastodon and `Oauth` is nothing at all.
+    # activitypub/` is `ActivityPub` in an app with that acronym and `Oauth` is nothing at all.
     # Zeitwerk resolves the path through the app's own inflector, which the
     # static tier has not loaded, so the source is the only place the real
     # constant is written down.
@@ -22,7 +22,8 @@ module RailsAiContext
       # `nesting` is Module.nesting where the superclass is read, innermost
       # first: `class Api::UsersController < BaseController` reads it at the
       # top level, and `< ::BaseController` reads it from the root anywhere.
-      Declaration = Data.define(:name, :superclass, :nesting)
+      # `body_nesting` is Module.nesting inside the class body.
+      Declaration = Data.define(:name, :superclass, :nesting, :body_nesting)
 
       DECLARATIONS = ObjectSpace::WeakMap.new
       MODULE_NAMES = ObjectSpace::WeakMap.new
@@ -212,6 +213,7 @@ module RailsAiContext
         all = []
         classes = []
         constants(root, assignments: true) do |name, node, nesting|
+          body_nesting = nesting
           if node.is_a?(Prism::ClassNode)
             parent = node.superclass
             nesting = nesting.drop(1)
@@ -222,7 +224,8 @@ module RailsAiContext
             next
           end
 
-          declaration = Declaration.new(name: name, superclass: superclass_name(parent), nesting: parent&.slice&.start_with?("::") ? [] : nesting)
+          declaration = Declaration.new(name: name, superclass: superclass_name(parent), nesting: parent&.slice&.start_with?("::") ? [] : nesting,
+                                        body_nesting: body_nesting)
           all << declaration
           classes << declaration if node.is_a?(Prism::ClassNode)
         end

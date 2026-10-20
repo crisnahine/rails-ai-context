@@ -171,25 +171,25 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(text).to include("Mounted: Sidekiq::Web, MetricsApp")
     end
 
-    # OFN mounts DfcProvider::Engine at three paths, which pushed Spree and
+    # An app that mounts FeedProvider::Engine at three paths pushed Shop and
     # Sidekiq off a line capped at five.
     it "names an app mounted at several paths once" do
-      mounts = %w[DfcProvider::Engine DfcProvider::Engine DfcProvider::Engine Flipper::UI.app Rswag::Api::Engine
-                  Spree::Core::Engine Sidekiq::Web]
+      mounts = %w[FeedProvider::Engine FeedProvider::Engine FeedProvider::Engine Flipper::UI.app Rswag::Api::Engine
+                  Shop::Core::Engine Sidekiq::Web]
       ctx = { engines: { mounted_engines: mounts.map { |engine| { engine: engine } } } }
       text = test_class.new(ctx).full_preset_stack_lines.join("\n")
-      expect(text).to include("Mounted: DfcProvider::Engine (3 paths), Flipper::UI.app, Rswag::Api::Engine, " \
-                              "Spree::Core::Engine, Sidekiq::Web")
+      expect(text).to include("Mounted: FeedProvider::Engine (3 paths), Flipper::UI.app, Rswag::Api::Engine, " \
+                              "Shop::Core::Engine, Sidekiq::Web")
     end
 
     it "names the app's own in-repo engines beside what it mounts" do
-      ctx = { engines: { mounted_engines: [ { engine: "Spree::Core::Engine" } ],
-                         in_repo_engines: [ { name: "catalog" }, { name: "dfc_provider" },
+      ctx = { engines: { mounted_engines: [ { engine: "Shop::Core::Engine" } ],
+                         in_repo_engines: [ { name: "catalog" }, { name: "feed_provider" },
                                             { name: "order_management" }, { name: "web" } ] } }
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
 
-      expect(text).to include("- In-repo engines: 4 (catalog, dfc_provider, order_management, web)")
+      expect(text).to include("- In-repo engines: 4 (catalog, feed_provider, order_management, web)")
     end
 
     it "caps the in-repo engine list the way the other lists are capped" do
@@ -385,9 +385,9 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
     end
 
     # The generated files call these "Global before_actions", so a filter that
-    # is skipped or carries a condition does not belong in the list. Mastodon's
-    # ApplicationController skips verify_authenticity_token, and the file said
-    # it ran on every request.
+    # is skipped or carries a condition does not belong in the list. An
+    # ApplicationController that skips verify_authenticity_token was said to have
+    # it run on every request.
     it "leaves out filters that are skipped or conditional" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app", "controllers"))

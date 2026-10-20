@@ -217,8 +217,8 @@ module RailsAiContext
           !first.nil? && !app_name(first).nil?
         end
 
-        # `Spree::Core::Engine.routes.draw` adds to the engine's table, controllers under its
-        # namespace (spree/admin/orders); the app's own `X::Application.routes.draw` is no engine.
+        # `Shop::Core::Engine.routes.draw` adds to the engine's table, controllers under its
+        # namespace (shop/admin/orders); the app's own `X::Application.routes.draw` is no engine.
         def engine_draw?(node)
           return false unless node.name == :draw && node.block
 
@@ -241,7 +241,7 @@ module RailsAiContext
         end
 
         # ponytail: assumes the class's verb methods prefix the path and `as:` and hand the
-        # rest to the mapper, as Canvas's ApiRouteSet does; read its `route` if another app differs.
+        # rest to the mapper, as an app's ApiRouteSet does; read its `route` if an app's differs.
         def enter_route_set(node)
           return if suppressed?
 

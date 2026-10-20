@@ -160,7 +160,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to include("outside the app's bundle")
       end
 
-      # Mastodon locks brakeman 8.0.6; the static run scans from outside only
+      # An app can lock brakeman 8.0.6; the static run scans from outside only
       # because this process never loads the app's bundle.
       it "does not say the app's bundle lacks a brakeman its lockfile carries" do
         allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({ "brakeman" => "8.0.6" }))

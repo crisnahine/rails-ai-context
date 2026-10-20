@@ -620,7 +620,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           described_class.call(context_lines: 0, **kwargs).content.first[:text]
         end
 
-        # Whitehall: `--pattern scheduled_publication --limit 2` answered "No
+        # `--pattern scheduled_publication --limit 2` answered "No
         # matches at offset 0. Total: 56+ matches." A page size is never an
         # answer of nothing.
         it "shows a match even when the limit is smaller than its context block" do

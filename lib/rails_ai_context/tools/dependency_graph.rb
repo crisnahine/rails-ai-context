@@ -132,13 +132,7 @@ module RailsAiContext
             end
           end
 
-          # The declared model names, so a derived one can be corrected to the
-          # spelling the app uses. Camelizing in this process knows none of the
-          # app's acronyms, so `ai_match_result` comes out `AiMatchResult`
-          # while the node the graph draws is `AIMatchResult`.
-          declared = models_data.each_with_object({}) do |(model_name, model_data), acc|
-            acc[model_name.to_s.downcase] = { name: model_name.to_s, data: model_data }
-          end
+          declared = models_data.transform_keys(&:to_s)
 
           # Build edges
           models_data.each do |model_name, data|
@@ -229,8 +223,10 @@ module RailsAiContext
           declared_spelling(base.camelize, declared, owner: owner)
         end
 
+        # Camelizing here knows none of the app's acronyms, so `AiMatchResult`
+        # is drawn as the app's `AIMatchResult`.
         def declared_spelling(candidate, declared, owner: nil)
-          Introspectors::TableName.resolve_class(candidate, owner) { |name| declared.dig(name.downcase, :name) }
+          Introspectors::TableName.model_for(candidate, owner, declared) || candidate.to_s.delete_prefix("::")
         end
 
         # The class the `through:` association points at - its own
@@ -258,7 +254,7 @@ module RailsAiContext
 
           middle = through_class(assoc, by_name, declared, owner: owner)
           source_name = (assoc.dig(:options, :source) || assoc[:source] || assoc[:name]).to_s
-          middle_data = declared.dig(middle.to_s.downcase, :data)
+          middle_data = declared[middle.to_s]
           source_assoc = Array(middle_data.is_a?(Hash) ? middle_data[:associations] : nil)
                            .find { |a| a[:name].to_s == source_name }
 

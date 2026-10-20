@@ -221,38 +221,38 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     # class in the file there is nothing else it could be named for, and
     # keying it under the path lost its superclass and dropped the model.
     it "answers the only declaration when the file declares one class" do
-      source = "class DiscourseGithubPlugin::GithubCommit < ActiveRecord::Base\nend\n"
+      source = "class ForumGithubPlugin::GithubCommit < ActiveRecord::Base\nend\n"
 
       picked = described_class.declaration_for(declarations.call(source), "GithubCommit")
 
-      expect(picked.name).to eq("DiscourseGithubPlugin::GithubCommit")
+      expect(picked.name).to eq("ForumGithubPlugin::GithubCommit")
       expect(picked.superclass).to eq("ActiveRecord::Base")
     end
 
-    # discourse-github's grant_github_badges.rb sits at a path spelling
+    # A plugin's grant_github_badges.rb can sit at a path spelling
     # Scheduled::GrantGithubBadges and declares one class under a name that
     # shares no segment with it, so neither the path nor its last segment
     # matches and the single class is the only answer there is.
     it "answers the only declaration when its name shares no segment with the path" do
-      source = "class DiscourseGithubPlugin::UpdateJob < ::Jobs::Scheduled\nend\n"
+      source = "class ForumGithubPlugin::UpdateJob < ::Jobs::Scheduled\nend\n"
 
       picked = described_class.declaration_for(declarations.call(source), "Scheduled::GrantGithubBadges")
 
-      expect(picked.name).to eq("DiscourseGithubPlugin::UpdateJob")
+      expect(picked.name).to eq("ForumGithubPlugin::UpdateJob")
       expect(picked.superclass).to eq("Jobs::Scheduled")
     end
 
     # A class reopened with no superclass is an override or a namespace the
     # file writes something else into, not what the file is named for.
     it "answers nothing when the only class is a namespace holding a module" do
-      source = "module DiscourseRssPolling\n  class RssFeed\n    module FindById\n    end\n  end\nend\n"
+      source = "module ForumRssPolling\n  class RssFeed\n    module FindById\n    end\n  end\nend\n"
 
-      picked = described_class.declaration_for(declarations.call(source), "DiscourseRssPolling::RssFeed::FindById")
+      picked = described_class.declaration_for(declarations.call(source), "ForumRssPolling::RssFeed::FindById")
 
       expect(picked).to be_nil
     end
 
-    # whitehall's asset_manager/service_helper.rb declares a module and one
+    # An asset_manager/service_helper.rb can declare a module and one
     # error class inside it; the file is the module.
     it "answers nothing when the only class is nested inside the path's own constant" do
       source = "module AssetManager::ServiceHelper\n  class AssetNotFound < StandardError\n  end\nend\n"

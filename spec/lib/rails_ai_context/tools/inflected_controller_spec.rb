@@ -6,8 +6,8 @@ require "tmpdir"
 # Every tool that answers a question about a controller by looking somewhere
 # on disk has to turn its name back into a path. Underscoring the name is that
 # derivation, and it is wrong for any controller the app names through an
-# inflection: Mastodon declares ActivityPub::InboxesController, whose file,
-# route and spec all sit under activitypub/, not activity_pub/.
+# inflection: an app that declares ActivityPub::InboxesController keeps its
+# file, route and spec under activitypub/, not activity_pub/.
 #
 # Each example asserts the tool finds the thing. The failure this pins is a
 # confident negative - "no routes", "no test file found" - which is the answer

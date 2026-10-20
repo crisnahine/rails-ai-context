@@ -725,7 +725,7 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
-    # OFN lists its route files in config.paths["config/routes.rb"]; reading
+    # An app can list its route files in config.paths["config/routes.rb"]; reading
     # config/routes.rb alone answered 69 routes of ~260 and none of its mounts.
     it "reads the route files config/application.rb registers, in order" do
       Dir.mktmpdir do |dir|
@@ -769,7 +769,7 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
-    # Discourse mounts Sidekiq::Web in both arms of an if/else, inside a
+    # An app can mount Sidekiq::Web in both arms of an if/else, inside a
     # `scope path: nil`: one app at one path, with the path known.
     it "names a mount once per app and path, with the path a nil scope leaves" do
       Dir.mktmpdir do |dir|
@@ -810,10 +810,10 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
           Rails.application.routes.draw do
             resources :posts, only: [:index]
-            mount Spree::Core::Engine, at: "/shop"
+            mount Shop::Core::Engine, at: "/shop"
           end
 
-          Spree::Core::Engine.routes.draw do
+          Shop::Core::Engine.routes.draw do
             namespace :admin do
               resources :orders, only: [:index]
             end
@@ -825,9 +825,9 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         expect(result[:total_routes]).to eq(1)
         expect(result[:by_controller].keys).to eq([ "posts" ])
         expect(result[:engine_routes]).to match([ a_hash_including(
-          engine: "Spree::Core::Engine", mount: "/shop",
-          routes: [ a_hash_including(verb: "GET", path: "/shop/admin/orders", controller: "spree/admin/orders",
-                                     action: "index", name: "spree.admin_orders") ]
+          engine: "Shop::Core::Engine", mount: "/shop",
+          routes: [ a_hash_including(verb: "GET", path: "/shop/admin/orders", controller: "shop/admin/orders",
+                                     action: "index", name: "shop.admin_orders") ]
         ) ])
       end
     end
@@ -897,10 +897,10 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
           Rails.application.routes.draw do
-            mount Spree::Core::Engine, at: "/"
+            mount Shop::Core::Engine, at: "/"
           end
 
-          Spree::Core::Engine.routes.draw do
+          Shop::Core::Engine.routes.draw do
             resources :orders, only: [:update]
           end
         RUBY
@@ -946,18 +946,18 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
-    # A devise_for drawn into Spree's table is missing from the engine's
+    # A devise_for drawn into an engine's table is missing from the engine's
     # count as it would be from the app's, and says so there.
     it "counts what an engine draw could not expand with that engine" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
           Rails.application.routes.draw do
-            mount Spree::Core::Engine, at: "/"
+            mount Shop::Core::Engine, at: "/"
           end
 
-          Spree::Core::Engine.routes.draw do
-            devise_for :spree_user
+          Shop::Core::Engine.routes.draw do
+            devise_for :shop_user
             resources :orders, only: [:index]
           end
         RUBY
@@ -1070,7 +1070,7 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
-    # Canvas draws its API through `ApiRouteSet::V1.draw(self)`, whose class
+    # One app draws its API through `ApiRouteSet::V1.draw(self)`, whose class
     # prefixes each verb route's path and `as:` name.
     it "prefixes routes drawn through an app class with the prefixes the class returns" do
       Dir.mktmpdir do |dir|
@@ -1367,8 +1367,8 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
 
       it "reads a mounted in-repo engine's own routes.rb under its mount" do
         Dir.mktmpdir do |dir|
-          introspector = build_app(dir, main: "Rails.application.routes.draw do\n  mount Dfc::Engine, at: \"/dfc\"\nend\n")
-          %w[dfc chat].each do |name|
+          introspector = build_app(dir, main: "Rails.application.routes.draw do\n  mount Feed::Engine, at: \"/feed\"\nend\n")
+          %w[feed chat].each do |name|
             FileUtils.mkdir_p(File.join(dir, "engines", name, "app", "models"))
             FileUtils.mkdir_p(File.join(dir, "engines", name, "config"))
             FileUtils.mkdir_p(File.join(dir, "engines", name, "lib", name))
@@ -1379,10 +1379,10 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
           end
 
           result = introspector.static_call
-          group = result[:engine_routes].find { |g| g[:engine] == "Dfc::Engine" }
+          group = result[:engine_routes].find { |g| g[:engine] == "Feed::Engine" }
 
           expect(group).not_to have_key(:unavailable)
-          expect(group[:routes].map { |r| r[:path] }).to eq([ "/dfc/addresses/:id" ])
+          expect(group[:routes].map { |r| r[:path] }).to eq([ "/feed/addresses/:id" ])
           expect(result[:in_repo_route_files]).to eq(1)
         end
       end

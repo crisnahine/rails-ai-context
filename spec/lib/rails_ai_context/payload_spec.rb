@@ -3,9 +3,9 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Payload do
-  # Discourse was headed by Chat::NullUser, carrying User's 85 associations.
+  # One app's list was headed by Chat::NullUser, carrying User's 85 associations.
   describe ".models_by_connection" do
-    # OpenProject's User adds 24 associations to Principal's 10 and stayed
+    # A User that adds 24 associations to Principal's 10 stayed
     # off the list while every subclass sank.
     it "ranks a subclass by the associations it adds to its parent" do
       models = {
@@ -234,7 +234,7 @@ RSpec.describe RailsAiContext::Payload do
   end
   # A view directory is the route key: app/views/activitypub/ is rendered by
   # whatever controller Rails routes as activitypub, and camelizing that back
-  # gives Activitypub, which is not the name Mastodon declares.
+  # gives Activitypub, which is not the ActivityPub the app declares.
   describe ".controller_for_route_key" do
     let(:context) do
       {
@@ -451,7 +451,7 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.job_file(context, "Nope")).to be_nil
     end
   end
-  # OpenProject's modules/reporting holds 64 .rb files under app/models and two
+  # One app's modules/reporting holds 64 .rb files under app/models and two
   # models. A file count read as a model count, and the 30 engine counts summed
   # to 346 against 274 models app-wide.
   describe ".in_repo_engines_with_models" do

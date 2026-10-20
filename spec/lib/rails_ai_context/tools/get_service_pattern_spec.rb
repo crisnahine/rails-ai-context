@@ -8,7 +8,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
   before { described_class.reset_cache! }
 
   describe ".call" do
-    # Canvas keeps a concern two directories down, under
+    # An app can keep a concern two directories down, under
     # app/services/accessibility/concerns; the listing offered it as a service.
     context "with a concern below the services root" do
       let(:tmpdir) { Dir.mktmpdir }
@@ -135,7 +135,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
-    # Mastodon registers ActivityPub as an acronym, so its files sit under
+    # An app that registers ActivityPub as an acronym keeps its files under
     # activitypub/; underscoring the name here, with none of the app's
     # acronyms, looked under activity_pub/ and answered not found.
     context "with a namespace the app spells with an acronym" do
@@ -1034,7 +1034,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
     end
 
     # app/services/concerns is its own autoload root, and a module in it is a
-    # concern the concern tool lists. Mastodon's Payloadable and
+    # concern the concern tool lists. Concerns like Payloadable and
     # SearchStoplight were counted among the app's 99 service objects.
     context "with a service concern" do
       let(:tmpdir) { Dir.mktmpdir }

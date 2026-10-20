@@ -841,11 +841,11 @@ module RailsAiContext
 
       # ActionMailer's interceptor and observer hooks. A class or module under
       # app/mailers that implements one is registered with the framework, not
-      # delivered by it: reporting OpenProject's Interceptors::DefaultHeaders
+      # delivered by it: reporting an app's Interceptors::DefaultHeaders
       # as a mailer offered `delivering_email` as an email somebody can send.
       # Everything else in that directory stays - a mailer's actions are as
       # often written as modules mixed into one class as they are methods on
-      # it, and GitLab keeps 20 such modules holding every notification it
+      # it, and one large app keeps 20 such modules holding every notification it
       # sends.
       MAILER_FRAMEWORK_HOOKS = %w[delivering_email previewing_email delivered_email].freeze
 

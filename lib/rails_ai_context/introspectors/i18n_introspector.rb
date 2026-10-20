@@ -14,8 +14,8 @@ module RailsAiContext
       # `I18n.default_locale = :es` in an initializer, which may also reach
       # config through `Rails.application.config.i18n`.
       # Anchored past the line start so a commented example does not win:
-      # GitLab ships `# config.i18n.default_locale = :de` and every coverage
-      # line then measured an English app against German.
+      # in an app that ships `# config.i18n.default_locale = :de`, every coverage
+      # line measured an English app against German.
       DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*((?:(?:::)?Rails\.(?:application\.config|configuration)|config)\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
       # `config.i18n.available_locales`, and only that: the listener strips the
@@ -282,7 +282,7 @@ module RailsAiContext
           # Below the rounding floor there is nothing to show but zeroes. Rails
           # lists a locale per language when the app keeps a language-name
           # lookup table under config/locales, and such a table shares a key or
-          # two with the default by coincidence - on Discourse that produced
+          # two with the default by coincidence. On one large app that produced
           # 138 rows reading "0.0% - 11918 missing", a translation effort
           # nobody had started.
           #
@@ -364,7 +364,7 @@ module RailsAiContext
 
       # locale => the files declaring it, built in ONE pass. Asking every file
       # about every locale is O(locales x files): 187 locales over 108 files
-      # took Discourse's i18n answer from under a second to four and a half
+      # took one large app's i18n answer from under a second to four and a half
       # minutes.
       def paths_by_declared_locale
         @paths_by_declared_locale ||= locale_file_paths.each_with_object({}) do |path, index|

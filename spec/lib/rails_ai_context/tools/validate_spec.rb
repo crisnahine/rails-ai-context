@@ -731,7 +731,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
-  # Mastodon declares 40-odd associations inside one `with_options
+  # An app can declare 40-odd associations inside one `with_options
   # dependent: :destroy` block, and every one of them was reported.
   describe "has_many inside a with_options block" do
     it "warns only about the association the block does not cover" do

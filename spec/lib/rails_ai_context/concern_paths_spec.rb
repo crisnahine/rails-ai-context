@@ -43,7 +43,7 @@ RSpec.describe RailsAiContext::ConcernPaths do
 
     # Rails globs `app/{*,*/concerns}`, and app/concerns is one of the `*`:
     # an app that keeps its concerns there has them autoloaded at the top
-    # level, and reading only app/*/concerns reported one of Huginn's 25.
+    # level, and reading only app/*/concerns reported one of an app's 25.
     it "reads app/concerns itself, in the root tree and in a pack" do
       FileUtils.mkdir_p(File.join(tmpdir, "app", "concerns"))
       FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "concerns"))
@@ -185,7 +185,7 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "DebugConcern")).to be_nil
     end
 
-    # Canvas declares Role::AssociationHelper in role.rb, which Zeitwerk loads it with.
+    # One app declares Role::AssociationHelper in role.rb, which Zeitwerk loads it with.
     it "finds a module with no file of its own in its outer constant's file, and reads only that module" do
       models = File.join(tmpdir, "app", "models")
       FileUtils.mkdir_p(models)
@@ -198,7 +198,7 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.module_source(tmpdir, "Role")).to start_with("class Role")
     end
 
-    # Rails autoloads every app/* directory, and Mastodon's controllers
+    # Rails autoloads every app/* directory, and an app's controllers can
     # include RoutingHelper and DomainControlHelper from app/helpers.
     it "finds a module in any app/* directory" do
       FileUtils.mkdir_p(File.join(tmpdir, "app", "helpers"))
@@ -229,7 +229,7 @@ RSpec.describe RailsAiContext::ConcernPaths do
     end
   end
 
-  # OpenProject names concerns against a hundred roots, and a stat per
+  # An app can name concerns against a hundred roots, and a stat per
   # candidate path was most of its controllers section.
   describe ".find_file within one run" do
     it "stats nothing for a name no listing holds, and finds one that is there" do

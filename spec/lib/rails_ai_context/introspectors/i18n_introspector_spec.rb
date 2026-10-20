@@ -192,7 +192,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:available_locales]).to eq(%w[en])
     end
 
-    # 16 of Discourse's 44 plugins with locales have no app/ at all.
+    # A plugin with locales may have no app/ at all.
     it "counts a plugin's locale files when the plugin has no app directory" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
         FileUtils.mkdir_p(File.join(dir, "plugins", "styleguide", "config", "locales"))
@@ -206,7 +206,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:in_repo_locale_files]).to eq(1)
     end
 
-    # Mastodon's `be` translates 2728 of 2729 keys, and rounding read that as
+    # A locale can translate 2728 of 2729 keys, and rounding read that as
     # 100.0% on the same line that says one key is missing.
     it "floors a coverage short of complete below 100" do
       keys = (1..40).map { |i| "  k#{i}: v" }.join("\n")
@@ -396,7 +396,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     end
 
     # I18n.fallbacks belongs to whichever process asks, and no app booted in
-    # this one. Static Mastodon reported "en -> en" as the app's setting.
+    # this one. A static run reported "en -> en" as the app's setting.
     it "does not report the library's own fallbacks as the app's" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n")
       expect(result).to have_key(:fallbacks)
@@ -424,7 +424,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     # A language-name lookup table is an ordinary thing to keep under
     # config/locales, and Rails really does load every one of its top-level
     # keys as an available locale. What it does not have is translations: on
-    # Discourse, 138 of its 187 locales define 2 keys each and score 0.0%
+    # one app, 138 of its 187 locales define 2 keys each and score 0.0%
     # against an English locale with 11,918.
     describe "a locale-name table under config/locales" do
       let(:result) do
@@ -506,7 +506,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     end
 
     # Reading every file to answer "which files hold locale X" once per locale
-    # is O(locales x files): on Discourse, 187 locales over 108 files took the
+    # is O(locales x files): on one app, 187 locales over 108 files took the
     # introspector from under a second to four and a half minutes.
     it "reads each locale file a bounded number of times" do
       reads = 0
@@ -523,7 +523,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(reads).to be < 100
     end
 
-    # GitLab's config/application.rb carries `# config.i18n.default_locale =
+    # An app's config/application.rb can carry `# config.i18n.default_locale =
     # :de` as a commented example, and an unanchored match took it as the
     # app's choice: every coverage line then read "against de" for an app that
     # runs in English.
@@ -645,7 +645,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     # Rails builds available_locales from the load path only while the app
     # leaves the setting alone. Once the app assigns it, that list IS
     # available_locales, and reading the files instead invents locales the app
-    # disabled: Mastodon enables 97 and ships files for 106.
+    # disabled: an app can enable 97 and ship files for 106.
     describe "an explicit available_locales assignment" do
       def with_config(initializers, application: nil, &block)
         static_result(

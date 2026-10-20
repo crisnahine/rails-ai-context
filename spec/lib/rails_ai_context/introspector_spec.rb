@@ -278,8 +278,8 @@ RSpec.describe RailsAiContext::Introspector do
       expect(RailsAiContext::Introspector.new(files_app).call[:rails_version]).to eq("7.2.2")
     end
 
-    # The directory is not the app's name: a checkout of Mastodon is
-    # "mastodon" where the app declares Mastodon, and the name heads onboard
+    # The directory is not the app's name: a checkout can be
+    # "blog" where the app declares Journal, and the name heads onboard
     # and every generated context file.
     it "names the app from the module config/application.rb declares" do
       files_app = RailsAiContext::StaticApp.new(File.expand_path("../../fixtures/static_app", __dir__))
@@ -303,7 +303,7 @@ RSpec.describe RailsAiContext::Introspector do
       end
     end
 
-    # An app can bundle railties without the rails meta-gem (Discourse does),
+    # An app can bundle railties without the rails meta-gem,
     # and it is still a Rails app at that version.
     it "answers the Rails version from railties when the meta-gem is absent" do
       Dir.mktmpdir do |dir|

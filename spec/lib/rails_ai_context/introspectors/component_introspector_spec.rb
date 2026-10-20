@@ -103,7 +103,7 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
   # Every other kind of code is read under an in-repo engine; components were
   # read from the root tree only, so 398 of one app's 559 were invisible and
   # asking for one by name answered not found.
-  # OpenProject keeps 93 previews under lookbook/previews, set in an
+  # An app can keep 93 previews under lookbook/previews, set in an
   # initializer; reading only the default directories answered "With
   # previews: 0".
   describe "an app that keeps its previews where its config says" do
@@ -130,9 +130,9 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
         FileUtils.mkdir_p(File.join(dir, "app", "components", "users"))
         File.write(File.join(dir, "app", "components", "users", "avatar_component.rb"),
                    "module Users\n  class AvatarComponent < ViewComponent::Base\n  end\nend\n")
-        FileUtils.mkdir_p(File.join(dir, "lookbook", "previews", "open_project", "users"))
-        File.write(File.join(dir, "lookbook", "previews", "open_project", "users", "avatar_component_preview.rb"), <<~RUBY)
-          module OpenProject::Users
+        FileUtils.mkdir_p(File.join(dir, "lookbook", "previews", "tracker", "users"))
+        File.write(File.join(dir, "lookbook", "previews", "tracker", "users", "avatar_component_preview.rb"), <<~RUBY)
+          module Tracker::Users
             class AvatarComponentPreview < Lookbook::Preview
               def default
                 render(Users::AvatarComponent.new(user: nil))
@@ -148,14 +148,14 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
           "BadgeComponent" => "spec/components/previews/badge_component_preview.rb",
           "Common::ListComponent" => "lookbook/previews/common/list_component_preview.rb",
           "PlainComponent" => nil,
-          "Users::AvatarComponent" => "lookbook/previews/open_project/users/avatar_component_preview.rb"
+          "Users::AvatarComponent" => "lookbook/previews/tracker/users/avatar_component_preview.rb"
         )
         expect(result[:summary][:with_previews]).to eq(3)
       end
     end
   end
 
-  # Consul's Admin::BudgetsWizard::BaseComponent is a base four components
+  # An Admin::BudgetsWizard::BaseComponent can be a base four components
   # inherit from, not one a view renders: it is named apart, as service and
   # job bases are.
   describe "an app with an abstract base component" do
@@ -287,8 +287,8 @@ RSpec.describe RailsAiContext::Introspectors::ComponentIntrospector do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "components"))
         FileUtils.mkdir_p(File.join(dir, "modules", "meetings", "app", "components", "meetings"))
-        FileUtils.mkdir_p(File.join(dir, "modules", "meetings", "lib", "open_project", "meetings"))
-        File.write(File.join(dir, "modules", "meetings", "lib", "open_project", "meetings", "engine.rb"), "module OpenProject\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "modules", "meetings", "lib", "tracker", "meetings"))
+        File.write(File.join(dir, "modules", "meetings", "lib", "tracker", "meetings", "engine.rb"), "module Tracker\nend\n")
         File.write(File.join(dir, "app", "components", "application_component.rb"), <<~RUBY)
           class ApplicationComponent < ViewComponent::Base
           end

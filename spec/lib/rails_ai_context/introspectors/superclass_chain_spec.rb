@@ -185,7 +185,7 @@ RSpec.describe RailsAiContext::Introspectors::SuperclassChain do
       expect(described_class.abstract_base?("Admin::ApplicationJob", inherited: false)).to be(true)
     end
 
-    # Mastodon's FollowService has a subclass and is called everywhere.
+    # A FollowService can have a subclass and still be called everywhere.
     it "does not call a subclassed service with an ordinary name a base" do
       expect(described_class.abstract_base?("FollowService", inherited: true)).to be(false)
     end

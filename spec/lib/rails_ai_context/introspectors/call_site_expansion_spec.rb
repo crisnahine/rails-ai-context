@@ -90,7 +90,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
-  # Canvas's plugin_settings runs `module_eval <<~RUBY` with interpolation;
+  # A plugin_settings method can run `module_eval <<~RUBY` with interpolation;
   # a heredoc's body sits past its node's slice, and reading it crashed.
   it "reads a method whose heredoc interpolates, keeping what follows it" do
     data = expand(<<~'RUBY', "recent_by :created_at")
@@ -106,7 +106,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     expect(associations(data)).to eq([ [ "has_many", "entries" ] ])
   end
 
-  # OpenProject's acts_as_customizable declares custom_comments only
+  # An acts_as_customizable can declare custom_comments only
   # `if can_have_custom_comments?`, which the call's literals cannot decide;
   # WorkPackage, which does not pass comments:, was listed as having it.
   describe "a declaration under a condition the literals cannot decide" do
@@ -210,7 +210,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
-  # Consul's validates_translation validates on translation_class inside
+  # A validates_translation can validate on translation_class inside
   # `translation_class.instance_eval { }`: that block declares on the
   # translation class, not on the model the method is called in.
   describe "a block evaluated on another receiver" do
@@ -282,7 +282,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     expect(data[:callbacks].map { |c| c[:method] }).to eq([ "touch_attachment" ])
   end
 
-  # Consul's validates_translation passes `options.merge(if: ...)`: the rules
+  # A validates_translation that passes `options.merge(if: ...)`: the rules
   # the call names, each under that condition, and never a computed attribute.
   it "reads merge, reject, slice and except on the call's options hash" do
     data = expand(<<~RUBY, "validates_translation :title, presence: true, length: { in: 4..Proposal.title_max_length }")
@@ -303,7 +303,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     expect(data[:validations].flat_map { |v| Array(v[:computed_attributes]) }).to be_empty
   end
 
-  # Consul validates the translation class a second time only `if options.many?`.
+  # A method can validate the translation class a second time only `if options.many?`.
   describe "a block on another receiver under a condition" do
     let(:method_source) do
       <<~RUBY
@@ -330,7 +330,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     end
   end
 
-  # Canvas's validates_locale, written before keyword arguments; `extract_options!` is the Rails spelling.
+  # A validates_locale written before keyword arguments; `extract_options!` is the Rails spelling.
   describe "an options hash taken off the end of a *args parameter" do
     [ "args.last.is_a?(Hash) ? args.pop : {}", "args.extract_options!" ].each do |taken|
       method_source = <<~RUBY
@@ -455,7 +455,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
                      .map { |f| [ f[:macro], f[:options] ] }
     end
 
-    # Consul's has_orders: `def has_orders(valid_orders, *)` passes its rest on as `before_action(*)`.
+    # `def has_orders(valid_orders, *)` passes its rest on as `before_action(*)`.
     it "passes an anonymous rest on, keywords included" do
       method_source = "def has_orders(valid_orders, *)\n  before_action(*) do |c|\n    c.head(:ok)\n  end\nend\n"
 
@@ -470,7 +470,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(filters(method_source, "guard_all :a, except: :show")).to eq([ [ :before_action, { except: :show } ] ])
     end
 
-    # OpenProject's authorize_with_permission, called with an `only:` list over three lines.
+    # An authorize_with_permission called with an `only:` list over three lines.
     it "keeps the block on the method's line when the call's arguments span several" do
       definition = Prism.parse("def guard(**args)\n  before_action(**args) do\n    head :ok\n  end\nend\n").value.statements.body.first
       call = Prism.parse("guard only: %i[a\n            b\n            c]\n").value.statements.body.first
@@ -480,7 +480,7 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
       expect(found.map { |f| [ f[:location], f[:proc_lines], f[:options] ] }).to eq([ [ 2, [ 2 ], { only: %i[a b c] } ] ])
     end
 
-    # Canvas's batch_jobs_in_actions takes its own key off the options before passing the rest on.
+    # A batch_jobs_in_actions that takes its own key off the options before passing the rest on.
     it "reads a hash parameter after the leading statements delete a key from it" do
       method_source = <<~RUBY
         def batch_jobs_in_actions(opts = {})

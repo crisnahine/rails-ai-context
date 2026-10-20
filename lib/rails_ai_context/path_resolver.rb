@@ -440,7 +440,7 @@ module RailsAiContext
     private_class_method :ruby_root?
 
     # In-repo gems, engines and plugins that carry config/locales, app/ or not:
-    # a Discourse plugin loads its locales without one.
+    # a plugin may load its locales without one.
     def locale_roots(root)
       root = File.expand_path(root.to_s)
       depths = (1..MAX_ROOT_DEPTH).map { |depth| Array.new(depth, "*").join("/") }.join(",")

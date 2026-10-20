@@ -846,7 +846,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
-  # Huginn's LiquidDroppable defines nothing of its own: every method and the
+  # A LiquidDroppable can define nothing of its own: every method and the
   # `include Enumerable` belong to nested Drop classes, which the answer
   # credited to the concern.
   # `include Pagy::Backend if defined?(Pagy::Backend)` was listed as an include
@@ -954,7 +954,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
-  # Mastodon's Cacheable writes its class methods in `module ClassMethods`,
+  # A Cacheable concern can write its class methods in `module ClassMethods`,
   # which ActiveSupport::Concern extends the includer with.
   it "reads a concern's module ClassMethods as its class methods" do
     File.write(File.join(model_concerns_dir, "cacheable.rb"), <<~RUBY)
@@ -1040,16 +1040,16 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
-  # plugins/discourse-subscriptions/app/controllers/concerns/group.rb
-  # declares DiscourseSubscriptions::Group; named "Group" it collided with
+  # plugins/forum-subscriptions/app/controllers/concerns/group.rb
+  # declares ForumSubscriptions::Group; named "Group" it collided with
   # the core model and could not be asked for by its real name.
   context "on a plugin concern that declares a namespace its path does not carry" do
     before do
-      plugin = File.join(tmpdir, "plugins", "discourse-subscriptions")
+      plugin = File.join(tmpdir, "plugins", "forum-subscriptions")
       FileUtils.mkdir_p(File.join(plugin, "app", "controllers", "concerns"))
-      File.write(File.join(plugin, "plugin.rb"), "# name: discourse-subscriptions\n")
+      File.write(File.join(plugin, "plugin.rb"), "# name: forum-subscriptions\n")
       File.write(File.join(plugin, "app", "controllers", "concerns", "group.rb"), <<~RUBY)
-        module DiscourseSubscriptions
+        module ForumSubscriptions
           module Group
             extend ActiveSupport::Concern
 
@@ -1062,15 +1062,15 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
 
     it "lists it and answers it under the constant the file declares" do
-      expect(described_class.call.content.first[:text]).to include("**DiscourseSubscriptions::Group**")
+      expect(described_class.call.content.first[:text]).to include("**ForumSubscriptions::Group**")
 
-      text = described_class.call(name: "DiscourseSubscriptions::Group").content.first[:text]
-      expect(text).to include("# DiscourseSubscriptions::Group")
+      text = described_class.call(name: "ForumSubscriptions::Group").content.first[:text]
+      expect(text).to include("# ForumSubscriptions::Group")
       expect(text).to include("plan_group")
     end
   end
 
-  # Mastodon keeps Admin::ExportControllerConcern and
+  # An app can keep Admin::ExportControllerConcern and
   # Settings::ExportControllerConcern; matching the last segment credited
   # every includer of either to both.
   context "on two concerns of one short name in two namespaces" do
@@ -1114,20 +1114,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
-  # OpenProject::StaticRouting lives in lib_static; the answer searched
+  # TaskTracker::StaticRouting lives in lib_static; the answer searched
   # app/lib_statics, which does not exist, and said nothing included it while
-  # a model does. Huginn's lib/location.rb includes a concern from app/concerns.
+  # a model does. A lib/location.rb can include a concern from app/concerns.
   context "on concerns whose includers live outside the concern's own kind" do
     before do
-      FileUtils.mkdir_p(File.join(tmpdir, "lib_static", "open_project"))
+      FileUtils.mkdir_p(File.join(tmpdir, "lib_static", "task_tracker"))
       FileUtils.mkdir_p(File.join(tmpdir, "config"))
       File.write(File.join(tmpdir, "config", "application.rb"),
                  "module App\n  class Application < Rails::Application\n    config.autoload_once_paths << Rails.root.join(\"lib_static\").to_s\n    config.autoload_paths << Rails.root.join(\"lib\").to_s\n  end\nend\n")
-      File.write(File.join(tmpdir, "lib_static", "open_project", "static_routing.rb"),
-                 "module OpenProject\n  module StaticRouting\n    extend ActiveSupport::Concern\n  end\nend\n")
+      File.write(File.join(tmpdir, "lib_static", "task_tracker", "static_routing.rb"),
+                 "module TaskTracker\n  module StaticRouting\n    extend ActiveSupport::Concern\n  end\nend\n")
       FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "activities"))
       File.write(File.join(tmpdir, "app", "models", "activities", "base_activity_provider.rb"),
-                 "class Activities::BaseActivityProvider\n  include OpenProject::StaticRouting\nend\n")
+                 "class Activities::BaseActivityProvider\n  include TaskTracker::StaticRouting\nend\n")
       FileUtils.mkdir_p(File.join(tmpdir, "app", "concerns"))
       File.write(File.join(tmpdir, "app", "concerns", "liquid_droppable.rb"), "module LiquidDroppable\n  extend ActiveSupport::Concern\nend\n")
       FileUtils.mkdir_p(File.join(tmpdir, "lib"))
@@ -1139,7 +1139,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
 
     it "finds the includers wherever the app's code lives" do
-      static_routing = described_class.call(name: "OpenProject::StaticRouting").content.first[:text]
+      static_routing = described_class.call(name: "TaskTracker::StaticRouting").content.first[:text]
       expect(static_routing).to include("## Included By (1)")
       expect(static_routing).to include("- Activities::BaseActivityProvider")
 

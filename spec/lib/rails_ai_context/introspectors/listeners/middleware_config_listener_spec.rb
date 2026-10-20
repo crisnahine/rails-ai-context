@@ -57,7 +57,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MiddlewareConfigListene
   it "reads the app's own stack, however the initializer reaches it" do
     results = parse_and_dispatch(<<~RUBY)
       Rails.application.middleware.unshift PrometheusExporter::Middleware
-      Rails.application.middleware.unshift Mastodon::Middleware::PrometheusQueueTime, instrument: false
+      Rails.application.middleware.unshift Social::Middleware::PrometheusQueueTime, instrument: false
       Rails.application.configure do |app|
         app.middleware.insert_after ActionDispatch::DebugExceptions, Appsignal::Rack::RailsInstrumentation
       end
@@ -65,7 +65,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MiddlewareConfigListene
 
     expect(results.map { |r| r[:middleware] }).to eq([
       "PrometheusExporter::Middleware",
-      "Mastodon::Middleware::PrometheusQueueTime",
+      "Social::Middleware::PrometheusQueueTime",
       "Appsignal::Rack::RailsInstrumentation"
     ])
   end

@@ -440,6 +440,22 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
       end
     end
 
+    context "with two models whose names differ only in case" do
+      let(:models_data) do
+        {
+          Checkin: { table_name: "checkins", associations: [] },
+          CheckIn: { table_name: "check_ins", associations: [] },
+          Visit: { table_name: "visits", associations: [ { type: "belongs_to", name: "checkin" }, { type: "belongs_to", name: "check_in" } ] }
+        }
+      end
+
+      it "draws each edge to its own model" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("Visit -->|belongs_to| Checkin")
+        expect(text).to include("Visit -->|belongs_to| CheckIn")
+      end
+    end
+
     context "when the graph is capped or a model failed" do
       let(:models_data) do
         data = {}
@@ -494,7 +510,7 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
         expect(text).to include("of 60 associations")
       end
 
-      # OpenProject `--model WorkPackage` ended with "pass `model:` to focus
+      # `--model WorkPackage` ended with "pass `model:` to focus
       # the graph" though model: had been passed.
       it "drops the focus hint when a model was passed" do
         text = described_class.call(model: "Account", depth: 1, format: "mermaid").content.first[:text]
@@ -646,7 +662,7 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
     end
   end
 
-  # OpenProject writes `class_name: "::Token::API"`: a literal, rooted at the
+  # An app can write `class_name: "::Token::API"`: a literal, rooted at the
   # top-level namespace. Read as a runtime expression, its edge vanished.
   describe "a class_name written with a leading ::" do
     before do
@@ -669,7 +685,7 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
     end
   end
 
-  # Whitehall's PolicyGroup: `has_many :depended_upon_contacts, through:
+  # A PolicyGroup with `has_many :depended_upon_contacts, through:
   # :policy_group_dependencies, source: :dependable, source_type: "Contact"`.
   # The source is a polymorphic belongs_to, so only source_type names the class.
   describe "a through association with a source_type" do
@@ -702,7 +718,7 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
   end
 
   # Rails resolves `has_many :investments` on Budget to Budget::Investment
-  # when it exists, and Spree::Order's `:payments` to Spree::Payment.
+  # when it exists, and Shop::Order's `:payments` to Shop::Payment.
   describe "an association named from inside a namespace" do
     before do
       allow(described_class).to receive(:cached_context).and_return(
@@ -713,11 +729,11 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
           },
           "Budget::Investment" => { table_name: "budget_investments", associations: [] },
           "Banner" => { table_name: "banners", associations: [] },
-          "Spree::Order" => {
-            table_name: "spree_orders",
+          "Shop::Order" => {
+            table_name: "shop_orders",
             associations: [ { type: "has_many", name: "payments" } ]
           },
-          "Spree::Payment" => { table_name: "spree_payments", associations: [] }
+          "Shop::Payment" => { table_name: "shop_payments", associations: [] }
         }
       )
     end
@@ -727,12 +743,12 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
 
       expect(text).to include("Budget -->|has_many| Budget__Investment")
       expect(text).to include("Budget -->|has_many| Banner")
-      expect(text).to include("Spree__Order -->|has_many| Spree__Payment")
+      expect(text).to include("Shop__Order -->|has_many| Shop__Payment")
       expect(text).not_to match(/-->\|has_many\| (Investment|Payment)\b/)
     end
   end
 
-  # Mastodon's Account follows, blocks and mutes other accounts through three
+  # An Account that follows, blocks and mutes other accounts through three
   # join models; only the first of them was drawn.
   describe "through associations to one target via different join models" do
     before do
@@ -765,20 +781,20 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
     before do
       allow(described_class).to receive(:cached_context).and_return(
         models: {
-          "Spree::Order" => { table_name: "spree_orders", associations: [
+          "Shop::Order" => { table_name: "shop_orders", associations: [
             { type: "has_many", name: "payments" },
             { type: "has_many", name: "legacy_payments", class_name: "::Payment" }
           ] },
-          "Spree::Payment" => { table_name: "spree_payments", associations: [] },
+          "Shop::Payment" => { table_name: "shop_payments", associations: [] },
           "Payment" => { table_name: "payments", associations: [] }
         }
       )
     end
 
     it "draws the top-level class for the rooted name only" do
-      text = described_class.call(model: "Spree::Order", format: "mermaid").content.first[:text]
+      text = described_class.call(model: "Shop::Order", format: "mermaid").content.first[:text]
 
-      expect(text).to include("Spree__Order -->|has_many| Spree__Payment", "Spree__Order -->|has_many| Payment\n")
+      expect(text).to include("Shop__Order -->|has_many| Shop__Payment", "Shop__Order -->|has_many| Payment\n")
     end
   end
 

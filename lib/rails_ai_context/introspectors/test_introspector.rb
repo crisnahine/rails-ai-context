@@ -278,7 +278,7 @@ module RailsAiContext
 
       # One walk per factory file for both the factories and their traits.
       # A factory whose name is computed (`factory :"#{model}_comment"` in a
-      # loop, as Consul writes) has no name to list, so it is counted apart.
+      # loop, as some apps write) has no name to list, so it is counted apart.
       def factory_definitions
         @factory_definitions ||= begin
           names = {}
@@ -337,7 +337,7 @@ module RailsAiContext
 
       def detect_test_helper_setup
         helpers = (HELPER_FILES + %w[test/application_system_test_case.rb]).map { |rel| File.join(suite_root, rel) }
-        # Apps also configure helpers in support files (Errbit's spec/support/devise.rb). A bare
+        # Apps also configure helpers in support files (spec/support/devise.rb). A bare
         # include there is usually a support module's own mixin, so only config.include counts.
         support = support_files
 

@@ -64,14 +64,11 @@ module RailsAiContext
 
     # Matched on the last segment: `module Edition; module Featurable` and
     # `module Edition::Featurable` both write one constant.
-    # An edition module (`prepend_mod_with`) counts only where `root` holds its file.
-    def owned_by(records, name, root: nil)
+    def owned_by(records, name)
       return Array(records) if Array(records).none? { |record| record.key?(:owner) }
 
       own = own_owner(records, name)
       Array(records).filter_map do |record|
-        next if record[:edition] && !(root && ConcernPaths.find_file(root.to_s, record[:name]))
-
         if record[:receiver]
           mixed_into(record, name)
         elsif own && Array(record[:owner]).join("::") == own

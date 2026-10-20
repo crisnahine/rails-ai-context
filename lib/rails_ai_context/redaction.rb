@@ -593,7 +593,7 @@ module RailsAiContext
       ].freeze
 
       # An env or header-variable name: capitals joined by `_`, led by `_` or
-      # `HTTP_` or naming a secret word (`_DISCOURSE_API`, `HTTP_API_KEY`).
+      # `HTTP_` or naming a secret word (`_FORUM_API`, `HTTP_API_KEY`).
       ENV_NAME = /\A_?[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\z/
 
       # A switch's value (`showPassword=false`), not a credential, under any name.

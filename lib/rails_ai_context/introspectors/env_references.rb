@@ -54,7 +54,7 @@ module RailsAiContext
           real_dir = File.realpath(dir)
           patterns.flat_map { |pattern| Dir.glob(File.join(dir, pattern)) }.filter_map do |path|
             # I18n loads locale YAML without ERB, so no ENV read is there to find;
-            # Canvas keeps 126MB of it.
+            # One app keeps 126MB of it.
             next if path.start_with?(File.join(root, "config", "locales", ""))
 
             real = File.realpath(path)

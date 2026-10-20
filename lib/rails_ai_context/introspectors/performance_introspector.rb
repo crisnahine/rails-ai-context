@@ -133,9 +133,6 @@ module RailsAiContext
 
           {
             name: class_name,
-            # The name of the class node whose superclass is ApplicationRecord,
-            # which is not always the qualified name above.
-            ar_class_name: active_record_class_name(ast[:classes]),
             file: record.file,
             table_name: model_table(class_name),
             has_many: has_many,
@@ -376,21 +373,40 @@ module RailsAiContext
         missing
       end
 
+      # Module.nesting inside the controller's body: a compact `class Admin::X` searches
+      # itself alone, a nested one Admin too. Read as nested when the class is not found.
+      def controller_nesting(record)
+        declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(record.source, path_name: record.path_name), record.path_name)
+        return [ record.path_name, *SuperclassChain.nesting_of(record.path_name) ] unless declaration
+
+        declaration.body_nesting
+      end
+
       def detect_model_all_in_controllers(model_data)
         findings = []
-        model_names = model_data.map { |model| model[:ar_class_name] }
+        # The last segment, so Post.all is found inside module Admin for a compact `class Admin::Post`.
+        model_names = model_data.map { |model| model[:name].to_s.split("::").last }
 
         return findings if model_names.empty?
 
         # One regex over every controller beats one AST walk per controller per
         # model, and a `Model.all` mention is all this heuristic needs. Regex
         # stays; the model names it looks for come from the model walk.
-        escaped_names = model_names.map { |n| Regexp.escape(n) }
-        combined_pattern = /(#{escaped_names.join("|")})\.all\b/
+        escaped_names = model_names.uniq.map { |n| Regexp.escape(n) }
+        combined_pattern = /(?<![\w:])((?:::)?(?:[A-Z]\w*::)*(?:#{escaped_names.join("|")}))\.all\b/
+        models = model_data.to_h { |model| [ model[:name], model ] }
 
         SourceScan.each(root, kind: "app/controllers").each do |record|
+          nesting = controller_nesting(record)
           record.source.scan(combined_pattern).each do |match|
-            model_name = match[0]
+            scopes = match[0].start_with?("::") ? [] : nesting
+            # A nearer constant with a file of its own takes the name, model or not.
+            found = SuperclassChain.resolve_in_scope(record.path_name, match[0], nesting: scopes) do |name|
+              models.key?(name) ? name : (:other if ConcernPaths.find_file(root, name, outer: false))
+            end
+            next unless models.key?(found.to_s)
+
+            model_name = found
             findings << {
               controller: record.file,
               model: model_name,

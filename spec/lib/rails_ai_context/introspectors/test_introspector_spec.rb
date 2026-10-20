@@ -127,7 +127,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(result[:test_files]).to be_a(Hash)
     end
 
-    # Errbit sets Devise up in spec/support/devise.rb, not in rails_helper.
+    # Some apps set Devise up in spec/support/devise.rb, not in rails_helper.
     it "reads the helper setup an app keeps in spec/support" do
       support = File.join(Rails.root, "spec/support/devise_setup.rb")
       FileUtils.mkdir_p(File.dirname(support))
@@ -573,7 +573,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
-  # Consul defines a comment factory per model in a loop,
+  # An app can define a comment factory per model in a loop,
   # `factory :"#{model}_comment"`. Its name is computed, so it is left out of
   # the names, and counted so no total claims to be exact.
   describe "a factory whose name is computed" do

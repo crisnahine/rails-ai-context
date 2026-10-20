@@ -4,7 +4,7 @@ require "spec_helper"
 
 RSpec.describe RailsAiContext::Percent do
   describe ".floor" do
-    # Mastodon's `be` translates 2728 of 2729 keys. Rounding called that 100.0%
+    # A `be` locale translates 2728 of 2729 keys. Rounding called that 100.0%
     # on the same line that says one key is missing.
     it "never rounds a share short of the whole up to 100" do
       expect(described_class.floor(2728, 2729)).to eq(99.9)

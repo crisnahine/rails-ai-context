@@ -113,9 +113,9 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
   end
 
   describe ".reflected_actions" do
-    # Rails dispatches a controller action with no arguments, so Mastodon's
+    # Rails dispatches a controller action with no arguments, so an
     # after_sign_in_path_for(resource) is none; a mailer action takes them.
-    # Mastodon's BulkMailSettingsConcern does `include ActiveSupport::Concern`,
+    # A BulkMailSettingsConcern does `include ActiveSupport::Concern`,
     # and Redisable adds redis helpers; neither is an email.
     it "keeps only the mail actions a mailer class defines" do
       mixin = Module.new do
@@ -454,7 +454,7 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(%w[show])
     end
 
-    # openfoodnetwork ships both a top-level BaseController and an
+    # An app can ship both a top-level BaseController and an
     # Api::V0::BaseController, and Api::V0::ShopsController inherits the
     # namespaced one. Bare-name-first bound it to the top-level class.
     it "prefers the namespaced parent over a top-level class of the same name" do
@@ -482,7 +482,7 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(%w[index])
     end
 
-    # OpenProject's DocumentTypesController defines `delete_dialog` over an
+    # A DocumentTypesController can define `delete_dialog` over an
     # EnumerationsControllerBase that defines eight, written `::Admin::...`.
     it "gathers every app ancestor's actions, a rooted parent name included" do
       chain = {
@@ -497,7 +497,7 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(%w[index new sort])
     end
 
-    # OpenProject: `class ItemsController < CustomFields::Hierarchy::ItemsBaseController`
+    # `class ItemsController < CustomFields::Hierarchy::ItemsBaseController`
     # inside Admin::Settings::ProjectCustomFields::Hierarchy names Admin::CustomFields::...
     it "resolves a qualified parent name outward when the listing lacks it as written" do
       chain = {

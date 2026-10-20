@@ -40,7 +40,7 @@ RSpec.describe RailsAiContext::Introspectors::SourceCalls do
   end
 
   # A bang method says it changes something, which is the work handed off:
-  # Discourse's badge job does nothing but `GithubBadges.grant!`.
+  # A badge job can do nothing but `GithubBadges.grant!`.
   it "lists any bang method called on a class" do
     source = <<~RUBY
       module Jobs

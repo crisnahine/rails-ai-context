@@ -51,7 +51,7 @@ RSpec.describe RailsAiContext::Doctor do
                                                   "cannot run it there: cannot load such file -- ruby_parser (LoadError)")
       end
 
-      # Mastodon locks brakeman; a static run never loads the app's bundle.
+      # An app can lock brakeman; a static run never loads the app's bundle.
       it "does not tell an app whose lockfile carries brakeman to add it" do
         allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ :machine, "8.0.6" ])
         allow(RailsAiContext::Tools::SecurityScan).to receive(:unbundled_failure).and_return(nil)

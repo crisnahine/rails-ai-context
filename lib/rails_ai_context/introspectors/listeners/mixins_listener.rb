@@ -13,13 +13,6 @@ module RailsAiContext
       class MixinsListener < BaseListener
         MIXIN_MACROS = %i[include prepend extend].to_set.freeze
         ANCESTOR_MACROS = %i[include prepend].to_set.freeze
-        # GitLab's `prepend_mod_with("Note")` mixes in EE::Note and JH::Note, each where that edition defines it;
-        # `prepend_mod` names the class itself.
-        EDITION_MACROS = {
-          include_mod_with: :include, prepend_mod_with: :prepend, extend_mod_with: :extend,
-          include_mod: :include, prepend_mod: :prepend, extend_mod: :extend
-        }.freeze
-        EDITIONS = %w[EE JH].freeze
 
         include OwnerScope
 
@@ -57,7 +50,6 @@ module RailsAiContext
           singleton = self.class.singleton_class_of?(node.receiver) { |inner| inner.nil? || inner.is_a?(Prism::SelfNode) }
           return unless node.receiver.nil? || receiver || singleton
 
-          return record_edition(node, receiver) if EDITION_MACROS.key?(node.name)
           return record_concerning(node) if node.name == :concerning && node.receiver.nil?
 
           macro, arguments = mixin_call(node)
@@ -79,24 +71,6 @@ module RailsAiContext
         end
 
         private
-
-        def record_edition(node, receiver)
-          macro = EDITION_MACROS[node.name]
-          arguments = node.arguments&.arguments || []
-          name = if node.name.end_with?("_with")
-            arguments.first.unescaped if arguments.size == 1 && arguments.first.is_a?(Prism::StringNode)
-          elsif arguments.empty?
-            receiver || @owner_stack.join("::").presence
-          end
-          return unless name
-
-          ancestor = receiver.nil? && @singleton_depth.zero? && ANCESTOR_MACROS.include?(macro)
-          EDITIONS.each do |edition|
-            record = self.class.record(node, macro, "#{edition}::#{name}", ancestor: ancestor, owner: @owner_stack.dup)
-            record[:receiver] = receiver if receiver
-            @results << record.merge(edition: true)
-          end
-        end
 
         # `concerning :Topic do` defines Owner::Topic and mixes it in; `inline`
         # says its body is the block, already read as the class's own.

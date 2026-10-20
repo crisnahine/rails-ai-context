@@ -4,7 +4,7 @@ require "spec_helper"
 require "tmpdir"
 require "fileutils"
 
-# A blank name is not a name. It matched Discourse's
+# A blank name is not a name. It matched a plugin's
 # plugins/.../app/helpers/helper.rb through the `_helper` basename probe and
 # crashed on the empty path it left; elsewhere it was looked up as if it were
 # one. Every by-name lookup answers it up front, the same way.

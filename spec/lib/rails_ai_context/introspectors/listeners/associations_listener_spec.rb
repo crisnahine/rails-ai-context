@@ -137,7 +137,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
     expect(results.first[:location]).to eq(1)
   end
 
-  # Discourse's Searchable concern names one association per model with an
+  # A Searchable concern can name one association per model with an
   # interpolated symbol; `[INFERRED]` is not a name anything can look up.
   it "names an interpolated association with the line the file wrote" do
     results = parse_and_dispatch('has_one :"#{name.underscore}_search_data", dependent: :destroy')
@@ -146,7 +146,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
     expect(results.first[:options]).to include(dependent: :destroy)
   end
 
-  # Discourse writes `class_name: "#{name}CustomField"`; the marker names no
+  # An app can write `class_name: "#{name}CustomField"`; the marker names no
   # class, and the line does.
   it "keeps a computed class_name as the line the file wrote" do
     results = parse_and_dispatch('has_many :_custom_fields, class_name: "#{name}CustomField"')
@@ -154,7 +154,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
     expect(results.first[:options][:class_name]).to eq('"#{name}CustomField"')
   end
 
-  # OpenProject's has_details_table concern writes `belongs_to owner_name`
+  # A has_details_table concern can write `belongs_to owner_name`
   # with a local. As text it reads exactly like `belongs_to :owner_name`, so
   # the record has to say which it was.
   it "marks a name held in a local as computed" do
@@ -170,7 +170,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
     expect(results.first).not_to have_key(:computed_name)
   end
 
-  # OpenProject's `has_details_table do ... end` class_evals its block on a
+  # A `has_details_table do ... end` class_evals its block on a
   # detail class; `tap` and `silence` run theirs on this one. Nothing tells them apart.
   it "keeps a declaration inside a block passed to an unknown method, marked" do
     results = parse_and_dispatch(<<~RUBY)

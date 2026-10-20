@@ -515,7 +515,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
 
     # A mailer's actions are often written as modules mixed into one class -
-    # GitLab keeps 20 of them under app/mailers/emails, holding every
+    # An app can keep 20 of them under app/mailers/emails, holding every
     # notification it sends. Those are a mailer's interface; an interceptor is
     # not, and the framework hook is what tells them apart.
     it "keeps a module whose methods are mailer actions" do
@@ -658,7 +658,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers].map { |m| m[:name] }).to eq(%w[Admin::ReportMailer])
     end
 
-    # Whitehall's MultiNotifications fans one notification out to every author
+    # A MultiNotifications mailer fans one notification out to every author
     # through `self.` methods. Dropping a mailer with no instance action hid a
     # class three models call.
     it "keeps a mailer whose interface is class methods, and names no parent past the app's own mailers or from Rails" do
@@ -686,13 +686,13 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect([ quiet, plain ].map { |m| m[:class_actions] }).to eq([ %w[ping], %w[ping] ])
     end
 
-    # Diaspora's DiasporaDeviseMailer overrides `self.mailer_name` and nothing
+    # A CustomDeviseMailer can override `self.mailer_name` and nothing
     # else. That is ActionMailer configuration, not a method anybody calls.
     it "does not read an ActionMailer class-level override as an interface" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
-        File.write(File.join(dir, "app", "mailers", "diaspora_devise_mailer.rb"), <<~RUBY)
-          class DiasporaDeviseMailer < Devise::Mailer
+        File.write(File.join(dir, "app", "mailers", "custom_devise_mailer.rb"), <<~RUBY)
+          class CustomDeviseMailer < Devise::Mailer
             def self.mailer_name
               "devise/mailer"
             end
@@ -700,12 +700,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         RUBY
       end
 
-      mailer = result[:mailers].find { |m| m[:name] == "DiasporaDeviseMailer" }
+      mailer = result[:mailers].find { |m| m[:name] == "CustomDeviseMailer" }
       expect(mailer[:parent_class]).to eq("Devise::Mailer")
       expect(mailer).not_to have_key(:class_actions)
     end
 
-    # Consul's DeviseMailer overrides one protected method and takes the rest
+    # A DeviseMailer can override one protected method and takes the rest
     # from a gem base. It is still the class the app delivers Devise mail
     # through, and the parent is what says where the actions live.
     it "keeps a mailer that declares no action of its own" do
@@ -728,8 +728,8 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(mailer[:parent_class]).to eq("Devise::Mailer")
     end
 
-    # Consul's ApplicationMailer makes `default_url_options` public and
-    # OpenProject's defines three header helpers. Rails dispatches on all of
+    # One app's ApplicationMailer makes `default_url_options` public, and
+    # another's defines three header helpers. Rails dispatches on all of
     # them, and every subclass inherits them: they are not emails anybody
     # sends, so the base leaves the listing and the answer names it.
     it "leaves a base other mailers inherit from out of the listing" do
@@ -755,11 +755,11 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailer_bases].map { |b| b[:name] }).to eq(%w[ApplicationMailer])
     end
 
-    # Every mailer runs with what its base declares: Mastodon's
+    # Every mailer runs with what its base declares: one
     # ApplicationMailer sets the layout, three helpers and an after_action,
-    # Forem's the from and reply_to defaults. The base record carries them as
+    # another the from and reply_to defaults. The base record carries them as
     # the app wrote them, what it defines, and who inherits it.
-    # OpenProject's ApplicationMailer writes `helper :application, # for
+    # An ApplicationMailer can write `helper :application, # for
     # format_text` across three lines with a comment on each, and reads
     # `default[:from]` inside `class << self` methods. The declaration printed
     # the comments folded into the call, and each read as a `default`.
@@ -908,7 +908,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailer_bases]).to eq([])
     end
 
-    # Diaspora keeps NotificationMailers::Base, a plain class, and twelve
+    # An app can keep NotificationMailers::Base, a plain class, and twelve
     # subclasses that only build header hashes, all under app/mailers. None
     # reaches ActionMailer, so none is a mailer, and the base is nobody's
     # mailer base either.
@@ -939,12 +939,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), <<~RUBY)
           class ApplicationMailer < ActionMailer::Base; end
         RUBY
-        File.write(File.join(dir, "app", "mailers", "diaspora_devise_mailer.rb"), <<~RUBY)
-          class DiasporaDeviseMailer < Devise::Mailer; end
+        File.write(File.join(dir, "app", "mailers", "custom_devise_mailer.rb"), <<~RUBY)
+          class CustomDeviseMailer < Devise::Mailer; end
         RUBY
       end
 
-      expect(result[:mailers].map { |m| m[:name] }).to eq(%w[DiasporaDeviseMailer Notifier])
+      expect(result[:mailers].map { |m| m[:name] }).to eq(%w[CustomDeviseMailer Notifier])
       expect(result[:mailer_bases].map { |b| b[:name] }).to eq(%w[ApplicationMailer])
     end
 
@@ -1014,7 +1014,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers]).to eq([])
     end
 
-    # Canvas keeps `class Mailer < ActionMailer::Base` in app/models. Scanning
+    # One app keeps `class Mailer < ActionMailer::Base` in app/models. Scanning
     # app/mailers alone answered "no mailers found" for an app that sends every
     # notification it has through one.
     it "finds a mailer outside app/mailers" do
@@ -1058,7 +1058,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers].map { |m| m[:name] }).to include("ReceiptMailer")
     end
 
-    # Forem's DeviseMailer and DigestMailer: `action_methods` counts both, but
+    # A DeviseMailer and a DigestMailer: `action_methods` counts both, but
     # a method a callback macro names is a filter and a predicate delivers
     # nothing.
     it "leaves callback filters and predicates out of the actions" do
@@ -1115,7 +1115,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:jobs]).to eq([])
     end
 
-    # A line scan counted a queue named in a comment: OFN's file names
+    # A line scan counted a queue named in a comment: one app's file names
     # config/initializers/sidekiq.rb under one, and the tool said the app
     # declares a queue called "config".
     describe "the Sidekiq config" do
@@ -1152,7 +1152,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         expect(config[:queues]).to eq(%w[critical default])
       end
 
-      # Whitehall wraps its scheduler section in ERB; the queue list above it
+      # An app can wrap its scheduler section in ERB; the queue list above it
       # still reads.
       it "reads a file that computes part of itself in ERB" do
         config = sidekiq_config(<<~YAML)
@@ -1185,7 +1185,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
 
     # A worker that inherits from a base worker carries the include on the
     # parent, so a file that must name a mixin in its own source drops every
-    # one of them: Mastodon reported 97 of its 116 workers, and the missing 19
+    # one of them: one app reported 97 of its 116 workers, and the missing 19
     # were exactly the inheriting ones and the three-line IterableJob mixin.
     describe "workers" do
       def worker_tree(dir)
@@ -1240,7 +1240,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
 
     # A job is a job wherever the app autoloads it. Reading ActiveJob out of
     # app/jobs and Sidekiq out of app/workers dropped every job in the other
-    # directory: Whitehall's 31 workers in app/sidekiq and OpenProject's ~80
+    # directory: one app's 31 workers in app/sidekiq and another's ~80
     # ActiveJob classes in app/workers both answered "No jobs found".
     describe "job directories" do
       it "reads Sidekiq workers out of app/sidekiq" do
@@ -1288,7 +1288,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         expect(result[:workers]).to eq([])
       end
 
-      # Discourse's 236 jobs are Sidekiq workers through Jobs::Base, and the
+      # An app's jobs can be Sidekiq workers through Jobs::Base, and the
       # queue each one declares is on `sidekiq_options`, not `queue_as`: read
       # as ActiveJob they all came back on the default queue.
       it "reads a Sidekiq queue off a job in app/jobs" do
@@ -1414,8 +1414,8 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         expect(result[:workers]).to eq([])
       end
 
-      # Jobs::Base was one of Discourse's 236 jobs, JobBase one of Whitehall's
-      # 32 workers. Neither is a unit of work anyone enqueues.
+      # Jobs::Base was listed as one app's job, JobBase as another's
+      # worker. Neither is a unit of work anyone enqueues.
       it "drops an abstract base another job inherits from" do
         result = static_result do |dir|
           FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
@@ -1542,7 +1542,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
 
       # The listing offers to answer for a base by name, so the record has to
       # carry the file that answer is read from.
-      # Whitehall's PublishingApiRedirectJob sets only `retry: 0`; its queue is
+      # A PublishingApiRedirectJob can set only `retry: 0`; its queue is
       # the one PublishingApiJob declares, and Sidekiq hands it down. The
       # nearest class that sets a key wins it.
       it "reads a worker's options down the app's own chain" do
@@ -1657,7 +1657,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         )
       end
 
-      # OpenProject keeps a PDF style class, Styles::Base, in app/workers, and
+      # An app can keep a PDF style class, Styles::Base, in app/workers, and
       # it has subclasses: a base by name, and no job at all. A job base is one
       # whose own chain reaches ActiveJob or a Sidekiq mixin.
       it "does not call a subclassed class with no job chain a job base" do
@@ -2167,7 +2167,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
 
     # Rails dispatches on none of MultiNotifications' methods, and the class is
-    # still what three Whitehall models send their notifications through.
+    # still what three models send their notifications through.
     it "keeps a mailer whose interface is class methods" do
       entry = with_mailer("FanoutMailer", <<~RUBY) { mailers.find { |m| m[:name] == "FanoutMailer" } }
         class FanoutMailer < ApplicationMailer
@@ -2230,12 +2230,12 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
-    # Forem's DeviseMailer: `use_settings_general_values` is a filter the class
-    # registers on itself, and DigestMailer's `user_follows_any_subforems?` is
+    # A DeviseMailer: `use_settings_general_values` is a filter the class
+    # registers on itself, and DigestMailer's `user_follows_any_subsites?` is
     # a predicate its own action calls.
     it "drops a callback filter and a predicate from the actions" do
-      with_mailer("SubforemMailer", <<~RUBY) do
-        class SubforemMailer < ApplicationMailer
+      with_mailer("SubsiteMailer", <<~RUBY) do
+        class SubsiteMailer < ApplicationMailer
           before_action :use_settings_general_values
 
           def welcome
@@ -2249,9 +2249,9 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           end
         end
       RUBY
-        entry = mailers.find { |m| m[:name] == "SubforemMailer" }
+        entry = mailers.find { |m| m[:name] == "SubsiteMailer" }
 
-        expect(SubforemMailer.action_methods.to_a.map(&:to_s))
+        expect(SubsiteMailer.action_methods.to_a.map(&:to_s))
           .to include("use_settings_general_values", "follows_any?")
         expect(entry[:actions]).to eq(%w[welcome])
       end

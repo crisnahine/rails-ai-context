@@ -833,7 +833,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
           strong_params: [],
           rescue_from: [
             { exception: "ActiveRecord::RecordInvalid", handler: "not_found" },
-            { exception: "Mastodon::NotPermittedError" }
+            { exception: "Social::NotPermittedError" }
           ],
           parent_class: "ApplicationController"
         }
@@ -841,7 +841,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       text = described_class.call(detail: "full").content.first[:text]
 
-      expect(text).to include("- Rescue from: ActiveRecord::RecordInvalid -> not_found, Mastodon::NotPermittedError")
+      expect(text).to include("- Rescue from: ActiveRecord::RecordInvalid -> not_found, Social::NotPermittedError")
     end
 
     it "pairs them on the single-controller answer as well" do

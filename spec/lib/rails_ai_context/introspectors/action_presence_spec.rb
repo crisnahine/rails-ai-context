@@ -77,9 +77,9 @@ RSpec.describe RailsAiContext::Introspectors::ActionPresence do
   it "names an ancestor or included module no app source holds as unread" do
     files = {
       "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  include Pagy::Backend\nend\n",
-      "app/controllers/application_controller.rb" => "class ApplicationController < Spree::BaseController\nend\n"
+      "app/controllers/application_controller.rb" => "class ApplicationController < Shop::BaseController\nend\n"
     }
-    chain_for(files) { |chain| expect(chain.unread).to eq(%w[Pagy::Backend Spree::BaseController]) }
+    chain_for(files) { |chain| expect(chain.unread).to eq(%w[Pagy::Backend Shop::BaseController]) }
   end
 
   it "finds a template at the controller's prefix or an ancestor's" do

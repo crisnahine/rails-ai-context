@@ -183,7 +183,7 @@ module RailsAiContext
     end
 
     # Each directory is listed once per run and a candidate is walked down
-    # from its root, so a name no listing holds costs no stat: OpenProject
+    # from its root, so a name no listing holds costs no stat: a large app
     # names concerns against a hundred roots. A listing matches a segment the
     # way the filesystem does, case-folded where the disk ignores case, so a
     # lookup answers the same inside a run and outside one.

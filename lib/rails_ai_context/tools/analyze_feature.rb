@@ -55,7 +55,7 @@ module RailsAiContext
           return empty_response("No matches found for '#{echo_input(feature)}'. A feature keyword is a word or two, such as 'payment'.")
         end
         ctx = cached_context
-        pattern = feature.downcase
+        pattern = feature
         root = rails_app.root.to_s
         lines = [ "# Feature Analysis: #{feature}", "" ]
         unread = Set.new
@@ -79,7 +79,7 @@ module RailsAiContext
         discover_components(ctx, pattern, lines)
 
         # For auth-related keywords, also discover auth gems
-        if AUTH_KEYWORDS.include?(pattern)
+        if auth_keyword?(pattern)
           notable = Payload.notable_gems(ctx)
           if notable.any?
             auth_gems = notable.select { |g| AUTH_GEM_NAMES.include?(g[:name]) }
@@ -138,12 +138,21 @@ module RailsAiContext
           return false if text.nil? || pattern.nil? || pattern.empty?
 
           text_words = text.to_s.underscore.scan(/[a-z0-9]+/)
-          pattern_words = pattern.to_s.underscore.scan(/[a-z0-9]+/)
-          return false if pattern_words.empty?
+          # A class name splits at its capitals (AIMatchResult) or, where an app
+          # acronym joins them, not at all (Token::ICal in token/ical.rb).
+          [ pattern.to_s.underscore, pattern.to_s.downcase.underscore ].uniq.any? do |form|
+            pattern_words = form.scan(/[a-z0-9]+/)
+            next false if pattern_words.empty?
 
-          text_words.each_cons(pattern_words.size).any? do |window|
-            window.zip(pattern_words).all? { |w, p| w == p || w.singularize == p.singularize }
+            text_words.each_cons(pattern_words.size).any? do |window|
+              window.zip(pattern_words).all? { |w, p| w == p || w.singularize == p.singularize }
+            end
           end
+        end
+
+        # SignUp, sign_up and signup alike.
+        def auth_keyword?(pattern)
+          AUTH_KEYWORDS.include?(pattern.underscore.delete("_"))
         end
 
         def discover_admin(root, pattern, lines)
@@ -160,7 +169,7 @@ module RailsAiContext
           models = Payload.models(ctx)
 
           # For auth-related keywords, also match the User model and auth-related concerns
-          extra_auth_match = AUTH_KEYWORDS.include?(pattern)
+          extra_auth_match = auth_keyword?(pattern)
 
           matched = models.select do |name, data|
             next false if data[:error]
@@ -486,20 +495,23 @@ module RailsAiContext
 
         # --- Test coverage gaps ---
         # A gap is a claim that something has no test, so it reads the name of every test in the suite:
-        # Discourse has 1,672 spec files, and the first 500 missed the ones that cover the feature.
+        # a large suite holds thousands of spec files, and the first 500 can miss the ones that cover it.
         def discover_test_gaps(root, pattern, matched_models, ctx, test_files, lines)
           gaps = []
           # Paths, not basenames: a namespaced name underscores to admin/badges,
           # which no basename can contain, so every namespaced controller was
-          # reported as having no test - Discourse's Admin::BadgesController
+          # reported as having no test, such as an Admin::BadgesController
           # against spec/requests/admin/badges_controller_spec.rb. Every test
           # in the suite, not only those the feature word names: the auth rule
           # matches User for `authentication`, a word its user_test.rb lacks.
           test_basenames = test_files.map { |f| f.to_s.sub(/\.rb\z/, "") }
 
           # Check models
-          matched_models&.each do |name, _data|
-            snake = name.underscore
+          matched_models&.each do |name, data|
+            # The file carries the app's inflection, which underscoring the name here
+            # does not, when it is the model's own file and not one it shares.
+            stem = data[:file].to_s[%r{app/models/(.+)\.rb\z}, 1]
+            snake = stem && Introspectors::DeclaredConstant.path_for?(stem, name) ? stem : name.underscore
             unless test_basenames.any? { |t| t.include?(snake) }
               gaps << "Model `#{name}` - no test file found"
             end

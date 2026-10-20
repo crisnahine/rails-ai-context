@@ -4,8 +4,8 @@ module RailsAiContext
   # What a controller action answers, read from its body through Prism: a
   # redirect, a head status, a JSON or plain-text render, the implicit render,
   # or an answer that depends on a condition this reader does not evaluate.
-  # Plots2's verify_email always redirects to /login; its shortlink redirects
-  # when the user exists and raises when not.
+  # A verify_email action may always redirect to /login, while a shortlink
+  # redirects when the user exists and raises when not.
   module ActionOutcome
     REDIRECTS = %i[redirect_to redirect_back redirect_back_or_to].freeze
     RESPONSES = (REDIRECTS + %i[head render raise respond_with]).freeze

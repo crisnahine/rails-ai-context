@@ -269,7 +269,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
 
     # What decides the restore is whether the app's bundle got onto the load
-    # path, not whether the boot finished. OpenProject and Canvas fail inside
+    # path, not whether the boot finished. Some apps fail inside
     # Bundler.setup; an app whose initializer raises fails after Bundler.require
     # has already loaded half its gems, and dropping their paths then left
     # ActiveSupport unable to finish loading and mcp loaded from two versions.

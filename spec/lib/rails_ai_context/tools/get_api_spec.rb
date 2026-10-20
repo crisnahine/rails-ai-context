@@ -144,10 +144,10 @@ RSpec.describe RailsAiContext::Tools::GetApi do
 
       it "names the middleware a CORS initializer with no allow block inserts" do
         api_data[:cors_config] = { file: "config/initializers/008-rack-cors.rb", origins: [], allows: [],
-                                   inserts: [ "Discourse::Cors" ] }
+                                   inserts: [ "Forum::Cors" ] }
         text = described_class.call(detail: "standard").content.first[:text]
 
-        expect(text).to include("**CORS:** config/initializers/008-rack-cors.rb (no allow block; inserts Discourse::Cors)")
+        expect(text).to include("**CORS:** config/initializers/008-rack-cors.rb (no allow block; inserts Forum::Cors)")
       end
 
       it "says the same thing in the summary and in the detail" do

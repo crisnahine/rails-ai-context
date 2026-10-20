@@ -10,7 +10,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AutoloadPathsListener d
 
   it "reads every literal form an app adds a root with" do
     source = <<~RUBY
-      module OpenProject
+      module Tracker
         class Application < Rails::Application
           config.autoload_paths << "lib_static"
           config.eager_load_paths += %W(\#{config.root}/modules/shared \#{config.root}/app/extra)

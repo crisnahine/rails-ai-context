@@ -194,7 +194,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
-    # Mastodon's Instances::DomainBlocksController: Api::BaseController, Instances::BaseController and the class each call vary_by.
+    # An Instances::DomainBlocksController: Api::BaseController, Instances::BaseController and the class each call vary_by.
     it "keeps one block per class that declares it when the classes share the block's name" do
       Dir.mktmpdir do |dir|
         app_with_base(dir)
@@ -224,7 +224,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
-    # Mastodon's AboutController runs four filters from WebAppControllerConcern
+    # An AboutController runs four filters from WebAppControllerConcern
     # and set_locale from the Localized its parent includes; the static walk
     # read only the two class bodies and listed none of them.
     it "carries the filters of the concerns the class and its parent include" do
@@ -733,7 +733,7 @@ RSpec.describe RailsAiContext::ActionFilters do
 
   # An ancestor's own skip record joined the dropped set only after its own
   # filters had been selected, so the skip was reported as a filter the child
-  # runs. Mastodon's Api::BaseController skips require_functional! and every
+  # runs. An Api::BaseController skipped require_functional!, and every
   # Api::V1 controller listed it as inherited.
   it "never reports an ancestor's skip as a filter the child runs" do
     ctx = { controllers: { controllers: {

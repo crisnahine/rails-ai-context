@@ -309,7 +309,7 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
 
       # `self.inheritance_column = nil` is how an app turns STI off; a private
       # API app does it on a model with a `type` column of its own.
-      # Mastodon's PreviewCard and BulkImport write `false`.
+      # Some apps write `false`.
       it "reads an inheritance column set to nil, false or :_type_disabled as STI off" do
         %w[nil false :_type_disabled "_type_disabled"].each do |value|
           patterns = patterns_for(
@@ -434,7 +434,7 @@ end
         FileUtils.mkdir_p(File.join(dir, "app", "views", "orders"))
         FileUtils.mkdir_p(File.join(dir, "app", "javascript"))
         File.write(File.join(dir, "app", "javascript", "application.js"), "import \"controllers\"\n")
-        %w[mastodon/main.tsx mastodon/api.ts mastodon/old.jsx controllers/hello_controller.ts].each do |file|
+        %w[social/main.tsx social/api.ts social/old.jsx controllers/hello_controller.ts].each do |file|
           FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "javascript", file)))
           File.write(File.join(dir, "app", "javascript", file), "export {}\n")
         end
@@ -516,7 +516,7 @@ end
     end
 
     it "does not read a react component named *_controller as stimulus" do
-      arch = architecture_for("app/javascript/mastodon/components/alerts_controller.tsx",
+      arch = architecture_for("app/javascript/social/components/alerts_controller.tsx",
                               %(import { useState } from "react";\n))
 
       expect(arch).not_to include("stimulus")

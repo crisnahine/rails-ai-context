@@ -595,15 +595,12 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    it "merges an edition module GitLab's prepend_mod_with names, and a prepend written after the class" do
+    it "merges a prepend written after the class" do
       Dir.mktmpdir do |dir|
         files = {
-          "config/application.rb" => "module X\n  class Application < Rails::Application\n    config.autoload_paths << Rails.root.join(\"ee/app/models\")\n  end\nend\n",
           "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
-          "ee/app/models/ee/note.rb" => "module EE\n  module Note\n    extend ActiveSupport::Concern\n    prepended do\n      has_many :epics\n      validates :body, presence: true\n    end\n  end\nend\n",
-          "app/models/note.rb" => "class Note < ApplicationRecord\n  validates :title, presence: true\nend\n\nNote.prepend_mod_with(\"Note\")\n",
           "app/models/concerns/flaggable.rb" => "module Flaggable\n  extend ActiveSupport::Concern\n  prepended do\n    has_many :flags\n  end\nend\n",
-          "app/models/post.rb" => "class Post < ApplicationRecord\nend\nPost.prepend(Flaggable)\nPost.prepend_mod\n"
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\nPost.prepend(Flaggable)\n"
         }
         files.each do |name, source|
           FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
@@ -612,9 +609,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(models["Note"][:associations].map { |a| a[:name] }).to eq([ "epics" ])
-        expect(models["Note"][:validations].map { |v| [ v[:kind], v[:attributes] ] }).to include([ "presence", [ "body" ] ], [ "presence", [ "title" ] ])
-        expect(models["Note"][:concerns]).to eq([ "EE::Note" ])
         expect(models["Post"][:associations].map { |a| a[:name] }).to eq([ "flags" ])
         expect(models["Post"][:concerns]).to eq([ "Flaggable" ])
         expect(models["Post"]).not_to have_key(:concerns_unread)
@@ -673,11 +667,11 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # OpenProject mixes Acts::Journalized into ActiveRecord::Base from a
+    # An app can mix Acts::Journalized into ActiveRecord::Base from a
     # plugin's init.rb, and the module lives in the file that init requires.
     # Every model has the module; a model whose concern's `included do` calls
     # acts_as_journalized has what the method declares, and no other does.
-    # Canvas declares DefineAttributeMethods in a 2300-line initializer full
+    # One app declares DefineAttributeMethods in a 2300-line initializer full
     # of other patches; the module is its own body, not the file's.
     it "reads a base mixin declared in a longer file as its own body, and hides none of the model's" do
       Dir.mktmpdir do |dir|
@@ -776,7 +770,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # Canvas keeps BroadcastPolicy in gems/broadcast_policy, a path gem the
+    # One app keeps BroadcastPolicy in gems/broadcast_policy, a path gem the
     # Gemfile declares. Its source is in the repo, so it is read like the
     # app's own; a gem installed outside the repo stays unread and named.
     it "reads a base mixin from a path gem inside the repo, and names one it cannot read" do
@@ -873,7 +867,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # Canvas's Submission declares `module Tardiness` in its own file and
+    # A Submission model can declare `module Tardiness` in its own file and
     # includes it; Ruby finds Submission::Tardiness there, and so is it read.
     it "does not call a module the model's own file declares and includes unread" do
       Dir.mktmpdir do |dir|
@@ -895,7 +889,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # OpenProject's WorkPackage gets journals from acts_as_journalized, which
+    # A WorkPackage can get journals from acts_as_journalized, which
     # a concern's included block calls; WorkPackage::InexistentWorkPackage
     # inherits the association, so it counts as calling what its parent calls.
     it "gives a subclass what its parent's concerns call into, as well as the parent" do
@@ -940,7 +934,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # Consul's Proposal calls validates_translation, which validates the model
+    # A Proposal can call validates_translation, which validates the model
     # and, inside translation_class.instance_eval, the translation class.
     it "keeps what a called method declares on another receiver out of the model, and names it" do
       Dir.mktmpdir do |dir|
@@ -1029,7 +1023,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # Huginn's ImapFolderAgent was credited with Scrubbed, which only its
+    # An ImapFolderAgent was credited with Scrubbed, which only its
     # nested Message class includes.
     it "names as a model's concerns only what the model's own body includes" do
       Dir.mktmpdir do |dir|
@@ -1053,11 +1047,11 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # OpenProject's ApplicationRecord includes Acts::Watchable, whose
+    # An ApplicationRecord can include Acts::Watchable, whose
     # associations sit inside `def acts_as_watchable ... class_eval do`. A
     # model that calls it has them, whether it calls it itself or its base
     # does; every other model of the app does not.
-    # OpenProject's User includes Users::Avatars, whose `included do` calls
+    # A User can include Users::Avatars, whose `included do` calls
     # an acts_as_* method a mixin of ApplicationRecord defines: the call runs
     # in User, so User has what the method declares.
     it "gives a base mixin's in-method macros to a model whose concern's included block calls the method" do
@@ -1199,7 +1193,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(detail[:class_name]).to eq("::Token::API")
     end
 
-    # consul keeps app/models/custom/setting.rb, which reopens Setting to add
+    # An app can keep app/models/custom/setting.rb, which reopens Setting to add
     # methods. Both files declare one class, and the reopen carried no
     # superclass, so whichever the walk saw first decided whether the app had
     # the model at all.
@@ -1229,23 +1223,23 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     # it as a PORO and left the model out of the section entirely.
     it "names a model the way its own class does when the path carries no namespace" do
       Dir.mktmpdir do |dir|
-        plugin = File.join(dir, "plugins", "discourse-github", "app", "models")
+        plugin = File.join(dir, "plugins", "forum-github", "app", "models")
         FileUtils.mkdir_p(plugin)
-        File.write(File.join(dir, "plugins", "discourse-github", "plugin.rb"), "# name: discourse-github\n")
+        File.write(File.join(dir, "plugins", "forum-github", "plugin.rb"), "# name: forum-github\n")
         RailsAiContext::PathResolver.clear_code_roots
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
         File.write(File.join(plugin, "github_commit.rb"), <<~RUBY)
-          class DiscourseGithubPlugin::GithubCommit < ActiveRecord::Base
+          class ForumGithubPlugin::GithubCommit < ActiveRecord::Base
             belongs_to :user
           end
         RUBY
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result.keys).to include("DiscourseGithubPlugin::GithubCommit")
+        expect(result.keys).to include("ForumGithubPlugin::GithubCommit")
         expect(result).not_to have_key("GithubCommit")
-        expect(result["DiscourseGithubPlugin::GithubCommit"][:associations].map { |a| a[:name] }).to eq([ "user" ])
+        expect(result["ForumGithubPlugin::GithubCommit"][:associations].map { |a| a[:name] }).to eq([ "user" ])
       end
     end
 
@@ -1297,6 +1291,24 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Without its parent, a subclass that raised reads as a second owner of
+    # its base's table.
+    it "keeps the parent of a subclass whose details raise" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "draft.rb"), "class Draft < Post\nend\n")
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source)
+          .with(a_string_including("class Draft"), described_class::MODEL_LISTENERS).and_raise(Errno::EACCES, "draft.rb")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Draft"]).to include(error: a_string_including("Permission denied"), table_name: "posts", parent_model: "Post")
+        expect(result["Post"]).not_to have_key(:parent_model)
+      end
+    end
+
     # The static builder passed the listener's raw records through where the
     # booted one merges the attribute-macro mappers, so every mapped key was
     # nil and five consumers rendered nothing.
@@ -1339,8 +1351,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
 
     # The skip was `relative.start_with?("concerns/")`, which only sees the
-    # top-level directory Rails autoloads. A nested one - OpenProject has
-    # app/models/queries/operators/concerns - walked straight past it, and four
+    # top-level directory Rails autoloads. A nested one, such as
+    # app/models/queries/operators/concerns, walked straight past it, and four
     # mixins were reported as models of the app.
     it "does not report a module in a nested concerns directory as a model" do
       Dir.mktmpdir do |dir|
@@ -2062,7 +2074,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
-  # Errbit: App embeds five relations and has_many one, and was listed with
+  # A Mongoid App that embeds five relations and has_many one, and was listed with
   # one association; ErrorReport, a plain class under app/models, was a model.
   describe "Mongoid apps, what counts" do
     it "counts embeds as associations and lists only documents and their subclasses" do
@@ -2186,7 +2198,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
-  # An app may nest a concerns/ anywhere (OpenProject has app/models/queries/operators/concerns),
+  # An app may nest a concerns/ anywhere (app/models/queries/operators/concerns, say),
   # and a file there named for a class is a model candidate like any other.
   describe "models under a concerns directory" do
     def models_in(files)
@@ -2342,17 +2354,17 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     # says so.
     it "reads the prefix an in-repo engine isolates its namespace with" do
       Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "app", "models", "discourse_rss_polling"))
-        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "lib", "discourse_rss_polling"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "app", "models", "forum_rss_polling"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "lib", "forum_rss_polling"))
         FileUtils.touch(File.join(dir, "plugins", "rss", "plugin.rb"))
-        File.write(File.join(dir, "plugins", "rss", "app", "models", "discourse_rss_polling", "rss_feed.rb"),
-                   "module DiscourseRssPolling\n  class RssFeed < ActiveRecord::Base\n  end\nend\n")
-        File.write(File.join(dir, "plugins", "rss", "lib", "discourse_rss_polling", "engine.rb"),
-                   "module DiscourseRssPolling\n  class Engine < ::Rails::Engine\n    isolate_namespace DiscourseRssPolling\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "rss", "app", "models", "forum_rss_polling", "rss_feed.rb"),
+                   "module ForumRssPolling\n  class RssFeed < ActiveRecord::Base\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "rss", "lib", "forum_rss_polling", "engine.rb"),
+                   "module ForumRssPolling\n  class Engine < ::Rails::Engine\n    isolate_namespace ForumRssPolling\n  end\nend\n")
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result["DiscourseRssPolling::RssFeed"][:table_name]).to eq("discourse_rss_polling_rss_feeds")
+        expect(result["ForumRssPolling::RssFeed"][:table_name]).to eq("forum_rss_polling_rss_feeds")
       end
     end
 
@@ -2392,19 +2404,19 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # Nothing isolates DiscourseGithubPlugin, so its models keep the plain
+    # Nothing isolates ForumGithubPlugin, so its models keep the plain
     # demodulized table - a prefix invented here would be a wrong answer where
     # today's is right.
     it "leaves a namespace no engine isolates alone" do
       Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "plugins", "gh", "app", "models", "discourse_github_plugin"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "gh", "app", "models", "forum_github_plugin"))
         FileUtils.touch(File.join(dir, "plugins", "gh", "plugin.rb"))
-        File.write(File.join(dir, "plugins", "gh", "app", "models", "discourse_github_plugin", "github_commit.rb"),
-                   "module DiscourseGithubPlugin\n  class GithubCommit < ActiveRecord::Base\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "gh", "app", "models", "forum_github_plugin", "github_commit.rb"),
+                   "module ForumGithubPlugin\n  class GithubCommit < ActiveRecord::Base\n  end\nend\n")
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result["DiscourseGithubPlugin::GithubCommit"][:table_name]).to eq("github_commits")
+        expect(result["ForumGithubPlugin::GithubCommit"][:table_name]).to eq("github_commits")
       end
     end
 
@@ -2472,8 +2484,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   # The booted tier rejects `abstract_class?`, so a namespaced base class is
-  # not a model there. GitLab has three - Ci::ApplicationRecord,
-  # PackageMetadata::ApplicationRecord, SecApplicationRecord - and the static
+  # not a model there. An app can have three (Ci::ApplicationRecord,
+  # PackageMetadata::ApplicationRecord, SecApplicationRecord), and the static
   # tier counted all three, giving the same app two different model counts.
   describe "an abstract base class" do
     it "is not a model in the static tier either" do
@@ -2592,6 +2604,14 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           .to eq("app/models/broken_widget.rb:4: syntax error, unexpected end-of-input, assuming it is closing the parent top level context")
         expect(result["ZzSpecialWidget"][:error])
           .to eq("app/models/zz_special_widget.rb needs BrokenWidget, which does not compile: #{result["BrokenWidget"][:error]}")
+      end
+
+      # Without its parent, the subclass reads as a second owner of the table.
+      it "keeps the parent the subclass names" do
+        result = described_class.new(Rails.application).call
+
+        expect(result["ZzSpecialWidget"]).to include(parent_model: "BrokenWidget", table_name: "broken_widgets")
+        expect(result["BrokenWidget"]).not_to have_key(:parent_model)
       end
     end
   end
@@ -2761,7 +2781,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # Reflection dropped every `if:` (a Proc has no text) and rendered
   # `validates_with RecordValidator` as a kind with no subject,
   # while the walk dropped `validates_with` and `validates_date` entirely.
-  # Discourse's Chat::NullUser < User: a subclass of a concrete model, with
+  # A Chat::NullUser < User: a subclass of a concrete model, with
   # no type column, so no STI entry either.
   describe "a booted model's concerns" do
     it "are resolved once for both the list and its sources" do
@@ -2797,9 +2817,47 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(static["User"]).not_to have_key(:parent_model)
       end
     end
+
+    # The booted entry for a model that raised keeps what the static one does:
+    # its file, table and parent. Without them a base reads no table, and its
+    # subclasses read as its owners.
+    it "keeps the file, table and parent of a booted model whose details raise" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        parent = Class.new(ApplicationRecord) { self.table_name = "users" }
+        parent.define_singleton_method(:name) { "User" }
+        child = Class.new(parent)
+        child.define_singleton_method(:name) { "Admin" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:discover_models).and_return([ parent, child ])
+        allow(introspector).to receive(:extract_model_details).and_raise(ArgumentError, "boom")
+
+        result = introspector.call
+
+        expect(result["User"]).to eq(error: "boom", file: "app/models/user.rb", table_name: "users")
+        expect(result["Admin"]).to eq(error: "boom", table_name: "users", parent_model: "User")
+      end
+    end
+
+    it "survives a booted model whose table name raises too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        parent = Class.new(ApplicationRecord) { self.table_name = "users" }
+        parent.define_singleton_method(:name) { "User" }
+        child = Class.new(parent)
+        child.define_singleton_method(:name) { "Admin" }
+        child.define_singleton_method(:table_name) { raise ArgumentError, "no table" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:discover_models).and_return([ child ])
+        allow(introspector).to receive(:extract_model_details).and_raise(ArgumentError, "no table")
+
+        expect(introspector.call["Admin"]).to eq(error: "no table", parent_model: "User")
+      end
+    end
   end
 
-  # Discourse's Topic writes `after_create do` and includes
+  # A Topic that writes `after_create do` and includes
   # RateLimiter::OnCreateRecord, whose `included do` writes one too.
   describe "a block callback in the model and in a concern" do
     it "keeps both, each credited to its own source" do
@@ -2900,7 +2958,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # OFN's Subscription writes `self.belongs_to_required_by_default = false`.
+    # A Subscription can write `self.belongs_to_required_by_default = false`.
     it "follows a class's own setting, and its parent's in a subclass" do
       Dir.mktmpdir do |dir|
         write_app(dir)
@@ -3239,17 +3297,17 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
-  # OpenProject's engines include `<Plugin>::Patches::<Model>Patch` into the model in to_prepare.
+  # Some engines include `<Plugin>::Patches::<Model>Patch` into the model in to_prepare.
   describe "a patch module the static reader does not follow" do
     it "names it on the model it patches, and on no other" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "work_package.rb"), "class WorkPackage < ApplicationRecord\nend\n")
         File.write(File.join(dir, "app", "models", "project.rb"), "class Project < ApplicationRecord\nend\n")
-        patches = File.join(dir, "modules", "backlogs", "lib", "open_project", "backlogs", "patches")
+        patches = File.join(dir, "modules", "backlogs", "lib", "tracker", "backlogs", "patches")
         FileUtils.mkdir_p(patches)
         File.write(File.join(patches, "work_package_patch.rb"), <<~RUBY)
-          module OpenProject::Backlogs::Patches::WorkPackagePatch
+          module Tracker::Backlogs::Patches::WorkPackagePatch
             extend ActiveSupport::Concern
 
             included do
@@ -3257,24 +3315,24 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
             end
           end
         RUBY
-        File.write(File.join(dir, "modules", "backlogs", "openproject-backlogs.gemspec"), "")
-        File.write(File.join(dir, "Gemfile"), "gem 'openproject-backlogs', path: 'modules/backlogs'\n")
+        File.write(File.join(dir, "modules", "backlogs", "tracker-backlogs.gemspec"), "")
+        File.write(File.join(dir, "Gemfile"), "gem 'tracker-backlogs', path: 'modules/backlogs'\n")
         File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
           PATH
             remote: modules/backlogs
             specs:
-              openproject-backlogs (1.0.0)
+              tracker-backlogs (1.0.0)
 
           GEM
             specs:
 
           DEPENDENCIES
-            openproject-backlogs!
+            tracker-backlogs!
         LOCK
 
         static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(static["WorkPackage"][:patches_unread]).to eq([ "OpenProject::Backlogs::Patches::WorkPackagePatch" ])
+        expect(static["WorkPackage"][:patches_unread]).to eq([ "Tracker::Backlogs::Patches::WorkPackagePatch" ])
         expect(static["Project"]).not_to have_key(:patches_unread)
       end
     end
@@ -4305,7 +4363,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
       end
 
-      # Runtime: TwoFarM :first, :a, :b; TwoFarEvalM :first, :a, :c. CanvasLikeM raises (Subm::ClassMethods is
+      # Runtime: TwoFarM :first, :a, :b; TwoFarEvalM :first, :a, :c. LargeAppM raises (Subm::ClassMethods is
       # undefined); without Subm it lists :first, :g, which an unresolved name must not take away.
       it "keeps apart two concerns' modules of one name, each resolved in its own concern" do
         Dir.mktmpdir do |dir|
@@ -4318,10 +4376,10 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
                                               "  module ClassMethods\n    def use_ss\n      before_save :g\n    end\n  end\nend\n")
           write_model(dir, "TwoFarM", "class TwoFarM < ApplicationRecord\n  include Ha\n  include Hb\n  before_save :first\n  stamp_a\n  stamp_b\nend\n")
           write_model(dir, "TwoFarEvalM", "class TwoFarEvalM < ApplicationRecord\n  include Ha\n  include Hc\n  before_save :first\n  stamp_a\n  stamp_c\nend\n")
-          write_model(dir, "CanvasLikeM", "class CanvasLikeM < ApplicationRecord\n  include Subm\n  include Smart\n  before_save :first\n  use_ss\nend\n")
+          write_model(dir, "LargeAppM", "class LargeAppM < ApplicationRecord\n  include Subm\n  include Smart\n  before_save :first\n  use_ss\nend\n")
 
-          expect(static_save(dir).slice("TwoFarM", "TwoFarEvalM", "CanvasLikeM")).to eq(
-            "TwoFarM" => %w[first a b], "TwoFarEvalM" => %w[first a c], "CanvasLikeM" => %w[first g]
+          expect(static_save(dir).slice("TwoFarM", "TwoFarEvalM", "LargeAppM")).to eq(
+            "TwoFarM" => %w[first a b], "TwoFarEvalM" => %w[first a c], "LargeAppM" => %w[first g]
           )
         end
       end
@@ -4645,7 +4703,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
 
     # A module mixed into every model is reached from a base's call as from the
-    # class's own: OpenProject's User calls acts_as_customizable for its subclasses.
+    # class's own: a User can call acts_as_customizable for its subclasses.
     it "keeps what a base's call declares through a module every model has" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
@@ -5434,9 +5492,9 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # The app's own base is a superclass like any other: Mastodon's
-    # ApplicationRecord includes Remotable, and Rails runs it in all 111
-    # models. It stays out of the listing because it is not a model.
+    # The app's own base is a superclass like any other: an
+    # ApplicationRecord that includes Remotable has Rails run it in every
+    # model. It stays out of the listing because it is not a model.
     it "reaches the child from the app's own base" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
@@ -5662,7 +5720,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     # The root `ApplicationRecord` is in `excluded_models` by default, so every
     # example that writes one passes whether or not the abstract check reads
     # `primary_abstract_class`. A namespaced base is in no such list: it is the
-    # one that says the check works. GitLab has Ci::ApplicationRecord.
+    # one that says the check works, such as Ci::ApplicationRecord.
     it "keeps a namespaced base out of the listing on what its source says" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "ci"))

@@ -242,9 +242,9 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
     end
 
     it "names the exception alone for a block form, which records no handler" do
-      data = { rescue_from: [ { exception: "Mastodon::NotPermittedError" } ] }
+      data = { rescue_from: [ { exception: "Social::NotPermittedError" } ] }
 
-      expect(described_class.rescue_handler_lines(data)).to eq([ "Mastodon::NotPermittedError" ])
+      expect(described_class.rescue_handler_lines(data)).to eq([ "Social::NotPermittedError" ])
     end
 
     it "answers an empty list for a controller with no rescue_from" do

@@ -132,7 +132,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
   end
 
   # The Rules and the tools guide tell the reader how to behave; the data above
-  # them is what the MCP tools can answer in full. OFN sat exactly on the
+  # them is what the MCP tools can answer in full. One app sat exactly on the
   # budget, so one added Stack line dropped the last rule off four files.
   describe "#enforce_max_lines with a kept tail" do
     let(:rules) { [ "## Rules", "- rule one", "- rule two", "" ] }
@@ -324,7 +324,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
   end
 
   # An app that runs every piece of background work through Sidekiq had its
-  # whole async story left out of the line: Whitehall's 31 workers read as
+  # whole async story left out of the line: its 31 workers read as
   # "Async: 1 mailer".
   describe "the async line" do
     let(:async_host) do

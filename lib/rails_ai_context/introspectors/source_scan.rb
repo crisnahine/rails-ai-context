@@ -18,7 +18,7 @@ module RailsAiContext
       module_function
 
       # A run asks for the same kinds again and again (app/models five times on
-      # OpenProject), and the glob plus a realpath per file was a fifth of its CPU.
+      # one large app), and the glob plus a realpath per file was a fifth of its CPU.
       def paths(root, kind:, skip_concerns: true, &block)
         return enum_for(:paths, root, kind: kind, skip_concerns: skip_concerns) unless block
 

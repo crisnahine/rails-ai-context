@@ -238,7 +238,7 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
-    # OpenProject keeps it in config/initializers/rack-cors.rb, which the api
+    # An app can keep it in config/initializers/rack-cors.rb, which the api
     # section already reads; the two sections name one file.
     it "finds the CORS initializer the api section reads" do
       Dir.mktmpdir do |dir|

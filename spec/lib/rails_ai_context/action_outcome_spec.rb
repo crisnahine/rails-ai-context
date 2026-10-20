@@ -45,7 +45,7 @@ RSpec.describe RailsAiContext::ActionOutcome do
     expect(outcome("render plain: \"ok\", status: :accepted")).to eq(kind: :plain, status: :accepted, content_type: "text/plain")
   end
 
-  # Whitehall's show calls fetch_version_and_remark_trails, which only loads
+  # A show action can call fetch_version_and_remark_trails, which only loads
   # records: calling a helper is no answer unless the helper gives one.
   it "reads a helper that answers nothing as no answer" do
     helper = "  def load_trails\n    @trails = Trail.all\n  end"

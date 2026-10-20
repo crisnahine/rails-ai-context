@@ -130,7 +130,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ScopesListener do
   # Folding every newline to a space ran two statements together, so the body
   # read as Ruby the file never wrote and still claimed to be verified.
   describe "a body of more than one statement" do
-    it "separates the statements of OFN's not_ready_for_checkout" do
+    it "separates the statements of a not_ready_for_checkout scope" do
       results = parse_and_dispatch(<<~RUBY)
         scope :not_ready_for_checkout, lambda {
           ready_enterprises = Enterprise.default_scoped.ready_for_checkout.
@@ -153,7 +153,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ScopesListener do
       expect(Prism.parse("lambda { #{results.first[:body]} }")).to be_success
     end
 
-    it "separates the statements of Whitehall's due_for_publication" do
+    it "separates the statements of a due_for_publication scope" do
       results = parse_and_dispatch(<<~RUBY)
         scope :due_for_publication, ->(within_time = 0) {
           cutoff = Time.zone.now + within_time
@@ -234,7 +234,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ScopesListener do
     end
   end
 
-  # Whitehall's authored_by passes SQL as a plain string written across
+  # An authored_by scope can pass SQL as a plain string written across
   # lines; the fold left the newlines inside it and the row ran on.
   it "respells a multi-line string literal on one line, as the same string" do
     results = parse_and_dispatch(<<~'RUBY')

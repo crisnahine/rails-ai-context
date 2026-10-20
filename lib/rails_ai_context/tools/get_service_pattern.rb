@@ -105,7 +105,7 @@ module RailsAiContext
 
         unless file
           # The constants the files declare, as the listing names them: the
-          # camelized path spells Activitypub:: where Mastodon writes ActivityPub::.
+          # camelized path spells Activitypub:: where the app writes ActivityPub::.
           available = service_records(service_files, service_dirs, root, lookup).filter_map { |r| r[:class_name] }.uniq
           return not_found_response("Service", service, available.sort,
             recovery_tool: "Call rails_get_service_pattern(detail:\"summary\") to see all services")

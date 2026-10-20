@@ -31,7 +31,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
   end
 
-  # Discourse writes `enum :status, Statuses.to_h`; the rules printed [INFERRED] as its value.
+  # An app can write `enum :status, Statuses.to_h`; the rules printed [INFERRED] as its value.
   it "writes a computed enum as its source, marked computed" do
     ctx = serializer_context(models: {
       "Topic" => { associations: [ { type: :has_many, name: :posts } ], validations: [], table_name: "topics",

@@ -124,7 +124,7 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
           "account.rb" => "class Account < ApplicationRecord\n  has_and_belongs_to_many :tags\nend\n" }
       end
 
-      # Mastodon's accounts_tags has primary_key: ["tag_id", "account_id"]; the
+      # An accounts_tags table with primary_key: ["tag_id", "account_id"]; the
       # key's index serves tag_id, and the check suggested adding one.
       it "counts a composite primary key's leading column as indexed" do
         missing = missing_for(<<~RUBY, accounts_tags_models)
@@ -278,7 +278,7 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         expect(missing).to be_empty
       end
 
-      # Mastodon's accounts_tags holds Tag's has_and_belongs_to_many :accounts.
+      # An accounts_tags table holds Tag's has_and_belongs_to_many :accounts.
       it "reports the join table columns a has_and_belongs_to_many reads" do
         models = { "tag.rb" => "class Tag < ApplicationRecord\n  has_and_belongs_to_many :accounts\nend\n",
                    "account.rb" => "class Account < ApplicationRecord\nend\n" }
@@ -299,7 +299,7 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
       end
 
       # structure.sql and the migration replay name a key's tables from_table
-      # and to_table, and a check reading `from` counted none of them: Diaspora's
+      # and to_table, and a check reading `from` counted none of them: one app's
       # three signature_order_id keys, declared and unindexed, went unreported.
       it "reports a column a structure.sql foreign key declares" do
         Dir.mktmpdir do |dir|
@@ -345,8 +345,8 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         end
       end
 
-      # The check read the model file alone: Diaspora's belongs_to
-      # :signature_order sits in a concern, and OpenProject's parent_id columns
+      # The check read the model file alone: a belongs_to
+      # :signature_order can sit in a concern, and parent_id columns can
       # come from acts_as_tree and from an acts_as_nested_set in a concern.
       it "reads associations from concerns and parent keys from tree macros" do
         models = {
@@ -439,25 +439,25 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         end
       end
 
-      # Rails strips the shared prefix: spree_roles and spree_users join
-      # through spree_roles_users, not spree_roles_spree_users.
+      # Rails strips the shared prefix: shop_roles and shop_users join
+      # through shop_roles_users, not shop_roles_shop_users.
       it "names a habtm join table the way Rails does" do
         models = {
-          "spree/role.rb" => "module Spree\n  class Role < ApplicationRecord\n    self.table_name = \"spree_roles\"\n    has_and_belongs_to_many :users, class_name: \"Spree::User\"\n  end\nend\n",
-          "spree/user.rb" => "module Spree\n  class User < ApplicationRecord\n    self.table_name = \"spree_users\"\n  end\nend\n"
+          "shop/role.rb" => "module Shop\n  class Role < ApplicationRecord\n    self.table_name = \"shop_roles\"\n    has_and_belongs_to_many :users, class_name: \"Shop::User\"\n  end\nend\n",
+          "shop/user.rb" => "module Shop\n  class User < ApplicationRecord\n    self.table_name = \"shop_users\"\n  end\nend\n"
         }
         missing = missing_for(<<~RUBY, models)
-          create_table "spree_roles_users", id: false do |t|
+          create_table "shop_roles_users", id: false do |t|
             t.integer "role_id"
             t.integer "user_id"
           end
         RUBY
 
         expect(missing.map { |m| [ m[:table], m[:column] ] })
-          .to contain_exactly([ "spree_roles_users", "role_id" ], [ "spree_roles_users", "user_id" ])
+          .to contain_exactly([ "shop_roles_users", "role_id" ], [ "shop_roles_users", "user_id" ])
       end
 
-      # OpenProject's journal tables inherit belongs_to :author from an
+      # Journal tables can inherit belongs_to :author from an
       # abstract Journal::BaseJournal: the check reads the association list
       # the models section resolves, bases included.
       it "reads an association a model inherits from its abstract base" do
@@ -513,14 +513,14 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         end
       end
 
-      # `has_many :payments` inside Spree::Order is Spree::Payment, as Rails
+      # `has_many :payments` inside Shop::Order is Shop::Payment, as Rails
       # and the dependency graph read it, so the unindexed key to report is
-      # spree_payments.order_id, not the top-level Payment's.
+      # shop_payments.order_id, not the top-level Payment's.
       it "credits a has_many's key to the class the owner's namespace resolves" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "db"))
           File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
-            create_table "spree_payments" do |t|
+            create_table "shop_payments" do |t|
               t.bigint "order_id"
             end
             create_table "payments" do |t|
@@ -529,14 +529,14 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
           RUBY
           introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
           introspector.context = { models: {
-            "Spree::Order" => { table_name: "spree_orders", associations: [ { type: "has_many", name: "payments" } ] },
-            "Spree::Payment" => { table_name: "spree_payments", associations: [] },
+            "Shop::Order" => { table_name: "shop_orders", associations: [ { type: "has_many", name: "payments" } ] },
+            "Shop::Payment" => { table_name: "shop_payments", associations: [] },
             "Payment" => { table_name: "payments", associations: [] }
           } }
 
           missing = introspector.call[:missing_fk_indexes].map { |m| [ m[:table], m[:column] ] }
 
-          expect(missing).to eq([ %w[spree_payments order_id] ])
+          expect(missing).to eq([ %w[shop_payments order_id] ])
         end
       end
 
@@ -901,6 +901,74 @@ end
     it "provides suggestions for Model.all findings" do
       finding = result[:model_all_in_controllers].find { |f| f[:model] == "Post" }
       expect(finding[:suggestion]).to include("pagination")
+    end
+
+    it "names a namespaced model's Model.all by the constant the controller reaches" do
+      Dir.mktmpdir do |dir|
+        {
+          "app/models/admin/post.rb" => "module Admin\n  class Post < ApplicationRecord\n  end\nend\n",
+          "app/models/comment.rb" => "class Comment < ApplicationRecord\nend\n",
+          "app/controllers/admin/posts_controller.rb" =>
+            "module Admin\n  class PostsController < ApplicationController\n    def index\n" \
+            "      @posts = Admin::Post.all\n      @comments = Comment.all\n      @drafts = Post.all\n    end\n  end\nend\n",
+          "app/controllers/reports_controller.rb" =>
+            "class ReportsController < ApplicationController\n  def index\n    @posts = Post.all\n  end\nend\n"
+        }.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), source)
+        end
+
+        findings = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_all_in_controllers]
+
+        expect(findings.map { |f| [ f[:controller], f[:model] ] }).to contain_exactly(
+          [ "app/controllers/admin/posts_controller.rb", "Admin::Post" ],
+          [ "app/controllers/admin/posts_controller.rb", "Comment" ],
+          [ "app/controllers/admin/posts_controller.rb", "Admin::Post" ]
+        )
+        expect(findings.first[:suggestion]).to start_with("Admin::Post.all loads")
+      end
+    end
+
+    it "resolves Model.all through the controller's lexical nesting" do
+      Dir.mktmpdir do |dir|
+        {
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+          "app/models/admin/post.rb" => "class Admin::Post < ApplicationRecord\nend\n",
+          "app/controllers/admin/posts_controller.rb" =>
+            "class Admin::PostsController < ApplicationController\n  def index\n    @posts = Post.all\n  end\nend\n",
+          "app/controllers/admin/drafts_controller.rb" =>
+            "module Admin\n  class DraftsController < ApplicationController\n    def index\n      @posts = Post.all\n    end\n  end\nend\n",
+          "app/controllers/admin/rooted_controller.rb" =>
+            "module Admin\n  class RootedController < ::ApplicationController\n    def index\n      @posts = Post.all\n    end\n  end\nend\n"
+        }.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), source)
+        end
+
+        findings = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_all_in_controllers]
+
+        expect(findings.map { |f| [ f[:controller], f[:model] ] }).to contain_exactly(
+          [ "app/controllers/admin/posts_controller.rb", "Post" ],
+          [ "app/controllers/admin/drafts_controller.rb", "Admin::Post" ],
+          [ "app/controllers/admin/rooted_controller.rb", "Admin::Post" ]
+        )
+      end
+    end
+
+    it "reports no Model.all where a nearer class that is not a model takes the name" do
+      Dir.mktmpdir do |dir|
+        {
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+          "app/services/shop/post.rb" => "module Shop\n  class Post\n  end\nend\n",
+          "app/controllers/shop/posts_controller.rb" =>
+            "module Shop\n  class PostsController < ApplicationController\n    def index\n      @posts = Post.all\n    end\n  end\nend\n"
+        }.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_all_in_controllers]).to be_empty
+      end
     end
 
     it "detects eager load candidates" do

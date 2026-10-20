@@ -302,13 +302,13 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
   it "reports an around callback whose target is a class object" do
     result = described_class.from_source(<<~RUBY)
       class Status < ApplicationRecord
-        around_create Mastodon::Snowflake::Callbacks
+        around_create Social::Snowflake::Callbacks
         before_save :normalize
       end
     RUBY
 
     expect(result[:callbacks]).to include(
-      a_hash_including(type: "around_create", method: "Mastodon::Snowflake::Callbacks")
+      a_hash_including(type: "around_create", method: "Social::Snowflake::Callbacks")
     )
   end
 end

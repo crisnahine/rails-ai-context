@@ -68,7 +68,7 @@ module RailsAiContext
         Includers.of(root, sources, names).keys
       end
 
-      # A class is one kind, and its chain decides which: OpenProject keeps
+      # A class is one kind, and its chain decides which: an app may keep
       # IncomingEmails::MailHandler, an ApplicationMailer, in app/services, and
       # the mailers listing already counts it. A parent the app does not
       # define that is named like a mailer (Devise::Mailer) counts the way the

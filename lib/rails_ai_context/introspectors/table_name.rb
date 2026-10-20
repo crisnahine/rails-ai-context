@@ -92,13 +92,25 @@ module RailsAiContext
         yield(name) || name
       end
 
-      # The model a derived name means, spelled the way the model set spells
-      # it: `AiBuyerMatch` from a name is `AIBuyerMatch` where the app declares
-      # the acronym. Nil when no model answers.
+      # The model a derived name means, as the app spells it (AiMatch is AIMatch).
+      # An exact spelling at any depth wins, so Checkin and CheckIn stay apart.
       def model_for(candidate, owner, models)
-        index = models.keys.to_h { |key| [ key.to_s.downcase, key.to_s ] }
-        found = resolve_class(candidate, owner) { |name| index[name.downcase] }
-        found if index.key?(found.to_s.downcase)
+        names = model_names(models)
+        found = resolve_class(candidate, owner) { |name| names[name] }
+        found = resolve_class(candidate, owner) { |name| names[name.downcase] } unless names.key?(found)
+        found if names.key?(found)
+      end
+
+      # Names and downcased names, which never collide. Cached per hash for the
+      # run, so a caller must not edit models in place mid-run.
+      def model_names(models)
+        RunCache.fetch([ :model_names, models.object_id, models.size ]) do
+          models.keys.each_with_object({}) do |key, names|
+            name = key.to_s
+            names[name.downcase] = name
+            names[name] = name
+          end
+        end
       end
 
       # The table a caller's model name refers to: the one the model tier

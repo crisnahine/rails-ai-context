@@ -564,7 +564,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
 
-  # Canvas has a migration that calls `create_table table_name do |t|`, where
+  # One app has a migration that calls `create_table table_name do |t|`, where
   # the name is a local computed at run time. A table the replay cannot name is
   # a table it cannot report, and keeping it produced a nil key that took the
   # whole context run down when a serializer sorted the table names.
@@ -631,7 +631,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
 
     expect(parses).to eq(1)
   end
-  # OpenProject creates 99 of its tables in db/migrate/tables/*.rb, required by
+  # An app can create 99 of its tables in db/migrate/tables/*.rb, required by
   # db/migrate/1000016_aggregated_migrations.rb. Reading db/migrate/*.rb alone
   # found 37 tables and answered "Table 'work_packages' not found".
   describe "a migration that requires other files under db/" do
@@ -770,7 +770,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables).to be_empty
     end
 
-    # OpenProject declares inflect.acronym "OAuth", so Tables::OAuthApplications
+    # With inflect.acronym "OAuth" declared, Tables::OAuthApplications
     # is oauth_applications to Rails; a plain underscore makes it
     # o_auth_applications, missed the file name, and dropped five tables.
     it "matches a class to its file across an acronym the app inflects" do
@@ -802,7 +802,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
   # A helper the replayed files define is read for what it does. A name
-  # pattern would not do: Discourse's create_join_table :web_hooks, :categories
+  # pattern would not do: a create_join_table :web_hooks, :categories
   # makes categories_web_hooks, and reading it as create_table would redefine
   # web_hooks with nothing but an id.
   describe "a table helper the replayed files define" do
@@ -827,7 +827,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       RUBY
     end
 
-    # OpenProject creates sessions through Tables::Base.create_unlogged_table.
+    # An app can create sessions through Tables::Base.create_unlogged_table.
     it "reads a call to a helper that forwards its first argument to create_table" do
       result = app_with(
         "db/migrate/100_aggregated.rb" => "require_relative \"tables/sessions\"\n",
@@ -1002,7 +1002,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
 
     # TableDefinition#references (7.0 to 8.1) defines each name it is given;
-    # Canvas's epub_exports reads three references off one call.
+    # An epub_exports table can read three references off one call.
     it "reads every name of one t.references call" do
       table = replayed(<<~RUBY)
         create_table :comments do |t|
@@ -1025,7 +1025,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(table[:columns].map { |c| c[:name] }).to eq(%w[id body])
     end
 
-    # Canvas's `t.replica_identity_index` is an app method that adds an index
+    # A `t.replica_identity_index` can be an app method that adds an index
     # the replay cannot see, so the table's index list may be short.
     it "marks a table whose block calls a method the replay does not read" do
       tables = replay([ <<~RUBY ])
@@ -1076,7 +1076,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
   end
   # The database moves an index to a renamed column, and Rails renames a
   # default-named index to match (rename_column_indexes, 7.0 to 8.1).
-  # OpenProject renames favorites.favored_* to favorited_*; the replay kept the
+  # An app can rename favorites.favored_* to favorited_*; the replay kept the
   # old keys, and the missing-index check reported the pair unindexed.
   describe "rename_column and the indexes on the column" do
     let(:table) do
@@ -1114,8 +1114,8 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
   # TableDefinition#column (7.0 to 8.1) indexes a column declared with
-  # index: - OpenProject's work_package_journals declares type_id and
-  # project_id that way, and the replay dropped both indexes.
+  # index: (a work_package_journals table can declare type_id and
+  # project_id that way), and the replay dropped both indexes.
   describe "a column declared with index:" do
     let(:table) do
       replay([ <<~RUBY ])["journals"]
@@ -1256,7 +1256,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(table[:columns].find { |c| c[:name] == "account_id" }[:type]).to eq("uuid")
     end
   end
-  # Discourse adds top_topics columns in a loop, `add_column :top_topics,
+  # An app can add top_topics columns in a loop, `add_column :top_topics,
   # column, :integer`: the replay recorded a column named nil, which any
   # reader calling a String method on the name trips over.
   describe "a column whose name the replay cannot read" do
@@ -1474,7 +1474,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
   end
   # A helper in a module the migration includes is replayed as the schema
   # statement it forwards to, when its whole body is that one statement.
-  # Anything else (Mastodon's change_column_type_concurrently adds a temp
+  # Anything else (a change_column_type_concurrently that adds a temp
   # column, copies rows, swaps names) is counted, not guessed.
   describe "a helper from a module the migration includes" do
     let(:result) do
@@ -1524,7 +1524,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
   # A migration's private methods run where up or change calls them, not in
-  # source order: Mastodon's add_index_to_table / remove_index_from_table pair
+  # source order: an add_index_to_table / remove_index_from_table pair
   # read as add-then-remove once remove_index was modelled, and five unique
   # indexes the migration does create went missing.
   describe "a migration's own private methods" do
@@ -1597,9 +1597,9 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(posts_indexes("def helper\n  add_index :posts, :uri\nend\n")).to eq(%w[index_posts_on_uri])
     end
   end
-  # GitLab, Discourse and Mastodon keep post-deployment migrations in
+  # Many large apps keep post-deployment migrations in
   # db/post_migrate; the app adds the path, and Rails runs every path's files
-  # in one version order. Mastodon drops users.current_sign_in_ip there.
+  # in one version order.
   describe ".migration_dirs" do
     it "reads db/post_migrate beside db/migrate, in one version order" do
       Dir.mktmpdir do |dir|
@@ -1690,7 +1690,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
   end
 
-  # The rest of change_table's DSL. OpenProject adds workspace_type with a
+  # The rest of change_table's DSL. An app can add workspace_type with a
   # default and drops the default in the same block; reading only the add
   # left a default the table does not have.
   describe "change_table's change and column calls" do
@@ -1766,7 +1766,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(posts["kind"]).to eq("article")
     end
   end
-  # Discourse drops columns with Migration::ColumnDropper.execute_drop, whose
+  # An app can drop columns with Migration::ColumnDropper.execute_drop, whose
   # body is raw SQL, not a Rails schema statement: nothing ties it to Rails'
   # semantics, so the call is counted, and the column is left alone.
   describe "a class method called on an app constant" do
@@ -1929,7 +1929,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
   # The count is of calls that could change the schema: a helper whose body
   # reaches a schema statement (through the module's own methods too), or a
   # constant's class method whose name is a schema verb or whose body reaches
-  # one. SafeMigrate.enable!, existing_site? and Discourse.redis are not.
+  # one. SafeMigrate.enable!, existing_site? and Forum.redis are not.
   describe "which skipped calls count" do
     let(:result) do
       Dir.mktmpdir do |dir|
@@ -1940,7 +1940,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
                    "module Migration\n  class SafeMigrate\n    def self.enable!\n      @on = true\n    end\n  end\nend\n")
         File.write(File.join(dir, "lib/migration/rebuilder.rb"),
                    "module Migration\n  class Rebuilder\n    def self.run(t)\n      rename_column t, :a, :b\n    end\n  end\nend\n")
-        File.write(File.join(dir, "lib/discourse.rb"), "module Discourse\n  def self.redis\n    nil\n  end\nend\n")
+        File.write(File.join(dir, "lib/forum.rb"), "module Forum\n  def self.redis\n    nil\n  end\nend\n")
         FileUtils.mkdir_p(File.join(dir, "lib/acme"))
         File.write(File.join(dir, "lib/acme/helpers.rb"), <<~RUBY)
           module Acme
@@ -1969,7 +1969,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             include Acme::Helpers
             def up
               Migration::SafeMigrate.enable!
-              Discourse.redis
+              Forum.redis
               existing_site?
               Migration::ColumnDropper.execute_drop(:posts, %i[a])
               Migration::Rebuilder.run(:posts)

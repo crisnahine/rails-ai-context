@@ -18,7 +18,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
 
     # The scan boundary bounds a jobs listing exactly as it bounds a worker
-    # listing, and OpenProject - 74 jobs, no Sidekiq config - was shown one
+    # listing, and an app with 74 jobs and no Sidekiq config was shown one
     # with no word about what had not been read.
     it "says which directories the listing was read from" do
       text = described_class.call.content.first[:text]
@@ -1421,7 +1421,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
   end
 
-  # Diaspora's 43 workers each printed their bases' two long sidekiq_options
+  # One app's 43 workers each printed their bases' two long sidekiq_options
   # expressions - about 60 repeated lines of the same text. An inherited
   # option is named once with where it comes from, its value only when short;
   # the base's own page carries the whole expression.
@@ -1476,7 +1476,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
   end
 
-  # Discourse enqueues through a helper of its own: `Jobs.enqueue(:process_post)`
+  # An app can enqueue through a helper of its own: `Jobs.enqueue(:process_post)`
   # names Jobs::ProcessPost by a symbol, `enqueue_in(delay, name)` puts the
   # delay first, and "chat/foo" spells a namespaced job. None of it names the
   # constant, so no enqueuer was ever listed.
@@ -1573,8 +1573,8 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     end
   end
 
-  # Discourse's 236 jobs implement `execute`; `perform` is on Jobs::Base and
-  # runs it. Reading only `perform` left every one of them with no signature
+  # An app's jobs can implement `execute`; `perform` is on Jobs::Base and
+  # runs it. Reading only `perform` left 236 of them with no signature
   # and no guard clauses.
   describe "a worker whose entry point is execute" do
     let(:tmpdir) { Dir.mktmpdir }
@@ -1818,7 +1818,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("**Inherited by (1):** Billing::Invoices::ArchiveWorker")
     end
 
-    # Mastodon's Fasp::BaseWorker declares the queue every Fasp worker runs on,
+    # A Fasp::BaseWorker declares the queue every Fasp worker runs on,
     # and its own page left it out: the file, "not counted as a job", nothing
     # it declares.
     it "shows what a base declares for the jobs that inherit it" do
@@ -1850,7 +1850,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("- sidekiq retry: 3")
     end
 
-    # 346 files re-read on Discourse to print what the walk had already parsed.
+    # 346 files re-read on one app to print what the walk had already parsed.
     it "prints them from the record, without reading the file again" do
       FileUtils.rm_rf(File.join(tmpdir, "app", "workers"))
 

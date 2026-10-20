@@ -495,7 +495,7 @@ module RailsAiContext
         content.scan(/^\s*(?:(?:private|protected|public|private_class_method)\s+)*def\s+(?:self\.)?(\w+_(?:path|url))\b/).flatten.to_set
       end
 
-      # An engine's view calls its helpers bare, so `spree.admin_orders` counts as admin_orders.
+      # An engine's view calls its helpers bare, so `shop.admin_orders` counts as admin_orders.
       private_class_method def self.build_route_name_set(by_controller)
         names = Set.new
         by_controller.each_value do |actions|

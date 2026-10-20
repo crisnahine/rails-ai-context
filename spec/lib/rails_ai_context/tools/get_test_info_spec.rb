@@ -464,7 +464,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("Searched:")
     end
 
-    # Whitehall files controller tests under test/functional and model tests
+    # An app can file controller tests under test/functional and model tests
     # under test/unit/app/models, and the no-arg answer already lists both
     # directories. Searching only the conventional two answered "no test file"
     # for a file the same tool had just counted.
@@ -542,7 +542,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       end
     end
 
-    # Mastodon tests AboutController only through spec/system/about_spec.rb,
+    # An app may test AboutController only through spec/system/about_spec.rb,
     # which visits about_path. "No test file found" there is a confident
     # negative about a controller the app does test.
     describe "specs that exercise a controller from outside its controller spec" do

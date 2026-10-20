@@ -57,7 +57,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
-    # Canvas routes login/google to `module Login; GoogleController = OAuth2Controller; end`.
+    # One app routes login/google to `module Login; GoogleController = OAuth2Controller; end`.
     describe "a *_controller.rb that names another controller" do
       let(:dir) { File.join(Rails.root, "app/controllers/alias_login") }
 
@@ -66,7 +66,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         File.write(File.join(dir, "oauth2_controller.rb"), "module AliasLogin\n  class OAuth2Controller < ApplicationController\n    def new; end\n  end\nend\n")
         File.write(File.join(dir, "google_controller.rb"), "module AliasLogin\n  GoogleController = OAuth2Controller\nend\n")
         File.write(File.join(dir, "gmail_controller.rb"), "module AliasLogin\n  GmailController = GoogleController\nend\n")
-        # Canvas's lti/ims file: the class under an acronym, then the path's spelling assigned to it.
+        # An lti/ims file: the class under an acronym, then the path's spelling assigned to it.
         File.write(File.join(dir, "ims_profile_controller.rb"),
                    "module AliasLogin\n  class IMSProfileController < ApplicationController\n    def show; end\n  end\n  ImsProfileController = IMSProfileController\nend\n")
       end
@@ -538,7 +538,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(names).to eq([ "order_params" ])
     end
 
-    # permit! on a slice lets through only the sliced keys (whitehall's params_filters).
+    # permit! on a slice lets through only the sliced keys (a params_filters helper).
     it "reads permit! on a slice of params as the keys it slices" do
       source = <<~RUBY
         def filter_params
@@ -551,7 +551,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(introspector.send(:extract_strong_params, computed)).to eq([ { name: "search_params" } ])
     end
 
-    # OFN's enterprise_params hands params to PermittedAttributes::Enterprise, which permits them.
+    # An enterprise_params that hands params to PermittedAttributes::Enterprise, which permits them.
     it "keeps a *_params method that hands params to another class, or returns another strong-params method" do
       source = <<~RUBY
         def enterprise_params
@@ -584,7 +584,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(introspector.send(:extract_strong_params, source)).to eq([ { name: "enterprise_params" }, { name: "permitted_resource_params" } ])
     end
 
-    # Canvas's render_unauthorized_action and OpenProject's login_back_url permit only to build a URL.
+    # A render_unauthorized_action or login_back_url can permit only to build a URL.
     it "keeps a method of another name only when it returns what it permits" do
       source = <<~RUBY
         def article_params_json
@@ -1213,7 +1213,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         end
       end
 
-      # Mastodon: CacheConcern's vary_by block and the controller's own lambda both open on line 8.
+      # CacheConcern's vary_by block and the controller's own lambda both open on line 8.
       it "names a block outside the controller's file by that file, and pairs each block with its own options" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
@@ -1286,7 +1286,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         end
       end
 
-      # Mastodon's StatusesController: vary_by from ApplicationController's chain, from WebAppControllerConcern, and its own.
+      # A StatusesController with vary_by from ApplicationController's chain, from WebAppControllerConcern, and its own.
       it "credits each of a body's blocks that share a name to the concern or body that declared it" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
@@ -1757,7 +1757,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     # Zeitwerk resolves a path through the app's own inflections, so a
     # directory named `activitypub` is `ActivityPub` in an app that registers
     # that acronym - and camelizing the path alone invents `Activitypub`, a
-    # constant Mastodon does not define anywhere in 818 references.
+    # constant the app does not define anywhere.
     it "names a controller from the constant its source declares" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
@@ -2273,7 +2273,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(introspector.send(:extract_controller_details, ctrl)[:actions]).to eq(%w[index])
     end
 
-    # Mastodon's Api::V2::Admin::AccountsController inherits nine actions its
+    # An Api::V2::Admin::AccountsController can inherit nine actions its
     # routes do not name, and Auth::OmniauthCallbacksController's
     # after_sign_in_path_for(resource) is no action; the static tier knew both.
     it "marks what the booted class inherits, and drops a method that needs an argument" do
@@ -2297,7 +2297,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
-  # OpenProject: WorkPackagePrioritiesController read "(no public actions)"
+  # A WorkPackagePrioritiesController read "(no public actions)"
   # and DocumentTypesController only `delete_dialog`, though both inherit
   # eight actions from Admin::Settings::EnumerationsControllerBase - a file
   # the listing never read, because its name does not end in _controller.rb.
@@ -2337,7 +2337,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         write(dir, "concerns/paginated.rb", "module Paginated\n  def page; end\nend\n")
         write(dir, "queries/params_parser.rb", "module Queries\n  class ParamsParser\n    def parse; end\n  end\nend\n")
         write(dir, "api/v3/grids/grids_api.rb",
-              "module API\n  module V3\n    module Grids\n      class GridsAPI < ::API::OpenProjectAPI\n      end\n    end\n  end\nend\n")
+              "module API\n  module V3\n    module Grids\n      class GridsAPI < ::API::RootAPI\n      end\n    end\n  end\nend\n")
 
         listing = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
 
@@ -2350,7 +2350,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
-  # OFN's Admin::OrderCyclesController routes `incoming` and ships
+  # An Admin::OrderCyclesController can route `incoming` and ship
   # incoming.html.haml with no method: Rails renders the template.
   describe ".apply_routes" do
     it "adds a routed action that has a template and no method" do
@@ -2387,25 +2387,25 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(section[:controllers]["Admin::UnroutedController"][:actions]).to eq([])
     end
 
-    # OFN draws Spree's admin routes into Spree::Core::Engine's table.
+    # An app can draw an engine's admin routes into Shop::Core::Engine's table.
     it "judges a controller by the routes an engine's table gives it" do
-      section = { controllers: { "Spree::Admin::ProductsController" => {
+      section = { controllers: { "Shop::Admin::ProductsController" => {
         actions: %w[destroy edit update_positions], inherited_actions: %w[destroy update_positions],
-        file: "app/controllers/spree/admin/products_controller.rb"
+        file: "app/controllers/shop/admin/products_controller.rb"
       } } }
       routes = { by_controller: { "posts" => [ { action: "index" } ] },
-                 engine_routes: [ { engine: "Spree::Core::Engine", mount: "/", routes: [
-                   { verb: "GET", path: "/admin/products/:id/edit", controller: "spree/admin/products", action: "edit" },
-                   { verb: "POST", path: "/admin/products/update_positions", controller: "spree/admin/products",
+                 engine_routes: [ { engine: "Shop::Core::Engine", mount: "/", routes: [
+                   { verb: "GET", path: "/admin/products/:id/edit", controller: "shop/admin/products", action: "edit" },
+                   { verb: "POST", path: "/admin/products/update_positions", controller: "shop/admin/products",
                      action: "update_positions" }
                  ] } ] }
 
       described_class.apply_routes(section, routes, Dir.tmpdir)
 
-      expect(section[:controllers]["Spree::Admin::ProductsController"][:actions]).to eq(%w[edit update_positions])
+      expect(section[:controllers]["Shop::Admin::ProductsController"][:actions]).to eq(%w[edit update_positions])
     end
 
-    # Mastodon's inflection spells ActivityPub:: as activitypub/.
+    # An app's inflection can spell ActivityPub:: as activitypub/.
     it "reads the controller's route path off its file" do
       section = { controllers: { "ActivityPub::LikesController" => {
         actions: %w[doorkeeper_forbidden_render_options index], inherited_actions: %w[doorkeeper_forbidden_render_options],
@@ -2443,7 +2443,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         "OAuth::UserinfoController" => { actions: %w[doorkeeper_forbidden_render_options show],
                                          inherited_actions: %w[doorkeeper_forbidden_render_options],
                                          file: "app/controllers/oauth/userinfo_controller.rb" },
-        # OpenProject's modules/costs routes this in modules/costs/config/routes.rb.
+        # An engine under modules/costs routes this in modules/costs/config/routes.rb.
         "Admin::CostsSettingsController" => { actions: %w[show update], inherited_actions: %w[show update],
                                               file: "modules/costs/app/controllers/admin/costs_settings_controller.rb" }
       } }
@@ -2454,7 +2454,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(section[:controllers]["Admin::CostsSettingsController"][:actions]).to eq(%w[show update])
     end
 
-    # Whitehall's ContactTranslationsController gets create, update and
+    # A ContactTranslationsController gets create, update and
     # destroy from TranslationControllerConcern; its helper is no action.
     it "lists what an included controller concern offers, and the routes keep the routed ones" do
       Dir.mktmpdir do |dir|

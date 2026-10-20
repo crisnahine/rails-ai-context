@@ -243,7 +243,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("slug:string [unique]")
     end
 
-    # Forem's articles.canonical_url is unique only among published rows.
+    # An articles.canonical_url can be unique only among published rows.
     it "says a unique index is partial, in the hints and in the table view" do
       allow(described_class).to receive(:cached_context).and_return({
         schema: { adapter: "postgresql", total_tables: 1, tables: {
@@ -289,7 +289,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("code:string [unique]")
     end
 
-    # Discourse's categories has a unique index on
+    # A categories table with a unique index on
     # (COALESCE(parent_category_id, '-1'::integer), name). The expression is
     # a key of its own, not the column inside it, and it is name's partner.
     it "names an expression partner as the expression" do
@@ -402,8 +402,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("status:string [indexed]")
     end
 
-    # Discourse's allowed_pm_users has the same unique pair in both orders,
-    # and assignments a column both in a unique set and behind another key.
+    # An allowed_pm_users table with the same unique pair in both orders, and
+    # an assignments table with a column in a unique set and behind another key.
     it "names a partner set once and adds no trailing hint beside a unique one" do
       allow(described_class).to receive(:cached_context).and_return({
         schema: { adapter: "postgresql", total_tables: 1, tables: {
@@ -858,18 +858,18 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
 
     it "finds the other side in the owner's namespace first" do
-      join_tables["spree_products_taxons"] = { columns: [], indexes: [], foreign_keys: [] }
+      join_tables["shop_products_taxons"] = { columns: [], indexes: [], foreign_keys: [] }
       allow(described_class).to receive(:cached_context).and_return({
         schema: { adapter: "sqlite3", tables: join_tables, total_tables: 6 },
         models: {
-          "Spree::Product" => { table_name: "spree_products",
+          "Shop::Product" => { table_name: "shop_products",
                                 associations: [ { name: "taxons", type: "has_and_belongs_to_many", options: {} } ] },
-          "Spree::Taxon" => { table_name: "spree_taxons", associations: [] },
+          "Shop::Taxon" => { table_name: "shop_taxons", associations: [] },
           "Taxon" => { table_name: "legacy_taxons", associations: [] }
         }
       })
 
-      expect(warning_line).not_to include("spree_products_taxons")
+      expect(warning_line).not_to include("shop_products_taxons")
     end
 
     it "leaves out a custom join table the booted record carries" do

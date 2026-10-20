@@ -536,7 +536,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
 
     # config/database.yml is on `sensitive_patterns` for its values. The ENV
-    # names in its ERB tags are not values, and Huginn's DATABASE_HOST is only
+    # names in its ERB tags are not values, and an app's DATABASE_HOST can be only
     # there, so the names are read and nothing else is.
     it "reads only the ENV names in a sensitive config file's ERB tags" do
       FileUtils.mkdir_p(File.join(tmpdir, "config"))

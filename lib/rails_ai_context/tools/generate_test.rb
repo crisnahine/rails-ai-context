@@ -550,7 +550,7 @@ module RailsAiContext
         # content columns).
         # The model a route key names without its namespace: from the
         # controller's namespace outward, else the one model of that own name
-        # (a line_items route serving Spree::LineItem).
+        # (a line_items route serving Shop::LineItem).
         def resource_model(keys, ctrl_class, name)
           found = RailsAiContext::Introspectors::TableName.resolve_class(name, ctrl_class) { |candidate| fuzzy_find_key(keys, candidate) }
           return found if keys.include?(found)
@@ -1439,7 +1439,7 @@ module RailsAiContext
         end
 
         # A segment that names a column of the record the test builds, or of a
-        # route parent it builds, is that record's attribute: Plots2 routes
+        # route parent it builds, is that record's attribute: an app may route
         # `graph/file/:uid/:id` to csvfiles, whose rows carry a uid.
         def column_value(param, subject_expr, res)
           return "#{subject_expr}.#{param}" if subject_expr && res[:table] && !schema_column_type(res[:table], param).empty?

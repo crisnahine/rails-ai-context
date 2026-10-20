@@ -413,17 +413,17 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
-    # A Discourse plugin nests its tree under its own namespace:
-    # plugins/discourse-ai/app/helpers/discourse_ai/ai_bot/shared_ai_conversations_helper.rb
+    # A plugin can nest its tree under its own namespace:
+    # plugins/forum-ai/app/helpers/forum_ai/ai_bot/shared_ai_conversations_helper.rb
     # declares the namespace its path carries; one written under a bare path
     # still answers to the constant the file declares.
     context "when a plugin's helper declares a namespace its path does not carry" do
       def plugin_app(root)
-        plugin = File.join(root, "plugins", "discourse-chat-integration")
+        plugin = File.join(root, "plugins", "forum-chat-integration")
         FileUtils.mkdir_p(File.join(plugin, "app", "helpers"))
-        File.write(File.join(plugin, "plugin.rb"), "# name: discourse-chat-integration\n")
+        File.write(File.join(plugin, "plugin.rb"), "# name: forum-chat-integration\n")
         File.write(File.join(plugin, "app", "helpers", "channel_helper.rb"), <<~RUBY)
-          module DiscourseChatIntegration
+          module ForumChatIntegration
             module ChannelHelper
               def self.process_command; end
 
@@ -432,7 +432,7 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
           end
         RUBY
         # `helper :all` reads only *_helper.rb, so this module of class methods reaches no view.
-        File.write(File.join(plugin, "app", "helpers", "helper.rb"), "module DiscourseChatIntegration\n  module Helper\n    def self.status; end\n  end\nend\n")
+        File.write(File.join(plugin, "app", "helpers", "helper.rb"), "module ForumChatIntegration\n  module Helper\n    def self.status; end\n  end\nend\n")
         FileUtils.mkdir_p(File.join(root, "app", "helpers"))
         allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
       end
@@ -442,11 +442,11 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
           plugin_app(root)
 
           listing = described_class.call.content.first[:text]
-          expect(listing).to include("DiscourseChatIntegration::ChannelHelper")
-          expect(listing).not_to include("DiscourseChatIntegration::Helper ")
+          expect(listing).to include("ForumChatIntegration::ChannelHelper")
+          expect(listing).not_to include("ForumChatIntegration::Helper ")
 
-          text = described_class.call(helper: "DiscourseChatIntegration::ChannelHelper").content.first[:text]
-          expect(text).to include("# DiscourseChatIntegration::ChannelHelper")
+          text = described_class.call(helper: "ForumChatIntegration::ChannelHelper").content.first[:text]
+          expect(text).to include("# ForumChatIntegration::ChannelHelper")
           expect(text).to include("channel_name")
         end
       end
@@ -548,9 +548,9 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
 
       it "lists the ones a module outside app/controllers declares when a controller includes it" do
-        FileUtils.mkdir_p(File.join(@root, "lib/spree/core/controller_helpers"))
-        File.write(File.join(@root, "lib/spree/core/controller_helpers/order.rb"), <<~RUBY)
-          module Spree
+        FileUtils.mkdir_p(File.join(@root, "lib/shop/core/controller_helpers"))
+        File.write(File.join(@root, "lib/shop/core/controller_helpers/order.rb"), <<~RUBY)
+          module Shop
             module Core
               module ControllerHelpers
                 module Order
@@ -562,25 +562,25 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
             end
           end
         RUBY
-        File.write(File.join(@root, "lib/spree/authentication_helpers.rb"), <<~RUBY)
-          module Spree::AuthenticationHelpers
+        File.write(File.join(@root, "lib/shop/authentication_helpers.rb"), <<~RUBY)
+          module Shop::AuthenticationHelpers
             def self.included(receiver)
-              receiver.helper_method :spree_current_user
+              receiver.helper_method :shop_current_user
             end
           end
         RUBY
         File.write(File.join(@root, "lib/unused_helpers.rb"), "module UnusedHelpers\n  helper_method :never\nend\n")
         File.write(File.join(@root, "app/controllers/base_controller.rb"), <<~RUBY)
           class BaseController < ApplicationController
-            include Spree::Core::ControllerHelpers::Order
-            include Spree::AuthenticationHelpers
+            include Shop::Core::ControllerHelpers::Order
+            include Shop::AuthenticationHelpers
           end
         RUBY
 
         text = described_class.call(detail: "standard").content.first[:text]
 
-        expect(text).to include("- `current_order` (Spree::Core::ControllerHelpers::Order, `lib/spree/core/controller_helpers/order.rb`)")
-        expect(text).to include("- `spree_current_user` (Spree::AuthenticationHelpers, `lib/spree/authentication_helpers.rb`)")
+        expect(text).to include("- `current_order` (Shop::Core::ControllerHelpers::Order, `lib/shop/core/controller_helpers/order.rb`)")
+        expect(text).to include("- `shop_current_user` (Shop::AuthenticationHelpers, `lib/shop/authentication_helpers.rb`)")
         expect(text).not_to include("never")
       end
 

@@ -655,7 +655,7 @@ module RailsAiContext
       private
 
       # What depends on a file and a name only, kept in the run's cache: one
-      # base-class mixin reaches every model, and Canvas walked its 2,000-line
+      # base-class mixin reaches every model, and one app walked its 2,000-line
       # initializer three ways per model. The cache carries a file the walk
       # could not read as well, so 100 models including one reads it once.
       def memo(key)

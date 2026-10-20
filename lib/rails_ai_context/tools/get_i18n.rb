@@ -66,7 +66,7 @@ module RailsAiContext
                    "#{Serializers::SectionFacts.unread_locale_note(i18n)}"
 
           # A language-name table under config/locales makes Rails list a
-          # locale per language, and on Discourse that is 138 rows of zeroes.
+          # locale per language, and on a large app that can be 138 rows of zeroes.
           # They are summarised as a group rather than listed - and rows for
           # them still exist, so asking for one by name answers with numbers.
           untranslated = i18n[:locales_without_translations] || []

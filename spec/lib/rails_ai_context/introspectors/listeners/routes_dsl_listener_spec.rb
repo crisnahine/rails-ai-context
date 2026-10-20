@@ -143,7 +143,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
 
   # Rails' add_controller_module (actionpack mapper.rb, same in 7.0 and 8.1):
   # a controller starting with "/" drops the slash and takes no module prefix.
-  # OpenProject writes 44 of these and every one read as a doubled namespace.
+  # One app writes 44 of these, and every one read as a doubled namespace.
   it "treats a controller with a leading slash as absolute" do
     records = route_records('namespace :admin do
       namespace :settings do
@@ -191,7 +191,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(archived).to include(verb: "GET", path: "/posts/archived", controller: "posts")
   end
 
-  # OpenProject: `get :delete, action: :deletion_dialog` inside a member block.
+  # `get :delete, action: :deletion_dialog` inside a member block.
   it "routes to the action an action: option names" do
     records = route_records('Rails.application.routes.draw do
       resources :items do
@@ -489,7 +489,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     )
   end
 
-  # Mastodon draws `resources :following, only: [:index]`, and Rails names its
+  # An app can draw `resources :following, only: [:index]`, and Rails names its
   # index following_index.
   it "appends _index to a singular resource name" do
     records = route_records('resources :following, only: [:index], controller: :following_accounts')
@@ -529,8 +529,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     )
   end
 
-  # Routes an app adds to an engine's table (`Spree::Core::Engine.routes.draw`)
-  # reach the engine's controllers, Spree::Admin::OrdersController, not the
+  # Routes an app adds to an engine's table (`Shop::Core::Engine.routes.draw`)
+  # reach the engine's controllers, Shop::Admin::OrdersController, not the
   # app's Admin::OrdersController.
   it "puts routes drawn into an engine under the engine's namespace" do
     results = routes_for(<<~RUBY)
@@ -540,7 +540,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
         end
       end
 
-      Spree::Core::Engine.routes.draw do
+      Shop::Core::Engine.routes.draw do
         namespace :admin do
           resources :orders, only: [:index]
         end
@@ -548,8 +548,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     RUBY
 
     routes = results.select { |r| r[:type] == :route }
-    expect(routes.map { |r| r[:controller] }).to contain_exactly("admin/orders", "spree/admin/orders")
-    expect(routes.find { |r| r[:controller] == "spree/admin/orders" }[:engine]).to eq("Spree::Core::Engine")
+    expect(routes.map { |r| r[:controller] }).to contain_exactly("admin/orders", "shop/admin/orders")
+    expect(routes.find { |r| r[:controller] == "shop/admin/orders" }[:engine]).to eq("Shop::Core::Engine")
     expect(routes.find { |r| r[:controller] == "admin/orders" }).not_to have_key(:engine)
   end
 

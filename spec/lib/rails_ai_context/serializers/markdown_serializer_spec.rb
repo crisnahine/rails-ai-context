@@ -24,13 +24,13 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
   describe "the Routes section" do
     it "lists routes drawn into an engine under that engine, apart from the total" do
       context = { routes: { total_routes: 1, by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index" } ] },
-                            engine_routes: [ { engine: "Spree::Core::Engine", mount: "/shop", routes: [
-                              { verb: "GET", path: "/shop/admin/orders", controller: "spree/admin/orders", action: "index" }
+                            engine_routes: [ { engine: "Shop::Core::Engine", mount: "/shop", routes: [
+                              { verb: "GET", path: "/shop/admin/orders", controller: "shop/admin/orders", action: "index" }
                             ] } ] } }
 
       output = described_class.new(context).call
 
-      expect(output).to include("### spree/admin/orders (in Spree::Core::Engine's table, not in the total)")
+      expect(output).to include("### shop/admin/orders (in Shop::Core::Engine's table, not in the total)")
       expect(output).to include("- `GET /shop/admin/orders` → index")
     end
   end
@@ -99,7 +99,7 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
           middleware_from_initializers: [
             { middleware: "Middleware::RequestTracker", action: "unshift", file: "config/initializers/200-first_middlewares.rb" },
             { middleware: "Middleware::RequestTracker", action: "move_after", file: "config/environments/test.rb" },
-            { middleware: "Discourse::Cors", action: "insert_before", file: "config/initializers/008-rack-cors.rb" }
+            { middleware: "Forum::Cors", action: "insert_before", file: "config/initializers/008-rack-cors.rb" }
           ]
         }
       }
@@ -108,7 +108,7 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
 
       expect(output).to include("- `Middleware::RequestTracker` (lib/middleware/request_tracker.rb) - inserted (unshift) in config/initializers/200-first_middlewares.rb, moved (move_after) in config/environments/test.rb")
       expect(output).to include("### Stack changes from the app's config")
-      expect(output).to include("- `Discourse::Cors` inserted (insert_before) in config/initializers/008-rack-cors.rb")
+      expect(output).to include("- `Forum::Cors` inserted (insert_before) in config/initializers/008-rack-cors.rb")
     end
   end
 

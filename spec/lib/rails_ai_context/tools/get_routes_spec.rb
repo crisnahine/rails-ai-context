@@ -35,16 +35,16 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
 
   describe "routes an app draws into a mounted engine" do
     let(:engine_routes) do
-      [ { engine: "Spree::Core::Engine", mount: "/shop", routes: [
-        { verb: "GET", path: "/shop/admin/orders", controller: "spree/admin/orders", action: "index",
-          name: "spree.admin_orders" }
+      [ { engine: "Shop::Core::Engine", mount: "/shop", routes: [
+        { verb: "GET", path: "/shop/admin/orders", controller: "shop/admin/orders", action: "index",
+          name: "shop.admin_orders" }
       ] } ]
     end
 
     before do
       allow(described_class).to receive(:cached_context).and_return({
         routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [],
-                  mounted_engines: [ { engine: "Spree::Core::Engine", path: "/shop" } ], unrouted_mounts: 1,
+                  mounted_engines: [ { engine: "Shop::Core::Engine", path: "/shop" } ], unrouted_mounts: 1,
                   engine_routes: engine_routes }
       })
     end
@@ -53,7 +53,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       text = described_class.call.content.first[:text]
 
       expect(text).to include("## Routes drawn into mounted engines")
-      expect(text).to include("**Spree::Core::Engine** at `/shop`: 1 route, not in the count above")
+      expect(text).to include("**Shop::Core::Engine** at `/shop`: 1 route, not in the count above")
       expect(text).to include("_A mounted app's own routes are in its table, not in the count above._")
     end
 
@@ -81,7 +81,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).not_to include("not mounted")
     end
 
-    # OFN: `orders` names api/v0/orders in the app and spree/admin/orders in Spree's table.
+    # `orders` can name api/v0/orders in the app and shop/admin/orders in an engine's table.
     it "lists the engine's matches beside the app's for a short name, labelled" do
       allow(described_class).to receive(:cached_context).and_return({
         routes: { total_routes: 1, api_namespaces: [], engine_routes: engine_routes,
@@ -92,8 +92,8 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
 
       expect(text).to include("`GET` `/api/v0/orders` → index")
       expect(text).to include("# Routes (2 routes)")
-      expect(text).to include("## spree/admin/orders (in Spree::Core::Engine's table)")
-      expect(text).to include("`GET` `/shop/admin/orders` → index `spree.admin_orders_path`")
+      expect(text).to include("## shop/admin/orders (in Shop::Core::Engine's table)")
+      expect(text).to include("`GET` `/shop/admin/orders` → index `shop.admin_orders_path`")
     end
 
     # Engine rows are listed like the app's: detail levels, paging and the
@@ -123,24 +123,24 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
         routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [], engine_routes: groups }
       })
 
-      expect(described_class.call.content.first[:text]).to include("**Spree::Core::Engine** at `/shop` (also `/shop2`): 1 route")
+      expect(described_class.call.content.first[:text]).to include("**Shop::Core::Engine** at `/shop` (also `/shop2`): 1 route")
     end
 
-    # OFN mounts its DFC engine at three paths inside `namespace :api`.
+    # An app can mount one engine at three paths inside `namespace :api`.
     it "names the other paths an engine is mounted at in a filtered answer" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config/routes.rb"), <<~RUBY)
           Rails.application.routes.draw do
             namespace :api do
-              mount DfcProvider::Engine, at: '/dfc-v1.6/', as: :legacy_dfc_provider_engine
-              mount DfcProvider::Engine, at: '/dfc-v1.7/', as: :v1_7_dfc_provider_engine
+              mount FeedProvider::Engine, at: '/feed-v1.6/', as: :legacy_feed_provider_engine
+              mount FeedProvider::Engine, at: '/feed-v1.7/', as: :v1_7_feed_provider_engine
               # Latest implemented version:
-              mount DfcProvider::Engine, at: '/dfc/'
+              mount FeedProvider::Engine, at: '/feed/'
             end
           end
 
-          DfcProvider::Engine.routes.draw do
+          FeedProvider::Engine.routes.draw do
             resources :enterprises, only: [] do
               resources :catalog_items, only: [:index]
             end
@@ -149,10 +149,10 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
         routes = RailsAiContext::Introspectors::RouteIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
         allow(described_class).to receive(:cached_context).and_return(routes: routes)
 
-        text = described_class.call(controller: "dfc_provider/catalog_items").content.first[:text]
+        text = described_class.call(controller: "feed_provider/catalog_items").content.first[:text]
 
-        expect(text).to include("(in DfcProvider::Engine's table, also mounted at `/api/dfc-v1.7`, `/api/dfc`)")
-        expect(text).to include("`GET` `/api/dfc-v1.6/enterprises/:enterprise_id/catalog_items` → index")
+        expect(text).to include("(in FeedProvider::Engine's table, also mounted at `/api/feed-v1.7`, `/api/feed`)")
+        expect(text).to include("`GET` `/api/feed-v1.6/enterprises/:enterprise_id/catalog_items` → index")
       end
     end
 
@@ -163,7 +163,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       })
 
       expect(described_class.call.content.first[:text])
-        .to include("**Spree::Core::Engine** at `/shop`: 1 route, 2 dynamic constructs not expanded, not in the count above")
+        .to include("**Shop::Core::Engine** at `/shop`: 1 route, 2 dynamic constructs not expanded, not in the count above")
     end
 
     it "says a booted engine group is the engine's whole table" do
@@ -173,15 +173,15 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       })
 
       expect(described_class.call.content.first[:text])
-        .to include("**Spree::Core::Engine** at `/shop`: 1 route in the engine's whole table, gem-drawn ones included, not in the count above")
+        .to include("**Shop::Core::Engine** at `/shop`: 1 route in the engine's whole table, gem-drawn ones included, not in the count above")
     end
 
     it "answers a controller filter with the engine's routes, named through its proxy" do
-      text = described_class.call(controller: "spree/admin/orders").content.first[:text]
+      text = described_class.call(controller: "shop/admin/orders").content.first[:text]
 
-      expect(text).to include("Spree::Core::Engine")
+      expect(text).to include("Shop::Core::Engine")
       expect(text).to include("`GET` `/shop/admin/orders` → index")
-      expect(text).to include("spree.admin_orders")
+      expect(text).to include("shop.admin_orders")
     end
   end
 

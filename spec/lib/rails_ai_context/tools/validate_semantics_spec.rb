@@ -23,36 +23,36 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     })
   end
 
-  # OFN's Spree views call the engine's helpers bare, and its Spree
+  # An app's engine views call the engine's helpers bare, and its engine
   # controllers answer routes in the engine's table.
   describe "routes an app draws into an engine" do
     let(:engine_routes) do
-      [ { engine: "Spree::Core::Engine", mount: "/", routes: [
-        { verb: "GET", path: "/admin/orders", controller: "spree/admin/orders", action: "index", name: "spree.admin_orders" },
-        { verb: "GET", path: "/admin/orders/:id/fire", controller: "spree/admin/orders", action: "fire" }
+      [ { engine: "Shop::Core::Engine", mount: "/", routes: [
+        { verb: "GET", path: "/admin/orders", controller: "shop/admin/orders", action: "index", name: "shop.admin_orders" },
+        { verb: "GET", path: "/admin/orders/:id/fire", controller: "shop/admin/orders", action: "fire" }
       ] } ]
     end
 
     before do
       allow(described_class).to receive(:cached_context).and_return({
         routes: { by_controller: { "posts" => [ { verb: "GET", action: "index", name: "posts" } ] }, engine_routes: engine_routes },
-        controllers: { controllers: { "Spree::Admin::OrdersController" => { actions: %w[index] } } },
+        controllers: { controllers: { "Shop::Admin::OrdersController" => { actions: %w[index] } } },
         schema: { tables: {} }, models: {}
       })
     end
 
     it "knows the engine's route helpers" do
-      with_app_file("app/views/spree/admin/orders/_x.html.erb", "<%= link_to 'x', admin_orders_path %>\n") do |file, path|
+      with_app_file("app/views/shop/admin/orders/_x.html.erb", "<%= link_to 'x', admin_orders_path %>\n") do |file, path|
         expect(described_class.check_rails_semantics(file, path).join).not_to include("admin_orders_path")
       end
     end
 
     it "checks an engine controller against the engine's routes" do
-      with_app_file("app/controllers/spree/admin/orders_controller.rb",
-                    "module Spree\n  module Admin\n    class OrdersController < BaseController\n      def index; end\n    end\n  end\nend\n") do |file, path|
+      with_app_file("app/controllers/shop/admin/orders_controller.rb",
+                    "module Shop\n  module Admin\n    class OrdersController < BaseController\n      def index; end\n    end\n  end\nend\n") do |file, path|
         root = path.delete_suffix(file)
-        File.write(File.join(root, "app/controllers/spree/admin/base_controller.rb"),
-                   "module Spree\n  module Admin\n    class BaseController < ApplicationController\n    end\n  end\nend\n")
+        File.write(File.join(root, "app/controllers/shop/admin/base_controller.rb"),
+                   "module Shop\n  module Admin\n    class BaseController < ApplicationController\n    end\n  end\nend\n")
         File.write(File.join(root, "app/controllers/application_controller.rb"), "class ApplicationController < ActionController::Base\nend\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
 
@@ -131,7 +131,7 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
   end
 
-  # OFN's ApplicationController includes Pagy::Backend, a gem module this
+  # An ApplicationController can include Pagy::Backend, a gem module this
   # check never reads, so it cannot say the gem defines no `show`.
   describe "a routed action no source the app holds defines" do
     def check(app_controller, extra = {}, predicate: false)
@@ -171,13 +171,13 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
 
     it "says it is unverified when an ancestor is a gem's class" do
-      text = check("class ApplicationController < Spree::BaseController\nend\n")
+      text = check("class ApplicationController < Shop::BaseController\nend\n")
 
       expect(text).not_to include("action not found")
-      expect(text).to include("Spree::BaseController")
+      expect(text).to include("Shop::BaseController")
     end
 
-    # Mastodon routes `get :merged, to: "requests#merged?"`.
+    # An app can route `get :merged, to: "requests#merged?"`.
     it "finds a predicate-named action an ancestor defines" do
       text = check("class ApplicationController < ActionController::Base\n  def show; end\n  def managed?; end\nend\n", predicate: true)
 
@@ -282,7 +282,7 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
   end
 
-  # Canvas's `t.replica_identity_index` indexes root_account_id through an app
+  # A `t.replica_identity_index` call indexes root_account_id through an app
   # method the static schema cannot read, so its index list may be short.
   describe "a table whose schema block called a method no reader interprets" do
     it "claims neither a missing index nor a missing column" do
@@ -449,7 +449,7 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         end
       end
 
-      # OpenProject's `has_details_table do` class_evals its block on a detail
+      # A `has_details_table do` macro class_evals its block on a detail
       # class, so a validation there reads that class's table.
       it "says nothing about a validation inside a block run on another class" do
         source = <<~RUBY

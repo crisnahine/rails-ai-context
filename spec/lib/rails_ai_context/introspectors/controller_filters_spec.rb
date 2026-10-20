@@ -212,7 +212,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
-    # Mastodon registers the acronym ActivityPub, so its base sits in activitypub/, not activity_pub/.
+    # An app that registers the acronym ActivityPub keeps its base in activitypub/, not activity_pub/.
     it "follows a base whose directory an app acronym spells" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
@@ -266,7 +266,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
-    # Mastodon: WebAppControllerConcern's included block calls vary_by, which CacheConcern gives ApplicationController.
+    # WebAppControllerConcern's included block calls vary_by, which CacheConcern gives ApplicationController.
     it "reads a base's class method an included concern's block calls, where that concern is included" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
@@ -296,7 +296,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
-    # Decidim's NeedsOrganization: the hook hands its base to a method that class_evals the filter onto it.
+    # A NeedsOrganization concern: the hook hands its base to a method that class_evals the filter onto it.
     it "reads a filter a mixin hook adds through a method it hands the including class to" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))

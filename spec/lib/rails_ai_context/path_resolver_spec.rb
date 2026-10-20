@@ -239,19 +239,19 @@ RSpec.describe RailsAiContext::PathResolver do
     end
 
     it "finds a constant under a root config/application.rb adds" do
-      mkdirs("config", "lib_static/open_project/authentication")
+      mkdirs("config", "lib_static/task_tracker/authentication")
       File.write(File.join(@root, "config/application.rb"), <<~RUBY)
-        module OpenProject
+        module TaskTracker
           class Application < Rails::Application
             config.autoload_paths << "lib_static"
           end
         end
       RUBY
-      File.write(File.join(@root, "lib_static/open_project/authentication/manager.rb"),
-                 "module OpenProject; module Authentication; class Manager; end; end; end\n")
+      File.write(File.join(@root, "lib_static/task_tracker/authentication/manager.rb"),
+                 "module TaskTracker; module Authentication; class Manager; end; end; end\n")
 
-      expect(described_class.file_for_constant(@root, "OpenProject::Authentication::Manager"))
-        .to eq(File.join(@root, "lib_static/open_project/authentication/manager.rb"))
+      expect(described_class.file_for_constant(@root, "TaskTracker::Authentication::Manager"))
+        .to eq(File.join(@root, "lib_static/task_tracker/authentication/manager.rb"))
     end
 
     it "does not take a declared root that climbs out of the app" do
@@ -328,7 +328,7 @@ RSpec.describe RailsAiContext::PathResolver do
       end
     end
 
-    it "finds a Discourse-style plugin tree" do
+    it "finds a plugin tree with a plugin.rb" do
       mkdirs("app/models", "plugins/chat/app/models")
       touch("plugins/chat/plugin.rb")
       expect(described_class.model_dirs(@root)).to include(File.join(@root, "plugins/chat/app/models"))

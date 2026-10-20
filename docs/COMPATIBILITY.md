@@ -230,32 +230,30 @@ Proof sources:
 1. `spec/e2e/in_gemfile_install_spec.rb`, `standalone_install_spec.rb`,
    `zero_config_install_spec.rb` (schema, routes, model_details, and controllers
    exercised across the install-path suite - in-Gemfile, standalone, zero-config);
-   real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`); Mastodon
-   (Rails 8.1, Ruby 3.4) in the v5.25.0 release QA, booted and static tiers,
-   standalone and in-Gemfile installs; Mastodon again in the v5.26.0 release QA,
-   with packs, in-repo engines, Postgres and concurrent tool calls covered by
-   hand where no lab shape plants them; a private Rails 8.0.5.1 API-only app
-   (Ruby 3.4.10, 133 models, 102 controllers, 1630 ActiveInteraction services,
-   516 Sidekiq workers) in the v5.27.0 QA round, booted and static tiers, with
-   every report rebuilt on a minimal Rails 8.0.5.1 fixture before it was filed.
-   In the v5.30.0 release QA: Mastodon, Discourse, OpenProject, Canvas, Forem,
-   Whitehall, Consul, OpenFoodNetwork, Huginn, Errbit, Diaspora and Plots2 in
-   the static and failed-boot tiers, and the same private app in every tier
-   and both install paths. In the v5.30.1 release QA: the same private app on
-   PostgreSQL 17 with a partitioned table added, booted and static from
-   schema.rb and structure.sql, a Rails 7.2 app whose schema.rb carries no
-   partition marker, and Discourse, Mastodon, OpenFoodNetwork and Forem
-   answering as before. In the v5.30.2 release QA: 14 real apps answered by
-   v5.30.1 and by the release branch side by side, and the lab regressions on
-   SQLite in all three tiers, PostgreSQL and MySQL. In the v5.31.0 release QA:
-   a private Rails 8.0 API app booted and static, and Discourse, Mastodon,
-   Forem, OpenFoodNetwork, OpenProject, Consul, Canvas and Errbit answered by
-   v5.30.2 and by the release branch side by side, every changed answer
-   checked against the app's source; the lab regressions on SQLite in all three
-   tiers, PostgreSQL and MySQL; and the unit suite on Ruby 3.1 with Rails 7.0.
-   In the v5.32.0 release QA: the same private app booted and static, Mastodon,
-   Discourse, OpenProject, Canvas, Whitehall, Consul, OpenFoodNetwork, Forem,
-   Huginn, Errbit, Diaspora, Plots2 and Decidim answered by v5.31.0 and by the
+   real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`); a large
+   open-source app (Rails 8.1, Ruby 3.4) in the v5.25.0 release QA, booted and
+   static tiers, standalone and in-Gemfile installs; the same app again in the
+   v5.26.0 release QA, with packs, in-repo engines, Postgres and concurrent
+   tool calls covered by hand where no lab shape plants them; a private Rails
+   8.0.5.1 API-only app (Ruby 3.4.10, 133 models, 102 controllers, 1630
+   ActiveInteraction services, 516 Sidekiq workers) in the v5.27.0 QA round,
+   booted and static tiers, with every report rebuilt on a minimal Rails
+   8.0.5.1 fixture before it was filed.
+   In the v5.30.0 release QA: 12 open-source apps in the static and
+   failed-boot tiers, and the same private app in every tier and both install
+   paths. In the v5.30.1 release QA: the same private app on PostgreSQL 17
+   with a partitioned table added, booted and static from schema.rb and
+   structure.sql, a Rails 7.2 app whose schema.rb carries no partition marker,
+   and four of the open-source apps answering as before. In the v5.30.2
+   release QA: 14 real apps answered by v5.30.1 and by the release branch side
+   by side, and the lab regressions on SQLite in all three tiers, PostgreSQL
+   and MySQL. In the v5.31.0 release QA: a private Rails 8.0 API app booted
+   and static, and eight of the open-source apps answered by v5.30.2 and by
+   the release branch side by side, every changed answer checked against the
+   app's source; the lab regressions on SQLite in all three tiers, PostgreSQL
+   and MySQL; and the unit suite on Ruby 3.1 with Rails 7.0.
+   In the v5.32.0 release QA: the same private app booted and static, and 13
+   open-source apps answered by v5.31.0 and by the
    release branch side by side, every changed answer checked against the app's
    source; 23 small apps built one per project shape (API-only, no Active
    Record, Mongoid, Sequel, multi-database, engine root and dummy, packs,
@@ -285,9 +283,8 @@ Proof sources:
    submodule; and the unit suite and the E2E harness on Linux, macOS and
    Windows.
    In the v5.34.0 release QA: the 21 apps of the v5.33.0 acceptance run
-   (Mastodon, OpenProject, Discourse, Canvas, Forem, Whitehall, Consul, Open
-   Food Network, Diaspora, Errbit, Huginn, Plots2, a private app and the small
-   blogs), 11 booted and 10 static, their answers compared with v5.33.0's,
+   (12 open-source apps, a private app and the small blogs), 11 booted
+   and 10 static, their answers compared with v5.33.0's,
    and their strong params and model tables compared again after the last
    fix; a fresh Rails 8.1 and a fresh Rails 7.0 app through the install,
    `ai:context` twice, `zeitwerk:check` with the engine mounted, MCP over the
@@ -354,6 +351,12 @@ Proof sources:
    three corpus apps in the static tier; the unit suite on Ruby 3.1 to 4.0
    with Rails 7.0 to 8.1 on macOS, with seeds 1, 27377 and 90210 and defined
    order; and the unit suite and the E2E harness on Linux, macOS and Windows.
+   In the v5.36.6 release QA: each fix's example failing on the code before
+   it; the answers of `rails_migration_advisor`, `rails_dependency_graph`,
+   `rails_analyze_feature` and `rails_performance_check` on ten open-source
+   and private apps in the static tier, compared with v5.36.5 and every
+   changed answer checked against the app's source; and the unit suite and
+   the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

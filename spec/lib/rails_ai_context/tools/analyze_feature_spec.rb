@@ -675,7 +675,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           "Status" => {
             table_name: "statuses",
             callbacks: {
-              "around_create" => %w[Mastodon::Snowflake::Callbacks],
+              "around_create" => %w[Social::Snowflake::Callbacks],
               "before_validation" => %w[[inline_block] set_slug]
             }
           }
@@ -686,10 +686,10 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     it "names the callback object and the block without a colon" do
       text = described_class.call(feature: "status").content.first[:text]
 
-      expect(text).to include("Status: around_create Mastodon::Snowflake::Callbacks")
+      expect(text).to include("Status: around_create Social::Snowflake::Callbacks")
       expect(text).to include("Status: before_validation [inline_block]")
       expect(text).to include("Status: before_validation :set_slug")
-      expect(text).not_to include(":Mastodon")
+      expect(text).not_to include(":Social")
     end
 
     # after_commit_on_create is the key this gem files `after_create_commit`
@@ -800,6 +800,47 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     end
   end
 
+  # Token::ICal lives in token/ical.rb where the app declares the ICal acronym,
+  # and this process underscores the name to token/i_cal.
+  describe "a feature named by a class whose name spells an acronym" do
+    it "lists the model, its test, and no gap" do
+      Dir.mktmpdir("rac_acronym") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "spec", "models", "token"))
+        File.write(File.join(tmp, "spec", "models", "token", "ical_token_spec.rb"), "RSpec.describe Token::ICal do\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "Token::ICal" => { table_name: "tokens", file: "app/models/token/ical.rb", associations: [], validations: [], scopes: [] } }
+        )
+
+        text = described_class.call(feature: "Token::ICal").content.first[:text]
+
+        expect(text).to include("### Token::ICal")
+        expect(text).to include("spec/models/token/ical_token_spec.rb")
+        expect(text).not_to include("no test file found")
+      end
+    end
+
+    # The file's name is the model's only when it names that model.
+    it "still reports a second model its file shares with a tested one" do
+      Dir.mktmpdir("rac_shared_file") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "spec", "models"))
+        File.write(File.join(tmp, "spec", "models", "payment_spec.rb"), "RSpec.describe Payment do\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Payment" => { table_name: "payments", file: "app/models/payment.rb", associations: [], validations: [], scopes: [] },
+            "PaymentRefund" => { table_name: "payment_refunds", file: "app/models/payment.rb", associations: [], validations: [], scopes: [] }
+          }
+        )
+
+        text = described_class.call(feature: "payment").content.first[:text]
+
+        expect(text).to include("Model `PaymentRefund` - no test file found")
+        expect(text).not_to include("Model `Payment` - no test file found")
+      end
+    end
+  end
+
   # The glob tier read queue_as out of the job's own file, so a queue
   # inherited from ApplicationJob printed as "default".
   describe "jobs, mailers and channels read from the payload" do
@@ -897,6 +938,12 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
       expect(text).to include("AIMatchListing")
       expect(text).not_to include("AiMatchListing")
+    end
+
+    it "finds the model when the feature is its class name" do
+      text = described_class.call(feature: "AIMatchListing").content.first[:text]
+
+      expect(text).to include("### AIMatchListing")
     end
   end
 

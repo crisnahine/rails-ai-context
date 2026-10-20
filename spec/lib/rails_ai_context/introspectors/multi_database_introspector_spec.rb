@@ -156,7 +156,7 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     end
   end
 
-  # Canvas and Plots2 commit no database.yml, only example files.
+  # Some apps commit no database.yml, only example files.
   describe "an app that commits only example database files" do
     it "records the adapters every example file names" do
       hide_const("ActiveRecord")
@@ -295,28 +295,28 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
         development:
           primary:
             <<: *default
-            database: <%= ENV['DB_NAME'] || 'mastodon_development' %>
+            database: <%= ENV['DB_NAME'] || 'social_development' %>
           replica:
             <<: *default
-            database: <%= ENV['DB_NAME'] || 'mastodon_development' %>
+            database: <%= ENV['DB_NAME'] || 'social_development' %>
             replica: true
 
         test:
           primary:
             <<: *default
-            database: <%= ENV['DB_NAME'] || 'mastodon' %>_test
+            database: <%= ENV['DB_NAME'] || 'social' %>_test
           replica:
             <<: *default
-            database: <%= ENV['DB_NAME'] || 'mastodon' %>_test
+            database: <%= ENV['DB_NAME'] || 'social' %>_test
             replica: true
 
         production:
           primary:
             <<: *default
-            database: <%= ENV['DB_NAME'] || 'mastodon_production' %>
+            database: <%= ENV['DB_NAME'] || 'social_production' %>
           replica:
             <<: *default
-            database: <%= ENV['REPLICA_DB_NAME'] || 'mastodon_production' %>
+            database: <%= ENV['REPLICA_DB_NAME'] || 'social_production' %>
             replica: true
             database_tasks: <%= ENV['REPLICA_DB_TASKS'] || 'true' %>
       YAML
@@ -340,7 +340,7 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     end
   end
 
-  # configs_for hides a replica unless asked, so Mastodon's booted run lost it
+  # configs_for hides a replica unless asked, so a booted run lost it
   # while the static tier read it from the file.
   describe "a booted app with a replica" do
     it "lists the replica the live configurations hold" do

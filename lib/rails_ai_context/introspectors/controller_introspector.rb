@@ -501,7 +501,7 @@ module RailsAiContext
                                filters: filter_names(filters))
       end
 
-      # What an app controller concern (Whitehall's TranslationControllerConcern)
+      # What an app controller concern (a TranslationControllerConcern, say)
       # would have Rails dispatch to; the routes decide which are actions.
       def concern_actions(concerns, within, filters)
         Array(concerns).flat_map do |concern|

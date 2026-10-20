@@ -18,7 +18,7 @@ RSpec.describe RailsAiContext::RouteCoverage do
     end
 
     it "names the routes drawn into engines, which the count leaves out" do
-      routes = { dynamic_routes: 2, engine_routes: [ { engine: "Spree::Core::Engine", routes: [ {}, {} ] },
+      routes = { dynamic_routes: 2, engine_routes: [ { engine: "Shop::Core::Engine", routes: [ {}, {} ] },
                                                      { engine: "Blog::Engine", routes: [ {} ] } ] }
       expect(described_class.suffix(routes)).to eq(", 2 dynamic constructs not expanded, 3 more in engine tables")
     end
@@ -112,7 +112,7 @@ RSpec.describe RailsAiContext::RouteCoverage do
       expect(merged.first[:verb]).to eq("PATCH|PUT")
     end
 
-    # Forem mounts api/v0/listings and api/v1/listings on the same path. Without
+    # An app can mount api/v0/listings and api/v1/listings on the same path. Without
     # the controller in the match the second version's PATCH found the first
     # version's already-merged entry, declined to merge into "PATCH|PUT" and was
     # appended twice - so the flat count said 769 where the per-controller sum

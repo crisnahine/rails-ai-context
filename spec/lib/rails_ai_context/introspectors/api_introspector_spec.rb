@@ -204,7 +204,7 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
 
       before do
         FileUtils.mkdir_p(grape_dir)
-        File.write(File.join(grape_dir, "api.rb"), "module API; module V3; class WorkPackagesAPI < ::API::OpenProjectAPI; end; end; end\n")
+        File.write(File.join(grape_dir, "api.rb"), "module API; module V3; class WorkPackagesAPI < ::API::RootAPI; end; end; end\n")
       end
 
       after { FileUtils.rm_rf(File.join(Rails.root, "lib/api")) }
@@ -389,12 +389,12 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
         before do
           FileUtils.mkdir_p(File.dirname(cors_path))
           File.write(cors_path, <<~RUBY)
-            class Discourse::Cors
+            class Forum::Cors
               def call(env)
               end
             end
 
-            Rails.configuration.middleware.insert_before ActionDispatch::Flash, Discourse::Cors
+            Rails.configuration.middleware.insert_before ActionDispatch::Flash, Forum::Cors
           RUBY
         end
 
@@ -405,7 +405,7 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
 
           expect(cors[:file]).to eq("config/initializers/008-rack-cors.rb")
           expect(cors[:allows]).to eq([])
-          expect(cors[:inserts]).to eq([ "Discourse::Cors" ])
+          expect(cors[:inserts]).to eq([ "Forum::Cors" ])
         end
       end
 

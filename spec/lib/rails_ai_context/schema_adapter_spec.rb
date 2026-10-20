@@ -74,7 +74,7 @@ RSpec.describe RailsAiContext::SchemaAdapter do
       expect(described_class.label(forward)).to eq("PostgreSQL or SQLite")
     end
 
-    # Huginn bundles pg and mysql2 and runs on MySQL. Picking whichever gem
+    # An app can bundle pg and mysql2 and run on MySQL. Picking whichever gem
     # came first in a constant named PostgreSQL in every generated file.
     it "refuses to pick between two adapter gems and names them" do
       context = { schema: { adapter: "static_parse" }, gems: { notable_gems: [ { name: "pg" }, { name: "mysql2" } ] } }
@@ -112,7 +112,7 @@ RSpec.describe RailsAiContext::SchemaAdapter do
       expect(described_class.label_with_reason(context)).to eq("MySQL or SQLite, database.yml does not say which")
     end
 
-    # Plots2 commits no database.yml: its five example files name both.
+    # An app may commit no database.yml, only example files that name both.
     it "says the example files name each when that is where the candidates came from" do
       context = { schema: { adapter: "static_parse" }, multi_database: { databases: [], example_adapters: %w[mysql2 sqlite3] } }
       expect(described_class.label_with_reason(context)).to eq("MySQL or SQLite, its database.yml examples name each")
@@ -129,7 +129,7 @@ RSpec.describe RailsAiContext::SchemaAdapter do
       expect(described_class.label_with_reason(context)).to eq("PostgreSQL")
     end
 
-    # Canvas commits no database.yml and bundles pg and sqlite3, but its
+    # An app can commit no database.yml and bundle pg and sqlite3, while its
     # database.yml.example says postgresql and its tables have jsonb columns.
     describe "evidence before the gem list" do
       let(:two_gems) { { notable_gems: [ { name: "pg" }, { name: "sqlite3" } ] } }

@@ -104,8 +104,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .to include([ :dry_runs, "DryRunnable::Wrapper" ])
   end
 
-  # OpenProject's acts_as_customizable extends with HumanAttributeName from lib/human_attribute_name.rb,
-  # which declares Redmine::Acts::Customizable::HumanAttributeName.
+  # An acts_as_customizable can extend with HumanAttributeName from lib/human_attribute_name.rb,
+  # which declares Plugin::Acts::Customizable::HumanAttributeName.
   it "names a module found beside the file naming it by the constant that file declares" do
     lib = File.join(tmpdir, "plugins", "cust", "lib")
     FileUtils.mkdir_p(lib)
@@ -130,7 +130,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     FileUtils.cp_r(File.join(tmpdir, "."), other)
     FileUtils.mkdir_p(File.join(other, "config"))
     File.write(File.join(other, "config", "application.rb"), <<~RUBY)
-      module Huginn
+      module Agents
         class Application < Rails::Application
           config.autoload_paths += %W[\#{config.root}/lib]
         end
@@ -144,7 +144,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     FileUtils.remove_entry(other) if other
   end
 
-  # OpenProject's ApplicationRecord includes Acts::Watchable, whose
+  # An ApplicationRecord can include Acts::Watchable, whose
   # `has_many :watchers` sits in `def acts_as_watchable ... class_eval do`
   # and runs only for the eleven models that call it. Collecting it gave
   # every model four associations it does not have.
@@ -214,7 +214,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(collected.keys).to eq([ :callbacks ])
   end
 
-  # OpenProject's WorkPackage includes WorkPackage::Validations, kept at
+  # A WorkPackage can include WorkPackage::Validations, kept at
   # app/models/work_package/validations.rb: app/models is a Zeitwerk root, so
   # that is where the constant lives, and no concerns directory holds it.
   it "reads a mixin from an app/* autoload root, resolved from the including class's namespace" do
@@ -237,7 +237,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(collected[:validations].first[:attributes]).to eq([ "subject" ])
   end
 
-  # A nested class's include is the nested class's: Huginn's Event was told
+  # A nested class's include is the nested class's: an Event model was told
   # its concerns included Enumerable, and called it unread.
   it "follows only the includes of the concern's own body" do
     File.write(File.join(concern_dir, "liquid_droppable.rb"), <<~RUBY)
@@ -299,7 +299,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :watchers ])
   end
 
-  # OpenProject's Redmine::Acts::Attachable keeps InstanceMethods in its own
+  # A Plugin::Acts::Attachable can keep InstanceMethods in its own
   # file; that module's `included do` declares an after_save for the classes
   # acts_as_attachable sends it to, and for no other. Read as the outer
   # module's body, it gave the callback to every model.
@@ -335,7 +335,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .to eq([ [ "persist_attachments_claimed", "Attachable::InstanceMethods" ] ])
   end
 
-  # Diaspora's Relayable, Fields::Guid and Taggable declare everything in
+  # Concerns such as Relayable, Fields::Guid and Taggable can declare everything in
   # `def self.included(model) model.class_eval do ... end end`. Ruby runs that
   # hook on every include, so its body belongs to every includer; read as an
   # uncalled method it was dropped, and Comment lost its author and likes.
@@ -404,7 +404,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(unresolved).to eq([ "Settings::ClassMethods#plugin_settings" ])
   end
 
-  # Canvas's CollectionRestrictor hook includes MasterCourses::Restrictor::CommonMethods, which
+  # A CollectionRestrictor hook can include MasterCourses::Restrictor::CommonMethods, which
   # restrictor.rb declares; Zeitwerk loads it with MasterCourses::Restrictor.
   it "reads a module from its outer module's file, through a hook's include too" do
     File.write(File.join(concern_dir, "restrictor.rb"), <<~RUBY)
@@ -645,7 +645,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :revisions ])
   end
 
-  # Canvas mixes one 2,000-line initializer's modules into every model, and
+  # One app mixes one 2,000-line initializer's modules into every model, and
   # each model's walk searched that tree three more ways: 12s of a static run.
   it "searches a concern file's tree once per run when a cache is passed" do
     File.write(File.join(concern_dir, "publishable.rb"), <<~RUBY)
@@ -693,7 +693,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
   end
 
   # Every model walked its bases' concerns again with its own calls, though
-  # most walks never meet a method the class calls: on Huginn that loop was a
+  # most walks never meet a method the class calls: on one app that loop was a
   # fifth of a tool call.
   describe "a walk kept across classes in one run" do
     before do
@@ -733,7 +733,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
                                                     calls: singleton_lookup({ "tracks" => [ nil ] })).collected)
     end
 
-    # OpenProject's authorization concern overrides `before_action`, which every
+    # An authorization concern can override `before_action`, which every
     # controller calls: each one walked ApplicationController's concerns again.
     it "is kept for a class that calls a concern method declaring nothing the walk collects" do
       File.write(File.join(concern_dir, "trackable.rb"), <<~RUBY)
@@ -761,8 +761,8 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
   end
 
-  # Mastodon's ApplicationController concerns call a class method from their own
-  # included blocks, which forced a second walk for each of its 280 controllers.
+  # One app's ApplicationController concerns called a class method from their own
+  # included blocks, which forced a second walk for each of its controllers.
   it "keeps a walk the concerns' own included calls repeated, for classes that call none of what it asked" do
     File.write(File.join(concern_dir, "watchable.rb"), "module Watchable\n  module ClassMethods\n    def acts_as_watchable\n      has_many :watchers\n    end\n  end\nend\n")
     File.write(File.join(concern_dir, "journalized.rb"), "module Journalized\n  extend ActiveSupport::Concern\n  included do\n    acts_as_watchable\n  end\nend\n")
