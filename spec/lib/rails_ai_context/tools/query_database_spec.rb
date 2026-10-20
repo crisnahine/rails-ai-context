@@ -225,7 +225,8 @@ RSpec.describe "the database argument" do
         "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`._"
       )
       expect(answer).to match(/^_Pending migrations could not be read for bad: The bad database cannot be reached: .*unable to open database file.* Check the file its config\/database.yml entry names\._$/i)
-      expect(answer).not_to include("mem")
+      # By its label: an error text or a temp path can hold the letters.
+      expect(answer).not_to match(/\bmem\b/)
     end
 
     it "names the databases that are up to date beside one it could not read" do
