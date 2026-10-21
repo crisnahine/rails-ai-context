@@ -376,6 +376,23 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
                               [ "projects", "owner_id" ])
       end
 
+      it "reads a tree macro as the declaring class's alone where a file declares two models" do
+        models = {
+          "payment.rb" => "class Payment < ApplicationRecord\n  acts_as_tree\nend\n\nclass PaymentRefund < ApplicationRecord\nend\n"
+        }
+        missing = missing_for(<<~RUBY, models)
+          create_table "payments" do |t|
+            t.integer "parent_id"
+          end
+
+          create_table "payment_refunds" do |t|
+            t.integer "parent_id"
+          end
+        RUBY
+
+        expect(missing.map { |m| [ m[:table], m[:column] ] }).to contain_exactly([ "payments", "parent_id" ])
+      end
+
       # paper_trail's has_paper_trail adds `has_many :versions, as: :item` when the app boots,
       # so only the booted models section carries the association.
       describe "a has_paper_trail model's versions table" do
@@ -876,6 +893,75 @@ end
         RUBY
 
         expect(risks).to be_empty
+      end
+    end
+
+    it "counts the has_many a module nested in the model's file adds" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "nest.rb"),
+                   "class Nest < ApplicationRecord\n  module Inner\n    extend ActiveSupport::Concern\n" \
+                   "    included do\n      has_many :items\n    end\n  end\n  include Inner\n  has_many :own_things\nend\n")
+
+        candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
+
+        expect(candidates).to contain_exactly(a_hash_including(model: "Nest", associations: contain_exactly("items", "own_things")))
+      end
+    end
+
+    it "counts only a model's own has_many where its file declares another model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "payment.rb"),
+                   "class Payment < ApplicationRecord\n  has_many :lines\nend\n\n" \
+                   "class PaymentRefund < ApplicationRecord\n  has_many :notes\nend\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]).to be_empty
+      end
+    end
+
+    it "counts the has_many of a module that a module the class includes includes in turn" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "payment.rb"),
+                   "class Payment < ApplicationRecord\n  module Auditing\n    extend ActiveSupport::Concern\n" \
+                   "    included do\n      has_many :audits\n    end\n  end\n" \
+                   "  module Trackable\n    extend ActiveSupport::Concern\n    include Auditing\n" \
+                   "    included do\n      has_many :tracks\n    end\n  end\n  include Trackable\nend\n")
+
+        candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
+
+        expect(candidates).to contain_exactly(a_hash_including(model: "Payment", associations: contain_exactly("audits", "tracks")))
+      end
+    end
+
+    it "reads a class from its own file once, though another file declares it too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "payment.rb"),
+                   "class Payment < ApplicationRecord\nend\n\nclass PaymentRefund < ApplicationRecord\n  has_many :a\n  has_many :b\nend\n")
+        File.write(File.join(dir, "app", "models", "payment_refund.rb"),
+                   "class PaymentRefund < ApplicationRecord\n  has_many :notes\n  has_many :lines\nend\n")
+
+        candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
+
+        expect(candidates).to contain_exactly(a_hash_including(model: "PaymentRefund", associations: %w[notes lines]))
+      end
+    end
+
+    it "reads a second model in a file as a model of its own, with only the modules it includes" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"), "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+        File.write(File.join(dir, "app", "models", "payment.rb"),
+                   "class Payment < ApplicationRecord\n  module Trackable\n    extend ActiveSupport::Concern\n" \
+                   "    included do\n      has_many :events\n    end\n  end\n  include Trackable\nend\n\n" \
+                   "class PaymentRefund < Payment\n  has_many :notes\n  has_many :lines\nend\n\n" \
+                   "class Ledger < ApplicationRecord\n  has_many :entries\nend\n")
+
+        candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
+
+        expect(candidates).to contain_exactly(a_hash_including(model: "PaymentRefund", associations: %w[notes lines]))
       end
     end
 

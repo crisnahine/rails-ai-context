@@ -4,6 +4,8 @@ module RailsAiContext
   module Introspectors
     module Listeners
       class GenericMacroListener < BaseListener
+        include OwnerScope
+
         # `any_receiver` also counts `base.macro`, the shape a mixin's `self.included(base)` hook writes.
         def initialize(*target_methods, block_source: [], call_source: [], any_receiver: false)
           super()
@@ -35,7 +37,8 @@ module RailsAiContext
             end_offset:    node.location.end_offset,
             parent_offset: @enclosing.last&.location&.start_offset,
             location:      node.location.start_line,
-            confidence:    confidence_for(node)
+            confidence:    confidence_for(node),
+            owner:         @owner_stack.dup
           }
           @results.last[:text] = one_line_source(node) if @call_source.include?(node.name)
           condition = macro_condition

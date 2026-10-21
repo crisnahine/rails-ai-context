@@ -520,6 +520,199 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Eager loading loads both classes from the one file, and each keeps its own declarations.
+    it "lists a second model class in a model file with its own declarations" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/payment.rb" => "class Payment < ApplicationRecord\n  has_many :payment_refunds\n  enum :state, { open: 0 }\n" \
+                                     "  class Error < StandardError; end\nend\n\n" \
+                                     "class PaymentRefund < ApplicationRecord\n  belongs_to :payment\n  validates :payment, presence: true\n" \
+                                     "  enum :kind, { full: 0 }\nend\n",
+          "app/models/entry.rb" => "module Entry\n  class Delegator < ApplicationRecord\n    self.abstract_class = true\n  end\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Payment", "PaymentRefund")
+        expect(models["Payment"][:associations].map { |a| a[:name] }).to eq([ "payment_refunds" ])
+        expect(models["Payment"][:validations]).to be_empty
+        expect(models["Payment"][:enums].keys).to eq([ "state" ])
+        expect(models["PaymentRefund"]).to include(file: "app/models/payment.rb", table_name: "payment_refunds")
+        expect(models["PaymentRefund"][:associations].map { |a| a[:name] }).to eq([ "payment" ])
+        expect(models["PaymentRefund"][:validations].map { |v| v[:attributes] }).to eq([ [ "payment" ] ])
+        expect(models["PaymentRefund"][:enums].keys).to eq([ "kind" ])
+        expect(models["Payment"][:associations].first).not_to have_key(:owner)
+      end
+    end
+
+    it "lists a model a model file assigns with Class.new beside its own class" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/thing.rb" => "class Thing < ApplicationRecord\nend\n\nGadget = Class.new(ApplicationRecord) do\n  belongs_to :thing\nend\n" \
+                                   "Oops = Class.new(StandardError)\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Thing", "Gadget")
+        expect(models["Gadget"][:associations].map { |a| a[:name] }).to eq([ "thing" ])
+        expect(Array(models["Thing"][:associations])).to be_empty
+      end
+    end
+
+    it "keeps a model's own file over a copy another model's file declares, and an abstract neighbour hides nothing" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/payment.rb" => "class Payment < ApplicationRecord\nend\n\nclass Tracker < ApplicationRecord\n  has_many :payments\nend\n",
+          "app/models/tracker.rb" => "class Tracker < ApplicationRecord\n  self.table_name = \"payouts\"\n  has_many :audits\nend\n",
+          "app/models/ledger.rb" => "class Ledger < ApplicationRecord\nend\n\nclass LedgerBase < ApplicationRecord\n  self.abstract_class = true\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Payment", "Tracker", "Ledger")
+        expect(models["Tracker"]).to include(file: "app/models/tracker.rb", table_name: "payouts")
+        expect(models["Tracker"][:associations].map { |a| a[:name] }).to eq([ "audits" ])
+      end
+    end
+
+    it "lists a class that shares a model file only when it reaches a record base through the app" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "db/schema.rb" => "ActiveRecord::Schema.define do\n  create_table \"payments\"\n  create_table \"payment_refunds\"\n  create_table \"errors\"\nend\n",
+          "app/models/payment.rb" => "class Payment < Vendor::Base\n  has_many :payment_refunds\nend\n\n" \
+                                     "class PaymentRefund < Vendor::Base\nend\n\nclass Error < StandardError\nend\n\n" \
+                                     "class Refund < Payment\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to contain_exactly("Payment", "Refund")
+      end
+    end
+
+    it "names a module nested in the model's file by the constant Ruby reaches" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/payment.rb" => "class Payment < ApplicationRecord\n  module Trackable\n    extend ActiveSupport::Concern\n  end\n" \
+                                     "  include Trackable\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Payment"][:concerns]).to eq([ "Payment::Trackable" ])
+      end
+    end
+
+    # Ruby has not reached a module written below the include, so the include finds the top-level one.
+    it "takes a top-level concern over a same-named module the file defines below the include" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/concerns/auditable.rb" => "module Auditable\n  extend ActiveSupport::Concern\n  included do\n    scope :audited, -> { all }\n  end\nend\n",
+          "app/models/order.rb" => "class Order < ApplicationRecord\n  include Auditable\nend\n\nmodule Order::Auditable\n  extend ActiveSupport::Concern\n" \
+                                   "  included do\n    scope :order_audited, -> { all }\n  end\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        order = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+        expect(order[:concerns]).to eq([ "Auditable" ])
+        expect(order[:scopes].map { |sc| sc[:name] }).to eq([ "audited" ])
+      end
+    end
+
+    it "keeps two classes of one short name in a file apart" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/payment.rb" => "class Payment < ApplicationRecord\n  has_many :lines\n  validates :amount, presence: true\nend\n\n" \
+                                     "module Legacy\n  class Payment < ApplicationRecord\n    has_many :entries\n  end\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Legacy::Payment"][:associations].map { |a| a[:name] }).to eq([ "entries" ])
+        expect(models["Legacy::Payment"][:validations]).to be_empty
+        expect(models["Payment"][:associations].map { |a| a[:name] }).to eq([ "lines" ])
+      end
+    end
+
+    # With no schema, an outside base counts as a record's when the class declares associations.
+    it "takes a gem-based model on what a module nested in its file declares, and never runs an autoload" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/tag.rb" => "class Tag < ActsAsTaggableOn::Tag\n  module Extras\n    extend ActiveSupport::Concern\n" \
+                                 "    included do\n      has_many :extra_taggings\n    end\n  end\n  include Extras\nend\n",
+          "app/models/invoice.rb" => "class Invoice < RaisingVendorBase\n  has_many :lines\nend\n",
+          "lib/raising_vendor_base.rb" => "raise \"loaded app code\"\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+        Object.autoload(:RaisingVendorBase, File.join(dir, "lib", "raising_vendor_base.rb"))
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models.keys).to include("Tag", "Invoice")
+        expect(models["Invoice"]).not_to have_key(:error)
+      ensure
+        Object.send(:remove_const, :RaisingVendorBase) if Object.autoload?(:RaisingVendorBase)
+      end
+    end
+
+    it "reads what a module nested in the model's file declares when the model includes it" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/nest.rb" => "class Nest < ApplicationRecord\n  module Inner\n    extend ActiveSupport::Concern\n    included do\n" \
+                                  "      scope :recent, -> { order(:id) }\n      has_many :items\n      validates :title, presence: true\n" \
+                                  "      enum :state, { open: 0 }\n    end\n  end\n  include Inner\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        nest = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Nest"]
+
+        expect(nest[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(nest[:associations].map { |a| a[:name] }).to eq([ "items" ])
+        expect(nest[:validations].map { |v| v[:attributes] }).to eq([ [ "title" ] ])
+        expect(nest[:enums].keys).to eq([ "state" ])
+      end
+    end
+
     it "finds a model assigned Class.new of a record base, with what its block declares" do
       Dir.mktmpdir do |dir|
         files = {
@@ -1795,6 +1988,85 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           expect(customer[:associations].map { |a| a[:name] }).to include("tickets")
           expect(customer).not_to have_key(:table_name)
         end
+      end
+    end
+
+    it "keeps a second document's declarations off the first in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "person.rb"), <<~RUBY)
+          class Person
+            include Mongoid::Document
+            field :name, type: String
+            has_many :posts
+          end
+
+          class Address
+            include Mongoid::Document
+            field :street, type: String
+            belongs_to :country
+            validates :street, presence: true
+          end
+
+          class Oops < StandardError
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          expect(result.keys).to include("Person", "Address")
+          expect(result.keys).not_to include("Oops")
+          person = result["Person"]
+          expect(person[:associations].map { |a| a[:name] }).to eq([ "posts" ])
+          expect(person[:associations].first).not_to have_key(:owner)
+          expect(Array(person[:validations])).to be_empty
+          expect(person[:fields].map { |f| f[:name] }).not_to include(:street)
+          expect(result["Address"][:fields].map { |f| f[:name] }).to include(:street)
+          expect(result["Address"][:associations].map { |a| a[:name] }).to eq([ "country" ])
+        end
+      end
+    end
+
+    it "reads a module nested in a document's file, and an abstract class there hides no document" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "person.rb"), <<~RUBY)
+          class Person
+            include Mongoid::Document
+            module Extras
+              extend ActiveSupport::Concern
+              included do
+                field :nick
+                has_many :posts
+                validates :nick, presence: true
+              end
+            end
+            include Extras
+            field :name
+          end
+
+          class PersonBase < ActiveRecord::Base
+            self.abstract_class = true
+          end
+
+          class Badge
+            include Mongoid::Document
+            field :label
+          end
+        RUBY
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        person = models["Person"]
+
+        expect(person[:fields].map { |f| f[:name] }).to include(:nick, :name)
+        expect(person[:associations].map { |a| a[:name] }).to eq([ "posts" ])
+        expect(person[:validations].map { |v| v[:attributes] }).to eq([ [ "nick" ] ])
+        expect(models["Badge"][:fields].map { |f| f[:name] }).not_to include(:nick)
+        expect(models["Badge"][:associations]).to be_empty
       end
     end
 

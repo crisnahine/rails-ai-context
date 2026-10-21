@@ -193,7 +193,8 @@ module RailsAiContext
       # declares no class and so appears here not at all. An `X = Class.new(Base)`
       # counts only when `path_name` (the constant the file's path spells) names X,
       # as Zeitwerk would: an error constant beside a class or in a mixin is never the file's class.
-      def declarations(source, path_name: nil)
+      # `all: true` answers every one, eager loading's view of the file.
+      def declarations(source, path_name: nil, all: false)
         return [] unless source
 
         root = AstCache.parse_string(source)&.value
@@ -202,6 +203,7 @@ module RailsAiContext
         # Keyed by the cached tree, so the entry lives as long as the parse:
         # one run asks the same file three or four times.
         found = (DECLARATIONS[root] ||= declarations_in(root))
+        return found[:all].dup if all
         return found[:classes].dup unless path_name
 
         found[:all].select { |d| found[:classes].include?(d) || path_names?(d.name, path_name) }
@@ -246,6 +248,8 @@ module RailsAiContext
       #
       # @return [Hash{String => Prism::ModuleNode}]
       def module_nodes(root)
+        return {} unless root
+
         constants(root).select { |_, node| node.is_a?(Prism::ModuleNode) }
                        .group_by(&:first).transform_values { |found| definition(found.map { |_, node| node }) }
       end

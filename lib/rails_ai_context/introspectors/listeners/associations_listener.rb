@@ -8,6 +8,7 @@ module RailsAiContext
       # belongs_to delegated_type declares
       class AssociationsListener < BaseListener
         include WithOptionsScope
+        include OwnerScope
 
         ASSOCIATION_METHODS = %i[
           belongs_to has_many has_one has_and_belongs_to_many
@@ -42,7 +43,8 @@ module RailsAiContext
             delegated_types_source: (delegated_types_source(node) if delegated),
             extension_methods: extension_methods(node),
             location:      node.location.start_line,
-            confidence:    confidence_for(node)
+            confidence:    confidence_for(node),
+            owner:         @owner_stack.dup
           }.compact
         end
 
@@ -58,7 +60,8 @@ module RailsAiContext
             computed_name: (true unless literal),
             options:       scope_options(receiver_name(node)).merge(extract_keyword_sources(node).slice(*TENANT_OPTIONS)),
             location:      node.location.start_line,
-            confidence:    confidence_for(node)
+            confidence:    confidence_for(node),
+            owner:         @owner_stack.dup
           }.compact
         end
 

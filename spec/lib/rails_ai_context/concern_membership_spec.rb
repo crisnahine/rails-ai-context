@@ -4,6 +4,107 @@ require "spec_helper"
 require "tmpdir"
 
 RSpec.describe RailsAiContext::ConcernMembership do
+  describe ".included_modules and .mixins_with_modules" do
+    let(:modules) do
+      root = RailsAiContext::AstCache.parse_string(<<~RUBY).value
+        class Payment
+          module B; end
+          module A; end
+          module Trackable; end
+        end
+      RUBY
+      RailsAiContext::Introspectors::DeclaredConstant.module_nodes(root)
+    end
+
+    it "follows only the mixins that reach the ancestor chain" do
+      mixins = [
+        { name: "A", owner: [ "Payment" ], ancestor: true, location: 9 },
+        { name: "B", owner: [ "Payment", "A" ], ancestor: false, location: 9 },
+        { name: "Trackable", owner: [ "Payment", "A" ], ancestor: true, location: 9 }
+      ]
+
+      expect(described_class.included_modules(mixins, "Payment", [ "Payment" ], modules)).to contain_exactly("Payment::A", "Payment::Trackable")
+    end
+
+    it "hands on a mixin whose in-file namesake is defined below the include" do
+      root = RailsAiContext::AstCache.parse_string("class Project\n  include Hierarchy\nend\n\nmodule Hierarchy\nend\n").value
+      modules = RailsAiContext::Introspectors::DeclaredConstant.module_nodes(root)
+      mixins = [ { name: "Hierarchy", owner: [ "Project" ], ancestor: true, location: 2 } ]
+
+      expect(described_class.mixins_with_modules(mixins, "Project", [ "Project" ], modules).map { |m| m[:name] }).to eq([ "Hierarchy" ])
+    end
+
+    it "takes no module the file defines below the include as the one included" do
+      root = RailsAiContext::AstCache.parse_string("class Project\n  include Hierarchy\nend\n\nmodule Hierarchy\nend\n").value
+      modules = RailsAiContext::Introspectors::DeclaredConstant.module_nodes(root)
+      mixins = [ { name: "Hierarchy", owner: [ "Project" ], ancestor: true, location: 2 } ]
+
+      expect(described_class.included_modules(mixins, "Project", [ "Project" ], modules)).to be_empty
+    end
+
+    # A module's `included do` runs at the class's include, after every module above the class exists.
+    it "follows an include written inside an included module whatever its line, and a one-line file" do
+      source = "module A\n  included do\n    include B\n  end\nend\n\nmodule B\nend\n\nclass Foo\n  include A\nend\n"
+      modules = RailsAiContext::Introspectors::DeclaredConstant.module_nodes(RailsAiContext::AstCache.parse_string(source).value)
+      mixins = [ { name: "B", owner: [ "A" ], ancestor: true, location: 3 }, { name: "A", owner: [ "Foo" ], ancestor: true, location: 11 } ]
+      expect(described_class.included_modules(mixins, "Foo", [ "Foo" ], modules)).to contain_exactly("A", "B")
+
+      one_line = RailsAiContext::Introspectors::DeclaredConstant.module_nodes(RailsAiContext::AstCache.parse_string("module A; end; class Foo; include A; end\n").value)
+      expect(described_class.included_modules([ { name: "A", owner: [ "Foo" ], ancestor: true, location: 1 } ], "Foo", [ "Foo" ], one_line)).to eq([ "A" ])
+    end
+
+    it "reads a chained include against the line of the class's include that brought it in" do
+      source = "module A\n  included do\n    include Tracked\n  end\nend\n\nclass Payment\n  include A\nend\n\nmodule Tracked\nend\n"
+      modules = RailsAiContext::Introspectors::DeclaredConstant.module_nodes(RailsAiContext::AstCache.parse_string(source).value)
+      mixins = [ { name: "Tracked", owner: [ "A" ], ancestor: true, location: 3 }, { name: "A", owner: [ "Payment" ], ancestor: true, location: 8 } ]
+
+      expect(described_class.included_modules(mixins, "Payment", [ "Payment" ], modules)).to eq([ "A" ])
+      expect(described_class.mixins_with_modules(mixins, "Payment", [ "Payment" ], modules).map { |m| m[:name] }).to eq([ "Tracked" ])
+    end
+
+    it "reads a module two includes bring in against the earlier of them" do
+      source = "module C\nend\n\nmodule A\nend\n\nmodule B\nend\n\nclass Post\n  include B\nend\n\nmodule D\nend\n\nclass Post\n  include A\nend\n"
+      modules = RailsAiContext::Introspectors::DeclaredConstant.module_nodes(RailsAiContext::AstCache.parse_string(source).value)
+      mixins = [
+        { name: "A", owner: [ "Post" ], ancestor: true, location: 18 }, { name: "B", owner: [ "Post" ], ancestor: true, location: 11 },
+        { name: "C", owner: [ "A" ], ancestor: true, location: 5 }, { name: "C", owner: [ "B" ], ancestor: true, location: 8 },
+        { name: "D", owner: [ "C" ], ancestor: true, location: 2 }
+      ]
+
+      [ mixins, mixins.reverse ].each do |order|
+        expect(described_class.included_lines(order, "Post", [ "Post" ], modules)).to eq("A" => 18, "B" => 11, "C" => 11)
+      end
+    end
+
+    it "hands on only the mixins the file does not define" do
+      mixins = [
+        { name: "A", owner: [ "Payment" ], ancestor: true, location: 9 },
+        { name: "Trackable", owner: [ "Payment", "A" ], ancestor: true, location: 9 },
+        { name: "Auditable", owner: [ "Payment", "A" ], ancestor: true, location: 9 }
+      ]
+
+      expect(described_class.mixins_with_modules(mixins, "Payment", [ "Payment" ], modules).map { |m| m[:name] }).to eq([ "Auditable" ])
+    end
+  end
+
+  describe ".owned_by" do
+    let(:records) { [ { name: "a", owner: [ "Payment" ] }, { name: "b", owner: [ "Legacy", "Payment" ] } ] }
+
+    it "takes the full name first, then every segment of it" do
+      expect(described_class.owned_by(records, "Legacy::Payment").map { |r| r[:name] }).to eq([ "b" ])
+      expect(described_class.owned_by(records, "Payment").map { |r| r[:name] }).to eq([ "a" ])
+    end
+
+    # A module read from its outer constant's file is a slice holding only its own name.
+    it "reads a shorter owner for a qualified name unless that owner is another class in the file" do
+      exportable = [ { name: "download", owner: [ "Exportable" ] } ]
+      payment = [ { name: "amount", owner: [ "Payment" ] } ]
+
+      expect(described_class.owned_by(exportable, "Posts::Exportable").map { |r| r[:name] }).to eq([ "download" ])
+      expect(described_class.owned_by(payment, "Legacy::Payment", others: [ "Payment" ])).to be_empty
+    end
+  end
+
   describe ".payload?" do
     it "keeps app concerns and gem capability modules, namespaced or not" do
       expect(described_class.payload?("Searchable")).to be(true)

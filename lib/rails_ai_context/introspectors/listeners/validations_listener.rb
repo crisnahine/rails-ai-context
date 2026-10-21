@@ -8,6 +8,7 @@ module RailsAiContext
       # Also detects custom `validate :method_name` calls.
       class ValidationsListener < BaseListener
         include WithOptionsScope
+        include OwnerScope
 
         VALIDATES_METHODS = %i[
           validates validates_presence_of validates_uniqueness_of
@@ -129,7 +130,7 @@ module RailsAiContext
           validators.each do |kind, attribute, options, before_rails|
             @results << { kind: kind.to_s, attributes: [ attribute.to_s ], options: options, added_by: macro,
                           before_rails: before_rails, location: node.location.start_line,
-                          confidence: confidence_for(node) }.compact
+                          confidence: confidence_for(node), owner: @owner_stack.dup }.compact
           end
         end
 
@@ -152,7 +153,8 @@ module RailsAiContext
             validator:  validator,
             options:    options,
             location:   node.location.start_line,
-            confidence: confidence_for(node)
+            confidence: confidence_for(node),
+            owner:      @owner_stack.dup
           }.compact
         end
       end

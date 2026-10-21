@@ -20,7 +20,8 @@ jobs:
   # The trimmed gemfiles keep a dev dependency from resolving the pinned gem
   # upward and turning this into a test of whatever won.
   floor:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no prebuilt Ruby 3.1.
+    runs-on: ${{ matrix.ruby == '3.1' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +101,8 @@ jobs:
   # Each family and rails_query end to end on real database servers: only a server shows
   # how it reports a timeout and what its read-only transaction lets through.
   database_servers:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no prebuilt Ruby 3.1.
+    runs-on: ${{ matrix.ruby == '3.1' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:

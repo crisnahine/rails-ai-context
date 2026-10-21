@@ -62,12 +62,16 @@ module RailsAiContext
       Array(names).select { |name| payload?(name) }
     end
 
+    # The keys a class reads from its own file by owner, so a module nested in
+    # that file is read for them on its own.
+    OWNED_KEYS = %i[callbacks macros scopes associations validations enums].freeze
+
     # Matched on the last segment: `module Edition; module Featurable` and
     # `module Edition::Featurable` both write one constant.
-    def owned_by(records, name)
+    def owned_by(records, name, others: [])
       return Array(records) if Array(records).none? { |record| record.key?(:owner) }
 
-      own = own_owner(records, name)
+      own = own_owner(records, name, others: others)
       Array(records).filter_map do |record|
         if record[:receiver]
           mixed_into(record, name)
@@ -87,10 +91,85 @@ module RailsAiContext
       record.key?(:ancestor) ? own.merge(ancestor: CONCERN_BLOCKS.key?(record[:macro])) : own
     end
 
-    def own_owner(records, name)
-      short = name.to_s.split("::").last.to_s
-      Array(records).map { |record| Array(record[:owner]).join("::") }
-                    .select { |owner| owner.split("::").last.to_s.casecmp?(short) }.min_by(&:length)
+    # A class's own records and those of the modules in its file it includes, never
+    # another class's. `classes` names the file's classes; `modules` maps its modules to their nodes.
+    def owned_with_modules(records, name, classes, mixins, modules)
+      own = owned_by(records, name, others: classes - [ name.to_s ])
+      included = included_modules(mixins, name, classes, modules)
+      own + Array(records).select { |record| included.include?(Array(record[:owner]).join("::")) && !own.include?(record) }
+    end
+
+    # The modules from other files the class and its in-file modules mix in; the
+    # in-file ones are read where they are written.
+    def mixins_with_modules(mixins, name, classes, modules)
+      lines = included_lines(mixins, name, classes, modules)
+      own = owned_by(mixins, name, others: classes - [ name.to_s ]).reject { |mixin| in_file?(mixin, modules) }
+      chained = Array(mixins).filter_map do |mixin|
+        owner = Array(mixin[:owner]).join("::")
+        mixin if lines.key?(owner) && !in_file?(mixin, modules, line: lines[owner])
+      end
+      own + chained
+    end
+
+    # Whether the mixin reaches a module the file defines, above `line` when one is given.
+    def in_file?(mixin, modules, line: mixin[:location])
+      node = modules[local_name(mixin, modules, line: line)]
+      !node.nil? && (line.nil? || node.location.start_line <= line)
+    end
+
+    # The modules in the file a class includes, and the ones those include in turn.
+    def included_modules(mixins, name, classes, modules)
+      included_lines(mixins, name, classes, modules).keys
+    end
+
+    # Each included in-file module with the line of the class's include that brought it
+    # in. Only an include or prepend runs a module's `included` block on the class, and
+    # a module's own include runs then, so it is read against that line.
+    def included_lines(mixins, name, classes, modules)
+      ancestors = Array(mixins).select { |mixin| mixin[:ancestor] }
+      roots = owned_by(ancestors, name, others: classes - [ name.to_s ]).select { |mixin| in_file?(mixin, modules) }
+      # The earliest include runs first, so a module keeps the first line that reaches it.
+      roots.sort_by { |mixin| mixin[:location] || Float::INFINITY }.each_with_object({}) do |root, found|
+        line = root[:location]
+        queue = [ local_name(root, modules) ]
+        until queue.empty?
+          key = queue.shift
+          next if found.key?(key)
+
+          found[key] = line
+          ancestors.each do |mixin|
+            queue << local_name(mixin, modules, line: line) if Array(mixin[:owner]).join("::") == key && in_file?(mixin, modules, line: line)
+          end
+        end
+      end
+    end
+
+    # The constant a mixin names as Ruby reaches it from where it is written: `include
+    # Trackable` in Payment's body is Payment::Trackable when the file defines it by `line`.
+    def local_name(mixin, modules, line: mixin[:location])
+      name = mixin[:name].to_s
+      return name.delete_prefix("::") if name.start_with?("::")
+
+      owner = Array(mixin[:owner])
+      owner.size.downto(1).map { |n| "#{owner.first(n).join("::")}::#{name}" }.find do |candidate|
+        node = modules[candidate]
+        node && (line.nil? || node.location.start_line <= line)
+      end || name
+    end
+
+    # The full name; else the shortest owner ending in all its segments; else in its last,
+    # unless that owner is one of `others`, so Legacy::Payment never reads Payment's.
+    def own_owner(records, name, others: [])
+      owners = Array(records).map { |record| Array(record[:owner]).join("::") }
+      return name.to_s if owners.include?(name.to_s)
+
+      segments = name.to_s.split("::")
+      tail = owners.select do |owner|
+        parts = owner.split("::").last(segments.size)
+        parts.size == segments.size && parts.zip(segments).all? { |own, want| own.casecmp?(want) }
+      end.min_by(&:length)
+      tail || owners.reject { |owner| others.include?(owner) }
+                    .select { |owner| owner.split("::").last.to_s.casecmp?(segments.last.to_s) }.min_by(&:length)
     end
 
     # Static reading: only the mixins reflection would report, by the

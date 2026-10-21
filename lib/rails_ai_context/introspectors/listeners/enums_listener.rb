@@ -7,6 +7,8 @@ module RailsAiContext
       # Handles both Rails 7+ syntax (`enum :role, { ... }`) and
       # legacy syntax (`enum role: { ... }`).
       class EnumsListener < BaseListener
+        include OwnerScope
+
         def on_call_node_enter(node)
           return unless node.name == :enum && node.receiver.nil?
 
@@ -39,7 +41,8 @@ module RailsAiContext
             values:     values,
             options:    options,
             location:   node.location.start_line,
-            confidence: confidence_for(node)
+            confidence: confidence_for(node),
+            owner:      @owner_stack.dup
           }
         end
 
@@ -62,7 +65,8 @@ module RailsAiContext
               values:     normalize_enum_values(enum_values(assoc.value)),
               options:    options,
               location:   node.location.start_line,
-              confidence: confidence_for(node)
+              confidence: confidence_for(node),
+              owner:      @owner_stack.dup
             }
           end
         end

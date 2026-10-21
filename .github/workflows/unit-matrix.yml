@@ -12,7 +12,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no prebuilt Ruby 3.1.
+    runs-on: ${{ matrix.ruby == '3.1' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     # release.yml needs contents: write and id-token: write to publish. Without
     # this the legs inherit them, and a leg runs third-party gem code.
     permissions:

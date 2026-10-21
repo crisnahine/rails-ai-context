@@ -581,7 +581,9 @@ module RailsAiContext
           next unless ConcernMembership.candidate?(name)
 
           source = file || @own_file
-          nested = !base && source && nested_module(source, name, within)
+          # In the class's own file the include is a class-body line, so a module below it is not yet defined.
+          before = mixin[:location] if mixin.is_a?(Hash) && file.nil?
+          nested = !base && source && nested_module(source, name, within, before: before)
           label, path =
             if base then [ name, given ]
             elsif nested then [ nested.first, source ]
@@ -624,8 +626,8 @@ module RailsAiContext
           bodies, hooks = method_bodies(data, macro)
           own_lines, inner, concern = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
           scope = [ singleton, inner + unrun, own_lines, hooks ]
-          # The class's own file was read with the class; only its callbacks go by owner.
-          keys = nested && source == @own_file ? @keys & [ :callbacks ] : @keys
+          # The class's own file was read with the class, which kept only its own declarations.
+          keys = nested && source == @own_file ? @keys & ConcernMembership::OWNED_KEYS : @keys
           shift = nested ? nested.last.location.start_line - 1 : 0
           keys.each do |key|
             applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(in_file(entry, shift), label, hook: in_hook?(entry, hooks)) }
@@ -667,15 +669,16 @@ module RailsAiContext
 
       # Resolved as Ruby does, from the enclosing namespace outward: `prepend Wrapper`
       # in DryRunnable is DryRunnable::Wrapper when the concern file declares it.
-      def nested_module(file, name, within)
-        memo([ :nested, file, name, within ]) { find_nested_module(file, name, within) }
+      # With `before`, only a module defined above that line.
+      def nested_module(file, name, within, before: nil)
+        memo([ :nested, file, name, within, before ]) { find_nested_module(file, name, within, before) }
       end
 
-      def find_nested_module(file, name, within)
+      def find_nested_module(file, name, within, before)
         modules = memo([ :modules, file ]) { Introspectors::DeclaredConstant.module_nodes(AstCache.parse(file).value) }
         ConcernPaths.candidate_names(name, within).each do |candidate|
           node = modules[candidate]
-          return [ candidate, node ] if node
+          return [ candidate, node ] if node && (before.nil? || node.location.start_line <= before)
         end
         nil
       rescue StandardError => e

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.36.6] - 2026-10-20
+## [5.36.6] - 2026-10-22
 
 ### Removed
 
@@ -38,6 +38,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its class gets none. The static tier cannot see the app's acronyms, so there
   `ai_match` still names `AIMatch`: a redundant `class_name` runs, and a
   missing one raises.
+- **A model file that declares a second model lists both, each with its own
+  declarations** (#503). On the static tier the second class was missing, and
+  its associations, validations and enums were the first class's:
+  `PaymentRefund` beside `Payment` in payment.rb answered "No matches" while
+  `Payment` gained a `belongs_to :payment`. Each class now takes its table
+  from its own name, an abstract class beside a model no longer drops the
+  model, and a model assigned with `Class.new` is listed too. A class that
+  shares a file is listed when it reaches a record base through the app's own
+  classes; one on a gem's base is not guessed at. A model's own file still
+  wins over another file that declares the same class, and what that other
+  file adds is not merged in.
+
+  A module nested in the model's file and included by it is read as the
+  model's: its scopes and macros were missing, and its associations,
+  validations and enums had been counted only because every line of the file
+  was. It is named as Ruby reaches it, `Payment::Trackable` where the static
+  tier said `Trackable`.
+
+  The booted tier gave each class in the file the validations of all of them.
+  A Mongoid document beside another was missing, and the first took its
+  fields, associations and validations. `rails_performance_check` counted the
+  next class's `has_many` as the first one's. Each now reads its own
+  declarations and those of the modules in its file that it includes.
 - **Two models whose names differ only in case stay apart.** An app with both
   `Checkin` and `CheckIn` had every association to either drawn to one of them
   in `rails_dependency_graph`, and named that one in `rails_analyze_feature`,

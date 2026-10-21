@@ -21,7 +21,8 @@ on:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no prebuilt Ruby 3.1.
+    runs-on: ${{ matrix.ruby == '3.1' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     timeout-minutes: 30
 
     strategy:

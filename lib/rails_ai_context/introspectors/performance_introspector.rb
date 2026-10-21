@@ -107,7 +107,9 @@ module RailsAiContext
       end
 
       def load_model_data
-        model_sources.filter_map do |record|
+        # A class with a file of its own is read from that file, never again as another file's neighbour.
+        own_files = model_sources.map { |record| declared_name(record) }.to_set
+        model_sources.flat_map do |record|
           ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
@@ -119,30 +121,32 @@ module RailsAiContext
           # The listener names the class node alone, so the qualified name is
           # the one the app can resolve; the superclass check stays the guard
           # that this file holds a model at all.
-          next unless active_record_class_name(ast[:classes])
+          next [] unless active_record_class_name(ast[:classes])
 
-          class_name = declared_name(record)
-
-          has_many = ast[:associations].select { |a| a[:type] == "has_many" }.map do |a|
-            { name: a[:name].to_s, options: a[:options] || {} }
-          end
-
-          belongs_to = ast[:associations].select { |a| a[:type] == "belongs_to" }.map do |a|
-            { name: a[:name].to_s, options: a[:options] || {} }
-          end
-
-          {
-            name: class_name,
-            file: record.file,
-            table_name: model_table(class_name),
-            has_many: has_many,
-            belongs_to: belongs_to,
-            macro_columns: macro_columns(ast, class_name),
-            counter_cultures: ast[:counter_culture].map { |c| counter_culture_record(c) }
-          }
+          declared = DeclaredConstant.declarations(record.source, all: true).map(&:name)
+          modules = DeclaredConstant.module_nodes(AstCache.parse_string(record.source)&.value)
+          primary = declared_name(record)
+          # Another class the file declares is a model of its own wherever the model walk lists it.
+          siblings = declared.select { |name| name != primary && !own_files.include?(name) && resolved_models.key?(name) }
+          [ primary, *siblings ].map { |class_name| model_record(record, ast, class_name, declared, modules) }
         rescue => e
-          RailsAiContext.debug_fail(e, nil, label: "load_model_data")
+          RailsAiContext.debug_fail(e, [], label: "load_model_data")
         end
+      end
+
+      def model_record(record, ast, class_name, classes, modules)
+        associations = ConcernMembership.owned_with_modules(ast[:associations], class_name, classes, ast[:mixins], modules)
+        of_type = ->(type) { associations.select { |a| a[:type] == type }.map { |a| { name: a[:name].to_s, options: a[:options] || {} } } }
+        {
+          name: class_name,
+          file: record.file,
+          table_name: model_table(class_name),
+          has_many: of_type.call("has_many"),
+          belongs_to: of_type.call("belongs_to"),
+          macro_columns: macro_columns(ast, class_name, classes, modules),
+          counter_cultures: ConcernMembership.owned_with_modules(ast[:counter_culture], class_name, classes, ast[:mixins], modules)
+                                             .map { |c| counter_culture_record(c) }
+        }
       end
 
       # Tree gem macros, which declare a parent key, with the option that renames it.
@@ -158,11 +162,13 @@ module RailsAiContext
 
       # The [table, column] a gem macro declares, in the model or its concerns.
       # The models section cannot carry it statically: the macro is a gem's.
-      def macro_columns(ast, class_name)
-        collected = ConcernMacros.collect(root, ast[:mixins], keys: %i[column_macros], prefer: "model",
+      def macro_columns(ast, class_name, classes, modules)
+        mixins = ConcernMembership.mixins_with_modules(ast[:mixins], class_name, classes, modules)
+        collected = ConcernMacros.collect(root, mixins, keys: %i[column_macros], prefer: "model",
                                           within: class_name, cache: (@concern_cache ||= {}),
                                           listeners: COLUMN_MACRO_CONCERN_LISTENERS).collected
-        (ast[:column_macros] + Array(collected[:column_macros])).map do |macro|
+        own = ConcernMembership.owned_with_modules(ast[:column_macros], class_name, classes, ast[:mixins], modules)
+        (own + Array(collected[:column_macros])).map do |macro|
           options = macro[:options] || {}
           next [ versions_table(options, class_name), "item_id" ] if macro[:macro] == VERSIONS_MACRO
 

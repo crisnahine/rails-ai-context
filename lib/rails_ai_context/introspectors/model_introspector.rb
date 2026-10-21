@@ -228,26 +228,55 @@ module RailsAiContext
             # A module file is named as it declares itself: camelize knows none of the app's acronyms.
             class_name = declaration&.name || DeclaredConstant.resolve(source, path_name)
             # Two files can declare one class (an app reopening a model to add methods);
-            # the one that names a superclass defines the model.
+            # the one that names a superclass defines the model, and a file named for it
+            # wins over one that only shares another class's file.
             previous = found[class_name]
-            next if previous && (previous[:superclass] || declaration&.superclass.nil?)
+            next if previous && !shares_file?(previous) && (previous[:superclass] || declaration&.superclass.nil?)
 
             # A module file declares no class and is kept for the prefix and
             # the suffix alone: they belong to the namespace, not to any one
             # model.
-            found[class_name] = {
-              path: record.path,
-              file: record.file,
-              superclass: declaration&.superclass,
-              superclass_nesting: declaration&.nesting,
-              abstract: abstract_class?(source)
-            }.merge(TableName.declarations(source, class_name, app.root))
+            found[class_name] = class_candidate(record, source, class_name, declaration)
+            add_sibling_candidates(found, record, source, class_name)
           rescue => e
             # The file is known here whatever failed, and a consumer with none
             # derives app/models/<name>.rb, which a pack model does not have.
             found[SourceScan.concerns_name(record.path_name, source.to_s)] = { error: e.message, file: record.file }.compact
           end
         end
+      end
+
+      # Eager loading loads every class a model file declares, so a second one
+      # with a superclass is a candidate too; modelhood is decided afterwards.
+      def add_sibling_candidates(found, record, source, class_name)
+        DeclaredConstant.declarations(source, all: true).each do |sibling|
+          next if sibling.name == class_name || sibling.superclass.nil? || found.key?(sibling.name)
+
+          found[sibling.name] = class_candidate(record, source, sibling.name, sibling).merge(stem: sibling.name.demodulize.underscore)
+        end
+      end
+
+      def class_candidate(record, source, class_name, declaration)
+        {
+          path: record.path,
+          file: record.file,
+          superclass: declaration&.superclass,
+          superclass_nesting: declaration&.nesting,
+          abstract: abstract_in?(source, class_name)
+        }.merge(TableName.declarations(source, class_name, app.root))
+      end
+
+      # An abstract base beside the class in its file does not take it along.
+      def abstract_in?(source, class_name)
+        own_text?(source, class_name) { |text| abstract_class?(text) }
+      end
+
+      # Whether the block holds for the class's own body text where the file declares
+      # the class, or else for the whole file, for a form whose body cannot be told apart.
+      def own_text?(source, class_name)
+        return yield(source) unless DeclaredConstant.declarations(source, all: true).any? { |d| d.name == class_name }
+
+        DeclaredConstant.class_bodies(AstCache.parse_string(source).value, class_name).any? { |body| yield(body.slice) }
       end
 
       # A file the walk could not read stays a candidate, because its children
@@ -304,6 +333,9 @@ module RailsAiContext
 
         resolved = resolve_superclass(parent, class_name, candidates)
         return model_class?(resolved, candidates, seen + [ class_name ]) if resolved
+        # A class sharing a file often has a table's name without being a record
+        # (a serializer model beside the one it serializes), so it is never guessed.
+        return false if shares_file?(candidates[class_name])
 
         outside_model_base?(class_name, candidates)
       end
@@ -316,6 +348,8 @@ module RailsAiContext
         parent = outside_parent(class_name, candidates)
         # The frameworks' own classes (`ActiveRecord::Relation`, `ActiveModel::Model`) are never a model's base.
         return false if parent.to_s.start_with?("ActiveRecord::", "ActiveModel::")
+        # Nor is a class this process already holds that is not a record (StandardError, Struct).
+        return false if known_non_record?(parent)
 
         if SchemaReader.for(app.root).tables.any?
           own = candidate[:table_name] || own_table_name(class_name, candidates)
@@ -327,7 +361,24 @@ module RailsAiContext
         end
 
         data = sti_base_source(candidate[:path])
-        !!data && (Array(data[:associations]).any? || Array(data[:scopes]).any?)
+        return false unless data
+
+        source = model_source(candidate[:path])
+        classes = DeclaredConstant.declarations(source, all: true).map(&:name)
+        modules = DeclaredConstant.module_nodes(AstCache.parse_string(source)&.value)
+        %i[associations scopes].any? { |key| ConcernMembership.owned_with_modules(data[key], class_name, classes, data[:mixins], modules).any? }
+      end
+
+      # Walked segment by segment so an autoload is never run: app code must not load here.
+      def known_non_record?(name)
+        klass = name.to_s.delete_prefix("::").split("::").reduce(Object) do |scope, segment|
+          break nil unless scope.is_a?(Module) && scope.const_defined?(segment, false) && !scope.autoload?(segment)
+
+          scope.const_get(segment, false)
+        end
+        klass.is_a?(Class) && !(defined?(ActiveRecord::Base) && klass <= ActiveRecord::Base)
+      rescue NameError
+        false
       end
 
       # ApplicationRecord, or the namespaced base a large app declares, such
@@ -365,11 +416,23 @@ module RailsAiContext
         found.first if found.one?
       end
 
+      # A class declared in a file named for another class.
+      def shares_file?(candidate)
+        candidate&.key?(:stem)
+      end
+
+      # A class that shares another's file has no file name of its own to read the stem off.
+      def sibling_or_file_stem(candidate, pluralize)
+        return TableName.stem(candidate[:path], pluralize) unless candidate[:stem]
+
+        pluralize ? candidate[:stem].pluralize : candidate[:stem]
+      end
+
       # The namespace's prefix and suffix around the stem the file name carries.
       def own_table_name(class_name, candidates, seen = [])
         [ namespace_affix(class_name, candidates, :table_name_prefix),
           contained_prefix(class_name, candidates, seen),
-          TableName.stem(candidates.dig(class_name, :path), pluralize_tables?(class_name, candidates)),
+          sibling_or_file_stem(candidates[class_name], pluralize_tables?(class_name, candidates)),
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
       end
 
@@ -1063,7 +1126,17 @@ module RailsAiContext
       # The source's mixins, plus the modules `devise :a, :b` includes by
       # Devise's own naming rule, so both tiers agree for Devise.
       def static_concerns(mixins, path)
-        ConcernMembership.from_mixins(mixins) | ConcernMembership.payload(devise_modules(path))
+        ConcernMembership.from_mixins(local_mixin_names(mixins, path)) | ConcernMembership.payload(devise_modules(path))
+      end
+
+      # `include Trackable` in Payment's body reaches Payment::Trackable where the
+      # file declares that module, as Ruby's lexical lookup does.
+      def local_mixin_names(mixins, path)
+        source = path && model_source(path)
+        local = source ? DeclaredConstant.module_nodes(AstCache.parse_string(source)&.value) : {}
+        return mixins if local.empty?
+
+        Array(mixins).map { |mixin| mixin[:name].to_s.start_with?("::") ? mixin : mixin.merge(name: ConcernMembership.local_name(mixin, local)) }
       end
 
       def devise_modules(path)
@@ -2271,7 +2344,7 @@ module RailsAiContext
         parent_name = entry[:superclass] && SuperclassChain.resolve_in_scope(class_name, entry[:superclass], nesting: entry[:nesting]) { |q| q if models.include?(q) }
         parent = parent_name && mongoid_entry(parent_name, entries, models, done)
         add_discriminator_field(parent) if parent.is_a?(Hash) && parent[:mongoid]
-        done[class_name] = if entry[:source].include?("Mongoid::Document") || (parent.is_a?(Hash) && parent[:mongoid])
+        done[class_name] = if entry[:document] || (parent.is_a?(Hash) && parent[:mongoid])
           mongoid_model_details(entry[:source], class_name, entry[:path], parent: parent && parent[:mongoid] ? [ parent_name, parent ] : nil)
             .merge(file: relative_to_root(entry[:path]))
         else
@@ -2300,7 +2373,7 @@ module RailsAiContext
               next if File.size(path) > RailsAiContext.configuration.max_file_size
 
               source = model_source(path)
-              next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
+              next if source.nil? || mixin_path?(relative, source)
 
               path_name = SourceScan.concerns_name(relative.camelize, source)
 
@@ -2309,8 +2382,11 @@ module RailsAiContext
               class_name = DeclaredConstant.resolve(source, path_name)
               next if found.key?(class_name) || config.excluded_models.include?(class_name)
 
+              add_sibling_documents(found, path, source, class_name)
+              next if abstract_in?(source, class_name)
+
               declaration = DeclaredConstant.declaration_for(DeclaredConstant.declarations(source, path_name: path_name), class_name)
-              found[class_name] = { path: path, source: source, superclass: declaration&.superclass, nesting: declaration&.nesting }
+              found[class_name] = document_candidate(path, source, class_name, declaration)
             rescue => e
               found[path_name || relative.camelize] ||= { error: e.message }
             end
@@ -2318,11 +2394,28 @@ module RailsAiContext
         end
       end
 
+      # Every other class the file declares that is a document or names a superclass.
+      def add_sibling_documents(found, path, source, class_name)
+        DeclaredConstant.declarations(source, all: true).each do |sibling|
+          next if sibling.name == class_name || found.key?(sibling.name) || config.excluded_models.include?(sibling.name)
+          next if abstract_in?(source, sibling.name)
+
+          entry = document_candidate(path, source, sibling.name, sibling)
+          found[sibling.name] = entry if entry[:document] || sibling.superclass
+        end
+      end
+
+      # A document beside a plain class does not make that class a document.
+      def document_candidate(path, source, class_name, declaration)
+        { path: path, source: source, superclass: declaration&.superclass, nesting: declaration&.nesting,
+          document: own_text?(source, class_name) { |text| text.include?("Mongoid::Document") } }
+      end
+
       # app/models also holds plain classes. A model includes Mongoid::Document,
       # subclasses a record base, or subclasses a model.
       def mongoid_model_names(entries)
         names = entries.filter_map do |name, entry|
-          name if entry[:source]&.include?("Mongoid::Document") || (entry[:superclass] && model_base?(entry[:superclass]))
+          name if entry[:document] || (entry[:superclass] && model_base?(entry[:superclass]))
         end.to_set
         loop do
           added = entries.select do |name, entry|
@@ -2348,10 +2441,16 @@ module RailsAiContext
       # A path the read could not answer falls through to the path walk, which raises. A class
       # nested in the model's file includes for itself, not for the model.
       def own_body(data, class_name)
-        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name),
-                   callbacks: ConcernMembership.owned_by(data[:callbacks], class_name),
-                   macros: ConcernMembership.owned_by(data[:macros], class_name),
-                   scopes: ConcernMembership.owned_by(data[:scopes], class_name).map { |scope| scope.except(:owner) })
+        others = Array(data[:declared_classes]) - [ class_name.to_s ]
+        owned = ConcernMembership::OWNED_KEYS.to_h do |key|
+          # Callbacks and macros keep their owner: the walks that settle them read it.
+          [ key, %i[callbacks macros].include?(key) ? ConcernMembership.owned_by(data[key], class_name, others: others) : own_records(data[key], class_name, others: others) ]
+        end
+        data.merge(mixins: ConcernMembership.owned_by(data[:mixins], class_name, others: others), **owned)
+      end
+
+      def own_records(records, class_name, others: [])
+        ConcernMembership.owned_by(records, class_name, others: others).map { |record| record.except(:owner) }
       end
 
       MODEL_LISTENERS = LISTENERS.merge(foreign_evals: Listeners::ForeignEvalsListener).freeze
@@ -2359,6 +2458,7 @@ module RailsAiContext
       def source_walk(path)
         source = model_source(path)
         walked = source ? SourceIntrospector.walk_source(source, MODEL_LISTENERS) : SourceIntrospector.walk(path, MODEL_LISTENERS)
+        walked[:declared_classes] = DeclaredConstant.declarations(source, all: true).map(&:name) if source
         CallSiteExpansion.class_body_foreign(Array(walked[:foreign_evals]), walked.except(:foreign_evals))
       end
 
@@ -2422,10 +2522,17 @@ module RailsAiContext
         # A concern's `included` block declares into the document before the body that follows it.
         from_concerns = ConcernMacros.collect(app.root.to_s, data[:mixins], keys: %i[mongoid], prefer: "model", within: class_name,
                                               listeners: { mongoid: MONGOID_MACROS, mixins: Listeners::MixinsListener }, file: path).collected
-        macros = Array(from_concerns[:mongoid]) + Array(data[:mongoid])
+        # A module in the document's file that it includes counts, as no concern walk reads it here.
+        classes = DeclaredConstant.declarations(source, all: true).map(&:name)
+        modules = DeclaredConstant.module_nodes(AstCache.parse_string(source)&.value)
+        beside = lambda do |key|
+          ConcernMembership.owned_with_modules(data[key], class_name, classes, data[:mixins], modules).map { |record| record.except(:owner) }
+        end
+        macros = Array(from_concerns[:mongoid]) + beside.call(:mongoid)
         calls = singleton_lookup([ [ class_name, path ] ])
         calls.add(0, {}, {}, [])
-        own = own_body(data.merge(mixins: []), class_name)
+        own = own_body(data.merge(mixins: [], declared_classes: classes), class_name).merge(associations: beside.call(:associations), validations: beside.call(:validations),
+                                                                                    scopes: beside.call(:scopes))
         parent_name, inherited = parent
         settled = settle(Walk.empty(own), calls).first[:callbacks]
         # A parent's callbacks join the chain as a base's do, one rank above the subclass's.
@@ -2437,13 +2544,13 @@ module RailsAiContext
         details = {
           confidence: Confidence::STATIC,
           mongoid: true,
-          fields: with_implicit_fields(declared, mixins, data[:associations], inherited),
+          fields: with_implicit_fields(declared, mixins, own[:associations], inherited),
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
           indexes: macros.select { |m| m[:macro] == :index }.map { |m| m[:text] },
           # An embedded child is a relation like any other, so every count and the graph see it.
-          associations: reject_excluded_associations(Array(data[:associations]) + embedded_associations(macros)),
-          validations: data[:validations],
+          associations: reject_excluded_associations(Array(own[:associations]) + embedded_associations(macros)),
+          validations: own[:validations],
           scopes: own[:scopes],
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
