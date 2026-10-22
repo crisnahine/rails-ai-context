@@ -439,6 +439,11 @@ module RailsAiContext
         return "Blocked: a `[` outside a string or a quoted name is not run. MariaDB reads it as the start of a quoted name when the " \
           "session's sql_mode holds MSSQL, and rails_query does not read the session's mode. Quote a name in backticks."
       end
+      # PROCEDURE is a reserved word there, so outside SHOW PROCEDURE STATUS a bare one is the SELECT clause.
+      if @family.mysql? && masked.match?(/\bPROCEDURE\b/i) && !masked.match?(/\A\s*SHOW\b/i)
+        return "Blocked: a PROCEDURE clause is not run. MariaDB's PROCEDURE ANALYSE returns each column's values, " \
+          "a secret column's too, under names of its own, past the redaction that reads names."
+      end
       # PostgreSQL's read-only transaction refuses a locking read, so a literal there is data.
       # MySQL's runs FOR SHARE and LOCK IN SHARE MODE, so there the raw text decides.
       locking = @family.refuses_locking_reads? ? masked : cleaned

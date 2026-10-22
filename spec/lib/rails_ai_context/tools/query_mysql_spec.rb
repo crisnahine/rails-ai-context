@@ -423,6 +423,14 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(text("SELECT count(`id`) AS n FROM `rac_my_accounts` WHERE `id` IN (1, 2)")).to include("| 1 |")
       end
 
+      it "refuses a PROCEDURE clause, whose ANALYSE reports every column's values under names of its own" do
+        refused([ "SELECT * FROM rac_my_accounts LIMIT 1 PROCEDURE ANALYSE()", "SELECT * FROM rac_my_accounts LIMIT 1 PROCEDURE `analyse` ()",
+                  "SELECT * FROM rac_my_accounts LIMIT 1 PROCEDURE/**/ANALYSE(10, 2000)" ],
+                "Blocked: a PROCEDURE clause is not run")
+        expect(text("SHOW PROCEDURE STATUS LIKE 'rac_my%'")).not_to start_with("Blocked")
+        expect(text("SELECT routine_name FROM information_schema.routines WHERE routine_type = 'PROCEDURE' LIMIT 1")).not_to start_with("Blocked")
+      end
+
       it "runs a view that names no secret column, and shows a refused view's definition" do
         expect(text("SELECT * FROM rac_my_contacts")).to include("a@example.com", "A@EXAMPLE.COM")
         expect(text("SHOW CREATE VIEW rac_my_renamed")).to include("rac_my_accounts")

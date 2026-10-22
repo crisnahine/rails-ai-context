@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.8] - 2026-10-23
+
+### Security
+
+- **The static tier keeps the security settings the app's Ruby config writes.**
+  No initializer runs without a boot, so on the static tier (`--no-boot`, or a
+  boot that failed) a `sensitive_patterns`, `excluded_paths` or `skip_tools`
+  value set in a `RailsAiContext.configure` block was dropped, and a file the
+  block made sensitive was searched and read. The static tier now reads every
+  Ruby file of the app that names the gem, without running it: a file under
+  `config/`, and the top level of any other, whole, and a method's body
+  elsewhere (a tool's, a helper's) for what it writes, with tests, installed
+  gems and generator templates left out. The literal values those files write
+  to the three keys are added to the YAML's; a removal is left out, the
+  stricter reading. A value it cannot read, such as one built from a constant
+  or the environment, a pattern changed in place, or the configuration reached
+  through `send`, stops the static tier with an error that names the file and
+  line.
+- **A sensitive pattern covers its file wherever it sits.**
+  `config/database.yml` and the other patterns with a `/` matched only at the
+  app root, so an engine's, a pack's or a test/dummy app's copy was read by
+  every file tool, and `**/id_rsa` missed an `id_rsa` at the root. A pattern
+  now reads the way a `.gitignore` line does: one with a `/` names its file
+  below the root too, a leading `/` anchors it at the root, a trailing `/`
+  names a folder and everything in it, and `**/` stands for any number of
+  folders, none included.
+  A file a link brings in is also asked by its name in the app's repository, so
+  a link to a pack's `config/` folder cannot hide the `config/` a pattern looks
+  for. `doctor`'s gitignore check reads the files below the root the same way.
+  A path a caller names that is longer than 4096 bytes, which no file system
+  holds, is answered as not found before any pattern reads it.
+- **`rails_search_code` reads a path the way the file system does.** A path
+  with a `.` segment (`./`, `config/.`) made ripgrep print `./config/...`, and a
+  link inside the app to `config/` made it print the link's name, so no
+  sensitive pattern matched and a sensitive file's lines came back. The path is
+  now cleaned, and one inside the app is searched as the folder it leads to.
+- **`rails_search_code` and `rails_review_changes` keep a private key's body
+  hidden on every line they show.** A search row is redacted with its whole
+  file, but ripgrep searched files over `max_file_size`, which the redaction
+  does not read, so each body line of a PEM key in such a file came back on its
+  own, unfiltered. ripgrep now skips those files as the Ruby search does, and a
+  file named as the path over the limit answers "File too large". A diff hunk
+  that opened inside a key showed its body lines the same way; each diff line
+  is now redacted with the whole side of the file it comes from, the hunk
+  header's line too. The diff is read with the repository's colour, external
+  diff and textconv settings off, and a diff over `max_file_size` or a merge
+  conflict's combined diff shows no lines. A submodule's change shows as the
+  commits it moves between, where `diff.submodule=diff` printed its files'
+  lines unredacted. A changed file that is not UTF-8 is read, where the tool
+  stopped with an encoding error.
+- **`rails_read_logs` filters a secret column's value written inline in a
+  statement.** MySQL and MariaDB run no prepared statements, so Active Record
+  logs every value inline with backquoted names, and `insert_all` and
+  `upsert_all` write their rows inline on every adapter. Password hashes,
+  tokens and reset keys came back from INSERT, UPDATE and WHERE lines, from the
+  `CAST()` and `LOWER()` a uniqueness validation writes, and from the database
+  errors that repeat a row's values. A value compared with a secret column
+  (through a JSON path too), listed for it with `IN` or `BETWEEN`, inserted
+  under it, or bound to its placeholder is now filtered whatever quotes the
+  names and the value carry, and so is a value whose column cannot be told in a
+  statement that names a secret column, every value of an `INSERT` with no
+  column list, and a secret-named key in JSON a value holds. PostgreSQL's
+  failing row is filtered whole, as it names no column, MySQL's duplicate entry
+  unless Rails named the index after columns that hold no secret, PostgreSQL's
+  duplicate key when the key names a secret, and the statement excerpt a MySQL
+  syntax error quotes; a message cut off is filtered to the end of its line. A
+  JSON log line's strings are read the same way, a value under a secret's key
+  and a JSON logger's binds included.
+- **`rails_get_config(section: "env")` hides a DSN or a webhook URL wherever it
+  is set.** A Dockerfile `ENV` or `ARG` value, an `.env.example` value and a
+  default in code went through the generic redaction only, which reads a URL's
+  password but not a key before `@` or a token in the path, so a Sentry DSN or
+  a Slack webhook printed in full where the Kamal section hid the same value.
+  Those values now read `[FILTERED]` when their shape can carry a secret: a URL
+  whose user part is a key or a password, a webhook's address, a token in a
+  query, a key-like run of letters and digits, and a `BUNDLE_<HOST>` gem server
+  credential. Paths, hosts and local or public URLs still show. An
+  `.env.example` value in quotes keeps a `#`, where the part after it printed
+  as a comment, and an inline comment is hidden when it holds a secret's shape.
+- **`rails_get_view` and `rails_get_partial_interface` match a path as plain
+  text.** A missing view's folder and a partial's name were globbed as written,
+  so each `{a,b}` group doubled the work for every view file, and one crafted
+  path held a server thread for minutes.
+- **`rails_query` refuses a `PROCEDURE` clause on MySQL and MariaDB.**
+  MariaDB's `SELECT ... PROCEDURE ANALYSE()` returns each column's lowest and
+  highest values, lengths and null counts, a secret column's included, under
+  names of its own that the result redaction does not read. `SHOW PROCEDURE
+  STATUS` still runs.
+- **The patterns that find a URL's password, a JWT and an `sk-` key read a
+  line in time that grows with its length.** The URL pattern tried a scheme from
+  each letter of a run, and the JWT and `sk-` patterns read to a run's end from
+  every repeat in it, so a 100 KB log line or env value took 15 to 35 seconds. A
+  URL's password is now read from its `://`, after a shell default's `:-` too,
+  and a JWT and an `sk-` key are read so that a run of repeats costs its length.
+
 ## [5.36.7] - 2026-10-22
 
 ### Security

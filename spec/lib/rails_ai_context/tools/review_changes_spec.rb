@@ -345,6 +345,139 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         expect(text).not_to include(token)
       end
 
+      # A hunk can open below a key's BEGIN line, where a body line read alone is any other line.
+      it "filters a key's body in a hunk that opens inside the key, its header line too" do
+        body = Array.new(12) { |i| "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0g#{i}" }
+        key = [ "PRIVATE_KEY = <<~PEM", "-----BEGIN RSA PRIVATE KEY-----", *body, "-----END RSA PRIVATE KEY-----", "PEM", "" ].join("\n")
+        write("config/initializers/jwt.rb", key)
+        git("add", "-A")
+        git("commit", "-q", "-m", "key")
+        write("config/initializers/jwt.rb", key.sub("ffAt0g8", "ffAt0gX8"))
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+        expect(text).to include("+[FILTERED]", "-[FILTERED]")
+        expect(text).not_to include("MIIEow")
+
+        git("commit", "-q", "-am", "rotate")
+        expect(described_class.call(ref: "HEAD~1").content.first[:text]).not_to include("MIIEow")
+      end
+
+      # git trims a hunk header's line and cuts it at 80 bytes, and the repository's own config shapes the diff.
+      it "keeps a key's body hidden whatever git's config and its header trimming do to the diff" do
+        body = Array.new(10) { |i| "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun#{'Q' * 50}#{i}   " }
+        key = [ "-----BEGIN RSA PRIVATE KEY-----", *body, "-----END RSA PRIVATE KEY-----", *Array.new(8) { |i| "line #{i}" }, "" ].join("\n")
+        write("config/fixtures/key.txt", key)
+        git("add", "-A")
+        git("commit", "-q", "-m", "key")
+        write("config/fixtures/key.txt", key.sub("ffAt0gun#{'Q' * 50}8", "ffAt0gunX#{'Q' * 50}8"))
+        git("config", "color.ui", "always")
+        git("config", "diff.suppressBlankEmpty", "true")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+        expect(text).to include("+[FILTERED]", "-[FILTERED]")
+        expect(text).not_to include("MIIEow", "\e[")
+      end
+
+      it "shows no line of a hunk it cannot read, such as a merge conflict's" do
+        write("config/fixtures/notes.txt", "a\n#{%(API_TOKEN = "#{token}")}\nb\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "notes")
+        git("checkout", "-q", "-b", "other")
+        write("config/fixtures/notes.txt", "a\n#{%(API_TOKEN = "#{token}x")}\nb\n")
+        git("commit", "-q", "-am", "other")
+        git("checkout", "-q", "-")
+        write("config/fixtures/notes.txt", "a\n#{%(API_TOKEN = "#{token}y")}\nb\n")
+        git("commit", "-q", "-am", "main")
+        Open3.capture2e("git", "merge", "other", chdir: @dir)
+
+        expect(described_class.call(ref: "HEAD").content.first[:text]).not_to include(token, "<<<<<<<")
+      end
+
+      # A removed `-- comment` reads `--- comment` in the diff, the shape of the file header.
+      it "keeps a body line that reads like a file header in its place" do
+        write("db/structure.sql", "line1\n-- Name: users\nline3 alpha\nline4 beta\nline5 gamma\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "sql")
+        write("db/structure.sql", "line1\n++ x\nline3 alpha\nadded beta\nline4 beta\nline5 gamma\n")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+        expect(text).to include("\n line1\n--- Name: users\n+++ x\n line3 alpha\n+added beta\n line4 beta\n line5 gamma\n")
+      end
+
+      # The builtin ruby driver picks the text after a line's indentation.
+      it "shows a method's name in a hunk header that diff=ruby writes" do
+        write(".gitattributes", "*.rb diff=ruby\n")
+        write("app/models/total.rb", "class Total\n  def total_amount\n#{"    x = 1\n" * 10}  end\n  def token\n    \"#{token}\"\n#{"    y = 1\n" * 10}  end\nend\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "total")
+        write("app/models/total.rb", File.read(File.join(@dir, "app/models/total.rb")).sub("    x = 1\n" * 10, "#{"    x = 1\n" * 7}    x = 2\n#{"    x = 1\n" * 2}"))
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+        expect(text).to include("@@ def total_amount")
+        expect(text).not_to include(token)
+      end
+
+      it "reads a file that is not UTF-8, and keeps what says a binary file or a mode changed" do
+        File.binwrite(File.join(@dir, "lib/latin.rb").tap { |path| FileUtils.mkdir_p(File.dirname(path)) }, "caf\xE9 = 1\n" * 5)
+        File.binwrite(File.join(@dir, "lib/bin.dat"), "x\0y")
+        write("lib/run.sh", "echo hi\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "files")
+        File.binwrite(File.join(@dir, "lib/latin.rb"), "caf\xE9 = 1\n" * 4 + "caf\xE9 = 2\n")
+        File.binwrite(File.join(@dir, "lib/bin.dat"), "x\0z")
+        File.chmod(0o755, File.join(@dir, "lib/run.sh"))
+        git("add", "-A")
+        git("commit", "-q", "-m", "change")
+
+        text = described_class.call(ref: "HEAD~1").content.first[:text]
+        expect(text).to include("+caf\uFFFD = 2", "Binary files a/lib/bin.dat and b/lib/bin.dat differ", "old mode 100644", "new mode 100755")
+        expect(text).not_to include("index ", "diff --git")
+      end
+
+      # git can print a submodule's own diff in place of its pointer, its files under the submodule's path.
+      it "shows a submodule's change as its commits, never its files' lines" do
+        Dir.mktmpdir do |sub|
+          Open3.capture2e("git", "init", "-q", chdir: sub)
+          File.write(File.join(sub, "a.key"), "oldkeyline\n")
+          Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false", "add", "-A", chdir: sub)
+          Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "a", chdir: sub)
+          git("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "lib/shared")
+          git("commit", "-q", "-m", "sub")
+          inner = File.join(@dir, "lib/shared")
+          File.write(File.join(inner, "a.key"), "KEYSECRETBODY9f8e7d6c5b4a\n")
+          Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false", "commit", "-q", "-am", "b", chdir: inner)
+          git("commit", "-q", "-am", "bump")
+          git("config", "diff.submodule", "diff")
+
+          text = described_class.call(ref: "HEAD~1").content.first[:text]
+          expect(text).to include("Subproject commit")
+          expect(text).not_to include("KEYSECRETBODY", "oldkeyline")
+        end
+      end
+
+      it "shows no line of a file whose two sides together pass max_file_size" do
+        write("config/fixtures/big.txt", "#{"x\n" * 400}API_TOKEN = \"#{token}\"\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "big")
+        write("config/fixtures/big.txt", "#{"x\n" * 400}API_TOKEN = \"#{token}z\"\n")
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(500)
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+        expect(text).to include("### config/fixtures/big.txt", "+1 / -1 lines")
+        expect(text).not_to include(token, "```diff")
+      end
+
+      it "places each line where blank context lines sit as git prints them with suppressBlankEmpty" do
+        write("app/models/x.rb", "a = 1\n" + "\n" * 7 + "b = 2\nx = 1\ny = 2\nz = 3\nc = 3\npassword = \"hunter2secretvalue\"\nd = 4\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "x")
+        write("app/models/x.rb", File.read(File.join(@dir, "app/models/x.rb")).sub("c = 3", "c = 33"))
+        git("config", "diff.suppressBlankEmpty", "true")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+        expect(text).to include("-c = 3", "+c = 33", %( password = "[FILTERED]"), " d = 4")
+      end
+
       it "filters a tracked log's short Bearer and Basic credentials as rails_read_logs does" do
         write("log/development.log", "Started GET /\n")
         git("add", "-A")

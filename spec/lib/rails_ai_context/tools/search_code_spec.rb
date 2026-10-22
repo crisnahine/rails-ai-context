@@ -507,6 +507,64 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           .to start_with("Path not allowed")
       end
     end
+
+    # A link up to the repository spells the app's own files under the link, where a pattern anchored at the root never looks.
+    it "refuses the app's own secret file reached through a link above the root" do
+      with_monorepo do |app|
+        patterns = RailsAiContext.configuration.sensitive_patterns
+        RailsAiContext.configuration.sensitive_patterns = patterns + %w[/config/private.yml]
+        FileUtils.mkdir_p(File.join(app, "config"))
+        File.write(File.join(app, "config/private.yml"), "HMAC_ANCHORED: p9\n")
+        File.symlink("../..", File.join(app, "repo"))
+        [ true, false ].each do |rg|
+          allow(described_class).to receive(:ripgrep_available?).and_return(false) unless rg
+          next if rg && !described_class.send(:ripgrep_available?)
+
+          expect(described_class.call(pattern: "HMAC_ANCHORED", path: "repo").content.first[:text]).not_to include("p9")
+        end
+      ensure
+        RailsAiContext.configuration.sensitive_patterns = patterns
+      end
+    end
+
+    # A link straight to the pack's config/ names its files without the config/ a pattern asks for.
+    it "refuses a pack's secret file reached through a link to its folder, on both backends" do
+      with_monorepo do |app|
+        File.symlink("../../packages/billing/config", File.join(app, "bcfg"))
+        [ true, false ].each do |rg|
+          allow(described_class).to receive(:ripgrep_available?).and_return(false) unless rg
+          next if rg && !described_class.send(:ripgrep_available?)
+
+          expect(described_class.call(pattern: "password", path: "bcfg").content.first[:text]).not_to include("password: unpaid")
+          expect(described_class.call(pattern: "password", path: "bcfg/database.yml").content.first[:text]).to start_with("Path not allowed")
+        end
+        expect(RailsAiContext::Tools::GetEditContext.call(file: "bcfg/database.yml", line: 1).content.first[:text]).to start_with("Path not allowed")
+      end
+    end
+  end
+
+  # ripgrep follows a link it is handed and names the rows by the link, so the
+  # link has to be read as the folder it leads to.
+  describe "a folder linked to another inside the app" do
+    before { allow(RailsAiContext).to receive(:tier).and_return(:static) }
+
+    it "refuses the secret files of the folder a link leads to, on both backends" do
+      with_search_app("config/application.yml" => "HMAC_SEED: 8f2a9c1d7e3b4a6f\n", "config/routes.rb" => "HMAC = 1\n") do |dir|
+        File.symlink("config", File.join(dir, "cfg"))
+        FileUtils.mkdir_p(File.join(dir, "app"))
+        File.symlink("../config", File.join(dir, "app/cfg2"))
+        [ true, false ].each do |rg|
+          allow(described_class).to receive(:ripgrep_available?).and_return(false) unless rg
+          next if rg && !described_class.send(:ripgrep_available?)
+
+          %w[cfg cfg/ ./cfg app/cfg2].each do |path|
+            text = described_class.call(pattern: "HMAC", path: path, context_lines: 0).content.first[:text]
+            expect(text).not_to include("HMAC_SEED"), "#{path} (#{rg ? 'ripgrep' : 'Ruby'})"
+            expect(text).to include("routes.rb:1"), "#{path} (#{rg ? 'ripgrep' : 'Ruby'})"
+          end
+        end
+      end
+    end
   end
 
   # A composer must be able to ask whether the trace found a `def` without
@@ -736,6 +794,13 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           end
         end
 
+        # No file system holds a path this long, so it is answered as not found before any pattern reads it.
+        it "answers a path longer than any file system holds as not found" do
+          with_search_app("app/models/post.rb" => "Qzv\n") do
+            expect(text_for(pattern: "Qzv", path: "app/#{'a/' * 3000}post.rb")).to include("Path not found")
+          end
+        end
+
         it "refuses a sensitive file named as the path, or linked to by it" do
           with_search_app("config/master.key" => "Qzv\n") do |dir|
             File.symlink(File.join(dir, "config", "master.key"), File.join(dir, "config", "notes.txt"))
@@ -744,6 +809,34 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
               expect(described_class.call(pattern: "Qzv", path: path).content.first[:text]).to include("Path not allowed")
             end
           end
+        end
+
+        it "never reads a sensitive file under a path spelled with a dot segment, and names files as the app does" do
+          files = { "config/application.yml" => "HMAC_SEED: 8f2a9c1d7e3b4a6f\n", "app/models/post.rb" => "# HMAC note\n" }
+          with_search_app(files) do
+            %w[./ . ./config config/. config// ./config/ app/../config].each do |path|
+              expect(text_for(pattern: "HMAC", path: path)).not_to include("HMAC_SEED"), path
+            end
+            expect(text_for(pattern: "HMAC", path: "./")).to include("app/models/post.rb:1").and(satisfy { |t| !t.include?("./app") })
+          end
+        end
+
+        it "returns no row from a file over max_file_size, so a key's body in one stays hidden" do
+          body = %w[MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun VTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u+qKhbwKfBstIs+bMY2Zkp18gnTxK]
+          source = [ "body: |", "  -----BEGIN RSA PRIVATE KEY-----", *body.map { |l| "  #{l}" }, "  -----END RSA PRIVATE KEY-----",
+                     *Array.new(100) { |i| "  filler #{i}" } ].join("\n") + "\n"
+          original = RailsAiContext.configuration.max_file_size
+          RailsAiContext.configuration.max_file_size = 1_000
+          with_search_app("spec/fixtures/cassette.yml" => source, "app/models/post.rb" => "# VTLw7on note\n") do
+            [ {}, { path: "spec" }, { path: "spec/fixtures/cassette.yml" } ].each do |scope|
+              text = text_for(pattern: "MIIE|VTLw7on", context_lines: 2, **scope)
+              expect(text).not_to match(/MIIEow|VTLw7onLRn/), scope.inspect
+            end
+            expect(text_for(pattern: "VTLw7on")).to include("app/models/post.rb:1")
+            expect(text_for(pattern: "MIIE", path: "spec/fixtures/cassette.yml")).to include("File too large: spec/fixtures/cassette.yml")
+          end
+        ensure
+          RailsAiContext.configuration.max_file_size = original
         end
 
         # The pattern ran on the raw file, so a filtered row answered whether a secret starts `3b`.

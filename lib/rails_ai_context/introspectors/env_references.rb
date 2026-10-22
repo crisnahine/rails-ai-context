@@ -104,7 +104,7 @@ module RailsAiContext
           # `ENV["X"]` answers nil when unset; only a fetch without a default raises.
           ref[:bracket] = true if entry[:method] == "[]"
           if entry[:default]
-            ref[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default])
+            ref[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.env_value(name, entry[:default])
           elsif entry[:has_default]
             ref[:default] = COMPUTED_DEFAULT
           end

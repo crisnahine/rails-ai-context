@@ -706,6 +706,87 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  # A DSN keeps its key before `@` and a webhook its token in the path, where Redaction reads no
+  # password: the Kamal section hid both, and these two printed them.
+  describe "a DSN or a webhook URL in the Dockerfile or .env.example" do
+    let(:dsn) { "https://0123456789abcdef0123456789abcdef@o123456.ingest.sentry.io/4504" }
+    # Built from parts so a secret scanner does not read the fixtures as live keys.
+    let(:webhook) { %w[https://hooks.slack.com/services T0ABCDEF1 B0ABCDEF2 aBcDeFgHiJkLmNoPqRsTuVwX].join("/") }
+    let(:stripe_key) { %w[sk live 51HabcdefGHIJKLmnop1234567890].join("_") }
+
+    around do |example|
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Dockerfile"), "FROM ruby:3.3\nENV SENTRY_DSN=#{dsn} SLACK_WEBHOOK_URL=#{webhook}\nENV RAILS_ENV=production\nARG HOOK=#{webhook}\n")
+        File.write(File.join(dir, ".env.example"), "SENTRY_DSN=#{dsn}\nSLACK_WEBHOOK_URL=#{webhook}\nAPI_KEY=your-api-key\nRAILS_MAX_THREADS=5\n")
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:scan_dockerfile).and_call_original
+      allow(described_class).to receive(:scan_env_example).and_call_original
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+    end
+
+    it "prints no part of either, and keeps a plain value and a placeholder" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("`ENV` `SENTRY_DSN` = `[FILTERED]`", "`ENV` `SLACK_WEBHOOK_URL` = `[FILTERED]`", "`ARG` `HOOK` = `[FILTERED]`")
+      expect(text).to include("- `SENTRY_DSN` = `[FILTERED]`", "- `SLACK_WEBHOOK_URL` = `[FILTERED]`")
+      expect(text).to include("`ENV` `RAILS_ENV` = `production`", "- `API_KEY` = `your-api-key`", "- `RAILS_MAX_THREADS` = `5`")
+      expect(text).not_to include("0123456789abcdef", "aBcDeFgHiJ", "T0ABCDEF1")
+    end
+
+    # A default in code is the same value in another place, and dotenv keeps a `#` inside quotes.
+    it "hides them as a code default and inside quotes too, and keeps a local URL and a public one" do
+      FileUtils.mkdir_p(File.join(@root, "config/initializers"))
+      File.write(File.join(@root, "config/initializers/services.rb"), <<~RUBY)
+        Sentry.init { |c| c.dsn = ENV.fetch("SENTRY_DSN", "#{dsn}") }
+        HOOK = ENV.fetch("SLACK_WEBHOOK_URL", "#{webhook}")
+        REDIS = ENV.fetch("REDIS_URL", "redis://localhost:6379/1")
+        API = ENV.fetch("API_BASE_URL", "https://api.example.com/v1")
+      RUBY
+      File.write(File.join(@root, ".env.example"), <<~ENV)
+        DATABASE_URL=postgres://localhost/app_dev
+        SMTP_PASSWORD="Pa#ssw0rdLongSecret123"
+        WEBHOOK_URL="https://hooks.slack.com/services/T0ABCDEF1/B0ABCDEF2/aBc#DeFgHiJkLmNoPqRsTuVwX" # team channel
+        RAILS_MAX_THREADS=5 # threads per process
+      ENV
+      File.write(File.join(@root, "Dockerfile"), "FROM ruby:3.3\nENV BARE_HOOK=hooks.slack.com/services/TABCDEFGH/BABCDEFGH/abcdefghijklmnopqrstuvwx\n" \
+                                                 "ARG VIPS_URL=https://github.com/libvips/libvips/releases/download\nENV DATABASE_URL=postgres://localhost/app_dev\n")
+      allow(described_class).to receive(:scan_env_vars).and_call_original
+
+      text = %w[standard full].map { |detail| described_class.call(detail: detail).content.first[:text] }.join("\n")
+
+      expect(text).to include("(default: `redis://localhost:6379/1`)", "(default: `https://api.example.com/v1`)", "- `DATABASE_URL` = `postgres://localhost/app_dev`")
+      expect(text).to include("- `RAILS_MAX_THREADS` = `5` - threads per process", "`ENV` `BARE_HOOK` = `[FILTERED]`")
+      expect(text).to include("`ARG` `VIPS_URL` = `https://github.com/libvips/libvips/releases/download`", "`ENV` `DATABASE_URL` = `postgres://localhost/app_dev`")
+      expect(text).not_to include("0123456789abcdef", "aBcDeFgHiJ", "DeFgHiJ", "T0ABCDEF1", "ssw0rd", "abcdefghijklmnop")
+    end
+
+    # A comment is printed beside its variable, so an example value written there is printed too.
+    it "hides a secret written in a comment and keeps a comment that holds none" do
+      File.write(File.join(@root, ".env.example"), <<~ENV)
+        SENTRY_DSN= # e.g. #{dsn}
+        SLACK_WEBHOOK_URL= # #{webhook}
+        STRIPE_KEY= # live: #{stripe_key}
+        API_TOKEN= # ghp_abcdefghijklmnopqrstuvwxyz0123456789
+        PORT=3000 # the port Puma listens on, see https://puma.io/puma/Puma/DSL.html
+        CACHE_URL=redis://app:pa#ss9word@cache:6379/0
+        API_TOKEN= # e.g. 123e4567-e89b-12d3-a456-426614174000
+      ENV
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- `SENTRY_DSN` - [FILTERED]", "- `SLACK_WEBHOOK_URL` - [FILTERED]", "- `STRIPE_KEY` - [FILTERED]", "- `API_TOKEN` - [FILTERED]")
+      expect(text).to include("- `PORT` = `3000` - the port Puma listens on, see https://puma.io/puma/Puma/DSL.html")
+      expect(text).to include("- `CACHE_URL` = `[FILTERED]`", "- `API_TOKEN` - [FILTERED]")
+      # A `#` after a space starts a comment; one inside a value stays in it, so a password keeps its tail.
+      expect(text).not_to include("0123456789abcdef", "aBcDeFgHiJ", "51Habcdef", "ghp_", "ss9word", "426614174000")
+    end
+  end
+
   describe "Dockerfile ENV written across continuation lines" do
     around do |example|
       Dir.mktmpdir do |dir|
@@ -1061,6 +1142,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
             SLACK_WEBHOOK: https://hooks.slack.com/services/T000/B000/XXXXsecretXXXX
             SENTRY_DSN: https://abc123def@o1.ingest.sentry.io/1
             OPAQUE: a8f3k29dk3ls02kd93ks
+            STORAGE_SETTING: EmRfnGuFGNHb/oaqLmMYLNXTBOf/RKkaoy6NupYA
             RAILS_RELATIVE_URL_ROOT: /app
             WEB_CONCURRENCY: 2
       YAML
@@ -1069,6 +1151,7 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).to include("- `SLACK_WEBHOOK` - value hidden")
       expect(text).to include("- `SENTRY_DSN` - value hidden")
       expect(text).to include("- `OPAQUE` - value hidden")
+      expect(text).to include("- `STORAGE_SETTING` - value hidden")
       expect(text).to include("- `RAILS_RELATIVE_URL_ROOT` = `/app`")
       expect(text).to include("- `WEB_CONCURRENCY` = `2`")
       expect(text).not_to include("XXXXsecretXXXX")
@@ -1270,6 +1353,18 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     it "contributes nothing when no example file exists" do
       Dir.mktmpdir do |dir|
         expect(described_class.send(:scan_env_example, dir)).to be_empty
+      end
+    end
+
+    it "reads a quoted value followed by a long run of spaces in time that grows with it" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".env.example"), "APP_NAME=demo\nGREETING=\"hello\"#{' ' * 40_000}x\nPORT=3000\n")
+        cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+        started = Process.clock_gettime(cpu)
+
+        names = described_class.send(:scan_env_example, dir).map { |var| var[:name] }
+        expect(Process.clock_gettime(cpu) - started).to be < 1
+        expect(names).to include("APP_NAME", "PORT")
       end
     end
   end

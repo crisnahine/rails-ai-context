@@ -5,6 +5,24 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::GetPartialInterface do
   before { described_class.reset_cache! }
 
+  # A partial's name was globbed as written: `{a,b}` was a choice, and each one doubled the lookups.
+  describe "a name holding glob characters" do
+    it "reads it as a name" do
+      expect(described_class.call(partial: "posts/form").content.first[:text]).to start_with("# Partial: posts/_form")
+      [ "{posts,x}/form", "posts/{form,x}", "{form,x}", "posts/_form*" ].each do |name|
+        expect(described_class.call(partial: name).content.first[:text]).to start_with("Partial '#{name}' not found."), name
+      end
+    end
+
+    it "answers one full of brace groups in the time any other takes" do
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      [ "{a,b}" * 24, "posts/#{'{a,b}' * 24}", "#{'{a,b}' * 24}/form" ].each do |name|
+        expect(described_class.call(partial: name).content.first[:text]).to include("not found."), name
+      end
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 5
+    end
+  end
+
   describe "an implicit render of a collection or record" do
     around do |example|
       Dir.mktmpdir("implicit-render") do |dir|

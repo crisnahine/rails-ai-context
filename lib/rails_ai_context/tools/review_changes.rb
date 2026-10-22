@@ -36,6 +36,10 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: true)
 
       MAX_DIFF_LINES_PER_FILE = 30
+      # A diff as git prints it with no config of the user's in the way: colour, an external diff,
+      # textconv, a submodule's own diff or a blank context line printed empty would each break the
+      # line-by-line reading.
+      DIFF = [ "git", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short" ].freeze
       VALIDATION_LINE = /\bvalidates?[\s(]/
       # Each schema method a migration names a table with - ActiveRecord's
       # SchemaStatements and its adapters', through Rails 8.1 - and how many
@@ -243,28 +247,30 @@ module RailsAiContext
           # Show diff summary
           diff = get_file_diff(file, root, ref)
           if diff
-            diff_lines = diff.lines
-            added = diff_lines.count { |l| l.start_with?("+") && !l.start_with?("+++") }
-            removed = diff_lines.count { |l| l.start_with?("-") && !l.start_with?("---") }
+            # The file's header stands before the first hunk; after it a line can read like one (`--- comment`).
+            # Of the header, what says how the file changed is kept: a mode, a rename, a binary file's note.
+            all_lines = diff.lines
+            first_hunk = all_lines.index { |l| l.start_with?("@@") } || all_lines.size
+            content_lines = all_lines[0...first_hunk].reject { |l| l.start_with?("diff --git ", "index ", "--- ", "+++ ") } + all_lines[first_hunk..]
+            added = content_lines.count { |l| l.start_with?("+") }
+            removed = content_lines.count { |l| l.start_with?("-") }
             lines << "+#{added} / -#{removed} lines"
 
             # Show truncated diff. A file the tools may not read shows that it
             # changed, and none of its lines.
-            content_lines = diff_lines.reject { |l| l.start_with?("diff ", "index ", "--- ", "+++ ") }
             if sensitive_file?(file)
               lines << "_diff not shown: the file is on `sensitive_patterns`_"
               content_lines = []
-            else
-              content_lines = redacted_diff(content_lines.map(&:chomp), file)
             end
-            if content_lines.size > MAX_DIFF_LINES_PER_FILE
+            shown = content_lines.empty? ? [] : redacted_diff(content_lines.first(MAX_DIFF_LINES_PER_FILE).map(&:chomp), file, get_file_diff(file, root, ref, whole: true))
+            if shown.any? && content_lines.size > MAX_DIFF_LINES_PER_FILE
               lines << "```diff"
-              lines.concat(content_lines.first(MAX_DIFF_LINES_PER_FILE).map(&:rstrip))
+              lines.concat(shown.map(&:rstrip))
               lines << "# ... #{count_phrase(content_lines.size - MAX_DIFF_LINES_PER_FILE, "more line")}"
               lines << "```"
-            elsif content_lines.any?
+            elsif shown.any?
               lines << "```diff"
-              lines.concat(content_lines.map(&:rstrip))
+              lines.concat(shown.map(&:rstrip))
               lines << "```"
             end
           else
@@ -378,33 +384,72 @@ module RailsAiContext
           option.value.unescaped if option.value.is_a?(Prism::SymbolNode) || option.value.is_a?(Prism::StringNode)
         end
 
-        # A diff line is a mark (` `, `+` or `-`) and a line of the file, so the
-        # lines go through the redaction every tool's source does, read as the
-        # file they come from (a YAML file's plain scalar is a literal there),
-        # and get their marks back. A hunk header carries a line of the file
-        # too, after its second @@.
-        def redacted_diff(diff_lines, file)
-          body = diff_lines.each_index.select { |i| diff_lines[i].match?(/\A[ +-]/) }
-          texts = RailsAiContext::Redaction.redact_source_lines(body.map { |i| diff_lines[i][1..] }, path: file)
-          redacted = diff_lines.dup
-          body.zip(texts) { |i, text| redacted[i] = diff_lines[i][0] + text }
-          redacted.map do |line|
-            hunk = line.match(/\A(@@ [^@]*@@)(.*)\z/m) or next line
-            hunk[1] + RailsAiContext::Redaction.redact_source_line(hunk[2], path: file)
+        # A diff line is a mark (` `, `+` or `-`) and a line of one side of the
+        # change, so it is shown as that line of that side, redacted with the
+        # whole of it the way every tool's source is: a hunk can open inside a
+        # PEM key, below its BEGIN line. A hunk header carries a line of the
+        # file too, after its second @@. `whole` is the same diff with every
+        # line as context; without it no line is shown.
+        def redacted_diff(diff_lines, file, whole)
+          # A merge conflict's combined diff has two mark columns, which this reading does not follow.
+          return [] if whole.nil? || [ *diff_lines, *whole.lines ].any? { |line| line.start_with?("@@@") }
+          # Both sides are read whole, so together they keep to the read limit a file has.
+          limit = RailsAiContext.configuration.max_file_size
+          return [] if limit.is_a?(Numeric) && whole.bytesize > limit
+
+          plain = diff_sides(whole)
+          sides = plain.map { |lines| RailsAiContext::Redaction.redact_source_lines(lines, path: file) }
+          # The line numbers, from 1, of the next old and new line.
+          old_line = new_line = 1
+          diff_lines.map do |line|
+            if (hunk = line.match(/\A(@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@)(.*)\z/m))
+              old_line, new_line = hunk[2].to_i, hunk[3].to_i
+              next hunk[1] + header_text(hunk[4], plain, sides)
+            end
+            next line unless (mark = line[0]) && " +-".include?(mark)
+
+            text = mark == "-" ? sides[0][old_line - 1] : sides[1][new_line - 1]
+            old_line += 1 unless mark == "+"
+            new_line += 1 unless mark == "-"
+            mark + (text || RailsAiContext::Redaction::FILTERED)
           end
         end
 
+        # [the old side's lines, the new side's] of a diff that has every line as context.
+        def diff_sides(whole)
+          body = whole.lines.drop_while { |line| !line.start_with?("@@") }.reject { |line| line.start_with?("@@", "\\") }
+          [ body.filter_map { |line| line.chomp[1..].to_s if line.start_with?(" ", "-") },
+            body.filter_map { |line| line.chomp[1..].to_s if line.start_with?(" ", "+") } ]
+        end
+
+        # A hunk header's text, copied by git from a line of either side (the part a funcname pattern picks,
+        # trimmed and cut at 80 bytes): as written when every line it can come from is shown so, redacted
+        # when it is one whole line, else filtered.
+        def header_text(text, plain, sides)
+          start = text.delete_prefix(" ").rstrip.b
+          return text if start.empty?
+
+          found = [ 0, 1 ].flat_map { |side| plain[side].each_index.select { |i| plain[side][i].b.include?(start) }.map { |i| [ plain[side][i], sides[side][i] ] } }
+          return text if found.any? && found.all? { |line, redacted| line == redacted }
+
+          redacted = found.map { |_, line| line.strip }.uniq
+          whole = found.any? && found.all? { |line, _| line.strip.b == start }
+          " #{whole && redacted.one? ? redacted.first : RailsAiContext::Redaction::FILTERED}"
+        end
+
         # The same two commits the file list came from, so a file's diff is
-        # the change that put it on the list.
-        def get_file_diff(file, root, base)
+        # the change that put it on the list. `whole` asks for every line as context.
+        def get_file_diff(file, root, base, whole: false)
+          diff = [ *DIFF, *(whole ? [ "--unified=#{2**31 - 1}" ] : []) ]
           if base == "HEAD"
-            output, status = Open3.capture2("git", "diff", "--relative", "--", file, chdir: root, err: File::NULL)
-            if !status.success? || output.strip.empty?
-              output, status = Open3.capture2("git", "diff", "--cached", "--relative", "--", file, chdir: root, err: File::NULL)
+            output, status = Open3.capture2(*diff, "--relative", "--", file, chdir: root, err: File::NULL)
+            if !status.success? || output.scrub.strip.empty?
+              output, status = Open3.capture2(*diff, "--cached", "--relative", "--", file, chdir: root, err: File::NULL)
             end
           else
-            output, status = Open3.capture2("git", "diff", "--relative", base, "HEAD", "--", file, chdir: root, err: File::NULL)
+            output, status = Open3.capture2(*diff, "--relative", base, "HEAD", "--", file, chdir: root, err: File::NULL)
           end
+          output = output.scrub
           status.success? && !output.strip.empty? ? output : nil
         end
 

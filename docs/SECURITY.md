@@ -57,6 +57,7 @@ Before any query reaches the database, the SQL gate (`RailsAiContext::SqlGate`) 
 - **Blocks lock clauses**: FOR UPDATE, FOR SHARE, FOR NO KEY UPDATE, FOR KEY SHARE and LOCK IN SHARE MODE, with whatever follows them (NOWAIT, SKIP LOCKED, OF, WAIT). On PostgreSQL the clause is read on quote-masked text, so `LIKE '%ready for update%'` is data: its read-only transaction refuses a locking read anyway. MySQL's read-only transaction lets `FOR SHARE` and `LOCK IN SHARE MODE` through, so there and on SQLite the raw text decides
 - **Blocks SHOW forms that tell of other sessions, replication and logs, on MySQL and MariaDB**: `SHOW GRANTS`, `SHOW PROCESSLIST` and `SHOW FULL PROCESSLIST`, `SHOW BINLOG`, `SHOW BINARY LOGS` and `SHOW BINARY LOG STATUS`, `SHOW RELAYLOG EVENTS`, the `SHOW SLAVE` and `SHOW SLAVES` forms, `SHOW MASTER`, the `SHOW REPLICA` and `SHOW REPLICAS` forms, `SHOW ALL SLAVES STATUS` and `SHOW ALL REPLICAS STATUS`, `SHOW ENGINE ... STATUS`, `SHOW PROFILE` and `SHOW PROFILES`, `SHOW OPEN TABLES`, `SHOW EXPLAIN FOR` and `SHOW ANALYZE FOR`, `SHOW USER_STATISTICS`, `SHOW CLIENT_STATISTICS` and the `SHOW WSREP_` forms. The answer is "Blocked: sensitive SHOW command". They are matched on the raw text, so the words inside a string literal are refused too
 - **Blocks `EXPLAIN FOR CONNECTION`, on MySQL and MariaDB**: it shows the plan of the statement another session is running. It is refused also as `DESCRIBE` or `DESC`, with a `FORMAT`, and inside a version comment. The answer is "Blocked: EXPLAIN FOR CONNECTION is not run. It shows the plan of the statement another session is running." It is read on quote-masked text, so a string literal that holds the words runs
+- **Blocks a `PROCEDURE` clause, on MySQL and MariaDB**: MariaDB's `SELECT ... PROCEDURE ANALYSE()` returns each column's lowest and highest values, a secret column's too, under names of its own that the result redaction does not read. `PROCEDURE` is a reserved word there, so a bare one outside a `SHOW` statement is refused in any spelling, and `SHOW PROCEDURE STATUS` runs. The answer starts "Blocked: a PROCEDURE clause is not run."
 - **Blocks SHOW with a WHERE clause**, on every family. MySQL's statement timeout holds `SELECT` only, so a `SHOW ... WHERE` filter would run past `query_timeout`. `SHOW ... LIKE` runs. The answer names the query to use: "Blocked: SHOW with a WHERE clause is not run, because MySQL's statement timeout does not hold it. SHOW ... LIKE runs. For any other filter, SELECT from information_schema, for example `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()`."
 - **Blocks SELECT INTO**: prevents table creation via SELECT. After a `WITH` clause an `INTO` can belong to a write, and such a statement is answered as that write: `WITH ... INSERT INTO ...` answers "Blocked: contains INSERT", and `REPLACE` and `MERGE` are named the same way. `INTO OUTFILE` / `INTO DUMPFILE` disk writes, and the file and network functions below, stay matched on the **raw (unmasked) text**. No read-only transaction stops a server-side file write, so `INTO OUTFILE` inside a string literal is refused on every database family, and a file function inside one on the family that has it
 - **Blocks file and network functions**, each on the database family that has it. PostgreSQL: `pg_read_file`, `pg_read_binary_file`, `pg_ls_dir`, `pg_stat_file`, `lo_import`, `lo_export`, `dblink*` and their relatives. MySQL and MariaDB: `LOAD DATA` and `LOAD_FILE`. SQLite: `load_extension`. They are checked before and after comment stripping
@@ -357,6 +358,16 @@ A placeholder whose name ends in `.example`, `.sample`, `.template` or
 characters, still does, and so does a path pattern (one with a `/`, such as
 `.ssh/*`), which covers everything under it.
 
+A pattern reads the way a `.gitignore` line does. One with a `/` names its
+file below the root as well, so `config/database.yml` covers an engine's, a
+pack's and a test/dummy app's copy, and a leading `/` anchors it at the root. A
+trailing `/` names a folder and everything in it, and `**/` stands for any
+number of folders, none included, so `**/id_rsa` covers an `id_rsa` at the
+root too. A file a link brings in from the app's repository is also asked by
+its name there, so a link to a pack's `config/` folder cannot hide the
+`config/` a pattern looks for. A path a caller names that is longer than 4096
+bytes, which no file system holds, is answered as not found.
+
 ### AI context file exclusions
 
 Search also excludes generated AI context files to prevent circular references:
@@ -375,6 +386,28 @@ AGENTS.md, opencode.json
 ```ruby
 config.sensitive_patterns = %w[.env* *.key *.pem credentials.yml.enc]
 ```
+
+On the static tier (`--no-boot`, or a boot that failed) no initializer runs.
+The gem reads every Ruby file of the app that names it (`RailsAiContext` or
+`rails_ai_context`), however the boot loads it, without running it: a file
+under a `config/` folder, and the top level and class bodies of any other file,
+which run as the file loads, whole; the body of a method outside `config/`, a
+tool's or a helper's that runs when called, for what it writes. Tests (a `spec/` or `test/` folder at any
+depth, an engine's test app among them), `db/`, `tmp/`, `vendor/bundle/`,
+`vendor/ruby/`, `vendor/cache/`, `vendor/gems/`, an installed copy of the gem, a
+generator's templates, hidden files and links are left out, and
+`config/initializers` and `config/environments` are read through a link as
+Rails globs them. The literal values those files write to
+`sensitive_patterns`, `excluded_paths` and `skip_tools` are added to the YAML's;
+a removal is left out. A value it cannot read, such as one built from a
+constant or the environment, the configuration handed to other code or
+reached through `send`, a pattern changed in place, or a file that does not
+parse, stops the static tier with an error that names the file and line;
+outside a method, so does a list or one of its patterns kept or handed on. A
+file outside the app, a list a method keeps and changes later, and code that reaches
+the settings through a name it builds at run time
+(`const_get("Rails" + "AiContext")`) are not followed.
+`.rails-ai-context.yml` is read on every tier.
 
 ---
 
@@ -516,7 +549,7 @@ Complex patterns that would cause catastrophic backtracking raise `RegexpError` 
 
 `SafeFile.read` provides drop-in safety for all file reads:
 
-- Size limit enforcement (`config.max_file_size`, default: 5 MB)
+- Size limit enforcement (`config.max_file_size`, default: 5 MB). `rails_search_code` skips a file over it on both backends, so a row is never shown without its whole file's redaction, and a file named as its path answers `File too large`
 - Returns `nil` on any failure (no exceptions leak)
 - UTF-8 encoding with invalid/undefined byte replacement
 - Handles: ENOENT, EACCES, EISDIR, ENAMETOOLONG, SystemCallError
@@ -532,6 +565,8 @@ What gets redacted:
 - Passwords, tokens, secrets and API keys, wherever they are named
 - The same in the app's own source a tool or resource shows: a method body, a template, a test file, a scan's code line, a change's diff (where a file on `sensitive_patterns` shows none of its lines)
 - Credentials embedded in URIs (`redis://user:pass@host`)
+- Values a logged SQL statement holds for a secret column: compared with it (through `LOWER()`, `CAST()` or a JSON path too), listed for it with `IN` or `BETWEEN`, inserted under it, or bound to a `$1` or `?` placeholder for it. MySQL and MariaDB log every value inline, and `insert_all` and `upsert_all` do on every adapter. A value whose column cannot be told is filtered when the statement names a secret column, and every value of an `INSERT` with no column list is filtered. A secret-named key in JSON a value holds is filtered, its quotes escaped or not. A line with `\'` in it that holds no backquoted name outside its strings is read both as MySQL and as standard SQL. Each string of a JSON log line, a header before it or not, is read as a line of its own; a value under a secret's key is filtered, an array's included, and so are a JSON logger's binds when the statement beside them names a secret column. A line is read on its own, so a value with a line break in it is read a line at a time
+- The values a database error repeats: PostgreSQL's failing row whole, since it names no column, and its duplicate key when the key names a secret; MySQL's and MariaDB's duplicate entry, unless Rails named the index after columns that name no secret (`index_users_on_email`); and the excerpt of the statement a MySQL syntax error quotes, whole. A message cut off is filtered to the end of its line. An error in a language other than English is read as any other line
 - Email addresses in log lines, in any script (`jürgen@example.com`, `anna@münchen.de`)
 - Values assigned to secret-named settings in initializers
 
@@ -596,7 +631,7 @@ The engine builds one transport per process, under a mutex, outside the controll
 ## Credential handling
 
 - `rails_get_config(section:"env")` returns credential **keys** and no values
-- The process's environment variable values are never read. A default written in code, and a placeholder from `.env.example`, `.env.sample` or `.env.template`, is shown after redaction
+- The process's environment variable values are never read. A default written in code, and a placeholder from `.env.example`, `.env.sample` or `.env.template`, is shown after redaction. A default in code, an example file's value and a Dockerfile `ENV` or `ARG` value read `[FILTERED]` when their shape can carry a secret: a URL whose user part holds a password or is a key (16 or more letters and digits, or hex in groups, as a DSN's is), a webhook's address, a token in a query, a run of 16 or more letters and digits with both in it, and a hex key split into groups. `/`, `.`, `-` and `_` end a run, so a path, a host and a slug show; so does a key written with them, base64 with a `/` among them, or in letters alone, unless its name says it is one. A class name with a digit in a run of 16 reads `[FILTERED]`. A `BUNDLE_<HOST>` variable, which Bundler reads a gem server's password from, is hidden whatever it holds. An example file's inline comment is hidden when it holds a credential, one of these shapes or a hex key in groups among its words, and a `#` starts a comment only after a space, so a password's `#` stays in its value (dotenv itself cuts an unquoted value at any `#`). A Kamal clear value that holds any URL, or a run of 16 letters and digits with `/` in it, is hidden
 - `config/credentials/*.yml.enc` is in the sensitive patterns list
 
 ---

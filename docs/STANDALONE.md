@@ -117,7 +117,7 @@ A key the gem does not know warns on stderr and is ignored; the rest of the file
 
 ### Precedence
 
-In standalone mode `.rails-ai-context.yml` is the only config source. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NoMethodError` (the binary opens the `RailsAiContext` namespace before the boot, so the constant exists but `configure` is not defined on it) and drops the command into the static tier.
+In standalone mode `.rails-ai-context.yml` is the only config source of a booted run. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing there: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NoMethodError` (the binary opens the `RailsAiContext` namespace before the boot, so the constant exists but `configure` is not defined on it) and drops the command into the static tier. On the static tier the gem reads the literal `sensitive_patterns`, `excluded_paths` and `skip_tools` values such a file writes, without running it ([SECURITY.md](SECURITY.md#configuration)).
 
 For in-Gemfile installs both sources apply and merge key by key - see [Precedence](CONFIGURATION.md#precedence).
 

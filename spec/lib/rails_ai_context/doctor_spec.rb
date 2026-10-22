@@ -1583,6 +1583,23 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # An engine or a test/dummy app keeps the same files under the same names, and the tools refuse them as they do the app's.
+    it "reads an engine's and a test/dummy app's files as it reads the app's" do
+      files = {
+        ".gitignore" => "/.env*\n/config/*.key\n",
+        "engines/admin/config/credentials.yml.enc" => "x\n",
+        "engines/admin/config/database.yml" => "test:\n  adapter: sqlite3\n  database: db/test.sqlite3\n",
+        "test/dummy/config/storage.yml" => "test:\n  service: Disk\n  root: tmp/storage\n"
+      }
+      app_with(files) { |dir| expect(gitignore_check_for(dir).status).to eq(:pass) }
+      app_with(files.merge("engines/admin/config/master.key" => "x\n")) do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("engines/admin/config/master.key not in .gitignore")
+      end
+    end
+
     it "warns about a config that holds a secret as a literal, naming the line" do
       app_with("config/database.yml" => "development:\n  adapter: postgresql\n  password: hunter2 # local only\n",
                "config/cable.yml" => "production:\n  url: redis://:s3cret@redis.internal:6379/1\n", ".gitignore" => "/.env*\n") do |dir|

@@ -342,6 +342,10 @@ module RailsAiContext
         # checkout: without it `end$` matched none of them and `\s$` all.
         cmd = [ "rg", "--no-heading", "--with-filename", "--line-number", "--sort=path", "--path-separator", "/",
                 "--crlf", "--max-count", max_results.to_s ]
+        # A row is redacted with its whole file, which SafeFile reads up to max_file_size, so a larger
+        # file is skipped as the Ruby search skips it.
+        limit = RailsAiContext.configuration.max_file_size
+        cmd.push("--max-filesize", limit.to_i.to_s) if limit.is_a?(Numeric) && limit.finite?
         if ctx_lines > 0
           cmd.push("-C", ctx_lines.to_s)
           cmd.push("--field-context-separator", CONTEXT_FIELD_SEPARATOR)
@@ -450,7 +454,7 @@ module RailsAiContext
             relative = prefix ? "#{prefix}/#{walked}" : walked
             next if extensions && extensions.none? { |ext| file.end_with?(".#{ext}") }
             next if sensitive_file?(relative) || ai_context_file?(ai_context, relative)
-            next if base && sensitive_file?(base.empty? ? walked : "#{base}/#{walked}")
+            next if base && (sensitive_file?(base.empty? ? walked : "#{base}/#{walked}") || RailsAiContext::SafePath.in_repository_sensitive?(file, root))
             return [ results, search_error ] if scan_file(file, relative, regex, ctx_lines, max_results, results)
           rescue => _e
             search_error = true
@@ -471,9 +475,12 @@ module RailsAiContext
         # Before the join, which would turn an absolute path into a subpath of
         # the root and leave it looking merely absent.
         return [ nil, error_response("Path not allowed: #{echo_input(path)}") ] if RailsAiContext::SafePath.traversal?(path)
+        return [ nil, text_response("Path not found: #{echo_input(path)}") ] if path.bytesize > RailsAiContext::SafePath::MAX_PATH
         return [ nil, error_response("Path not allowed: #{echo_input(path)} (sensitive file)") ] if sensitive_file?(path)
 
-        search_path = File.join(root, path)
+        # ripgrep names each file as the path was spelled, so `./` or `config/.` reached the
+        # sensitive check as `./config/...`. expand_path drops those segments and follows no link.
+        search_path = File.expand_path(File.join(root, path))
         # A symlink under the root can still resolve outside it; that check is
         # on the realpath below.
         unless File.exist?(search_path)
@@ -489,7 +496,14 @@ module RailsAiContext
         # A file named as the path is read whatever it is linked to, so the
         # name it has where it lives is asked too.
         real_name = real_search.delete_prefix("#{linked || real_root}/")
-        return [ nil, error_response("Path not allowed: #{echo_input(path)} (sensitive file)") ] if File.file?(real_search) && sensitive_file?(real_name)
+        if File.file?(real_search) && (sensitive_file?(real_name) || (linked && RailsAiContext::SafePath.in_repository_sensitive?(real_search, root)))
+          return [ nil, error_response("Path not allowed: #{echo_input(path)} (sensitive file)") ]
+        end
+        # ripgrep follows a link it is handed and names the rows by it, so a path inside the root is
+        # handed over as the place it leads to: `cfg` linked to config/ is searched as config.
+        search_path = real_search == real_root ? root : File.join(root, real_search.delete_prefix("#{real_root}/")) if inside
+        # ripgrep's --max-filesize skips only the files it walks to, never one it is named.
+        return [ nil, text_response("File too large: #{echo_input(path)}") ] if File.file?(real_search) && File.size(real_search) > RailsAiContext.configuration.max_file_size
 
         [ search_path, nil ]
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
@@ -561,12 +575,13 @@ module RailsAiContext
       # SafePath.locate asks it: a pack's config/master.key is not the app's
       # name for it, but it is the key.
       private_class_method def self.sensitive_in_tree?(relative, trees, root)
-        trees.any? do |spelled, _real, base|
+        trees.any? do |spelled, real, base|
           prefix = spelled_relative(spelled, root)
           next false unless relative == prefix || relative.start_with?("#{prefix}/")
 
-          name = [ base, relative.delete_prefix(prefix).delete_prefix("/") ].reject(&:empty?).join("/")
-          sensitive_file?(name)
+          rest = relative.delete_prefix(prefix).delete_prefix("/")
+          sensitive_file?([ base, rest ].reject(&:empty?).join("/")) ||
+            RailsAiContext::SafePath.in_repository_sensitive?(rest.empty? ? real : File.join(real, rest), root)
         end
       end
 
@@ -614,7 +629,8 @@ module RailsAiContext
       end
 
       # Rows are lines read off disk, so they pass through Redaction. Each file is redacted whole,
-      # so a PEM key's body is filtered on every row it shows on.
+      # so a PEM key's body is filtered on every row it shows on. A line that cannot be read with
+      # its whole file is filtered: alone, a key's body line reads as any other.
       private_class_method def self.redact_rows(rows, root)
         files = {}
         rows.map do |row|
@@ -623,7 +639,7 @@ module RailsAiContext
             files[row[:file]] = source && RailsAiContext::Redaction.redact_source_lines(source.scrub.lines.map(&:chomp), path: row[:file])
           end
           text = lines && lines[row[:line_number] - 1]
-          row.merge(content: text || RailsAiContext::Redaction.redact_source_line(row[:content].to_s.chomp, path: row[:file]))
+          row.merge(content: text || RailsAiContext::Redaction::FILTERED)
         end
       end
 

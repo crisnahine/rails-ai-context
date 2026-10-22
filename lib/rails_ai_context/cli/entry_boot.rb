@@ -221,6 +221,8 @@ module RailsAiContext
         RailsAiContext.static_kind = kind
         RailsAiContext.configuration.app_root = root
         Configuration.auto_load!(root)
+        # No initializer runs here, so the security settings one writes are read from its source.
+        InitializerSettings.apply!(root)
         # A failed boot's reason is already the line above.
         messages << "[rails-ai-context] static tier active#{": #{reason}" unless kind == :boot_failed}"
         Outcome.new(tier: :static, reason: reason, kind: kind, messages: messages)

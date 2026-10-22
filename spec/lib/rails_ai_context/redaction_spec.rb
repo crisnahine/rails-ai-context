@@ -779,7 +779,225 @@ RSpec.describe RailsAiContext::Redaction do
     end
   end
 
+  describe ".env_value" do
+    it "hides a value shaped like a secret" do
+      [
+        "https://0123456789abcdef0123456789abcdef@o123456.ingest.sentry.io/4504",
+        "https://hooks.slack-gov.com/services/TABCDEFGH/BABCDEFGH/abcdefghijklmnopqrstuvwx",
+        "https://chat.example.com/hooks/qwertyuiopasdfghjklzxcvbnm",
+        "https://example.com/api/v1/abcdef0123456789abcdef",
+        "https://bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
+        "https://example.com/feed?api_key=abc",
+        "123e4567-e89b-12d3-a456-426614174000",
+        "ky0FbQDq30QRLyYGW8+URS3swIiF",
+        "https://01234567-89ab-cdef-0123-456789abcdef@uploads.example.com",
+        "https://deadbeefdeadbeefdeadbeefdeadbeef@o1.ingest.sentry.io/1",
+        "${DATABASE_URL:-postgres://app:hunter2pass@db:5432/app}",
+        "smtp://ana@example.com:hunter2pass@smtp.example.com:587",
+        "mongodb://app:p@ss@db.example.com/app"
+      ].each { |value| expect(described_class.env_value("SETTING", value)).to eq("[FILTERED]"), value }
+      # Bundler reads a gem server's user and password from BUNDLE_<HOST>.
+      expect(described_class.env_value("BUNDLE_GEMS__CONTRIBSYS__COM", "abcd1234:ef567890")).to eq("[FILTERED]")
+      expect(described_class.env_value("SIDEKIQ_CREDS", "abcd1234:ef567890")).to eq("[FILTERED]")
+      %w[BUNDLE_WITHOUT BUNDLE_MIRROR__ALL BUNDLE_LOCAL__RACK BUNDLE_GITHUB__HTTPS BUNDLE_BUILD__NOKOGIRI].each do |name|
+        expect(described_class.env_value(name, "development:test")).to eq("development:test"), name
+      end
+    end
+
+    it "keeps a path, a host, a class name and a URL with a plain user part" do
+      [
+        "/opt/app/releases/20261023120000/public",
+        "https://d111111abcdef8.cloudfront.net",
+        "https://example.com/search?auth_mode=basic",
+        "mysql2://root@localhost/app",
+        "ApplicationNotificationsJob",
+        "TrueFalseEnabledDisabled",
+        "SlackNewUserSignUpNotifier",
+        "MyAppWebHookReceiverProcessor",
+        "HTTPSConnectionPoolManagerFactory",
+        "PRODUCTIONDATABASEHOSTNAME",
+        "https://github.com/libvips/libvips/releases/download",
+        "/Library/Java/JavaVirtualMachines/jdk17/Contents/Home",
+        "https://sqs.us-east-1.amazonaws.com/123456789012/MyQueue2",
+        "sqlserver://SA@db:1433",
+        "amqp://Guest@mq.example.com",
+        "https://example.com/webhooks/stripe-events-handler"
+      ].each { |value| expect(described_class.env_value("SETTING", value)).to eq(value) }
+    end
+  end
+
   describe ".redact_log_line" do
+    # Lines as Active Record 8 writes them: MySQL and MariaDB run no prepared statements, so every value is
+    # inline, and insert_all and upsert_all put theirs inline on every adapter.
+    it "filters a secret column's inline value in each query shape Active Record logs" do
+      {
+        %q(User Create (1.1ms)  INSERT INTO `users` (`email`, `encrypted_password`, `api_token`, `notes`) VALUES ('a@b.co', '$2a$12$hashhashhash', 'tok9f8e7d6c5b4a', 'it\'s, (x)')) =>
+          %q(User Create (1.1ms)  INSERT INTO `users` (`email`, `encrypted_password`, `api_token`, `notes`) VALUES ('[EMAIL]', '[FILTERED]', '[FILTERED]', 'it\'s, (x)')),
+        %q(User Update (2.2ms)  UPDATE `users` SET `users`.`encrypted_password` = '$2a$12$newhash', `users`.`api_token` = 'tok\'quoted\\x' WHERE `users`.`id` = 1) =>
+          %q(User Update (2.2ms)  UPDATE `users` SET `users`.`encrypted_password` = '[FILTERED]', `users`.`api_token` = '[FILTERED]' WHERE `users`.`id` = 1),
+        %q(User Load (0.4ms)  SELECT `users`.* FROM `users` WHERE `users`.`reset_password_token` = 'rst7b3f9e2a1c4d' LIMIT 1) =>
+          %q(User Load (0.4ms)  SELECT `users`.* FROM `users` WHERE `users`.`reset_password_token` = '[FILTERED]' LIMIT 1),
+        %q(User Load (0.3ms)  SELECT `users`.* FROM `users` WHERE `users`.`api_token` IN ('tokA1b2c3d4e5f6', 'tokB1b2c3d4e5f6')) =>
+          %q(User Load (0.3ms)  SELECT `users`.* FROM `users` WHERE `users`.`api_token` IN ('[FILTERED]', '[FILTERED]')),
+        %q(User Load (0.3ms)  SELECT `users`.* FROM `users` WHERE `users`.`api_token` != 'tokC1b2c3d4e5f6') =>
+          %q(User Load (0.3ms)  SELECT `users`.* FROM `users` WHERE `users`.`api_token` != '[FILTERED]'),
+        %q(User Bulk Insert (3.3ms)  INSERT INTO `users` (`email`,`api_token`) VALUES ('x@y.co', 'tokD1b2c3d4e5f6'), ('z@y.co', 'tokE1b2c3d4e5f6') AS `users_values` ON DUPLICATE KEY UPDATE `email`=`users`.`email`) =>
+          %q(User Bulk Insert (3.3ms)  INSERT INTO `users` (`email`,`api_token`) VALUES ('[EMAIL]', '[FILTERED]'), ('[EMAIL]', '[FILTERED]') AS `users_values` ON DUPLICATE KEY UPDATE `email`=`users`.`email`),
+        %q(User Create (1.1ms)  INSERT INTO "users" ("email", "encrypted_password", "notes") VALUES ('a@b.co', '$2a$12$hash', 'it''s, (x)') RETURNING "id") =>
+          %q(User Create (1.1ms)  INSERT INTO "users" ("email", "encrypted_password", "notes") VALUES ('[EMAIL]', '[FILTERED]', 'it''s, (x)') RETURNING "id"),
+        %q(User Bulk Insert (0.8ms)  INSERT INTO "users" ("id","email","api_token") VALUES (1, 'x@y.co', 'tokD1b2c3d4e5f6'), (2, 'z@y.co', 'tokE1b2c3d4e5f6') ON CONFLICT  DO NOTHING RETURNING "id") =>
+          %q(User Bulk Insert (0.8ms)  INSERT INTO "users" ("id","email","api_token") VALUES (1, '[EMAIL]', '[FILTERED]'), (2, '[EMAIL]', '[FILTERED]') ON CONFLICT  DO NOTHING RETURNING "id"),
+        %q(User Update (1.2ms)  UPDATE "users" SET "api_token" = 'tok''quoted\x' WHERE "users"."id" = 1) =>
+          %q(User Update (1.2ms)  UPDATE "users" SET "api_token" = '[FILTERED]' WHERE "users"."id" = 1),
+        %q(Key Load  SELECT `keys`.* FROM `keys` WHERE `keys`.`otp_secret` = x'616263' AND `keys`.`api_token` NOT IN (_binary'tokZ1b2c3d4e5f6')) =>
+          %q(Key Load  SELECT `keys`.* FROM `keys` WHERE `keys`.`otp_secret` = x'[FILTERED]' AND `keys`.`api_token` NOT IN (_binary'[FILTERED]'))
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
+    # A uniqueness validation compares through CAST or LOWER, a range through < and BETWEEN, and a unique
+    # index's error repeats the duplicate value: each value still meets a secret column.
+    it "filters a secret column's value however the statement or its error wraps it" do
+      [
+        %q(User Exists? (4.2ms)  SELECT 1 AS one FROM `users` WHERE `users`.`api_token` = CAST('tokCASESENS12345' AS BINARY) LIMIT 1),
+        %q(User Exists? (5.9ms)  SELECT 1 AS one FROM `users` WHERE LOWER(`users`.`api_token`) = LOWER('tokCOLLBIN123456') LIMIT 1),
+        %q(User Exists? (0.6ms)  SELECT 1 AS one FROM "users" WHERE LOWER("users"."api_token") = LOWER('tokLOWER12345678') LIMIT 1),
+        %q(User Load (0.3ms)  SELECT `users`.* FROM `users` WHERE `users`.`api_token` >= 'tokGE11111111111'),
+        %q(User Load (0.3ms)  SELECT "users".* FROM "users" WHERE "users"."api_token" < 'tokLT11111111111'),
+        %q(User Load (0.3ms)  SELECT `users`.* FROM `users` WHERE `users`.`api_token` BETWEEN 'tokBETA111111111' AND 'tokBETZ111111111'),
+        %q(User Load (0.3ms)  SELECT "users".* FROM "users" WHERE ('tokREV1111111111' = api_token)),
+        %q(SELECT `users`.* FROM `users` WHERE `users`.`api_token` = BINARY 'tokBINARY1111111'),
+        %q(INSERT INTO "users" ("notes","api_token") VALUES (ARRAY['a','b'], 'tokARRAY11111111')),
+        %q(UPDATE `users` SET `api_token` = 'tokSPLIT' 'tokSPLIT22222222'),
+        %q(UPDATE users SET api_token = CONCAT('tokCC', 'tokCC22222222222')),
+        %q(REPLACE INTO `users` (`email`, `api_token`) VALUES ('x', 'tokREPLACE111111')),
+        %q(ActiveRecord::RecordNotUnique (Trilogy::ProtocolError: 1062: Duplicate entry 'tokDUPLICATE1234' for key 'users.index_users_on_api_token' (trilogy_query_recv)):),
+        %q(DETAIL:  Key (api_token)=(tokDUPLICATE1234) already exists.),
+        %q(DETAIL:  Key (user_id, api_token)=(5, tokDUPLICATE1234) already exists.),
+        %q(User Load (0.4ms)  SELECT "users".* FROM "users" WHERE (api_token = $1)  [[nil, "tokWHERE11111111"]]),
+        %q(SELECT 1 FROM users WHERE api_token = E'tok\'SECRETTAIL' LIMIT 1),
+        %q(SELECT 1 FROM users WHERE api_token = _binary'tok\'SECRETTAIL' LIMIT 1),
+        %q(SELECT * FROM users WHERE api_token IS NOT DISTINCT FROM 'tokDISTINCT11111'),
+        %q(INSERT INTO users (api_token) SELECT 'tokSELECT1111111'),
+        %q(INSERT INTO "users" ("name","api_token","bio") VALUES ('c\', 'tokPGBACKSLASH11', 'has `tick`') ON CONFLICT  DO NOTHING),
+        %q(ActiveRecord::RecordNotUnique: Trilogy::ProtocolError: 1062: Duplicate entry 'tokCUSTOMINDEX11' for key 'users.users_uniq_rpt'),
+        %q(DETAIL:  Key (lower(api_token::text))=(tokLOWERINDEX111) already exists.),
+        "DETAIL:  Key (api_token)=(tok(UNBALANCED11) already exists.",
+        "DETAIL:  Key (api_token)=(tokCUTOFF1111111",
+        "ActiveRecord::RecordNotUnique: Mysql2::Error: Duplicate entry 'tokCUTOFF1111111",
+        %q(DETAIL:  Failing row contains (5, null, a b, tokFAILROW111111, 2026-10-23 00:00:00).),
+        "DETAIL:  Failing row contains (5, (x), tokFAILCUT111111",
+        %q(SELECT * FROM users WHERE "api_token" COLLATE "C" = 'tokCOLLATE111111'),
+        %q(SELECT * FROM users WHERE api_token::text = 'tokCAST111111111'),
+        %q(SELECT * FROM `users` WHERE JSON_EXTRACT(`settings`, '$.api_token') = 'tokJSON111111111'),
+        %q(  WHERE LOWER(api_token) = LOWER('tokCONTINUED1111')),
+        %q(SELECT * FROM `users` WHERE `api_token` = "tokDOUBLEQUOTE11"),
+        %q(SELECT * FROM `users` WHERE `api_token` = "tok\"ESCAPED111111" LIMIT 1),
+        %q(SELECT * FROM `users` WHERE `api_token` IN ("tokDQIN111111111", "x")),
+        %q(INSERT INTO users VALUES (1, 'tokNOCOLUMNS1111')),
+        %q(REPLACE INTO `users` VALUE (1, "tokVALUE11111111")),
+        %q(SELECT TBL.*, 'admin' AS role FROM `TBL` WHERE `TBL`.`name` = 'O\'Brien' AND `TBL`.`api_token` IN ('tokESCAPED111111', 'tokESCAPED222222')),
+        %q(SELECT * FROM t WHERE name = 'O\'Brien' AND api_token IN ('tokFINDBYSQL1111','tokFINDBYSQL2222') AND LOWER(api_token) = LOWER('tokFINDBYSQL3333')),
+        %q(UPDATE `users` SET `settings` = '{\"api_key\":\"tokJSONESC111111\",\"theme\":\"dark\"}' WHERE `users`.`id` = 1),
+        %q(UPDATE "users" SET "settings" = $1 WHERE "users"."id" = $2  [["settings", "{\"api_key\":\"tokJSONBIND11111\"}"], ["id", 1]]),
+        %q(SELECT "users".* FROM "users" WHERE (settings @> $1)  [[nil, "{\"api_key\":\"tokJSONNIL111111\"}"]]),
+        %q(SELECT "users".* FROM "users" WHERE (settings->>'api_key' = $1)  [[nil, "tokARROWBIND1111"]]),
+        %q(SELECT "users".* FROM "users" WHERE (settings->'auth'->>'api_token' = $1)  [[nil, "tokARROWBIND2222"]]),
+        %q(SELECT "users".* FROM "users" WHERE (settings #>> '{auth,api_token}' = $1)  [[nil, "tokPATHBIND11111"]]),
+        %q{Trilogy::QueryError: 1064: You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '>>'$.api_key' = 'tokNEAR111111111')' at line 1},
+        %q(Mysql2::Error: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'AND `users`.`api_token` = 'tokNEAR222222222' LIMIT 1' at line 1),
+        %q({"sql":"SELECT `users`.* FROM `users` WHERE `users`.`api_token` = 'tokJSONLOG111111' LIMIT 1"}),
+        %q({"message":"User Load (0.4ms)  SELECT \"users\".* FROM \"users\" WHERE \"users\".\"api_token\" IN ('tokJSONLOG222222')"}),
+        %q({"payload":{"sql":"INSERT INTO \"users\" (\"name\",\"api_token\") VALUES ('a', 'tokJSONLOG333333')"}}),
+        %q(DETAIL:  Key (api_token)=(tokEXCLUSION1111) conflicts with existing key (api_token)=(tokEXCLUSION2222).),
+        %q(User Load (0.3ms)  SELECT "users".* FROM "users" WHERE (api_token = $1 AND name = $2)  [[nil, "tokBINDPOS111111"], [nil, "Ana"]]),
+        %q(User Load (0.1ms)  SELECT "users".* FROM "users" WHERE "users"."id" = ? AND (api_token = ?)  [["id", 1], [nil, "tokQMARK11111111"]]),
+        %q(SELECT * FROM users WHERE name BETWEEN 'a' AND 'z' AND 'tokLEFTBETWEEN11' = api_token),
+        %q(Mysql2::Error: Duplicate entry 'tokCONVENTION111' for key 'users.index_users_on_account_id_and_api_token'),
+        %q(UPDATE `users` SET `settings` = '{\"password\":\"pre tokTAILMARK11\\\\\\\\\\"}' WHERE `users`.`id` = 1),
+        %q(UPDATE `users` SET `settings` = '{\"password\":\"pre\\\\ntokNEWLINE11 x\",\"y\":1}' WHERE `users`.`id` = 1),
+        %q(SELECT `users`.* FROM `users` WHERE `users`.`api_token` = '$.tokDOLLAR111111' LIMIT 1),
+        %q(SELECT `users`.* FROM `users` WHERE `users`.`api_token` IN ('$.tokDOLLAR222222', '$[tokDOLLAR333333')),
+        %q(INSERT INTO `users` (`name`, `api_token`) VALUES ('a', '$.tokDOLLAR444444')),
+        %q(SELECT "users".* FROM "users" WHERE (md5(name || 'tokMD5FUNCTION11') = api_token)),
+        %q(SELECT `users`.* FROM `users` WHERE (JSON_CONTAINS(settings, '"tokJSONCONTAINS1"', '$.api_key'))),
+        %q(SELECT "users".* FROM "users" WHERE (jsonb_extract_path_text(settings, 'api_key') = 'tokJSONBPATH1111')),
+        %q(SELECT `users`.* FROM `users` WHERE JSON_EXTRACT(`settings`, '$.api_key[0]') = 'tokJSONINDEX1111'),
+        %q(UPDATE `users` SET `settings` = '{\"api_key\":\"tokQUOTE\\\"INSIDE1111\",\"theme\":\"dark\"}'),
+        %q({"sql":"SELECT \"users\".* FROM \"users\" WHERE (api_token = $1)","binds":{"nil":"tokSEMANTIC11111"}}),
+        %q({"sql":"SELECT \"users\".* FROM \"users\" WHERE (name = $1 AND api_token = $2)","binds":{"nil":["Ana","tokSEMANTIC22222"]}}),
+        %q({"sql":"SELECT \"users\".* FROM \"users\" WHERE \"users\".\"api_token\" IN ($1, $2)","binds":{"api_token":["tokSEMANTIC33333","tokSEMANTIC44444"]}}),
+        %q(2026-10-23T04:00:00.000Z pid=1 {"sql":"SELECT `users`.* FROM `users` WHERE `users`.`api_token` = 'tokPREFIXJSON111'"}),
+        %q([{"sql":"SELECT `users`.* FROM `users` WHERE `users`.`api_token` = 'tokARRAYJSON1111'"}]),
+        %q(Mysql2::Error: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'tokNEARVALUE1111' LIMIT 1' at line 1),
+        %q(INFO -- : Cache read: session-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U),
+        # Built from parts so a secret scanner does not read the fixture as a live token.
+        "WARN -- : fallback slack-#{%w[xoxb 123456789012 tokSLACKDASH111].join('-')} and openai-sk-proj-tokOPENAIDASH1234567890abcdef1234",
+        %q(INFO -- : webhook signedPayload eyJhbGciOiAiRVMyNTYiLCAieDVjIjogWyJNSUlCQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIl19.eyJzdWIiOiAiMTIzIiwgImlhdCI6IDF9.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U),
+        %q(INFO -- : cache read jws-eyJhbGciOiAiRVMyNTYiLCAieDVjIjogWyJNSUlCQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIl19.eyJzdWIiOiAiMTIzIiwgImlhdCI6IDF9.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U),
+        %q(Setting Update (0.4ms)  UPDATE `settings` SET `value` = '{\"type\":\"service_account\",\"private_key\":\"-----BEGIN PRIVATE KEY-----\\\\nMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkqMIIEvQIBADANBgkq\\\\n-----END PRIVATE KEY-----\\\\n\",\"client\":\"x\"}' WHERE `settings`.`id` = 1)
+      ].each do |line|
+        expect(described_class.redact_log_line(line)).not_to match(/tok[A-Z]|SECRETTAIL|dozjgNryP4J3|QIBADANBgkq/), line
+      end
+    end
+
+    it "keeps the values of a statement and an error that name no secret column" do
+      [
+        %q(Post Exists? (0.5ms)  SELECT 1 AS one FROM `posts` WHERE LOWER(`posts`.`slug`) = LOWER('hello-world') LIMIT 1),
+        %q(Post Load (0.3ms)  SELECT `posts`.* FROM `posts` WHERE `posts`.`published_on` BETWEEN '2026-01-01' AND '2026-02-01'),
+        %q(DETAIL:  Key (slug)=(hello-world) already exists.),
+        %q(Updating the slug 'hello-world' for post 5),
+        %q(Pick the 'pro' plan, then select a new api_token in settings),
+        %q(SELECT * FROM `posts` WHERE `slug` = "hello-world" AND `title` = 'Hi'),
+        %q(User Load (0.3ms)  SELECT "users".* FROM "users" WHERE (name = $1)  [[nil, "Ana"]]),
+        %q(SELECT "users".* FROM "users" WHERE (settings->>'theme' = 'dark') AND api_token IS NULL),
+        %q(User Load (0.2ms)  SELECT "users".* FROM "users" WHERE (LOWER(email) = LOWER($1)) AND "users"."otp_secret" IS NOT NULL  [[nil, "Ana Maria"]]),
+        %q(SELECT `users`.* FROM `users` WHERE `users`.`reset_password_sent_at` >= '2024-01-01 00:00:00'),
+        %q(SELECT "u".* FROM "u" WHERE "u"."api_token" IS NOT NULL AND "u"."tags" && ARRAY['ruby','rails']),
+        %q(SELECT * FROM `users` WHERE JSON_EXTRACT(`settings`, '$.theme') = 'dark' AND `api_token` IS NULL),
+        %q(Mysql2::Error: Duplicate entry 'Ana' for key 'users.index_users_on_name'),
+        %q(Mysql2::Error: Duplicate entry '42-7' for key 'index_memberships_on_user_id_and_group_id'),
+        %q(Mysql2::Error: Duplicate entry '5' for key 'users.PRIMARY'),
+        %q(CREATE TABLE "users" ("id" bigserial primary key, "api_token" character varying, "state" character varying DEFAULT 'pending' NOT NULL, "locale" character varying DEFAULT 'en')),
+        %q(User Load (0.1ms)  SELECT "users".* FROM "users" WHERE (name = ?) AND "users"."price" = '$5'  [[nil, "Ana"]]),
+        %q({"level":"info","message":"Started GET \"/\" for 127.0.0.1"}),
+        %q(Started GET "/assets/honeyJarCarousel-abc.bundle_min.js" for 127.0.0.1)
+      ].each { |line| expect(described_class.redact_log_line(line)).to eq(line) }
+      # An `eyJ` inside a word (surveyJobs) begins no JWT.
+      expect(described_class.redact_source_line("this.surveyJobsService.fetchAllJobs.bind(this);", path: "app/javascript/survey.js"))
+        .to eq("this.surveyJobsService.fetchAllJobs.bind(this);")
+      # A secret's key holding an object or an array is filtered whole, and the line still reads.
+      expect(described_class.redact_log_line(%q({"password_reset":{"sent_at":"2026-01-01","count":2},"user_id":7})))
+        .to eq(%q({"password_reset":"[FILTERED]","user_id":7}))
+      expect(described_class.redact_log_line(%q({"api_key":[[["x"]]], "b":"c"}))).to eq(%q({"api_key":"[FILTERED]", "b":"c"}))
+      # The placeholder stays as written and only its bind is filtered.
+      expect(described_class.redact_log_line(%q(SELECT "users".* FROM "users" WHERE (api_token = $1 AND name = $2)  [[nil, "tokPLACEHOLDER11"], [nil, "Ana"]])))
+        .to eq(%q(SELECT "users".* FROM "users" WHERE (api_token = $1 AND name = $2)  [[nil, "[FILTERED]"], [nil, "Ana"]]))
+      # MySQL names only the index: one Rails named after its columns tells them, any other name could cover a secret.
+      expect(described_class.redact_log_line(%q(Mysql2::Error: Duplicate entry 'hello-world' for key 'posts.index_posts_on_slug')))
+        .to eq(%q(Mysql2::Error: Duplicate entry 'hello-world' for key 'posts.index_posts_on_slug'))
+      expect(described_class.redact_log_line(%q(Mysql2::Error: Duplicate entry 'hello-world' for key 'posts.uniq_slug')))
+        .to eq(%q(Mysql2::Error: Duplicate entry '[FILTERED]' for key 'posts.uniq_slug'))
+      # A JSON path names what it reads, so it stays when the value it is compared with is filtered.
+      expect(described_class.redact_log_line(%q(SELECT * FROM `users` WHERE JSON_EXTRACT(`settings`, '$.api_key') = 'tokJSONPATH11111')))
+        .to eq(%q(SELECT * FROM `users` WHERE JSON_EXTRACT(`settings`, '$.api_key') = '[FILTERED]'))
+      [
+        %q(SELECT `users`.* FROM `users` WHERE `users`.`api_token` IS NOT NULL AND `users`.`created_at` BETWEEN '2024-01-01 00:00:00' AND '2024-12-31 00:00:00'),
+        %q(SELECT `users`.* FROM `users` WHERE `users`.`api_token` IS NOT NULL AND (LOWER(name) = LOWER('Ana Maria'))),
+        %q(REPLACE INTO `users` (`name`, `api_token`) VALUES ('n1', 'tokREPLACE111111'))
+      ].zip([ "'2024-01-01 00:00:00' AND '2024-12-31 00:00:00'", "LOWER('Ana Maria')", "VALUES ('n1', '[FILTERED]')" ]).each do |line, kept|
+        expect(described_class.redact_log_line(line)).to include(kept), line
+      end
+      expect(described_class.redact_log_line(%q(DETAIL:  Key (lower(api_token::text))=(tokLOWERINDEX111) already exists.)))
+        .to eq(%q(DETAIL:  Key (lower(api_token::text))=([FILTERED]) already exists.))
+    end
+
+    it "keeps a value whose column holds no secret, and a value cut off with its line filtered" do
+      line = %q(Post Load  SELECT `posts`.* FROM `posts` WHERE `posts`.`title` = 'token talk' AND `posts`.`slug` IN ('a', 'b'))
+      expect(described_class.redact_log_line(line)).to eq(line)
+      expect(described_class.redact_log_line(%q{INSERT INTO `users` (`email`,`api_token`) VALUES ('x', 'tokD1b2c3d4e5f6}))
+        .to eq(%q{INSERT INTO `users` (`email`,`api_token`) VALUES ('x', '[FILTERED]})
+    end
+
     it "filters a secret column's value in a query's logged binds" do
       line = %q(  User Load (0.4ms)  SELECT "users".* FROM "users" WHERE "users"."api_token" = $1 LIMIT $2  ) +
         %q([["api_token", "tok_9f8e7d6c5b4a"], ["LIMIT", 1]])
@@ -981,6 +1199,14 @@ RSpec.describe RailsAiContext::Redaction do
     it "strips URI userinfo" do
       expect(described_class.call("redis://app:hunter2@cache.internal:6379/0"))
         .to eq("redis://[FILTERED]@cache.internal:6379/0")
+    end
+
+    # A shell or compose default writes the URL after `-`, and a log can glue a colour code to it.
+    it "strips URI userinfo whatever comes before the scheme" do
+      expect(described_class.call("${DATABASE_URL:-postgres://app:hunter2pass@db:5432/app}")).to eq("${DATABASE_URL:-postgres://[FILTERED]@db:5432/app}")
+      expect(described_class.call("1redis://u:p4ssword@h")).not_to include("p4ssword")
+      expect(described_class.value("X", "\e[36mpostgres://app:hunter2pw@db/app")).not_to include("hunter2pw")
+      expect(described_class.redact_log_line(%q({"msg":"\u001b[36mpostgres://app:hunter2pw@db:5432/app\u001b[0m"}))).not_to include("hunter2pw")
     end
 
     it "strips a quoted value behind a secret-ish key" do
@@ -1335,6 +1561,30 @@ RSpec.describe RailsAiContext::Redaction do
           line.gsub(pattern) { |match| match }
           expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
         end
+      end
+    end
+
+    # A scheme was tried from each letter of a run before `://`, and the SQL and database-error passes
+    # read a line once: a long run, a pile of unfinished messages or of open lists costs its length.
+    it "reads a 1 MB line of a URL, SQL values or database errors in seconds, in a log and as an env value", :cpu_timed do
+      [ "#{'a' * 1_000_000}://", "https://#{'a' * 1_000_000}@x", "Duplicate entry 'x' for key '" * 35_000, "Key (a)=(" * 110_000,
+        "Failing row contains (" * 45_000, "#{'`a`.`api_token` IN (' * 50_000}'x'", "#{'INSERT INTO t (a) VALUES (' * 38_000}'x'",
+        "api_token = 'x' " * 60_000, "aB" * 500_000, "/hooks/" * 140_000, "?#{'a' * 1_000_000}", "`a` #{'"' * 1_000_000}",
+        "`api_token` IN (#{'"x\\"", ' * 120_000})", "INSERT INTO t VALUES #{"('x'), " * 110_000}", "x://#{':' * 1_000_000}",
+        "sk-" * 330_000, "eyJ-" * 250_000, "#{'(' * 200_000}#{"'x'" * 200_000}", "#{'$1 = ' * 150_000} [[nil, \"x\"]]",
+        "{#{'"a":"b",' * 100_000}\"c\":1}", "near '#{"'x' " * 200_000}", "(#{'a.' * 400_000}a) it's",
+        "{#{'"\\' * 400_000}}", "'$.#{'a' * 1_000_000}!'", "Duplicate entry 'x' for key 'index_#{'_on_' * 200_000}!'",
+        "#{'eyJ-' * 250_000}", "{\"q\":\"#{'\\"api_key\\"=\\"v\\"w ' * 50_000}", "#{'eyJa.' * 200_000}",
+        "#{'eyJ-' * 100_000}.#{'b' * 20}.c", "{\"items\":[#{'{"token":{"v":1}},' * 40_000}1]}" ].each do |line|
+        started = Process.clock_gettime(cpu_clock)
+        described_class.redact_log_line(line)
+        described_class.env_value("SETTING", line)
+        described_class.env_comment(line)
+        expect(Process.clock_gettime(cpu_clock) - started).to be < 15
+
+        started = Process.clock_gettime(cpu_clock)
+        line.gsub(described_class::URI_USERINFO) { |match| match }
+        expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
       end
     end
 

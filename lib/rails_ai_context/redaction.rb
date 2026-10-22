@@ -2,6 +2,10 @@
 
 require_relative "safe_path"
 
+# strscan and json are gems an app's bundle pins, and the CLI reads files before the app boots: each loads when first named.
+autoload :StringScanner, "strscan"
+autoload :JSON, "json"
+
 module RailsAiContext
   # Every value that leaves the app through this gem - config source slices,
   # log lines, query rows, environment values - passes through here first.
@@ -24,7 +28,7 @@ module RailsAiContext
     # the AST or a log file rather than parsing structure. A credential can
     # sit in an interpolation, a heredoc or a bare string, and no node type
     # marks one - the words are the signal.
-    SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials|
+    SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials|creds?|
                    pepper|salt|master_key|signing_key|encryption_key|deterministic_key|cipher_key|aes_key|cbc_key|gcm_key|hmac_key/xi
 
     # `primary_key` is ordinary ActiveRecord vocabulary; under
@@ -46,14 +50,31 @@ module RailsAiContext
     # `password_length` and `token_expiry` describe a secret rather than
     # being one; their values are policy, and filtering them hides config the
     # reader asked for.
-    DESCRIPTOR_SUFFIX = /_(?:length|size|min|max|expiry|ttl|strategy|regex|format|field|params?|columns?|names?|enabled|required|count|algorithm|method|type|salt_length)\z/i
+    DESCRIPTOR_SUFFIX = /_(?:length|size|min|max|expiry|ttl|strategy|regex|format|field|params?|columns?|names?|enabled|required|count|algorithm|method|type|salt_length|at|on)\z/i
 
     # `=(?!>)` so the alternation cannot backtrack into matching the `=` of a
     # `=>` and treating the stray `>` as the value.
     ASSIGN = /\s*(?::|=>|=(?!>))\s*/
 
-    # Userinfo holds no quote, bracket or slash, so the match cannot run across JSON or a path.
-    URI_USERINFO = %r{([a-z][a-z0-9+.-]*://)[^\s/"'<>@]*:[^@\s/"'<>]+@}i
+    # Userinfo holds no quote, bracket or slash, so the match cannot run across JSON or a path. It is
+    # read from the `://` a scheme's letter stands before, whatever stands before the scheme (`:-` in
+    # a shell default). The user part may hold an `@` (an email address) and the password runs to the
+    # last `@` before the host; the match starts at `://` only, so a long run costs its length.
+    URI_USERINFO = %r{(?<=[a-z0-9+.-])(://)[^\s/"'<>:]*+:[^\s/"'<>]*@}i
+    # Shapes an environment value carries a secret in where no name says so: a webhook's address, a
+    # token in a query, and the runs secret_shaped? reads.
+    ENV_SECRET_SHAPES = [
+      %r{\b(?:hooks\.slack(?:-gov)?\.com|(?:discord|discordapp)\.com/api/webhooks|webhook\.office\.com|outlook\.office\.com/webhook|hooks\.zapier\.com)\b}i,
+      %r{/(?:web)?hooks?/[A-Za-z0-9]{16,}}i,
+      /[?&][\w.-]*(?:token|key|secret|signature|sig|password|passwd|pwd|auth|authorization|credential)=/i
+    ].freeze
+    # A run a key is written in: `/`, `.`, `-` and `_` break it, so a path, a host or a slug is many runs.
+    OPAQUE_RUN = /[A-Za-z0-9+=]{16,}/
+    # A URL's user part with no password: a name shows, a key in its place (a DSN's) does not.
+    ENV_USER = %r{://([^\s/"'<>@:]+)@}
+    # Bundler's settings that name no gem server, whose BUNDLE_<HOST> holds a user and password.
+    BUNDLER_SETTINGS = %w[BUILD LOCAL MIRROR GITHUB].freeze
+    GROUPED_HEX = /\A\h{16,}\z/
     QUOTED_SECRET = /#{SECRET_NAME}#{ASSIGN}["'][^"']*["']/
     # Stops before a collection: the value pattern ends at the first comma or
     # bracket, so matching `token: ["a", "b"]` would cut mid-literal and
@@ -87,7 +108,8 @@ module RailsAiContext
     # code or config is written this way. A JWT's signature may be empty.
     CREDENTIAL_TOKENS = [
       /\bAKIA[0-9A-Z]{16}\b/,
-      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/,
+      # A key's first digit sits near its start: a bound keeps each try short when a run of `sk-` offers
+      # a start at every repeat. A JWT is read by filter_jwts.
       /\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/,
       /\brk_(?:live|test)_[A-Za-z0-9]{10,}\b/,
       /\bSG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{10,}\b/,
@@ -95,8 +117,11 @@ module RailsAiContext
       /\bgh[pus]_[A-Za-z0-9]{36,}\b/,
       /\bglpat-[A-Za-z0-9_-]{20,}\b/,
       /\bnpm_[A-Za-z0-9]{36,}\b/,
-      /\bsk-(?:ant-|proj-)?(?=[\w-]*\d)[\w-]{32,}/
+      /\bsk-(?:ant-|proj-)?(?=[\w-]{0,255}\d)[\w-]{32,}/
     ].freeze
+
+    # The characters a JWT's three parts and their dots are written in, a run long enough to hold one.
+    JWT_RUN = /[A-Za-z0-9_.-]{24,}/
 
     PEM_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/
     PEM_END = /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/
@@ -171,9 +196,9 @@ module RailsAiContext
     # key_name): a run of words and dashes with a secret-ish part, taken from
     # its start in one pass, as DASHED_KEY_NAME takes one in source.
     LOG_SECRET_ASSIGNMENT = /
-      (["']?)((?<![\w-])(?=[\w-]*?(?:#{KEY_NAME}))[\w-]++)\1
-      (\s*(?:=>|:|=(?!>))\s*)
-      (?!["']?\[FILTERED\])(?:"([^"]*)"|'([^']*)'|([^\s,;&)\]}]+))
+      (\\?["']?)((?<![\w-])(?=[\w-]*?(?:#{KEY_NAME}))[\w-]++)\1
+      (\s*(?:=>|:(?!:)|=(?!>))\s*)
+      (?!\\?["']?\[FILTERED\]|\$\d+(?![\w$])|\?(?![\w?]))(?:"([^"]*)"|'([^']*)'|\\"((?:\\\\\\\\|\\\\\\"|\\\\[^\\"]|[^\\"])*+)\\"|([^\s,;&)\]}]+))
     /xi
     # A `["name", "value"]` pair in a query's logged binds. Active Record filters a bind only
     # when config.filter_parameters lists its name, which pre-Rails-7 apps often leave at
@@ -181,6 +206,37 @@ module RailsAiContext
     # captured and the value filtered when the name is a secret; a bare value (a number, nil) is
     # left, as is the `$n` placeholder in the SQL before the binds.
     LOG_BIND = /\[\s*"((?:[^"\\]|\\.)*)"\s*,\s*("(?:[^"\\]|\\.)*")\s*\]/
+    LOG_UNNAMED_BIND = /\[\s*nil\s*,\s*("(?:[^"\\]|\\.)*")\s*\]/
+
+    # A string literal in a logged statement, with the letters one may carry before its quote (x'..', _binary'..'),
+    # and to the line's end when the line cuts it off. MySQL escapes a quote with a backslash and quotes names in
+    # backticks; standard SQL doubles the quote.
+    SQL_STRING = /(?:[xXbBnN])?'(?:[^']|'')*'?/
+    MYSQL_STRING = /(?:[xXbBnN]|_\w+)?'(?:[^'\\]|\\.|'')*'?/m
+    # MySQL reads double quotes as a string too, where Active Record's backquotes name the columns.
+    MYSQL_DQ_STRING = /"(?:[^"\\]|\\.|"")*"?/m
+    # PostgreSQL's E'..' and MySQL's _charset'..' read a backslash as an escape whatever quotes the names.
+    ESCAPED_STRING = /(?:[eE]|_\w+)'(?:[^'\\]|\\.|'')*'?/m
+    SQL_WORD = /`(?:[^`]|``)*`?|"(?:[^"\\]|\\.|"")*"?|[A-Za-z_][\w$]*/
+    # PostgreSQL's array overlap and containment compare a column with a value too.
+    SQL_COMPARISON = %w[= != <> <=> < > <= >= && @> <@].freeze
+    # Read as one token, so the `>` in a JSON arrow is no comparison.
+    SQL_OPERATOR = /<=>|!=|<>|<=|>=|->>|->|\#>>|\#>|@>|<@|&&|\?\||\?&|\d[\w.]*/
+    JSON_ARROWS = %w[-> ->> #> #>>].freeze
+    # A statement and a clause of one, as against a log line of prose.
+    SQL_STATEMENT = /\A(?:select|insert|update|delete|replace|with|upsert)\z/i
+    SQL_CLAUSE = /\A(?:from|into|set|values|where)\z/i
+    SQL_VALUES = /\Avalues?\z/i
+    # What a column name stands after; a word after anything else (`COLLATE "C"`, `::text`) is no column.
+    SQL_COLUMN_LEAD = /\A(?:where|and|or|on|set|not|when|having|by|then|else|case|select)\z/i
+    # Where PostgreSQL's key error ends its values, which can hold parentheses of their own.
+    KEY_VALUES_END = /\)(?= (?:already exists|is not present|is still referenced|conflicts with))/
+    KEY_VALUES_START = /(?:Key|existing key) \(/
+    # Each pair of a query's logged binds, named or not, in the order of the `$n` placeholders.
+    ANY_BIND = /\[\s*(nil|"(?:[^"\\]|\\.)*")\s*,\s*("(?:[^"\\]|\\.)*"|[^\[\]"]*?)\s*\]/
+    JSON_STRING = /"(?:[^"\\]|\\.)*"/
+    # MySQL repeats the statement from where it stopped reading in a syntax error.
+    SYNTAX_NEAR = "for the right syntax to use near '"
 
     # A quoted key may close an index (`ENV["API_TOKEN"] =`); the assignment may be `||=` or another op-assign.
     SECRET_KEY = /"(?<name>#{DASHED_KEY_NAME})"\]?|'(?<name>#{DASHED_KEY_NAME})'\]?|(?<![\w"'\/\\-])(?<name>#{KEY_NAME})/
@@ -287,7 +343,7 @@ module RailsAiContext
           result = result.gsub(NAMED_OBJECT) { |m| filter_named_object(m, Regexp.last_match, example) }
         end
         result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
-        result = CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) }
+        result = filter_jwts(CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) })
         result = scheme_credentials(result)
         # A log shown as a file (a tracked log's diff) gets what rails_read_logs filters too.
         return redact_log_line(result) if path.to_s.match?(LOG_FILE)
@@ -365,7 +421,7 @@ module RailsAiContext
       def redact_log_line(line)
         return line unless line.is_a?(String)
 
-        result = line.dup
+        result = json_line(line).dup
         result.gsub!(ANSI_ESCAPE, "")
         result.gsub!(DOTENV_LINE, "[dotenv] Set #{FILTERED}")
         result.gsub!(URI_USERINFO) { "#{Regexp.last_match(1)}#{FILTERED}@" }
@@ -376,6 +432,8 @@ module RailsAiContext
         result.gsub!(FLAG_ARGUMENT) { |m| filter_flag(m, Regexp.last_match, false) }
         result.gsub!(result.encoding == Encoding::UTF_8 ? EMAIL_PATTERN : ASCII_EMAIL_PATTERN, EMAIL)
 
+        result, bind_columns = filter_sql_values(syntax_near(result))
+        result = filter_unnamed_binds(error_values(result), bind_columns)
         result.gsub!(LOG_SECRET_ASSIGNMENT) { filter_assignment(Regexp.last_match) }
         result.gsub!(LOG_BIND) { filter_bind(Regexp.last_match) }
 
@@ -391,7 +449,52 @@ module RailsAiContext
           end
         end
 
-        scheme_credentials(result)
+        scheme_credentials(filter_jwts(result))
+      end
+
+      # A JWT in a run of its characters: three dot-joined parts, the first a base64url JSON header
+      # (`eyJ`) of 13 or more that starts the run or follows a `-` or a `.`, the second of 10 or more. The
+      # run is read once, a part at a time, so a header of any length is caught and a run of repeats costs
+      # its length.
+      def filter_jwts(text)
+        return text unless text.include?("eyJ") && text.include?(".")
+
+        text.gsub(JWT_RUN) { |run| jwt_redacted(run) }
+      end
+
+      def jwt?(text)
+        text.include?("eyJ") && filter_jwts(text) != text
+      end
+
+      # The next `eyJ` at or after from that no word character stands before (`surveyJobs` holds none).
+      def jwt_start(run, from)
+        while (at = run.index("eyJ", from))
+          return at if at.zero? || !run[at - 1].match?(/[A-Za-z0-9_]/)
+
+          from = at + 1
+        end
+      end
+
+      def jwt_redacted(run)
+        return run unless run.include?("eyJ") && run.count(".") >= 2
+
+        out = +""
+        pos = 0
+        header = jwt_start(run, 0)
+        while header && (dot = run.index(".", pos))
+          header = jwt_start(run, pos) if header < pos
+          break unless header
+
+          second = run.index(".", dot + 1) if header < dot && dot - header >= 13
+          if second && second - dot > 10
+            out << run[pos...header] << FILTERED
+            pos = run.index(".", second + 1) || run.length
+          else
+            out << run[pos..dot]
+            pos = dot + 1
+          end
+        end
+        out << run[pos..]
       end
 
       # The one place a name and value pair leaves the process. Normally the
@@ -411,6 +514,43 @@ module RailsAiContext
         return FILTERED if name.match?(WHOLE_KEY_NAME) && keyed_secret?(name, stripped, placeholder_ok)
 
         stripped.gsub(URI_USERINFO) { |m| placeholder?(m) ? m : "#{Regexp.last_match(1)}#{FILTERED}@" }
+      end
+
+      # An environment value as an env file or a code default gives it: as Redaction.value reads it, or
+      # FILTERED when its shape can hold a secret. `placeholder_ok` as for value.
+      def env_value(name, value, placeholder_ok: false)
+        text = value.to_s
+        shown = value(name, text, placeholder_ok: placeholder_ok)
+        shown.to_s.include?(FILTERED) || bundler_credential?(name.to_s) || secret_shaped?(text) ? FILTERED : shown
+      end
+
+      # An env file's comment, printed beside its variable: FILTERED when it holds a credential, a
+      # secret's shape, or a hex key in groups (a UUID) among its words.
+      def env_comment(text)
+        hidden = credential?(text) || secret_shaped?(text) || text.split.any? { |word| word.delete("-_").match?(GROUPED_HEX) }
+        hidden ? FILTERED : call(text)
+      end
+
+      # Whether text has a shape a secret is kept in where no name says so: ENV_SECRET_SHAPES, a hex key
+      # split into groups, a key in a URL's user part, or a run of 16 letters and digits with both in it.
+      def secret_shaped?(text)
+        ENV_SECRET_SHAPES.any? { |shape| text.match?(shape) } || grouped_hex?(text) ||
+          text.scan(ENV_USER).any? { |(user)| opaque_text?(user) || grouped_hex?(user) } || opaque_text?(text)
+      end
+
+      def opaque_text?(text)
+        text.scan(OPAQUE_RUN).any? { |run| run.match?(/\d/) && run.match?(/[A-Za-z]/) }
+      end
+
+      def grouped_hex?(text)
+        text.delete("-_").match?(GROUPED_HEX)
+      end
+
+      # BUNDLE_<HOST>, the host's dots written `__`: the one place Bundler reads a gem server's password.
+      def bundler_credential?(name)
+        return false unless name.start_with?("BUNDLE_") && name.index("__", 7)
+
+        !BUNDLER_SETTINGS.any? { |setting| name.start_with?("BUNDLE_#{setting}__") }
       end
 
       # Redacting before the search means a term can only match text the
@@ -519,7 +659,7 @@ module RailsAiContext
       # credential is written with: a UUID's dashes, base64's `+`, `/` and `=`. A word or a
       # placeholder has no digits to count.
       def scheme_credential?(value)
-        return true if CREDENTIAL_TOKENS.any? { |pattern| value.match?(pattern) }
+        return true if CREDENTIAL_TOKENS.any? { |pattern| value.match?(pattern) } || jwt?(value)
         return false if placeholder?(value)
 
         alnum = value.delete("^A-Za-z0-9")
@@ -561,7 +701,7 @@ module RailsAiContext
       def credential?(inner)
         return false if placeholder?(inner)
 
-        inner.match?(PEM_INLINE) || CREDENTIAL_TOKENS.any? { |pattern| inner.match?(pattern) }
+        inner.match?(PEM_INLINE) || CREDENTIAL_TOKENS.any? { |pattern| inner.match?(pattern) } || jwt?(inner)
       end
 
       PLACEHOLDER = /\#\{|<%|\$\{|%\{|\{\w+\}|\A<[^<>]*>\z|\A(?:[xX]{3,}|\*{3,})\z|
@@ -665,7 +805,7 @@ module RailsAiContext
       # A 16+ character run mixing letters and digits, or a known token format; a cache or i18n
       # key (`views/posts/1`, `users.index.title`), a path or a header name has no such run.
       def key_credential?(value)
-        return true if CREDENTIAL_TOKENS.any? { |pattern| value.match?(pattern) }
+        return true if CREDENTIAL_TOKENS.any? { |pattern| value.match?(pattern) } || jwt?(value)
         return false if placeholder?(value) || !value.ascii_only? || value.match?(/\s/)
         return false unless NOT_A_SECRET.none? { |shape| value.match?(shape) }
         return false if object_path?(value)
@@ -742,10 +882,506 @@ module RailsAiContext
       def filter_assignment(match)
         quote, key, assign = match[1], match[2], match[3]
         name = key_name(key)
-        return match[0] unless name && log_secret?(name, match[4] || match[5] || match[6])
+        return match[0] unless name && log_secret?(name, match[4] || match[5] || match[6] || match[7])
 
-        value_quote = match[4] ? '"' : (match[5] ? "'" : "")
+        value_quote = match[4] ? '"' : (match[5] ? "'" : (match[6] ? '\\"' : ""))
         "#{quote}#{key}#{quote}#{assign}#{value_quote}#{FILTERED}#{value_quote}"
+      end
+
+      # A statement's values written inline, filtered where the column they meet is a secret: compared
+      # with it (through LOWER() or CAST() too), in a BETWEEN or an IN list for it, or inserted under
+      # it. Active Record writes them so on MySQL and MariaDB, which run no prepared statements, and for
+      # insert_all and upsert_all on every adapter. A value whose column cannot be told is filtered when
+      # the statement names a secret column. A line with `\'` in it reads one way as MySQL and another
+      # as standard SQL, so it is read both ways, and a value either reading filters is filtered.
+      # Returns the line and the columns each bind placeholder meets, for the unnamed binds after it.
+      def filter_sql_values(line)
+        binds = line.match?(LOG_UNNAMED_BIND)
+        return [ line, nil ] unless binds || line.include?("'") || (line.include?('"') && line.include?("`"))
+
+        spans = []
+        columns = {}
+        sql_dialects(line).each { |mysql| sql_read(line, mysql, spans, columns) }
+        [ sql_rewrite(line, spans), columns ]
+      end
+
+      # Whether to read a line as MySQL, as standard SQL, or both. Active Record quotes MySQL's names in
+      # backquotes and the others' in double quotes, the first name before most values. A `\'` reads two
+      # ways, so a line with one counts as MySQL only when a backquoted name stands outside its strings.
+      def sql_dialects(line)
+        if line.include?("\\'")
+          sql_tokens(line, false).any? { |kind, text| kind == :word && text.start_with?("`") } ? [ true ] : [ true, false ]
+        else
+          tick = line.index("`")
+          double = line.index('"')
+          [ tick && (double.nil? || tick < double) ? true : false ]
+        end
+      end
+
+      # One reading of a line: each filtered string's byte span into spans, each placeholder's column into columns.
+      # One pass over the tokens, so a line cut off or full of parentheses costs no more than its length.
+      def sql_read(line, mysql, spans, columns)
+        tokens = sql_tokens(line, mysql)
+        stack = []
+        insert = closed = between = named = nil
+        question = 0
+        tokens.each_with_index do |(kind, text, start), i|
+          insert = insert_stage(insert, tokens, i, stack)
+          between = nil if between && between[:and] && !sql_keyword?(tokens[i], "and") && tokens[i - 1] && !sql_keyword?(tokens[i - 1], "and")
+          case text
+          when "(", "["
+            stack << sql_context(tokens, i, stack.last, insert, closed)
+            insert[:stage] = stack.last[:kind] if insert && %i[columns tuple].include?(stack.last[:kind])
+          when ")", "]"
+            group = stack.pop
+            insert[:columns], insert[:stage] = group[:names], :columns_done if insert && group&.dig(:kind) == :columns
+            insert[:stage] = :after_tuple if insert && group&.dig(:kind) == :tuple
+            sql_note(stack.last, group[:found], group[:words]) if group
+            closed = group && { index: i, column: group[:found], known: group[:found] || group[:words] }
+          when ","
+            stack.last[:item] += 1 if stack.last
+          else
+            if kind == :word
+              stack.last[:names][stack.last[:item]] = sql_name(text) if stack.last&.dig(:kind) == :columns
+              sql_note(stack.last, sql_secret_name(text), true)
+              if text.casecmp?("between")
+                between = { column: sql_left(tokens, i - 1, closed) }
+              elsif between && (text.casecmp?("and") || text.casecmp?("or"))
+                # BETWEEN takes one AND; the next AND or an OR starts another condition.
+                between = between[:and] || text.casecmp?("or") ? nil : between.merge(and: true)
+              end
+              next
+            end
+            next unless kind == :string || kind == :bind
+
+            # A key name in a function's arguments ('api_key', '$.api_key') says it reads that secret.
+            sql_note(stack.last, json_secret(text), false) if kind == :string
+            next if kind == :string && json_path?(tokens, i, stack.last)
+            column = between && !sql_operator_before(tokens, i - 1) ? between[:column] : sql_column(tokens, i, stack.last, closed)
+            if kind == :bind
+              (columns[text == "?" ? (question += 1) : text[1..].to_i] ||= []) << column
+              next
+            end
+            literal = sql_literal(text)
+            hide = if column.nil?
+              (named ||= sql_secret_names(tokens)).any? { |secret| log_secret?(secret, literal) }
+            else
+              column == true || (column && log_secret?(column, literal))
+            end
+            spans << [ start, start + text.bytesize ] if hide
+          end
+        end
+      end
+
+      # The line with each span, merged where readings overlap, written as a filtered string.
+      def sql_rewrite(line, spans)
+        return line if spans.empty?
+
+        merged = []
+        spans.sort.each { |from, to| merged.last && from < merged.last[1] ? merged.last[1] = [ merged.last[1], to ].max : merged << [ from, to ] }
+        out = +""
+        cursor = 0
+        merged.each do |from, to|
+          text = line.byteslice(from, to - from)
+          quote = text[/['"]/]
+          prefix = text[0, text.index(quote)]
+          closed_quote = text.length > prefix.length + 1 && text.end_with?(quote)
+          out << line.byteslice(cursor, from - cursor) << "#{prefix}#{quote}#{FILTERED}#{quote if closed_quote}"
+          cursor = to
+        end
+        out << line.byteslice(cursor, line.bytesize - cursor)
+      end
+
+      # [kind, text, byte offset] for each token of a line read as SQL: :string, :word (a keyword or a
+      # name, bare or quoted), :bind (a `$1` or `?` placeholder) or :punct (an operator or one
+      # character). Read as MySQL, a backslash escapes and double quotes make a string too. A `?` is a
+      # placeholder unless the line numbers its placeholders, where it is PostgreSQL's JSON operator.
+      def sql_tokens(line, mysql)
+        string = mysql ? MYSQL_STRING : SQL_STRING
+        numbered = line.match?(/(?<![\w$'"])\$\d+(?![\w$'"])/)
+        scanner = StringScanner.new(line)
+        tokens = []
+        until scanner.eos?
+          next if scanner.skip(/\s+/)
+
+          start = scanner.pos
+          kind = if scanner.scan(ESCAPED_STRING) || scanner.scan(string) || (mysql && scanner.scan(MYSQL_DQ_STRING)) then :string
+          elsif scanner.scan(SQL_WORD) then :word
+          elsif scanner.scan(/\$\d+/) || (!numbered && scanner.scan(/\?(?![|&])/)) then :bind
+          else
+            scanner.scan(SQL_OPERATOR) || scanner.getch
+            :punct
+          end
+          tokens << [ kind, scanner.matched, start ]
+        end
+        tokens
+      end
+
+      # Where an INSERT (or MySQL's REPLACE) read so far stands after tokens[i]: INSERT [a word or two]
+      # INTO name [(columns)] VALUES (...), (...). Nil once a token breaks that shape.
+      def insert_stage(insert, tokens, i, stack)
+        kind, text = tokens[i]
+        # MySQL's INSERT() string function inside a row starts no statement.
+        if kind == :word && (text.casecmp?("insert") || text.casecmp?("replace")) && !%i[columns tuple].include?(insert&.dig(:stage))
+          return { stage: :insert, words: 0 }
+        end
+        return nil unless insert
+
+        case insert[:stage]
+        when :insert
+          return insert.merge(stage: :into) if text.casecmp?("into")
+
+          insert[:words] < 2 && kind == :word ? insert.merge(words: insert[:words] + 1) : nil
+        when :into then kind == :word ? insert.merge(stage: :table) : nil
+        when :table
+          return insert.merge(stage: :values, columns: :unlisted) if kind == :word && text.match?(SQL_VALUES)
+
+          text == "." || text == "(" || (kind == :word && tokens[i - 1][1] == ".") ? insert : nil
+        when :columns, :tuple then insert
+        when :columns_done then text.match?(SQL_VALUES) ? insert.merge(stage: :values) : nil
+        when :values then text == "(" ? insert : nil
+        when :after_tuple then text == "," || (text == "(" && tokens[i - 1][1] == ",") ? insert : nil
+        end
+      end
+
+      # What a parenthesis or bracket opens: an IN list after `column [NOT] IN`, an INSERT's column list
+      # or one of its rows, the right side of a comparison (`= LOWER(`, `&& ARRAY[`), or a group that
+      # belongs to the list or row around it.
+      def sql_context(tokens, i, outer, insert, closed)
+        before = tokens[i - 1] if i.positive?
+        if tokens[i][1] == "(" && sql_keyword?(before, "in")
+          { kind: :list, column: sql_left(tokens, sql_keyword?(tokens[i - 2], "not") ? i - 3 : i - 2, closed), item: 0 }
+        elsif tokens[i][1] == "(" && insert && insert[:stage] == :table
+          { kind: :columns, names: [], item: 0 }
+        elsif tokens[i][1] == "(" && insert && %i[values after_tuple].include?(insert[:stage])
+          { kind: :tuple, columns: insert[:columns], item: 0 }
+        elsif (op = sql_operator_before(tokens, i - 1))
+          { kind: :list, column: sql_left(tokens, op - 1, closed), item: 0 }
+        else
+          { kind: :plain, owner: outer && (outer[:kind] == :plain ? outer[:owner] : outer), item: 0 }
+        end
+      end
+
+      # Notes a name read inside a group, so a comparison with the group knows whether it holds a secret.
+      def sql_note(context, secret, word)
+        return unless context
+
+        context[:found] ||= secret
+        context[:words] ||= word
+      end
+
+      # The index of a comparison operator right before tokens[j + 1], a function's name (and BINARY) skipped.
+      def sql_operator_before(tokens, j)
+        j -= 1 if tokens[j]&.first == :word && !sql_keyword?(tokens[j], "and") && j.positive? && tokens[j - 1] && (sql_comparison?(tokens[j - 1]) || sql_keyword?(tokens[j - 1], "binary"))
+        j -= 1 if sql_keyword?(tokens[j], "binary")
+        j if j >= 0 && sql_comparison?(tokens[j])
+      end
+
+      def sql_comparison?(token)
+        token && ((token.first == :punct && SQL_COMPARISON.include?(token[1])) || (token.first == :word && token[1].match?(/\A(?:like|ilike)\z/i)))
+      end
+
+      # The column a value meets: the one compared with it, the IN list's, BETWEEN's or INSERT row's it
+      # sits in. false when that is known to be no secret, nil when it cannot be told, and true in a row
+      # with no column list, where any value can be a secret.
+      def sql_column(tokens, i, context, closed)
+        if (op = sql_operator_before(tokens, i - 1))
+          op -= 1 if sql_keyword?(tokens[op - 1], "not") && sql_keyword?(tokens[op], "like")
+          return sql_left(tokens, op - 1, closed)
+        end
+        # A value on the left: 'v' = api_token.
+        return sql_right(tokens, i + 2) if sql_comparison?(tokens[i + 1])
+
+        list = context && context[:kind] == :plain ? context[:owner] : context
+        case list&.dig(:kind)
+        when :list then list[:column]
+        when :tuple
+          return true if list[:columns] == :unlisted
+
+          column = list[:columns]&.at(list[:item])
+          column && (sql_secret_name(column) || false)
+        end
+      end
+
+      # The secret name an operand at tokens[j] holds: a column (the last name of a dotted one, standing
+      # where a column stands), a JSON path's key, or a group just closed. false when it holds none, nil
+      # when unread.
+      def sql_left(tokens, j, closed)
+        return nil if j.negative?
+        return (closed[:column] || (closed[:known] ? false : nil)) if closed && closed[:index] == j && tokens[j][1] == ")"
+        return json_secret(tokens[j][1]) || false if tokens[j].first == :string && JSON_ARROWS.include?(tokens[j - 1]&.at(1))
+        return nil unless tokens[j].first == :word
+
+        start = j
+        start -= 2 while start >= 2 && tokens[start - 1][1] == "." && tokens[start - 2].first == :word
+        lead = tokens[start - 1] if start.positive?
+        trusted = lead.nil? || [ "(", ",", "[" ].include?(lead[1]) || (lead.first == :word && lead[1].match?(SQL_COLUMN_LEAD))
+        trusted ? (sql_secret_name(tokens[j][1]) || false) : nil
+      end
+
+      # The column a value on the left is compared with: a name, dotted or not, after the operator.
+      def sql_right(tokens, j)
+        return nil unless tokens[j]&.first == :word
+
+        j += 2 while tokens[j + 1]&.at(1) == "." && tokens[j + 2]&.first == :word
+        sql_secret_name(tokens[j][1]) || false
+      end
+
+      # A string that names a JSON key rather than holding a value: after a JSON arrow, or a MySQL path
+      # (`'$.a.b'`) a function is given. Compared, listed or inserted, a `$.` string is a value.
+      def json_path?(tokens, i, context = :plain)
+        return true if JSON_ARROWS.include?(tokens[i - 1]&.at(1))
+
+        (context == :plain || context&.dig(:kind) == :plain) && sql_literal(tokens[i][1]).match?(/\A\$(?:[.\[]|\z)/)
+      end
+
+      # The secret name a JSON path's last key reads as: `api_key` in '$.auth.api_key' or '{auth,api_key}'.
+      def json_secret(text)
+        key = sql_literal(text).scan(/[\w-]+/).reverse.find { |word| !word.match?(/\A\d+\z/) }
+        key && sql_secret_name(key)
+      end
+
+      # The name a word or a JSON key reads as when it is a secret's.
+      def sql_secret_name(text)
+        name = sql_name(text)
+        name.length <= 128 ? key_name(name) : nil
+      end
+
+      # The secret names a statement holds in its words and JSON paths, none for a line that is no statement.
+      def sql_secret_names(tokens)
+        statement = tokens.any? { |kind, text| kind == :word && text.match?(SQL_STATEMENT) } &&
+          tokens.any? { |kind, text| kind == :word && text.match?(SQL_CLAUSE) }
+        # A comparison, or an IN list; prose says "in", "like" and "between" too.
+        operator = tokens.each_with_index.any? do |(kind, text), i|
+          (kind == :punct && SQL_COMPARISON.include?(text)) || (sql_keyword?(tokens[i], "in") && tokens[i + 1]&.at(1) == "(")
+        end
+        return [] unless statement || operator
+
+        tokens.each_with_index.filter_map do |(kind, text), i|
+          next sql_secret_name(text) if kind == :word
+
+          json_secret(text) if kind == :string && json_path?(tokens, i)
+        end.compact.uniq
+      end
+
+      def sql_literal(text)
+        text.sub(/\A[^'"]*['"]/, "").delete_suffix(text[/['"]/])
+      end
+
+      # A bind Active Record logs with no name (`where("api_token = ?", x)`), filtered when the column its
+      # placeholder meets is a secret, or when that cannot be told and the statement names a secret column.
+      def filter_unnamed_binds(line, columns)
+        return line unless line.match?(LOG_UNNAMED_BIND)
+
+        named = nil
+        position = 0
+        line.gsub(ANY_BIND) do |pair|
+          position += 1
+          name, quoted = Regexp.last_match(1), Regexp.last_match(2)
+          next pair unless name == "nil" && quoted.start_with?('"')
+
+          value = quoted[1..-2]
+          met = columns&.fetch(position, nil) || [ nil ]
+          hide = met.any? do |column|
+            next column == true || log_secret?(column, value) if column
+
+            column.nil? && (named ||= sql_secret_names(sql_tokens(line, sql_dialects(line).first))).any? { |secret| log_secret?(secret, value) }
+          end
+          hide ? %([nil, "#{FILTERED}"]) : pair
+        end
+      end
+
+      # The values a database error repeats: MySQL's and MariaDB's duplicate entry, PostgreSQL's failing
+      # row (named after no column, so always filtered) and its duplicate key.
+      def error_values(line)
+        line = duplicate_entries(line)
+        # A row's values can hold `)`; its own ends the message with a period.
+        filter_key_values(filter_after(line, "Failing row contains (", ").", last: true))
+      end
+
+      # MySQL's `Duplicate entry 'v' for key 'index'` names only the index. Rails names one after its
+      # columns (index_users_on_api_token), so the value shows when those name no secret; any other name
+      # could cover a secret column, and its value is filtered. A message cut off is filtered to the end.
+      def duplicate_entries(line)
+        out = +""
+        cursor = 0
+        while (at = line.index("Duplicate entry '", cursor))
+          start = at + 17
+          finish = line.index("' for key '", start)
+          key_end = finish && line.index("'", finish + 11)
+          shown = key_end && plain_index?(line[(finish + 11)...key_end])
+          out << line[cursor...start] << (shown ? line[start...finish] : FILTERED)
+          cursor = finish || line.length
+        end
+        out << line[cursor..]
+      end
+
+      def plain_index?(key)
+        name = key.split(".").last.to_s
+        return true if name == "PRIMARY"
+        return false unless name.start_with?("index_") && (on = name.index("_on_", 7)) && name.match?(/\A\w+\z/)
+
+        name[(on + 4)..].split("_and_").none? { |column| (secret = key_name(column)) && !descriptor_name?(secret) }
+      end
+
+      # The text after each `opening` filtered up to `closing` (the line's last one when last), or up to
+      # the line's end when none follows: a message cut off is no reason to show its value.
+      def filter_after(line, opening, closing, last: false)
+        out = +""
+        cursor = 0
+        while (at = line.index(opening, cursor))
+          start = at + opening.length
+          finish = last ? line.rindex(closing) : line.index(closing, start)
+          finish = line.length unless finish && finish >= start
+          out << line[cursor...start] << FILTERED
+          cursor = finish
+        end
+        out << line[cursor..]
+      end
+
+      # PostgreSQL's `Key (key)=(values) already exists.` (and an exclusion constraint's `existing key`),
+      # the values filtered when the key, an expression included, names a secret. Each search starts where
+      # the last ended, so a line full of unfinished messages costs its length.
+      def filter_key_values(line)
+        out = +""
+        cursor = 0
+        while (at = line.index(KEY_VALUES_START, cursor)) && (split = line.index(")=(", at))
+          key = line[(at + Regexp.last_match(0).length)...split]
+          start = split + 3
+          finish = line.index(KEY_VALUES_END, start) || line.rindex(")")
+          finish = line.length unless finish && finish >= start
+          secret = key.scan(/[A-Za-z_][\w$]*/).any? { |word| (name = key_name(word)) && !descriptor_name?(name) }
+          out << line[cursor...start] << (secret ? FILTERED : line[start...finish])
+          cursor = finish
+        end
+        out << line[cursor..]
+      end
+
+      # MySQL's syntax error quotes the statement from where it stopped reading, which can start inside
+      # a value, so the excerpt is filtered whole.
+      def syntax_near(line)
+        at = line.index(SYNTAX_NEAR) or return line
+        start = at + SYNTAX_NEAR.length
+        finish = line.rindex(/' at line \d+/)
+        finish = line.length unless finish && finish >= start
+        line[0...start] + FILTERED + line[finish..]
+      end
+
+      # A JSON log line, or one a header stands before: each string value is read as a log line of its
+      # own, so a statement a formatter wrote into one is read as SQL. A value under a secret's key is
+      # filtered, an array's or an object's included, and so are a JSON logger's binds when the
+      # statement beside them names a secret column. Any other line as it is.
+      def json_line(line)
+        start = line.index(/[{\[]/)
+        return line unless start && line.rstrip.end_with?("}", "]")
+
+        tokens = json_tokens(line[start..]) or return line
+        named = json_named(tokens)
+        binds = [ false ]
+        key = nil
+        out = +line[0...start]
+        i = 0
+        while i < tokens.size
+          kind, text = tokens[i]
+          if kind == :punct && [ "{", "[" ].include?(text) && json_secret_key?(key)
+            # A secret's key holding an object or an array is filtered whole.
+            out << JSON.generate(FILTERED)
+            i = json_close(tokens, i)
+            key = nil
+          elsif kind == :punct
+            case text
+            when "{", "[" then binds << (binds.last || key == "binds")
+            when "}", "]" then binds.pop if binds.size > 1
+            end
+            key = nil if [ "{", "[", "}", "]", "," ].include?(text)
+            out << text
+          elsif json_key?(tokens, i)
+            key = json_text(text)
+            out << text
+          else
+            value = json_text(text)
+            name = key && key_name(key)
+            hide = (name && value.is_a?(String) && log_secret?(name, value)) || ((binds.last || key == "binds") && named.any?)
+            out << (hide ? JSON.generate(FILTERED) : json_value(text, value))
+          end
+          i += 1
+        end
+        out
+      end
+
+      # The index of the bracket that closes the one at tokens[open].
+      def json_close(tokens, open)
+        depth = 0
+        (open...tokens.size).each do |i|
+          kind, text = tokens[i]
+          next unless kind == :punct
+
+          depth += 1 if [ "{", "[" ].include?(text)
+          depth -= 1 if [ "}", "]" ].include?(text)
+          return i if depth.zero?
+        end
+        tokens.size
+      end
+
+      # [kind, text] for each string and each other run of a JSON text, nil for one with a string cut off.
+      def json_tokens(text)
+        scanner = StringScanner.new(text)
+        tokens = []
+        until scanner.eos?
+          if scanner.scan(JSON_STRING) then tokens << [ :string, scanner.matched ]
+          elsif scanner.check(/"/) then return nil
+          else tokens << [ :punct, scanner.scan(/[{}\[\]:,]|[^"{}\[\]:,]+/) ]
+          end
+        end
+        tokens
+      end
+
+      def json_key?(tokens, i)
+        j = i + 1
+        j += 1 while tokens[j] && tokens[j].first == :punct && tokens[j][1].strip.empty?
+        tokens[j]&.at(1) == ":"
+      end
+
+      # The secret names the statements of a JSON line's "sql" keys hold.
+      def json_named(tokens)
+        tokens.each_index.each_with_object([]) do |i, named|
+          next unless tokens[i].first == :string && json_key?(tokens, i) && json_text(tokens[i][1]) == "sql"
+
+          j = i + 1
+          j += 1 while tokens[j] && tokens[j].first != :string
+          sql = tokens[j] && json_text(tokens[j][1])
+          named.concat(sql_secret_names(sql_tokens(sql, sql_dialects(sql).first))) if sql.is_a?(String)
+        end
+      end
+
+      def json_secret_key?(key)
+        name = key && key_name(key)
+        name && !descriptor_name?(name) && !keyish_only?(name) ? true : false
+      end
+
+      def json_text(token)
+        JSON.parse(token)
+      rescue JSON::ParserError
+        nil
+      end
+
+      def json_value(token, text)
+        return token unless text.is_a?(String)
+
+        redacted = redact_log_line(text)
+        redacted == text ? token : JSON.generate(redacted)
+      end
+
+      def sql_keyword?(token, word)
+        token&.first == :word && token[1].casecmp?(word)
+      end
+
+      # A name with its quotes gone.
+      def sql_name(text)
+        quote = text[0]
+        return text unless quote == "`" || quote == '"'
+
+        text[1..].delete_suffix(quote).gsub(quote * 2, quote)
       end
 
       # A logged bind pair `["name", "value"]` with its value gone when the name is a secret.

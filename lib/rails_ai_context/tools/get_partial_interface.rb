@@ -226,9 +226,10 @@ module RailsAiContext
         # its directory and basename, whatever format and handler follow.
         # The plain file before a locale or variant one: Rails renders it for a request that asks for neither.
         plain_first = ->(paths) { paths.sort_by { |path| [ view_alternate_of(path) ? 1 : 0, path ] } }
+        dir = File.join(views_dir, *dir_parts)
         candidates = [
-          *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*"))),
-          *plain_first.call(Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*"))),
+          *plain_first.call(named_files(dir, prefixed_basename)),
+          *plain_first.call(named_files(dir, unprefixed_basename)),
           File.join(views_dir, partial)
         ]
 
@@ -257,7 +258,15 @@ module RailsAiContext
         return [] if name.include?("/")
 
         name = "_#{name}" unless name.start_with?("_")
-        RailsAiContext::ViewFile.glob(rails_app.root.to_s, views_dir, File.join("**", "#{name}.*")).select { |c| File.file?(c) }
+        RailsAiContext::ViewFile.glob(rails_app.root.to_s, views_dir, "**/*").select { |c| File.basename(c).start_with?("#{name}.") && File.file?(c) }
+      end
+
+      # The entries of `dir` named `name.<format>.<handler>`. The caller's name is matched as written:
+      # as a glob, each `{a,b}` in it doubled the lookups.
+      private_class_method def self.named_files(dir, name)
+        Dir.children(dir).select { |child| child.start_with?("#{name}.") }.map { |child| File.join(dir, child) }
+      rescue SystemCallError
+        []
       end
 
       # ActionView::Template::STRICT_LOCALS_REGEX as of Rails 8.0, held here so

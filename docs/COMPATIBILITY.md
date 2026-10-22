@@ -366,6 +366,15 @@ Proof sources:
    security, gate, redaction and database specs on Rails 7.0 (Ruby 3.1), 7.1,
    7.2 and 8.1 against live PostgreSQL; and the unit suite and the E2E harness
    on Linux, macOS and Windows.
+   In the v5.36.8 release QA: each fix's example failing on the code before
+   it; `rails_read_logs` against Active Record 8.0's own logs from live
+   PostgreSQL 16, MySQL 8.4 and MariaDB 13 for inline values, binds and the
+   errors that repeat a row, and against a JSON logger's lines; the static-tier
+   settings reader, `rails_search_code`, `rails_get_config` and
+   `rails_review_changes` on five open-source apps and two private ones with
+   `--no-boot`, compared with v5.36.7 and every changed answer checked; the
+   touched specs on Rails 7.0 (Ruby 3.1) and on prism 1.4; and the unit suite
+   and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

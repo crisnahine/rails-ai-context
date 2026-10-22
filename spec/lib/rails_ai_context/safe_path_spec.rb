@@ -267,6 +267,90 @@ RSpec.describe RailsAiContext::SafePath do
       # A path pattern means the whole directory, placeholders included.
       include_examples "blocks", ".ssh/id_rsa.template"
       include_examples "blocks", ".ssh/config.dist"
+      # So does a name pattern that names a folder, at the root as below it.
+      include_examples "blocks", ".env.d/production.example"
+      include_examples "blocks", "x/.env.d/production.example"
+    end
+
+    # A `*` crosses `/` in a name pattern, so `secret*.*` reads `secrets/app.example` whole without naming its folder.
+    describe "a name pattern whose star reaches into a file below a folder" do
+      around do |example|
+        patterns = RailsAiContext.configuration.sensitive_patterns
+        RailsAiContext.configuration.sensitive_patterns = patterns + %w[secret*.*]
+        example.run
+      ensure
+        RailsAiContext.configuration.sensitive_patterns = patterns
+      end
+
+      include_examples "allows", "secrets/app.example"
+      include_examples "blocks", "secrets/app.rb"
+      include_examples "blocks", "secrets.d/app.example"
+    end
+
+    # A caller names the path, so its length is theirs: a folder check that tried each folder of it took minutes.
+    it "reads a long path in one pass per pattern" do
+      patterns = RailsAiContext.configuration.sensitive_patterns
+      RailsAiContext.configuration.sensitive_patterns = patterns + %w[vault/**/*.yml /anchored/ deep/*/x.yml /vault **/docs/**/private]
+      cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+      [ "config/credentials/#{'a/' * 32_000}b.yml.enc/x", "vault/#{'a/' * 32_000}b.yml/z", "anchored/#{'a/' * 32_000}z",
+        "deep/#{'a/' * 32_000}x.yml/z", "#{'a/' * 32_000}id_rsa/z", "vault/#{'a/' * 500_000}z", "docs/#{'a/' * 500_000}private" ].each do |path|
+        started = Process.clock_gettime(cpu)
+        expect(described_class.sensitive?(path)).to be(true), path[0, 40]
+        expect(Process.clock_gettime(cpu) - started).to be < 2
+      end
+    ensure
+      RailsAiContext.configuration.sensitive_patterns = patterns
+    end
+
+    # An engine, a pack or a test/dummy app keeps its secrets under the same names.
+    describe "secret files below the root" do
+      include_examples "blocks", "engines/admin/config/application.yml"
+      include_examples "blocks", "engines/admin/config/database.yml"
+      include_examples "blocks", "test/dummy/config/database.yml"
+      include_examples "blocks", "packs/billing/config/application.yml"
+      include_examples "blocks", "vendor/engines/x/config/credentials/production.yml.enc"
+      include_examples "blocks", "deploy/.ssh/config"
+      include_examples "blocks", "id_rsa"
+      include_examples "blocks", "id_ed25519"
+      include_examples "allows", "engines/admin/.env.example"
+      include_examples "allows", "engines/admin/config/routes.rb"
+      include_examples "allows", "app/myconfig/database.yml"
+    end
+
+    # A user writes a pattern the way a .gitignore line reads: `/` anchors it at the root, a trailing `/`
+    # names a folder, and `**/` stands for any number of folders, none included.
+    describe "a pattern written as a .gitignore line" do
+      around do |example|
+        patterns = RailsAiContext.configuration.sensitive_patterns
+        RailsAiContext.configuration.sensitive_patterns = patterns + %w[/config/private.yml ./config/local.yml secrets/ /root_only/ vault/**/*.yml
+                                                                        named_dir /anchored_dir /*.pemx /.envx*]
+        example.run
+      ensure
+        RailsAiContext.configuration.sensitive_patterns = patterns
+      end
+
+      include_examples "blocks", "config/private.yml"
+      include_examples "allows", "engines/a/config/private.yml"
+      include_examples "blocks", "config/local.yml"
+      include_examples "blocks", "secrets/a.yml"
+      include_examples "blocks", "engines/a/secrets/deep/b.yml"
+      include_examples "blocks", "root_only/x.txt"
+      include_examples "allows", "engines/a/root_only/x.txt"
+      include_examples "blocks", "vault/x.yml"
+      include_examples "blocks", "vault/a/b/x.yml"
+      include_examples "blocks", "engines/a/vault/x.yml"
+      include_examples "allows", "vault/x.rb"
+      # A name with no slash names a folder too, and everything in it.
+      include_examples "blocks", "named_dir/a.yml"
+      include_examples "blocks", "x/named_dir/b/c.yml"
+      include_examples "blocks", "named_dir/notes.example"
+      include_examples "blocks", "anchored_dir/a/b.yml"
+      include_examples "allows", "x/anchored_dir/b.yml"
+      # Anchored, a `*` stays in its folder, and a placeholder is kept as the unanchored pattern keeps it.
+      include_examples "blocks", "root.pemx"
+      include_examples "allows", "keys/ok.pemx"
+      include_examples "blocks", ".envx.local"
+      include_examples "allows", ".envx.example"
     end
 
     describe "connection and credential files" do

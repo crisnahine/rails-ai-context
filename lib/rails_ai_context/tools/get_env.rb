@@ -370,21 +370,23 @@ module RailsAiContext
       end
 
       SAFE_ENV_NAMES = Introspectors::EnvIntrospector::KNOWN_ENV_VARS.select { |spec| spec[:safe] }.to_set { |spec| spec[:name] }.freeze
-      # A run of letters and digits this long is a key or token, whatever the variable is called;
-      # a hyphen or underscore breaks the run, so a host name such as `myapp-production-db-1` shows.
-      OPAQUE_TOKEN = /(?=[A-Za-z0-9+\/=]*\d)(?=[A-Za-z0-9+\/=]*[A-Za-z])[A-Za-z0-9+\/=]{16,}/
-      # A UUID or a hex key split into groups is still a key once the separators go.
-      GROUPED_HEX = /\A\h{16,}\z/
 
-      # Webhook URLs and DSNs hide their secret in the path or user part, where Redaction does not look.
       private_class_method def self.kamal_clear_value(name, value)
         return :computed if RailsAiContext::ConfigYaml.marked?(value)
 
+        deployed_value(name, value) || :hidden
+      end
+
+      # A value Kamal sets the app container to, or nil when it may hold a secret. It is what production
+      # runs with, so a URL of any shape is held back too, as a webhook or a DSN keeps its secret in one,
+      # and so is a run of 16 letters and digits with `/` in it, which base64 has.
+      private_class_method def self.deployed_value(name, value)
         text = value.to_s
         return RailsAiContext::Redaction.value(name, text) if SAFE_ENV_NAMES.include?(name)
-        return :hidden if text.include?("://") || text.match?(OPAQUE_TOKEN) || text.delete("-_").match?(GROUPED_HEX) || RailsAiContext::Redaction.value(name, text) != text
 
-        text
+        shown = RailsAiContext::Redaction.env_value(name, text)
+        opaque = text.scan(%r{[A-Za-z0-9+/=]{16,}}).any? { |run| run.match?(/\d/) && run.match?(/[A-Za-z]/) }
+        shown unless text.include?("://") || opaque || shown == RailsAiContext::Redaction::FILTERED
       end
 
       # Without the config gem, config/settings.yml is the app's own file and no Settings constant exists.
@@ -427,6 +429,10 @@ module RailsAiContext
         end + [ "" ]
       end
 
+      # A line as dotenv reads it: a quoted value keeps a `#`, and in a bare one a `#` after a space starts
+      # the comment, so a password's `#` stays in its URL.
+      ENV_EXAMPLE_LINE = /\A(?:export\s+)?(?<name>[A-Z_][A-Z0-9_]*)\s*=\s*(?<value>"(?:\\.|[^"\\])*"\s*+|'[^']*'\s*+|(?>(?:[^\s#]+|\s+(?!#)|(?<=\S)#)*))(?:\s*#(?<comment>.*))?\z/
+
       private_class_method def self.scan_env_example(root)
         # Only the example files - NEVER .env or .env.local
         candidates = %w[.env.example .env.sample .env.template]
@@ -440,25 +446,11 @@ module RailsAiContext
           source.each_line do |line|
             stripped = line.strip
             next if stripped.empty? || stripped.start_with?("#")
+            next unless (match = stripped.match(ENV_EXAMPLE_LINE))
 
-            # Parse KEY=value # comment
-            if (match = stripped.match(/\A([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/))
-              value_and_comment = match[2]
-              comment = nil
-              example_value = value_and_comment
-
-              # Extract inline comment
-              if value_and_comment.include?("#")
-                parts = value_and_comment.split("#", 2)
-                example_value = parts[0].strip
-                comment = parts[1]&.strip
-              end
-
-              # Don't expose actual secret values - only show structure
-              example_value = RailsAiContext::Redaction.value(match[1], example_value, placeholder_ok: true).to_s
-
-              vars << { name: match[1], example_value: example_value, comment: comment }
-            end
+            value = RailsAiContext::Redaction.env_value(match[:name], match[:value].strip, placeholder_ok: true)
+            comment = match[:comment] && RailsAiContext::Redaction.env_comment(match[:comment].strip)
+            vars << { name: match[:name], example_value: value, comment: comment }
           end
 
           break # Only read the first found example file
@@ -479,16 +471,14 @@ module RailsAiContext
           dockerfile_instructions(source).each do |instruction|
             if (match = instruction.match(/\AENV\s+(.+)/m))
               dockerfile_env_pairs(match[1]).each do |var_name, raw|
-                default = RailsAiContext::Redaction.value(var_name, raw)
-                default = nil if default.to_s.empty?
+                default = raw.to_s.empty? ? nil : RailsAiContext::Redaction.env_value(var_name, raw)
                 vars << { type: "ENV", name: var_name, default: default, file: name }
               end
             end
 
             # ARG takes one variable per instruction.
             if (match = instruction.match(/\AARG\s+([A-Z_][A-Z0-9_]*)(?:\s*=\s*(.*))?/))
-              default = RailsAiContext::Redaction.value(match[1], match[2])
-              default = nil if default.to_s.empty?
+              default = match[2].to_s.empty? ? nil : RailsAiContext::Redaction.env_value(match[1], match[2])
               vars << { type: "ARG", name: match[1], default: default, file: name }
             end
           end

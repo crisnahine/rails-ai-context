@@ -27,6 +27,7 @@ module RailsAiContext
     def locate(relative, under:, root: under, max_size: nil, listed: false, links: true)
       relative = relative.to_s
       return refuse(:traversal) if traversal?(relative)
+      return refuse(:missing) if relative.bytesize > MAX_PATH
       return refuse(:sensitive) if sensitive?(relative)
 
       path = File.join(under.to_s, relative)
@@ -47,8 +48,8 @@ module RailsAiContext
       else Pathname.new(real).relative_path_from(Pathname.new(real_root)).to_s
       end
       return refuse(:sensitive) if sensitive?(root_relative)
-      # Read where the file is too: a name inside the linked directory.
-      return refuse(:sensitive) if linked && sensitive?(real.delete_prefix(dir_prefix(linked)))
+      # Read where the file is too: a name inside the linked directory, and inside its repository.
+      return refuse(:sensitive) if linked && (sensitive?(real.delete_prefix(dir_prefix(linked))) || in_repository_sensitive?(real, root))
       return refuse(:missing) unless File.file?(real)
 
       limit = max_size || RailsAiContext.configuration.max_file_size
@@ -58,6 +59,16 @@ module RailsAiContext
     # EINVAL: Windows refuses a name holding `:`, `<`, `|` and the like.
     rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG, Errno::ENOTDIR, Errno::EINVAL
       refuse(:missing)
+    end
+
+    # A file a link brings in, asked by the names it has where it lives: in the app when the link leads
+    # back into it, and in the repository holding `root` (link_bound), where a link to a pack's config/
+    # names database.yml without the config/ a pattern looks for.
+    def in_repository_sensitive?(real, root)
+      real_root = real_base(root)
+      bound = link_bound(root)
+      (contained?(real, real_root) && sensitive?(real.delete_prefix(dir_prefix(real_root)))) ||
+        (contained?(real, bound) && sensitive?(real.delete_prefix(dir_prefix(bound))))
     end
 
     # A directory resolves to the same path for every lookup in a run.
@@ -153,23 +164,102 @@ module RailsAiContext
     end
 
     PLACEHOLDER_SUFFIXES = %w[.example .sample .template .dist].freeze
+    # Longer than any path a file system holds, so only a caller can name one.
+    MAX_PATH = 4096
 
     # A placeholder (.env.example) is committed to be read, so a basename glob
-    # does not block it; a path pattern (`.ssh/*`) or its exact name does.
+    # does not block it; a path pattern (`.ssh/*`), its exact name or a folder
+    # it sits in does.
     def sensitive?(relative)
       path = relative.to_s
+      return true if path.bytesize > MAX_PATH
+
       basename = File.basename(path)
-      flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-      matching = RailsAiContext.configuration.sensitive_patterns.select do |pattern|
-        File.fnmatch(pattern, path, flags) || File.fnmatch(pattern, basename, flags)
-      end
-      return false if matching.empty?
-      return true unless PLACEHOLDER_SUFFIXES.any? { |suffix| basename.downcase.end_with?(suffix) }
+      down = path.downcase
+      base_down = basename.downcase
+      matched = compiled_patterns.filter_map { |pattern| (how = pattern.match(path, basename, down, base_down)) && [ pattern, how ] }
+      return false if matched.empty?
+      return true unless PLACEHOLDER_SUFFIXES.any? { |suffix| base_down.end_with?(suffix) }
 
       # Without FNM_EXTGLOB a brace is literal, so only these make a pattern a glob.
-      matching.any? do |pattern|
-        pattern.include?("/") || (!pattern.match?(/[*?\[\\]/) && (pattern.casecmp?(path) || pattern.casecmp?(basename)))
+      matched.any? do |pattern, how|
+        glob = pattern.glob
+        how == :folder || glob.include?("/") || (!glob.match?(/[*?\[\\]/) && (glob.casecmp?(path) || glob.casecmp?(basename)))
       end
+    end
+
+    MATCH_FLAGS = File::FNM_DOTMATCH | File::FNM_CASEFOLD
+    PATHNAME_FLAGS = MATCH_FLAGS | File::FNM_PATHNAME
+
+    # A pattern read as a .gitignore line is: a leading `/` (or `./`) anchors it at the root, where a
+    # `*` stays in its folder; a trailing `/` names a folder and everything in it; `**/` stands for any
+    # number of folders, none included; and a pattern names a folder too, so everything in a folder it
+    # names is covered. Unanchored, a path pattern names its file at any depth, as an engine, a pack or
+    # a test/dummy app keeps its own config/database.yml, and without FNM_PATHNAME a `*` crosses `/`.
+    # `lead` and `tail` are the glob's literal start and end, lowercased: a path that does not hold them
+    # is passed over before fnmatch, which runs per pattern on every file a search walks. `within` and
+    # `nested_within` are the globs with a folder's contents after them, so one fnmatch asks whether any
+    # folder of the path matches, however many folders a caller's path has.
+    Pattern = Data.define(:source, :glob, :nested, :mode, :lead, :tail, :within, :nested_within) do
+      # :file when the pattern names the path, :folder when it names a folder the path is in, else nil.
+      def match(path, basename, down, base_down)
+        if mode == :name
+          return :file if base_down.start_with?(lead) && fnmatch(glob, basename)
+          return :folder if down.include?(lead) && down.include?("#{tail}/") &&
+                            path.split("/")[0...-1].any? { |folder| folder.downcase.start_with?(lead) && fnmatch(glob, folder) }
+
+          # Its `*` crosses `/`, so it can match the whole path through no folder's name: the file's.
+          :file if path.include?("/") && down.start_with?(lead) && fnmatch(glob, path)
+        else
+          return nil unless down.include?(lead)
+          return :file if matches?(glob, nested, path, down)
+          return nil unless down.include?("#{tail}/")
+
+          :folder if matches?(within, nested_within, path, down)
+        end
+      end
+
+      private
+
+      def matches?(glob, nested, path, down)
+        case mode
+        when :path then (down.start_with?(lead) && fnmatch(glob, path)) || (down.include?("/#{lead}") && fnmatch(nested, path))
+        when :anchored then down.start_with?(lead) && File.fnmatch(glob, path, PATHNAME_FLAGS)
+        else File.fnmatch(glob, path, PATHNAME_FLAGS) || (!nested.nil? && File.fnmatch(nested, path, PATHNAME_FLAGS))
+        end
+      end
+
+      def fnmatch(pattern, path)
+        File.fnmatch(pattern, path, MATCH_FLAGS)
+      end
+    end
+
+    def compile_pattern(source)
+      bare = source.start_with?("./") ? source[2..] : source.delete_prefix("/")
+      anchored = bare != source
+      bare = "#{bare}*" if bare.end_with?("/")
+      bare = bare.delete_prefix("**/") unless anchored
+      lead = bare[/\A[^*?\[\\{]*/].downcase
+      tail = bare[/[^*?\[\]\\{}]*\z/].downcase
+      # Without FNM_PATHNAME a `*` crosses `/`, so `/*` covers a folder's contents; with it, `/**/*` does.
+      if bare.include?("**/")
+        nested = anchored ? nil : "**/#{bare}"
+        Pattern.new(source, bare, nested, :pathname, lead, tail, "#{bare}/**/*", nested && "#{nested}/**/*")
+      elsif anchored then Pattern.new(source, bare, nil, :anchored, lead, tail, "#{bare}/**/*", nil)
+      elsif bare.include?("/") then Pattern.new(source, bare, "*/#{bare}", :path, lead, tail, "#{bare}/*", "*/#{bare}/*")
+      else Pattern.new(source, bare, nil, :name, lead, tail, nil, nil)
+      end
+    end
+
+    # The configured patterns compiled once per list, read again when the list changes.
+    def compiled_patterns
+      patterns = RailsAiContext.configuration.sensitive_patterns
+      cached = @compiled_patterns
+      return cached[2] if cached && cached[0].equal?(patterns) && cached[1] == patterns
+
+      compiled = patterns.map { |pattern| compile_pattern(pattern.to_s) }.freeze
+      @compiled_patterns = [ patterns, patterns.dup, compiled ].freeze
+      compiled
     end
 
     def contained?(real, real_dir)

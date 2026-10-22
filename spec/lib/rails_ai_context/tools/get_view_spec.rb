@@ -241,6 +241,16 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(result.error?).to be(true)
         expect(result.content.first[:text]).to eq("Path not allowed: .env (sensitive file)")
       end
+
+      # The folder of a missing view was globbed as written, and each `{a,b}` doubled the work on every view file.
+      it "reads a missing view's folder as a name, never as a glob" do
+        expect(described_class.call(path: "posts/nope.html.erb").content.first[:text]).to include("Files in posts/: posts/_form.html.erb")
+        expect(described_class.call(path: "{posts,x}/nope.html.erb").content.first[:text]).not_to include("posts/_form")
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        expect(described_class.call(path: "#{'{a,b}' * 24}/x.erb").content.first[:text]).to start_with("View not found")
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 5
+      end
     end
 
     # The payload-less listing reads the same app/views directory, so its

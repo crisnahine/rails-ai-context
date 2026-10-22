@@ -198,6 +198,19 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "refuses a PROCEDURE clause on MySQL and MariaDB in every spelling, and runs SHOW PROCEDURE STATUS" do
+      [ "SELECT * FROM users LIMIT 10 PROCEDURE ANALYSE()", "select * from users limit 1 procedure analyse(10, 2000)",
+        "SELECT * FROM users LIMIT 1 PROCEDURE `ANALYSE` ()", "SELECT * FROM users LIMIT 1 PROCEDURE/**/ANALYSE()",
+        "SELECT * FROM users LIMIT 1\nPROCEDURE\tANALYSE()", "SELECT * FROM users LIMIT 1 /*!50000 PROCEDURE ANALYSE() */",
+        "EXPLAIN SELECT * FROM users LIMIT 1 PROCEDURE ANALYSE()" ].each do |sql|
+        expect(refusal(sql, :mysql)).to start_with("Blocked: a PROCEDURE clause is not run"), sql
+      end
+      [ "SHOW PROCEDURE STATUS", "SHOW PROCEDURE STATUS LIKE 'report%'", "SELECT routine_name FROM information_schema.routines WHERE routine_type = 'PROCEDURE'",
+        "SELECT `procedure` FROM visits" ].each do |sql|
+        expect(runs?(sql, :mysql)).to be(true), sql
+      end
+    end
+
     it "runs the SHOW statements that list the schema" do
       [ "SHOW TABLES", "SHOW FULL TABLES", "SHOW FULL COLUMNS FROM orders", "SHOW ENGINES", "SHOW TABLES LIKE 'ord%'",
         "SHOW COLUMNS FROM orders LIKE '%where%'", "SHOW INDEX FROM orders", "SHOW TABLE STATUS", "SHOW ALL" ].each do |sql|

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module RailsAiContext
   module Tools
     class GetView < BaseTool
@@ -325,9 +327,10 @@ module RailsAiContext
         when :sensitive then return error_response("Path not allowed: #{echo_input(path)} (sensitive file)")
         when :too_large then return text_response("File too large: #{path}")
         when :missing
-          dir = File.dirname(path.to_s.delete_prefix("app/views/"))
-          siblings = RailsAiContext::ViewFile.each(rails_app.root.to_s, File.join(dir, "*"))
-            .map { |_file, relative| relative }.sort.first(10)
+          dir = Pathname.new(File.dirname(path.to_s.delete_prefix("app/views/"))).cleanpath.to_s
+          # The folder is a name: as a glob, each `{a,b}` in it doubled the work on every view file.
+          siblings = RailsAiContext::ViewFile.each(rails_app.root.to_s)
+            .filter_map { |_file, relative| relative if File.dirname(relative).casecmp?(dir) }.sort.first(10)
           hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
           return empty_response([ "View not found: #{echo_input(path)}.#{hint}", static_engine_views_note ].compact.join("\n\n"))
         end

@@ -1529,8 +1529,11 @@ module RailsAiContext
       nil
     end
 
+    # Read as SafePath.sensitive? reads a pattern, so a file the tools refuse lands in the list that names it,
+    # an engine's or a test/dummy app's included.
     def matches_any?(patterns, file)
-      patterns.any? { |pattern| File.fnmatch(pattern, file, File::FNM_PATHNAME | File::FNM_DOTMATCH) }
+      basename = File.basename(file)
+      patterns.any? { |pattern| SafePath.compile_pattern(pattern).match(file, basename, file.downcase, basename.downcase) }
     end
 
     # Every file the tools refuse to read (the one sensitive-pattern list), plus the Codex

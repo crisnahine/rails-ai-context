@@ -495,6 +495,28 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       end
     end
 
+    # No initializer runs on the static tier, and a file the configure block made sensitive was served.
+    it "keeps the security settings an initializer writes, and refuses the tier when it cannot read one" do
+      patterns = RailsAiContext.configuration.sensitive_patterns.dup
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/widget.rb"), "class Widget; end\n")
+        initializer = File.join(dir, "config/initializers/rails_ai_context.rb")
+        FileUtils.mkdir_p(File.dirname(initializer))
+        File.write(initializer, "RailsAiContext.configure do |config|\n  config.sensitive_patterns += %w[config/partner_keys.rb]\nend\n")
+
+        expect(described_class.call(root: dir, allow_static: true, no_boot: true).tier).to eq(:static)
+        expect(RailsAiContext::SafePath.sensitive?("config/partner_keys.rb")).to be(true)
+
+        File.write(initializer, "RailsAiContext.configure do |config|\n  config.sensitive_patterns += PARTNER_FILES\nend\n")
+        outcome = described_class.call(root: dir, allow_static: true, no_boot: true)
+        expect(outcome.tier).to eq(:absent)
+        expect(outcome.messages.last).to start_with("Error: config/initializers/rails_ai_context.rb:2:").and(include("`sensitive_patterns`"))
+      end
+    ensure
+      RailsAiContext.configuration.sensitive_patterns = patterns
+    end
+
     it "hands the static tier the root it was given" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/models"))

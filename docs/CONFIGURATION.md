@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning, and a key the gem does not know warns on stderr and is ignored while the rest of the file applies.
+> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning, and a key the gem does not know warns on stderr and is ignored while the rest of the file applies. On the static tier no initializer runs: the literal values that the app's Ruby files naming the gem write to `sensitive_patterns`, `excluded_paths` and `skip_tools` are read without running them and added to the YAML's, and one the gem cannot read stops the static tier with an error naming its file and line ([SECURITY.md](SECURITY.md#configuration)).
 
 ---
 
