@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rails-ai-context": {
+      "command": "ruby",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/serve.rb"]
+    }
+  }
+}

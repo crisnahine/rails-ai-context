@@ -91,6 +91,93 @@ This is what the generator writes for an in-Gemfile install. A standalone instal
 
 On Windows the command is `cmd` and `"/c"` goes ahead of the args (`["/c", "bundle", "exec", "rails-ai-context", "serve"]`): a gem's executables there are batch files, which a client that starts its server without a shell does not run. The generator writes that form on Windows, and `doctor` names an entry written for the other platform; see [GUIDE.md](GUIDE.md#mcp-server-setup) for teams on both.
 
+### As a plugin
+
+The repository is also a Claude Code plugin marketplace. The plugin brings the
+MCP server and, at the start of each session in a Rails app, the six rules the
+context files open with. It writes no files, so it suits a team that keeps its
+own `CLAUDE.md`.
+
+```bash
+gem install rails-ai-context      # the plugin runs the installed gem
+claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project
+```
+
+In a session the second line is `/plugin install rails-ai-context --marketplace crisnahine/rails-ai-context`.
+A Claude Code too old for `--marketplace` takes two steps:
+`/plugin marketplace add crisnahine/rails-ai-context`, then
+`/plugin install rails-ai-context@rails-ai-context`. Project scope records the
+plugin in the app's `.claude/settings.json`; commit it, and add the marketplace
+there too so a teammate's Claude Code offers to install it:
+
+```json
+{
+  "enabledPlugins": { "rails-ai-context@rails-ai-context": true },
+  "extraKnownMarketplaces": {
+    "rails-ai-context": { "source": { "source": "github", "repo": "crisnahine/rails-ai-context" } }
+  }
+}
+```
+
+- **The gem comes first.** The plugin starts the server with the `ruby` on your
+  `PATH`, which needs the gem installed for that Ruby (3.1 or later). With
+  rbenv, asdf or mise that is the Ruby the app's `.ruby-version` names; a Claude
+  Code started from the Dock or an IDE may see the system Ruby instead, and the
+  server's log names the one it found. An app that also has the gem in its
+  Gemfile gets its bundled copy, as with any standalone install, but a bundle
+  kept in `vendor/bundle` is not where that Ruby looks, so install the gem for
+  it too. When the server cannot start, `/mcp` lists it as failed and its log
+  says why: no gem for that Ruby, a Ruby too old, or the gem's own error. A
+  session then gets no rules either, since there are no tools for them to name.
+  The rules need 5.33.0 or later.
+- **Install the gem, not its setup, for Claude Code.** The install generator and
+  `init` write a `.mcp.json` server; with the plugin, run them only for other AI
+  tools, or with `--cli`.
+- **The plugin or another server, not both.** Claude Code starts the plugin's
+  server and one from `.mcp.json` or `claude mcp add` as two servers and lists
+  every tool twice. `doctor` reads Claude Code the way a session does, by the
+  folder it started in: that folder's settings (and the local settings of its
+  git repository), every `.mcp.json` from that folder up, and the `/mcp` toggles
+  and local servers Claude Code keeps for its git repository. It looks at each
+  folder where the plugin would serve this app: the app, a folder inside it, or
+  a folder above that holds this app alone. The plugin counts where it is
+  enabled (or pinned to versions), installed, and not turned off in `/mcp`; then
+  Claude Code's MCP check passes without a `.mcp.json`. Where it runs only for
+  sessions started in another folder, `doctor` names that folder and what turns
+  it on for this one: `claude plugin enable`, `/mcp` where its server was turned
+  off, or both. A second server counts
+  where such a session would start it, unless `/mcp` or `disabledMcpjsonServers`
+  turned it off, and `doctor` names the command that removes it and the folder
+  to run it in. A teammate who has the committed setting but never installed the
+  plugin is told to install it.
+- **One app per session.** The server reads the app Claude Code was started in,
+  the app above that folder, or the one app below it, as every command does. At
+  user scope the plugin starts in every project and its server fails outside a
+  Rails app. In a folder that holds several apps its log says to start Claude
+  Code in one of them; for a session over all of them, use the
+  [workspace](CLI.md#init-standalone-only) entries `init` writes.
+- **The rules load once.** The hook skips them where the app's `CLAUDE.md` or
+  `.claude/rules/rails-mcp-tools.md` carries them already, and where
+  `.rails-ai-context.yml` or an initializer sets `anti_hallucination_rules` to
+  `false`; an initializer's value wins over the file's, as when the app boots.
+  It reads the initializer without running it, so only a literal `true` or
+  `false` counts.
+- **Windows works the same.** The server starts `ruby` without a shell, so it
+  needs no `cmd /c`.
+- **Permission rules name the plugin's server.** Its tools are
+  `mcp__plugin_rails-ai-context_rails-ai-context__<tool>`, so a rule for the
+  `.mcp.json` server (`mcp__rails-ai-context`) does not cover them;
+  `mcp__plugin_rails-ai-context_rails-ai-context` allows them all.
+- **Updates follow this repository.** The plugin's version is the commit it was
+  installed from. Claude Code updates it only with auto-update on (under
+  `/plugin`, Marketplaces) or `claude plugin update
+  rails-ai-context@rails-ai-context`. The server is versioned by the gem: `gem
+  update rails-ai-context`.
+- **Removing it** is `claude plugin uninstall rails-ai-context@rails-ai-context
+  --scope project` (or the scope it went in at), which also takes it out of that
+  scope's settings file. The gem's `uninstall` leaves Claude Code's settings
+  alone.
+
 ### Split rules with `paths:` frontmatter
 
 Claude Code loads `.claude/rules/` files conditionally based on YAML frontmatter:

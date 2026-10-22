@@ -177,6 +177,14 @@ Two senses on different axes. Qualify it; the bare word does not say which.
 
 **Standalone server** - how MCP is served: the entry point that is its own process, `rails ai:serve_http` starting `Server` with `transport: :http`, serving MCP and nothing else. The middleware and the engine controller answer the same requests from inside the app's web server; the standalone server does not need one running. It says nothing about the install - an in-Gemfile app starts it from a rake task. ADR-0003 and `McpEdge` use this sense.
 
+## Plugin
+
+Two senses. Qualify it; the bare word does not say which.
+
+**Claude Code plugin** - `plugins/rails-ai-context` in this repository: the folder Claude Code installs to start the gem's MCP server and, at session start, give a Rails app the six rules. It writes nothing into the app and runs the gem installed for the `ruby` on `PATH`. ADR-0011 records why.
+
+**In-repo plugin** - a directory in the app (`plugins/*`, `gems/plugins/*`) that carries its own `app/` tree, read by `PathResolver` as one more code root beside packs and engines.
+
 ## App root
 
 The directory a command reads as the app, decided once by `CLI::AppRoot` before anything reads the working directory, and then made the process's working directory. `--app-path` names it outright and is never walked. Otherwise it is the nearest directory at or above the working directory that passes the strict test, as `bin/rails` and Bundler find theirs: `config/application.rb`, `config/environment.rb`, or a `bin/rails` that boots an app or an engine. A working directory that passes only the loose test (source alone, any `app/**/*.rb`: a packwerk pack, an engine kept as code) is the root itself when no app holds it. The walk up never stops at a pack, `$HOME`, `node_modules`, `vendor/bundle` or a gem install.

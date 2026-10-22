@@ -45,28 +45,34 @@ pushed.
    bench in the qa-rails-ai-context skill (`prompt-bench.py`), not by
    `docs_prompts_spec`, which only checks that each flag exists.
 
+6. **The plugin ships from `main`, not from the tag.** Claude Code versions
+   `plugins/rails-ai-context` by commit, so a change there reaches users on
+   their next plugin update, before any release. It may only use what a
+   released gem already has; a change that needs this release's gem waits
+   until the release is on RubyGems.
+
 ## Before the tag
 
-6. **CI is green on the exact commit that will be tagged.** Check the run, do
+7. **CI is green on the exact commit that will be tagged.** Check the run, do
    not infer it from a local pass. The release matrix is stricter than a local
    run in two ways: it runs seeds 1, 27377 and 90210 rather than a random one,
    and it runs `--order defined` as a fourth ordering no seed reproduces.
-7. **A successful E2E run exists for that same SHA.** The E2E workflow does not
+8. **A successful E2E run exists for that same SHA.** The E2E workflow does not
    run on tags, and the release's `e2e-gate` job asks the API for a completed
    successful `e2e.yml` run whose `head_sha` is this commit. Start it by hand
    from Actions and let it finish before tagging.
 
 ## Tagging
 
-8. Tag the merge commit and push the tag. Nothing publishes until the tag is on
+9. Tag the merge commit and push the tag. Nothing publishes until the tag is on
    the remote.
 
 ## After
 
-9. **Confirm the release object exists and is not a draft**, and that its notes
-   are this version's changelog section rather than the fallback sentence.
-10. **Confirm the gem is on RubyGems and the version is in the MCP registry.**
-   Both jobs skip themselves when the version is already published, so a skip
-   in the log is not the same as a failure.
-11. **Close what the release closed.** On GitHub a comma list after one `Closes`
-   keyword closes only the first issue. Write the keyword once per issue.
+10. **Confirm the release object exists and is not a draft**, and that its notes
+    are this version's changelog section rather than the fallback sentence.
+11. **Confirm the gem is on RubyGems and the version is in the MCP registry.**
+    Both jobs skip themselves when the version is already published, so a skip
+    in the log is not the same as a failure.
+12. **Close what the release closed.** On GitHub a comma list after one `Closes`
+    keyword closes only the first issue. Write the keyword once per issue.

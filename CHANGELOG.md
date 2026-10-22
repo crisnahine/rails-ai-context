@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The repository is a Claude Code plugin marketplace.** `claude plugin install
+  rails-ai-context --marketplace crisnahine/rails-ai-context --scope project`
+  adds the MCP server and gives each session in a Rails app the six rules the
+  context files open with (unless the app's own files carry them or its config
+  turns them off), and writes no files. It runs the gem installed for the `ruby`
+  on `PATH`, Windows included, and says why when it cannot start. See
+  [SETUP.md](docs/SETUP.md#as-a-plugin).
+- **`doctor` knows the plugin.** It reads Claude Code's settings, install
+  registry and `/mcp` toggles per session folder, as Claude Code does. Where the
+  plugin serves the app it counts as Claude Code's MCP config, and with no AI
+  tools chosen the check stops there. A `.mcp.json`, user scope or local scope
+  server of the gem's that a session would start beside it is a warning naming
+  the command that removes it, since Claude Code would list every tool twice.
+
 ## [5.36.7] - 2026-10-22
 
 ### Security

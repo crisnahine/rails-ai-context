@@ -1,0 +1,12 @@
+{
+  "name": "rails-ai-context",
+  "description": "Live Rails schema, routes, models and conventions for Claude Code, read from your app",
+  "author": {
+    "name": "crisnahine",
+    "url": "https://github.com/crisnahine"
+  },
+  "homepage": "https://github.com/crisnahine/rails-ai-context",
+  "repository": "https://github.com/crisnahine/rails-ai-context",
+  "license": "MIT",
+  "keywords": ["rails", "ruby", "mcp", "schema", "codebase-context"]
+}

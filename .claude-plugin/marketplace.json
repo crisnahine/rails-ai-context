@@ -1,0 +1,15 @@
+{
+  "name": "rails-ai-context",
+  "description": "Live Rails schema, routes, models and conventions for Claude Code, read from your app",
+  "owner": {
+    "name": "crisnahine",
+    "url": "https://github.com/crisnahine"
+  },
+  "plugins": [
+    {
+      "name": "rails-ai-context",
+      "source": "./plugins/rails-ai-context",
+      "description": "Live Rails schema, routes, models and conventions for Claude Code, read from your app"
+    }
+  ]
+}

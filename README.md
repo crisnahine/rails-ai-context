@@ -81,6 +81,12 @@ gem install rails-ai-context
 rails-ai-context init                                  # or: rails-ai-context init --tools claude --defaults
 ```
 
+As a Claude Code plugin, which adds the MCP server and gives each session the six rules below, and writes no files. It runs the installed gem, so install that first, with `gem install rails-ai-context` (or `bundle add` alone, when the bundle installs where your `ruby` looks); the install generator and `init` would add a second server in `.mcp.json` ([details](docs/SETUP.md#as-a-plugin)):
+
+```bash
+claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project
+```
+
 `--tools` takes `claude`, `cursor`, `copilot`, `opencode`, `codex` or `all`. Add `--cli` for context files only, or `--mcp-only` for the MCP config only. Re-running is safe: with `--defaults` it keeps your recorded tools and setup, keeps what you have and adds what is missing, and in a `CLAUDE.md` you wrote it only touches the block between its `<!-- BEGIN/END rails-ai-context -->` markers. Every step is in [What the install generator does](docs/GUIDE.md#what-the-install-generator-does).
 
 Needs Ruby 3.1+ and Rails 7.0+, on Linux, macOS or Windows. Optional: `brakeman` for `security_scan`, `listen` for `watch`, `ripgrep` for faster `search_code`.

@@ -5,6 +5,18 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Doctor do
   let(:doctor) { described_class.new(Rails.application) }
 
+  def plugin_settings(enabled = true) = JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => enabled })
+
+  # Claude Code's install registry, listing the plugin as installed on this machine.
+  let(:plugin_registry) { File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "plugins", "installed_plugins.json") }
+
+  before do
+    FileUtils.mkdir_p(File.dirname(plugin_registry))
+    File.write(plugin_registry, JSON.generate("version" => 2, "plugins" => { "rails-ai-context@rails-ai-context" => [ { "scope" => "user" } ] }))
+  end
+
+  after { FileUtils.rm_rf(File.dirname(plugin_registry)) }
+
   describe "#run" do
     subject(:result) { doctor.run }
 
@@ -868,6 +880,113 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    context "when the Claude Code plugin serves the app" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        write("config/application.rb", "")
+      end
+
+      it "passes Claude Code with no .mcp.json, and checks no other tool when none was chosen" do
+        write(".claude/settings.json", plugin_settings)
+
+        expect(check).to have_attributes(status: :pass, message: "1 of 1 MCP config valid")
+      end
+
+      it "reads the plugin enabled in the user's own settings" do
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "settings.json"), plugin_settings)
+
+        expect(check.status).to eq(:pass)
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "settings.json"))
+      end
+
+      it "lets the local settings turn off what the project settings turn on" do
+        write(".claude/settings.json", plugin_settings)
+        write(".claude/settings.local.json", plugin_settings(false))
+
+        expect(check.status).to eq(:warn)
+      end
+
+      it "warns that .mcp.json starts a second server beside the plugin's" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write(".claude/settings.json", plugin_settings)
+        write(".mcp.json", server(bundled))
+
+        expect(check).to have_attributes(
+          status: :warn,
+          message: "1 of 1 MCP config needs attention: .mcp.json (Claude Code): `rails-ai-context` in .mcp.json runs the " \
+                   "server beside the rails-ai-context plugin, so Claude Code lists every tool twice",
+          fix: "Remove `rails-ai-context` from .mcp.json, or run `claude plugin disable rails-ai-context@rails-ai-context --scope local`"
+        )
+      end
+
+      # A broken entry is a fault of its own, whatever else serves the app.
+      it "reports a broken entry before any second server" do
+        write(".claude/settings.json", plugin_settings)
+        write(".mcp.json", server(%w[rails-ai-context serve]))
+        allow(app_doctor).to receive(:client_path).and_return(Dir.mktmpdir)
+
+        expect(check.message).to include("cannot start")
+        expect(check.message).not_to include("lists every tool twice")
+      end
+
+      it "passes a .mcp.json entry the settings reject, since Claude Code never starts it" do
+        write(".claude/settings.json", JSON.generate(JSON.parse(plugin_settings).merge("disabledMcpjsonServers" => [ "rails-ai-context" ])))
+        write(".mcp.json", server(bundled))
+
+        expect(check.status).to eq(:pass)
+      end
+
+      it "passes a .mcp.json entry /mcp turned off, and fails over to the install where /mcp turned the plugin off" do
+        write(".claude/settings.json", plugin_settings)
+        write(".mcp.json", server(bundled))
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"),
+                   JSON.generate("projects" => { @root => { "disabledMcpServers" => [ "rails-ai-context" ] } }))
+        expect(check.status).to eq(:pass)
+
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"),
+                   JSON.generate("projects" => { @root => { "disabledMcpServers" => [ "plugin:rails-ai-context:rails-ai-context" ] } }))
+        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:mcp_config_verdict, :claude).status).to eq(:pass)
+        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:claude_code).plugin?).to be(false)
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
+      end
+
+      # The install's own fix would add the second server the plugin replaces,
+      # and a machine that never added the marketplace needs it named.
+      it "asks a teammate with the committed setting to install the plugin, not to run the install" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
+        write(".claude/settings.json", plugin_settings)
+        FileUtils.rm_rf(File.dirname(plugin_registry))
+
+        expect(check).to have_attributes(
+          status: :warn,
+          message: "1 of 1 MCP config needs attention: the rails-ai-context plugin (Claude Code): enabled for this app but not installed on this machine",
+          fix: "Run `claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project`"
+        )
+      end
+
+      it "asks nothing of context files where the plugin brings the rules and no AI tools were chosen" do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
+        write(".claude/settings.json", plugin_settings)
+
+        expect(app_doctor.send(:check_context_freshness)).to be_nil
+      end
+
+      it "names a user scope server beside the plugin, with the command that removes it" do
+        write(".claude/settings.json", plugin_settings)
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"),
+                   JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+
+        expect(check).to have_attributes(status: :warn, fix: "Run `claude mcp remove rails-ai-context -s user`, or run `claude plugin disable rails-ai-context@rails-ai-context --scope local`")
+        expect(check.message).to eq("1 of 1 MCP config needs attention: the rails-ai-context plugin (Claude Code): the user scope " \
+                                    "server `rails-ai-context` runs the server beside the rails-ai-context plugin, so Claude Code " \
+                                    "lists every tool twice")
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
+      end
+    end
+
     context "when multiple tools configured, some configs missing" do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
@@ -1375,6 +1494,16 @@ RSpec.describe RailsAiContext::Doctor do
 
       expect(app_doctor.send(:check_stdio_activation_hygiene).message).to eq("gem activation is silent on stdout")
     end
+
+    it "checks the activation when the Claude Code plugin starts the installed binary" do
+      FileUtils.mkdir_p([ File.join(@root, ".claude"), File.join(@root, "config") ])
+      File.write(File.join(@root, "config", "application.rb"), "")
+      File.write(File.join(@root, ".claude", "settings.json"), plugin_settings)
+      status = instance_double(Process::Status, success?: true, exitstatus: 0)
+      allow(Open3).to receive(:capture3).and_return([ "", "", status ])
+
+      expect(app_doctor.send(:check_stdio_activation_hygiene).message).to eq("gem activation is silent on stdout")
+    end
   end
 
   # Only the bundle this process runs in has its gemspec loaded here.
@@ -1448,6 +1577,125 @@ RSpec.describe RailsAiContext::Doctor do
       expect(entry).to include(%("rails-ai-context-a":{"command":"rails-ai-context"))
       expect(check.fix).to eq("Add #{entry} to ../.vscode/mcp.json by hand: #{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}, " \
                               "so the install leaves it as it is")
+    end
+
+    context "with the Claude Code plugin on" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        write("a/config/application.rb", "")
+        write("a/.claude/settings.json", plugin_settings)
+        write(".claude/settings.json", plugin_settings)
+        write(".mcp.json", JSON.generate("mcpServers" => {
+          "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] }
+        }))
+      end
+
+      it "counts the folder's entry as a second server when the folder holds this app alone" do
+        expect(workspace_doctor.send(:check_mcp_json).status).to eq(:warn)
+      end
+
+      # A session in the folder starts its .mcp.json, but not the plugin the app alone enables.
+      it "passes the folder's entry when only the app's own settings turn the plugin on" do
+        FileUtils.rm_f(File.join(@work, ".claude", "settings.json"))
+
+        expect(workspace_doctor.send(:check_mcp_json).status).to eq(:pass)
+      end
+
+      it "counts an entry naming no app, which serves the one app the folder holds" do
+        write(".mcp.json", JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+
+        expect(workspace_doctor.send(:check_mcp_json).message).to include("`rails-ai-context` in ../.mcp.json runs the server")
+      end
+
+      # A local server and the plugin's local switch both live with the folder a session started in.
+      it "says where to run the commands that remove a local server added in the folder" do
+        FileUtils.rm_f(File.join(@work, ".mcp.json"))
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"), JSON.generate("projects" => {
+          @work => { "mcpServers" => { "rac" => { "command" => "rails-ai-context", "args" => [ "serve" ] } } }
+        }))
+
+        expect(workspace_doctor.send(:check_mcp_json).fix).to eq(
+          "Run `claude mcp remove rac -s local` in .., or run `claude plugin disable rails-ai-context@rails-ai-context --scope local` in .."
+        )
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
+      end
+
+      it "names the folder to run the enable in, from where doctor ran" do
+        FileUtils.rm_f(File.join(@work, ".mcp.json"))
+        write("a/.claude/settings.json", plugin_settings(false))
+        doctor = described_class.new(RailsAiContext::StaticApp.new(app_root), from: @work)
+
+        expect(doctor.send(:check_mcp_json).fix).to end_with("`claude plugin enable rails-ai-context@rails-ai-context --scope local` in a")
+      end
+
+      # Enabled there already, so `enable` would change nothing.
+      it "points at /mcp where it turned the plugin off for the app's folder" do
+        FileUtils.rm_f(File.join(@work, ".mcp.json"))
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"), JSON.generate("projects" => {
+          app_root => { "disabledMcpServers" => [ "plugin:rails-ai-context:rails-ai-context" ] }
+        }))
+
+        expect(workspace_doctor.send(:check_mcp_json).fix).to eq(
+          "Start Claude Code there, or turn the plugin's server back on with /mcp in a session started here"
+        )
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
+      end
+
+      it "asks for both steps where the app turned the plugin off and /mcp turned its server off" do
+        FileUtils.rm_f(File.join(@work, ".mcp.json"))
+        write("a/.claude/settings.json", plugin_settings(false))
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"), JSON.generate("projects" => {
+          app_root => { "disabledMcpServers" => [ "plugin:rails-ai-context:rails-ai-context" ] }
+        }))
+
+        expect(workspace_doctor.send(:check_mcp_json).fix).to eq(
+          "Start Claude Code there, or run `claude plugin enable rails-ai-context@rails-ai-context --scope local`, " \
+          "then turn the plugin's server back on with /mcp in a session started here"
+        )
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
+      end
+
+      # Each session's plugin may come from another marketplace.
+      it "names each session's own plugin id in the disable hint" do
+        FileUtils.rm_f(File.join(@work, ".mcp.json"))
+        File.write(plugin_registry, JSON.generate("version" => 2, "plugins" => {
+          "rails-ai-context@one" => [ { "scope" => "user" } ], "rails-ai-context@two" => [ { "scope" => "user" } ]
+        }))
+        write(".claude/settings.json", JSON.generate("enabledPlugins" => { "rails-ai-context@one" => true }))
+        write("a/.claude/settings.json", JSON.generate("enabledPlugins" => { "rails-ai-context@two" => true }))
+        File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"),
+                   JSON.generate("mcpServers" => { "rac" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+
+        expect(workspace_doctor.send(:check_mcp_json).fix).to eq(
+          "Run `claude mcp remove rac -s user`, or run `claude plugin disable rails-ai-context@two --scope local` " \
+          "and run `claude plugin disable rails-ai-context@one --scope local` in .."
+        )
+      ensure
+        FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
+      end
+
+      # A session started in the app runs no server, though one in the folder above would.
+      it "warns where the plugin runs only for sessions started in another folder" do
+        FileUtils.rm_f(File.join(@work, ".mcp.json"))
+        write("a/.claude/settings.json", plugin_settings(false))
+
+        expect(workspace_doctor.send(:check_mcp_json)).to have_attributes(
+          status: :warn,
+          message: "1 of 1 MCP config needs attention: .mcp.json (Claude Code): the rails-ai-context plugin serves this app only in " \
+                   "sessions started in ..",
+          fix: "Start Claude Code there, or run `claude plugin enable rails-ai-context@rails-ai-context --scope local`"
+        )
+      end
+
+      # Started in a folder of apps, the plugin serves none, so the folder's entry is the only server.
+      it "passes the folder's entry when the folder holds more apps" do
+        write("b/config/application.rb", "")
+
+        expect(workspace_doctor.send(:check_mcp_json).status).to eq(:pass)
+      end
     end
 
     it "finds its MCP configs in the workspace and names where they are" do

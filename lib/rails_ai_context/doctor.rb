@@ -503,8 +503,10 @@ module RailsAiContext
 
     def check_context_freshness
       # An MCP-only install asked for no context files, so their absence is
-      # the configuration working, not something to fix.
+      # the configuration working, not something to fix. Nor with the Claude
+      # Code plugin and no install, which brings the rules itself.
       return nil unless install_config.context_files
+      return nil if install_config.ai_tools.nil? && claude_code.plugin?
 
       # Where the files are written: config.output_dir, else the install's root.
       output_dir = install_config.output_dir || install_root
@@ -726,8 +728,11 @@ module RailsAiContext
         fix: fixes.join("; "))
     end
 
-    # Check at least the Claude Code config (always expected)
+    # Check at least the Claude Code config (always expected); with no AI
+    # tools chosen, the Claude Code plugin is the choice made.
     def mcp_tools_to_check
+      return %i[claude] if install_config.ai_tools.nil? && (claude_code.plugin? || claude_code.uninstalled_plugin_id)
+
       tools = configured_ai_tools & self.class.mcp_config_checks.keys
       tools.empty? ? %i[claude] : tools
     end
@@ -741,9 +746,23 @@ module RailsAiContext
       # config, if it cannot be read, is the one to fix.
       full_path = mcp_config_path(tool)
       label = "#{typed_path(full_path)} (#{cfg[:name]})"
-      unless File.exist?(full_path)
-        return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+      claude_plugin = tool == :claude && claude_code.plugin?
+      uninstalled_id = tool == :claude && !claude_plugin && claude_code.uninstalled_plugin_id
+      # A session started in the config's folder is the one this config serves.
+      folder = mcp_config_folder(tool, full_path)
+      missing = lambda do
+        return claude_plugin_verdict("the rails-ai-context plugin (#{cfg[:name]})") if claude_plugin && claude_code.plugin_on_in?(folder)
+        return claude_plugin_elsewhere(label, folder) if claude_plugin
+        # The fix the install names would add the second server the plugin is there to replace.
+        if uninstalled_id
+          return ConfigVerdict.new(label: "the rails-ai-context plugin (#{cfg[:name]})", status: :warn,
+                                   problem: "enabled for this app but not installed on this machine",
+                                   fix: "Run #{plugin_install_command(uninstalled_id)}", unparseable: nil)
+        end
+
+        ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
       end
+      return missing.call unless File.exist?(full_path)
 
       # Where the install would leave the file, or the gem's entry in it, as
       # it is, the edit by hand it names instead is the fix: sent to run the
@@ -761,7 +780,7 @@ module RailsAiContext
         text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
         if problem.nil? && text.strip.empty?
-          return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+          return missing.call
         end
         # The entry added by hand would sit in a file JSON still cannot read;
         # saved as UTF-8, the next install merges into it.
@@ -777,6 +796,7 @@ module RailsAiContext
       end
 
       entries = serving_entries(tool, full_path)
+      return missing.call if entries.empty? && (claude_plugin || uninstalled_id)
       if entries.empty?
         return ConfigVerdict.new(label: label, status: :warn, problem: shape&.[](1) || "holds no rails-ai-context server",
                                  fix: shape&.[](2) || by_hand || install_fix, unparseable: nil)
@@ -786,6 +806,8 @@ module RailsAiContext
       # is its owner's to judge.
       troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, by_hand) }
       status, problem, fix = [ *troubles, shape ].compact.min_by { |trouble| trouble.first == :fail ? 0 : 1 }
+      return claude_plugin_verdict(label) if status.nil? && claude_plugin
+
       ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
     rescue SystemCallError, IOError => e
       ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix, unparseable: nil)
@@ -868,6 +890,66 @@ module RailsAiContext
     def mcp_config_path(tool)
       McpConfigGenerator.serving_config(install_root, tool) || McpConfigGenerator.unreadable_config_above(install_root, tool) ||
         File.join(install_root, self.class.mcp_config_checks[tool][:path])
+    end
+
+    def claude_code
+      @claude_code ||= ClaudeCodeSettings.new(install_root)
+    end
+
+    # Claude Code's verdict where the plugin serves the app: a pass, unless a
+    # server of the gem's that a session also starts would list every tool
+    # twice. A removal by Claude Code's CLI works in the folder that holds it.
+    def claude_plugin_verdict(label)
+      duplicates = claude_code.duplicates
+      return ConfigVerdict.new(label: label, status: :pass, problem: nil, fix: nil, unparseable: nil) if duplicates.empty?
+
+      places, fixes = duplicates.map do |dup|
+        case dup.scope
+        when :project then [ "`#{dup.name}` in #{typed_path(dup.config)}", "remove `#{dup.name}` from #{fix_path(dup.config)}" ]
+        when :user then [ "the user scope server `#{dup.name}`", "run `claude mcp remove #{dup.name} -s user`" ]
+        else [ "the local scope server `#{dup.name}`", "run `claude mcp remove #{dup.name} -s local`#{run_in([ dup.key ])}" ]
+        end
+      end.transpose.map(&:uniq)
+      # Each session's plugin may come from another marketplace, so the disable names its own id.
+      disables = duplicates.flat_map(&:sessions).uniq.group_by { |session| claude_code.plugin_id_in(session) }.map do |id, sessions|
+        "run `claude plugin disable #{id} --scope local`#{run_in(sessions)}"
+      end
+      ConfigVerdict.new(label: label, status: :warn,
+                        problem: "#{places.join(" and ")} #{places.one? ? "runs" : "run"} the server beside the " \
+                                 "rails-ai-context plugin, so Claude Code lists every tool twice",
+                        fix: "#{fixes.join(", ").sub(/\A\w/, &:upcase)}, or #{disables.join(" and ")}",
+                        unparseable: nil)
+    end
+
+    # The plugin serves this app, but not in a session started where its config is.
+    def claude_plugin_elsewhere(label, folder)
+      ConfigVerdict.new(label: label, status: :warn,
+                        problem: "the rails-ai-context plugin serves this app only in sessions started in " \
+                                 "#{claude_code.plugin_sessions.map { |session| fix_path(session) }.uniq.join(" and ")}",
+                        fix: "Start Claude Code there, or #{claude_plugin_switch_on(folder)}", unparseable: nil)
+    end
+
+    # Enabling the plugin and turning its server on in /mcp are two switches; name the ones that are off.
+    def claude_plugin_switch_on(folder)
+      where = run_in([ folder ])
+      steps = []
+      steps << "run `claude plugin enable #{claude_code.plugin_id} --scope local`#{where}" unless claude_code.plugin_enabled_in?(folder)
+      steps << "turn the plugin's server back on with /mcp in a session started#{where.empty? ? " here" : where}" if claude_code.plugin_server_off_in?(folder)
+      steps.join(", then ")
+    end
+
+    # The marketplace this repository publishes is named after the plugin; another one has to be added first.
+    def plugin_install_command(id)
+      plugin, marketplace = id.split("@", 2)
+      return "`claude plugin install #{plugin} --marketplace crisnahine/rails-ai-context --scope project`" if marketplace == plugin
+
+      "`claude plugin marketplace add` for the #{marketplace} marketplace, then `claude plugin install #{id} --scope project`"
+    end
+
+    # Where to run a command, when that is not where doctor ran.
+    def run_in(folders)
+      named = folders.map { |folder| fix_path(folder) }.uniq
+      named == [ "." ] ? "" : " in #{named.join(" and ")}"
     end
 
     # The folder a config sits in, which its client starts the server from.
@@ -1205,6 +1287,7 @@ module RailsAiContext
     # binary itself, which activates the gem through RubyGems.
     def serves_installed_binary?
       return false if install_config.tool_mode == :cli
+      return true if claude_code.plugin?
 
       mcp_tools_to_check.any? do |tool|
         path = McpConfigGenerator.serving_config(install_root, tool) or next false
