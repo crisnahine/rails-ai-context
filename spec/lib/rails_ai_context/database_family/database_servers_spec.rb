@@ -201,6 +201,13 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
 
     it "still plans a parameterized statement generically, naming its relation" do
+      # GENERIC_PLAN came with PostgreSQL 16; before it, a $1 cannot be planned and the
+      # statement fails, as it did before the extended-protocol change.
+      if conn.select_value("SHOW server_version_num").to_i < 160_000
+        expect { family.plan(conn, "SELECT id FROM rac_server_rows WHERE id = $1", timeout: 5, generic: true) }
+          .to raise_error(ActiveRecord::StatementInvalid)
+        next
+      end
       plan = family.plan(conn, "SELECT id FROM rac_server_rows WHERE id = $1", timeout: 5, generic: true)
       expect(plan.to_s).to include("rac_server_rows")
     end
