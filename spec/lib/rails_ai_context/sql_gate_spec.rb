@@ -1070,6 +1070,19 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
+    it "reads a dollar after a non-ASCII character as part of a name, and a dollar tag spelled as a name is, as PostgreSQL does" do
+      [ "SELECT 1 AS →$a$; DELETE FROM users; SELECT 1 AS →$a$", "SELECT $→$ ' $→$; DELETE FROM users; SELECT ' '" ].each do |sql|
+        expect(refusal(sql, :postgresql)).to eq("Blocked: multiple statements (no semicolons)"), sql
+      end
+      expect(text("SELECT $→$a -- b$→$ AS v", :postgresql)).to eq("SELECT $→$a -- b$→$ AS v")
+    end
+
+    it "reads -- before any control character as a comment on MySQL, as the server does" do
+      # Without this, `--` is no comment before \x01, so the `'` opens a string that swallows the
+      # rest and `mysql.user` is never seen. MySQL ends the comment at the line and reads the table.
+      expect(refusal("SELECT 1 FROM --\x01 '\nmysql.user #'", :mysql)).to start_with("Blocked: `mysql` is not read.")
+    end
+
     it "reads a dollar as no quote off PostgreSQL, so a comment after one is taken out" do
       %i[sqlite mysql].each { |family| expect(text("SELECT $t$ -- x $t$ AS v\nFROM t", family)).to eq("SELECT $t$  \nFROM t") }
     end

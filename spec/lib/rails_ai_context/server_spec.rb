@@ -774,8 +774,40 @@ RSpec.describe RailsAiContext::Server do
       rack_app.call(
         "PATH_INFO" => path_info,
         "REQUEST_METHOD" => "POST",
+        "HTTP_HOST" => host,
         "rack.input" => StringIO.new("")
       )
+    end
+
+    let(:host) { "localhost:6029" }
+
+    # The SDK's own check arrived in mcp 0.23, and the gemspec allows older ones.
+    context "when the Host or Origin is not the loopback server's" do
+      let(:transport) { instance_double("Transport", handle_request: [ 200, {}, [ "{}" ] ]) }
+
+      it "refuses a Host that is not a loopback name" do
+        status, _headers, body = s.send(:build_rack_app, transport).call(
+          "PATH_INFO" => mcp_path, "REQUEST_METHOD" => "POST", "HTTP_HOST" => "rebound.example:6029", "rack.input" => StringIO.new("")
+        )
+        expect([ status, body.join ]).to match([ 403, /Invalid Host header/ ])
+        expect(transport).not_to have_received(:handle_request)
+      end
+
+      it "refuses an Origin from another site" do
+        status, _headers, body = s.send(:build_rack_app, transport).call(
+          "PATH_INFO" => mcp_path, "REQUEST_METHOD" => "POST", "HTTP_HOST" => "127.0.0.1:6029",
+          "HTTP_ORIGIN" => "http://rebound.example", "rack.input" => StringIO.new("")
+        )
+        expect([ status, body.join ]).to match([ 403, /Invalid Origin header/ ])
+      end
+
+      it "answers a loopback Host, a bracketed IPv6 one included" do
+        %w[localhost:6029 127.0.0.1 [::1]:6029].each do |name|
+          status, = s.send(:build_rack_app, transport).call("PATH_INFO" => mcp_path, "REQUEST_METHOD" => "POST", "HTTP_HOST" => name,
+                                                             "rack.input" => StringIO.new(""))
+          expect(status).to eq(200), name
+        end
+      end
     end
 
     it "404s requests outside the MCP path" do

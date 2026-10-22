@@ -648,7 +648,7 @@ module RailsAiContext
     def build_rack_app(transport)
       lambda do |env|
         if McpEdge.mcp_request?(env)
-          McpEdge.serve(env, transport)
+          McpEdge.loopback_refusal(env) || McpEdge.serve(env, transport)
         else
           [ 404, { "Content-Type" => "application/json" }, [ '{"error":"Not found"}' ] ]
         end

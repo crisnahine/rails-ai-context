@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.7] - 2026-10-22
+
+### Security
+
+- **`rails_query` reads a dollar-quote tag the way PostgreSQL does, and runs
+  one statement at the wire.** The gate read a `$tag$` that followed a
+  non-ASCII byte, or whose tag held one, as a string boundary where the server
+  read it as part of a name, so text the gate believed was one quoted value was
+  several statements to the server, and a crafted statement could run a write.
+  The tag grammar now matches the server's: a non-ASCII byte counts as a letter
+  in a tag and before one. On top of that, the statement and its plan now run
+  over the extended protocol (one statement per message), so even a text that
+  slipped past the gate cannot carry a second statement to the server. A generic
+  plan's unbound parameter, which only that protocol refuses, falls back to a
+  plan that runs nothing.
+- **`rails_query` reads `--` on MySQL the way the server does.** MySQL starts a
+  `--` comment before any control character, not whitespace alone; the gate
+  accepted whitespace only, so a `--` before a control byte hid code from the
+  checks that the server still ran, and a secret column could leave under a
+  harmless name. The comment rule now ends at a control byte too.
+- **`rails_read_logs` filters a secret column's logged bind values.** Active
+  Record filters a bind only when `config.filter_parameters` names it, which
+  older apps often leave at `[:password]`, so a token or reset key logged in
+  full. A `["name", "value"]` bind pair whose name is a secret now has its
+  value filtered, alongside the existing name-and-value rules.
+- **The standalone HTTP server refuses a non-loopback Host of its own.** It
+  binds a loopback address and hands the SDK no allowed hosts, so only a
+  loopback Host is its own. mcp 1.x refuses the rest itself; the gemspec floor
+  is 0.13, and 0.13 to 0.22 check nothing, so a web page the developer opened
+  could reach the endpoint by DNS rebinding. The server now makes that check
+  across every supported SDK, as `docs/SECURITY.md` says it does.
+
 ## [5.36.6] - 2026-10-22
 
 ### Removed

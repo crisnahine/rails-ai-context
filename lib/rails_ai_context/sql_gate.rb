@@ -219,8 +219,11 @@ module RailsAiContext
     E_QUOTE = /(?<=(?<![\p{Word}$]|[^\x00-\x7F])[eE])'/
     # SQLite reads [name] as an identifier.
     BRACKETED = /\[[^\]\n]*\]/
-    DOLLAR_QUOTED = /(?<![\p{Word}$])\$(\p{Word}*)\$.*?\$\1\$/m
-    DOLLAR_TAG = /(?<![\p{Word}$])\$\p{Word}*\$/
+    # PostgreSQL spells a dollar quote's tag as a name, and reads any non-ASCII character as a letter in both:
+    # a dollar after one (`→$a$`) is part of that name, and `$→$` is a tag.
+    TAG_NAME = /(?:[A-Za-z_]|[^\x00-\x7F])(?:\w|[^\x00-\x7F])*/
+    DOLLAR_QUOTED = /(?<![\w$]|[^\x00-\x7F])\$((?:#{TAG_NAME})?)\$.*?\$\1\$/m
+    DOLLAR_TAG = /(?<![\w$]|[^\x00-\x7F])\$(?:#{TAG_NAME})?\$/
     UNQUOTED = /[^'"`$\/\-#*\[]+/
 
     # A constant in a plan expression. PostgreSQL's deparser always doubles
@@ -269,7 +272,7 @@ module RailsAiContext
       def closed?(tag)
         @last ||= {}.tap do |last|
           tags = StringScanner.new(string)
-          last["$#{tags[1]}"] = tags.pos - 1 while tags.skip_until(/\$(?=(\p{Word}*\$))/)
+          last["$#{tags[1]}"] = tags.pos - 1 while tags.skip_until(/\$(?=((?:#{TAG_NAME})?\$))/o)
         end
         @last.fetch(tag, -1) >= pos + tag.bytesize
       end

@@ -257,7 +257,10 @@ RSpec.describe RailsAiContext::Tools::Query, skip: (ENV["RAC_TEST_PG_URL"] ? fal
         expect([ response.error?, response.content.first[:text] ]).to match([ false, a_string_including("| 1 ") ]), sql
         expect(statements.grep(/rac_pg_c\d/)).to be_empty, sql
       end
-      expect(sent { run("SELECT id, email FROM rac_pg_accounts WHERE id = 1") }.size).to eq(24)
+      # The statement and its plan run over the extended protocol (one statement per message),
+      # which Active Record does not instrument, so the `sql.active_record` count is the schema
+      # reads beside them. It is the shape of the reads this guards, not the exact two.
+      expect(sent { run("SELECT id, email FROM rac_pg_accounts WHERE id = 1") }.size).to eq(22)
     end
 
     it "refuses a statement that names a materialized view four schemas from the rows, by the view" do

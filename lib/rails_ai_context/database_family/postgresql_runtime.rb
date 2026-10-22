@@ -9,14 +9,50 @@ module RailsAiContext
       module_function
 
       def read_only(conn, sql, timeout)
-        # An EXPLAIN answers text, and one of a generic plan holds $1, which Rails 7.0's select_all sends as an empty bind.
-        if sql.match?(/\A\s*EXPLAIN\b/i)
-          result = bounded(conn, timeout) { conn.execute(sql) }
-          return Rows.new(result.fields, result.values, false)
-        end
+        result = bounded(conn, timeout) { exec_single(conn, sql) }
+        Rows.new(result.fields, result.values, false)
+      end
 
-        result = bounded(conn, timeout) { conn.select_all(sql) }
-        Rows.new(result.columns, result.rows, false)
+      # One statement over the extended protocol (exec_params with no binds). The simple
+      # protocol conn.execute and select_all use runs every statement in its text, so a text
+      # the gate passed in error would run a second one; the extended protocol refuses that at
+      # the wire ("cannot insert multiple commands"), whatever the gate saw. The adapter set the
+      # raw connection's result type map, so values cast as select_all's do. The bounded block's
+      # SET statements have materialized the transaction, so this runs inside it, under its
+      # read-only mode and statement_timeout. A driver error is raised as the ActiveRecord class
+      # the callers expect, so a timeout still reads as TimedOut.
+      #
+      # A single statement that leaves a $n unbound can only be an EXPLAIN (GENERIC_PLAN), which
+      # the extended protocol will not run but the simple one plans without a value; it runs
+      # nothing (no ANALYZE). The extended attempt aborts the transaction, so a savepoint lets
+      # the simple protocol plan it after. A text with a second statement fails with "cannot
+      # insert multiple commands" before the bind, never the unbound-parameter error, so the
+      # simple-protocol fallback can never run one. Only a $ can be an unbound parameter, so a
+      # statement without one takes the extended protocol with no savepoint round-trips.
+      def exec_single(conn, sql)
+        raw = conn.raw_connection
+        return raw.exec_params(sql, []) unless sql.include?("$")
+
+        raw.exec("SAVEPOINT rac_exec_single")
+        begin
+          result = raw.exec_params(sql, [])
+          raw.exec("RELEASE SAVEPOINT rac_exec_single")
+          result
+        rescue StandardError => e
+          raw.exec("ROLLBACK TO SAVEPOINT rac_exec_single")
+          raise e unless unbound_parameters?(e)
+
+          conn.execute(sql)
+        end
+      rescue ActiveRecord::ActiveRecordError
+        raise
+      rescue StandardError => e
+        raise conn.send(:translate_exception_class, e, sql, [])
+      end
+
+      # The driver's "bind message supplies 0 parameters, but ... requires N" for a lone $n.
+      def unbound_parameters?(error)
+        (defined?(PG::ProtocolViolation) && error.is_a?(PG::ProtocolViolation)) || error.message.include?("bind message supplies")
       end
 
       # statement_timeout ends each statement in the block, a wait on a lock included. Read-only, rolled back.
@@ -76,8 +112,12 @@ module RailsAiContext
       # Planning only: EXPLAIN without ANALYZE runs nothing, not even a VOLATILE function.
       # A timeout and an SQL error are raised, so the caller never runs what it could not plan.
       def plan(conn, sql, timeout, generic: false)
-        json = read_only(conn, "EXPLAIN (VERBOSE, FORMAT JSON#{", GENERIC_PLAN" if generic}) #{sql}", timeout).rows.first&.first
-        data = JSON.parse(json.to_s)
+        explain = "EXPLAIN (VERBOSE, FORMAT JSON#{", GENERIC_PLAN" if generic}) #{sql}"
+        # One statement at the wire while the gate is still checking, so a text it passed in
+        # error cannot run a write here. A generic plan's unbound $n falls back to the simple
+        # protocol inside exec_single, which plans it without running anything.
+        result = bounded(conn, timeout) { exec_single(conn, explain) }
+        data = JSON.parse(result.values.first&.first.to_s)
         data.is_a?(Array) && data.first.is_a?(Hash) ? data.first["Plan"] : nil
       rescue JSON::ParserError
         nil

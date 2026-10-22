@@ -71,9 +71,9 @@ module RailsAiContext
         mysql?
       end
 
-      # @return [Regexp] a comment that runs to the end of its line: `#` too, and `--` only before a space, on MySQL
+      # @return [Regexp] a comment that runs to the end of its line: `#` too, and `--` only before a space or a control character, on MySQL
       def line_comment
-        mysql? ? /--(?=\s|\z)[^\n]*|#[^\n]*/ : /--[^\n]*/
+        mysql? ? /--(?=[\s\x00-\x1f\x7f]|\z)[^\n]*|#[^\n]*/ : /--[^\n]*/
       end
 
       # @return [Rows] run in a read-only transaction, bounded by timeout seconds

@@ -359,6 +359,13 @@ Proof sources:
    them on Mongoid, in the static tier, compared with v5.36.5 and every
    changed answer checked against the app's source; and the unit suite and
    the E2E harness on Linux, macOS and Windows.
+   In the v5.36.7 release QA: each fix's example failing on the code before
+   it; the `rails_query` gate and its reads run against live PostgreSQL 17,
+   MySQL 9.6 and MariaDB 13 for the dollar-quote and `--` comment readings,
+   with each server confirmed to read the text the way the gate does; the
+   security, gate, redaction and database specs on Rails 7.0 (Ruby 3.1), 7.1,
+   7.2 and 8.1 against live PostgreSQL; and the unit suite and the E2E harness
+   on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

@@ -153,6 +153,19 @@ module RailsAiContext
         message && [ 403, { "Content-Type" => "application/json" }, [ error_frame(INVALID_REQUEST, message) ] ]
       end
 
+      # The standalone server's own Host and Origin check. It binds a loopback address and
+      # hands the SDK no allowed_hosts, so only a loopback Host is its own. mcp >= 0.23 makes
+      # the SDK refuse the rest itself; the gemspec floor is 0.13, and 0.13 to 0.22 check
+      # nothing, so a web page the developer opens could reach the endpoint by DNS rebinding.
+      # This stands in for the SDK's check across every allowed version.
+      def loopback_refusal(env)
+        host = env["HTTP_HOST"].to_s.downcase.sub(/:\d+\z/, "").delete_prefix("[").delete_suffix("]")
+        message = if !LOOPBACK_HOSTS.include?(host) then "Forbidden: Invalid Host header"
+        elsif env["HTTP_ORIGIN"] && !same_origin?(env["HTTP_ORIGIN"], env["HTTP_HOST"]) then "Forbidden: Invalid Origin header"
+        end
+        message && [ 403, { "Content-Type" => "application/json" }, [ error_frame(INVALID_REQUEST, message) ] ]
+      end
+
       private
 
       def host_allowed?(env, app)

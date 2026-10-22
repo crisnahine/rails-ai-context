@@ -234,7 +234,8 @@ RSpec.describe "BaseTool shared caches under concurrency" do
 
       def post(app, message, session: nil)
         env = Rack::MockRequest.env_for("/mcp", method: "POST", input: JSON.generate(message),
-          "CONTENT_TYPE" => "application/json", "HTTP_ACCEPT" => "application/json, text/event-stream")
+          "CONTENT_TYPE" => "application/json", "HTTP_ACCEPT" => "application/json, text/event-stream",
+          "HTTP_HOST" => "127.0.0.1:6029")
         env.merge!("HTTP_MCP_SESSION_ID" => session, "HTTP_MCP_PROTOCOL_VERSION" => "2025-06-18") if session
         status, headers, body = app.call(env)
         out = StringIO.new

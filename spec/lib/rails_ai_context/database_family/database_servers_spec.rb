@@ -190,6 +190,21 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
     it_behaves_like "a guarded database server"
 
+    # Even past the gate, a second statement in the text cannot run: the extended protocol sends one.
+    it "runs one statement at the wire, so a second one never runs" do
+      [ "SELECT 1; COMMIT; DELETE FROM rac_server_rows", "SHOW search_path; COMMIT; DELETE FROM rac_server_rows" ].each do |sql|
+        expect { family.read_only(conn, sql, timeout: 5) }.to raise_error(ActiveRecord::StatementInvalid, /multiple commands/), sql
+      end
+      expect { family.plan(conn, "SELECT id FROM rac_server_rows; COMMIT; DELETE FROM rac_server_rows", timeout: 5) }
+        .to raise_error(ActiveRecord::StatementInvalid, /multiple commands/)
+      expect(conn.select_value("SELECT COUNT(*) FROM rac_server_rows").to_i).to eq(3)
+    end
+
+    it "still plans a parameterized statement generically, naming its relation" do
+      plan = family.plan(conn, "SELECT id FROM rac_server_rows WHERE id = $1", timeout: 5, generic: true)
+      expect(plan.to_s).to include("rac_server_rows")
+    end
+
     it "bounds a statement" do
       took = seconds { expect { family.read_only(conn, "SELECT pg_sleep(3)", timeout: 0.5) }.to raise_error(described_class::TimedOut) }
       expect(took).to be < 2

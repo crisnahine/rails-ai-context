@@ -780,6 +780,14 @@ RSpec.describe RailsAiContext::Redaction do
   end
 
   describe ".redact_log_line" do
+    it "filters a secret column's value in a query's logged binds" do
+      line = %q(  User Load (0.4ms)  SELECT "users".* FROM "users" WHERE "users"."api_token" = $1 LIMIT $2  ) +
+        %q([["api_token", "tok_9f8e7d6c5b4a"], ["LIMIT", 1]])
+      expect(described_class.redact_log_line(line)).to end_with(%q([["api_token", "[FILTERED]"], ["LIMIT", 1]]))
+      expect(described_class.redact_log_line(%q([["reset_password_token", "a\"b"], ["email", "x"]])))
+        .to eq(%q([["reset_password_token", "[FILTERED]"], ["email", "x"]]))
+    end
+
     it "filters a short credential under an unquoted Authorization name, as an env dump or a debug line writes it" do
       expect(described_class.redact_log_line("HTTP_AUTHORIZATION=Basic dXNlcjpw")).to eq("HTTP_AUTHORIZATION=[FILTERED]")
       expect(described_class.redact_log_line("AUTHORIZATION=Bearer abc123")).to eq("AUTHORIZATION=[FILTERED]")

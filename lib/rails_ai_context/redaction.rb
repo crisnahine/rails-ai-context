@@ -175,6 +175,13 @@ module RailsAiContext
       (\s*(?:=>|:|=(?!>))\s*)
       (?!["']?\[FILTERED\])(?:"([^"]*)"|'([^']*)'|([^\s,;&)\]}]+))
     /xi
+    # A `["name", "value"]` pair in a query's logged binds. Active Record filters a bind only
+    # when config.filter_parameters lists its name, which pre-Rails-7 apps often leave at
+    # [:password], so a token or reset key logs in full. The name and the quoted value are
+    # captured and the value filtered when the name is a secret; a bare value (a number, nil) is
+    # left, as is the `$n` placeholder in the SQL before the binds.
+    LOG_BIND = /\[\s*"((?:[^"\\]|\\.)*)"\s*,\s*("(?:[^"\\]|\\.)*")\s*\]/
+
     # A quoted key may close an index (`ENV["API_TOKEN"] =`); the assignment may be `||=` or another op-assign.
     SECRET_KEY = /"(?<name>#{DASHED_KEY_NAME})"\]?|'(?<name>#{DASHED_KEY_NAME})'\]?|(?<![\w"'\/\\-])(?<name>#{KEY_NAME})/
     KEYED_LITERAL = /(?:#{SECRET_KEY})(?<assign>\s*(?::|=>|(?:\|\||&&|[-+*\/|&])?=(?![=~>]))\s*)(?<literal>#{STRING_LITERAL})/
@@ -370,6 +377,7 @@ module RailsAiContext
         result.gsub!(result.encoding == Encoding::UTF_8 ? EMAIL_PATTERN : ASCII_EMAIL_PATTERN, EMAIL)
 
         result.gsub!(LOG_SECRET_ASSIGNMENT) { filter_assignment(Regexp.last_match) }
+        result.gsub!(LOG_BIND) { filter_bind(Regexp.last_match) }
 
         LOG_PATTERNS.each do |pattern, replacement|
           next result.gsub!(pattern, replacement) unless replacement == :value
@@ -738,6 +746,14 @@ module RailsAiContext
 
         value_quote = match[4] ? '"' : (match[5] ? "'" : "")
         "#{quote}#{key}#{quote}#{assign}#{value_quote}#{FILTERED}#{value_quote}"
+      end
+
+      # A logged bind pair `["name", "value"]` with its value gone when the name is a secret.
+      def filter_bind(match)
+        name = key_name(match[1])
+        return match[0] unless name && log_secret?(name, match[2])
+
+        %(["#{match[1]}", "#{FILTERED}"])
       end
 
       # The setting name at the head of a matched assignment.

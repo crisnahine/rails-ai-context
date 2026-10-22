@@ -277,11 +277,11 @@ RSpec.describe RailsAiContext::DatabaseFamily do
 
           def adapter_name = "PostgreSQL"
 
-          def raw_connection = Struct.new(:transaction_status).new(0)
+          def raw_connection = Struct.new(:transaction_status) do
+            def exec_params(_sql, _binds) = Struct.new(:fields, :values).new(%w[x], [ [ 1 ] ])
+          end.new(0)
 
           def execute(sql) = @statements << sql
-
-          def select_all(_sql) = ActiveRecord::Result.new(%w[x], [ [ 1 ] ])
 
           def transaction(**)
             yield
@@ -641,18 +641,19 @@ RSpec.describe RailsAiContext::DatabaseFamily do
   describe "PostgreSQL planning" do
     let(:conn) { double("connection") }
 
+    before { allow(described_class::PostgresqlRuntime).to receive(:bounded) { |_conn, _timeout, &block| block.call } }
+
     it "raises a timeout and an SQL error" do
-      allow(described_class::PostgresqlRuntime).to receive(:read_only).and_raise(described_class::TimedOut, "stopped")
+      allow(described_class::PostgresqlRuntime).to receive(:exec_single).and_raise(described_class::TimedOut, "stopped")
       expect { described_class::POSTGRESQL.plan(conn, "SELECT 1", timeout: 2) }.to raise_error(described_class::TimedOut)
 
-      allow(described_class::PostgresqlRuntime).to receive(:read_only).and_raise(ActiveRecord::StatementInvalid, "syntax")
+      allow(described_class::PostgresqlRuntime).to receive(:exec_single).and_raise(ActiveRecord::StatementInvalid, "syntax")
       expect { described_class::POSTGRESQL.plan(conn, "SELECT nope", timeout: 2) }.to raise_error(ActiveRecord::StatementInvalid)
     end
 
     it "answers no plan for text that is not one" do
       [ "not json", "{}", "[]" ].each do |text|
-        allow(described_class::PostgresqlRuntime).to receive(:read_only)
-          .and_return(described_class::Rows.new(%w[plan], [ [ text ] ], false))
+        allow(described_class::PostgresqlRuntime).to receive(:exec_single).and_return(double("result", values: [ [ text ] ]))
         expect(described_class::POSTGRESQL.plan(conn, "SELECT 1", timeout: 2)).to be_nil, text
       end
     end
