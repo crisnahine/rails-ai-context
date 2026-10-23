@@ -121,6 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No update notice where the app's lockfile names the version running.**
   That lockfile decides the copy that serves the app, so `gem update` changed
   nothing there.
+- **A lockfile rewritten within the clock's resolution is read again.** The
+  app's bundle was cached by modification time alone, so a second write in the
+  same tick kept the first answer.
 - **An app whose bundle has its own path runs its own copy.** Where `bundle
   config set path`, a deployment bundle or `BUNDLE_PATH` put the gem under
   the app, the installed copy served it and the app's boot loaded the

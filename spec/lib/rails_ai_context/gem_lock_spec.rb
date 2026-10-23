@@ -130,6 +130,17 @@ RSpec.describe RailsAiContext::GemLock do
     expect(described_class.for(@root).version("rails")).to eq("8.0.1")
   end
 
+  it "rereads a lockfile rewritten within the clock's resolution" do
+    path = File.join(@root, "Gemfile.lock")
+    written = File.mtime(path)
+    expect(described_class.for(@root).version("rails")).to eq("7.2.2")
+
+    File.write(path, lock_text.sub("rails (7.2.2)", "rails (7.2.10)"))
+    File.utime(written, written, path)
+
+    expect(described_class.for(@root).version("rails")).to eq("7.2.10")
+  end
+
   it "reads the ruby version whatever the section is indented by" do
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)

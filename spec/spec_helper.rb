@@ -44,7 +44,9 @@ ENV["RAILS_AI_CONTEXT_NO_UPDATE_CHECK"] = "1"
 # Doctor reads the Claude Code plugins enabled in the user's own settings; the
 # developer's must not decide what a spec sees.
 ENV["CLAUDE_CONFIG_DIR"] = Dir.mktmpdir("claude-config")
-at_exit { FileUtils.rm_rf(ENV.fetch("CLAUDE_CONFIG_DIR")) }
+# A forked child that exits normally runs at_exit too, as Ruby 4 does after a fork hook raises.
+config_owner = Process.pid
+at_exit { FileUtils.rm_rf(ENV.fetch("CLAUDE_CONFIG_DIR")) if Process.pid == config_owner }
 
 Dir[File.join(__dir__, "support", "**", "*.rb")].sort.each { |f| require f }
 

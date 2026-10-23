@@ -147,7 +147,7 @@ module RailsAiContext
       root = root.to_s
       bundle = bundle(root)
       stamp = [ bundle.lockfile, bundle.gemfile, File.join(root, "config/boot.rb"),
-                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && mtime(file) } << loaded?
+                *VERSION_FILES.map { |name| File.join(root, name) } ].map { |file| file && file_stamp(file) } << loaded?
       stamp << Introspectors::GemfileGems.stamps(bundle) if loaded?
 
       MUTEX.synchronize do
@@ -285,8 +285,10 @@ module RailsAiContext
     end
     private_class_method :absent_spec
 
-    def mtime(path)
-      File.mtime(path)
+    # Size and inode too: a file rewritten within the clock's resolution keeps its mtime.
+    def file_stamp(path)
+      stat = File.stat(path)
+      [ stat.mtime.to_i, stat.mtime.nsec, stat.size, stat.ino ]
     rescue SystemCallError
       nil
     end

@@ -79,8 +79,8 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
     gemfile_lock_path = Rails.root.join("Gemfile.lock").to_s
     allow(File).to receive(:exist?).with(gemfile_lock_path).and_return(true)
     allow(File).to receive(:file?).with(gemfile_lock_path).and_return(true)
-    allow(File).to receive(:mtime).and_call_original
-    allow(File).to receive(:mtime).with(gemfile_lock_path).and_return(Time.at(0))
+    allow(File).to receive(:stat).and_call_original
+    allow(File).to receive(:stat).with(gemfile_lock_path).and_return(File.stat(__FILE__))
     allow(RailsAiContext::SafeFile).to receive(:read)
       .with(gemfile_lock_path, max_size: anything)
       .and_return("GEM\n  remote: https://rubygems.org/\n  specs:\n    railties (8.0.1)\n")
