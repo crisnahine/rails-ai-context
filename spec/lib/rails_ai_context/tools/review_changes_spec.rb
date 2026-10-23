@@ -427,6 +427,8 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         File.binwrite(File.join(@dir, "lib/bin.dat"), "x\0z")
         File.chmod(0o755, File.join(@dir, "lib/run.sh"))
         git("add", "-A")
+        # Git for Windows ignores the file's mode, so the index is told.
+        git("update-index", "--chmod=+x", "lib/run.sh")
         git("commit", "-q", "-m", "change")
 
         text = described_class.call(ref: "HEAD~1").content.first[:text]

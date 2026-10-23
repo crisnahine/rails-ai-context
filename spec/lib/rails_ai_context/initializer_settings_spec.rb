@@ -291,14 +291,16 @@ RSpec.describe RailsAiContext::InitializerSettings do
     end
     write("big.rb", "#{'#' * 100}\nRailsAiContext.log_warn('x')\n")
     write("lib/nul.rb", "RailsAiContext.log_warn('x')\n# \0 note\n")
-    write("app/my\ntool.rb", "RailsAiContext.log_warn('x')\n")
+    # Windows refuses a newline in a file name.
+    newline_named = Gem.win_platform? ? [] : [ "app/my\ntool.rb" ]
+    newline_named.each { |path| write(path, "RailsAiContext.log_warn('x')\n") }
     File.symlink(File.join(@root, "app"), File.join(@root, "linked_app"))
     File.symlink(File.join(@root, "app/a.rb"), File.join(@root, "lib/linked.rb"))
     with_rg = described_class.boot_files(@root)
     allow(RailsAiContext::Executable).to receive(:on_path?).with("rg").and_return(false)
 
     expect(described_class.boot_files(@root)).to eq(with_rg)
-    expect(with_rg).to eq([ "app/a.rb", "app/my\ntool.rb", "big.rb", "config/initializers/i.rb", "lib/nul.rb", "vendor/engines/z.rb" ])
+    expect(with_rg).to eq([ "app/a.rb", *newline_named, "big.rb", "config/initializers/i.rb", "lib/nul.rb", "vendor/engines/z.rb" ])
   end
 
   it "refuses a file that names the gem when it does not parse or is too deep to read, and does not stop" do
