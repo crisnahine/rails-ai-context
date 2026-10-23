@@ -102,6 +102,11 @@ module RailsAiContext
 
     INVALID_PARAMS = -32602
 
+    # A read that needs a file a gem cleanup removed, which load_failure has already logged.
+    class LoadFailure < MCP::Server::RequestHandlerError; end
+    # Read while the gem's files are there: a cleanup can remove them before a read fails.
+    INTERNAL_ERROR = McpEdge::INTERNAL_ERROR
+
     class << self
       def static_resources
         STATIC_RESOURCES.map do |uri, meta|
@@ -132,6 +137,8 @@ module RailsAiContext
           handle_read(params)
         rescue RailsAiContext::Error => e
           raise read_error(params, e)
+        rescue LoadError => e
+          raise load_failure(params, e)
         end
       end
 
@@ -164,6 +171,14 @@ module RailsAiContext
         return error unless defined?(MCP::Server::ResourceNotFoundError)
 
         MCP::Server::ResourceNotFoundError.new(uri)
+      end
+
+      # The SDK keeps a handler error's own message only with an error code;
+      # without one its text still reaches the client as the error's data.
+      def load_failure(params, error)
+        text = RailsAiContext.load_error_message(error)
+        codes = handler_error_data? ? { error_code: INTERNAL_ERROR } : {}
+        LoadFailure.new(text, params, error_type: :internal_error, **codes)
       end
 
       # error_code and error_data arrived together with ResourceNotFoundError,

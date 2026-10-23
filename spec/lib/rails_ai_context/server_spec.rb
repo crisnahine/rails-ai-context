@@ -463,6 +463,70 @@ RSpec.describe RailsAiContext::Server do
         end
       end
 
+      # The gem loads its files lazily, and a LoadError gets past every
+      # StandardError rescue up to the binary, which exits.
+      describe "a tool call that cannot load one of the gem's files" do
+        let(:mcp_server) { server.build }
+        let(:call) { -> { mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rails_get_schema", arguments: {} } }) } }
+
+        before do
+          allow(RailsAiContext::Tools::BaseTool).to receive(:refresh_if_files_changed!)
+            .and_raise(LoadError, "cannot load such file -- /gems/rails-ai-context-1.0.0/lib/rails_ai_context/x")
+        end
+
+        it "answers with the LoadError as a tool error, and the next call as usual" do
+          failed = nil
+          expect { failed = call.call[:result] }.to output.to_stderr
+          expect(failed[:isError]).to be(true)
+          expect(failed[:content].first[:text]).to eq("cannot load such file -- /gems/rails-ai-context-1.0.0/lib/rails_ai_context/x")
+
+          allow(RailsAiContext::Tools::BaseTool).to receive(:refresh_if_files_changed!).and_call_original
+          expect(call.call[:result][:isError]).to be_falsey
+        end
+
+        it "says to reconnect when this copy's files are gone" do
+          allow(RailsAiContext).to receive(:files_gone?).and_return(true)
+          allow(RailsAiContext).to receive(:stdio_open).and_return(true)
+
+          text = nil
+          expect { text = call.call.dig(:result, :content, 0, :text) }.to output(/are gone/).to_stderr
+          expect(text).to eq("rails-ai-context #{RailsAiContext::VERSION}'s files at #{File.dirname(RailsAiContext::LIB_DIR)} " \
+                             "are gone: a gem cleanup or uninstall removed them while this server ran. " \
+                             "Reconnect the server (in Claude Code: /mcp, then Reconnect) or restart the AI client.")
+        end
+
+        # The client shows the error's message, and the log carries it once.
+        it "answers a resource read the same way, logged once" do
+          allow(RailsAiContext::Resources).to receive(:handle_read).and_raise(LoadError, "cannot load such file -- x")
+          allow(RailsAiContext).to receive(:files_gone?).and_return(true)
+          read = -> { mcp_server.handle({ jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri: "rails://schema" } }) }
+
+          reply = nil
+          expect { reply = read.call }.to output(/\A\[rails-ai-context\] [^\n]*are gone[^\n]*\n\z/).to_stderr
+          if RailsAiContext::Resources.send(:handler_error_data?)
+            expect(reply[:error]).to include(code: -32603, message: RailsAiContext.files_gone_message)
+          end
+        end
+
+        # A reconnect only opens another session on the same process.
+        it "says to restart the process serving it over HTTP" do
+          allow(RailsAiContext).to receive(:files_gone?).and_return(true)
+          allow(RailsAiContext).to receive(:stdio_open).and_return(false)
+
+          text = nil
+          expect { text = call.call.dig(:result, :content, 0, :text) }.to output(/are gone/).to_stderr
+          expect(text).to end_with("while this server ran. Restart the process serving it (`rails-ai-context serve --transport http`, " \
+                                   "or the Rails server where the app mounts it), then reconnect the client.")
+        end
+
+        it "takes the files as gone only once this copy's lib folder is" do
+          expect(RailsAiContext.files_gone?).to be(false)
+
+          stub_const("RailsAiContext::LIB_DIR", File.join(Dir.tmpdir, "rails-ai-context-removed", "lib"))
+          expect(RailsAiContext.files_gone?).to be(true)
+        end
+      end
+
       # The SDK named only the guess.
       it "answers a name no tool has with the nearest tools, or with every tool" do
         call = ->(name) { server.build.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: {} } }) }

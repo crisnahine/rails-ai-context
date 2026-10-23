@@ -41,6 +41,11 @@ ENV["GIT_CONFIG_VALUE_0"] = "false"
 # version and write the answer under the developer's home.
 ENV["RAILS_AI_CONTEXT_NO_UPDATE_CHECK"] = "1"
 
+# Doctor reads the Claude Code plugins enabled in the user's own settings; the
+# developer's must not decide what a spec sees.
+ENV["CLAUDE_CONFIG_DIR"] = Dir.mktmpdir("claude-config")
+at_exit { FileUtils.rm_rf(ENV.fetch("CLAUDE_CONFIG_DIR")) }
+
 Dir[File.join(__dir__, "support", "**", "*.rb")].sort.each { |f| require f }
 
 RSpec.configure do |config|
@@ -67,6 +72,11 @@ RSpec.configure do |config|
   # rather than after: an example that sets a message expectation on
   # reset_cache! would otherwise count the teardown call as its own.
   config.before(:each) { RailsAiContext::Tools::BaseTool.reset_cache! }
+
+  # Doctor reads the machine's managed Claude Code settings too.
+  config.before(:each) do
+    stub_const("RailsAiContext::ClaudeCodeSettings::MANAGED_SETTINGS", File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "managed", "managed-settings.json"))
+  end
 
   # Same reason for the path caches: a spec that writes a pack or an in-repo
   # engine under Rails.root and removes it again would otherwise be decided by

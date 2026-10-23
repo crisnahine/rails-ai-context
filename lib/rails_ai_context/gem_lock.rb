@@ -133,9 +133,14 @@ module RailsAiContext
       File.file?(File.join(root.to_s, "gems.rb")) ? "gems.rb" : "Gemfile"
     end
 
-    # gems.rb locks to gems.locked, Gemfile to Gemfile.lock.
     def lockfile_name(root)
-      gemfile_name(root) == "gems.rb" ? "gems.locked" : "Gemfile.lock"
+      File.basename(lockfile_for(gemfile_name(root)))
+    end
+
+    # gems.rb locks to gems.locked, any other Gemfile to its own name plus .lock.
+    def lockfile_for(gemfile)
+      gemfile = gemfile.to_s
+      File.basename(gemfile) == "gems.rb" ? File.join(File.dirname(gemfile), "gems.locked") : "#{gemfile}.lock"
     end
 
     def for(root)
@@ -167,7 +172,7 @@ module RailsAiContext
     def for_gemfile(gemfile, root)
       gemfile = File.expand_path(gemfile.to_s)
       dir = File.dirname(gemfile)
-      lockfile = File.basename(gemfile) == "gems.rb" ? File.join(dir, "gems.locked") : "#{gemfile}.lock"
+      lockfile = lockfile_for(gemfile)
       return nil unless File.file?(lockfile)
 
       parse(Bundle.new(lockfile: lockfile, gemfile: gemfile, lock_label: File.basename(lockfile), gemfile_label: File.basename(gemfile),
@@ -194,7 +199,7 @@ module RailsAiContext
       dir = File.dirname(target)
       label = ->(file) { Pathname.new(File.join(dir, file)).relative_path_from(Pathname.new(real_root)).to_s }
       gemfile = File.basename(target)
-      lockfile = gemfile == "gems.rb" ? "gems.locked" : "#{gemfile}.lock"
+      lockfile = File.basename(lockfile_for(gemfile))
       repo = SafePath.git_root(real_root)
       unless repo && File.directory?(dir) && SafePath.contained?(File.realpath(dir), repo)
         return own.with(lockfile: nil, outside: label.(gemfile), no_repo: repo.nil?)

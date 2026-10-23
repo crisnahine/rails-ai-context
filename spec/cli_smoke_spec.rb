@@ -635,6 +635,60 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # A session started here runs the plugin, which serves the one app below.
+    it "writes no Claude Code server where the folder's committed settings turn the plugin on and it holds one app" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        FileUtils.mkdir_p(File.join(dir, ".claude"))
+        File.write(File.join(dir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+        # Claude Code has run on this machine, and never installed the plugin.
+        expect(err).to include("Claude Code: no server written into .mcp.json here: .claude/settings.json in this folder turns the " \
+                               "rails-ai-context plugin on, but it does not start for you here: doctor names why")
+        expect(err).to include("Claude Code: .claude/settings.json in this folder turns the rails-ai-context plugin on, but it does not start for you here")
+        expect(err).not_to include("approve each rails-ai-context server")
+        # The summary says what serves Claude Code, and lists no server it did not write.
+        expect(err).to include("Claude Code      -> the rails-ai-context plugin (off here: see below)")
+        expect(err).not_to include("MCP servers, one per app")
+
+        rails_app(File.join(dir, "b"))
+        _out, err, = init(dir, "1\n3\n")
+        expect(servers(dir).keys).to eq(%w[rails-ai-context-a rails-ai-context-b])
+        expect(err).to include("it has nothing to serve here: `claude plugin disable rails-ai-context@rails-ai-context --scope project` turns it off for this folder")
+      end
+    end
+
+    # The app's sessions read its own .mcp.json, which a context run writes, and the repository's local settings run the plugin there too.
+    it "names the app's own .mcp.json below a folder that commits the plugin, and the /mcp step where the plugin runs beside it" do
+      config = ENV.fetch("CLAUDE_CONFIG_DIR")
+      registry = File.join(config, "plugins", "installed_plugins.json")
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "shop"))
+        system("git", "init", "-q", dir, out: File::NULL, err: File::NULL)
+        FileUtils.mkdir_p([ File.join(dir, ".claude"), File.dirname(registry) ])
+        on = JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true })
+        File.write(File.join(dir, ".claude", "settings.json"), on)
+        File.write(File.join(dir, ".claude", "settings.local.json"), on)
+        File.write(registry, JSON.generate("version" => 2, "plugins" => { "rails-ai-context@rails-ai-context" => [ { "scope" => "user" } ] }))
+
+        _out, err, status = init(dir, "1\n1\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+        expect(JSON.parse(File.read(File.join(dir, "shop", ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
+        expect(err).to include("Claude Code: no server written into .mcp.json here:")
+        expect(err).to include("Claude Code      -> the rails-ai-context plugin, and shop/.mcp.json for sessions started in shop; CLAUDE.md")
+        expect(err).to include("Claude Code: the rails-ai-context plugin already serves this app for you, so turn the .mcp.json server " \
+                               "`rails-ai-context` off with /mcp in a session started in shop, or Claude Code lists every tool twice")
+      end
+    ensure
+      FileUtils.rm_rf(File.dirname(registry))
+    end
+
     # The bare entry serves the folder it starts in, which is no app.
     it "replaces a bare entry left in the folder, and changes nothing on a second run" do
       Dir.mktmpdir do |dir|
@@ -1413,6 +1467,28 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       File.write(File.join(dir, ".rails-ai-context.yml"), yaml) if yaml
     end
 
+    # The stdio server is started by its client; the HTTP one is started by hand, like any other command.
+    it "tells the stdio server's client, and whoever runs the HTTP server, where the pinned Ruby must be active" do
+      Dir.mktmpdir do |dir|
+        app_dir(dir)
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "environment.rb"), "require 'shop_native_ext'\n")
+        File.write(File.join(dir, ".ruby-version"), "1.9.3\n")
+
+        _out, stdio, = Open3.capture3("ruby", "-I", lib, exe, "serve", chdir: dir, stdin_data: "")
+        expect(stdio).to include("pins Ruby 1.9.3 (.ruby-version)").and include("Start the client where that Ruby is active")
+
+        http = +""
+        Open3.popen3("ruby", "-I", lib, exe, "serve", "--transport", "http", "--port", "6126", chdir: dir) do |stdin, _o, err, wait|
+          stdin.close
+          Timeout.timeout(60) { (http << err.gets.to_s) until http.include?("starting on") || err.eof? }
+        ensure
+          Process.kill("KILL", wait.pid) rescue nil
+        end
+        expect(http).to include("pins Ruby 1.9.3 (.ruby-version)").and include("Run it where that Ruby is active")
+      end
+    end
+
     it "honours --port under the streamable_http alias" do
       Dir.mktmpdir do |dir|
         app_dir(dir)
@@ -1494,6 +1570,39 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--cli", "--prune")
         expect(err).not_to include("Next step")
+      end
+    end
+
+    # Typed in a folder inside the app, the plugin's note names the folder whose sessions start it.
+    it "names the app's folder in the committed plugin's note when init runs inside the app" do
+      Dir.mktmpdir do |dir|
+        dir = File.realpath(dir)
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, ".claude"))
+        File.write(File.join(dir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+        system("git", "init", "-q", dir, out: File::NULL, err: File::NULL)
+
+        models = File.join(dir, "app", "models")
+        _out, err, = run_cli(models, "init", "--no-boot", "--tools", "claude", "--defaults")
+        expect(err).to include("no server written into #{File.join(dir, ".mcp.json")}: #{File.join(dir, ".claude", "settings.json")} turns the " \
+                               "rails-ai-context plugin on, but it does not start for you in #{dir}: doctor names why")
+
+        # Where Claude Code never ran, the committed setting is the whole setup.
+        _out, err, = Open3.capture3({ "CLAUDE_CONFIG_DIR" => File.join(dir, "never-ran") }, "ruby", "-I", lib, exe, "init", "--no-boot", "--tools",
+                                    "claude", "--defaults", chdir: models, stdin_data: "")
+        expect(err).to include("the rails-ai-context plugin serves this app for sessions started in #{dir}")
+      end
+    end
+
+    # Typed above the app, each step names the folder to start the client in.
+    it "names the app's folder in each next step when --app-path picks the app from above" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "shop"))
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--app-path", "shop", "--tools", "claude,codex", "--defaults")
+
+        expect(err).to include("Claude Code: start a new Claude Code session in shop and approve",
+                               "Codex CLI: trust shop when Codex CLI asks", "then start a new codex session in shop")
       end
     end
 
@@ -1745,6 +1854,126 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(status.exitstatus).to eq(0), err
         expect(File.read(File.join(dir, ".gitignore"))).to eq("*.log\n")
+      end
+    end
+
+    # The plugin runs the installed gem, so removing the gem first leaves it failing to start.
+    # A local disable wins over every other setting; an uninstall goes by the install's scope, in its project.
+    it "names the command that takes out the Claude Code plugin installed for the app, before the gem" do
+      registry = File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "plugins", "installed_plugins.json")
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        system("git", "init", "-q", dir, out: File::NULL, err: File::NULL)
+        FileUtils.mkdir_p([ File.join(dir, ".claude"), File.dirname(registry) ])
+        File.write(File.join(dir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+        File.write(registry, JSON.generate("version" => 2, "plugins" => {
+          "rails-ai-context@rails-ai-context" => [ { "scope" => "project", "projectPath" => File.realpath(dir) } ]
+        }))
+
+        _out, err, status = run_cli(dir, "uninstall")
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("take it out before the gem: `claude plugin disable rails-ai-context@rails-ai-context --scope local` turns it off " \
+                               "for this app, or `claude plugin uninstall rails-ai-context@rails-ai-context --scope project` takes it out of " \
+                               ".claude/settings.json for everyone.")
+        expect(err.index("claude plugin disable")).to be < err.index("gem uninstall rails-ai-context")
+
+        _out, err, = run_cli(File.join(dir, "app", "models"), "uninstall")
+        expect(err).to include("`claude plugin disable rails-ai-context@rails-ai-context --scope local` run in #{File.realpath(dir)} turns it off " \
+                               "for this app, or `claude plugin uninstall rails-ai-context@rails-ai-context --scope project` run in " \
+                               "#{File.realpath(dir)} takes it out of .claude/settings.json for everyone.")
+
+        # With a second install, no one uninstall takes it out.
+        File.write(registry, JSON.generate("version" => 2, "plugins" => {
+          "rails-ai-context@rails-ai-context" => [ { "scope" => "project", "projectPath" => File.realpath(dir) }, { "scope" => "user" } ]
+        }))
+        _out, err, = run_cli(dir, "uninstall")
+        expect(err).to include("`claude plugin disable rails-ai-context@rails-ai-context --scope local` turns it off for this app.")
+      end
+    ensure
+      FileUtils.rm_rf(File.dirname(registry))
+    end
+
+    # One local disable per project covers each session that runs it, the user's own settings included.
+    it "names every project whose sessions run a plugin the user's settings and the app's turn on" do
+      config = ENV.fetch("CLAUDE_CONFIG_DIR")
+      registry = File.join(config, "plugins", "installed_plugins.json")
+      Dir.mktmpdir do |dir|
+        dir = File.realpath(dir)
+        shop = File.join(dir, "mid", "shop")
+        rails_app(shop)
+        rails_app(File.join(dir, "other"))
+        system("git", "init", "-q", shop, out: File::NULL, err: File::NULL)
+        FileUtils.mkdir_p([ File.join(shop, ".claude"), File.dirname(registry) ])
+        on = JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true })
+        File.write(File.join(shop, ".claude", "settings.json"), on)
+        File.write(File.join(config, "settings.json"), on)
+        File.write(registry, JSON.generate("version" => 2, "plugins" => { "rails-ai-context@rails-ai-context" => [ { "scope" => "user" } ] }))
+
+        _out, err, status = run_cli(shop, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        # Outside a repository, mid's local settings reach only sessions started in mid itself.
+        expect(err).to include("take it out before the gem: `claude plugin disable rails-ai-context@rails-ai-context --scope local` run here " \
+                               "and in #{File.join(dir, "mid")} turns it off for this app and sessions started there, or " \
+                               "`claude plugin uninstall rails-ai-context@rails-ai-context --scope user` takes it out everywhere.")
+      end
+    ensure
+      FileUtils.rm_rf(File.dirname(registry))
+      FileUtils.rm_f(File.join(config, "settings.json"))
+    end
+
+    # Never installed here, the plugin runs nothing the gem's removal could break.
+    it "says nothing of a plugin the app turns on but this machine never installed" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, ".claude"))
+        File.write(File.join(dir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).not_to include("claude plugin")
+      end
+    end
+
+    # Every session there runs the plugin's server, and a .mcp.json one would list each tool twice.
+    it "writes no Claude Code server where the app's committed settings turn the plugin on" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, ".claude"))
+        File.write(File.join(dir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+
+        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--mcp")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+        expect(File.exist?(File.join(dir, ".cursor", "mcp.json"))).to be(true)
+        expect(err).to include("Claude Code: the app's .claude/settings.json turns the rails-ai-context plugin on, but it does not start for you here")
+        expect(err).not_to include("approve each rails-ai-context server")
+        expect(err).to include("Claude Code      -> the rails-ai-context plugin (off here: see below); CLAUDE.md + .claude/rules/")
+
+        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--mcp-only")
+        expect(err).to include("Claude Code      -> the rails-ai-context plugin (off here: see below)\n")
+        expect(err).not_to include("-> MCP config only")
+      end
+    end
+
+    # Typed from the folder above, the files and the folder a session starts in are named from there.
+    it "names the committed plugin's files from where init --app-path was typed" do
+      Dir.mktmpdir do |dir|
+        app = File.join(dir, "shop")
+        rails_app(app)
+        FileUtils.mkdir_p(File.join(app, ".claude"))
+        File.write(File.join(app, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+        File.write(File.join(app, ".mcp.json"), JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
+
+        _out, err, status = run_cli(dir, "init", "--app-path", "shop", "--no-boot", "--tools", "claude", "--mcp-only")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("Claude Code: no server written into shop/.mcp.json: shop/.claude/settings.json turns the rails-ai-context plugin on, " \
+                               "but it does not start for you in shop: doctor names why")
+        expect(err).to include("Claude Code: shop/.claude/settings.json turns the rails-ai-context plugin on, but it does not start for you in shop")
+        expect(err).not_to include(" .mcp.json", " .claude/settings.json")
       end
     end
 

@@ -294,7 +294,7 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
       it "says nothing outside bundle exec, or for the app whose Gemfile bundle exec loaded" do
         root = app("work/shop")
         File.write(File.join(root, "Gemfile"), "")
-        stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH"))
+        stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH", "BUNDLE_GEMFILE"))
         expect(described_class.bundle_warning(root, tmp)).to be_nil
 
         under_bundle(File.join(root, "Gemfile"))
@@ -384,6 +384,70 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         expect(described_class.bundle_warning(inside, tmp)).to be_nil
         expect(described_class.bundle_warning(outside, tmp)).to include("boots against the bundle of")
       end
+
+      context "with BUNDLE_GEMFILE inherited and no bundle exec" do
+        def inherited(gemfile, extra = {})
+          stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH", "BUNDLE_GEMFILE", "RAILS_AI_CONTEXT_HANDOFF")
+                                    .merge("BUNDLE_GEMFILE" => gemfile).merge(extra))
+        end
+
+        # config/boot.rb's `||=` keeps the inherited value, so the app boots
+        # against that bundle; "run it without bundle exec" would not help.
+        it "warns for another project's Gemfile and names the variable" do
+          root = app("shop")
+          File.write(File.join(root, "Gemfile"), "")
+          other = File.join(dir("elsewhere"), "Gemfile")
+          File.write(other, "")
+          inherited(other)
+
+          expect(described_class.bundle_warning(root, root))
+            .to eq("[rails-ai-context] WARNING: This app boots against #{other}, which BUNDLE_GEMFILE names, " \
+                   "not its own Gemfile. Unset BUNDLE_GEMFILE, or point it at the app's Gemfile.")
+        end
+
+        it "reads a relative value against the current folder, as Bundler does" do
+          root = app("shop")
+          File.write(File.join(root, "Gemfile"), "")
+          File.write(File.join(dir("elsewhere"), "Gemfile"), "")
+          inherited("../elsewhere/Gemfile")
+
+          Dir.chdir(root) do
+            expect(described_class.bundle_warning(root, root)).to include("#{File.join(tmp, 'elsewhere/Gemfile')}, which BUNDLE_GEMFILE names")
+          end
+        end
+
+        it "says nothing for the app's own Gemfile, a Gemfile.next inside it, or an empty value" do
+          root = app("shop")
+          File.write(File.join(root, "Gemfile"), "")
+          File.write(File.join(root, "Gemfile.next"), "")
+
+          [ File.join(root, "Gemfile"), File.join(root, "Gemfile.next"), "" ].each do |gemfile|
+            inherited(gemfile)
+            expect(described_class.bundle_warning(root, tmp)).to be_nil
+          end
+        end
+
+        it "says nothing for the bundle an app with no Gemfile sits under" do
+          root = app("work/engine/spec/dummy")
+          File.write(File.join(tmp, "work/engine/Gemfile"), "")
+          inherited(File.join(tmp, "work/engine/Gemfile"))
+
+          expect(described_class.bundle_warning(root, tmp)).to be_nil
+        end
+
+        # The run that handed off has already warned about the same Gemfile.
+        it "says nothing in the run a bundled-copy handoff started" do
+          root = app("shop")
+          File.write(File.join(root, "Gemfile"), "")
+          other = File.join(dir("elsewhere"), "Gemfile")
+          File.write(other, "")
+          inherited(other, described_class::HANDOFF_ENV => "1")
+          expect(described_class.bundle_warning(root, tmp)).to be_nil
+
+          under_bundle(other)
+          expect(described_class.bundle_warning(root, tmp)).to be_nil
+        end
+      end
     end
 
     describe ".bundled_handoff" do
@@ -396,7 +460,11 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
         dir(path).tap { |copy| File.write(File.join(copy, "rails-ai-context.gemspec"), "") }
       end
 
-      before { stub_const("ENV", ENV.to_h.except("BUNDLE_BIN_PATH", "BUNDLE_GEMFILE", described_class::HANDOFF_ENV)) }
+      # No Bundler setting of this run's, nor the user's own, decides where a bundle here installs.
+      before do
+        stub_const("ENV", ENV.to_h.reject { |key, _| key.start_with?("BUNDLE_") }.except(described_class::HANDOFF_ENV)
+                             .merge("BUNDLE_USER_CONFIG" => File.join(tmp, "no-user-config")))
+      end
 
       # Two copies in one process: this one's files load before the boot,
       # the bundle's over them.
@@ -427,6 +495,154 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
 
         expect(handoff.version).to eq("5.0.0")
         expect(handoff.env["BUNDLE_GEMFILE"]).to eq(File.join(root, "Gemfile.next"))
+      end
+
+      # Parsing a Gemfile costs a second on a machine with many gems, for the many apps that never lock this one.
+      it "reads no lockfile in full that never names the gem" do
+        root = app("shop")
+        File.write(File.join(root, "Gemfile"), %(gem "rails"\n))
+        File.write(File.join(root, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n\nDEPENDENCIES\n  rails\n")
+        allow(RailsAiContext::GemLock).to receive(:for).and_call_original
+
+        expect(described_class.bundled_handoff(root)).to be_nil
+        expect(described_class.pinned?(root)).to be(false)
+        expect(RailsAiContext::GemLock).not_to have_received(:for)
+      end
+
+      # Only a lock naming this very version decides the copy that runs; another one is handed the run, or not found.
+      it "takes the app as pinned where its lockfile names the version running" do
+        root = app("shop")
+        locked_from(root, "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (#{RailsAiContext::VERSION})\n")
+        expect(described_class.pinned?(root)).to be(true)
+
+        locked_from(root, "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.0.0)\n")
+        expect(described_class.pinned?(root)).to be(false)
+      end
+
+      it "reads a gems.rb app's bundle from gems.locked" do
+        root = app("shop")
+        path_copy("vendor/rails-ai-context")
+        File.write(File.join(root, "gems.rb"), %(gem "rails-ai-context", path: "../vendor/rails-ai-context"\n))
+        File.write(File.join(root, "gems.locked"), "PATH\n  remote: ../vendor/rails-ai-context\n  specs:\n    rails-ai-context (5.0.0)\n\n" \
+                                                   "PLATFORMS\n  ruby\n\nDEPENDENCIES\n  rails-ai-context!\n")
+
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+        expect(described_class.pinned?(root, "5.0.0")).to be(true)
+      end
+
+      def vendored(root, under: File.join("vendor", "bundle"), version: "5.0.0")
+        locked_from(root, "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (#{version})\n")
+        copy = File.join(root, under, RUBY_ENGINE, RbConfig::CONFIG["ruby_version"], "gems", "rails-ai-context-#{version}")
+        FileUtils.mkdir_p(File.join(copy, "lib"))
+        File.write(File.join(copy, "lib", "rails_ai_context.rb"), "")
+      end
+
+      def bundle_config(root, text)
+        FileUtils.mkdir_p(File.join(root, ".bundle"))
+        File.write(File.join(root, ".bundle", "config"), "---\n#{text}")
+      end
+
+      # Installed under the bundle's own path, the copy is seen from no Gem path, and the boot would load it over this one.
+      it "hands the command to a copy the bundle installed under its own path" do
+        root = app("shop")
+        vendored(root)
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        bundle_config(root, %(BUNDLE_PATH: "vendor/bundle"\n))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+        bundle_config(root, %(BUNDLE_DEPLOYMENT: "true"\n))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+      end
+
+      # As Bundler's Settings#path: the first level naming a path or system gems decides, before any deployment.
+      it "finds the bundle's path level by level, as Bundler does" do
+        root = app("shop")
+        vendored(root)
+        bundle_config(root, %(BUNDLE_DEPLOYMENT: "true"\n))
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_PATH" => "elsewhere"))
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        bundle_config(root, %(BUNDLE_PATH: vendor/bundle\nBUNDLE_PATH__SYSTEM: "true"\n))
+        expect(described_class.bundled_handoff(root)).to be_nil
+        bundle_config(root, %(BUNDLE_PATH: vendor/bundle\nBUNDLE_DISABLE_SHARED_GEMS: "false"\n))
+        expect(described_class.bundled_handoff(root)).to be_nil
+        bundle_config(root, %(BUNDLE_PATH: vendor/bundle\nBUNDLE_DISABLE_SHARED_GEMS: "true"\n))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+      end
+
+      it "reads the user's Bundler config where Bundler does, and none where it is told to ignore it" do
+        root = app("shop")
+        vendored(root)
+        File.write(File.join(tmp, "user-config"), %(---\nBUNDLE_PATH: "#{File.join(root, "vendor", "bundle")}"\n))
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_USER_CONFIG" => File.join(tmp, "user-config")))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_IGNORE_CONFIG" => "1"))
+        expect(described_class.bundled_handoff(root)).to be_nil
+      end
+
+      it "takes the user's config from BUNDLE_CONFIG before BUNDLE_USER_CONFIG, and from BUNDLE_USER_HOME without either" do
+        root = app("shop")
+        vendored(root)
+        File.write(File.join(tmp, "user-config"), %(---\nBUNDLE_PATH: "#{File.join(tmp, 'elsewhere')}"\n))
+        File.write(File.join(tmp, "config"), %(---\nBUNDLE_PATH: "#{File.join(root, 'vendor', 'bundle')}"\n))
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_USER_CONFIG" => File.join(tmp, "user-config"), "BUNDLE_CONFIG" => File.join(tmp, "config")))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+
+        stub_const("ENV", ENV.to_h.except("BUNDLE_CONFIG", "BUNDLE_USER_CONFIG").merge("BUNDLE_USER_HOME" => tmp))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+      end
+
+      it "reads the app's config from the folder BUNDLE_APP_CONFIG names, against the app" do
+        root = app("shop")
+        vendored(root)
+        bundle_config(root, %(BUNDLE_PATH__SYSTEM: "true"\n))
+        FileUtils.mkdir_p(File.join(root, "settings"))
+        File.write(File.join(root, "settings", "config"), %(---\nBUNDLE_PATH: "vendor/bundle"\n))
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        stub_const("ENV", ENV.to_h.merge("BUNDLE_APP_CONFIG" => "settings"))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+      end
+
+      # Bundler writes double quotes and no comment; a hand-edited file may hold either.
+      it "reads a single-quoted value as Bundler does" do
+        root = app("shop")
+        vendored(root)
+        bundle_config(root, %(BUNDLE_PATH: 'vendor/bundle'\n))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+      end
+
+      it "cuts a trailing comment off a bare value as Bundler does" do
+        root = app("shop")
+        vendored(root)
+        bundle_config(root, %(BUNDLE_PATH: vendor/bundle # kept with the app\n))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+      end
+
+      # bundle exec loads only the copy under the bundle's path, though the Gem path holds one at the same version.
+      it "hands the command to the bundle's copy under its own path at this very version" do
+        root = app("shop")
+        vendored(root, version: RailsAiContext::VERSION)
+        bundle_config(root, %(BUNDLE_PATH: "vendor/bundle"\n))
+        allow(Gem::Specification).to receive(:find_all_by_name).and_call_original
+        allow(Gem::Specification).to receive(:find_all_by_name).with("rails-ai-context", "= #{RailsAiContext::VERSION}")
+                                                              .and_return([ instance_double(Gem::Specification, full_gem_path: described_class::OWN_COPY) ])
+
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: RailsAiContext::VERSION)
+      end
+
+      # Bundler 5 installs a bundle that names no path under the app's .bundle folder.
+      it "looks under .bundle for a bundle Bundler 5 locked" do
+        root = app("shop")
+        vendored(root, under: ".bundle")
+        File.write(File.join(root, "Gemfile.lock"), "#{File.read(File.join(root, "Gemfile.lock"))}\nBUNDLED WITH\n   4.0.18\n")
+        expect(described_class.bundled_handoff(root)).to be_nil
+
+        File.write(File.join(root, "Gemfile.lock"), File.read(File.join(root, "Gemfile.lock")).sub("4.0.18", "5.0.0"))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
+        bundle_config(root, %(BUNDLE_DISABLE_SHARED_GEMS: "true"\n))
+        expect(described_class.bundled_handoff(root)).to have_attributes(version: "5.0.0")
       end
 
       it "runs on when the bundle's copy is this one, or this run is already the bundle's" do

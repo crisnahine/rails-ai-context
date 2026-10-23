@@ -37,6 +37,21 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     expect(RailsAiContext::RunCache.active?).to be false
   end
 
+  # A gem cleanup under a running server removes the files it loads lazily.
+  it "answers a call that cannot load the gem's own files with a request to reconnect, not to retry" do
+    tool = build_tool do
+      define_singleton_method(:call) do |server_context: nil|
+        raise LoadError, "cannot load such file -- /gems/rails-ai-context-1.0.0/lib/rails_ai_context/x"
+      end
+    end
+    allow(RailsAiContext).to receive(:files_gone?).and_return(true)
+
+    response = tool.call
+
+    expect(response.error?).to be(true)
+    expect(response.content.first[:text]).to eq(RailsAiContext.files_gone_message)
+  end
+
   describe "call parameter recording" do
     it "records a tool's own arguments with no per-tool code" do
       tool = build_tool do

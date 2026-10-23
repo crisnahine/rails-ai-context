@@ -2,7 +2,6 @@
 
 require "find"
 require "rbconfig"
-require_relative "../boot_manager"
 
 module RailsAiContext
   module CLI
@@ -90,9 +89,10 @@ module RailsAiContext
       # `doctor` is the command that diagnoses this app as it was typed: with
       # its --app-path, under bundle exec when that is how it ran. `shown` is
       # the root as the messages name it: a typed --app-path as typed, where
-      # the cwd spells it through any symlink (/private/var on macOS).
+      # the cwd spells it through any symlink (/private/var on macOS). `client` is true for a
+      # process a client started (the stdio server); every other run is typed.
       def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil,
-                    doctor: "rails-ai-context doctor", shown: root)
+                    doctor: "rails-ai-context doctor", shown: root, client: false)
         messages = []
 
         if allow_static && no_boot
@@ -117,6 +117,8 @@ module RailsAiContext
         # always restored: every branch below needs the gem loadable.
         pre_boot_paths = $LOAD_PATH.dup
         pre_boot_specs = preboot_gem_specs.reject { |name, _| preboot_framework_names.include?(name) }
+        # Loaded only to boot: it pulls in timeout, whose version the app's bundle decides.
+        require_relative "../boot_manager"
         timeout = BootManager.env_timeout
         begin
           drop_conflicting_gem_activations!(messages)
@@ -126,13 +128,15 @@ module RailsAiContext
         end
 
         unless result.booted?
-          return boot_failed(result, shown, timeout, messages) unless allow_static
+          return boot_failed(result, root, shown, timeout, messages) unless allow_static
 
           messages << "[rails-ai-context] App boot failed: #{result.failure_summary}"
           if result.error.is_a?(BootManager::BootTimeoutError)
             messages << "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
           end
           result.configure_hint.each { |line| messages << "[rails-ai-context]   #{line}" }
+          pin = ruby_pin_note(root, client: client) if wrong_ruby_failure?(result.error)
+          messages << "[rails-ai-context] #{pin}" if pin
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
           messages << "[rails-ai-context] Run `#{doctor}` for boot diagnostics."
           return enter_static(result.failure_summary, :boot_failed, root, messages, doctor)
@@ -178,8 +182,8 @@ module RailsAiContext
       end
       private_class_method :absent
 
-      def self.boot_failed(result, root, timeout, messages)
-        messages << "Error: Rails app failed to boot in #{root}"
+      def self.boot_failed(result, root, shown, timeout, messages)
+        messages << "Error: Rails app failed to boot in #{shown}"
         messages << "  #{result.failure_summary(full: true)}"
         if ENV["DEBUG"]
           Array(result.error.backtrace).first(15).each { |line| messages << "    #{line}" }
@@ -204,9 +208,57 @@ module RailsAiContext
           messages << "  that needs a service (database, Redis), or a syntax error."
           messages << "  If the app is healthy but slow to boot, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, default 60)."
         end
+        pin = ruby_pin_note(root, client: false) if wrong_ruby_failure?(result.error)
+        messages << "  #{pin}" if pin
         Outcome.new(tier: :absent, reason: result.failure_summary, messages: messages)
       end
       private_class_method :boot_failed
+
+      # A process started where another Ruby is active boots the app under it, which its bundle may not
+      # be installed for. Only a full x.y.z pin counts, so a loose one never reads as a mismatch.
+      def self.ruby_pin_note(root, running: RUBY_VERSION, client: true)
+        file, pinned = pinned_ruby(root)
+        return nil if pinned.nil? || pinned == running
+
+        start = client ? "Start the client" : "Run it"
+        "This app pins Ruby #{pinned} (#{file}); this process runs #{running} (#{RbConfig.ruby}). " \
+          "#{start} where that Ruby is active, or install the app's bundle for this one."
+      end
+
+      # A failure another Ruby or an uninstalled bundle raises: a load error (a gem, a native extension
+      # built for another Ruby) or Bundler's own, anywhere in the chain. Bundler's wrapper around a gem's
+      # require is left to its cause, so an app's own error never sends anyone to reinstall the bundle.
+      def self.wrong_ruby_failure?(error)
+        10.times do
+          return false if error.nil?
+          return true if error.is_a?(LoadError) ||
+                         (defined?(::Bundler::BundlerError) && error.is_a?(::Bundler::BundlerError) && !error.is_a?(::Bundler::GemRequireError))
+
+          error = error.cause
+        end
+        false
+      end
+      private_class_method :wrong_ruby_failure?
+
+      def self.pinned_ruby(root)
+        { ".ruby-version" => :ruby_version, ".tool-versions" => :tool_versions }.each do |file, form|
+          text = String.new(File.binread(File.join(root, file), 4096).to_s, encoding: Encoding::UTF_8).scrub
+          declared = if form == :ruby_version
+            text.each_line.map(&:strip).find { |line| !line.empty? && !line.start_with?("#") }&.split&.first
+          else
+            text[/^[ \t]*ruby[ \t]+(\S+)/, 1]
+          end
+          next if declared.nil?
+
+          # .ruby-version first, as rbenv, rvm and chruby read it; asdf reads .tool-versions alone.
+          version = declared.delete_prefix("ruby-").sub(/@.*\z/, "")
+          return version.match?(/\A\d+\.\d+\.\d+\z/) ? [ file, version ] : nil
+        rescue SystemCallError, IOError
+          next
+        end
+        nil
+      end
+      private_class_method :pinned_ruby
 
       # Static tier: the gem loads with no app constants, introspection runs
       # against the filesystem, and every tool response carries the tier banner.

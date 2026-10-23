@@ -4,6 +4,7 @@ require "rbconfig"
 require "shellwords"
 require_relative "entry_boot"
 require_relative "../safe_path"
+require_relative "../version"
 
 module RailsAiContext
   module CLI
@@ -288,13 +289,25 @@ module RailsAiContext
       # so is the one an app with no Gemfile names in its config/boot.rb (a
       # monorepo's shared bundle), or any bundle above such an app (an
       # engine's dummy app). Otherwise an app with a Gemfile of its own boots
-      # against someone else's Gemfile.lock.
+      # against someone else's Gemfile.lock. An inherited BUNDLE_GEMFILE picks
+      # the bundle the same way: config/boot.rb sets it only when it is unset.
       def self.bundle_warning(root, cwd)
-        return nil unless ENV["BUNDLE_BIN_PATH"] && defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
+        # A handoff's child runs the Gemfile the parent already checked.
+        return nil if ENV[HANDOFF_ENV]
 
+        bundled = ENV["BUNDLE_BIN_PATH"]
+        if bundled
+          return nil unless defined?(::Bundler) && ::Bundler.respond_to?(:default_gemfile)
+
+          given = ::Bundler.default_gemfile.to_s
+        else
+          return nil if ENV["BUNDLE_GEMFILE"].to_s.empty?
+
+          given = File.expand_path(ENV["BUNDLE_GEMFILE"])
+        end
         # Bundler's path comes from ENV, which a C locale tags binary whatever
         # the default; spelled in the app's encoding, it joins its name.
-        given = ::Bundler.default_gemfile.to_s.dup.force_encoding(root.encoding)
+        given = given.dup.force_encoding(root.encoding)
         bundle_gemfile = real(given)
         real_root = real(root)
         # Bundler looks for gems.rb before Gemfile.
@@ -306,6 +319,11 @@ module RailsAiContext
         # Standing in the app, only a BUNDLE_GEMFILE someone set picks another
         # bundle, so the way out is the variable.
         where, inside = root == cwd ? [ "This app", "" ] : [ "#{display(root, cwd).delete_suffix('/')}/", " or from inside the app" ]
+        unless bundled
+          return "[rails-ai-context] WARNING: #{where} boots against #{bundle_gemfile}, which BUNDLE_GEMFILE names, " \
+                 "not its own Gemfile. Unset BUNDLE_GEMFILE, or point it at the app's Gemfile."
+        end
+
         "[rails-ai-context] WARNING: #{where} boots against the bundle of #{bundle_gemfile} under bundle exec, " \
           "not its own. Run it without bundle exec#{inside}, or point BUNDLE_GEMFILE at the app's Gemfile."
       rescue StandardError
@@ -326,23 +344,48 @@ module RailsAiContext
       def self.bundled_handoff(root)
         return nil if ENV["BUNDLE_BIN_PATH"] || ENV[HANDOFF_ENV]
 
-        require_relative "../gem_lock"
-        # A BUNDLE_GEMFILE someone set (a dual boot's Gemfile.next) picks the
-        # bundle, as it does for bundle exec; resolve_app_root! has already
-        # made it absolute.
-        named = ENV["BUNDLE_GEMFILE"].to_s
-        gemfile = named.empty? ? GemLock.bundle(root).gemfile : named
-        return nil unless gemfile && File.file?(gemfile)
+        gemfile, lock = gem_bundle(root)
+        return nil unless lock
 
-        lock = named.empty? ? GemLock.for(root) : GemLock.for_gemfile(gemfile, root)
-        version = lock&.version("rails-ai-context") or return nil
-
+        version = lock.version("rails-ai-context")
         copy = bundled_copy(lock.source("rails-ai-context"), version, gemfile)
         return nil if copy.nil? || real(copy).b == real(OWN_COPY).b
 
         Handoff.new(env: { "BUNDLE_GEMFILE" => File.expand_path(gemfile), HANDOFF_ENV => "1" }, version: version)
       rescue StandardError
         nil
+      end
+
+      # A BUNDLE_GEMFILE someone set (a dual boot's Gemfile.next) picks the bundle, as it does for bundle exec;
+      # resolve_app_root! has already made it absolute.
+      def self.gem_bundle(root)
+        require_relative "../gem_lock"
+        named = ENV["BUNDLE_GEMFILE"].to_s
+        gemfile = named.empty? ? GemLock.bundle(root).gemfile : named
+        return nil unless gemfile && File.file?(gemfile) && lock_names_gem?(gemfile)
+
+        lock = named.empty? ? GemLock.for(root) : GemLock.for_gemfile(gemfile, root)
+        [ gemfile, lock ] if lock&.version("rails-ai-context")
+      end
+      private_class_method :gem_bundle
+
+      # Whether the app's lockfile names this gem, by its text: most apps never
+      # lock it, and parsing a Gemfile takes a second on a machine with many gems.
+      def self.lock_names_gem?(gemfile)
+        lock = GemLock.lockfile_for(gemfile)
+        File.file?(lock) && File.read(lock).include?("rails-ai-context")
+      rescue SystemCallError, IOError
+        false
+      end
+
+      # Whether the app's lockfile names the version this process runs, so the lockfile, not an
+      # update, decides the copy that serves it. Where it names another, that copy is handed the
+      # run, or is not to be found and this one serves.
+      def self.pinned?(root, version = RailsAiContext::VERSION)
+        _, lock = gem_bundle(root)
+        lock&.version("rails-ai-context") == version
+      rescue StandardError
+        false
       end
 
       # This copy's root, as a bundle would name it.
@@ -376,19 +419,86 @@ module RailsAiContext
       end
 
       # The directory the bundle loads the gem from: a path source's, or the
-      # installed gem a rubygems source resolves to. A git checkout, or one
-      # installed under a vendored bundle path, is nil: its install is not
-      # seen from here.
+      # installed gem a rubygems source resolves to, only under the bundle's own
+      # path where it has one, as bundle exec loads it. A git checkout is nil:
+      # its install is not seen from here.
       def self.bundled_copy(source, version, gemfile)
         case source&.first
         when :path
           dir = File.expand_path(source[1].to_s, File.dirname(gemfile))
           dir if File.file?(File.join(dir, "rails-ai-context.gemspec"))
         when :gem
+          path = bundle_path(gemfile)
+          return vendored_copy(gemfile, path, version) if path
+
           Gem::Specification.find_all_by_name("rails-ai-context", "= #{version}").first&.full_gem_path
         end
       end
       private_class_method :bundled_copy
+
+      # A copy installed under the bundle's own path, which no Gem path outside the bundle sees.
+      def self.vendored_copy(gemfile, path, version)
+        copy = File.join(File.expand_path(path, File.dirname(gemfile)), RUBY_ENGINE, RbConfig::CONFIG["ruby_version"], "gems",
+                         "rails-ai-context-#{version}")
+        copy if File.file?(File.join(copy, "lib", "rails_ai_context.rb"))
+      rescue ArgumentError, SystemCallError, IOError
+        nil
+      end
+      private_class_method :vendored_copy
+
+      # Where Bundler installs the bundle, as its Settings#path decides; nil for system gems, which the
+      # Gem path already holds. The first level that names a path or system gems decides; only then does
+      # a deployment mean vendor/bundle, and Bundler 5 puts a bundle with neither under .bundle.
+      def self.bundle_path(gemfile)
+        own = ".bundle" if File.read(GemLock.lockfile_for(gemfile))[/^BUNDLED WITH\r?\n\s+(\d+)\./, 1].to_i >= 5
+        levels = bundle_levels(File.dirname(gemfile))
+        levels.each do |level|
+          path, system, shared = level.values_at("BUNDLE_PATH", "BUNDLE_PATH__SYSTEM", "BUNDLE_DISABLE_SHARED_GEMS")
+          next if path.nil? && system.nil? && shared.nil?
+          return nil if bundle_true?(system) || (shared && !bundle_true?(shared))
+
+          return path || own
+        end
+        bundle_true?(levels.filter_map { |level| level["BUNDLE_DEPLOYMENT"] }.first) ? "vendor/bundle" : own
+      rescue ArgumentError, SystemCallError, IOError
+        nil
+      end
+      private_class_method :bundle_path
+
+      # Bundler's settings as it ranks them: the app's config, the environment, then the user's. The
+      # files are read as text, since YAML is a gem an app's bundle pins.
+      def self.bundle_levels(dir)
+        env = ENV.to_h.select { |key, _| key.start_with?("BUNDLE_") }
+        return [ env ] if ENV["BUNDLE_IGNORE_CONFIG"]
+
+        app = ENV["BUNDLE_APP_CONFIG"].to_s
+        user = ENV.values_at("BUNDLE_CONFIG", "BUNDLE_USER_CONFIG").find { |file| !file.to_s.empty? } ||
+               File.join(ENV["BUNDLE_USER_HOME"].to_s.empty? ? File.join(Dir.home, ".bundle") : ENV["BUNDLE_USER_HOME"], "config")
+        local, global = [ File.join(app.empty? ? File.join(dir, ".bundle") : File.expand_path(app, dir), "config"), user ].map do |file|
+          File.file?(file) ? bundle_settings(File.read(file)) : {}
+        end
+        [ local, env, global ]
+      end
+      private_class_method :bundle_levels
+
+      # A settings file read as Bundler's YAMLSerializer reads it: one optional space after the colon, a matching
+      # pair of quotes, then a comment cut off a value that does not start with one.
+      def self.bundle_settings(text)
+        text.split(/\r?\n/).each_with_object({}) do |line, settings|
+          key, _, value = line.match(/\A(BUNDLE_[A-Z0-9_]+):(?=\s|\z) ?(['"]?)(.*)\2\z/)&.captures
+          next unless key
+
+          value = value.split("#", 2).first.strip if value.include?("#") && !value.start_with?("#")
+          settings[key] = value
+        end
+      end
+      private_class_method :bundle_settings
+
+      # A Bundler boolean setting: anything but an empty or false-like word is true.
+      def self.bundle_true?(value)
+        !value.nil? && !value.match?(/\A(false|f|no|n|0|)\z/i)
+      end
+      private_class_method :bundle_true?
 
       # Whether config/boot.rb points Bundler at this Gemfile.
       def self.boot_bundle?(root, gemfile)

@@ -201,6 +201,7 @@ RSpec.describe RailsAiContext::BootManager do
         expect(result).not_to be_booted
         expect(result.error).to be_a(described_class::BootExitError)
         expect(result.failure_summary).to include("App called exit(1) during boot")
+        expect(result.error.cause).to be_nil
       end
     end
 

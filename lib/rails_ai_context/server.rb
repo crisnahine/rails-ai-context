@@ -291,7 +291,9 @@ module RailsAiContext
     # params) are expected traffic, not bugs - the mcp gem already turns them
     # into a proper JSON-RPC error response, so here they get one quiet line.
     EXCEPTION_REPORTER = lambda { |exception, _server_context|
-      if exception.is_a?(MCP::Server::RequestHandlerError) && exception.error_type != :internal_error
+      if exception.is_a?(Resources::LoadFailure)
+        nil
+      elsif exception.is_a?(MCP::Server::RequestHandlerError) && exception.error_type != :internal_error
         $stderr.puts "[rails-ai-context] request error (#{exception.error_type}): #{exception.message}"
       elsif ENV["DEBUG"]
         $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: #{exception.message}"
@@ -398,6 +400,9 @@ module RailsAiContext
           raise MCP::Server::RequestHandlerError.new(Server.unknown_tool_message(name, tools.keys), request,
                                                      error_type: :invalid_params, **Server.unknown_tool_data(tools.keys))
         end
+      rescue LoadError => e
+        text = RailsAiContext.load_error_message(e)
+        MCP::Tool::Response.new([ { type: "text", text: text } ], error: true).to_h
       end
 
       def skipped_call(name)

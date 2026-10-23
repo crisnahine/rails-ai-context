@@ -79,7 +79,11 @@ module RailsAiContext
       #
       # @return [Symbol, nil]
       def tool_mode(root:)
-        initializer_content(root)&.slice(MODE_LINE, 1)&.to_sym || yaml_record(root)["tool_mode"]&.to_sym
+        declared = initializer_content(root)&.slice(MODE_LINE, 1)
+        return declared.to_sym if declared
+
+        recorded = yaml_record(root)["tool_mode"]
+        recorded.to_sym if recorded.is_a?(String) || recorded.is_a?(Symbol)
       end
 
       # Whether this install writes context files, initializer first, the
@@ -249,12 +253,14 @@ module RailsAiContext
         nil
       end
 
-      # @return [Hash] the parsed record, empty when it is missing or unreadable.
+      # @return [Hash] the parsed record, empty when it is missing, unreadable
+      #   or not a mapping (the config loader ignores such a file too).
       private_class_method def self.yaml_record(root)
         path = File.join(root.to_s, YAML_FILE)
         return {} unless File.exist?(path)
 
-        YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
+        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML, aliases: true)
+        data.is_a?(Hash) ? data : {}
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
         {}
@@ -312,7 +318,7 @@ module RailsAiContext
 
       # @return [Hash, nil] the parsed record, or nil when it will not parse
       private_class_method def self.readable_yaml(path)
-        YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
+        YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML, aliases: true) || {}
       rescue StandardError
         nil
       end
@@ -452,7 +458,7 @@ module RailsAiContext
       end
 
       private_class_method def self.yaml_reads_as?(text, expected)
-        YAML.safe_load(text, permitted_classes: PERMITTED_YAML) == expected
+        YAML.safe_load(text, permitted_classes: PERMITTED_YAML, aliases: true) == expected
       rescue StandardError
         false
       end

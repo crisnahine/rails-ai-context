@@ -45,28 +45,54 @@ pushed.
    bench in the qa-rails-ai-context skill (`prompt-bench.py`), not by
    `docs_prompts_spec`, which only checks that each flag exists.
 
+6. **The plugin ships from `main`, not from the tag.** Claude Code versions
+   `plugins/rails-ai-context` by commit, so a change there reaches users on
+   their next plugin update, before any release. Its scripts may only use what
+   the release its requirement names already has
+   (`plugins/rails-ai-context/scripts/gem_requirement.rb`); CI's plugin floor
+   job runs them against that release from RubyGems, and fails while RubyGems
+   does not have it. So the release commit leaves the requirement alone: a
+   requirement no published gem meets stops every updated plugin's server. A
+   release that changes what the plugin relies on, a tool or parameter
+   `rules.md` names or what `doctor` and the update notice say about the
+   plugin, raises it after the publish (item 12), and a plugin change that
+   needs this release's gem waits for that commit. A commit that renames or
+   drops a tool or parameter `rules.md` names keeps the old name served and in
+   the rendered rules until that commit switches them: the main suite holds
+   `rules.md` word for word to the checkout's rendering, and the floor job
+   holds every name in it to the release the requirement names.
+
 ## Before the tag
 
-6. **CI is green on the exact commit that will be tagged.** Check the run, do
+7. **CI is green on the exact commit that will be tagged.** Check the run, do
    not infer it from a local pass. The release matrix is stricter than a local
    run in two ways: it runs seeds 1, 27377 and 90210 rather than a random one,
    and it runs `--order defined` as a fourth ordering no seed reproduces.
-7. **A successful E2E run exists for that same SHA.** The E2E workflow does not
+8. **A successful E2E run exists for that same SHA.** The E2E workflow does not
    run on tags, and the release's `e2e-gate` job asks the API for a completed
    successful `e2e.yml` run whose `head_sha` is this commit. Start it by hand
    from Actions and let it finish before tagging.
 
 ## Tagging
 
-8. Tag the merge commit and push the tag. Nothing publishes until the tag is on
+9. Tag the merge commit and push the tag. Nothing publishes until the tag is on
    the remote.
 
 ## After
 
-9. **Confirm the release object exists and is not a draft**, and that its notes
-   are this version's changelog section rather than the fallback sentence.
-10. **Confirm the gem is on RubyGems and the version is in the MCP registry.**
-   Both jobs skip themselves when the version is already published, so a skip
-   in the log is not the same as a failure.
-11. **Close what the release closed.** On GitHub a comma list after one `Closes`
-   keyword closes only the first issue. Write the keyword once per issue.
+10. **Confirm the release object exists and is not a draft**, and that its notes
+    are this version's changelog section rather than the fallback sentence.
+11. **Confirm the gem is on RubyGems and the version is in the MCP registry.**
+    Both jobs skip themselves when the version is already published, so a skip
+    in the log is not the same as a failure.
+12. **Raise the plugin's requirement where item 6 says to.** Once item 11 shows
+    the gem on RubyGems, set the requirement in
+    `plugins/rails-ai-context/scripts/gem_requirement.rb` and the number
+    `docs/SETUP.md` names (a spec holds the two together) to this version, in
+    a commit on `main` that carries any plugin change that waited for it. The
+    first release whose `doctor` and update notice know the plugin (it ships
+    `lib/rails_ai_context/claude_code_settings.rb`) is one: CI's plugin floor
+    job fails once such a release is out while the requirement still accepts
+    one without that file.
+13. **Close what the release closed.** On GitHub a comma list after one `Closes`
+    keyword closes only the first issue. Write the keyword once per issue.

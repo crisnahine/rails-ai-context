@@ -127,6 +127,8 @@ Codex reads `config.toml` as TOML, which is UTF-8, and loads nothing from a file
 - `can't find executable rails-ai-context for gem rails-ai-context`: the bundle's copy of the gem lists no executable, as a `path:` copy of 5.32.2 or earlier outside a git checkout does. Point the Gemfile at a git checkout or a release.
 - On Windows, a config that runs `bundle` or `rails-ai-context` itself rather than through `cmd /c`: those are batch files there, which Claude Code, Codex and the other clients that start a server without a shell do not run (`doctor` warns about it). Run the install again; on Windows it writes `cmd /c bundle exec rails-ai-context serve`.
 - On macOS or Linux, a config that runs `cmd /c ...`: it was written on Windows, and there is no `cmd` here (`doctor` fails it). Run the install again on this machine, and keep the MCP configs out of git if the team works on both.
+- The Claude Code plugin's server connects with no tools: it tells the session why (no gem for its Ruby, an older one, a Ruby too old, several apps or none) and what to run; `claude --debug` shows the same line as its stderr.
+- The Claude Code plugin's server is listed as failed in `/mcp`, and `claude --debug` shows a `Bundler::GemNotFound` trace in its stderr: Claude Code was started from `bundle exec`, or from a shell holding the `RUBYOPT` or `BUNDLER_SETUP` it sets, for a bundle not installed for the plugin's Ruby, which fails before the plugin runs. Start Claude Code outside `bundle exec`, or unset those two where a shell profile sets them. After a failed start Claude Code skips the server in new sessions for about 15 minutes, so reconnect it in `/mcp` once the cause is fixed.
 
 Check for Bundler/Ruby path issues:
 
@@ -148,8 +150,10 @@ command gives it 60. Start the service, or, for an app that is healthy but
 slow to boot, raise both limits in the server's MCP entry: the boot's with
 `RAILS_AI_CONTEXT_BOOT_TIMEOUT` (seconds) in its `env`, and the client's with
 its own setting (Claude Code reads `MCP_TIMEOUT`, in milliseconds). Raising
-only the boot's leaves a client that gives up first. `rails ai:serve` has no
-static tier, so it exits with the same message instead.
+only the boot's leaves a client that gives up first. The Claude Code plugin's
+entry is the plugin's own: set both in Claude Code's settings `env` (user,
+project or local) or in the shell that starts Claude Code. `rails ai:serve`
+has no static tier, so it exits with the same message instead.
 
 ### A server set up for a folder of apps fails to start
 

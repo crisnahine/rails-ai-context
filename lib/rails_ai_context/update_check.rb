@@ -57,7 +57,12 @@ module RailsAiContext
     end
 
     def disabled?
-      !@enabled || !ENV[OPT_OUT_ENV].to_s.empty? || ci? || Gem::Version.new(VERSION).prerelease?
+      !@enabled || @pinned || !ENV[OPT_OUT_ENV].to_s.empty? || ci? || Gem::Version.new(VERSION).prerelease?
+    end
+
+    # The app this run reads pins the gem in its lockfile, which decides its version.
+    def pinned!
+      @pinned = true
     end
 
     # Starts the fetch when the last one is a day old (or in the future, after a
@@ -93,14 +98,22 @@ module RailsAiContext
       return if newest_at_start && newest_at_start > running
 
       installed = newest_installed
+      plugin = plugin_server?
       if installed && installed >= latest
-        "rails-ai-context #{installed} is installed, but this process still runs #{VERSION}. " \
-          "Restart the MCP server (or the AI client) to load it."
+        restart = plugin ? "Reconnect the server in /mcp (or start a new session)" : "Restart the MCP server (or the AI client)"
+        "rails-ai-context #{installed} is installed, but this process still runs #{VERSION}. #{restart} to load it."
       else
+        # A plugin's server needs no init, which would add a second server beside it.
+        after = plugin ? "reconnect the server in /mcp (or start a new session)" : "`rails-ai-context init --defaults` in each app"
         "rails-ai-context #{latest} is out; this is #{VERSION} on Ruby #{RUBY_VERSION} (#{RbConfig.ruby}). " \
-          "Under that Ruby run `gem update rails-ai-context`, then `rails-ai-context init --defaults` in each app. " \
+          "Under that Ruby run `gem update rails-ai-context`, then #{after}. " \
           "#{OPT_OUT_ENV}=1 turns this check off."
       end
+    end
+
+    # Claude Code sets this for every MCP server a plugin starts.
+    def plugin_server?
+      !ENV["CLAUDE_PLUGIN_ROOT"].to_s.empty?
     end
 
     def latest_release

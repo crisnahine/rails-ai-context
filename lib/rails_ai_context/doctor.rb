@@ -4,6 +4,7 @@ require "json"
 require "find"
 require "fileutils"
 require "open3"
+require "rbconfig"
 require "tmpdir"
 
 module RailsAiContext
@@ -511,6 +512,10 @@ module RailsAiContext
       present = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq
         .select { |relative| File.exist?(File.join(output_dir, relative)) }
       if present.empty?
+        # Nor where the plugin is the only choice, which brings the rules itself; files
+        # the app has still go stale, so only their absence passes.
+        return nil if install_config.ai_tools.nil? && plugin_choice?
+
         return Check.new(name: "Context files", status: :warn,
           message: "No context files generated#{at_engine if engine_install?}",
           fix: "Run #{install_job(:context)}")
@@ -700,17 +705,21 @@ module RailsAiContext
     ConfigVerdict = Data.define(:label, :status, :problem, :fix, :unparseable)
 
     def check_mcp_json
-      if install_config.tool_mode == :cli
+      # CLI-only mode writes no MCP config, which leaves the plugin's server to Claude Code.
+      cli = install_config.tool_mode == :cli
+      if cli && !plugin_choice?
         return Check.new(name: "MCP configs", status: :pass,
           message: "Skipped (CLI-only mode)", fix: nil)
       end
 
-      verdicts = mcp_tools_to_check.map { |tool| mcp_config_verdict(tool) }
+      verdicts = (cli ? [ [ :claude, false ] ] : mcp_tools_to_check).filter_map { |tool, optional| mcp_config_verdict(tool, optional: optional) }
       failures = verdicts.reject { |verdict| verdict.status == :pass }
 
       if failures.empty?
+        plugin = verdicts.find { |verdict| verdict.label == CLAUDE_PLUGIN_LABEL }
+        note = typed_session_note if plugin
         return Check.new(name: "MCP configs", status: :pass,
-          message: "#{verdicts.size} of #{count_phrase(verdicts.size, "MCP config")} valid",
+          message: "#{verdicts.size} of #{count_phrase(verdicts.size, "MCP config")} valid#{": #{plugin.label}" if plugin}#{"; #{note}" if note}",
           fix: nil)
       end
 
@@ -726,24 +735,67 @@ module RailsAiContext
         fix: fixes.join("; "))
     end
 
-    # Check at least the Claude Code config (always expected)
+    # Each config to judge, with whether it counts only when broken: Claude Code's always counts where the
+    # plugin is chosen, and with no AI tools chosen the plugin is the choice, so the others count only when broken.
     def mcp_tools_to_check
+      plugin = plugin_choice?
+      if install_config.ai_tools.nil? && plugin
+        return [ [ :claude, false ], *(self.class.mcp_config_checks.keys - %i[claude]).map { |tool| [ tool, true ] } ]
+      end
+
       tools = configured_ai_tools & self.class.mcp_config_checks.keys
-      tools.empty? ? %i[claude] : tools
+      tools |= %i[claude] if plugin
+      (tools.empty? ? %i[claude] : tools).map { |tool| [ tool, false ] }
     end
 
+    CLAUDE_PLUGIN_LABEL = "the rails-ai-context plugin (Claude Code)"
+    # A local marketplace's folder, once gone, is added again from wherever it now is.
+    MARKETPLACE_READD = "add the marketplace again from its folder with `claude plugin marketplace add <folder>`"
+    # One that is there but lacks the plugin needs a checkout that has it; added again as it is, it still lacks it.
+    MARKETPLACE_UPDATE = "check out a version that has plugins/rails-ai-context, or add the marketplace from one that does"
+
     # The config a tool reads for this app, judged as the install would merge
-    # into it and as its client would start the server it names.
-    def mcp_config_verdict(tool)
+    # into it and as its client would start the server it names; nil for an
+    # optional one with nothing of the gem's in it.
+    def mcp_config_verdict(tool, optional: false)
       cfg = self.class.mcp_config_checks[tool]
       install_fix = "Run #{install_job(:install)} to fix"
       # An app in a workspace is served from the folder above it, whose
       # config, if it cannot be read, is the one to fix.
       full_path = mcp_config_path(tool)
       label = "#{typed_path(full_path)} (#{cfg[:name]})"
-      unless File.exist?(full_path)
-        return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+      plugin = tool == :claude && claude_code.plugin_chosen?
+      # A session started in the config's folder is the one this config serves.
+      folder = mcp_config_folder(tool, full_path)
+      broken = tool == :claude ? claude_code.broken_managed_files : []
+      if broken.any?
+        return ConfigVerdict.new(label: "#{broken.join(", ")} (Claude Code)", status: :fail,
+                                 problem: "Claude Code will not start until #{broken.join(" and ")} #{broken.one? ? "is" : "are"} fixed",
+                                 fix: "Ask whoever manages your Claude Code settings to fix #{broken.one? ? "it" : "them"}", unparseable: nil)
       end
+      return claude_managed_mcp_verdict(folder) if tool == :claude && claude_code.managed_mcp
+
+      # Unread, Claude Code's own config may hold a plugin or server that doubles this one.
+      unread = tool == :claude && ClaudeCodeSettings.relative_config_dir?
+      return claude_config_dir_verdict(CLAUDE_PLUGIN_LABEL) if unread && plugin
+      # Typed above the app, a session started there never reads the app's own .mcp.json: where it enables
+      # the plugin, which does not run there, and no .mcp.json it reads serves the app, it has no server.
+      if tool == :claude && typed_above_app? && claude_code.plugin_chosen_in?(typed_dir) && !claude_code.plugin_on_in?(typed_dir) && !served_from?(typed_dir)
+        return claude_plugin_missing(label, typed_dir)
+      end
+
+      # The install writes no Claude Code server where the committed settings turn the plugin on.
+      committed = tool == :claude && claude_code.committed_in?(folder)
+
+      missing = lambda do
+        return nil if optional
+        return claude_config_dir_verdict(label) if unread
+        return claude_plugin_missing(label, folder) if plugin
+
+        turned_off = claude_plugin_turned_off(folder) if tool == :claude && claude_code.committed_in?(folder)
+        turned_off || ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+      end
+      return missing.call unless File.exist?(full_path)
 
       # Where the install would leave the file, or the gem's entry in it, as
       # it is, the edit by hand it names instead is the fix: sent to run the
@@ -761,31 +813,60 @@ module RailsAiContext
         text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
         if problem.nil? && text.strip.empty?
-          return ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+          return missing.call
         end
         # The entry added by hand would sit in a file JSON still cannot read;
-        # saved as UTF-8, the next install merges into it.
+        # saved as UTF-8, the next install merges into it. Where the committed settings turn the plugin on, it never does.
+        mended = if !committed then ", then run #{run_after(full_path)}"
+        elsif claude_code.plugin_on_in?(folder) then ", then remove the gem's server from it; the rails-ai-context plugin serves this app"
+        else ""
+        end
         if problem
-          return ConfigVerdict.new(label: label, status: :fail, problem: problem,
-                                   fix: "Save #{fix_path(full_path)} as UTF-8, then run #{run_after(full_path)}", unparseable: nil)
+          return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: "Save #{fix_path(full_path)} as UTF-8#{mended}", unparseable: nil)
         end
 
         problem = json_config_problem(text, tool)
+        if problem && committed
+          # A file that parses holds no server of the gem's to remove; one that does not cannot say.
+          key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
+          edit = if problem == %("#{key}" is not an object) then %(Make "#{key}" in #{fix_path(full_path)} an object)
+          elsif problem == "it is JSON but not an object" then "Make #{fix_path(full_path)} a JSON object"
+          else "Make #{fix_path(full_path)} valid JSON holding an object#{mended}"
+          end
+          return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: edit, unparseable: nil)
+        end
         return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: nil, unparseable: full_path) if problem
 
         by_hand = json_by_hand(tool, full_path) if McpConfigGenerator.json_comments?(text)
       end
 
       entries = serving_entries(tool, full_path)
+      # Claude Code never starts a server its MCP policy blocks.
+      blocked, entries = entries.partition { |entry| claude_code.server_block(entry[:name], entry[:argv].map(&:to_s), folder, url: remote_url(entry, folder)) } if tool == :claude
+      return missing.call if entries.empty? && (plugin || optional || committed)
+      return claude_server_blocked(label, blocked.first, folder) if entries.empty? && blocked&.any?
       if entries.empty?
         return ConfigVerdict.new(label: label, status: :warn, problem: shape&.[](1) || "holds no rails-ai-context server",
                                  fix: shape&.[](2) || by_hand || install_fix, unparseable: nil)
       end
 
       # An entry under the gem's name that runs something else (an HTTP one)
-      # is its owner's to judge.
-      troubles = entries.select { |entry| entry[:own] }.filter_map { |entry| entry_trouble(entry, tool, full_path, by_hand) }
+      # is its owner's to judge. Where the plugin serves, a broken entry is one more server to remove.
+      troubles = entries.select { |entry| entry[:own] }.filter_map do |entry|
+        hand = committed_fix(entry[:name], full_path, folder) if committed
+        # The install rewrites only the names it writes, so a hand-named entry is mended by hand.
+        hand ||= "Fix or remove `#{entry[:name]}` in #{fix_path(full_path)} by hand" if entry[:hand]
+        trouble = entry_trouble(entry, tool, full_path, by_hand || hand)
+        trouble && committed && claude_code.plugin_on_in?(folder) ? [ :warn, trouble[1], hand ] : trouble
+      end
       status, problem, fix = [ *troubles, shape ].compact.min_by { |trouble| trouble.first == :fail ? 0 : 1 }
+      if status.nil? && tool == :claude && claude_code.plugin?
+        verdict = claude_plugin_verdict(label)
+        # Passing where the plugin runs, every entry here is off or blocked and the plugin is what serves.
+        return verdict.status == :pass && claude_code.plugin_on_in?(folder) ? verdict.with(label: CLAUDE_PLUGIN_LABEL) : verdict
+      end
+      return claude_config_dir_verdict(label) if status.nil? && unread
+
       ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
     rescue SystemCallError, IOError => e
       ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix, unparseable: nil)
@@ -870,6 +951,348 @@ module RailsAiContext
         File.join(install_root, self.class.mcp_config_checks[tool][:path])
     end
 
+    def claude_code
+      @claude_code ||= ClaudeCodeSettings.new(install_root, from: typed_dir)
+    end
+
+    def typed_above_app?
+      typed = SafePath.canonical(typed_dir)
+      root = SafePath.canonical(install_root)
+      typed != root && SafePath.contained?(root, typed)
+    end
+
+    # Whether a .mcp.json a session started in that folder reads, there or above, runs a server of the gem's for this app.
+    def served_from?(folder)
+      dir = File.expand_path(folder)
+      loop do
+        path = File.join(dir, ".mcp.json")
+        return true if File.file?(path) && claude_code.gem_server_names(path, folder).any?
+        return false if File.dirname(dir) == dir
+
+        dir = File.dirname(dir)
+      end
+    end
+
+    # A session started where doctor was typed, inside the app, is one the plugin that passes may not reach.
+    def typed_session_note
+      typed = SafePath.canonical(typed_dir)
+      inside = [ app.root.to_s, install_root ].any? { |root| SafePath.contained?(typed, SafePath.canonical(root)) }
+      return nil if !inside || claude_code.plugin_on_in?(typed_dir)
+
+      steps = claude_plugin_switch_on(typed_dir)
+      "a session started here would not run it: #{steps}" unless steps.empty?
+    end
+
+    # The install writes no Claude Code server where the committed settings turn the plugin on, so a .mcp.json entry is fixed
+    # by hand: removed where the plugin runs, else mended or the plugin turned back on.
+    def committed_fix(name, path, folder)
+      return "Remove `#{name}` from #{fix_path(path)}; the rails-ai-context plugin serves this app" if claude_code.plugin_on_in?(folder)
+
+      on = claude_plugin_turned_off(folder)&.fix || claude_plugin_switch_on(folder, claude_code.committed_id(folder))
+      "Fix `#{name}` in #{fix_path(path)} by hand#{", or #{on.sub(/\A\w/, &:downcase)}" unless on.empty?}"
+    end
+
+    # The Claude Code plugin is the app's choice where a session enables it,
+    # or where its committed settings do, whatever one user turned off.
+    def plugin_choice?
+      claude_code.plugin_chosen? || claude_code.committed_in?(install_root)
+    end
+
+    # Where the plugin is the app's choice and no .mcp.json entry serves the app: running here, only elsewhere,
+    # or what stops it, most basic first. The install's own fix would add the second server the plugin replaces.
+    def claude_plugin_missing(label, folder)
+      warning = ->(problem, fix) { ConfigVerdict.new(label: CLAUDE_PLUGIN_LABEL, status: :warn, problem: problem, fix: fix, unparseable: nil) }
+      return claude_plugin_verdict(CLAUDE_PLUGIN_LABEL) if claude_code.plugin_on_in?(folder)
+      return claude_plugin_elsewhere(label, folder) if claude_code.plugin?
+
+      if (id = claude_code.uninstalled_plugin_id)
+        if (gone = claude_code.missing_marketplace(id, folder))
+          return warning.("Claude Code loads the plugin from #{gone}, which is gone", MARKETPLACE_READD.sub(/\A\w/, &:upcase))
+        end
+        if (bare = claude_code.marketplace_without_plugin(id, folder))
+          return warning.("the marketplace at #{bare} has no rails-ai-context plugin", MARKETPLACE_UPDATE.sub(/\A\w/, &:upcase))
+        end
+        return warning.("enabled for this app but not installed on this machine", "Run #{plugin_install_command(id)}")
+      end
+      if (blocked = claude_code.blocked_plugin)
+        problem = blocked.rule == :marketplace ? "Claude Code's managed marketplace policy keeps it from loading" : "Claude Code's MCP policy keeps its server from starting"
+        return warning.(problem, plugin_policy_fix(blocked))
+      end
+
+      off = one_per_project(claude_code.plugin_off_sessions)
+      step = "Turn the plugin's server back on with /mcp in a session started #{started_in(off)}"
+      return warning.("its server is turned off in /mcp", step) if off.any? { |session| SafePath.canonical(session) == SafePath.canonical(folder) }
+
+      here = claude_plugin_switch_on(folder, claude_code.switched_off_plugin_id)
+      warning.("its server is turned off in /mcp", here.empty? ? step : "#{step}, or #{here}")
+    end
+
+    # Where managed-mcp.json is deployed, Claude Code starts its servers and
+    # no other, neither the plugin's nor one in any .mcp.json.
+    def claude_managed_mcp_verdict(folder)
+      managed = claude_code.managed_mcp
+      label = "#{managed} (Claude Code)"
+      held = claude_code.managed_servers(folder)
+      servers = ClaudeCodeSettings.read_json(managed)&.dig("mcpServers")
+      servers = {} unless servers.is_a?(Hash)
+      # The one that starts is judged as a .mcp.json entry is, and only whoever manages the file can edit it;
+      # an HTTP entry is its endpoint's to judge.
+      if (name, _, _, url = held.find { |_, why, _| why.nil? })
+        return ConfigVerdict.new(label: label, status: :pass, problem: nil, fix: nil, unparseable: nil) if url
+
+        server = servers[name]
+        env = server.is_a?(Hash) && server["env"].is_a?(Hash) ? server["env"].transform_values(&:to_s) : {}
+        entry = { name: name, argv: McpConfigGenerator.json_argv(server).map(&:to_s), env: env, own: true }
+        status, problem, fix = entry_trouble(entry, :claude, managed, by_settings("fix `#{name}` in #{managed}", :managed).sub(/\A\w/, &:upcase), folder: folder)
+        return ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
+      end
+
+      name, (rule, scope), command, url = held.first
+      if name
+        problem = "Claude Code does not start `#{name}`, its server for this app: #{rule == :off ? "/mcp turned it off" : "the MCP policy keeps it off"}"
+        fix = rule == :off ? "Turn `#{name}` back on with /mcp in a session started #{started_in([ folder ])}" : policy_fix(rule, scope, name, command, folder, url: url)
+        return ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: fix, unparseable: nil)
+      end
+
+      # Beside another app's server, an entry naming no app would start there too, so this one names the app, under a free name.
+      argv = %w[rails-ai-context serve]
+      name = McpConfigGenerator::SERVER_NAME
+      if servers.key?(name) || servers.any? { |_, server| McpConfigGenerator.json_argv(server).any? { |arg| File.basename(arg.to_s.tr("\\", "/"), ".*") == name } }
+        argv += [ "--app-path", install_root ]
+        base = name = Install::Workspace.server_names([ File.basename(install_root) ]).values.first
+        number = 1
+        name = "#{base}-#{number += 1}" while servers.key?(name)
+      end
+      argv = McpConfigGenerator.platform_argv(argv)
+      entry = JSON.generate(name => { "command" => argv.first, "args" => argv.drop(1) })
+      ConfigVerdict.new(label: label, status: :warn,
+                        problem: "it names every MCP server Claude Code starts on this machine, and none of them serves this app",
+                        fix: "Have whoever manages your Claude Code settings add #{entry} to its mcpServers", unparseable: nil)
+    end
+
+    # Empty or relative, CLAUDE_CONFIG_DIR has Claude Code read its settings and plugins under
+    # whatever folder a session starts in, so nothing here says what a session runs.
+    def claude_config_dir_verdict(label)
+      value, source = ClaudeCodeSettings.config_dir_setting
+      where = source ? " in the env block of #{source}" : ""
+      problem = if value.empty?
+        "CLAUDE_CONFIG_DIR#{where} is set but empty, so Claude Code reads its settings and plugins from whatever folder a session starts in"
+      else
+        "CLAUDE_CONFIG_DIR (`#{value}`)#{where} is not an absolute path, so Claude Code reads its settings and plugins from that path " \
+          "under whatever folder a session starts in"
+      end
+      fix = if source then "set CLAUDE_CONFIG_DIR#{where} to the absolute path of the folder Claude Code keeps its settings in, or remove it"
+      elsif value.empty? then "unset CLAUDE_CONFIG_DIR, or set it to the absolute path of the folder Claude Code keeps its settings in"
+      else "set CLAUDE_CONFIG_DIR to the absolute path of the folder Claude Code keeps its settings in"
+      end
+      managed = source && ClaudeCodeSettings.managed_files(ClaudeCodeSettings::MANAGED_SETTINGS).include?(source)
+      ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: by_settings(fix, managed ? :managed : :user).sub(/\A\w/, &:upcase), unparseable: nil)
+    end
+
+    # The committed settings turn the plugin on and winning ones turn it off for this user, where the
+    # install writes no server, so its fix would change nothing.
+    def claude_plugin_turned_off(folder)
+      id = claude_code.committed_id(folder)
+      scope, value, path = claude_code.setting_for(id, folder)
+      # Claude Code runs a plugin only where the winning value is true.
+      return nil unless %i[local managed].include?(scope) && value != true
+
+      # Not installed for that folder, the local install turns it on as well.
+      fix = if scope == :managed then "Have whoever manages your Claude Code settings turn it on"
+      elsif claude_code.installed_in?(id, folder) then "Run `claude plugin enable #{id} --scope local`#{run_in([ folder ])}"
+      else "Run #{plugin_install_command(id, scope: "local")}#{run_in([ folder ])}"
+      end
+      named = settings_named(scope, path)
+      ConfigVerdict.new(label: CLAUDE_PLUGIN_LABEL, status: :warn,
+                        problem: "the app's .claude/settings.json turns it on, and #{named} #{scope == :local ? "turns" : "turn"} it off for you",
+                        fix: fix, unparseable: nil)
+    end
+
+    # A server of the app's that Claude Code's MCP policy keeps from starting.
+    def claude_server_blocked(label, entry, folder)
+      argv = entry[:argv].map(&:to_s)
+      url = remote_url(entry, folder)
+      rule, scope = claude_code.server_block(entry[:name], argv, folder, url: url)
+      ConfigVerdict.new(label: label, status: :warn, problem: "Claude Code's MCP policy keeps `#{entry[:name]}` from starting",
+                        fix: policy_fix(rule, scope, entry[:name], argv, folder, url: url), unparseable: nil)
+    end
+
+    # The url a remote entry connects at from that folder, nil for a stdio one.
+    def remote_url(entry, folder)
+      claude_code.server_url(entry[:url], folder) if entry[:url]
+    end
+
+    # The change that lets the server start, in the settings that hold the rule: every deny that
+    # names it, the plugin where only plugins may start, or the allowlist entry that admits it
+    # without turning every other stdio server to matching by command.
+    def policy_fix(rule, scope, name, command, folder, plugin: false, url: nil)
+      case rule
+      when :denied
+        claude_code.deny_rules(name, command, folder, url: url).group_by { |where, _, path| [ where, settings_named(where, path) ] }.map do |(where, named), rules|
+          by_settings("remove #{rules.map { |_, entry| JSON.generate(entry) }.join(" and ")} from deniedMcpServers in #{named}", where)
+        end.join(", and ").sub(/\A\w/, &:upcase)
+      when :locked
+        "Run #{plugin_install_command(claude_code.enabled_plugin_id || "rails-ai-context@rails-ai-context")}, whose server this lock still starts, " \
+          "or have whoever manages your Claude Code settings lift strictPluginOnlyCustomization's mcp lock, which lets only plugin and managed servers start"
+      else
+        by_command = claude_code.allowlist_by_command?(folder)
+        # Once a list matches a url, a remote server is admitted by its url alone, so a name is offered while none does.
+        entry = if url && (claude_code.allowlist_by_url?(folder) || !name.match?(/\A[A-Za-z0-9_-]+\z/)) then JSON.generate("serverUrl" => url)
+        elsif url then JSON.generate("serverName" => name)
+        elsif plugin || by_command || !name.match?(/\A[A-Za-z0-9_-]+\z/)
+          command ? JSON.generate("serverCommand" => command) : "an entry naming the command that starts it"
+        else
+          JSON.generate("serverName" => name)
+        end
+        note = plugin && command && !by_command ? ", and a serverCommand entry for each stdio server it admits by name, since then every one matches by command" : ""
+        by_settings("add #{entry} to allowedMcpServers in #{settings_named(scope, claude_code.allowlist_file(folder))}#{note}", scope).sub(/\A\w/, &:upcase)
+      end
+    end
+
+    # What lets the plugin's server start where a block holds it.
+    def plugin_policy_fix(blocked)
+      return marketplace_fix(blocked) if blocked.rule == :marketplace
+
+      policy_fix(blocked.rule, blocked.scope, ClaudeCodeSettings::PLUGIN_SERVER, blocked.command, blocked.folder, plugin: true)
+    end
+
+    # A managed marketplace gate, which only whoever manages the settings can open, in the file that sets it.
+    # shortcut: a file holding both gates is read as the blocklist's, though only its allowlist may hold the marketplace back;
+    # name the key the block came from once Blocked carries it.
+    def marketplace_fix(blocked)
+      marketplace = blocked.id.split("@", 2).last
+      data = ClaudeCodeSettings.read_json(blocked.path) || {}
+      step = if Array(data["blockedMarketplaces"]).any?
+        "take the entry that names the #{marketplace} marketplace out of blockedMarketplaces in #{blocked.path}"
+      else
+        "add the #{marketplace} marketplace's source to #{data.key?("strictKnownMarketplaces") ? "strictKnownMarketplaces" : "allowedMarketplaces"} in #{blocked.path}"
+      end
+      by_settings(step, :managed).sub(/\A\w/, &:upcase)
+    end
+
+    # A change in managed settings is for whoever manages them to make.
+    def by_settings(step, scope)
+      scope == :managed ? "have whoever manages your Claude Code settings #{step}" : step
+    end
+
+    # A project or local file by its path from where doctor ran, which may be a parent folder's or the repository's.
+    def settings_named(scope, path)
+      case scope
+      when :user then "your user settings"
+      when :managed then "the managed settings"
+      else fix_path(path)
+      end
+    end
+
+    # Claude Code's verdict where the plugin serves the app: a pass, unless a
+    # server of the gem's that a session also starts would list every tool again.
+    def claude_plugin_verdict(label)
+      problem, fix = duplicates_said
+      ConfigVerdict.new(label: label, status: problem ? :warn : :pass, problem: problem, fix: fix, unparseable: nil)
+    end
+
+    # [problem, fix] for the gem's servers beside the plugin's, nil where none: a committed plugin's .mcp.json
+    # entry goes, while one user's plugin turns the team's entry off for that user alone.
+    def duplicates_said(disable: true)
+      duplicates = claude_code.duplicates
+      return nil if duplicates.empty?
+
+      places, removals = duplicates.map do |dup|
+        case dup.scope
+        when :project
+          committed = dup.sessions.all? { |session| claude_code.committed_in?(session) }
+          [ "`#{dup.name}` in #{typed_path(dup.config)}",
+            committed ? "remove `#{dup.name}` from #{fix_path(dup.config)}" : "turn `#{dup.name}` off with /mcp in a session started #{started_in(one_per_project(dup.sessions))}" ]
+        when :user then [ "the user scope server `#{dup.name}`", "run `claude mcp remove #{dup.name} -s user`" ]
+        else [ "the local scope server `#{dup.name}`", "run `claude mcp remove #{dup.name} -s local`#{run_in([ dup.key ])}" ]
+        end
+      end.transpose.map(&:uniq)
+      # Claude Code starts one server per name in a session, from the scope that wins.
+      sessions = duplicates.flat_map { |dup| dup.sessions.map { |session| [ session, dup.name ] } }.uniq.map(&:first)
+      times = sessions.tally.values.max + 1
+      problem = "#{places.join(" and ")} #{places.one? ? "runs" : "run"} the server beside the rails-ai-context plugin, " \
+                "so Claude Code lists every tool #{times == 2 ? "twice" : "#{times} times"}"
+      fix = removals.join(" and ").sub(/\A\w/, &:upcase)
+      disables = plugin_disables(sessions) if disable
+      [ problem, disables ? "#{fix}, or #{disables}" : fix ]
+    end
+
+    # Turning the plugin off instead, unless a session would keep two servers or managed settings turn it
+    # on: one `--scope local` per repository, for every id it runs under there, since any one starts it.
+    def plugin_disables(sessions)
+      return nil unless sessions.tally.values.all?(1)
+      return nil if sessions.any? { |session| claude_code.plugin_ids_in(session).any? { |id| claude_code.managed_in?(id, session) } }
+
+      # Run where a session that enables it starts: Claude Code reads the setting there, and writes the local file that wins there.
+      projects = sessions.group_by { |session| claude_code.local_settings_dir(session) }
+                         .map { |_, group| [ group.first, group.flat_map { |session| claude_code.plugin_ids_in(session) }.uniq ] }
+      projects.group_by(&:last).map do |ids, pairs|
+        "run #{ids.map { |id| "`claude plugin disable #{id} --scope local`" }.join(" and ")}#{run_in(pairs.map(&:first))}"
+      end.join(" and ")
+    end
+
+    # One session folder per project: a /mcp switch is kept for the whole
+    # project, and only a session that loads the server can flip it.
+    def one_per_project(sessions)
+      sessions.group_by { |session| claude_code.project_of(session) }.map { |_, group| group.first }
+    end
+
+    # Session folders as a fix names them: here, or in a folder from where doctor ran.
+    def started_in(folders)
+      folders.map { |folder| fix_path(folder) }.uniq.map { |place| place == "." ? "here" : "in #{place}" }.join(" and ")
+    end
+
+    # The plugin serves this app, but not in a session started where its config is.
+    def claude_plugin_elsewhere(label, folder)
+      runs = started_in(claude_code.plugin_sessions)
+      problem = "the rails-ai-context plugin serves this app only in sessions started #{runs}, not in ones started #{started_in([ folder ])}"
+      start = [ "start Claude Code #{runs == "here" ? "here" : "there"}", claude_plugin_switch_on(folder) ].reject(&:empty?).join(", or ")
+      fix = start.sub(/\A\w/, &:upcase)
+      # Started there as told, the session would list every tool again.
+      duplicate, removal = duplicates_said(disable: false)
+      problem, fix = "#{problem}, where #{duplicate}", "#{removal}; then #{start}" if duplicate
+      ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: fix, unparseable: nil)
+    end
+
+    # What a session started in that folder needs to run the plugin: an install for its project, which
+    # enables it too, else enabling it, else lifting the policy that blocks it, and its server back on in /mcp.
+    def claude_plugin_switch_on(folder, id = claude_code.plugin_id)
+      where = run_in([ folder ])
+      steps = []
+      if id && !claude_code.installed_in?(id, folder)
+        bare = claude_code.marketplace_without_plugin(id, folder)
+        steps << if claude_code.missing_marketplace(id, folder)
+          MARKETPLACE_READD
+        elsif bare
+          "the marketplace at #{bare} has no rails-ai-context plugin: #{MARKETPLACE_UPDATE}"
+        else
+          "run #{plugin_install_command(id, scope: "local")}#{where}"
+        end
+      elsif id && !claude_code.plugin_enabled_in?(folder)
+        steps << "run `claude plugin enable #{id} --scope local`#{where}"
+      elsif (blocked = claude_code.block_in(folder))
+        steps << plugin_policy_fix(blocked).sub(/\A\w/, &:downcase)
+      end
+      steps << "turn the plugin's server back on with /mcp in a session started#{where.empty? ? " here" : where}" if claude_code.plugin_server_off_in?(folder)
+      steps.join(", then ")
+    end
+
+    # A marketplace Claude Code recorded needs no source, this repository's is named after the plugin,
+    # and another has to be added first. The scope is, unless said, the one that leaves a committed file alone.
+    def plugin_install_command(id, scope: claude_code.install_scope(id))
+      return "`claude plugin install #{id} --scope #{scope}`" if claude_code.marketplace_known?(id)
+
+      plugin, marketplace = id.split("@", 2)
+      return "`claude plugin install #{plugin} --marketplace crisnahine/rails-ai-context --scope #{scope}`" if marketplace == plugin
+
+      "`claude plugin marketplace add` for the #{marketplace} marketplace, then `claude plugin install #{id} --scope #{scope}`"
+    end
+
+    # Where to run a command, when that is not where doctor ran alone.
+    def run_in(folders)
+      folders.map { |folder| fix_path(folder) }.uniq == [ "." ] ? "" : " #{started_in(folders)}"
+    end
+
     # The folder a config sits in, which its client starts the server from.
     def mcp_config_folder(tool, path)
       path.delete_suffix(McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:path]).chomp("/")
@@ -878,12 +1301,23 @@ module RailsAiContext
     # The entries under the gem's names in a config that serve this app: the
     # app's own config's (at an engine's root, the engine's), or a
     # workspace's that point --app-path at the app.
+    # Claude Code's own also counts a server the gem's under any other name, as the install and the duplicate check do.
     def serving_entries(tool, path)
       folder = mcp_config_folder(tool, path)
       variable = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:folder_variable]
       target = SafePath.canonical(install_root)
-      McpConfigGenerator.named_entries(path, tool).select do |entry|
+      entries = McpConfigGenerator.named_entries(path, tool)
+      entries += hand_named_entries(path, folder, entries.map { |entry| entry[:name] }) if tool == :claude
+      entries.select do |entry|
         SafePath.canonical(McpConfigGenerator.entry_app_root(entry[:argv], variable, folder) || folder) == target
+      end
+    end
+
+    def hand_named_entries(path, folder, named)
+      servers = ClaudeCodeSettings.read_json(path)&.dig("mcpServers")
+      (claude_code.gem_server_names(path, folder) - named).map do |name|
+        env = servers[name]["env"]
+        { name: name, argv: McpConfigGenerator.json_argv(servers[name]).map(&:to_s), env: env.is_a?(Hash) ? env.transform_values(&:to_s) : {}, own: true, hand: true }
       end
     end
 
@@ -892,15 +1326,17 @@ module RailsAiContext
     # nil when it starts the right one. Fast on purpose: the command is
     # looked up, never run. A fix that rewrites the entry is the install,
     # or, where the install leaves the file as it is, the edit `by_hand`.
-    def entry_trouble(entry, tool, config_path, by_hand = nil)
+    # `folder` is where the client starts the server: the config's own, but a session's for managed-mcp.json.
+    def entry_trouble(entry, tool, config_path, by_hand = nil, folder: mcp_config_folder(tool, config_path))
       argv = McpConfigGenerator.unwrapped_argv(entry[:argv])
-      folder = mcp_config_folder(tool, config_path)
       line = "`#{argv.take_while { |arg| !arg.start_with?("--app-path") }.join(' ')}`"
       rerun = by_hand || "Run #{install_command(config_path)} to fix"
       # Codex sets the PATH its env snapshot holds, which the snapshot check reads.
       path, where = entry_path_variable(entry, tool)
       found = path.nil? || executable_on?(argv.first.to_s, path, folder)
-      missing = "#{line} cannot start - `#{argv.first}` is not on #{where}"
+      # A command named by its path is no PATH lookup, so no install puts it there.
+      qualified = argv.first.to_s.include?("/") || (Gem.win_platform? && argv.first.to_s.include?("\\"))
+      missing = "#{line} cannot start - `#{argv.first}` #{qualified ? "is not an executable file" : "is not on #{where}"}"
       # A config is committed, and one written on the other platform starts
       # the server the way that platform's clients need.
       if Array(entry[:argv]).size != argv.size && !McpConfigGenerator.windows_shell?
@@ -932,7 +1368,7 @@ module RailsAiContext
 
           return [ :warn, "#{line} needs the gem installed outside the app's bundle, while #{bundled}", rerun ]
         end
-        return [ :fail, missing, "Run `gem install rails-ai-context` for the Ruby on #{where}" ] unless found
+        return [ :fail, missing, qualified ? rerun : "Run `gem install rails-ai-context` for the Ruby on #{where}" ] unless found
       elsif !found
         return [ :fail, missing, rerun ]
       end
@@ -1179,14 +1615,24 @@ module RailsAiContext
       # snapshot of the pre-boot environment when it is available.
       base_env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
       %w[RUBYOPT RUBYLIB BUNDLE_GEMFILE BUNDLE_BIN_PATH BUNDLER_SETUP BUNDLE_PATH].each { |k| base_env.delete(k) }
-      stdout, _stderr, status = Open3.capture3(
+      # The plugin starts the gem installed for that Ruby, never a bundle's
+      # copy, and only at the version its own requirement names.
+      plugin = plugin_activation
+      requirement = claude_code.plugin_gem_requirement if plugin
+      activate = "gem 'rails-ai-context'#{requirement&.map { |bound| ", #{bound.inspect}" }&.join}"
+      stdout, stderr, status = Open3.capture3(
         base_env, Gem.ruby, "--disable-gems", "-e",
-        "require 'rubygems'; gem 'rails-ai-context'",
+        "require 'rubygems'; begin; #{activate}; rescue Gem::LoadError => e; warn e.message.lines.first; exit 1; end",
         unsetenv_others: true
       )
       if status.success? && stdout.empty?
         Check.new(name: "MCP stdio hygiene", status: :pass,
           message: "gem activation is silent on stdout", fix: nil)
+      elsif stdout.empty? && plugin
+        said = plugin == :warn ? "once Claude Code runs here, the rails-ai-context plugin needs" : "the rails-ai-context plugin starts"
+        Check.new(name: "MCP stdio hygiene", status: plugin,
+          message: "#{said} the gem installed for #{Gem.ruby}, which did not activate: #{stderr.strip.truncate(200)}",
+          fix: "Run `#{CLI::AppRoot.command_line([ Gem.ruby, File.join(RbConfig::CONFIG["bindir"], "gem"), "install", "rails-ai-context" ])}`")
       elsif stdout.empty?
         Check.new(name: "MCP stdio hygiene", status: :warn,
           message: "gem activation exited #{status.exitstatus} (stdout clean)",
@@ -1204,9 +1650,10 @@ module RailsAiContext
     # Whether a config this app is served from starts the `rails-ai-context`
     # binary itself, which activates the gem through RubyGems.
     def serves_installed_binary?
+      return true if plugin_activation
       return false if install_config.tool_mode == :cli
 
-      mcp_tools_to_check.any? do |tool|
+      mcp_tools_to_check.any? do |tool, _|
         path = McpConfigGenerator.serving_config(install_root, tool) or next false
         serving_entries(tool, path).any? do |entry|
           entry[:own] && File.basename(McpConfigGenerator.unwrapped_argv(entry[:argv]).first.to_s) == "rails-ai-context"
@@ -1214,6 +1661,14 @@ module RailsAiContext
       rescue SystemCallError, IOError, JSON::ParserError
         false
       end
+    end
+
+    # How a gem the plugin cannot activate counts: a failure, but a warning where Claude Code never ran, as on CI,
+    # since no plugin starts there until it does. nil where no plugin serves the app.
+    def plugin_activation
+      return nil unless claude_code.plugin?
+
+      claude_code.absent? ? :warn : :fail
     end
 
     # ── Introspector health ───────────────────────────────────────────

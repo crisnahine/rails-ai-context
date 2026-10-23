@@ -5,6 +5,128 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.36.9] - 2026-10-23
+
+### Security
+
+- **`rails_read_logs` and `rails_query` hide a value under a plural secret name
+  or a list of codes** (#606). A secret word ending a name in its plural (`api_keys`,
+  `tokens`, `secrets`, `passwords`, `accessTokens`) named no secret, and
+  neither did `recovery_codes`, `backup_codes`, `recoveryCodes` or
+  `backupCodes`, so their values came back from a log line, inline or bound,
+  and `rails_query` returned such a column. A list or hash logged under a
+  secret name is now filtered whole, on one line or spread over lines, where
+  only its first element was, and so are a query parameter with a secret word
+  anywhere in its bracketed name (`user[password][new]=`) and every value of
+  `API_KEYS=a,b`. In a log line a count stays shown (`tokens_used`,
+  `token_count`, `prompt_tokens: 12`, `inputTokens: 12`), and so do `keys`,
+  `primary_keys` and `cache_keys`; `rails_query` still refuses a column whose
+  name holds `token` unless `query_allowed_columns` lists it.
+
+### Added
+
+- **The repository is a Claude Code plugin marketplace.** `claude plugin install
+  rails-ai-context --marketplace crisnahine/rails-ai-context --scope project`
+  adds the MCP server and gives each session in a Rails app the six rules the
+  context files open with (unless the app's own files carry them or its config
+  turns them off), and writes no context files or MCP config. It runs the
+  installed rails-ai-context, for the `ruby` on `PATH`, Windows included.
+  Where it cannot serve (no gem for that Ruby, an older one, a Ruby too old,
+  several apps or none) its server still connects, with no tools, and tells
+  the session why, naming the Ruby and the folder it ran in, since Claude Code
+  skips a plugin server that failed to start in every new session for 15
+  minutes. Its command line names no versioned folder, so one
+  `allowedMcpServers` entry admits it across updates. See
+  [SETUP.md](docs/SETUP.md#as-a-plugin).
+- **`doctor` knows the plugin.** It reads Claude Code's settings, install
+  registry, `/mcp` toggles and MCP policy per session folder, as Claude Code
+  does. Where the plugin serves the app it counts as Claude Code's MCP config;
+  where it does not run, `doctor` says why (not installed, a local marketplace
+  folder that is gone, turned off in `/mcp`, blocked by the MCP or marketplace
+  policy, naming each rule and the file that holds it, or a managed settings
+  file Claude Code cannot read) instead of sending you to `init`. A
+  `.mcp.json`, user scope or local scope server of the gem's, an HTTP one
+  included, that a session would start beside it is a warning naming the
+  commands that remove it, since Claude Code would list every tool twice. Where
+  Claude Code never ran, as on CI, what the plugin needs is a warning, so a
+  STRICT run stays green. Where an organization deploys `managed-mcp.json`,
+  which starts its own servers alone, `doctor` judges Claude Code by it; it
+  follows a `CLAUDE_CONFIG_DIR` set in the settings' `env` block, and warns
+  about one there or in the environment that is not an absolute path, which no
+  one can read from outside a session.
+
+### Changed
+
+- **The install writes no Claude Code server where the app's committed settings
+  turn the plugin on.** `init`, the install generator and `context` leave
+  `.mcp.json` alone there and say why, so doctor's fix to remove an old entry
+  lasts; `init` in a folder holding one app does the same where that folder's
+  committed settings turn the plugin on, and writes the app's own `.mcp.json`
+  for sessions started in the app. Its summary marks the plugin off where it
+  does not start for you. Where only your own settings turn the plugin on,
+  Claude Code's next step says to turn the `.mcp.json` server off with `/mcp`.
+- **The update notice in a plugin's server says to reconnect it.** It named
+  `init`, which would add a second server beside the plugin's.
+- **`uninstall` names the Claude Code plugin** that runs the installed gem, and
+  the commands that turn it off for the app (one per folder whose local
+  settings its sessions read) and take it out, before it suggests removing the
+  gem.
+
+### Fixed
+
+- **A YAML alias in `.rails-ai-context.yml` no longer stops the app's boot.**
+  The loader refused aliases and the error escaped the engine's initializer.
+  Aliases now apply, and YAML that will not load warns and keeps the defaults.
+  So does a value of the wrong shape, such as a nested list for `ai_tools`, a
+  list for `preset` or a mapping for a number, which raised past the
+  initializer too, in one short line however many aliases the file nests. A
+  number written as text reads as that number: `1e5` had read as 1, a
+  `query_timeout` of `010` as 8, and a quoted number failed the tools that
+  compare it.
+- **`rails-ai-context init` and `context` read an odd config file as the
+  loader does** (#520). A file holding a list, not settings, and a `tool_mode`
+  that is not a name stopped both with a Ruby error. They now warn and keep the
+  default, as the loader does.
+- **A number setting from a configure block is checked when it is set.** Text
+  such as an ENV lookup, a negative count or a list was stored as given for the
+  settings with no writer of their own, and a tool failed on it later. It now
+  reads as the number it is written as, and a wrong value raises ArgumentError
+  at boot, as `cache_ttl` already did; from the YAML file it warns and keeps
+  the default. `live_reload_debounce` likewise takes a finite number of
+  seconds, zero or more.
+- **A query log tag in a statement's trailing comment is read as a tag.**
+  `rails_read_logs` read the comment as SQL, so where the statement named a
+  secret column, the first tag's value (`/*application='App'*/`) was
+  filtered. A tag is now filtered only when its key names a secret, in the
+  `key='value'` and `key:value` forms; MySQL's `/*!` and `/*+` stay SQL.
+- **`live_reload: "false"` in `.rails-ai-context.yml` no longer turns live
+  reload on.** Any name was taken and meant auto. `true` and `false`, as
+  booleans or text, and `auto` now count; anything else warns and keeps auto
+  from the file, and raises ArgumentError from a configure block.
+- **A Ruby file the app cannot read no longer stops the static tier.** Since
+  5.36.8 the static tier reads the security settings an app's Ruby config
+  writes, and one file it could not open made every answer an error; no boot
+  loads that file either, so it now names no setting.
+- **A `BUNDLE_GEMFILE` inherited from another project is named.** The app
+  booted against that bundle and failed with a bare LoadError; the warning
+  bundle exec already had now covers the variable on its own.
+- **A running server survives `gem cleanup`.** The gem loads its files as it
+  needs them, so a tool call after its copy was removed raised a LoadError that
+  ended the server. A call that needs a file it has not loaded yet now answers
+  with an error that says to reconnect the server, or over HTTP to restart the
+  process serving it.
+- **A boot failure names the Ruby the app pins** when another one runs and the
+  failure can come from that, a missing gem or a load error, as when a client
+  starts in a monorepo's root that pins its own.
+- **No update notice where the app's lockfile names the version running.**
+  That lockfile decides the copy that serves the app, so `gem update` changed
+  nothing there.
+- **An app whose bundle has its own path runs its own copy.** Where `bundle
+  config set path`, a deployment bundle or `BUNDLE_PATH` put the gem under
+  the app, the installed copy served it and the app's boot loaded the
+  bundle's copy over it, two copies in one process, whichever version the
+  bundle locked. The bundle's path is now read as Bundler reads its settings.
+
 ## [5.36.8] - 2026-10-23
 
 ### Security

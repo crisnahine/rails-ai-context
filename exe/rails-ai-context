@@ -311,12 +311,13 @@ class RailsAiContextCLI < Thor
       # gets less than that.
       if options[:transport] == "stdio"
         entry_boot
+        require_relative "../lib/rails_ai_context/boot_manager"
         ::RailsAiContext::BootManager.default_timeout = ::RailsAiContext::BootManager::STDIO_TIMEOUT
       end
 
       # Live reload uses `listen` when it is there, standalone included.
       reach_installed_gem("listen")
-      boot_rails!(command: "serve", allow_static: true)
+      boot_rails!(command: "serve", allow_static: true, client: options[:transport] == "stdio")
 
       transport = options[:transport].to_sym
       # No Thor default: it would overwrite the config file's http_port.
@@ -503,7 +504,8 @@ class RailsAiContextCLI < Thor
       program.remove_mcp_entries(program_surface, unwired, root: Dir.pwd)
       program.remove_context_files(program_surface, ai_tools, root: Dir.pwd) if stale
       record_selection(ai_tools, tool_mode, context_files)
-      write_mcp_configs(ai_tools, tool_mode)
+      written = write_mcp_configs(ai_tools, tool_mode)
+      held = written[:held] || []
       add_to_gitignore(context_files)
 
       if bundled
@@ -519,7 +521,7 @@ class RailsAiContextCLI < Thor
       end
 
       # --- Instructions ---
-      show_standalone_instructions(ai_tools, tool_mode, context_files, removed: stale)
+      show_standalone_instructions(ai_tools, tool_mode, context_files, removed: stale, held: held, plugin_off: written[:plugin_off])
     end
 
     desc "uninstall", "Remove what rails-ai-context wrote: context files, MCP entries, its config, .gitignore lines and pre-commit hook"
@@ -541,6 +543,9 @@ class RailsAiContextCLI < Thor
       bundled = app_roots.any? { |app| bundled_app?(app) }
       where = display_place || (resolution.workspace? ? "this folder" : "this app")
       $stderr.puts ""
+      require_relative "../lib/rails_ai_context/install/claude_plugin_removal"
+      ::RailsAiContext::Install::ClaudePluginRemoval.lines(app_roots, cwd: @app_root_result&.cwd || Dir.pwd, workspace: resolution.workspace?)
+                                                   .each { |line| $stderr.puts line }
       if changed
         $stderr.puts "rails-ai-context is uninstalled from #{where}. To remove the gem itself:"
       else
@@ -742,8 +747,10 @@ class RailsAiContextCLI < Thor
     def write_mcp_configs(ai_tools, tool_mode, root: Dir.pwd, servers: nil)
       standalone = servers ? nil : ::RailsAiContext::InstallMode.standalone?(root: root)
       in_starting_env do
+        there = run_there(root).delete_prefix(" run in ")
         ::RailsAiContext::Install::Program.write_mcp_configs(
-          program_surface, tools: ai_tools, tool_mode: tool_mode, root: root, servers: servers, standalone: standalone
+          program_surface, tools: ai_tools, tool_mode: tool_mode, root: root, servers: servers, standalone: standalone,
+          place: (there unless there.empty?)
         )
       end
     end
@@ -827,7 +834,8 @@ class RailsAiContextCLI < Thor
       end
 
       $stderr.puts ""
-      write_mcp_configs(ai_tools, tool_mode, root: dir, servers: configured.map(&:server))
+      written = write_mcp_configs(ai_tools, tool_mode, root: dir, servers: configured.map(&:server))
+      held = written[:held] || []
       # This folder's own .gitignore, when it has one: the Codex config here
       # embeds this machine's PATH and GEM_HOME too.
       add_to_gitignore(false, root: dir)
@@ -845,7 +853,7 @@ class RailsAiContextCLI < Thor
         $stderr.puts "MCP-only setup: no context files written."
       end
 
-      show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files, configured: configured)
+      show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files, configured: configured, held: held, plugin_off: written[:plugin_off])
       return if failed.empty?
 
       $stderr.puts "Error: no context files for #{failed.map { |app| "#{app.path}/" }.join(', ')} - see the output above. " \
@@ -927,7 +935,7 @@ class RailsAiContextCLI < Thor
               "= #{spec.version}" ], false ]
     end
 
-    def show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files, configured: apps)
+    def show_workspace_instructions(dir, apps, ai_tools, tool_mode, context_files, configured: apps, held: [], plugin_off: false)
       $stderr.puts ""
       $stderr.puts "=" * 50
       $stderr.puts " rails-ai-context initialized for #{apps.size == 1 ? '1 app' : "#{apps.size} apps"}"
@@ -940,10 +948,16 @@ class RailsAiContextCLI < Thor
 
         # The MCP config is this folder's, so it leaves the per-app list.
         files = context_files ? "#{tool.files_label(mcp: false)} in each app" : "no context files"
-        files = "#{tool.mcp_config[:path]} #{where}; #{files}" if tool_mode == :mcp
+        # A committed plugin serves where no server was written, and the app's own .mcp.json its own sessions.
+        if tool_mode == :mcp
+          served = held.include?(tool.key) ? plugin_label(plugin_off) : "#{tool.mcp_config[:path]} #{where}"
+          own = configured.one? && held.include?(tool.key) && ::RailsAiContext::Install::Program.app_mcp_json(dir, configured.first.root)
+          served += ", and #{configured.first.path}/.mcp.json for sessions started in #{configured.first.path}" if own
+          files = "#{served}; #{files}"
+        end
         $stderr.puts "  #{tool.name.ljust(16)} -> #{files}"
       end
-      if tool_mode == :mcp && configured.any?
+      if tool_mode == :mcp && configured.any? && (ai_tools - held).any?
         $stderr.puts ""
         $stderr.puts "MCP servers, one per app:"
         width = configured.map { |app| app.server_name.size }.max
@@ -959,7 +973,8 @@ class RailsAiContextCLI < Thor
       first = app_root.command_line([ app_root.option_path(app_root.display(example.root, Dir.pwd)) ])
       if tool_mode == :mcp && configured.any?
         $stderr.puts ""
-        say_next_steps(ai_tools)
+        # A folder holding one app is one the plugin serves.
+        say_next_steps(ai_tools, root: (dir if configured.one?), app: configured.first&.root)
       end
       $stderr.puts ""
       $stderr.puts "Commands, from here:"
@@ -972,18 +987,32 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
     end
 
+    # Where a command has to run, when that is not where this one was typed.
+    def run_there(folder)
+      cwd = @app_root_result&.cwd or return ""
+      return "" if ::RailsAiContext::SafePath.canonical(folder) == ::RailsAiContext::SafePath.canonical(cwd)
+
+      " run in #{app_root.display(folder, cwd)}"
+    end
+
     # Whether the app's bundle starts the gem. An app with no Gemfile has no
     # bundle at all, which InstallMode, unable to read one, counts as bundled.
     def bundled_app?(root)
       File.file?(File.join(root.to_s, "Gemfile")) && !::RailsAiContext::InstallMode.standalone?(root: root)
     end
 
-    def say_next_steps(ai_tools)
+    def say_next_steps(ai_tools, root: nil, app: root)
       $stderr.puts "Next step, before the MCP tools appear:"
-      ::RailsAiContext::Install::Program.next_steps(ai_tools).each { |line| $stderr.puts "  #{line}" }
+      place = root && run_there(root).sub(" run in ", "in ")
+      ::RailsAiContext::Install::Program.next_steps(ai_tools, root: root, place: place.to_s.empty? ? "here" : place, app: app).each { |line| $stderr.puts "  #{line}" }
     end
 
-    def show_standalone_instructions(ai_tools, tool_mode, context_files = true, removed: false)
+    # The next step names what serves instead where the committed plugin does not start for this user.
+    def plugin_label(off)
+      off ? "the rails-ai-context plugin (off here: see below)" : "the rails-ai-context plugin"
+    end
+
+    def show_standalone_instructions(ai_tools, tool_mode, context_files = true, removed: false, held: [], plugin_off: false)
       $stderr.puts ""
       $stderr.puts "=" * 50
       $stderr.puts " rails-ai-context initialized!"
@@ -992,7 +1021,9 @@ class RailsAiContextCLI < Thor
       $stderr.puts "Your setup:"
       ::RailsAiContext::Install::AiTool.all.each do |tool|
         next unless ai_tools.include?(tool.key)
-        $stderr.puts "  #{tool.name.ljust(16)} -> #{context_files ? tool.files_label(mcp: tool_mode == :mcp) : 'MCP config only'}"
+        files = context_files ? tool.files_label(mcp: tool_mode == :mcp) : "MCP config only"
+        files = context_files ? "#{plugin_label(plugin_off)}; #{files}" : plugin_label(plugin_off) if held.include?(tool.key)
+        $stderr.puts "  #{tool.name.ljust(16)} -> #{files}"
       end
       unless context_files || removed
         $stderr.puts ""
@@ -1015,7 +1046,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts "  #{binary} doctor     # Check AI readiness"
       $stderr.puts ""
       if tool_mode == :mcp
-        say_next_steps(ai_tools)
+        say_next_steps(ai_tools, root: Dir.pwd)
       else
         $stderr.puts "CLI tools:"
         $stderr.puts "  AI agents can run `rails-ai-context tool schema table=users` directly."
@@ -1112,9 +1143,9 @@ class RailsAiContextCLI < Thor
     # A command that needs more than the tier gives it says so here rather
     # than being recognised by name.
     def boot_rails!(command:, allow_static: false, no_boot: false, allow_source_only: allow_static,
-                    boot_failure_hint: nil)
+                    boot_failure_hint: nil, client: false)
       outcome = enter_app(command: command, allow_static: allow_static, no_boot: no_boot,
-                          allow_source_only: allow_source_only)
+                          allow_source_only: allow_source_only, client: client)
       outcome.messages.each { |line| $stderr.puts line }
       return unless outcome.tier == :absent
 
@@ -1125,7 +1156,7 @@ class RailsAiContextCLI < Thor
 
     # The app this command reads, booted or read from source as the command
     # allows. Prints nothing: the outcome carries the lines to say.
-    def enter_app(command:, allow_static:, no_boot:, allow_source_only:)
+    def enter_app(command:, allow_static:, no_boot:, allow_source_only:, client: false)
       # Read by the hand-off, which resolving the root may start: `tool`
       # takes --no-boot after the tool's name, where Thor never sees it.
       @no_boot = true if no_boot
@@ -1141,7 +1172,8 @@ class RailsAiContextCLI < Thor
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
       entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                      allow_source_only: allow_source_only, command: command, doctor: doctor_command, shown: shown_root)
+                      allow_source_only: allow_source_only, command: command, doctor: doctor_command, shown: shown_root,
+                      client: client)
     end
 
     # Which app this command reads, decided once and before anything reads
@@ -1194,6 +1226,7 @@ class RailsAiContextCLI < Thor
       warning = app_root.bundle_warning(result.root, cwd) if entry_boot.app_present?(result.root, allow_source_only: true)
       $stderr.puts warning if warning
       hand_off_to_bundle!(result.root, cwd) if hand_off
+      @start_update_check&.pinned! if app_root.pinned?(result.root)
       result
     end
 
@@ -1377,7 +1410,7 @@ class RailsAiContextCLI < Thor
       %w[
         gem_lock install/ai_tool install/selection_record install/cleanup
         install/surface install/validation_hook install/program install/uninstall mcp_config_generator install/workspace
-        legacy_cleanup
+        legacy_cleanup claude_code_settings
       ].each { |file| require_relative "../lib/rails_ai_context/#{file}" }
 
       # Both are defined in the entry file, which is the thing that must not

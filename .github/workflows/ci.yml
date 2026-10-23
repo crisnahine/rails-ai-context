@@ -66,6 +66,54 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
+  # The plugin ships from main to users whose gem may be the oldest release its
+  # requirement accepts, so its scripts and rules run here against that release
+  # from RubyGems.
+  plugin-floor:
+    runs-on: ubuntu-latest
+    name: plugin gem floor
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      # The plugin ships from main, so its requirement may name only a
+      # published release (docs/RELEASING.md items 6 and 12).
+      - name: Install the oldest release the plugin accepts
+        id: floor
+        run: |
+          floor=$(ruby -r ./plugins/rails-ai-context/scripts/gem_requirement -e '
+            print Gem::Requirement.new(*RailsAiContextPlugin::GEM_REQUIREMENT).requirements.find { |op, _| %w[>= ~> =].include?(op) }.last')
+          latest=$(gem list --remote --exact rails-ai-context | sed -n 's/^rails-ai-context (\([^)]*\))$/\1/p')
+          if [ -z "$latest" ]; then
+            echo "::error::could not read the latest rails-ai-context from RubyGems"
+            exit 1
+          fi
+          if ! gem install rails-ai-context -v "$floor" --install-dir "$RUNNER_TEMP/plugin-floor" --no-document; then
+            echo "::error::could not install rails-ai-context $floor (above); where RubyGems lacks it, raise the requirement only after the publish (docs/RELEASING.md item 6)"
+            exit 1
+          fi
+          # A release whose doctor and update notice know the plugin ships this file.
+          aware=lib/rails_ai_context/claude_code_settings.rb
+          if [ "$latest" != "$floor" ] && [ ! -f "$RUNNER_TEMP/plugin-floor/gems/rails-ai-context-$floor/$aware" ]; then
+            gem install rails-ai-context -v "$latest" --install-dir "$RUNNER_TEMP/plugin-latest" --ignore-dependencies --no-document > /dev/null
+            if [ -f "$RUNNER_TEMP/plugin-latest/gems/rails-ai-context-$latest/$aware" ]; then
+              echo "::error::rails-ai-context $latest knows the plugin, and the plugin still accepts $floor, which does not: raise its requirement (docs/RELEASING.md item 12)"
+              exit 1
+            fi
+          fi
+          echo "gem_home=$RUNNER_TEMP/plugin-floor" >> "$GITHUB_OUTPUT"
+
+      - name: Run the plugin's specs against it
+        env:
+          PLUGIN_FLOOR_GEM_HOME: ${{ steps.floor.outputs.gem_home }}
+        run: bundle exec rspec spec/claude_plugin_spec.rb
+
   # Allowed to fail: it exists so a removal in prism's main branch surfaces
   # here rather than in a user's bundle after the next release.
   prism-head:

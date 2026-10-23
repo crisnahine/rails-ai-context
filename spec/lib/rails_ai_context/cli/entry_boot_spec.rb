@@ -367,6 +367,58 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
   end
 
+  describe ".ruby_pin_note" do
+    def note(files)
+      Dir.mktmpdir do |dir|
+        files.each { |name, body| File.binwrite(File.join(dir, name), body) }
+        described_class.ruby_pin_note(dir, running: "3.3.12")
+      end
+    end
+
+    it "reads a full version in every form a version manager writes" do
+      {
+        ".ruby-version" => [ "3.4.9", "ruby-3.4.9\n", "3.4.9@shop\n", "  3.4.9  \n", "# pinned for the shop\n3.4.9\n" ],
+        ".tool-versions" => [ "ruby 3.4.9\n", "nodejs 22.1.0\nruby   3.4.9 3.3.0  # main first\n" ]
+      }.each do |file, bodies|
+        bodies.each do |body|
+          expect(note(file => body)).to start_with("This app pins Ruby 3.4.9 (#{file}); this process runs 3.3.12 ("), body.inspect
+        end
+      end
+    end
+
+    it "says nothing for the running version, or for a pin that is not one full version" do
+      expect(note(".ruby-version" => "ruby-3.3.12\n")).to be_nil
+      [ "3.4", "system", "latest", "3.4.9-p0", "jruby-9.4.8.0", "3.4.9.1", "", "\xFF\x00\xFE" ].each do |body|
+        expect(note(".ruby-version" => body)).to be_nil, body.inspect
+      end
+      expect(note(".tool-versions" => "nodejs 22.1.0\n# ruby 3.4.9\n")).to be_nil
+      expect(note({})).to be_nil
+    end
+
+    it "prefers .ruby-version to .tool-versions" do
+      expect(note(".ruby-version" => "3.4.9\n", ".tool-versions" => "ruby 3.4.8\n")).to include("3.4.9 (.ruby-version)")
+      expect(note(".ruby-version" => "3.4\n", ".tool-versions" => "ruby 3.4.8\n")).to be_nil
+      expect(note(".ruby-version" => "\n", ".tool-versions" => "ruby 3.4.8\n")).to include("3.4.8 (.tool-versions)")
+    end
+
+    it "says nothing for a version file it cannot read" do
+      Dir.mktmpdir do |dir|
+        Dir.mkdir(File.join(dir, ".ruby-version"))
+        expect(described_class.ruby_pin_note(dir, running: "3.3.12")).to be_nil
+      end
+    end
+  end
+
+  # The plugin's launcher resolves the app before the app's bundle decides which
+  # version of a default gem loads; loaded first, it would load twice.
+  it "loads no default gem a bundle pins when only the app is resolved" do
+    lib = File.expand_path("../../../../lib", __dir__)
+    out, = Open3.capture2e({ "RUBYOPT" => nil, "BUNDLER_SETUP" => nil, "BUNDLE_GEMFILE" => nil }, Gem.ruby, "-I", lib, "-e",
+                           'require "rails_ai_context/cli/app_root"; print $LOADED_FEATURES.grep(%r{/timeout[.]rb\z}).size')
+
+    expect(out).to eq("0")
+  end
+
   describe ".call" do
     # Entering the static tier is real here, not stubbed.
     around do |example|
@@ -548,9 +600,9 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
           expect(allowed.kind).to eq(:boot_failed)
           expect(allowed.messages).to include(a_string_starting_with("[rails-ai-context] App boot failed:"))
 
-          refused = described_class.call(root: dir, allow_static: false)
+          refused = described_class.call(root: dir, allow_static: false, shown: "blog/")
           expect(refused.tier).to eq(:absent)
-          expect(refused.messages.first).to eq("Error: Rails app failed to boot in #{dir}")
+          expect(refused.messages.first).to eq("Error: Rails app failed to boot in blog/")
         end
       end
 
@@ -641,6 +693,80 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       ensure
         described_class.preboot_gem_specs = {}
         $LOAD_PATH.delete("/fake/json-3.0.2/lib")
+      end
+
+      # A client started at a monorepo root runs the root's Ruby, which the
+      # app's bundle may not be installed for. Only the stdio server is started
+      # by a client; the HTTP server and every other command are typed.
+      it "names the Ruby the app pins when it is not the one running, in both tiers" do
+        allow(RailsAiContext::BootManager).to receive(:boot!).and_return(
+          RailsAiContext::BootManager::Result.new(status: :failed, error: LoadError.new("cannot load such file -- pg_ext"))
+        )
+        failing_app do |dir|
+          File.write(File.join(dir, ".ruby-version"), "ruby-1.9.3\n")
+          line = lambda do |start|
+            "This app pins Ruby 1.9.3 (.ruby-version); this process runs #{RUBY_VERSION} (#{RbConfig.ruby}). " \
+              "#{start} where that Ruby is active, or install the app's bundle for this one."
+          end
+
+          expect(described_class.call(root: dir, allow_static: true, command: "serve", client: true).messages)
+            .to include("[rails-ai-context] #{line.('Start the client')}")
+          expect(described_class.call(root: dir, allow_static: true, command: "serve").messages)
+            .to include("[rails-ai-context] #{line.('Run it')}")
+          expect(described_class.call(root: dir, allow_static: true, command: "context").messages)
+            .to include("[rails-ai-context] #{line.('Run it')}")
+          expect(described_class.call(root: dir, allow_static: false).messages).to include("  #{line.('Run it')}")
+        end
+      end
+
+      it "names the pinned Ruby only for a failure another Ruby or bundle can raise" do
+        failing_app do |dir|
+          File.write(File.join(dir, ".ruby-version"), "1.9.3\n")
+          note = lambda do |error|
+            allow(RailsAiContext::BootManager).to receive(:boot!)
+              .and_return(RailsAiContext::BootManager::Result.new(status: :failed, error: error))
+            [ true, false ].map { |static| described_class.call(root: dir, allow_static: static).messages.join.include?("pins Ruby") }.uniq
+          end
+          wrapped = lambda do |cause|
+            raise cause
+          rescue StandardError, ScriptError => e
+            begin
+              raise Bundler::GemRequireError.new(e, "There was an error while trying to load the gem 'shop_ext'.")
+            rescue Bundler::GemRequireError => wrapper
+              wrapper
+            end
+          end
+
+          expect(note.(RuntimeError.new("boom"))).to eq([ false ])
+          expect(note.(wrapped.(RuntimeError.new("missing credentials")))).to eq([ false ])
+          expect(note.(wrapped.(LoadError.new("incompatible library version")))).to eq([ true ])
+          expect(note.(Bundler::GemNotFound.new("Could not find pg-1.5.9 in locally installed gems"))).to eq([ true ])
+          expect(note.(Gem::MissingSpecError.new("pg", ">= 0"))).to eq([ true ])
+        end
+      end
+
+      # In a terminal Bundler rescues its own error and calls exit, so the note reads the exit's cause.
+      it "names the pinned Ruby when Bundler exits on a missing gem, and not for an app's own exit" do
+        allow(RailsAiContext::BootManager).to receive(:boot!).and_call_original
+        failing_app do |dir|
+          File.write(File.join(dir, ".ruby-version"), "1.9.3\n")
+          environment = File.join(dir, "config/environment.rb")
+          note = lambda do |body|
+            File.write(environment, body)
+            [ true, false ].map { |static| described_class.call(root: dir, allow_static: static).messages.join.include?("pins Ruby") }.uniq
+          end
+
+          expect(note.(%(begin; raise Bundler::GemNotFound, "Could not find pg-1.5.9"; rescue Bundler::BundlerError; exit 7; end\n))).to eq([ true ])
+          expect(note.("exit 1\n")).to eq([ false ])
+        end
+      end
+
+      it "says nothing about Ruby when the app pins the one running" do
+        failing_app do |dir|
+          File.write(File.join(dir, ".ruby-version"), "#{RUBY_VERSION}\n")
+
+          expect(described_class.call(root: dir, allow_static: true).messages.join).not_to include("pins Ruby")
+        end
       end
 
       it "keeps the boot-failure lines when the static tier itself cannot load" do

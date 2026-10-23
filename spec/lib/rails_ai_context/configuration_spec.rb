@@ -89,8 +89,8 @@ RSpec.describe RailsAiContext::Configuration do
     end
 
     it "refuses an unknown mode and names the valid ones" do
-      expect { config.context_mode = :huge }.to raise_error(ArgumentError, "context_mode must be compact or full (got huge)")
-      expect { config.tool_mode = :both }.to raise_error(ArgumentError, "tool_mode must be mcp or cli (got both)")
+      expect { config.context_mode = :huge }.to raise_error(ArgumentError, "context_mode must be compact or full (got :huge)")
+      expect { config.tool_mode = :both }.to raise_error(ArgumentError, "tool_mode must be mcp or cli (got :both)")
       expect([ config.context_mode, config.tool_mode ]).to eq(%i[compact mcp])
     end
   end
@@ -106,9 +106,15 @@ RSpec.describe RailsAiContext::Configuration do
   describe "#query_timeout=" do
     it "raises on a value that is not a positive number" do
       [ 0, -1, 0.0, "soon", nil, Float::INFINITY, Float::NAN, :fast, Complex(2, 0), Complex(2, 1) ].each do |value|
-        expect { config.query_timeout = value }.to raise_error(ArgumentError, "query_timeout must be positive (got #{value})"), value.inspect
+        expect { config.query_timeout = value }.to raise_error(ArgumentError, /\Aquery_timeout must be positive \(got .+\)\z/), value.inspect
       end
+      expect { config.query_timeout = "soon" }.to raise_error(ArgumentError, 'query_timeout must be positive (got "soon")')
       expect(config.query_timeout).to eq(5)
+    end
+
+    it "reads text in base 10, as the number keys do" do
+      config.query_timeout = "010"
+      expect(config.query_timeout).to eql(10)
     end
 
     it "keeps a positive number as given, a fraction of a second too, and reads a numeric string" do

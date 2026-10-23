@@ -29,7 +29,8 @@ module RailsAiContext
     # sit in an interpolation, a heredoc or a bare string, and no node type
     # marks one - the words are the signal.
     SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials|creds?|
-                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key|cipher_key|aes_key|cbc_key|gcm_key|hmac_key/xi
+                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key|cipher_key|aes_key|cbc_key|gcm_key|hmac_key|
+                   recovery_code|recoverycode|backup_code|backupcode/xi
 
     # `primary_key` is ordinary ActiveRecord vocabulary; under
     # `active_record.encryption` it is a credential. Only the path tells them
@@ -38,10 +39,11 @@ module RailsAiContext
 
     # The secret word has to be a whole underscore-delimited part of the name,
     # so `secret_key` and `api_key` match while `passwordless_login` does not.
+    # Its plural ends a name (`api_keys`, `tokens`), so `tokens_used` stays a count.
     # A name is a whole word, so it is taken atomically: when what follows it
     # fails, trying the word split another way cannot help, and doing so cost
     # the square of a long word with the secret word in many of its parts.
-    SECRET_NAME = /(?<!\w)(?>(?:\w+_)?(?:#{SECRET_WORD})(?:_\w+)?(?!\w))/i
+    SECRET_NAME = /(?<!\w)(?>(?:\w+_)?(?:#{SECRET_WORD})(?:s(?!\w)|(?:_\w+)?(?!\w)))/i
 
     # A name ending in `_KEY`/`Key`/`key` is as often a cache or i18n key as a credential,
     # so under it only a credential-looking value is filtered (see key_credential?).
@@ -174,9 +176,9 @@ module RailsAiContext
     # `spin`), nor may one with more after it (`ONEPASSWORD_VAULT` names 1Password's vault).
     PASSWORD_NAME = /(?<!\w)(?>(?:\w+_)?(?:(?:#{PASSWORD_WORD})(?:_\w+)?|[a-z\d]+(?:passphrase|password|passwd))(?!\w))/i
     # JSON and JavaScript write a key's words in camel case: one of them is the secret's
-    # (`accessToken`, `clientSecret`, `secretAccessKey`, `jwtSecretKey`), as one between
-    # underscores is in SECRET_NAME. `tokenizer` and `secretary` have none.
-    CAMEL_SECRET_NAME = /(?<!\w)(?>(?:secret|token|[a-z][a-z\d]*(?:[A-Z][a-z\d]*)*?(?:Secret|Token))(?:[A-Z][a-z\d]*)*(?!\w))/
+    # (`accessToken`, `clientSecret`, `secretAccessKey`, `jwtSecretKey`, `otpBackupCodes`), as one
+    # between underscores is in SECRET_NAME. `tokenizer` and `secretary` have none.
+    CAMEL_SECRET_NAME = /(?<!\w)(?>(?:secret|token|[a-z][a-z\d]*(?:[A-Z][a-z\d]*)*?(?:Secret|Token|RecoveryCode|BackupCode))(?:s(?!\w)|(?:[A-Z][a-z\d]*)*(?!\w)))/
     # Each of these takes a whole word, and when two of them can, they take the same one.
     KEY_NAME = /(?>#{SECRET_NAME}|#{PASSWORD_NAME}|#{KEYISH_NAME}|#{CAMEL_SECRET_NAME})/
     # A header or an attribute joins its words with dashes (`"X-Api-Key"`, `"x-auth-token"`). Quoted,
@@ -195,10 +197,18 @@ module RailsAiContext
     # name comes whole (`"X-Api-Key"=>`), its dashes read as underscores (see
     # key_name): a run of words and dashes with a secret-ish part, taken from
     # its start in one pass, as DASHED_KEY_NAME takes one in source.
+    # A list or a hash as one value: quoted commas and brackets included, nested three deep, and to the
+    # line's end when cut off. Spelled out per depth, since a recursive call costs the square of an unclosed run.
+    LOG_COLLECTION = 3.times.reduce(nil) do |inner, _|
+      /[\[{](?:\\.|"(?:[^"\\]|\\.)*+"?|'(?:[^'\\]|\\.)*+'?|[^\[\]{}"'\\]#{"|#{inner}" if inner})*+[\]}]?/
+    end
+    # Marks where a filtered collection ran on past what LOG_COLLECTION reads; the line is cut there.
+    RUNS_ON = "\u0000rails-ai-context-runs-on\u0000"
     LOG_SECRET_ASSIGNMENT = /
       (\\?["']?)((?<![\w-])(?=[\w-]*?(?:#{KEY_NAME}))[\w-]++)\1
       (\s*(?:=>|:(?!:)|=(?!>))\s*)
-      (?!\\?["']?\[FILTERED\]|\$\d+(?![\w$])|\?(?![\w?]))(?:"([^"]*)"|'([^']*)'|\\"((?:\\\\\\\\|\\\\\\"|\\\\[^\\"]|[^\\"])*+)\\"|([^\s,;&)\]}]+))
+      (?!\\?["']?\[FILTERED\]|\$\d+(?![\w$])|\?(?![\w?]))(?:"([^"]*)"|'([^']*)'|\\"((?:\\\\\\\\|\\\\\\"|\\\\[^\\"]|[^\\"])*+)\\"
+        |(#{LOG_COLLECTION})|([^\s,;&)\]}]+))
     /xi
     # A `["name", "value"]` pair in a query's logged binds. Active Record filters a bind only
     # when config.filter_parameters lists its name, which pre-Rails-7 apps often leave at
@@ -218,6 +228,12 @@ module RailsAiContext
     # PostgreSQL's E'..' and MySQL's _charset'..' read a backslash as an escape whatever quotes the names.
     ESCAPED_STRING = /(?:[eE]|_\w+)'(?:[^'\\]|\\.|'')*'?/m
     SQL_WORD = /`(?:[^`]|``)*`?|"(?:[^"\\]|\\.|"")*"?|[A-Za-z_][\w$]*/
+    # A comment, Rails' query log tags among them, to the line's end when cut off. MySQL runs `/*!` and
+    # `/*+` as SQL, so those are read as SQL. A tag's quoted value may hold `*/`; an apostrophe in prose
+    # (`/* don't */`) starts no value.
+    SQL_COMMENT = %r{/\*(?![!+])(?:(?<![\w.-])[A-Za-z_][\w.-]*+\s*=\s*'(?:[^'\\]|\\.)*+'|.)*?(?:\*/|\z)}m
+    # A query log tag: sqlcommenter's key='value' or the legacy key:value.
+    COMMENT_TAG = /(?<key>[A-Za-z_][\w.-]*)\s*[=:]\s*(?<value>'(?:[^'\\]|\\.)*'?|[^,\s*\/]+)/
     # PostgreSQL's array overlap and containment compare a column with a value too.
     SQL_COMPARISON = %w[= != <> <=> < > <= >= && @> <@].freeze
     # Read as one token, so the `>` in a JSON arrow is no comparison.
@@ -267,8 +283,13 @@ module RailsAiContext
     # The same shape sits in a URL query, a quoted env entry or a flag
     # (`--password=...`, `x-api-key=...`), so the value stops where a quote,
     # bracket or separator starts; a `:name=` setter symbol, a `(?<=name=`
-    # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments.
-    ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]+)/
+    # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments. A comma that no
+    # `name=` follows continues the value, a list of keys (`API_KEYS=k1,k2`).
+    ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]++(?:,(?![\w-]+=[^\s=,;&"'])[^\s"'`$<>\\()\[\]{},;&]++)*+)/
+
+    # A query parameter named with brackets (`user[password]=`, `api_keys[]=`), raw or percent-encoded
+    # as Rails' filtered path writes it.
+    QUERY_PARAM = /(?<![^\s?&"'])(?<name>[\w-]+(?:(?:\[|%5B)[\w-]*(?:\]|%5D))++)=(?!\[FILTERED\]|%5BFILTERED%5D)(?<value>[^&\s"'#]+)/i
 
     # A flag may take its value as the next word, bare or quoted (`redis-server --requirepass ...`,
     # `docker login --password "..."`), its name read as a dashed name is (key_name). Prose names a
@@ -429,12 +450,14 @@ module RailsAiContext
           name = Regexp.last_match(:name)
           log_secret?(name, Regexp.last_match(:value)) ? "#{name}=#{FILTERED}" : m
         end
+        result.gsub!(QUERY_PARAM) { |m| filter_query_param(m, Regexp.last_match) }
         result.gsub!(FLAG_ARGUMENT) { |m| filter_flag(m, Regexp.last_match, false) }
         result.gsub!(result.encoding == Encoding::UTF_8 ? EMAIL_PATTERN : ASCII_EMAIL_PATTERN, EMAIL)
 
         result, bind_columns = filter_sql_values(syntax_near(result))
         result = filter_unnamed_binds(error_values(result), bind_columns)
         result.gsub!(LOG_SECRET_ASSIGNMENT) { filter_assignment(Regexp.last_match) }
+        result = result[0, result.index(RUNS_ON)] if result.include?(RUNS_ON)
         result.gsub!(LOG_BIND) { filter_bind(Regexp.last_match) }
 
         LOG_PATTERNS.each do |pattern, replacement|
@@ -557,7 +580,16 @@ module RailsAiContext
       # reader would see; matching the original told a caller whether a
       # secret was there by whether a line came back.
       def redact_log_lines(lines, search: nil)
-        redacted = outside_key_bodies(Array(lines)) { |line| redact_log_line(line) }
+        open = 0
+        redacted = outside_key_bodies(Array(lines)) do |line|
+          # A secret list a logger spreads over lines: its indented lines are filtered until it closes.
+          if open.positive? && line.match?(/\A(?:\s|[\]}])/)
+            open += bracket_depth(line)
+            next line.strip.match?(/\A[\]},]+\z/) ? line : line.sub(/\S.*/, FILTERED)
+          end
+          open = open_secret_collection(line)
+          redact_log_line(line)
+        end
         term = search.to_s.strip
         return redacted if term.empty?
 
@@ -627,6 +659,14 @@ module RailsAiContext
         end
       end
 
+      # The value sits under every word of its name, so a secret word anywhere in it holds the value.
+      def filter_query_param(text, match)
+        words = match[:name].split(/\[|\]|%5B|%5D/i).grep(/[A-Za-z]/)
+        return text unless words.any? { |word| (name = key_name(word)) && log_secret?(name, match[:value]) }
+
+        text.delete_suffix(match[:value]) + FILTERED
+      end
+
       # A matched flag and the word after it, with the word filtered when it is the flag's secret.
       def filter_flag(text, match, example)
         name = key_name(match[:name])
@@ -668,6 +708,9 @@ module RailsAiContext
 
       # The one verdict on a name and value in a log line, whichever pattern found the pair.
       def log_secret?(name, value)
+        # A short number under a `*_tokens` or `*Tokens` name is a usage count (`prompt_tokens: 123`), never a token.
+        return false if name.match?(/(?:_|[a-z\d])tokens\z/i) && value.to_s.delete(%("')).match?(/\A\d{1,9}\z/)
+
         !descriptor_name?(name) && !(keyish_only?(name) && !key_credential?(value))
       end
 
@@ -882,10 +925,34 @@ module RailsAiContext
       def filter_assignment(match)
         quote, key, assign = match[1], match[2], match[3]
         name = key_name(key)
-        return match[0] unless name && log_secret?(name, match[4] || match[5] || match[6] || match[7])
+        return match[0] unless name && log_secret?(name, match[4] || match[5] || match[6] || match[7] || match[8])
 
         value_quote = match[4] ? '"' : (match[5] ? "'" : (match[6] ? '\\"' : ""))
-        "#{quote}#{key}#{quote}#{assign}#{value_quote}#{FILTERED}#{value_quote}"
+        filtered = "#{quote}#{key}#{quote}#{assign}#{value_quote}#{FILTERED}#{value_quote}"
+        # Nested deeper than LOG_COLLECTION reads, the collection runs on past the match: the line ends here.
+        match[7] && !balanced?(match[7]) ? "#{filtered}#{RUNS_ON}" : filtered
+      end
+
+      def balanced?(text)
+        bracket_depth(text) <= 0
+      end
+
+      # Brackets opened less brackets closed, its strings and escapes left out.
+      def bracket_depth(text)
+        depth = 0
+        text.scan(/\\.|"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|[\[\]{}]/) do |token|
+          depth += 1 if token == "[" || token == "{"
+          depth -= 1 if token == "]" || token == "}"
+        end
+        depth
+      end
+
+      # How deep a list or hash under a secret name is still open where the line ends.
+      def open_secret_collection(line)
+        line.to_enum(:scan, LOG_SECRET_ASSIGNMENT).map { Regexp.last_match }.sum do |match|
+          name = match[7] && key_name(match[2])
+          name && log_secret?(name, match[7]) ? [ bracket_depth(match[7]), 0 ].max : 0
+        end
       end
 
       # A statement's values written inline, filtered where the column they meet is a secret: compared
@@ -921,7 +988,8 @@ module RailsAiContext
       # One reading of a line: each filtered string's byte span into spans, each placeholder's column into columns.
       # One pass over the tokens, so a line cut off or full of parentheses costs no more than its length.
       def sql_read(line, mysql, spans, columns)
-        tokens = sql_tokens(line, mysql)
+        tokens, comments = sql_tokens(line, mysql).partition { |kind, _| kind != :comment }
+        comments.each { |_, text, start| comment_tag_spans(text, start, spans) }
         stack = []
         insert = closed = between = named = nil
         question = 0
@@ -973,6 +1041,19 @@ module RailsAiContext
         end
       end
 
+      # A query log tag whose key names a secret has its value filtered; no other word in a comment is SQL.
+      def comment_tag_spans(text, start, spans)
+        text.scan(COMMENT_TAG) do
+          match = Regexp.last_match
+          name = key_name(match[:key]) or next
+          value = match[:value]
+          next unless log_secret?(name, value.start_with?("'") ? sql_literal(value) : value)
+
+          from = start + text[0, match.begin(:value)].bytesize
+          spans << [ from, from + value.bytesize ]
+        end
+      end
+
       # The line with each span, merged where readings overlap, written as a filtered string.
       def sql_rewrite(line, spans)
         return line if spans.empty?
@@ -984,6 +1065,11 @@ module RailsAiContext
         merged.each do |from, to|
           text = line.byteslice(from, to - from)
           quote = text[/['"]/]
+          if quote.nil?
+            out << line.byteslice(cursor, from - cursor) << FILTERED
+            cursor = to
+            next
+          end
           prefix = text[0, text.index(quote)]
           closed_quote = text.length > prefix.length + 1 && text.end_with?(quote)
           out << line.byteslice(cursor, from - cursor) << "#{prefix}#{quote}#{FILTERED}#{quote if closed_quote}"
@@ -993,7 +1079,7 @@ module RailsAiContext
       end
 
       # [kind, text, byte offset] for each token of a line read as SQL: :string, :word (a keyword or a
-      # name, bare or quoted), :bind (a `$1` or `?` placeholder) or :punct (an operator or one
+      # name, bare or quoted), :bind (a `$1` or `?` placeholder), :comment or :punct (an operator or one
       # character). Read as MySQL, a backslash escapes and double quotes make a string too. A `?` is a
       # placeholder unless the line numbers its placeholders, where it is PostgreSQL's JSON operator.
       def sql_tokens(line, mysql)
@@ -1005,7 +1091,8 @@ module RailsAiContext
           next if scanner.skip(/\s+/)
 
           start = scanner.pos
-          kind = if scanner.scan(ESCAPED_STRING) || scanner.scan(string) || (mysql && scanner.scan(MYSQL_DQ_STRING)) then :string
+          kind = if scanner.scan(SQL_COMMENT) then :comment
+          elsif scanner.scan(ESCAPED_STRING) || scanner.scan(string) || (mysql && scanner.scan(MYSQL_DQ_STRING)) then :string
           elsif scanner.scan(SQL_WORD) then :word
           elsif scanner.scan(/\$\d+/) || (!numbered && scanner.scan(/\?(?![|&])/)) then :bind
           else

@@ -128,9 +128,12 @@ module RailsAiContext
       files
     end
 
-    # A file that cannot be read whole is read a line at a time, and taken to name the gem when it cannot be read at all.
+    # A file that cannot be read whole is read a line at a time, and taken to name the gem when that fails too.
+    # One Ruby cannot open or find holds no setting in any tier, since no boot loads it either.
     def names_gem?(path)
       File.foreach(path).any? { |line| MARKERS.any? { |marker| line.include?(marker) } }
+    rescue Errno::EACCES, Errno::ENOENT
+      false
     rescue SystemCallError, ArgumentError
       true
     end

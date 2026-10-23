@@ -159,7 +159,7 @@ rails-ai-context uninstall               # standalone; then, once no app uses it
 - The lines the install added to `.gitignore`, with their comments.
 - The pre-commit hook, when it is the one the install wrote and covers only this app. A hook that covers other apps of the repository loses this one; a hook changed by hand is named and left for you.
 
-A `mount RailsAiContext::Engine` line in `config/routes.rb` is your code, so it is named with its line number, not edited. Run in a folder of apps, it does the same for every app below and for the folder's MCP configs. It needs no boot, so it works on an app that cannot start, and the binary of any install can run it: in an app whose bundle pins a version from before `uninstall` existed, `gem install rails-ai-context` and run `rails-ai-context uninstall`.
+A `mount RailsAiContext::Engine` line in `config/routes.rb` is your code, so it is named with its line number, not edited. Run in a folder of apps, it does the same for every app below and for the folder's MCP configs. It needs no boot, so it works on an app that cannot start, and the binary of any install can run it: in an app whose bundle pins a version from before `uninstall` existed, `gem install rails-ai-context` and run `rails-ai-context uninstall`. Where the Claude Code plugin runs the gem, it first names the commands that turn the plugin off and take it out ([SETUP](SETUP.md#as-a-plugin)); a release from before the plugin names none, so turn it off yourself with `claude plugin disable rails-ai-context@rails-ai-context --scope local`.
 
 ---
 

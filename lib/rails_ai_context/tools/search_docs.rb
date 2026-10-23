@@ -70,7 +70,7 @@ module RailsAiContext
 
         # Load index
         index = load_index
-        return text_response(index[:error]) if index[:error]
+        return error_response(index[:error]) if index[:error]
 
         topics = index[:topics]
 
@@ -114,6 +114,7 @@ module RailsAiContext
 
           result = begin
             unless File.exist?(INDEX_PATH)
+              return { error: RailsAiContext.files_gone_message } if RailsAiContext.files_gone?
               return { error: "Documentation index not found at #{INDEX_PATH}. The gem installation may be incomplete - reinstall rails-ai-context." }
             end
 

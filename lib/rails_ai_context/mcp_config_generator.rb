@@ -700,7 +700,7 @@ module RailsAiContext
       # An entry under one of this write's names that is not the gem's - the
       # HTTP one SETUP.md describes - is kept in place of the gem's.
       kept = entries.keys.select { |name| servers.key?(name) && !self.class.own_entry?(name, self.class.json_argv(servers[name])) }
-      note_kept(path, kept)
+      note_kept(path, kept, kept.select { |name| self.class.http_entry?(name, servers[name]) })
       entries = entries.except(*kept)
       stale = stale_names(ours.to_h)
       return :skipped if text && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
@@ -730,11 +730,13 @@ module RailsAiContext
       raise ShapeError, self.class.parse_problem(e, text)
     end
 
-    def note_kept(path, kept)
+    def note_kept(path, kept, http)
       return if kept.empty?
 
-      @notes[path] = "kept #{kept.join(', ')}, which #{kept.one? ? 'runs' : 'run'} something other than the gem's " \
-                     "server (an HTTP entry?), in place of the gem's"
+      other = kept - http
+      said = [ (http.any? && "#{http.join(', ')}, which #{http.one? ? 'reaches' : 'reach'} the gem's HTTP endpoint"),
+               (other.any? && "#{other.join(', ')}, which #{other.one? ? 'runs' : 'run'} something other than the gem's server") ]
+      @notes[path] = "kept #{said.select { |part| part }.join(', and ')}, in place of the gem's"
     end
 
     # --- TOML merge logic ---
@@ -768,7 +770,8 @@ module RailsAiContext
       # gem's is kept in place of the gem's, which would be a second table of
       # one name, and that does not parse.
       kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first) + unwritable.map(&:name)
-      note_kept(path, kept.uniq)
+      kept = kept.uniq
+      note_kept(path, kept, kept.select { |name| toml_http?(found, name) })
       # Written all the same, as it always was: the bytes are the user's.
       @notes[path] = [ @notes[path], TOML_NOT_UTF8 ].compact.join("; ") if content.encoding == Encoding::BINARY
       by_name = by_name.except(*kept)
@@ -817,6 +820,14 @@ module RailsAiContext
 
       RailsAiContext::SafeFile.atomic_write(path, bom + new_content)
       :written
+    end
+
+    # A Codex server set by a url and no command, in a table, dotted keys or an inline table.
+    def toml_http?(found, name)
+      keys = found.select { |statement| statement.kind == :pair && statement.path&.take(2) == [ Toml::SERVERS, name ] }.flat_map do |pair|
+        pair.path.size > 2 ? [ pair.path[2] ] : Toml.value(pair.value).then { |value| value.is_a?(Hash) ? value.keys : [] }
+      end
+      keys.include?("url") && !keys.include?("command")
     end
 
     # A Codex config the merge would leave unreadable, or could not keep
@@ -959,7 +970,8 @@ module RailsAiContext
 
         argv = json_argv(entry).map(&:to_s)
         env = entry[env_key] if entry.is_a?(Hash)
-        { name: name, argv: argv, env: env.is_a?(Hash) ? env.transform_values(&:to_s) : {}, own: own_entry?(name, argv) }
+        { name: name, argv: argv, env: env.is_a?(Hash) ? env.transform_values(&:to_s) : {}, own: own_entry?(name, argv),
+          url: (entry["url"].to_s if http_entry?(name, entry)) }
       end
     end
 

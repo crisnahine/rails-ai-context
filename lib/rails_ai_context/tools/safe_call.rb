@@ -145,6 +145,11 @@ module RailsAiContext
       end
 
       def failure_response(error)
+        # Retrying cannot help a call whose own gem files are gone; reconnecting can.
+        if error.is_a?(LoadError) && RailsAiContext.files_gone?
+          return MCP::Tool::Response.new([ { type: "text", text: RailsAiContext.files_gone_message } ], error: true)
+        end
+
         label = respond_to?(:tool_name) ? tool_name : name
         # A section renderer answers inside rails_get_config, the tool the caller named.
         section = RailsAiContext::Tools::GetConfig.retired_section(label)

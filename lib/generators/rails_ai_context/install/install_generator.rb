@@ -100,11 +100,13 @@ module RailsAiContext
       # itself the generator reads Rails.root's, which is an engine's dummy
       # app.
       def create_mcp_config
-        RailsAiContext::Install::Program.write_mcp_configs(
+        written = RailsAiContext::Install::Program.write_mcp_configs(
           program_surface,
           tools: @selected_formats, tool_mode: @tool_mode, root: install_root,
           standalone: RailsAiContext::InstallMode.standalone?(root: install_root)
         )
+        @held = written[:held]
+        @plugin_off = written[:plugin_off]
         program = RailsAiContext::Install::Program
         unless context_files?
           @removed_context_files = program.ask_context_removal(program_surface, tools: @selected_formats, root: install_root,
@@ -801,6 +803,8 @@ module RailsAiContext
         RailsAiContext::Install::AiTool.all.each do |tool|
           next unless @selected_formats.include?(tool.key)
           files = context_files? ? tool.files_label(mcp: tool_mode == :mcp) : "MCP config only"
+          plugin = @plugin_off ? "the rails-ai-context plugin (off here: see below)" : "the rails-ai-context plugin"
+          files = context_files? ? "#{plugin}; #{files}" : plugin if Array(@held).include?(tool.key)
           say "  ✅ #{tool.name.ljust(16)} -> #{files}"
         end
         unless context_files? || @removed_context_files
@@ -816,7 +820,7 @@ module RailsAiContext
         say ""
         if @tool_mode == :mcp
           say "Next step, before the MCP tools appear:", :yellow
-          RailsAiContext::Install::Program.next_steps(@selected_formats).each { |line| say "  #{line}" }
+          RailsAiContext::Install::Program.next_steps(@selected_formats, root: install_root).each { |line| say "  #{line}" }
         else
           say "CLI tools:", :yellow
           example = engine_root ? "bundle exec rails-ai-context tool schema --table users" : "rails 'ai:tool[schema]' table=users"
@@ -825,8 +829,8 @@ module RailsAiContext
         end
         say ""
         show_more_tools
-        committed = [ ("context files" if context_files?), ("MCP configs" if tool_mode == :mcp) ].compact
-        say "Commit the #{committed.join(' and ')} so your team benefits!", :green
+        committed = [ ("context files" if context_files?), ("MCP configs" if tool_mode == :mcp && (@selected_formats - Array(@held)).any?) ].compact
+        say "Commit the #{committed.join(' and ')} so your team benefits!", :green if committed.any?
         # Only where a Codex config was written, and only while a commit
         # would still take it along.
         if tool_mode == :mcp && @selected_formats.include?(:codex) &&

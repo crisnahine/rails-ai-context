@@ -886,6 +886,31 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(summary).not_to include("Next step")
     end
 
+    # The app's committed settings turn the plugin on, so no .mcp.json server was written to commit.
+    it "names the plugin for Claude Code, and no MCP configs to commit, where the committed plugin held its server" do
+      FileUtils.mkdir_p(File.join(tmpdir, ".claude"))
+      File.write(File.join(tmpdir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+      generator.instance_variable_set(:@selected_formats, %i[claude])
+      generator.instance_variable_set(:@context_files, false)
+      allow(generator).to receive(:say)
+      generator.create_mcp_config
+
+      expect(File.exist?(File.join(tmpdir, ".mcp.json"))).to be(false)
+      # Claude Code has run here and never installed the plugin, so the next step says what is missing.
+      expect(summary).to include("Claude Code      -> the rails-ai-context plugin (off here: see below)\n",
+                                 "Claude Code: the app's .claude/settings.json turns the rails-ai-context plugin on, but it does not start for you here")
+      expect(summary).not_to include("-> MCP config only", "Commit the")
+
+      generator.instance_variable_set(:@context_files, true)
+      expect(summary).to include("Claude Code      -> the rails-ai-context plugin (off here: see below); CLAUDE.md + .claude/rules/",
+                                 "Commit the context files so your team benefits!")
+
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with("CLAUDE_CONFIG_DIR").and_return(File.join(Dir.tmpdir, "rails-ai-context-never-ran"))
+      generator.create_mcp_config
+      expect(summary).to include("Claude Code      -> the rails-ai-context plugin; CLAUDE.md + .claude/rules/")
+    end
+
     it "offers no regeneration when the install writes no context files" do
       generator.instance_variable_set(:@context_files, false)
 

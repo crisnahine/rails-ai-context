@@ -445,11 +445,118 @@ module RailsAiContext
         surface.say "Could not update #{shown(surface, gitignore, root)} - add .ai-context.json and .codex/config.toml by hand", :warn
       end
 
-      # What the user does next in each selected AI tool for its MCP server
-      # to start, one line per tool, in the menu's order.
-      def next_steps(tools)
+      # One next step per selected tool, in the menu's order, for its MCP server to start. In the folder at
+      # `root` (holding the one `app` a workspace serves), Claude Code's names the plugin where it is the
+      # setup; a session starts `place` ("here", "in shop").
+      def next_steps(tools, root: nil, place: "here", app: root)
         chosen = Array(tools).map(&:to_sym)
-        AiTool.all.select { |tool| chosen.include?(tool.key) }.map { |tool| "#{tool.name}: #{tool.next_step}" }
+        AiTool.all.select { |tool| chosen.include?(tool.key) }.map do |tool|
+          at, where = claude_at(root.to_s, place, app.to_s) if tool.key == :claude && root
+          where ||= place
+          step = (claude_plugin_step(at, where, app.to_s) if at) || tool.next_step
+          step = step.gsub("in this folder", where).gsub("this folder", where.delete_prefix("in ")).gsub(/ here\b/, " #{where}") unless where == "here"
+          "#{tool.name}: #{step}"
+        end
+      end
+
+      # Where Claude Code's step is taken: the app itself where it has a server of its own in its .mcp.json
+      # below a folder whose committed settings turn the plugin on, since its sessions start that server.
+      def claude_at(root, place, app)
+        return [ root, place ] unless app_mcp_json(root, app)
+
+        below = relative_to(app, root)
+        [ app, place == "here" ? "in #{below}" : "#{place}/#{below}" ]
+      end
+
+      # The app's own .mcp.json, where it holds the gem's server for the app and the folder above it
+      # commits the plugin, which its sessions do not read.
+      def app_mcp_json(root, app)
+        return nil if File.expand_path(root) == File.expand_path(app) || !RailsAiContext::ClaudeCodeSettings.committed?(root)
+
+        path = File.join(File.expand_path(app), ".mcp.json")
+        path if RailsAiContext::ClaudeCodeSettings.new(app).gem_server_names(path, app).any?
+      end
+
+      def claude_plugin_step(root, place, app = root)
+        settings = RailsAiContext::ClaudeCodeSettings.new(app, from: root)
+        if RailsAiContext::ClaudeCodeSettings.committed?(root)
+          return committed_plugin_note(root, settings, app: app, place: (place.delete_prefix("in ") unless place == "here"))
+        end
+
+        mcp_json = File.join(File.expand_path(root), ".mcp.json")
+        held = settings.duplicates.find { |dup| dup.scope == :project && dup.config == mcp_json }
+        if held
+          return "the rails-ai-context plugin already serves this app for you, so turn the .mcp.json server " \
+                 "`#{held.name}` off with /mcp in a session started #{place}, or Claude Code lists every tool twice"
+        end
+        "the rails-ai-context plugin serves this app for you" if settings.plugin_on_in?(root)
+      end
+
+      # Where the committed settings turn the plugin on: whether it serves this user, and what .mcp.json
+      # runs beside it or in its place. The folder's own settings decide, the last file that names it winning.
+      # Files are named from `place`, the folder init was typed from when that is not `root`.
+      def committed_plugin_note(root, settings = RailsAiContext::ClaudeCodeSettings.new(root), app: root, place: nil)
+        file = ->(name) { place ? File.join(place, name) : name }
+        on_here = if place then "#{file.(".claude/settings.json")} turns the rails-ai-context plugin on"
+        elsif File.expand_path(root) == File.expand_path(app) then "the app's .claude/settings.json turns the rails-ai-context plugin on"
+        else ".claude/settings.json in this folder turns the rails-ai-context plugin on"
+        end
+        if settings.managed_mcp
+          name = settings.managed_server(root)
+          return "#{on_here}, but managed-mcp.json decides which servers start, and its `#{name}` serves this app" if name
+
+          return "#{on_here}, but managed-mcp.json decides which servers start, and none of them serves this app: " \
+                 "ask whoever manages your Claude Code settings to add one"
+        end
+
+        id = settings.committed_id(root)
+        mcp_json = File.join(File.expand_path(root), ".mcp.json")
+        # A server the committed settings turn off starts in no one's session.
+        committed_off = Array(RailsAiContext::ClaudeCodeSettings.read_json(File.join(root, ".claude", "settings.json"))&.dig("disabledMcpjsonServers"))
+        held = (settings.gem_server_names(mcp_json, root) - committed_off).first
+        scope, on, path = settings.setting_for(id, root)
+        if on == false && %i[local managed].include?(scope)
+          off = scope == :local ? "your #{file.(relative_to(path, root))} turns" : "managed settings turn"
+          return "#{on_here}, and #{off} it off for you, so #{file.(".mcp.json")}'s `#{held}` serves you" if held
+          return "#{on_here}, and managed settings turn it off: ask whoever manages your Claude Code settings to turn it on" if scope == :managed
+
+          return "#{on_here}, and #{off} it off: `claude plugin enable #{id} --scope local` turns it back on"
+        end
+        return "#{on_here}, but it does not start for you here: doctor names why" unless plugin_serves?(root, settings)
+
+        serves = "the rails-ai-context plugin serves this app#{" for sessions started in #{place}" if place}, as #{file.(".claude/settings.json")} says"
+        return "#{serves}; doctor names anything missing" unless held
+
+        said = "#{serves}, and #{file.(".mcp.json")} still holds `#{held}`"
+        if settings.absent? || settings.duplicates.any? { |dup| dup.scope == :project && dup.config == mcp_json && dup.name == held }
+          return "#{said}, which runs beside it: remove it from #{file.(".mcp.json")}"
+        end
+
+        "#{said}, which your settings turn off, but teammates' sessions start it beside the plugin: remove it from #{file.(".mcp.json")}"
+      end
+
+      # Whether the plugin the committed settings turn on starts for this user here, where Claude Code has run.
+      def plugin_serves?(root, settings)
+        return false if settings.managed_mcp
+
+        scope, on, = settings.setting_for(settings.committed_id(root), root)
+        return false if on == false && %i[local managed].include?(scope)
+
+        settings.absent? || settings.plugin_on_in?(root)
+      end
+
+      # Local settings win over the committed ones; the apps below read the folder's local file too only
+      # where it is their own session's, as a repository's main checkout is.
+      def several_apps_fix(id, root, servers)
+        settings = RailsAiContext::ClaudeCodeSettings.new(root)
+        scope, on, path = settings.setting_for(id, root)
+        return "`claude plugin disable #{id} --scope project` turns it off for this folder" unless scope == :local && on == true
+
+        dir = File.dirname(path, 2)
+        apps = Array(servers).map { |server| File.expand_path(server.app_path.to_s, root) }
+        return "your local settings turn it on for the apps below as well, so start Claude Code in one of them" if apps.all? { |app| settings.local_settings_dir(app) == dir }
+
+        "`claude plugin disable #{id} --scope local` turns it off for this folder"
       end
 
       # Whether a commit would leave the Codex config out, which it must: it
@@ -492,7 +599,27 @@ module RailsAiContext
       # Gemfile.lock, so every entry writes the same command form for the
       # same app (no config ping-pong). `servers:` replaces the app's own
       # entry with a workspace's, one per app.
-      def write_mcp_configs(surface, tools:, tool_mode:, root:, standalone: nil, servers: nil)
+      # `place` names the root for a run typed inside it, where the surface names files from the root itself.
+      def write_mcp_configs(surface, tools:, tool_mode:, root:, standalone: nil, servers: nil, place: nil)
+        # A committed plugin starts Claude Code's server for everyone who opens a folder holding one app,
+        # and one in .mcp.json too would list every tool twice; in a folder of several, it fails to start.
+        id = RailsAiContext::ClaudeCodeSettings.committed_id(root.to_s) if tool_mode != :cli && Array(tools).map(&:to_sym).include?(:claude)
+        held = id && (servers.nil? || servers.one?) ? %i[claude] : []
+        plugin_off = false
+        if held.any?
+          tools = Array(tools).map(&:to_sym) - held
+          app = servers ? File.expand_path(servers.first.app_path.to_s, root.to_s) : root.to_s
+          settings = RailsAiContext::ClaudeCodeSettings.new(app, from: root.to_s)
+          place ||= surface.place if surface.respond_to?(:place)
+          note = committed_plugin_note(root.to_s, settings, app: app, place: place)
+          note = note.gsub(/ here\b/, " in #{place}") if place
+          plugin_off = !plugin_serves?(root.to_s, settings)
+          file = place ? File.join(place, ".mcp.json") : shown(surface, File.join(root.to_s, ".mcp.json"), root)
+          surface.say "Claude Code: no server written into #{file == ".mcp.json" ? ".mcp.json here" : file}: #{note}", :muted
+        elsif id
+          surface.say "Claude Code: .claude/settings.json turns on the rails-ai-context plugin, which serves one app, not a folder of them, " \
+                      "so it has nothing to serve here: #{several_apps_fix(id, root.to_s, servers)}", :warn
+        end
         generator = RailsAiContext::McpConfigGenerator.new(
           tools: tools, output_dir: root.to_s, tool_mode: tool_mode, standalone: standalone, servers: servers
         )
@@ -505,7 +632,7 @@ module RailsAiContext
           surface.say result[:reasons][f], :warn if result[:reasons]&.[](f)
         end
         surface.say "Skipped MCP config files (CLI-only mode)", :muted if tool_mode == :cli
-        result
+        result.merge(held: held, plugin_off: plugin_off)
       end
 
       # A path as the person running the install reads it: named from the

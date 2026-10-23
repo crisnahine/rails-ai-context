@@ -332,6 +332,179 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
+    it "applies a value reached through an alias" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "base: &b false\nanti_hallucination_rules: *b\n")
+
+        capture_stderr { described_class.load_from_yaml(yaml_path) }
+
+        expect(config.anti_hallucination_rules).to be(false)
+      end
+    end
+
+    # A list alias inside a list is a list of lists, and a mapping alias is no number: each warns like a bad value.
+    it "warns about a value of the wrong shape and keeps that key's default, rather than stopping the app's boot" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "tools: &tools [claude, cursor]\nai_tools: [*tools]\nlimits: &l {a: 1}\nmax_tool_response_chars: *l\n" \
+                              "skip_tools: [[rails_get_gems]]\ncache_ttl: 90\n")
+
+        output = capture_stderr { described_class.load_from_yaml(yaml_path) }
+
+        expect(output).to include("ai_tools:", "max_tool_response_chars:", "skip_tools:")
+        expect(config.ai_tools).to be_nil
+        expect(config.max_tool_response_chars).to eq(described_class.new.max_tool_response_chars)
+        expect(config.skip_tools).to eq([])
+        expect(config.cache_ttl).to eq(90)
+      end
+    end
+
+    # Every key's value has a shape, and a wrong one warns from the file instead of failing a tool later.
+    it "warns about a wrong-shaped preset, mode, number or list, naming the values a named key takes, and loads a number written as text" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "preset: [standard]\nmax_tool_response_chars: 1e5\nmax_file_size: {a: 1}\nmax_search_results: \"5\"\n" \
+                              "live_reload_debounce: \"2.5\"\nexcluded_models: [[a]]\nlog_lines: [3]\nlive_reload: [x]\n" \
+                              "query_row_limit: 300s\nmax_validate_files: \"010\"\nhydration_max_hints: .inf\ntool_mode: [mcp]\ncontext_mode: 1\n")
+
+        output = capture_stderr { described_class.load_from_yaml(yaml_path) }
+
+        expect(output).to include("preset: preset must be standard or full (got a list of 1 item)", "max_file_size: max_file_size must be a number",
+                                  "query_row_limit: query_row_limit must be a number", "hydration_max_hints: hydration_max_hints must be a number",
+                                  "excluded_models:", "log_lines:",
+                                  "live_reload: live_reload must be true, false or auto (got a list of 1 item)",
+                                  "tool_mode: tool_mode must be mcp or cli (got a list of 1 item)",
+                                  "context_mode: context_mode must be compact or full (got 1)")
+        defaults = described_class.new
+        expect([ config.introspectors, config.max_file_size, config.excluded_models, config.log_lines, config.query_row_limit, config.hydration_max_hints ])
+          .to eq([ defaults.introspectors, defaults.max_file_size, defaults.excluded_models, defaults.log_lines, defaults.query_row_limit,
+                   defaults.hydration_max_hints ])
+        expect([ config.max_tool_response_chars, config.max_search_results, config.max_validate_files, config.live_reload_debounce, config.live_reload ])
+          .to eq([ 100_000, 5, 10, 2.5, :auto ])
+      end
+    end
+
+    # A Ruby block's number keeps working as it did: a Duration or a fraction is cut to whole seconds.
+    it "takes any number from a Ruby block, cut to a whole one" do
+      config.cache_ttl = 90.5
+      expect(config.cache_ttl).to eq(90)
+      config.cache_ttl = ActiveSupport::Duration.build(300)
+      expect(config.cache_ttl).to be_an_instance_of(Integer).and eq(300)
+    end
+
+    # An unset ENV lookup in a Ruby list, or a YAML item left empty, names nothing.
+    it "drops an empty item from a list of names, from YAML and from Ruby" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "skip_tools:\n  - rails_get_gems\n  -\n")
+        capture_stderr { described_class.load_from_yaml(yaml_path) }
+        expect(config.skip_tools).to eq(%w[rails_get_gems])
+      end
+
+      config.skip_tools = [ "rails_get_schema", nil ]
+      expect(config.skip_tools).to eq(%w[rails_get_schema])
+      expect { config.http_port = [ 1 ] }.to raise_error(ArgumentError, "http_port must be a number (got a list of 1 item)")
+      expect { config.preset = [ :full ] }.to raise_error(ArgumentError, "preset must be standard or full (got a list of 1 item)")
+    end
+
+    # Ten aliases a level, six levels deep: a million names in a file of a few hundred bytes.
+    it "names a wrong-shaped value built from nested aliases by its shape, in one short line" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        lines = [ "l0: &l0 [x, x, x, x, x, x, x, x, x, x]" ]
+        (1..5).each { |level| lines << "l#{level}: &l#{level} [#{([ "*l#{level - 1}" ] * 10).join(', ')}]" }
+        File.write(yaml_path, "#{lines.join("\n")}\nexcluded_models: *l5\n")
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        output = capture_stderr { described_class.load_from_yaml(yaml_path) }
+
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        warning = output.lines.find { |line| line.include?("excluded_models:") }
+        expect(warning).to include("excluded_models must be a list of names (got a list of 10 items)")
+        expect(warning.length).to be < 300
+        expect(config.excluded_models).to eq(described_class.new.excluded_models)
+      end
+    end
+
+    it "names a long preset name or a huge port in one short line" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        { "preset: #{'z' * 5000}" => "Unknown preset: \"zzz", "http_port: 1.0e300" => "http_port must be between 1 and 65535 (got 1000" }.each do |line, start|
+          File.write(yaml_path, "#{line}\n")
+          warning = capture_stderr { described_class.load_from_yaml(yaml_path) }
+          expect(warning).to include(start)
+          expect(warning.length).to be < 300
+        end
+      end
+      expect { described_class.new.preset = "z" * 5000 }.to raise_error(ArgumentError) { |e| expect(e.message.length).to be < 300 }
+    end
+
+    it "warns about a debounce that is not a finite number of seconds, and keeps 1.5" do
+      [ ".inf", "[1]", "-1" ].each do |value|
+        Dir.mktmpdir do |dir|
+          yaml_path = File.join(dir, ".rails-ai-context.yml")
+          File.write(yaml_path, "live_reload_debounce: #{value}\n")
+
+          expect(capture_stderr { described_class.load_from_yaml(yaml_path) }).to include("live_reload_debounce must be a number of seconds")
+          expect(config.live_reload_debounce).to eq(1.5)
+        end
+      end
+    end
+
+    it "reads live_reload as true, false or auto, text included, and warns about any other name" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        { "\"false\"" => false, "\"true\"" => true, "auto" => :auto }.each do |written, read|
+          RailsAiContext.configuration = described_class.new
+          File.write(yaml_path, "live_reload: #{written}\n")
+          expect(capture_stderr { described_class.load_from_yaml(yaml_path) }).to be_empty, written
+          expect(RailsAiContext.configuration.live_reload).to eq(read), written
+        end
+
+        RailsAiContext.configuration = described_class.new
+        RailsAiContext.configuration.live_reload = false
+        File.write(yaml_path, "live_reload: \"off\"\n")
+        expect(capture_stderr { described_class.load_from_yaml(yaml_path) })
+          .to include('live_reload: live_reload must be true, false or auto (got "off")')
+        expect(RailsAiContext.configuration.live_reload).to be(false)
+      end
+      expect { described_class.new.live_reload = :disabled }.to raise_error(ArgumentError, /live_reload must be true, false or auto/)
+    end
+
+    # Each count and size key checks its value on both paths, so no tool meets text or a negative later.
+    it "reads a number key's text from a Ruby block as a number, and refuses one below its least" do
+      config.max_search_results = "5"
+      config.max_file_size = "900000"
+      expect([ config.max_search_results, config.max_file_size ]).to eq([ 5, 900_000 ])
+
+      expect { config.log_lines = 0 }.to raise_error(ArgumentError, "log_lines must be positive (got 0)")
+      expect { config.max_validate_files = [ 1 ] }.to raise_error(ArgumentError, "max_validate_files must be a number (got a list of 1 item)")
+      expect { config.max_file_size = "x" * 100 }.to raise_error(ArgumentError, "max_file_size must be a number (got \"#{'x' * 56}...)")
+      config.hydration_max_hints = 0
+      expect(config.hydration_max_hints).to eq(0)
+      expect { config.hydration_max_hints = -1 }.to raise_error(ArgumentError, "hydration_max_hints must be zero or more (got -1)")
+
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "max_validate_files: -1\n")
+        expect(capture_stderr { described_class.load_from_yaml(yaml_path) }).to include("max_validate_files must be positive (got -1)")
+        expect(config.max_validate_files).to eq(50)
+      end
+    end
+
+    it "warns and keeps the defaults when an alias names no anchor" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "anti_hallucination_rules: *missing\n")
+
+        output = capture_stderr { expect(described_class.load_from_yaml(yaml_path)).to be_nil }
+
+        expect(output).to include("has invalid YAML")
+        expect(config.anti_hallucination_rules).to be(true)
+      end
+    end
+
     it "handles empty YAML file" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")

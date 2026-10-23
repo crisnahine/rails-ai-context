@@ -145,6 +145,17 @@ RSpec.describe RailsAiContext::Resources do
       captured_block
     end
 
+    # The gem loads its files lazily, and a LoadError gets past the SDK's rescue to the binary, which exits.
+    it "answers a read that cannot load one of the gem's files with an error that keeps the server up" do
+      allow(described_class).to receive(:handle_read).and_raise(LoadError, "cannot load such file -- x")
+      allow(RailsAiContext).to receive(:files_gone?).and_return(true)
+
+      error = nil
+      expect { read_handler.call(uri: "rails://schema") }.to raise_error(MCP::Server::RequestHandlerError) { |raised| error = raised }
+        .and output(/are gone/).to_stderr
+      expect(error.message).to eq(RailsAiContext.files_gone_message)
+    end
+
     it "returns JSON content for a static resource URI" do
       result = read_handler.call(uri: "rails://schema")
       expect(result).to be_an(Array)

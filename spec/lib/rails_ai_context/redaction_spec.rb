@@ -109,6 +109,7 @@ RSpec.describe RailsAiContext::Redaction do
         .to eq("ENV SECRET_KEY_BASE=[FILTERED] RAILS_ENV=production")
       expect(redact("export STRIPE_SECRET_KEY=sk9f8e7d6c5b4a", path: "bin/setup")).to eq("export STRIPE_SECRET_KEY=[FILTERED]")
       expect(redact("DB_PASSWORD=hunter2 \\", path: "Dockerfile")).to eq("DB_PASSWORD=[FILTERED] \\")
+      expect(redact("API_KEYS=k1aaaa9,k2bbbb9", path: ".env")).to eq("API_KEYS=[FILTERED]")
     end
 
     it "replaces only the value of a NAME=value inside a string, URL or comment" do
@@ -854,6 +855,126 @@ RSpec.describe RailsAiContext::Redaction do
       }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
     end
 
+    # A plural secret word ends a name, and a list of recovery codes is one secret; a count stays shown.
+    it "filters a value logged under a plural secret name or a list of codes" do
+      {
+        %q(User Bulk Insert (0.8ms)  INSERT INTO "users" ("id","api_keys","recovery_codes") VALUES (1, 'k1', 'c1 c2') ON CONFLICT  DO NOTHING RETURNING "id") =>
+          %q(User Bulk Insert (0.8ms)  INSERT INTO "users" ("id","api_keys","recovery_codes") VALUES (1, '[FILTERED]', '[FILTERED]') ON CONFLICT  DO NOTHING RETURNING "id"),
+        %q(User Update (2.2ms)  UPDATE `users` SET `users`.`tokens` = 'tok1', `users`.`backup_codes` = 'b1 b2' WHERE `users`.`id` = 1) =>
+          %q(User Update (2.2ms)  UPDATE `users` SET `users`.`tokens` = '[FILTERED]', `users`.`backup_codes` = '[FILTERED]' WHERE `users`.`id` = 1),
+        %q(User Load (0.4ms)  SELECT "users".* FROM "users" WHERE (tokens = $1)  [[nil, "tokWHERE11111111"]]) =>
+          %q(User Load (0.4ms)  SELECT "users".* FROM "users" WHERE (tokens = $1)  [[nil, "[FILTERED]"]]),
+        %q(User Load (0.4ms)  SELECT "users".* FROM "users" WHERE "users"."recovery_codes" = $1 LIMIT $2  [["recovery_codes", "c1 c2"], ["LIMIT", 1]]) =>
+          %q(User Load (0.4ms)  SELECT "users".* FROM "users" WHERE "users"."recovery_codes" = $1 LIMIT $2  [["recovery_codes", "[FILTERED]"], ["LIMIT", 1]]),
+        %q(Usage Update (0.5ms)  UPDATE "usages" SET "token_count" = '3', "cache_keys" = 'k1' WHERE "usages"."id" = 1) =>
+          %q(Usage Update (0.5ms)  UPDATE "usages" SET "token_count" = '3', "cache_keys" = 'k1' WHERE "usages"."id" = 1),
+        %q({"accessTokens":["abc123","def456"],"tokensUsed":"12"}) => %q({"accessTokens":"[FILTERED]","tokensUsed":"12"})
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
+    # Rails filters a query string by the app's filter_parameters only, and writes a bracketed name encoded.
+    it "filters a query parameter with a secret word anywhere in its bracketed name" do
+      {
+        %q(Started GET "/s?user[password]=pw1aaaa&user[email]=a&items[0][title]=hi" for ::1) =>
+          %q(Started GET "/s?user[password]=[FILTERED]&user[email]=a&items[0][title]=hi" for ::1),
+        %q(Started GET "/s?api_keys[]=ak1aaaa&api_keys[]=ak2bbbb&user[tokens][0]=tk1aaaa&q[password_length]=8" for ::1) =>
+          %q(Started GET "/s?api_keys[]=[FILTERED]&api_keys[]=[FILTERED]&user[tokens][0]=[FILTERED]&q[password_length]=8" for ::1),
+        %q(Started GET "/s?user%5Bbackup_codes%5D%5B%5D=bc1aaaa&user%5Bname%5D=n" for ::1) =>
+          %q(Started GET "/s?user%5Bbackup_codes%5D%5B%5D=[FILTERED]&user%5Bname%5D=n" for ::1),
+        %q(user[recovery_codes][]=rc1aaaa&user[recovery_codes][]=rc2bbbb) =>
+          %q(user[recovery_codes][]=[FILTERED]&user[recovery_codes][]=[FILTERED]),
+        %q(Started GET "/settings?integration[api_key][value]=sk9f8e7d6c5b4a3&user[password][new]=hunter2abc&page=2" for ::1) =>
+          %q(Started GET "/settings?integration[api_key][value]=[FILTERED]&user[password][new]=[FILTERED]&page=2" for ::1)
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
+    # An LLM client logs its usage as `*_tokens` counts; a token, or a long number under such a name, stays filtered.
+    it "keeps a usage count under a plural tokens name" do
+      {
+        %q({"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168},"max_tokens":1000}) =>
+          %q({"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168},"max_tokens":1000}),
+        %q(input_tokens=1234 output_tokens=56) => %q(input_tokens=1234 output_tokens=56),
+        %q(Parameters: {"usage"=>{"prompt_tokens"=>"12"}}) => %q(Parameters: {"usage"=>{"prompt_tokens"=>"12"}}),
+        %q(tokens = "abc123def456" api_tokens=1234567890 token=1234 tokens=55) =>
+          %q(tokens = "[FILTERED]" api_tokens=[FILTERED] token=[FILTERED] tokens=[FILTERED]),
+        %q({"usage":{"inputTokens":12,"outputTokens":34},"maxTokens":1024}) => %q({"usage":{"inputTokens":12,"outputTokens":34},"maxTokens":1024}),
+        %q(promptTokens=12 ACCESS_TOKENS=12 accessTokens="abc123def") => %q(promptTokens=12 ACCESS_TOKENS=12 accessTokens="[FILTERED]")
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
+    # A JSON client or a legacy column writes a code list's name in camel case.
+    it "filters a camel-cased list of codes, and keeps its count" do
+      {
+        %q({"recoveryCodes":["rc1aaaa","rc2bbbb"],"backupCodes":"bc1aaaa","otpBackupCodes":"ob1aaaa","recoveryCodesCount":3}) =>
+          %q({"recoveryCodes":"[FILTERED]","backupCodes":"[FILTERED]","otpBackupCodes":"[FILTERED]","recoveryCodesCount":3}),
+        %q(User Load  SELECT "users".* FROM "users" WHERE "users"."backupCodes" = $1  [["backupCodes", "bc1aaaa"]]) =>
+          %q(User Load  SELECT "users".* FROM "users" WHERE "users"."backupCodes" = $1  [["backupCodes", "[FILTERED]"]]),
+        %q(Parameters: {"recoveryCodes"=>"rc1aaaa", "otpBackupCodes"=>["ob1aaaa", "ob2bbbb"], "backupCodesCount"=>"4"}) =>
+          %q(Parameters: {"recoveryCodes"=>"[FILTERED]", "otpBackupCodes"=>[FILTERED], "backupCodesCount"=>"4"})
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
+    # Rails' filter_parameters leaves a list of codes in Parameters, and every element of it is the secret.
+    it "filters a whole list under a secret name, however the line assigns it" do
+      {
+        %q(Parameters: {"user"=>{"backup_codes"=>["bc1aaaa", "bc2bbbb", "bc3cccc"], "name"=>"n"}}) =>
+          %q(Parameters: {"user"=>{"backup_codes"=>[FILTERED], "name"=>"n"}}),
+        %q(Parameters: {"user" => {"recovery_codes" => ["rc1aaaa", "rc2bbbb"], "api_keys" => ["ak1aaaa", "ak2bbbb"]}}) =>
+          %q(Parameters: {"user" => {"recovery_codes" => [FILTERED], "api_keys" => [FILTERED]}}),
+        %q({"user" => {"password" => ["pw1aaaa", "pw2bbbb"]}, "id" => 1}) => %q({"user" => {"password" => [FILTERED]}, "id" => 1}),
+        %q(recovery_codes: ["rc1aaaa", "rc2bbbb"] id: 1) => %q(recovery_codes: [FILTERED] id: 1),
+        %q(api_keys = ["ak1aaaa", "ak2bbbb"]; id = 1) => %q(api_keys = [FILTERED]; id = 1),
+        %q(password=["pw1aaaa","pw2bbbb"] id=1) => %q(password=[FILTERED] id=1),
+        %q("backup_codes" => [["bc1aaaa", "bc2, ]bbbb"], ["bc3cccc"]], "id" => 1) => %q("backup_codes" => [FILTERED], "id" => 1),
+        %q("backup_codes" => ["bc1aaaa", "bc2bb) => %q("backup_codes" => [FILTERED]),
+        %q(Parameters: {"user"=>{"backup_codes"=>{"0"=>"bc1aaaa", "1"=>"bc2bbbb"}, "name"=>"n"}}) =>
+          %q(Parameters: {"user"=>{"backup_codes"=>[FILTERED], "name"=>"n"}}),
+        %q(API_KEYS=ak1aaaa,ak2bbbb id=1 token=tk1aaaa,user=bob) => %q(API_KEYS=[FILTERED] id=1 token=[FILTERED],user=bob),
+        %q({"backup_codes":["bc1aaaa","bc2bbbb"],"api_keys": ["ak1aaaa", "ak2bbbb"]}) =>
+          %q({"backup_codes":"[FILTERED]","api_keys": "[FILTERED]"}),
+        %q("backup_codes" => ["bc1[aaaa", "bc2bbbb"], "id" => 1) => %q("backup_codes" => [FILTERED], "id" => 1),
+        %q(msg="{\"api_keys\"=>[\"k1\", \"SECRETK2\"]}" level=info) => %q(msg="{\"api_keys\"=>[FILTERED]}" level=info),
+        %q(API_KEYS=k1,dGVzdGtleQ== RAILS_ENV=production) => %q(API_KEYS=[FILTERED] RAILS_ENV=production),
+        %q(SECRET_TOKENS=sk_live_one,c2stbGl2ZS10d28=) => %q(SECRET_TOKENS=[FILTERED]),
+        # Nested past what one match reads, the list runs on, so the line ends at the filtered value.
+        %q(Parameters: {"backup_codes"=>[["a",["b",["c",["d"]]]],"bc9tail"], "page"=>"2"}) => %q(Parameters: {"backup_codes"=>[FILTERED]),
+        %q(Parameters: {"password"=>{"x"=>{"y"=>{"z"=>{"w"=>"v"}}}, "k"=>"pw9tail"}, "page"=>"2"}) => %q(Parameters: {"password"=>[FILTERED])
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
+    # A JSON logger spreads a list over lines: each element line under a secret name is filtered until the list
+    # closes, and a line that starts a new entry ends it.
+    it "filters a secret list a logger spreads over lines" do
+      lines = [ %q(  "user": {), %q(    "backup_codes": [), %q(      "bc1aaaa9",), %q(      "bc2bbbb9"), %q(    ],), %q(    "name": "n"),
+                %q(  }), %q(    "password": [), %q(I, [2026-10-23] Started GET "/" for ::1), %q(   "note": "kept") ]
+
+      expect(described_class.redact_log_lines(lines)).to eq([ %q(  "user": {), %q(    "backup_codes": [FILTERED]), "      [FILTERED]",
+                                                               "      [FILTERED]", %q(    ],), %q(    "name": "n"), %q(  }),
+                                                               %q(    "password": [FILTERED]), %q(I, [2026-10-23] Started GET "/" for ::1),
+                                                               %q(   "note": "kept") ])
+    end
+
+    # Rails' query log tags end a statement in a comment: no tag is SQL, and only one whose key names a secret
+    # has its value filtered. MySQL runs /*! and /*+ as SQL, so those stay SQL.
+    it "reads a trailing comment as query log tags, not as SQL" do
+      {
+        %q(Account Load (0.3ms)  SELECT "accounts".* FROM "accounts" WHERE "accounts"."api_key" = 'v1' LIMIT 1 /*application='App',controller='accounts'*/) =>
+          %q(Account Load (0.3ms)  SELECT "accounts".* FROM "accounts" WHERE "accounts"."api_key" = '[FILTERED]' LIMIT 1 /*application='App',controller='accounts'*/),
+        %q(SELECT 1 FROM "a" WHERE "a"."name" = 'x' /*application:App,api_token:tok1b2c3d4e5f6a7*/) =>
+          %q(SELECT 1 FROM "a" WHERE "a"."name" = 'x' /*application:App,api_token:[FILTERED]*/),
+        %q(SELECT 1 FROM "a" WHERE "a"."name" = 'x' /*application='App',secret='s3cret'*/) =>
+          %q(SELECT 1 FROM "a" WHERE "a"."name" = 'x' /*application='App',secret='[FILTERED]'*/),
+        %q(SELECT 1 FROM `a` WHERE `a`.`name` = 'x' /*!50000 AND `a`.`token` = 't1' */) =>
+          %q(SELECT 1 FROM `a` WHERE `a`.`name` = 'x' /*!50000 AND `a`.`token` = '[FILTERED]' */),
+        %q(SELECT 1 FROM "a" WHERE "a"."name" = 'a /* b' AND "a"."token" = 't') =>
+          %q(SELECT 1 FROM "a" WHERE "a"."name" = 'a /* b' AND "a"."token" = '[FILTERED]'),
+        %q(SELECT 1 FROM "a" WHERE "a"."id" = 1 /*application='Demo',password='ab*/cd'*/) =>
+          %q(SELECT 1 FROM "a" WHERE "a"."id" = 1 /*application='Demo',password='[FILTERED]'*/),
+        %q(SELECT 1 /* don't */ FROM "a" WHERE LOWER("a"."api_token") = 'tok1b2c3') =>
+          %q(SELECT 1 /* don't */ FROM "a" WHERE LOWER("a"."api_token") = '[FILTERED]')
+      }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
+    end
+
     # A uniqueness validation compares through CAST or LOWER, a range through < and BETWEEN, and a unique
     # index's error repeats the duplicate value: each value still meets a secret column.
     it "filters a secret column's value however the statement or its error wraps it" do
@@ -1367,6 +1488,16 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class.call(%(API_KEY = "abc123"))).to eq(%(API_KEY = "[FILTERED]"))
       expect(described_class.redact_assignment("API_KEY", value: '"abc123"', source: nil)[:value])
         .to eq('"[FILTERED]"')
+    end
+
+    # A plural ends a name; with more after it, the name counts something.
+    it "takes a plural secret word or a list of codes for a secret, and a count or a key column for none" do
+      %w[api_keys tokens secrets passwords recovery_codes backup_codes otp_backup_codes recoveryCodes backupCodes].each do |name|
+        expect(described_class.secret_name?(name)).to be(true), name
+      end
+      %w[tokens_used token_count keys primary_keys foreign_keys cache_keys recovery_codes_count].each do |name|
+        expect(described_class.secret_name?(name)).to be(false), name
+      end
     end
 
     # `primary_key` is ordinary ActiveRecord vocabulary; only the encryption

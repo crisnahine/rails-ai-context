@@ -83,6 +83,14 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(described_class.read(root: root)).to be_nil
     end
 
+    it "reads a record that holds a list, not settings, as no record" do
+      write_yaml("- ai_tools\n- tool_mode\n")
+
+      expect(described_class.read(root: root)).to be_nil
+      expect(described_class.tool_mode(root: root)).to be_nil
+      expect(described_class.context_files(root: root)).to be_nil
+    end
+
     it "drops a name that is not a known AI tool" do
       write_initializer("config.ai_tools = %i[claude emacs]\n")
 
@@ -282,6 +290,24 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
         expect(described_class.write([ :cursor ], root: root)).to include(yaml: :updated)
         expect(described_class.read(root: root)).to eq([ :cursor ])
+      end
+
+      it "reads and updates a record that uses an alias, as the config loader does" do
+        File.write(File.join(root, ".rails-ai-context.yml"),
+                   "tools: &tools\n  - claude\nai_tools: *tools\nlog_lines: 30\n")
+
+        expect(described_class.read(root: root)).to eq([ :claude ])
+        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :updated)
+        expect(described_class.read(root: root)).to eq([ :cursor ])
+        expect(File.read(File.join(root, ".rails-ai-context.yml"))).to include("log_lines: 30")
+      end
+
+      it "edits a record in place when an alias sits on a key it leaves alone" do
+        File.write(File.join(root, ".rails-ai-context.yml"),
+                   "# shared values\nlimits: &lim 12345\nmax_tool_response_chars: *lim  # via alias\nai_tools:\n  - claude\n")
+
+        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :updated)
+        expect(File.read(File.join(root, ".rails-ai-context.yml"))).to include("# shared values", "*lim  # via alias", "- cursor")
       end
 
       it "reports the tools it actually recorded" do
@@ -607,6 +633,12 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       write_initializer("  config.tool_mode = :cli\n")
 
       expect(described_class.tool_mode(root: root)).to eq(:cli)
+    end
+
+    it "is nil when the recorded value is not a name" do
+      write_yaml("tool_mode: true\n")
+
+      expect(described_class.tool_mode(root: root)).to be_nil
     end
 
     it "ignores the commented-out default in the generated initializer" do

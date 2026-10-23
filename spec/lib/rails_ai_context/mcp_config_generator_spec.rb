@@ -390,7 +390,28 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           expect(result[:skipped].size).to eq(2)
           expect(File.read(File.join(dir, ".mcp.json"))).to eq(http)
           expect(File.read(File.join(dir, ".codex/config.toml"))).to eq(toml)
-          expect(result[:notes].values).to all(include("kept rails-ai-context", "in place of the gem's"))
+          expect(result[:notes].values).to all(eq("kept rails-ai-context, which reaches the gem's HTTP endpoint, in place of the gem's"))
+        end
+      end
+
+      it "says an inline Codex table with a url reaches the gem's HTTP endpoint" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), %([mcp_servers]\nrails-ai-context = { url = "http://localhost:3000/mcp" }\n))
+
+          result = described_class.new(tools: %i[codex], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:notes].values.first).to start_with("kept rails-ai-context, which reaches the gem's HTTP endpoint")
+        end
+      end
+
+      it "keeps an entry under the bare name with neither command nor url, and does not call it the HTTP endpoint" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), %({"mcpServers": {"rails-ai-context": {"type": "stdio"}}}\n))
+
+          result = described_class.new(tools: %i[claude], output_dir: dir, tool_mode: :mcp, standalone: true).call
+
+          expect(result[:notes].values).to eq([ "kept rails-ai-context, which runs something other than the gem's server, in place of the gem's" ])
         end
       end
 

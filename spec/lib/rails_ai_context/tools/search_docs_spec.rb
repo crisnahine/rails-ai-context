@@ -168,6 +168,21 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
       expect(text).to include("reinstall rails-ai-context")
     end
 
+    # Reinstalling cannot help a process that still points at the removed folder.
+    it "says to reconnect when a cleanup removed this copy's files under it" do
+      described_class.instance_variable_set(:@docs_index, nil)
+      allow(File).to receive(:exist?).with(described_class::INDEX_PATH).and_return(false)
+      allow(RailsAiContext).to receive(:files_gone?).and_return(true)
+      allow(RailsAiContext).to receive(:stdio_open).and_return(true)
+
+      result = described_class.call(query: "active record")
+      text = result.content.first[:text]
+
+      expect(text).to include("rails-ai-context #{RailsAiContext::VERSION}'s files at", "are gone", "/mcp, then Reconnect")
+      expect(text).not_to include("reinstall")
+      expect(result.error?).to be(true)
+    end
+
     it "handles malformed JSON index gracefully" do
       described_class.instance_variable_set(:@docs_index, nil)
       allow(RailsAiContext::SafeFile).to receive(:read).with(described_class::INDEX_PATH).and_return("not valid json{{{")

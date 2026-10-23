@@ -283,6 +283,21 @@ RSpec.describe RailsAiContext::InitializerSettings do
     expect(Process.clock_gettime(cpu) - started).to be < 5
   end
 
+  it "passes over a file it cannot open, which no boot loads either" do
+    skip "root reads any file" if Process.respond_to?(:euid) && Process.euid.zero?
+    skip "chmod cannot take read access away on Windows" if Gem.win_platform?
+
+    write("app/models/unread.rb", "class Unread; end\n")
+    write("config/initializers/rails_ai_context.rb", "RailsAiContext.configure { |c| c.excluded_paths += %w[private_data] }\n")
+    File.chmod(0o000, File.join(@root, "app/models/unread.rb"))
+
+    expect(described_class.boot_files(@root)).to eq([ "config/initializers/rails_ai_context.rb" ])
+    expect { apply }.not_to raise_error
+    expect(config.excluded_paths).to include("private_data")
+  ensure
+    File.chmod(0o644, File.join(@root, "app/models/unread.rb")) if File.exist?(File.join(@root, "app/models/unread.rb"))
+  end
+
   it "lists the same files with ripgrep and without it" do
     skip "requires ripgrep" unless RailsAiContext::Executable.on_path?("rg")
 

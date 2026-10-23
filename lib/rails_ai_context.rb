@@ -42,6 +42,8 @@ module RailsAiContext
   # How much of a static-tier reason a per-answer footer carries.
   STATIC_REASON_HEAD = 140
 
+  LIB_DIR = __dir__
+
   class Error < StandardError; end
   class ConfigurationError < Error; end
 
@@ -145,6 +147,30 @@ module RailsAiContext
       return reason if reason.nil? || reason.length <= STATIC_REASON_HEAD
 
       "#{reason[0, STATIC_REASON_HEAD].rstrip}..."
+    end
+
+    # The gem loads its files lazily, so a gem cleanup or uninstall under a
+    # running server breaks every call that reaches a file not loaded yet.
+    def files_gone?
+      !Dir.exist?(LIB_DIR)
+    end
+
+    # A client starts a new stdio server on reconnect; an HTTP one stays up until its process restarts.
+    def files_gone_message
+      fix = if stdio_open
+        "Reconnect the server (in Claude Code: /mcp, then Reconnect) or restart the AI client."
+      else
+        "Restart the process serving it (`rails-ai-context serve --transport http`, or the Rails server where the app " \
+          "mounts it), then reconnect the client."
+      end
+      "rails-ai-context #{VERSION}'s files at #{File.dirname(LIB_DIR)} are gone: a gem cleanup or uninstall removed them " \
+        "while this server ran. #{fix}"
+    end
+
+    # What a request that needs a file the gem cannot load answers, logged as well: its callers rescue the
+    # LoadError, which past them ends the process, and every tool with it.
+    def load_error_message(error)
+      (files_gone? ? files_gone_message : error.message).tap { |text| $stderr.puts "[rails-ai-context] #{text}" }
     end
 
     # Quick access to introspect the current Rails app

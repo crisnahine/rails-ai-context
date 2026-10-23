@@ -138,7 +138,13 @@ module RailsAiContext
 
       Result.new(status: :failed, error: BootError.new("config/environment.rb loaded but defined no Rails application"))
     rescue SystemExit => e
-      Result.new(status: :failed, error: BootExitError.new("App called exit(#{e.status}) during boot"))
+      # Bundler in a terminal exits on a missing gem; keeping its error as the cause lets callers name it.
+      error = begin
+        raise BootExitError, "App called exit(#{e.status}) during boot", cause: e.cause
+      rescue BootExitError => raised
+        raised
+      end
+      Result.new(status: :failed, error: error)
     end
 
     # The same three protections for callers that boot through their own

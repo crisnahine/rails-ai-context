@@ -49,8 +49,15 @@ RSpec.describe RailsAiContext::SecretColumns do
       end
     end
 
+    it "is true for a plural secret word or a list of codes" do
+      %w[api_keys tokens passwords recovery_codes backup_codes otp_backup_codes recoveryCodes backupCodes otpBackupCodes].each do |name|
+        expect(secrets.secret?(name)).to be(true), name
+      end
+    end
+
     it "is false for ordinary columns" do
-      %w[id email name status created_at user_id lock_version salt_length archive active private_ivy].each do |name|
+      %w[id email name status created_at user_id lock_version salt_length archive active private_ivy primary_keys foreign_keys
+         cache_keys recovery_codes_count].each do |name|
         expect(secrets.secret?(name)).to be(false), name
       end
     end

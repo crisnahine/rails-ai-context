@@ -375,6 +375,16 @@ Proof sources:
    `--no-boot`, compared with v5.36.7 and every changed answer checked; the
    touched specs on Rails 7.0 (Ruby 3.1) and on prism 1.4; and the unit suite
    and the E2E harness on Linux, macOS and Windows.
+   In the v5.36.9 release QA: each fix's example failing on the code before
+   it; `doctor`'s plugin checks against what Claude Code 2.1.308 and 2.1.309
+   do with the same settings (marketplaces, enabled plugins, server command
+   and URL rules, managed files and `managed-mcp.json`), and the plugin's
+   launcher under Ruby 2.6 and 3.1; `rails_read_logs` and `rails_query` on
+   plural secret names and code lists, compared with v5.36.8 in a booted
+   SQLite app; the QA ladder on the SQLite labs in every tier, the E2E harness
+   and one large open-source app, booted; the unit suite on Ruby 3.4 and on
+   Rails 7.0 (Ruby 3.1); and the unit suite and the E2E harness on Linux,
+   macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

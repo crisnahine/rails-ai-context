@@ -10,7 +10,7 @@ RSpec.describe RailsAiContext::UpdateCheck do
     described_class.instance_variable_set(:@enabled, true)
     described_class.instance_variable_set(:@newest_at_start, nil)
     allow(described_class).to receive_messages(state_file: state, ci?: false, newest_installed: nil)
-    stub_const("ENV", ENV.to_h.merge(described_class::OPT_OUT_ENV => nil))
+    stub_const("ENV", ENV.to_h.merge(described_class::OPT_OUT_ENV => nil, "CLAUDE_PLUGIN_ROOT" => nil))
     stub_const("RailsAiContext::VERSION", "5.36.3")
   end
 
@@ -18,6 +18,7 @@ RSpec.describe RailsAiContext::UpdateCheck do
     described_class.remove_instance_variable(:@enabled)
     described_class.remove_instance_variable(:@newest_at_start)
     described_class.remove_instance_variable(:@gem_dirs) if described_class.instance_variable_defined?(:@gem_dirs)
+    described_class.remove_instance_variable(:@pinned) if described_class.instance_variable_defined?(:@pinned)
     FileUtils.rm_rf(dir)
   end
 
@@ -57,6 +58,14 @@ RSpec.describe RailsAiContext::UpdateCheck do
       expect(note).to include("`gem update rails-ai-context`", "`rails-ai-context init --defaults`", "RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1")
     end
 
+    # Updating the installed gem would leave such an app on the version its lockfile names.
+    it "says nothing for an app whose lockfile pins the gem" do
+      write_latest("5.36.4")
+      described_class.pinned!
+
+      expect(described_class.notice).to be_nil
+    end
+
     it "says nothing when the running copy is the latest or newer" do
       write_latest("5.36.3")
       expect(described_class.notice).to be_nil
@@ -86,6 +95,38 @@ RSpec.describe RailsAiContext::UpdateCheck do
       described_class.instance_variable_set(:@newest_at_start, Gem::Version.new("5.36.3"))
       allow(described_class).to receive(:newest_installed).and_return(Gem::Version.new("5.36.5"))
       expect(described_class.notice).to start_with("rails-ai-context 5.37.0 is out; this is 5.36.3")
+    end
+
+    # Claude Code sets CLAUDE_PLUGIN_ROOT for a plugin's server, and init
+    # there would add a second server beside the plugin's.
+    describe "as a Claude Code plugin's server" do
+      before do
+        ENV["CLAUDE_PLUGIN_ROOT"] = "/plugins/rails-ai-context"
+        write_latest("5.37.0")
+      end
+
+      it "asks for the update and a reconnect, and never for init" do
+        expect(described_class.notice).to eq(
+          "rails-ai-context 5.37.0 is out; this is 5.36.3 on Ruby #{RUBY_VERSION} (#{RbConfig.ruby}). " \
+          "Under that Ruby run `gem update rails-ai-context`, then reconnect the server in /mcp (or start a new session). " \
+          "RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1 turns this check off."
+        )
+      end
+
+      it "asks for a reconnect when the newer release is installed" do
+        described_class.instance_variable_set(:@newest_at_start, Gem::Version.new("5.36.3"))
+        allow(described_class).to receive(:newest_installed).and_return(Gem::Version.new("5.37.0"))
+
+        expect(described_class.notice).to eq(
+          "rails-ai-context 5.37.0 is installed, but this process still runs 5.36.3. " \
+          "Reconnect the server in /mcp (or start a new session) to load it."
+        )
+      end
+
+      it "keeps the usual wording when the variable is empty" do
+        ENV["CLAUDE_PLUGIN_ROOT"] = ""
+        expect(described_class.notice).to include("`rails-ai-context init --defaults`")
+      end
     end
 
     it "says nothing, and raises nothing, for a state file that is not text or no home to find it in" do
@@ -241,9 +282,9 @@ RSpec.describe RailsAiContext::UpdateCheck do
       end
       let(:thor) { Gem.loaded_specs.fetch("thor").full_require_paths.first }
 
-      def run_on_terminal(extra = {})
+      def run_on_terminal(extra = {}, *args)
         require "pty"
-        reader, _writer, pid = PTY.spawn(env.merge(extra), RbConfig.ruby, "-I", lib, "-I", thor, exe, "version")
+        reader, _writer, pid = PTY.spawn(env.merge(extra), RbConfig.ruby, "-I", lib, "-I", thor, exe, *(args.empty? ? [ "version" ] : args))
         out = +""
         begin
           loop { out << reader.readpartial(4096) }
@@ -258,6 +299,25 @@ RSpec.describe RailsAiContext::UpdateCheck do
         skip "no PTY on Windows" if Gem.win_platform?
         expect(run_on_terminal).to include("rails-ai-context 999.0.0 is out")
         expect(run_on_terminal("BUNDLE_BIN_PATH" => "/the/bundle/exe/bundle")).not_to include("is out")
+      end
+
+      # The lockfile, not an update, picks the copy an app that locks this very version runs.
+      it "prints none for an app whose lockfile names the version running, and one where it names another" do
+        skip "no PTY on Windows" if Gem.win_platform?
+        app = File.join(dir, "shop")
+        FileUtils.mkdir_p(File.join(app, "config"))
+        File.write(File.join(app, "config", "application.rb"), "")
+        File.write(File.join(app, "Gemfile"), %(gem "rails-ai-context"\n))
+        lock = lambda do |version|
+          File.write(File.join(app, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (#{version})\n\n" \
+                                                     "PLATFORMS\n  ruby\n\nDEPENDENCIES\n  rails-ai-context\n")
+        end
+
+        # The child runs the real version, not the one this example stubs.
+        lock.(File.read(File.join(lib, "rails_ai_context", "version.rb"))[/VERSION = "([^"]+)"/, 1])
+        expect(run_on_terminal({}, "--app-path", app, "mcp-entry")).not_to include("is out")
+        lock.("5.0.0")
+        expect(run_on_terminal({}, "--app-path", app, "mcp-entry")).to include("rails-ai-context 999.0.0 is out")
       end
 
       it "prints nothing when stderr is not a terminal" do

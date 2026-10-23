@@ -8,11 +8,23 @@ module RailsAiContext
     CONFIG_FILENAME = ".rails-ai-context.yml"
 
     # Keys that require symbol conversion (string → symbol or array of symbols)
-    SYMBOL_KEYS = %i[tool_mode preset context_mode live_reload].freeze
+    SYMBOL_KEYS = %i[tool_mode preset context_mode].freeze
 
     CONTEXT_MODES = %i[compact full].freeze
     TOOL_MODES = %i[mcp cli].freeze
     SYMBOL_ARRAY_KEYS = %i[ai_tools introspectors].freeze
+
+    # The shape each key's value takes, so a wrong one warns from the file instead of failing a tool later.
+    LIST_KEYS = %i[
+      excluded_models excluded_controllers excluded_route_prefixes excluded_filters excluded_middleware
+      excluded_association_names excluded_paths excluded_concerns sensitive_patterns search_extensions
+      concern_paths frontend_paths extra_app_paths query_redacted_columns query_allowed_columns
+    ].freeze
+    INTEGER_KEYS = %i[
+      claude_max_lines cache_ttl max_tool_response_chars http_port max_file_size max_test_file_size
+      max_schema_file_size max_view_total_size max_view_file_size max_search_results max_validate_files
+      query_row_limit log_lines hydration_max_hints
+    ].freeze
 
     # All YAML-supported keys (explicit allowlist for safety)
     YAML_KEYS = %i[
@@ -49,7 +61,7 @@ module RailsAiContext
     def self.load_from_yaml(path)
       return unless File.exist?(path)
 
-      data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES) || {}
+      data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES, aliases: true) || {}
       return $stderr.puts("[rails-ai-context] WARNING: #{path}: the file holds no `key: value` settings. Ignored.") unless data.is_a?(Hash)
 
       config = RailsAiContext.configuration
@@ -84,7 +96,7 @@ module RailsAiContext
       end
 
       config
-    rescue Psych::SyntaxError, Psych::DisallowedClass => e
+    rescue Psych::Exception => e
       $stderr.puts "[rails-ai-context] WARNING: #{path} has invalid YAML (#{e.message}). Using defaults."
       nil
     rescue SystemCallError => e
@@ -133,15 +145,50 @@ module RailsAiContext
     private_class_method :nearest_yaml_key
 
     def self.coerce_value(key, value)
-      if SYMBOL_KEYS.include?(key)
-        value.respond_to?(:to_sym) ? value.to_sym : value
-      elsif SYMBOL_ARRAY_KEYS.include?(key)
-        Array(value).map(&:to_sym)
+      # Any other shape goes to the setter as given, which names the values it takes.
+      if SYMBOL_KEYS.include?(key) then value.is_a?(String) ? value.to_sym : value
+      elsif SYMBOL_ARRAY_KEYS.include?(key) then names(value, key).map(&:to_sym)
+      elsif LIST_KEYS.include?(key) then names(value, key)
       else
         value
       end
     end
     private_class_method :coerce_value
+
+    # A list of names, from YAML or Ruby. An empty item, such as an unset ENV
+    # lookup, is dropped; a nested list is the same mistake as a bad value.
+    def self.names(value, key)
+      list = Array(value).compact
+      raise ArgumentError, "#{key} must be a list of names (got #{shown(value)})" unless list.all? { |name| name.is_a?(String) || name.is_a?(Symbol) }
+
+      list
+    end
+
+    # A number, or text that reads as one (`1e5` included), from YAML or Ruby, cut to a whole number
+    # as it always was; a list, a mapping or `300s` is the same mistake as a bad number.
+    def self.integer(value, key)
+      number = number(value)
+      raise ArgumentError, "#{key} must be a number (got #{shown(value)})" unless number.is_a?(Numeric) && number.finite?
+
+      number.to_i
+    end
+
+    # Text read as a number, with a leading zero read as decimal: "010" is ten.
+    def self.number(value)
+      value.is_a?(String) ? Integer(value, 10, exception: false) || Float(value, exception: false) : value
+    end
+
+    # A rejected value as an error message names it. With YAML aliases a short file can hold a list
+    # too large to print, so a list or mapping goes by its size and a scalar is cut short.
+    def self.shown(value)
+      case value
+      when Array then "a list of #{value.size} item#{'s' unless value.size == 1}"
+      when Hash then "a mapping of #{value.size} key#{'s' unless value.size == 1}"
+      else
+        text = value.inspect
+        text.length > 60 ? "#{text[0, 57]}..." : text
+      end
+    end
 
     # Keys a `RailsAiContext.configure` block assigned. The YAML load skips
     # them, so the block wins key by key whether it sits in an initializer,
@@ -249,10 +296,10 @@ module RailsAiContext
     # :auto (default) - enable if `listen` gem is available, say so on stderr otherwise
     # true  - enable, raise if `listen` gem is missing
     # false - disable entirely
-    attr_accessor :live_reload
+    attr_reader :live_reload
 
     # Debounce interval in seconds for live reload file watching
-    attr_accessor :live_reload_debounce
+    attr_reader :live_reload_debounce
 
     # Whether to include raw tool arguments in ActiveSupport::Notifications
     # instrumentation events. Default: false (v5.8.1+). When false, only
@@ -283,14 +330,14 @@ module RailsAiContext
     attr_accessor :anti_hallucination_rules
 
     # File size limits (bytes) - increase for larger projects
-    attr_accessor :max_file_size          # Per-file read limit for tools (default: 5MB)
-    attr_accessor :max_test_file_size     # Test file read limit (default: 1MB)
-    attr_accessor :max_schema_file_size   # schema.rb / structure.sql parse limit (default: 10MB)
+    attr_reader :max_file_size            # Per-file read limit for tools (default: 5MB)
+    attr_reader :max_test_file_size       # Test file read limit (default: 1MB)
+    attr_reader :max_schema_file_size     # schema.rb / structure.sql parse limit (default: 10MB)
     # Doctor thresholds, not read caps: the view tools do not stop at them.
-    attr_accessor :max_view_total_size    # Size of app/views doctor warns past (default: 10MB)
-    attr_accessor :max_view_file_size     # Accepted and stored; no check reads it (default: 1MB)
-    attr_accessor :max_search_results     # Max lines a search may emit, matches and context together (default: 200)
-    attr_accessor :max_validate_files     # Max files per validate call (default: 50)
+    attr_reader :max_view_total_size      # Size of app/views doctor warns past (default: 10MB)
+    attr_reader :max_view_file_size       # Accepted and stored; no check reads it (default: 1MB)
+    attr_reader :max_search_results       # Max lines a search may emit, matches and context together (default: 200)
+    attr_reader :max_validate_files       # Max files per validate call (default: 50)
 
     # Additional MCP tool classes to register alongside built-in tools
     attr_accessor :custom_tools
@@ -388,11 +435,11 @@ module RailsAiContext
     attr_accessor :allow_query_in_production  # Allow rails_query in production (default: false)
 
     # Log reading settings (rails_read_logs)
-    attr_accessor :log_lines                  # Default lines to tail (default: 50)
+    attr_reader :log_lines                    # Default lines to tail (default: 50)
 
     # Hydration: inject schema hints into controller/view tool responses
     attr_accessor :hydration_enabled          # Enable/disable hydration (default: true)
-    attr_accessor :hydration_max_hints        # Max schema hints per response (default: 5)
+    attr_reader :hydration_max_hints          # Max schema hints per response (default: 5)
 
     def initialize
       @server_name         = "rails-ai-context"
@@ -470,8 +517,10 @@ module RailsAiContext
     end
 
     def preset=(name)
+      raise ArgumentError, "preset must be #{PRESETS.keys.join(' or ')} (got #{self.class.shown(name)})" unless name.respond_to?(:to_sym)
+
       name = name.to_sym
-      raise ArgumentError, "Unknown preset: #{name}. Valid presets: #{PRESETS.keys.join(", ")}" unless PRESETS.key?(name)
+      raise ArgumentError, "Unknown preset: #{self.class.shown(name.to_s)}. Valid presets: #{PRESETS.keys.join(", ")}" unless PRESETS.key?(name)
       self.introspectors = PRESETS[name].dup
     end
 
@@ -480,7 +529,7 @@ module RailsAiContext
     # symbols, so %i[] is written often enough that accepting it as a no-op
     # meant a configured skip silently kept the tool.
     def skip_tools=(value)
-      @skip_tools = Array(value).map(&:to_s)
+      @skip_tools = self.class.names(value, :skip_tools).map(&:to_s)
     end
 
     # A YAML file can only carry strings, and an invalid one would otherwise
@@ -493,7 +542,7 @@ module RailsAiContext
         begin
           Regexp.new(pattern.to_s)
         rescue RegexpError => e
-          raise ArgumentError, "invalid pattern #{pattern.to_s.inspect} (#{e.message})"
+          raise ArgumentError, "invalid pattern #{self.class.shown(pattern.to_s)} (#{e.message})"
         end
       end
     end
@@ -503,42 +552,42 @@ module RailsAiContext
     end
 
     def http_port=(value)
-      value = value.to_i
-      raise ArgumentError, "http_port must be between 1 and 65535 (got #{value})" unless value.between?(1, 65535)
+      value = self.class.integer(value, :http_port)
+      raise ArgumentError, "http_port must be between 1 and 65535 (got #{self.class.shown(value)})" unless value.between?(1, 65535)
       @http_port = value
     end
 
     def cache_ttl=(value)
-      value = value.to_i
-      raise ArgumentError, "cache_ttl must be positive (got #{value})" unless value > 0
+      value = self.class.integer(value, :cache_ttl)
+      raise ArgumentError, "cache_ttl must be positive (got #{self.class.shown(value)})" unless value > 0
       @cache_ttl = value
     end
 
     def claude_max_lines=(value)
-      value = value.to_i
-      raise ArgumentError, "claude_max_lines must be positive (got #{value})" unless value > 0
+      value = self.class.integer(value, :claude_max_lines)
+      raise ArgumentError, "claude_max_lines must be positive (got #{self.class.shown(value)})" unless value > 0
       @claude_max_lines = value
     end
 
     def max_tool_response_chars=(value)
-      value = value.to_i
-      raise ArgumentError, "max_tool_response_chars must be positive (got #{value})" unless value > 0
+      value = self.class.integer(value, :max_tool_response_chars)
+      raise ArgumentError, "max_tool_response_chars must be positive (got #{self.class.shown(value)})" unless value > 0
       @max_tool_response_chars = value
     end
 
     # A fraction of a second is kept as given: each database family rounds it up to the least it can bound.
     def query_timeout=(value)
-      number = value.is_a?(String) ? Integer(value, exception: false) || Float(value, exception: false) : value
+      number = self.class.number(value)
       unless number.is_a?(Numeric) && number.real? && number.positive? && number.finite?
-        raise ArgumentError, "query_timeout must be positive (got #{value})"
+        raise ArgumentError, "query_timeout must be positive (got #{self.class.shown(value)})"
       end
 
       @query_timeout = number
     end
 
     def query_row_limit=(value)
-      value = value.to_i
-      raise ArgumentError, "query_row_limit must be between 1 and 1000 (got #{value})" unless value.between?(1, 1000)
+      value = self.class.integer(value, :query_row_limit)
+      raise ArgumentError, "query_row_limit must be between 1 and 1000 (got #{self.class.shown(value)})" unless value.between?(1, 1000)
       @query_row_limit = value
     end
 
@@ -553,12 +602,45 @@ module RailsAiContext
       @tool_mode = one_of(:tool_mode, value, TOOL_MODES)
     end
 
+    # The server reads only false as off, so any other value would turn live reload on silently.
+    def live_reload=(value)
+      @live_reload =
+        case value
+        when true, "true" then true
+        when false, "false" then false
+        when :auto, "auto" then :auto
+        else raise ArgumentError, "live_reload must be true, false or auto (got #{self.class.shown(value)})"
+        end
+    end
+
+    def live_reload_debounce=(value)
+      number = value.is_a?(String) ? Float(value, exception: false) : value
+      unless number.is_a?(Numeric) && number.real? && number.finite? && !number.negative?
+        raise ArgumentError, "live_reload_debounce must be a number of seconds (got #{self.class.shown(value)})"
+      end
+
+      @live_reload_debounce = number
+    end
+
     def one_of(key, value, allowed)
       symbol = value.respond_to?(:to_sym) ? value.to_sym : value
       return symbol if allowed.include?(symbol)
 
-      raise ArgumentError, "#{key} must be #{allowed.join(' or ')} (got #{value})"
+      raise ArgumentError, "#{key} must be #{allowed.join(' or ')} (got #{self.class.shown(value)})"
     end
     private :one_of
+
+    # Zero hints turns hydration off; every other key caps a size or a count, where zero lets nothing through.
+    INTEGER_KEYS.each do |key|
+      next if instance_methods(false).include?(:"#{key}=")
+
+      least = key == :hydration_max_hints ? 0 : 1
+      define_method(:"#{key}=") do |value|
+        value = self.class.integer(value, key)
+        raise ArgumentError, "#{key} must be #{least.zero? ? 'zero or more' : 'positive'} (got #{self.class.shown(value)})" if value < least
+
+        instance_variable_set(:"@#{key}", value)
+      end
+    end
   end
 end
