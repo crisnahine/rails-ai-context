@@ -17,20 +17,10 @@ begin
   found = RailsAiContext::CLI::AppRoot.resolve(cwd: start)
   root = found.root or exit
   exit unless RailsAiContext::CLI::EntryBoot.app_present?(root, allow_source_only: true)
-  # The server hands such an app to its bundle's copy, whose tools the rules then
-  # name. Most apps never lock the gem, and reading a lock whole takes a second.
-  # shortcut: repeats AppRoot.lock_names_gem?, which the 5.35.1 floor lacks; call it once the requirement reaches a release that has it.
+  # The server hands such an app to its bundle's copy, whose tools the rules then name.
   named = ENV["BUNDLE_GEMFILE"].to_s
-  lockfile = if named.empty? then RailsAiContext::GemLock.bundle(root).lockfile
-  elsif File.basename(named) == "gems.rb" then File.join(File.dirname(named), "gems.locked")
-  else "#{named}.lock"
-  end
-  names_gem = begin
-    lockfile && File.file?(lockfile) && File.read(lockfile).include?("rails-ai-context")
-  rescue SystemCallError, IOError
-    false
-  end
-  if names_gem
+  gemfile = named.empty? ? RailsAiContext::GemLock.bundle(root).gemfile : named
+  if gemfile && RailsAiContext::CLI::AppRoot.lock_names_gem?(gemfile)
     handoff = RailsAiContext::CLI::AppRoot.bundled_handoff(root)
     exit if handoff && !requirement.satisfied_by?(Gem::Version.new(handoff.version)) &&
             RailsAiContext::CLI::AppRoot.bundle_ready?(handoff.env, root)

@@ -146,7 +146,7 @@ which leaves the committed file as it is.
   repository's root wrote an app's own `.mcp.json`, which sessions started in
   the app read, a `--scope local` install that reaches those sessions runs the
   plugin beside it; `doctor` names the one to turn off.
-- **The gem comes first.** The plugin needs rails-ai-context 5.35.1 or later,
+- **The gem comes first.** The plugin needs rails-ai-context 5.36.9 or later,
   installed for the `ruby` on Claude Code's `PATH` (Ruby 3.1 or later); `gem
   update rails-ai-context` brings an older one up. A shim version manager
   (rbenv, asdf, or mise with its shims on `PATH`) picks that Ruby by the folder

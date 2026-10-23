@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The Claude Code plugin needs rails-ai-context 5.36.9 or later**, the first
+  release whose `doctor` and update notice know it; an older one sent you to
+  `init`, which adds a second server beside the plugin's. With an older gem the
+  plugin's server connects with no tools and says to update it.
+
 ## [5.36.9] - 2026-10-23
 
 ### Security
