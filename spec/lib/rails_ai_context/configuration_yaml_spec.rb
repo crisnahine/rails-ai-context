@@ -422,7 +422,7 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
         warning = output.lines.find { |line| line.include?("excluded_models:") }
         expect(warning).to include("excluded_models must be a list of names (got a list of 10 items)")
-        expect(warning.length).to be < 300
+        expect(warning.sub(yaml_path, "").length).to be < 300
         expect(config.excluded_models).to eq(described_class.new.excluded_models)
       end
     end
@@ -434,7 +434,7 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
           File.write(yaml_path, "#{line}\n")
           warning = capture_stderr { described_class.load_from_yaml(yaml_path) }
           expect(warning).to include(start)
-          expect(warning.length).to be < 300
+          expect(warning.sub(yaml_path, "").length).to be < 300
         end
       end
       expect { described_class.new.preset = "z" * 5000 }.to raise_error(ArgumentError) { |e| expect(e.message.length).to be < 300 }

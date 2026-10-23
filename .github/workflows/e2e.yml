@@ -92,13 +92,19 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
+      - name: Name the Ruby the bundle is built for
+        id: ruby
+        shell: bash
+        run: echo "build=$(ruby -e 'print RUBY_VERSION, "-", RUBY_PLATFORM')" >> "$GITHUB_OUTPUT"
+
+      # Native extensions in it link to that exact Ruby, so a runner's patch update needs a fresh bundle.
       - name: Cache shared e2e bundle directory
         uses: actions/cache@v6
         with:
           path: .e2e-bundle
-          key: e2e-bundle-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-v1
+          key: e2e-bundle-ruby${{ steps.ruby.outputs.build }}-rails${{ matrix.rails }}-v1
           restore-keys: |
-            e2e-bundle-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-
+            e2e-bundle-ruby${{ steps.ruby.outputs.build }}-rails${{ matrix.rails }}-
 
       - name: Install Rails globally (for `rails new`)
         env:
@@ -174,13 +180,19 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
+      - name: Name the Ruby the bundle is built for
+        id: ruby
+        shell: bash
+        run: echo "build=$(ruby -e 'print RUBY_VERSION, "-", RUBY_PLATFORM')" >> "$GITHUB_OUTPUT"
+
+      # Native extensions in it link to that exact Ruby, so a runner's patch update needs a fresh bundle.
       - name: Cache shared e2e bundle directory
         uses: actions/cache@v6
         with:
           path: .e2e-bundle
-          key: e2e-bundle-${{ matrix.os }}-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-v1
+          key: e2e-bundle-${{ matrix.os }}-ruby${{ steps.ruby.outputs.build }}-rails${{ matrix.rails }}-v1
           restore-keys: |
-            e2e-bundle-${{ matrix.os }}-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-
+            e2e-bundle-${{ matrix.os }}-ruby${{ steps.ruby.outputs.build }}-rails${{ matrix.rails }}-
 
       - name: Install Rails globally (for `rails new`)
         run: gem install rails -v "~> ${{ matrix.rails }}.0" --no-document

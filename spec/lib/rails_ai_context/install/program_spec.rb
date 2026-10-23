@@ -131,6 +131,8 @@ RSpec.describe RailsAiContext::Install::Program do
 
     # In a repository's subfolder, the local file that wins is the repository's.
     it "names the local file that turns the committed plugin off where it is" do
+      skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
       Dir.mktmpdir do |repo|
         root = File.join(repo, "shop")
         FileUtils.mkdir_p([ File.join(repo, ".git"), File.join(repo, ".claude") ])
@@ -307,6 +309,8 @@ RSpec.describe RailsAiContext::Install::Program do
 
     # The plugin serves a folder holding one app, and fails to start in a folder of several.
     it "writes a workspace's servers only where the folder holds several apps, and says the plugin fails there" do
+      skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
       Dir.mktmpdir do |root|
         commit_plugin(root)
         server = ->(app) { RailsAiContext::McpConfigGenerator::Server.new(name: "rails-ai-context-#{app}", standalone: true, app_path: app) }

@@ -58,6 +58,8 @@ RSpec.describe RailsAiContext::Install::ClaudePluginRemoval do
 
   # The repository's local file is written from any session in it, and every one of them reads it.
   it "names one folder per repository whose sessions run the plugin" do
+    skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
     root = app("shop")
     installed(id)
     on(id)
@@ -104,6 +106,8 @@ RSpec.describe RailsAiContext::Install::ClaudePluginRemoval do
 
   # The repository's main checkout holds the local file every session in it reads, the other apps' included.
   it "says a disable in an app below its git root reaches every session in that repository" do
+    skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
     repo = File.join(@dir, "mono")
     FileUtils.mkdir_p(File.join(repo, ".git"))
     root = app("mono/shop", git: false)
@@ -152,6 +156,8 @@ RSpec.describe RailsAiContext::Install::ClaudePluginRemoval do
 
   # In a folder of apps one line covers them all where it holds for each; else each names its app.
   it "says one line for a folder of apps it holds for, and names the app where they differ" do
+    skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
     work = File.join(@dir, "work")
     FileUtils.mkdir_p(File.join(work, ".git"))
     shop = app("work/shop", git: false)

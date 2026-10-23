@@ -682,8 +682,11 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(JSON.parse(File.read(File.join(dir, "shop", ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
         expect(err).to include("Claude Code: no server written into .mcp.json here:")
         expect(err).to include("Claude Code      -> the rails-ai-context plugin, and shop/.mcp.json for sessions started in shop; CLAUDE.md")
-        expect(err).to include("Claude Code: the rails-ai-context plugin already serves this app for you, so turn the .mcp.json server " \
-                               "`rails-ai-context` off with /mcp in a session started in shop, or Claude Code lists every tool twice")
+        # On Windows the repository's local settings stay in its folder, so the plugin does not run in shop.
+        unless Gem.win_platform?
+          expect(err).to include("Claude Code: the rails-ai-context plugin already serves this app for you, so turn the .mcp.json server " \
+                                 "`rails-ai-context` off with /mcp in a session started in shop, or Claude Code lists every tool twice")
+        end
       end
     ensure
       FileUtils.rm_rf(File.dirname(registry))

@@ -843,7 +843,11 @@ RSpec.describe RailsAiContext::Doctor do
     # generator does.
     around do |example|
       Dir.mktmpdir do |dir|
-        @root = File.realpath(dir)
+        # Another app beside this one, so no folder above it resolves to this app, as on a machine with several.
+        FileUtils.mkdir_p(File.join(dir, "blog", "config"))
+        File.write(File.join(dir, "blog", "config", "application.rb"), "")
+        @root = File.join(File.realpath(dir), "shop")
+        FileUtils.mkdir_p(@root)
         @bin = bin_dir_with("bundle", "rails-ai-context")
         example.run
       ensure
@@ -851,11 +855,14 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    let(:app_doctor) { described_class.new(RailsAiContext::StaticApp.new(@root)) }
+    # A doctor that finds commands in @bin, whatever this machine's PATH holds.
+    def fresh_doctor
+      described_class.new(RailsAiContext::StaticApp.new(@root)).tap { |doctor| allow(doctor).to receive(:client_path).and_return(@bin) }
+    end
+
+    let(:app_doctor) { fresh_doctor }
 
     subject(:check) { app_doctor.send(:check_mcp_json) }
-
-    before { allow(app_doctor).to receive(:client_path).and_return(@bin) }
 
     def write(path, content)
       FileUtils.mkdir_p(File.dirname(File.join(@root, path)))
@@ -933,7 +940,7 @@ RSpec.describe RailsAiContext::Doctor do
         )
 
         write(".claude/settings.json", JSON.generate(JSON.parse(plugin_settings).merge("deniedMcpServers" => [ { "serverUrl" => "http://localhost:*/*" } ])))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json))
+        expect(fresh_doctor.send(:check_mcp_json))
           .to have_attributes(status: :pass, message: "1 of 1 MCP config valid: the rails-ai-context plugin (Claude Code)")
       end
 
@@ -947,10 +954,10 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to include("Claude Code's MCP policy keeps `rails-ai-context` from starting")
 
         File.write(user, JSON.generate("allowedMcpServers" => [ { "serverUrl" => "https://tools.example.com/*" } ]))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).fix)
+        expect(fresh_doctor.send(:check_mcp_json).fix)
           .to eq('Add {"serverUrl":"http://localhost:3000/mcp"} to allowedMcpServers in your user settings')
         File.write(user, JSON.generate("allowedMcpServers" => [ { "serverName" => "github" } ]))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).fix)
+        expect(fresh_doctor.send(:check_mcp_json).fix)
           .to eq('Add {"serverName":"rails-ai-context"} to allowedMcpServers in your user settings')
       ensure
         FileUtils.rm_f(user)
@@ -965,7 +972,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.fix).to eq("Fix or remove `myrails` in .mcp.json by hand")
 
         write(".mcp.json", JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => missing, "args" => [ "serve" ] } }))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).fix).to eq("Run `rails generate rails_ai_context:install` to fix")
+        expect(fresh_doctor.send(:check_mcp_json).fix).to eq("Run `rails generate rails_ai_context:install` to fix")
       end
 
       # A file that parses holds no server of the gem's to remove, so the edit is all a committed plugin's .mcp.json needs.
@@ -975,7 +982,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.fix).to eq('Make "mcpServers" in .mcp.json an object')
 
         write(".mcp.json", "[]")
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).fix).to eq("Make .mcp.json a JSON object")
+        expect(fresh_doctor.send(:check_mcp_json).fix).to eq("Make .mcp.json a JSON object")
       end
 
       # A broken entry is a fault of its own, whatever else serves the app, and with the plugin serving it is one to remove.
@@ -1005,8 +1012,8 @@ RSpec.describe RailsAiContext::Doctor do
 
         File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"),
                    JSON.generate("projects" => { @root => { "disabledMcpServers" => [ "plugin:rails-ai-context:rails-ai-context" ] } }))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:mcp_config_verdict, :claude).status).to eq(:pass)
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:claude_code).plugin?).to be(false)
+        expect(fresh_doctor.send(:mcp_config_verdict, :claude).status).to eq(:pass)
+        expect(fresh_doctor.send(:claude_code).plugin?).to be(false)
       ensure
         FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
       end
@@ -1094,10 +1101,10 @@ RSpec.describe RailsAiContext::Doctor do
                                          fix: "Set CLAUDE_CONFIG_DIR to the absolute path of the folder Claude Code keeps its settings in")
 
         write(".mcp.json", server(bundled))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).message).to end_with(problem)
+        expect(fresh_doctor.send(:check_mcp_json).message).to end_with(problem)
 
         write(".claude/settings.json", plugin_settings)
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).message)
+        expect(fresh_doctor.send(:check_mcp_json).message)
           .to eq("1 of 1 MCP config needs attention: the rails-ai-context plugin (Claude Code): #{problem}")
       end
 
@@ -1125,7 +1132,7 @@ RSpec.describe RailsAiContext::Doctor do
 
         write(".claude/settings.json", plugin_settings(false))
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
-        verdict = described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json)
+        verdict = fresh_doctor.send(:check_mcp_json)
         expect(verdict.message).to include("Claude Code's MCP policy keeps `rails-ai-context` from starting")
         # A name entry admits it without turning the github entry to matching by command.
         expect(verdict.fix).to eq("Add {\"serverName\":\"rails-ai-context\"} to allowedMcpServers in your user settings")
@@ -1275,7 +1282,7 @@ RSpec.describe RailsAiContext::Doctor do
         )
 
         File.write(managed_mcp, server(bare))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json))
+        expect(fresh_doctor.send(:check_mcp_json))
           .to have_attributes(status: :pass, message: "1 of 1 MCP config valid")
       ensure
         FileUtils.rm_f(managed_mcp)
@@ -1293,7 +1300,7 @@ RSpec.describe RailsAiContext::Doctor do
 
         FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "settings.json"))
         File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"), JSON.generate("projects" => { @root => { "disabledMcpServers" => [ "rails" ] } }))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).fix)
+        expect(fresh_doctor.send(:check_mcp_json).fix)
           .to eq("Turn `rails` back on with /mcp in a session started here")
       ensure
         FileUtils.rm_rf(managed_dir)
@@ -1309,7 +1316,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check).to have_attributes(status: :pass, message: "1 of 1 MCP config valid")
 
         File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "settings.json"), JSON.generate("deniedMcpServers" => [ { "serverUrl" => "http://localhost:3000/*" } ]))
-        fresh = described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json)
+        fresh = fresh_doctor.send(:check_mcp_json)
         expect(fresh).to have_attributes(status: :warn, fix: 'Remove {"serverUrl":"http://localhost:3000/*"} from deniedMcpServers in your user settings')
         expect(fresh.message).to include("Claude Code does not start `rails-ai-context`, its server for this app: the MCP policy keeps it off")
       ensure
@@ -1383,7 +1390,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.fix).to start_with("Have whoever manages your Claude Code settings add {\"serverCommand\":")
 
         File.write(managed, plugin_settings(false))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json))
+        expect(fresh_doctor.send(:check_mcp_json))
           .to have_attributes(fix: "Have whoever manages your Claude Code settings turn it on")
       ensure
         FileUtils.rm_f(managed)
@@ -1409,7 +1416,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(app_doctor.send(:check_context_freshness)).to be_nil
 
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:cli)
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).message).to include("turns it off for you")
+        expect(fresh_doctor.send(:check_mcp_json).message).to include("turns it off for you")
       end
 
       # The app's own sessions start its .mcp.json server; only sessions started above it run the plugin.
@@ -1431,6 +1438,8 @@ RSpec.describe RailsAiContext::Doctor do
 
       # In a repository's subfolder, the local file that wins is the repository's, where `--scope local` writes it.
       it "names the local settings file that turns a committed plugin off, where it is" do
+        skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
         Dir.mktmpdir do |dir|
           repo = File.realpath(dir)
@@ -1507,6 +1516,8 @@ RSpec.describe RailsAiContext::Doctor do
 
       # A file named from the app's folder would be one that is not there.
       it "names each policy file as a path from where doctor ran, the repository's local file included" do
+        skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
         Dir.mktmpdir do |dir|
           repo = File.realpath(dir)
@@ -1616,15 +1627,14 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to end_with("`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
 
         write(".claude/settings.local.json", plugin_settings(false))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).tap { |doctor| allow(doctor).to receive(:client_path).and_return(@bin) }
-                 .send(:check_mcp_json)).to have_attributes(
+        expect(fresh_doctor.send(:check_mcp_json)).to have_attributes(
                    status: :fail,
                    fix: "Fix `rails` in .mcp.json by hand, or run `claude plugin enable rails-ai-context@rails-ai-context --scope local`"
                  )
       end
 
       it "ends a committed plugin's .mcp.json fix at the hand edit, since the install leaves that file alone" do
-        fix = -> { described_class.new(RailsAiContext::StaticApp.new(@root)).tap { |doctor| allow(doctor).to receive(:client_path).and_return(@bin) }.send(:check_mcp_json).fix }
+        fix = -> { fresh_doctor.send(:check_mcp_json).fix }
         write(".claude/settings.json", plugin_settings)
         write(".mcp.json", %({"mcpServers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"],"env":{"X":"caf\xE9"}}}}).b)
         expect(fix.call).to eq("Save .mcp.json as UTF-8, then remove the gem's server from it; the rails-ai-context plugin serves this app")
@@ -1709,7 +1719,7 @@ RSpec.describe RailsAiContext::Doctor do
         )
 
         File.write(managed, JSON.generate("blockedMarketplaces" => [ { "source" => "github", "repo" => "crisnahine/rails-ai-context" } ]))
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_mcp_json).fix)
+        expect(fresh_doctor.send(:check_mcp_json).fix)
           .to eq("Have whoever manages your Claude Code settings take the entry that names the rails-ai-context marketplace out of blockedMarketplaces in #{managed}")
       ensure
         FileUtils.rm_f(managed)
@@ -2143,7 +2153,7 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:fail)
         expect(check.message).to include("2 of 2")
         expect(check.fix).to start_with("Make .mcp.json, .vscode/mcp.json valid JSON holding an object")
-        expect(described_class.new(RailsAiContext::StaticApp.new(@root)).run[:checks].map(&:message).join)
+        expect(fresh_doctor.run[:checks].map(&:message).join)
           .not_to include("has invalid JSON")
       end
     end
@@ -2532,6 +2542,8 @@ RSpec.describe RailsAiContext::Doctor do
 
       # `--scope local` writes the git root's settings.local.json, which every session in that repository reads.
       it "names one disable for the sessions of one git repository" do
+        skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
         FileUtils.rm_f(File.join(@work, ".mcp.json"))
         FileUtils.mkdir_p(File.join(@work, ".git"))
         File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"),
@@ -2675,6 +2687,8 @@ RSpec.describe RailsAiContext::Doctor do
 
       # In a repository whose root is the home folder, Claude Code keeps each session folder's local settings apart.
       it "names a disable for each session folder whose local settings Claude Code keeps apart" do
+        skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
         FileUtils.rm_f(File.join(@work, ".mcp.json"))
         FileUtils.mkdir_p(File.join(@work, ".git"))
         write("a/app/.claude/settings.json", plugin_settings)

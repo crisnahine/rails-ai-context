@@ -5,7 +5,9 @@ require "spec_helper"
 RSpec.describe RailsAiContext::ClaudeCodeSettings do
   around do |example|
     Dir.mktmpdir do |dir|
-      @dir = File.realpath(dir)
+      # Another app beside this one's folder, so the folder above it resolves to no app of its own, as on a machine with several.
+      app(File.join(dir, "blog"))
+      @dir = File.join(File.realpath(dir), "work")
       @root = File.join(@dir, "shop")
       @config = File.join(@dir, "config")
       app(@root)
@@ -116,6 +118,8 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
     # Claude Code reads local settings from the folder's git root too, writes them
     # there, and lets that file override the folder's own.
     it "reads the local settings of the git root above the app, over the folder's" do
+      skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
       git_root = File.join(@dir, "repo")
       root = File.join(git_root, "backend")
       app(root)
@@ -134,6 +138,8 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
     # Claude Code keeps the local file in the session's folder where it cannot share one safely.
     it "reads the git root's local settings only off Windows, outside the home folder, in a root this user owns" do
+      skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
       git_root = File.join(@dir, "repo")
       root = File.join(git_root, "backend")
       app(root)
@@ -161,6 +167,8 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
     # Claude Code keys a worktree's project, and the local settings it writes
     # from one, by the main checkout.
     it "reads a git worktree's local settings, toggles and local servers under the main checkout" do
+      skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
+
       main = File.join(@dir, "main")
       app(main)
       git = ->(*args) { system("git", "-C", main, "-c", "user.email=a@b.c", "-c", "user.name=a", *args, out: File::NULL, err: File::NULL) }

@@ -383,7 +383,7 @@ RSpec.describe "Claude Code plugin" do
 
     def write(path, text)
       FileUtils.mkdir_p(File.dirname(path))
-      File.write(path, text)
+      File.binwrite(path, text)
     end
 
     def rendered(skip_tools = [])
