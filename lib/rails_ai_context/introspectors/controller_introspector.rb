@@ -55,10 +55,12 @@ module RailsAiContext
         # No reflection here, so every file's own source is the only source of
         # its name as well as its details.
         result = discover_from_filesystem.each_with_object({}) do |(path_name, record), hash|
-          name, details = detail_for(record, path_name)
+          name, details, siblings = detail_for(record, path_name)
           next if name.nil?
 
-          hash[name] = details[:error] ? details : details.merge(confidence: Confidence::STATIC)
+          hash[name] = static_entry(details)
+          # A file named for a controller answers for it over one that only declares it beside its own.
+          Array(siblings).each { |found, entry| hash[found] ||= static_entry(entry) }
         rescue => e
           hash[path_name] = { error: portable_message(e) }
         end
@@ -69,6 +71,10 @@ module RailsAiContext
           note: "Parsed statically from app/controllers (app not booted)#{"; the engine at #{unread} is not read unbooted" if unread}",
           unread_engine: unread
         }.compact
+      end
+
+      def static_entry(details)
+        details[:error] ? details : details.merge(confidence: Confidence::STATIC)
       end
 
       # Rails renders a routed action's template when the controller has no method for it,
@@ -156,24 +162,14 @@ module RailsAiContext
       # carries. Every walk reads the listing as it was, before any entry took
       # on its ancestors' actions, and the child's own filters come off the
       # union: an inherited method the child names in a callback is a filter.
-      # A controller is an API controller when a base it inherits is one. A
-      # file names only its own parent, so Api::V1::PostsController <
-      # BaseController read as no API controller though BaseController is an
-      # ActionController::API; the chain is followed through the listing.
+      # A controller is an API controller when its chain reaches
+      # ActionController::API. A file names only its own parent, so the chain
+      # is followed through the listing and the base files it leaves out.
       def inherit_api_controller(result)
         result.each do |name, info|
           next unless info.is_a?(Hash) && info[:api_controller] == false
 
-          seen = Set[name]
-          parent = ActionResolver.resolve_entry_name(result, info[:parent_class], name)
-          while parent && result[parent].is_a?(Hash) && seen.add?(parent)
-            if result[parent][:api_controller]
-              info[:api_controller] = true
-              break
-            end
-
-            parent = ActionResolver.resolve_entry_name(result, result[parent][:parent_class], parent)
-          end
+          info[:api_controller] = ControllerSettings.api?(name, app.root.to_s, controllers: result)
         end
         result
       end
@@ -224,7 +220,7 @@ module RailsAiContext
 
       # The strong params the controller has, its own and each ancestor's that no nearer class redefines.
       def inherited_strong_params(links)
-        sources = links.map { |_link, entry, source| entry ? controller_source(entry) : source }
+        sources = links.map { |link, entry, source| entry ? controller_source(entry, link) : source }
         facts = links.each_with_index.map do |(link, entry, _source), index|
           next NO_STRONG_PARAMS unless sources[index]
 
@@ -248,13 +244,19 @@ module RailsAiContext
       # The instance methods of the concerns a class includes, which run before a parent class's of that name.
       def concern_methods(source, within)
         (@concern_methods ||= {})[[ source, within ]] ||= extract_concerns_from_source(source).each_with_object(Set.new) do |concern, names|
-          found = ConcernPaths.module_source(app.root.to_s, concern.to_s, prefer: "controller", within: within)
-          names.merge(strong_params_facts(found, [])[:defined]) if found
+          ConcernPaths.included_sources(app.root.to_s, concern.to_s, prefer: "controller", within: within).each do |found|
+            names.merge(strong_params_facts(found, [])[:defined])
+          end
         end
       end
 
-      def controller_source(entry)
-        entry[:file] && SafeFile.read(File.join(app.root.to_s, entry[:file]))
+      def controller_source(entry, name)
+        entry[:file] && own_class_source(File.join(app.root.to_s, entry[:file]), name)
+      end
+
+      def own_class_source(path, name)
+        source = SafeFile.read(path)
+        source && DeclaredConstant.own_source(source, name)
       end
 
       # `clear_respond_to` empties the class attribute; each `respond_to` adds to it.
@@ -292,18 +294,31 @@ module RailsAiContext
       def detail_for(record, path_name, unloaded: nil)
         source = SafeFile.read(record.path)
         return [ path_name, { error: "unreadable" } ] unless source
-        if path_name.end_with?("Controller") && !DeclaredConstant.declares_class?(source, path_name: path_name) &&
-           (targets = alias_candidates(source, path_name))
+
+        declarations = DeclaredConstant.declarations(source, path_name: path_name)
+        if path_name.end_with?("Controller") && declarations.empty? && (targets = alias_candidates(source, path_name))
           return [ path_name, unloaded ? { error: unloaded, file: record.file } : { alias_of: targets, file: record.file } ]
         end
         # A *_controller.rb that declares only a module is a mixin controllers include.
-        return nil if !DeclaredConstant.declares_class?(source, path_name: path_name) && DeclaredConstant.declared_module_names(source).any?
+        return nil if declarations.empty? && DeclaredConstant.declared_module_names(source).any?
         return nil unless record.path.end_with?("_controller.rb") || subclasses_a_controller?(source, path_name)
 
         name = DeclaredConstant.resolve(source, path_name)
         return [ name, { error: unloaded, file: record.file } ] if unloaded
 
-        [ name, extract_details_from_source(record, name, source) ]
+        own = DeclaredConstant.declaration_for(declarations, path_name)
+        [ name, extract_details_from_source(record, name, DeclaredConstant.own_source(source, own&.name || name)),
+          sibling_details(record, own&.name || name, source) ]
+      end
+
+      # Eager loading loads every class a controller file declares, so a controller beside the
+      # file's own class is listed too, each read from its own class body.
+      def sibling_details(record, own, source)
+        DeclaredConstant.declarations(source).filter_map do |sibling|
+          next if sibling.name == own || !controller_parent?(sibling.superclass)
+
+          [ sibling.name, extract_details_from_source(record, sibling.name, DeclaredConstant.own_source(source, sibling.name)) ]
+        end
       end
 
       # `GoogleController = OAuth2Controller`: the file names another controller, which Ruby looks
@@ -350,7 +365,11 @@ module RailsAiContext
       # A file not named *_controller.rb is a controller only if it subclasses one: a mixin,
       # a plain helper class or a Grape API is not.
       def subclasses_a_controller?(source, path_name)
-        DeclaredConstant.declarations(source, path_name: path_name).any? { |d| d.superclass.to_s.split("::").last.to_s.end_with?("Controller") }
+        DeclaredConstant.declarations(source, path_name: path_name).any? { |d| controller_parent?(d.superclass) }
+      end
+
+      def controller_parent?(superclass)
+        superclass.to_s.split("::").last.to_s.end_with?("Controller") || ActionPresence::BASES.include?(superclass.to_s.delete_prefix("::"))
       end
 
       def discover_controllers
@@ -409,7 +428,7 @@ module RailsAiContext
         details = {
           parent_class: parent,
           parent_nesting: odd_nesting(class_name, declaration&.nesting),
-          api_controller: parent.include?("API"),
+          api_controller: parent.delete_prefix("::") == ControllerSettings::API,
           actions: (own + mixed_in).sort,
           inherited_actions: mixed_in.presence,
           filters: filters,
@@ -505,11 +524,10 @@ module RailsAiContext
       # would have Rails dispatch to; the routes decide which are actions.
       def concern_actions(concerns, within, filters)
         Array(concerns).flat_map do |concern|
-          source = ConcernPaths.module_source(app.root.to_s, concern.to_s, prefer: "controller", within: within)
-          next [] unless source
-
-          offered = (@concern_actions ||= {})[source] ||= ActionResolver.module_actions(source)
-          ActionResolver.deliverable_actions(offered, filter_names(filters))
+          ConcernPaths.included_sources(app.root.to_s, concern.to_s, prefer: "controller", within: within).flat_map do |source|
+            offered = (@concern_actions ||= {})[source] ||= ActionResolver.module_actions(source)
+            ActionResolver.deliverable_actions(offered, filter_names(filters))
+          end
         end.uniq
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "concern_actions")
@@ -927,7 +945,8 @@ module RailsAiContext
         when Prism::AndNode, Prism::OrNode then tail_expressions(node.left) + tail_expressions(node.right)
         when Prism::ReturnNode then Array(node.arguments&.arguments).flat_map { |arg| tail_expressions(arg) }
         when Prism::ArrayNode then node.elements.flat_map { |element| tail_expressions(element) }
-        else node.respond_to?(:value) && node.class.name.end_with?("WriteNode") ? tail_expressions(node.value) : [ node ]
+        when *AstWalk::VALUE_WRITES then tail_expressions(node.value)
+        else [ node ]
         end
       end
 
@@ -1316,7 +1335,8 @@ module RailsAiContext
       def read_source(ctrl)
         path = source_path(ctrl)
         return nil unless path && File.exist?(path) && !PathResolver.linked_out?(path, app.root)
-        RailsAiContext::SafeFile.read(path)
+
+        own_class_source(path, ctrl.name)
       end
 
       # Ruby knows where the class was defined; the underscored name only

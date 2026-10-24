@@ -287,6 +287,122 @@ RSpec.describe RailsAiContext::Fingerprinter do
 
       expect(before).not_to eq(after)
     end
+
+    # Each one outside the watched dirs that an introspector or the env scan reads or checks for.
+    ROOT_READS = %w[Dockerfile Dockerfile.dev docker-compose.yml docker-compose.yaml Procfile Procfile.dev Capfile app.json
+                    fly.toml render.yaml render.yml railway.toml railway.json Jenkinsfile .gitlab-ci.yml .travis.yml
+                    bitbucket-pipelines.yml buildkite.yml .buildkite/pipeline.yml .circleci/config.yml .github/workflows/ci.yml
+                    .rubocop.yml .standard.yml .erb_lint.yml .erb-lint.yml .rspec Steepfile sorbet/config
+                    vite.config.ts webpack.config.js rollup.config.js bun.config.js pnpm-workspace.yaml turbo.json nx.json
+                    lerna.json yarn.lock package-lock.json pnpm-lock.yaml bun.lock bun.lockb frontend/package.json
+                    client/yarn.lock app/javascript/package.json .ruby-version .tool-versions mise.toml .mise.toml
+                    .config/mise.toml widget.gemspec bin/setup config/sidekiq.yaml angular.json next.config.js
+                    rspack.config.js jsconfig.json frontend/angular.json frontend/jsconfig.json Dockerfile.production
+                    .env.example .env.sample .env.template config/credentials.yml.example config.ru].freeze
+
+    it "detects every root file, bin script and config YAML a reader reads being added, edited and removed" do
+      root = app.root.to_s
+      ROOT_READS.each do |file|
+        path = File.join(root, file)
+        FileUtils.mkdir_p(File.dirname(path))
+        before = described_class.compute(app)
+        File.write(path, "\n")
+        added = described_class.compute(app)
+        expect(added).not_to eq(before), "#{file} added"
+        File.utime(Time.now + 5, Time.now + 5, path)
+        expect(described_class.compute(app)).not_to eq(added), "#{file} edited"
+        File.delete(path)
+        expect(described_class.compute(app)).to eq(before), "#{file} removed"
+      end
+    end
+
+    it "reads bin's files only, and enters a folder only where an entry names one, never through a link" do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "app")
+        outside = File.join(tmp, "system-lib")
+        FileUtils.mkdir_p([ File.join(root, "bin/helpers"), File.join(root, ".github/workflows/reusable"), outside ])
+        50.times { |n| File.write(File.join(outside, "lib#{n}.so"), "") }
+        File.symlink(outside, File.join(root, "bin/linked"))
+        File.symlink(outside, File.join(root, ".github/workflows/linked"))
+        %w[bin/setup bin/helpers/x.sh .github/workflows/reusable/build.yml].each { |file| File.write(File.join(root, file), "") }
+
+        expect(described_class.manifests(root).sort).to eq(%w[.github/workflows/reusable/build.yml bin/setup])
+      end
+    end
+
+    it "never enters a workflows folder that is itself a link, nor hands it to the watcher" do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "app")
+        outside = File.join(tmp, "shared-workflows")
+        FileUtils.mkdir_p([ File.join(root, ".github"), outside ])
+        File.write(File.join(outside, "build.yml"), "")
+        File.symlink(outside, File.join(root, ".github/workflows"))
+
+        expect(described_class.manifests(root)).not_to include(a_string_starting_with(".github/workflows"))
+        expect(described_class.manifest_dirs(root)).to be_empty
+      end
+    end
+
+    it "detects the manifests in a frontend_paths directory the app declared" do
+      allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "ui" ])
+      path = File.join(app.root.to_s, "ui/package.json")
+      FileUtils.mkdir_p(File.dirname(path))
+      before = described_class.compute(app)
+      File.write(path, "{}\n")
+
+      expect(described_class.compute(app)).not_to eq(before)
+    end
+
+    it "detects the manifests in a declared frontend_paths folder whose name has brackets" do
+      allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "ui[v2]" ])
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "ui[v2]"))
+        File.write(File.join(root, "ui[v2]/package.json"), "{}\n")
+        File.write(File.join(root, "config.ru"), "\n")
+
+        expect(described_class.manifests(root)).to include("ui[v2]/package.json", "config.ru")
+        expect(described_class.manifests(root)).not_to include("./config.ru")
+      end
+    end
+
+    it "detects an edit to the files PackageJson reads outside the app root" do
+      Dir.mktmpdir do |tmp|
+        repo = File.join(tmp, "repo")
+        root = File.join(repo, "apps/shop")
+        web = File.join(repo, "web")
+        FileUtils.mkdir_p([ root, web ])
+        system("git", "init", "-q", repo, exception: true)
+        allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "../../web" ])
+        app = Struct.new(:root).new(Pathname.new(root))
+        { File.join(web, "package.json") => "{}\n", File.join(repo, "yarn.lock") => "\n" }.each do |path, body|
+          File.write(path, body)
+          before = described_class.compute(app)
+          File.utime(Time.now + 5, Time.now + 5, path)
+
+          expect(described_class.compute(app)).not_to eq(before), path
+        end
+      end
+    end
+
+    it "detects a rename that keeps the mtime and the sort position" do
+      root = app.root.to_s
+      before = described_class.compute(app)
+      File.rename(File.join(root, "app/models/post.rb"), File.join(root, "app/models/posts.rb"))
+
+      expect(described_class.compute(app)).not_to eq(before)
+    end
+
+    it "skips dependency and build folders beside the files it reads" do
+      root = app.root.to_s
+      before = described_class.compute(app)
+      %w[node_modules/left-pad/package.json frontend/node_modules/x/package.json tmp/cache/x.rb log/x.yml
+         app/assets/builds/application.js].each do |file|
+        FileUtils.mkdir_p(File.dirname(File.join(root, file)))
+        File.write(File.join(root, file), "\n")
+      end
+
+      expect(described_class.compute(app)).to eq(before)
+    end
   end
 
   describe ".mark and .stale?" do
@@ -306,6 +422,25 @@ RSpec.describe RailsAiContext::Fingerprinter do
       File.utime(Time.now + 5, Time.now + 5, path)
 
       expect(described_class.stale?(app, mark)).to be true
+    end
+  end
+
+  describe "an app folder whose name has glob characters" do
+    %w[my[app] my{a,b}].each do |name|
+      it "sees a new model in #{name}" do
+        Dir.mktmpdir do |base|
+          root = File.join(base, name)
+          FileUtils.mkdir_p(File.join(root, "app/models"))
+          File.write(File.join(root, "app/models/post.rb"), "class Post < ApplicationRecord\nend\n")
+          app = RailsAiContext::StaticApp.new(root)
+          mark = described_class.mark(app)
+          File.write(File.join(root, "app/models/new_thing.rb"), "class NewThing; end\n")
+          File.utime(Time.now + 5, Time.now + 5, File.join(root, "app/models/new_thing.rb"))
+
+          expect(described_class.stale?(app, mark)).to be(true)
+          expect(described_class.changed_since(root, Time.now + 1)).to eq([ "app/models" ])
+        end
+      end
     end
   end
 

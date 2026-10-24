@@ -214,11 +214,12 @@ module RailsAiContext
       # Render and write a serializer's whole rule-file table.
       # @param dir [String] directory the table's relative names hang off
       # @param table [Hash<String, Hash>] name => { renderer:, reason: }
-      def write_rule_table(dir, table)
+      def write_rule_table(dir, table, root:)
         write_rule_files(
           table.map do |name, rule|
             RuleFile.new(File.join(dir, name), send(rule[:renderer]), rule[:reason])
-          end
+          end,
+          root: root
         )
       end
 
@@ -233,7 +234,7 @@ module RailsAiContext
       # gem's block, as a root file does.
       # @param entries [Array<RuleFile>]
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
-      def write_rule_files(entries, shared: false)
+      def write_rule_files(entries, root:, shared: false)
         result = { written: [], skipped: [], not_applicable: {} }
 
         entries.each do |entry|
@@ -243,9 +244,9 @@ module RailsAiContext
           end
 
           outcome = if shared
-            SectionMarkerWriter.write_whole_or_block(entry.path, entry.content)
+            SectionMarkerWriter.write_whole_or_block(entry.path, entry.content, root: root)
           else
-            SectionMarkerWriter.write_whole(entry.path, entry.content)
+            SectionMarkerWriter.write_whole(entry.path, entry.content, root: root)
           end
           SectionMarkerWriter.report(outcome, entry.path, result)
         end

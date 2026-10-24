@@ -14,7 +14,12 @@ require "spec_helper"
 # - No order guarantee between matching instruction files
 # - Subdirectory organization allowed in .github/instructions/
 RSpec.describe "Copilot instructions compliance" do
-  let(:context) { serializer_context(routes: { total_routes: 45, by_controller: { "users" => 7, "posts" => 5 } }) }
+  let(:context) do
+    serializer_context(routes: { total_routes: 2, by_controller: {
+      "users" => [ { verb: "GET", path: "/users", action: "index" } ],
+      "posts" => [ { verb: "GET", path: "/posts", action: "index" } ]
+    } })
+  end
 
   describe "root file (.github/copilot-instructions.md)" do
     let(:root_content) { RailsAiContext::Serializers::CopilotSerializer.new(context).call }

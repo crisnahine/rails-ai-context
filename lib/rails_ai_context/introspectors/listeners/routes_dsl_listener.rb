@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "active_support/core_ext/string/inflections"
+require "prism"
 
 module RailsAiContext
   module Introspectors
@@ -14,12 +15,14 @@ module RailsAiContext
       # at the accumulated prefix.
       class RoutesDslListener < BaseListener
         include BranchConditions
+        include RoutesWalk
 
         VERB_METHODS = %i[get post put patch delete options].freeze
         PLURAL_ACTIONS = %i[index create new edit show update destroy].freeze
         # Rails' drawing order: the first route asking for a name gets it.
         SINGULAR_ACTIONS = %i[new edit show update destroy create].freeze
-        RESTFUL_ACTIONS = %w[index show new create edit update destroy].freeze
+        # Mapper::CANONICAL_ACTIONS: in a member, collection or new scope these draw at the scope's path, unnamed by the action.
+        CANONICAL_ACTIONS = %w[index create new show update destroy].freeze
         DYNAMIC_MACROS = %i[devise_for draw].freeze
         # `direct` and `resolve` define URL helpers and draw no route.
         URL_HELPER_MACROS = %i[direct resolve].freeze
@@ -31,25 +34,72 @@ module RailsAiContext
         IN_PLACE_BLOCKS = %i[constraints defaults devise_scope as authenticate authenticated unauthenticated localized].freeze
         # Statement-level calls that draw nothing into the table.
         NON_ROUTING = %i[require require_relative puts p pp print warn raise default_url_options extend include].freeze
+        # Iterators whose block is drawn once per element when the receiver is a literal list.
+        LOOPS = %i[each each_with_index].freeze
+        # The block methods of Ruby's collections, numbers and strings, and ActiveSupport's on them: each runs its
+        # block during the call, while `Sidekiq::Web.use do` keeps it for each request.
+        ITERATORS = %i[
+          all? any? bsearch bsearch_index chunk chunk_while collect collect! collect_concat combination count cycle
+          delete delete_if detect downto drop_while each each_byte each_char each_codepoint each_cons each_entry
+          each_grapheme_cluster each_index each_key each_line each_pair each_slice each_value each_with_index
+          each_with_object fetch fetch_values fill filter filter! filter_map find find_all find_index flat_map grep
+          grep_v group_by gsub gsub! index inject keep_if map map! max max_by merge merge! min min_by minmax minmax_by
+          none? one? partition permutation product reduce reject reject! repeated_combination repeated_permutation
+          reverse_each rindex scan select select! slice_after slice_before slice_when sort sort! sort_by sort_by! split
+          step sub sub! sum take_while times to_h to_set transform_keys transform_keys! transform_values
+          transform_values! uniq uniq! update upto with_index with_object zip
+          deep_transform_keys deep_transform_values in_groups in_groups_of index_by index_with many?
+        ].to_set.freeze
+        # Every write that changes a local, a multi-assignment's target among them; AstWalk::VALUE_WRITES is every kind of write.
+        VARIABLE_WRITES = [ Prism::LocalVariableWriteNode, Prism::LocalVariableOperatorWriteNode, Prism::LocalVariableOrWriteNode,
+                            Prism::LocalVariableAndWriteNode, Prism::LocalVariableTargetNode ].freeze
+        # Calls that change the string they are called on, and calls that keep their argument in their receiver.
+        STRING_MUTATORS = InitializerSettings::MUTATORS
+        HOLDING_MUTATORS = CallSiteExpansion::MUTATORS
+        INDEX_WRITES = [ Prism::IndexOperatorWriteNode, Prism::IndexOrWriteNode, Prism::IndexAndWriteNode, Prism::IndexTargetNode ].freeze
+        # Where a value written into one is kept: an element, a hash value, a splat, either arm of a branch.
+        HOLDERS = [ Prism::ArgumentsNode, Prism::ArrayNode, Prism::HashNode, Prism::KeywordHashNode, Prism::AssocNode,
+                    Prism::SplatNode, Prism::ParenthesesNode, Prism::StatementsNode, Prism::BeginNode, Prism::IfNode,
+                    Prism::UnlessNode, Prism::ElseNode, Prism::OrNode, Prism::AndNode ].freeze
 
         # ponytail: an engine's namespace is its first segment; read isolate_namespace if one differs.
         def self.engine_namespace(engine)
           engine.split("::").first.underscore
         end
 
+        # A name that reads as an engine's, for a constant whose file the app does not hold.
+        ENGINE_NAME = /(?:\A|::)Engine\z/
+
+        # Mapper#app_name: a class's name underscored; an engine's railtie_name, which only its file can tell.
+        def self.mount_name(class_name)
+          underscored(class_name) unless class_name.match?(ENGINE_NAME)
+        end
+
+        # Rails' name for a class: `Admin::UI` is admin_ui.
+        def self.underscored(class_name)
+          class_name.underscore.tr("/", "_")
+        end
+
         # `scope` is the frames a `draw` of this file sits in, as its record carries them.
         # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
         # `names` is the set of route names taken so far, shared by every file of one table.
-        # `multi_path`: the app's Rails draws every path of `get "/a", "/b"`; 8.1 raises instead.
+        # `before_8_1`: the app's Rails draws every path of `get "/a", "/b"` and names a mount given `as: nil`; 8.1 does neither.
         # `api_only`: the app sets config.api_only, so its own table draws no new or edit route.
-        def initialize(scope: [], route_set: nil, names: Set.new, multi_path: false, api_only: false)
+        # `mount_name` answers the name Rails gives a mount of a class, or nil.
+        def initialize(scope: [], route_set: nil, names: Set.new, before_8_1: false, api_only: false, mount_name: self.class.method(:mount_name))
           super()
-          @multi_path = multi_path
+          @before_8_1 = before_8_1
+          @mount_name = mount_name
           @api_only = api_only
           @stack = scope.map { |frame| frame.merge(node: nil) }
           @route_set = route_set
           @concern_blocks = {}
           @replaying = []
+          @replayed = Set.new.compare_by_identity
+          # The block scopes and branches each concern's block and method's def is written in, for its replays.
+          @written_under = {}.compare_by_identity
+          # The listeners walking this file beside this one, which see each body it replays.
+          @joined = []
           # Rails leaves a route unnamed when another route already took its name.
           @taken_names = names
           # The calls that stand as statements of a route body, as opposed to
@@ -66,8 +116,8 @@ module RailsAiContext
 
         # Ruby runs a method's body where it is called, so it is replayed there.
         def on_def_node_enter(node)
-          @methods[node.name] = node if @statements.key?(node) && node.receiver.nil?
-          push_frame(node, suppress: true)
+          @methods[node.name] = definitions_in_force(@methods[node.name], node, [ node ]) if @statements.key?(node) && node.receiver.nil?
+          push_frame(node, suppress: true, held: node)
         end
 
         def on_def_node_leave(node)
@@ -75,6 +125,7 @@ module RailsAiContext
         end
 
         def on_call_node_enter(node)
+          note_mapper_call(node)
           statement = @statements.key?(node)
           register_statements(node.block.body) if statement && route_body?(node)
           return enter_engine_draw(node) if engine_draw?(node)
@@ -87,7 +138,11 @@ module RailsAiContext
           end
           return enter_late_table_change(node) if late_table_change?(node, statement)
           return push_frame(node, prepend: true) if node.receiver && node.name == :prepend && statement && route_body?(node)
-          return unless node.receiver.nil?
+          return enter_loop(node) if statement && loop?(node)
+          return register_statements(node.block.body) if statement && run_once?(node)
+          return enter_repeat(node) if statement && iterator?(node)
+          return unless mapper_call?(node)
+          return emit_repeated(node) if repeated?(node)
 
           @routing_calls += 1 if ROUTE_METHODS.include?(node.name)
           case node.name
@@ -99,7 +154,7 @@ module RailsAiContext
           when :collection then enter_member_collection(node, :collection)
           when :new then enter_member_collection(node, :new)
           # A resource's frame already holds its nested scope, which a direct child draws under too.
-          when :nested then push_frame(node, suppress: current_resource.nil?) if node.block
+          when :nested then push_frame(node, nested: true, suppress: current_resource.nil?) if node.block
           when :shallow then push_frame(node, shallow: true) if node.block
           when :concern then define_concern(node)
           when :concerns then apply_concerns(node)
@@ -107,9 +162,9 @@ module RailsAiContext
           when :controller then enter_controller(node)
           when :resources_path_names then @global_path_names.merge!(path_names_option(path_names: own_options(node)))
           when *URL_HELPER_MACROS then push_frame(node, suppress: true) if node.block
-          when :mount then emit_dynamic(node) unless mounted_app?(node)
+          when :mount then mounted_app?(node) ? take_mount_name(node) : emit_dynamic(node)
           when :root then emit_root(node)
-          when *VERB_METHODS, :match then emit_verb_route(node) unless rack_app_target?(node)
+          when *VERB_METHODS, :match then emit_verb_route(node, app: rack_app_target?(node))
           when *DYNAMIC_MACROS then emit_dynamic(node) unless rack_app_target?(node)
           else
             if statement && node.block
@@ -121,10 +176,70 @@ module RailsAiContext
           end
         end
 
+        # Where Rails attaches a Rack app given `path` inside a resource, member or collection scope, which only this walk
+        # models: it draws there as a route at that path does. Nil outside one; :unknown where the walk cannot place it
+        # (a resource it cannot read, a concern's body where it is defined, a block in a resource that does not draw in place).
+        def resource_scoped_path(node, path)
+          return :unknown if @stack.any? { |f| f[:unplaced] } || (scope_level && suppressed?)
+
+          return unless scope_level
+
+          on = route_options(node)[:on]
+          # Rails draws a canonical action given as a symbol at the scope's own path, as it does a verb route's.
+          verb_route_path(path.is_a?(Symbol) && canonical_action?(path, on) ? "" : path.to_s, on)
+        end
+
+        # A loop variable's value, or a string or symbol interpolating only literals and loop variables; nil otherwise.
+        def bound_value(node)
+          case node
+          when Prism::LocalVariableReadNode
+            block = @blocks[-1 - node.depth]
+            frame = block && @stack.reverse.find { |f| f[:block].equal?(block) && f[:bindings]&.key?(node.name) }
+            frame && frame[:bindings][node.name]
+          when Prism::ImplicitNode then bound_value(node.value)
+          when Prism::InterpolatedStringNode, Prism::InterpolatedSymbolNode
+            parts = node.parts.map do |part|
+              next part.unescaped if part.is_a?(Prism::StringNode)
+
+              inner = part.statements&.body if part.is_a?(Prism::EmbeddedStatementsNode)
+              bound_value(inner.first)&.to_s if inner&.size == 1
+            end
+            text = parts.join unless parts.include?(nil)
+            node.is_a?(Prism::InterpolatedSymbolNode) ? text&.to_sym : text
+          end
+        end
+
+        # A string or symbol the source spells out or a loop binds.
+        def literal_or_bound(node)
+          value = case node
+          when Prism::SymbolNode then node.unescaped.to_sym
+          when Prism::StringNode then node.unescaped
+          else bound_value(node)
+          end
+          value if value.is_a?(String) || value.is_a?(Symbol)
+        end
+
+        # Walks `listener` through every body this walk replays, as Rails runs it there.
+        def join(listener)
+          @joined << listener
+        end
+
+        # The bodies Rails runs only where they are replayed (a concern's, a routes-file method's) that the walk is in.
+        def held_keys
+          @stack.filter_map { |f| f[:held] }
+        end
+
+        # Whether the walk replayed any of these definitions, each replay drawing what is in it at its own site.
+        def replayed?(keys)
+          keys.any? { |key| @replayed.include?(key) }
+        end
+
         # An unknown block that draws no route is a gem macro (`use_doorkeeper do`), counted once,
         # and so is one whose routes it does not draw in place.
         def on_call_node_leave(node)
           return unless @stack.last && @stack.last[:node].equal?(node)
+          return finish_resources(node) if @stack.last[:draw]
+          return finish_loop(node) if @stack.last[:loop]
 
           frame = @stack.pop
           return unless frame[:unknown_block]
@@ -142,24 +257,173 @@ module RailsAiContext
 
         # A receiver's block (`Sidekiq::Web.use ... do`) is plain Ruby; only a draw holds routes.
         def route_body?(node)
-          node.block.is_a?(Prism::BlockNode) && (node.receiver.nil? || %i[draw append prepend].include?(node.name))
+          node.block.is_a?(Prism::BlockNode) && (mapper_call?(node) || %i[draw append prepend].include?(node.name))
+        end
+
+        # `LOC.each_key { }` or `2.times { }`, which the walk does not unroll.
+        def iterator?(node)
+          node.receiver && node.block.is_a?(Prism::BlockNode) && ITERATORS.include?(node.name) && !route_body?(node)
+        end
+
+        def run_once?(node)
+          node.block.is_a?(Prism::BlockNode) && RUN_ONCE.include?(node.name)
+        end
+
+        # A block Ruby runs any number of times, which the walk reads once without replaying its passes.
+        def enter_repeat(node)
+          register_statements(node.block.body)
+          push_frame(node, repeats: true)
+        end
+
+        # Every pass of such a block draws its routes again, so each call that draws some counts as a construct.
+        # A Rack app it attaches is MountListener's to list.
+        # shortcut: a `draw` there is followed once, count it too if a routes file ever draws one file per pass.
+        def repeated?(node)
+          @stack.any? { |f| f[:repeats] } && !rack_app_route?(node) &&
+            (@methods.key?(node.name) || (ROUTE_METHODS.include?(node.name) && !%i[concern draw].include?(node.name)))
+        end
+
+        def rack_app_route?(node)
+          node.name == :mount ? mounted_app?(node) : rack_app_target?(node)
+        end
+
+        def emit_repeated(node)
+          emit_dynamic(node)
+          push_frame(node, suppress: true) if node.block
+        end
+
+        def loop?(node)
+          LOOPS.include?(node.name) && node.receiver && node.arguments.nil? && node.block.is_a?(Prism::BlockNode)
+        end
+
+        # Whether the block takes one plain parameter per element (and an index for each_with_index)
+        # and leaves it the element on every pass.
+        def unrolls?(node)
+          params = node.block.parameters.parameters if node.block.parameters.is_a?(Prism::BlockParametersNode)
+          return false unless params
+
+          plain = params.optionals.empty? && params.rest.nil? && params.posts.empty? && params.keywords.empty? &&
+                  params.keyword_rest.nil? && params.block.nil? && params.requireds.all?(Prism::RequiredParameterNode)
+          # A mutation of a symbol, or of a string under `# frozen_string_literal: true`, raises at boot.
+          # shortcut: a mutable string held or handed on (`d = { page: x }`, `x.each_char { }`) declines though most never
+          # change it, follow the holder's later calls if real route files lose routes to this.
+          mutable = node.receiver.elements.any? { |e| e.is_a?(Prism::StringNode) && !e.frozen? }
+          plain && params.requireds.size.between?(1, node.name == :each_with_index ? 2 : 1) &&
+            !changes_variable?(node.block.body, params.requireds.map(&:name), mutable: mutable)
+        end
+
+        # A pass that assigns, mutates or hands on its variable may no longer hold the element. `depth`
+        # counts the blocks in between, as Prism's does, so a shadowing parameter is another variable.
+        def changes_variable?(node, names, depth = 0, kept: false, mutable: true)
+          case node
+          when nil, *AstWalk::OWN_SCOPES then return false
+          when *VARIABLE_WRITES then return true if own_variable?(node, names, depth)
+          when Prism::LocalVariableReadNode then return kept && own_variable?(node, names, depth)
+          when *INDEX_WRITES then return true if mutable && own_variable?(element(node.receiver), names, depth)
+          when Prism::CallNode
+            return true if mutable && own_variable?(element(node.receiver), names, depth) && (node.block || mutator?(node.name))
+          end
+          inner = node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode) ? depth + 1 : depth
+          node.compact_child_nodes.any? do |child|
+            changes_variable?(child, names, inner, kept: mutable && keeps?(node, child, kept), mutable: mutable)
+          end
+        end
+
+        def own_variable?(node, names, depth)
+          (node.is_a?(Prism::LocalVariableReadNode) || VARIABLE_WRITES.include?(node.class)) && names.include?(node.name) && node.depth == depth
+        end
+
+        # The object a call such as `x.to_s` or `x.presence` hands back: its receiver.
+        def element(node)
+          node = node.receiver while node.is_a?(Prism::CallNode) && node.receiver && !node.block && InitializerSettings::ELEMENT_SELF.include?(node.name)
+          node
+        end
+
+        def mutator?(name)
+          name.end_with?("!") || STRING_MUTATORS.include?(name)
+        end
+
+        # Whether `child`'s value is kept where its variable can be changed: a write's value, an argument to `yield`,
+        # to a lambda, to a collection's mutator or to a method of this file that changes its own, a list a block
+        # runs over, or inside a list, hash or branch that is.
+        def keeps?(parent, child, kept)
+          case parent
+          when Prism::CallNode
+            return !parent.block.nil? || (kept && InitializerSettings::ELEMENT_SELF.include?(parent.name)) if child.equal?(parent.receiver)
+            return false unless child.equal?(parent.arguments)
+
+            definitions = @methods[parent.name] if parent.receiver.nil?
+            return definitions.any? { |definition| changes_arguments?(definition) } if definitions
+
+            parent.receiver && (parent.name == :call || parent.attribute_write? || HOLDING_MUTATORS.include?(parent.name))
+          when Prism::YieldNode, Prism::SuperNode then child.equal?(parent.arguments)
+          when Prism::MatchRequiredNode, Prism::MatchPredicateNode then child.equal?(parent.value)
+          when *HOLDERS then kept
+          when *AstWalk::VALUE_WRITES then child.equal?(parent.value)
+          end
+        end
+
+        # Whether a method of this file may change an argument it is given; one it is still being asked about may.
+        def changes_arguments?(definition)
+          @changes_arguments ||= {}.compare_by_identity
+          return @changes_arguments[definition] if @changes_arguments.key?(definition)
+
+          @changes_arguments[definition] = true
+          params = definition.parameters&.compact_child_nodes || []
+          names = params.map { |param| param.name if param.respond_to?(:name) }
+          @changes_arguments[definition] = names.include?(nil) || changes_variable?(definition.body, names)
+        end
+
+        # Ruby runs the block once per element: the first pass is this walk, the others replay it on leave.
+        # A block it cannot unroll is walked once, its variable unknown.
+        def enter_loop(node)
+          list = node.receiver
+          return enter_repeat(node) unless list.is_a?(Prism::ArrayNode) && list.elements.all? { |e| e.is_a?(Prism::StringNode) || e.is_a?(Prism::SymbolNode) }
+
+          register_statements(node.block.body)
+          return push_frame(node, suppress: true) if list.elements.empty?
+          return push_frame(node, repeats: true) unless unrolls?(node)
+
+          values = list.elements.map { |e| literal_or_bound(e) }
+          push_frame(node, loop: values, **loop_bindings(node, values.first, 0))
+        end
+
+        def finish_loop(node)
+          @stack.pop[:loop].each_with_index.drop(1).each do |value, index|
+            push_frame(node, **loop_bindings(node, value, index))
+            replay_dispatcher.dispatch(node.block)
+            @stack.pop
+          end
+        end
+
+        def loop_bindings(node, value, index)
+          names = node.block.parameters.parameters.requireds.map(&:name)
+          { bindings: names.zip([ value, index ]).to_h, block: node.block }
+        end
+
+        def extract_value(node, source: false)
+          value = bound_value(node)
+          value.nil? ? super : value
+        end
+
+        def extract_symbol_args(node)
+          (node.arguments&.arguments || []).filter_map { |a| literal_or_bound(a)&.to_sym }
         end
 
         def call_method_or_count(node)
-          definition = @methods[node.name]
+          definitions = @methods[node.name]
           key = "def #{node.name}"
           # A gem macro's configuration until its block turns out to draw routes.
-          outer = open_unknown_block if definition.nil?
+          outer = open_unknown_block if definitions.nil?
           return (outer[:pending] << node unless suppressed?) if outer
-          return emit_dynamic(node) if definition.nil? || node.arguments || @replaying.include?(key) || takes_arguments?(definition)
+          return emit_dynamic(node) if definitions.nil? || node.arguments || @replaying.include?(key) || definitions.any? { |d| takes_arguments?(d) }
           return if suppressed?
 
-          @replaying.push(key)
-          begin
-            register_statements(definition.body)
-            replay_dispatcher.dispatch(definition.body) if definition.body
-          ensure
-            @replaying.pop
+          each_in_force(definitions) do |definition|
+            replaying(key, definition) do
+              register_statements(definition.body)
+              replay_dispatcher.dispatch(definition.body) if definition.body
+            end
           end
         end
 
@@ -212,9 +476,36 @@ module RailsAiContext
         # A mount MountListener names. A lambda or a variable is an app no walk
         # can name, and the booted tier counts a lambda as a dynamic construct.
         def mounted_app?(node)
+          app = mounted_app_node(node)
+          !app.nil? && !app_name(app).nil?
+        end
+
+        # `mount App, at:` or `mount App => path`.
+        def mounted_app_node(node)
           first = node.arguments&.arguments&.first
-          first = first.elements.first&.key if first.is_a?(Prism::KeywordHashNode) || first.is_a?(Prism::HashNode)
-          !first.nil? && !app_name(first).nil?
+          first.is_a?(Prism::KeywordHashNode) || first.is_a?(Prism::HashNode) ? first.elements.first&.key : first
+        end
+
+        # Rails names a mount like a route, its `as:` or its app's name, so a later route cannot take the name.
+        # shortcut: a module app takes no name and is read as a class here, read the app's file if one collides.
+        def take_mount_name(node)
+          return if suppressed?
+
+          options = route_options(node)
+          return if options.key?(:as) && !options[:as] && !@before_8_1
+
+          as = name_or_marker(options[:as]) || mounted_class_name(mounted_app_node(node))&.then { |app| @mount_name.call(app) }
+          name = as && verb_route_name(as, nil, nil)
+          @taken_names.add([ current_engine, name ]) if name && !name.include?(RailsAiContext::Confidence::INFERRED)
+        end
+
+        # The class a mount attaches, as app_name names it; an instance (`Rack::Builder.new`, `App.new`, `ActionCable.server`)
+        # has no name for Rails to give, while Ruby names a `Class.new` after its constant.
+        def mounted_class_name(app)
+          value = written_value(app)
+          receiver = value.receiver if value.is_a?(Prism::CallNode) && value.name == :new
+          built_class = (receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)) && constant_path_string(receiver) == "Class"
+          app_name(app) if built_class || !value.is_a?(Prism::CallNode)
         end
 
         # `Shop::Core::Engine.routes.draw` adds to the engine's table, controllers under its
@@ -270,7 +561,7 @@ module RailsAiContext
         # `scope(controller:)` or resource, else Rails' module path alone.
         def current_controller
           frame = @stack.reverse.find { |f| f[:controller] || f[:resource] }
-          return frame[:resource][:controller] if frame && !frame[:controller]
+          return prefixed_controller(frame[:resource][:controller]) if frame && !frame[:controller]
 
           controller = prefixed_controller(frame ? frame[:controller] : "")
           controller unless controller.empty?
@@ -313,7 +604,7 @@ module RailsAiContext
           own = {} unless route_level
           defaults = (own[:url] || {}).merge(scopes.map { |c| c[:url].merge(c[:defaults]) }.reduce({}, :merge)).merge(own[:defaults] || {})
           defaults = defaults.merge(scopes.map { |c| c[:options] }.reduce({}, :merge)).merge(own[:options] || {})
-          params = path.scan(/[:*](\w+)/).flatten << "format"
+          params = RouteCoverage.path_params(path) << "format"
           segments = scopes.map { |c| c[:segment] }.reduce({}, :merge).merge(own[:segment] || {}).select { |key, value| value && params.include?(key) }
           all = defaults.merge(segments)
           "{#{all.map { |key, value| "#{key}: #{value}" }.join(', ')}}" if all.any?
@@ -326,9 +617,9 @@ module RailsAiContext
 
           # `scoped` is what Rails keeps in the scope's constraints, which nested resources read.
           found = { url: {}, defaults: {}, segment: {}, scoped: {}, options: {} }
-          if node.name == :constraints && node.receiver.nil?
+          if node.name == :constraints && mapper_call?(node)
             read_constraint_hash(hash, found)
-          elsif node.name == :defaults && node.receiver.nil?
+          elsif node.name == :defaults && mapper_call?(node)
             each_literal(hash) { |k, v| found[:defaults][k] = constraint_value(v) }
           else
             hash.elements.each do |assoc|
@@ -382,7 +673,7 @@ module RailsAiContext
         # The innermost `format:` a route or its scopes give; `true` makes the segment required.
         def required_format?(node)
           carriers = [ node, *@stack.reverse_each.map { |f| f[:node] } ].select do |n|
-            n.is_a?(Prism::CallNode) && n.receiver.nil? && OPTION_CARRIERS.include?(n.name)
+            n.is_a?(Prism::CallNode) && mapper_call?(n) && OPTION_CARRIERS.include?(n.name)
           end
           carrier = carriers.find { |n| own_options(n).key?(:format) }
           carrier && own_options(carrier)[:format] == true
@@ -436,8 +727,8 @@ module RailsAiContext
           return unless node.block
 
           name = literal_first_arg(node)
-          @concern_blocks[name.to_s] = node.block if name
-          push_frame(node, suppress: true)
+          @concern_blocks[name.to_s] = definitions_in_force(@concern_blocks[name.to_s], node.block, @blocks.dup) if name
+          push_frame(node, suppress: true, unplaced: true, held: node.block)
         end
 
         def apply_concerns(node)
@@ -452,27 +743,66 @@ module RailsAiContext
         def replay_concerns(names, node)
           names.each do |name|
             key = name.to_s
-            block = @concern_blocks[key]
+            blocks = @concern_blocks[key]
             # A concern defined in another drawn file, or one that names
             # itself, has no body this walk can replay; the marker keeps it
             # counted instead of dropping its routes silently.
-            if block.nil? || @replaying.include?(key)
+            if blocks.nil? || @replaying.include?(key)
               emit_dynamic(node, macro: :concerns)
               next
             end
 
-            @replaying.push(key)
-            begin
-              register_statements(block.body)
-              replay_dispatcher.dispatch(block)
-            ensure
-              @replaying.pop
+            each_in_force(blocks) do |block|
+              replaying(key, block) do
+                register_statements(block.body)
+                replay_dispatcher.dispatch(block)
+              end
             end
           end
         end
 
+        # A later definition under only an earlier one's branches replaces it; under one other if/unless, the earlier one holds where it did not run.
+        # shortcut: a case, a guard or nested ifs give the earlier one no opposite condition, negate them if a routes file needs it.
+        def definitions_in_force(earlier, definition, blocks)
+          conditions = branch_conditions.map(&:dup)
+          @written_under[definition] = [ blocks, conditions ]
+          (earlier || []).reject do |other|
+            kept = @written_under[other].last
+            texts = kept.map { |o| branch_text(o) }
+            unstated = conditions.reject { |c| texts.include?(branch_text(c)) }
+            opposite = unstated.first.slice(:node, :keyword).merge(negated: !unstated.first[:negated]) if unstated.one? && !unstated.first[:text]
+            kept << opposite if opposite && !texts.include?(branch_text(opposite))
+            unstated.empty?
+          end << definition
+        end
+
+        # One definition in force runs, so each takes names from those taken before the site.
+        def each_in_force(definitions)
+          before = @taken_names.dup
+          after = Set.new
+          definitions.each do |definition|
+            @taken_names.replace(before)
+            yield definition
+            after.merge(@taken_names)
+          end
+          @taken_names.replace(after)
+        end
+
+        # Walks `definition`'s body under `key`, which a body naming itself finds taken, in the block scopes and
+        # branches it is written in.
+        def replaying(key, definition)
+          @replaying.push(key)
+          @replayed << definition
+          walkers = [ self, *@joined ]
+          walking_in = walkers.map { |walker| walker.enter_replay(*@written_under[definition]) }
+          yield
+        ensure
+          @replaying.pop
+          walkers.zip(walking_in) { |walker, left| walker.leave_replay(left) }
+        end
+
         def replay_dispatcher
-          @replay_dispatcher ||= ListenerRegistration.dispatcher_for(self)
+          @replay_dispatcher ||= ListenerRegistration.dispatcher_for(self, *@joined)
         end
 
         # `with_options` is ActiveSupport's OptionMerger, not a routing method:
@@ -499,7 +829,8 @@ module RailsAiContext
 
         def enter_namespace(node)
           name = literal_first_arg(node)
-          unless name
+          opts = route_options(node)
+          if name.nil? || unreadable_scope?(opts)
             emit_dynamic(node)
             # A block whose name we can't read still opens a nested scope -
             # without suppressing it, children resolve against the OUTER
@@ -511,15 +842,16 @@ module RailsAiContext
           end
           return unless node.block
 
-          opts = route_options(node)
           path = (opts[:path] || name).to_s
           as = (opts[:as] || name).to_s
+          # Rails wraps a namespace drawn in a resource's own scope in `nested`.
           push_frame(node,
+                     nested: resource_scope?,
                      prefix: join_path(current_prefix, path),
                      mod: (opts[:module] || name).to_s,
                      name_prefix: as,
                      shallow_path: join_path(current_shallow_path, (literal_option(opts[:shallow_path]) || path).to_s),
-                     shallow_prefix: join_names(current_shallow_prefix, (literal_option(opts[:shallow_prefix]) || as).to_s))
+                     shallow_prefix: join_names(current_shallow_prefix, (name_or_marker(opts[:shallow_prefix]) || as).to_s))
         end
 
         def enter_scope(node)
@@ -527,9 +859,15 @@ module RailsAiContext
 
           opts = route_options(node)
           first = literal_first_arg(node)
+          # Rails' scope takes a positional path over `path:`.
+          if unreadable_scope?(first ? opts.except(:path) : opts) || (first.nil? && positional_prefix?(node))
+            emit_dynamic(node)
+            return push_frame(node, suppress: true)
+          end
+
           path = (first || opts[:path])&.to_s
           shallow_path = (literal_option(opts[:shallow_path]) || path)&.to_s
-          shallow_prefix = (literal_option(opts[:shallow_prefix]) || literal_option(opts[:as]))&.to_s
+          shallow_prefix = (name_or_marker(opts[:shallow_prefix]) || name_or_marker(opts[:as]))&.to_s
           frame = { prefix: path ? join_path(current_prefix, path) : current_prefix,
                     mod: opts[:module]&.to_s,
                     name_prefix: opts[:as]&.to_s,
@@ -539,7 +877,52 @@ module RailsAiContext
           frame[:shallow_path] = join_path(current_shallow_path, shallow_path) if shallow_path
           frame[:shallow_prefix] = join_names(current_shallow_prefix, shallow_prefix) if shallow_prefix
           frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
+          frame.merge!(scoped_resource(scope_level, path, opts[:as]&.to_s)) if resource_scope?
           push_frame(node, **frame)
+        end
+
+        # A path, module or shallow: the walk cannot read moves every route under it somewhere it cannot say.
+        def unreadable_scope?(opts)
+          opts.values_at(:path, :module, :shallow_path, :shallow).include?(RailsAiContext::Confidence::INFERRED)
+        end
+
+        # The frame that sets Rails' scope level: a member, collection, new or nested block, or a resource.
+        def scope_level
+          @stack.reverse.find { |f| f[:kind] || f[:resource] || f[:nested] }
+        end
+
+        def canonical_action?(segment, on_option)
+          CANONICAL_ACTIONS.include?(segment.to_s) && !current_resource.nil? && !member_collection_kind(on_option).nil?
+        end
+
+        def resource_scope?
+          !scope_level&.dig(:resource).nil?
+        end
+
+        # Rails runs a resource's block at the path and name outside the resource, so a scope
+        # opened there comes before the resource's own path and name. Its member routes and
+        # nested scope start from the shallow path and prefix when the resource is shallow.
+        def scoped_resource(level, path, as)
+          resource = level[:resource]
+          outer = scope_outer(resource[:outer_prefix], resource[:outer_name], path, as)
+          member = scope_outer(resource[:member_outer_prefix], resource[:member_outer_name], path, as)
+          moved = resource.merge(outer_prefix: outer[:prefix], outer_name: outer[:name],
+                                 member_outer_prefix: member[:prefix], member_outer_name: member[:name],
+                                 base: outer[:move].(resource[:base]), new_path: outer[:move].(resource[:new_path]),
+                                 member_path: member[:move].(resource[:member_path]),
+                                 new_route_name: outer[:rename].(resource[:new_route_name]),
+                                 plural_route_name: outer[:rename].(resource[:plural_route_name]),
+                                 singular_route_name: member[:rename].(resource[:singular_route_name]))
+          { prefix: member[:move].(level[:prefix]), name_prefix: join_names(member[:name], resource[:key]), name_root: true,
+            resource: moved }
+        end
+
+        def scope_outer(prefix, name, path, as)
+          inner = path ? join_path(prefix, path) : prefix
+          inner_name = join_names(name, as)
+          { prefix: inner, name: inner_name,
+            move: ->(p) { join_path(inner, p.delete_prefix(prefix)) },
+            rename: ->(n) { join_names(inner_name, name ? n.delete_prefix("#{name}_") : n) } }
         end
 
         def handle_resources(node, singular:)
@@ -548,35 +931,43 @@ module RailsAiContext
           return emit_dynamic(node) if current_route_set
 
           names = extract_symbol_args(node)
-          if names.empty? || opaque_options?(node)
+          if names.empty? || opaque_options?(node) || unreadable_scope?(route_options(node))
             emit_dynamic(node)
             # Same reasoning as the namespace case: a block we can't attach
             # resource info to still opens a nested scope, so its children
             # must be suppressed rather than resolved against the outer
             # prefix and misreported as verified routes.
-            push_frame(node, suppress: true) if node.block
+            push_frame(node, suppress: true, unplaced: true) if node.block
             return
           end
 
           opts = route_options(node)
-          names.each { |n| emit_resource_routes(node, n.to_s, opts, singular: singular) }
+          names = names.map(&:to_s)
+          return names.each { |name| draw_resource(node, name, opts, singular: singular) } unless node.block
+
+          push_resource_frame(node, names.first, opts, singular: singular)
+          @stack.last[:draw] = { names: names, opts: opts, singular: singular }
+        end
+
+        # Rails' resources yields the block, then replays the concerns, then draws its own routes,
+        # all of it once per name.
+        def finish_resources(node)
+          draw = @stack.last[:draw]
+          close_resource(node, draw[:names].first, draw[:opts], singular: draw[:singular])
+          draw[:names].drop(1).each { |name| draw_resource(node, name, draw[:opts], singular: draw[:singular], block: node.block) }
+        end
+
+        def draw_resource(node, name, opts, singular:, block: nil)
+          push_resource_frame(node, name, opts, singular: singular)
+          replay_dispatcher.dispatch(block) if block
+          close_resource(node, name, opts, singular: singular)
+        end
+
+        def close_resource(node, name, opts, singular:)
           concerns = Array(opts[:concerns])
-
-          if node.block
-            return unless names.size == 1
-
-            push_resource_frame(node, names.first.to_s, opts, singular: singular)
-            replay_concerns(concerns, node) if concerns.any?
-          elsif concerns.any?
-            # A concern applied without a block still runs inside the resource's
-            # scope, so the frame has to exist for the replay and go again
-            # straight after it - there is no block leave to pop it.
-            names.each do |n|
-              push_resource_frame(node, n.to_s, opts, singular: singular)
-              replay_concerns(concerns, node)
-              @stack.pop
-            end
-          end
+          replay_concerns(concerns, node) if concerns.any?
+          @stack.pop
+          emit_resource_routes(node, name, opts, singular: singular)
         end
 
         # Routes nested under this resource inherit its singular route key as a
@@ -585,25 +976,39 @@ module RailsAiContext
         # resource nests its children under the shallow path and prefix alone.
         def push_resource_frame(node, name, opts, singular:)
           layout = resource_layout(name, opts, singular: singular)
+          outer_name = current_name_prefix
+          outer_prefix = current_prefix
+          shallow_prefix = resource_shallow_prefix(opts)
+          member_outer_name = layout[:shallow] ? shallow_prefix : outer_name
+          member_outer_prefix = layout[:shallow] ? resource_shallow_path(opts) : outer_prefix
           frame = {
             prefix: layout[:nested_prefix],
             mod: opts[:module]&.to_s,
-            name_prefix: layout[:shallow] ? join_names(current_shallow_prefix, layout[:key]) : layout[:key],
+            name_prefix: layout[:shallow] ? join_names(shallow_prefix, layout[:key]) : layout[:key],
             name_root: layout[:shallow],
             path_names: path_names_option(opts),
             resource: {
               name: name,
               singular: singular,
-              controller: resource_controller(name, opts, singular: singular),
+              # Its routes take the modules on the stack where they are drawn, the resource's own module: among them.
+              controller: resource_controller_name(name, opts, singular: singular),
               base: layout[:base],
               member_path: layout[:member_path],
               new_path: layout[:new_path],
               singular_route_name: layout[:member_name],
               new_route_name: layout[:singular_name],
-              plural_route_name: layout[:plural_name]
+              plural_route_name: layout[:plural_name],
+              outer_name: outer_name,
+              outer_prefix: outer_prefix,
+              member_outer_name: member_outer_name,
+              member_outer_prefix: member_outer_prefix,
+              key: layout[:key],
+              collection_key: collection_route_key(name, opts, singular: singular)
             }
           }
           frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
+          frame[:shallow_path] = resource_shallow_path(opts) if opts.key?(:shallow_path)
+          frame[:shallow_prefix] = shallow_prefix if opts.key?(:shallow_prefix)
           push_frame(node, **frame)
           nest_param_constraint(layout, opts)
         end
@@ -653,8 +1058,8 @@ module RailsAiContext
           param = resource_param(opts)
           path_names = current_path_names.merge(path_names_option(opts))
           shallow = !singular && (opts.key?(:shallow) ? opts[:shallow] == true : current_shallow)
-          shallow_base = join_path(current_shallow_path, path)
-          member = singular ? base : "#{shallow ? shallow_base : base}/:#{param}"
+          shallow_base = join_path(resource_shallow_path(opts), path)
+          member = singular ? base : join_path(shallow ? shallow_base : base, ":#{param}")
           {
             base: base,
             key: key,
@@ -662,9 +1067,9 @@ module RailsAiContext
             member_path: member,
             edit_path: join_path(member, (path_names[:edit] || "edit").to_s),
             new_path: join_path(base, (path_names[:new] || "new").to_s),
-            nested_prefix: singular ? base : "#{shallow ? shallow_base : base}/:#{key}_#{param}",
+            nested_prefix: singular ? base : join_path(shallow ? shallow_base : base, ":#{key}_#{param}"),
             singular_name: route_name_for(key),
-            member_name: shallow ? join_names(current_shallow_prefix, key) : route_name_for(key),
+            member_name: shallow ? join_names(resource_shallow_prefix(opts), key) : route_name_for(key),
             plural_name: route_name_for(collection_route_key(name, opts, singular: singular))
           }
         end
@@ -681,6 +1086,16 @@ module RailsAiContext
           @stack.reverse.find { |f| f[:shallow_prefix] }&.dig(:shallow_prefix)
         end
 
+        # Rails draws a resource inside a scope of its own shallow_path: and shallow_prefix:.
+        def resource_shallow_path(opts)
+          path = literal_option(opts[:shallow_path])
+          path ? join_path(current_shallow_path, path.to_s) : current_shallow_path
+        end
+
+        def resource_shallow_prefix(opts)
+          join_names(current_shallow_prefix, name_or_marker(opts[:shallow_prefix]))
+        end
+
         def current_path_names
           @stack.filter_map { |f| f[:path_names] }.reduce(@global_path_names, :merge)
         end
@@ -695,6 +1110,11 @@ module RailsAiContext
           value if (value.is_a?(String) || value.is_a?(Symbol)) && value != RailsAiContext::Confidence::INFERRED
         end
 
+        # A name the source spells out, or the INFERRED marker a held one leaves, which the names built on it carry.
+        def name_or_marker(value)
+          value if value.is_a?(String) || value.is_a?(Symbol)
+        end
+
         def join_names(*parts)
           joined = parts.compact.map(&:to_s).reject(&:empty?).join("_")
           joined unless joined.empty?
@@ -704,10 +1124,9 @@ module RailsAiContext
         def opaque_options?(node)
           (node.arguments&.arguments || []).any? do |arg|
             case arg
-            when Prism::SymbolNode, Prism::StringNode then false
             when Prism::KeywordHashNode, Prism::HashNode
               arg.elements.any? { |assoc| !assoc.is_a?(Prism::AssocNode) || opaque_action_list?(assoc) }
-            else true
+            else literal_or_bound(arg).nil?
             end
           end
         end
@@ -716,7 +1135,7 @@ module RailsAiContext
           return false unless %i[only except].include?(extract_key(assoc.key))
 
           values = assoc.value.is_a?(Prism::ArrayNode) ? assoc.value.elements : [ assoc.value ]
-          !values.all? { |v| v.is_a?(Prism::SymbolNode) || v.is_a?(Prism::StringNode) }
+          !values.all? { |v| literal_or_bound(v) }
         end
 
         # `as:` renames the route helpers and the nested param, and leaves the
@@ -747,16 +1166,23 @@ module RailsAiContext
           (opts[:param] || "id").to_s
         end
 
-        def emit_verb_route(node)
+        # `app:` is a route to a Rack app, which MountListener lists: the walk only takes its name.
+        def emit_verb_route(node, app: false)
           return if suppressed?
 
+          kept = @results.size
+          emit_verb_route!(node)
+          @results.slice!(kept..) if app
+        end
+
+        def emit_verb_route!(node)
           opts = route_options(node)
           via = opts.key?(:via) ? opts[:via] : @stack.reverse.find { |f| f[:via] }&.dig(:via)
           verb = node.name == :match ? match_verb(via) : node.name.to_s.upcase
           return emit_dynamic(node) if verb.nil? || opaque_options?(node)
 
           rocket_key = opts.keys.find { |k| k.is_a?(String) }
-          return emit_dynamic(node) if !@multi_path && (node.arguments&.arguments || []).count { |a| !a.is_a?(Prism::KeywordHashNode) && !a.is_a?(Prism::HashNode) } > 1
+          return emit_dynamic(node) if !@before_8_1 && (node.arguments&.arguments || []).count { |a| !a.is_a?(Prism::KeywordHashNode) && !a.is_a?(Prism::HashNode) } > 1
 
           paths = literal_paths(node)
           paths = [ [ rocket_key, false ] ] if paths.empty? && rocket_key
@@ -768,14 +1194,14 @@ module RailsAiContext
         # Rails 7.x and 8.0 draw every path of `get "/a", "/b"`, strings before symbols.
         # @return [Array<[String, Boolean]>] each path, and whether it names an action
         def literal_paths(node)
-          args = (node.arguments&.arguments || []).select { |a| a.is_a?(Prism::StringNode) || a.is_a?(Prism::SymbolNode) }
-          args.partition { |a| a.is_a?(Prism::StringNode) }.flatten.map { |a| [ a.unescaped, a.is_a?(Prism::SymbolNode) ] }
+          args = (node.arguments&.arguments || []).filter_map { |a| literal_or_bound(a) }
+          args.partition { |a| a.is_a?(String) }.flatten.map { |a| [ a.to_s, a.is_a?(Symbol) ] }
         end
 
         def emit_verb_path(node, verb, segment, action_given, opts, rocket_key)
           # Rails' match reads `path => :action` as the action and `path => "controller"` as the controller.
           rocket = rocket_key && opts[rocket_key]
-          if rocket.is_a?(Symbol) || (rocket.is_a?(String) && !rocket.include?("#"))
+          if rocket.is_a?(Symbol) || (rocket.is_a?(String) && !rocket.include?("#") && rocket != RailsAiContext::Confidence::INFERRED)
             opts = opts.except(rocket_key)
             opts[rocket.is_a?(Symbol) ? :action : :controller] ||= rocket
             rocket_key = nil
@@ -783,7 +1209,6 @@ module RailsAiContext
 
           target_given = opts.key?(:to) || !rocket_key.nil?
           target = opts[:to] || (rocket_key && opts[rocket_key])
-          return emit_dynamic(node) if target_given && unreadable_target?(target)
 
           route_set = current_route_set unless node.name == :match
           if route_set
@@ -791,13 +1216,27 @@ module RailsAiContext
             # The class passes `as: nil` when none is given, and Rails generates no name then.
             as = opts[:as] && "#{route_set[:name_prefix]}#{opts[:as]}"
           end
+          # A member and a collection route sit at different paths, and a constant on: names neither.
+          return emit_dynamic(node) if opts[:on] == RailsAiContext::Confidence::INFERRED
+
+          name = route_set ? as && verb_route_name(as, segment, opts[:on]) : verb_route_name(opts[:as], segment, opts[:on])
+          if target_given && unreadable_target?(target)
+            # Rails names a route to a redirect or a Rack app like any other, so a later route cannot take the name.
+            @taken_names.add([ current_engine, name ]) if name && !name.empty? && !name.include?(RailsAiContext::Confidence::INFERRED)
+            return emit_dynamic(node)
+          end
 
           controller, action = resolve_target(target, segment, opts)
           return emit_dynamic(node) unless controller && action
+          # Rails maps an action given as a symbol through path_names, unless `path:` names its path; a string is the path.
+          option_path = opts[:path] if action_given && !route_set
+          return emit_dynamic(node) if option_path && !literal_option(option_path)
 
-          name = route_set ? as && verb_route_name(as, segment, opts[:on]) : verb_route_name(opts[:as], segment, opts[:on])
-          # Rails maps an action given as a symbol through path_names; a string is the path.
-          path = action_given ? (current_path_names[segment.to_sym] || segment).to_s : segment
+          path = option_path&.to_s
+          path ||= if !action_given then segment
+          elsif canonical_action?(segment, opts[:on]) then ""
+          else (current_path_names[segment.to_sym] || segment).to_s
+          end
           emit(node, verb, verb_route_path(path, opts[:on]), controller, action, name)
         end
 
@@ -821,16 +1260,20 @@ module RailsAiContext
           return unless resource
 
           prefix = { member: resource[:member_path], new: resource[:new_path] }.fetch(kind, resource[:base])
-          push_frame(node, prefix: prefix, kind: kind)
+          # Rails' member, collection and new scopes add the resource's path and none of its name.
+          push_frame(node, prefix: prefix, kind: kind, name_prefix: resource[kind == :member ? :member_outer_name : :outer_name], name_root: true)
         end
 
         # The member/collection frame a verb route sits in, if any - either
         # from an enclosing member/collection block or an explicit on: keyword.
+        # Rails draws a bare verb in a singular resource as a member route.
         def member_collection_kind(on_option)
           return on_option.to_sym if on_option
 
-          frame = @stack.reverse.find { |f| f[:kind] }
-          frame && frame[:kind]
+          frame = scope_level
+          return unless frame
+
+          frame[:kind] || (:member if frame[:resource]&.dig(:singular))
         end
 
         def verb_route_path(segment, on_option)
@@ -894,11 +1337,12 @@ module RailsAiContext
             controller: controller,
             action: action.to_s,
             location: node.location.start_line,
-            confidence: confidence_for(node)
+            # A controller or action the walk could not read leaves the route a guess.
+            confidence: inferred_target?(controller, action) ? RailsAiContext::Confidence::INFERRED : confidence_for(node)
           }
           engine = current_engine
           # An engine's table keeps its own names.
-          record[:name] = name if name && !name.empty? && @taken_names.add?([ engine, name ])
+          record[:name] = name if name && !name.empty? && (name.include?(RailsAiContext::Confidence::INFERRED) || @taken_names.add?([ engine, name ]))
           record[:engine] = engine if engine
           condition = current_condition
           record[:condition] = condition if condition
@@ -906,10 +1350,15 @@ module RailsAiContext
           record[:late] = true if @stack.any? { |f| f[:late] }
           constraints = route_constraints(node, path)
           record[:constraints] = constraints if constraints
-          params = path.scan(/:(\w+)/).flatten
+          params = RouteCoverage.path_params(path)
           record[:params] = params if params.any?
-          record[:restful] = RESTFUL_ACTIONS.include?(record[:action])
+          record[:restful] = RouteCoverage::RESTFUL_ACTIONS.include?(record[:action])
           @results << record
+        end
+
+        # `admin/[INFERRED]` too: a namespace prefixes what it could not read.
+        def inferred_target?(controller, action)
+          "#{controller}##{action}".include?(RailsAiContext::Confidence::INFERRED)
         end
 
         def emit_dynamic(node, macro: node.name)
@@ -923,7 +1372,7 @@ module RailsAiContext
           # of writing off everything the file defines.
           if macro == :draw
             record[:target] = draw_target(node)
-            record[:scope] = @stack.map { |frame| frame.except(:node) }
+            record[:scope] = @stack.map { |frame| frame.except(:node, :loop, :bindings, :block) }
             record[:prefix] = current_prefix
             record[:name_prefix] = current_name_prefix
           end
@@ -931,8 +1380,7 @@ module RailsAiContext
         end
 
         def draw_target(node)
-          target = extract_first_symbol(node)
-          target unless target == RailsAiContext::Confidence::INFERRED
+          literal_or_bound(node.arguments&.arguments&.first)&.to_sym
         end
 
         # Keyword options including hash-rocket string keys, so
@@ -951,20 +1399,20 @@ module RailsAiContext
           hash.elements.each_with_object({}) do |assoc, acc|
             next unless assoc.is_a?(Prism::AssocNode)
 
-            key = case assoc.key
-            when Prism::SymbolNode then assoc.key.unescaped.to_sym
-            when Prism::StringNode then assoc.key.unescaped
-            end
-            acc[key] = extract_value(assoc.value) if key
+            key = literal_or_bound(assoc.key)
+            next unless key
+
+            # Rails reads a constant's value (`path: PREFIX`); the walk sees only its name, or for a route target the string the file assigns it.
+            value = key == :to || key.is_a?(String) ? written_value(assoc.value) : assoc.value
+            constant = value.is_a?(Prism::ConstantReadNode) || value.is_a?(Prism::ConstantPathNode)
+            acc[key] = constant && key != :to ? RailsAiContext::Confidence::INFERRED : extract_value(value)
           end
         end
 
         # First positional argument when it is a plain symbol/string literal.
         def literal_first_arg(node)
           arg = node.arguments&.arguments&.first
-          case arg
-          when Prism::SymbolNode, Prism::StringNode then arg.unescaped
-          end
+          literal_or_bound(arg)&.to_s if arg
         end
 
         # Rails' Resource#default_actions: an api_only route set leaves out new
@@ -982,11 +1430,15 @@ module RailsAiContext
         # resource option there: Rails peels it into a surrounding scope, so it
         # moves the controller and never the path.
         def resource_controller(name, opts, singular: false)
-          controller = (opts[:controller] || (singular ? name.pluralize : name)).to_s
+          controller = resource_controller_name(name, opts, singular: singular)
           return controller.delete_prefix("/") if controller.start_with?("/")
 
           controller = "#{opts[:module]}/#{controller}" if opts[:module]
           prefixed_controller(controller)
+        end
+
+        def resource_controller_name(name, opts, singular:)
+          (opts[:controller] || (singular ? name.pluralize : name)).to_s
         end
 
         # A leading slash makes the controller absolute: Rails' own
@@ -1024,17 +1476,28 @@ module RailsAiContext
           kind = member_collection_kind(on_option)
           resource = current_resource
           if kind && resource
-            resource_key = { member: resource[:singular_route_name], new: "new_#{resource[:new_route_name]}" }
-              .fetch(kind, resource[:plural_route_name])
-            base = as_option ? as_option.to_s : plain_segment_name(segment)
-            return nil unless base && resource_key && !resource_key.empty?
+            resource_key = if scope_level[:kind]
+              # In a member, collection or new block the name takes the scope's `as:` as it stands there.
+              named = join_names(current_name_prefix, kind == :collection ? resource[:collection_key] : resource[:key])
+              kind == :new ? "new_#{named}" : named
+            else
+              { member: resource[:singular_route_name], new: "new_#{resource[:new_route_name]}" }
+                .fetch(kind, resource[:plural_route_name])
+            end
+            return nil if resource_key.nil? || resource_key.empty?
+            return resource_key if !as_option && canonical_action?(segment, on_option)
 
-            return "#{base}_#{resource_key}"
+            base = as_option ? as_option.to_s : plain_segment_name(segment)
+            return base && "#{base}_#{resource_key}"
           end
 
           return route_name_for(as_option.to_s) if as_option
 
-          generated_name(route_name_for(plain_segment_name(segment)))
+          segment_name = plain_segment_name(segment)
+          # Mapper#name_for_action: under a parent resource, no `as:` and no nameable path gives no name.
+          return nil if segment_name.nil? && resource
+
+          generated_name(route_name_for(segment_name))
         end
 
         # Rails converts the hyphens of a path-derived name to underscores
@@ -1046,14 +1509,15 @@ module RailsAiContext
         NAMEABLE = /\A[_a-z]/i
 
         def plain_segment_name(segment)
-          plain = segment.to_s.delete_prefix("/")
+          plain = segment.to_s.squeeze("/").delete_prefix("/").delete_suffix("/")
           return nil if plain.empty? || plain.include?(":") || plain.match?(UNNAMEABLE_PATH)
 
           plain.tr("/", "_").tr("-", "_")
         end
 
+        # A name under an `as:` the walk could not read stays, marked: Rails names it after the value.
         def generated_name(name)
-          name if name&.match?(NAMEABLE)
+          name if name&.match?(NAMEABLE) || name&.start_with?(RailsAiContext::Confidence::INFERRED)
         end
 
         def join_path(*segments)

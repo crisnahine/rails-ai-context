@@ -108,7 +108,7 @@ module RailsAiContext
         if files&.any?
           warnings = warnings.select do |w|
             path = w.file.relative
-            files.any? { |f| path == f || path.start_with?(f) }
+            files.any? { |f| path_matches?(path, f) }
           end
         end
 
@@ -455,7 +455,7 @@ module RailsAiContext
         # `brakeman-*` also matches brakeman-lib, a different gem: a version
         # starts with a digit.
         specs = Gem.path.flat_map { |dir|
-          Dir.glob(File.join(dir, "specifications", "brakeman-*.gemspec"))
+          PathResolver.glob(dir, "specifications/brakeman-*.gemspec")
         }.filter_map { |path| (version = File.basename(path)[/\Abrakeman-(\d[^-]*)\.gemspec\z/, 1]) && [ version, path ] }
 
         newest = specs.max_by { |version, _| Gem::Version.new(version) rescue Gem::Version.new("0") } or return nil

@@ -114,7 +114,7 @@ module RailsAiContext
         end
 
         def current_condition
-          branch_conditions.map { |c| c[:text]&.call || condition_text(c) }.join(" and ").then { |text| text unless text.empty? }
+          branch_conditions.map { |c| branch_text(c) }.join(" and ").then { |text| text unless text.empty? }
         end
 
         # [chain offset, arm, arms] when every open branch is an arm of one if/unless chain that ends
@@ -133,6 +133,10 @@ module RailsAiContext
           return nil unless other.is_a?(Prism::ElseNode)
 
           [ stack.first[:node].location.start_offset, stack.size - (stack.last[:negated] ? 0 : 1), arms + 1 ]
+        end
+
+        def branch_text(branch)
+          branch[:text]&.call || condition_text(branch)
         end
 
         # Built only when a record asks, since most branches a walk passes hold nothing it records.

@@ -64,7 +64,7 @@ module RailsAiContext
 
         # Check for common Rails patterns in model files. Concerns stay in:
         # a macro declared in one is the app's pattern as much as any other.
-        model_records = SourceScan.each(root, kind: "app/models", skip_concerns: false).first(500)
+        model_records = SourceScan.each(root, kind: "app/models", skip_concerns: false).to_a
         if model_records.any?
           # Collect AST-detected macros across all model files
           all_macros = Set.new
@@ -160,7 +160,7 @@ module RailsAiContext
 
       def uses_async_queries?
         %w[app/controllers app/services app/jobs app/models].any? do |kind|
-          SourceScan.each(root, kind: kind, skip_concerns: false).first(500).any? do |record|
+          SourceScan.each(root, kind: kind, skip_concerns: false).any? do |record|
             # AST-based detection: ignores comments automatically
             ast = SourceIntrospector.walk_source(record.source, {
               async: -> { Listeners::ChainedCallListener.new(*ASYNC_QUERY_METHODS) }
@@ -200,7 +200,7 @@ module RailsAiContext
         (important_dirs | app_child_dirs).each_with_object({}) do |dir, hash|
           count = SourceScan.paths(root, kind: dir, skip_concerns: false).count
           glob = NON_RUBY_FILES[dir]
-          count += PathResolver.dirs_for(root, dir).sum { |path| Dir.glob(File.join(path, glob)).size } if glob
+          count += PathResolver.dirs_for(root, dir).sum { |path| Dir.glob(glob, base: path).size } if glob
 
           hash[dir] = count if count > 0
         end
@@ -218,23 +218,23 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "app_child_dirs")
       end
 
-      def detect_config_files
-        configs = %w[
-          config/database.yml config/credentials.yml.enc
-          config/cable.yml config/storage.yml
-          config/sidekiq.yml config/deploy.yml
-          config/importmap.rb config/tailwind.config.js
-          config/puma.rb config/application.rb
-          config/locales/en.yml
-          package.json Gemfile
-          Procfile Procfile.dev
-          .rubocop.yml .standard.yml .erb_lint.yml .erb-lint.yml .rspec
-          sorbet/config Steepfile
-          Dockerfile docker-compose.yml
-          .github/workflows/ci.yml
-        ]
+      CONFIG_FILES = %w[
+        config/database.yml config/credentials.yml.enc
+        config/cable.yml config/storage.yml
+        config/sidekiq.yml config/deploy.yml
+        config/importmap.rb config/tailwind.config.js
+        config/puma.rb config/application.rb
+        config/locales/en.yml
+        package.json Gemfile
+        Procfile Procfile.dev
+        .rubocop.yml .standard.yml .erb_lint.yml .erb-lint.yml .rspec
+        sorbet/config Steepfile
+        Dockerfile docker-compose.yml
+        .github/workflows/ci.yml
+      ].freeze
 
-        configs.select { |f| file_exists?(f) }
+      def detect_config_files
+        CONFIG_FILES.select { |f| file_exists?(f) }
       end
 
       STANDARD_APP_DIRS = %w[

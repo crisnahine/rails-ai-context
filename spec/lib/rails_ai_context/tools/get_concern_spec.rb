@@ -756,6 +756,40 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
+  # Zeitwerk loads Eager::Accessor with eager/checksum.rb, so it is the file's concern; the class beside it is none.
+  context "on a file that defines a concern beside its class" do
+    before do
+      eager = File.join(tmpdir, "app", "services", "eager")
+      FileUtils.mkdir_p(eager)
+      File.write(File.join(eager, "checksum.rb"), <<~RUBY)
+        module Eager
+          class Checksum < Base
+            def apply; end
+          end
+
+          module Accessor
+            extend ActiveSupport::Concern
+
+            included do
+              attr_accessor :cache_checksum
+            end
+          end
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "lists the concern and not the class, and answers the concern by name" do
+      listing = described_class.call.content.first[:text]
+      text = described_class.call(name: "Eager::Accessor").content.first[:text]
+
+      expect(listing).to include("**Eager::Accessor**")
+      expect(listing).not_to include("Eager::Checksum")
+      expect(text).to include("# Eager::Accessor", "attr_accessor :cache_checksum")
+    end
+  end
+
   # A module that extends ActiveSupport::Concern is a concern wherever it
   # lives: the services listing leaves one under app/services out as a
   # concern, and this tool said the app had none.
@@ -1244,6 +1278,65 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     end
   end
 
+  describe "a concern only another concern includes" do
+    before do
+      File.write(File.join(model_concerns_dir, "sluggable.rb"), "module Sluggable\n  extend ActiveSupport::Concern\nend\n")
+      File.write(File.join(model_concerns_dir, "publishable.rb"), <<~RUBY)
+        module Publishable
+          extend ActiveSupport::Concern
+          include Sluggable
+        end
+      RUBY
+      File.write(File.join(models_dir, "comment.rb"), "class Comment < ApplicationRecord\n  include Publishable\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "names the including concern, and the class that has it through that concern" do
+      text = described_class.call(name: "Sluggable").content.first[:text]
+
+      expect(text).to include("## Included By (2)")
+      expect(text).to include("- Publishable (concern)")
+      expect(text).to include("- Comment (through Publishable)")
+      expect(text).not_to include("includes this concern._")
+    end
+  end
+
+  # A module passes what it includes to every class that includes it, wherever its file sits.
+  describe "a concern that modules outside a concerns directory include" do
+    before do
+      exports = File.join(tmpdir, "app", "services", "shop", "exports")
+      FileUtils.mkdir_p(exports)
+      File.write(File.join(exports, "columns.rb"), "module Shop::Exports::Columns\n  extend ActiveSupport::Concern\nend\n")
+      File.write(File.join(exports, "base.rb"), <<~RUBY)
+        module Shop::Exports::Base
+          extend ActiveSupport::Concern
+
+          included do
+            include Shop::Exports::Columns
+          end
+        end
+      RUBY
+      File.write(File.join(exports, "yearly.rb"), "module Shop\n  module Exports\n    class Yearly\n      include Base\n    end\n  end\nend\n")
+      File.write(File.join(exports, "layout.rb"), "module Shop\n  module Exports\n    module Layout\n      include Columns\n    end\n  end\nend\n")
+      File.write(File.join(exports, "summary.rb"), "module Shop\n  module Exports\n    class Summary\n      include Layout\n    end\n  end\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "names the classes that have it through them, each module by what it is" do
+      text = described_class.call(name: "Shop::Exports::Columns", detail: "full").content.first[:text]
+
+      expect(text[/## Included By.*?(?=\n\n)/m]).to eq(<<~TEXT.chomp)
+        ## Included By (4)
+        - Shop::Exports::Base (concern)
+        - Shop::Exports::Layout (module)
+        - Shop::Exports::Yearly (through Shop::Exports::Base)
+        - Shop::Exports::Summary (through Shop::Exports::Layout)
+      TEXT
+    end
+  end
+
   describe "a concern whose namespace the path does not camelize to" do
     before do
       FileUtils.mkdir_p(File.join(model_concerns_dir, "sdg"))
@@ -1431,6 +1524,45 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).not_to include("No model or concern in app/models wires this validator")
     end
 
+    it "names the module that owns the wiring call, not its namespace" do
+      FileUtils.mkdir_p(File.join(validator_dir, "admin"))
+      File.write(File.join(validator_dir, "admin", "contactable.rb"), <<~RUBY)
+        module Admin
+          module Contactable
+            extend ActiveSupport::Concern
+
+            included do
+              validates :email, email: true
+            end
+          end
+        end
+      RUBY
+
+      text = described_class.call(name: "EmailValidator").content.first[:text]
+
+      expect(text).to include("- Admin::Contactable (concern)")
+      expect(text).not_to include("- Admin (module)")
+    end
+
+    it "labels each module that wires it by its own declaration, wherever its file sits" do
+      File.write(File.join(tmpdir, "app", "models", "shippable.rb"), <<~RUBY)
+        module Shippable
+          extend ActiveSupport::Concern
+
+          included do
+            validates_with ZipCodeValidator
+          end
+        end
+      RUBY
+      File.write(File.join(validator_dir, "plain_mailing.rb"), "module PlainMailing\n  validates_with ZipCodeValidator\nend\n")
+
+      text = described_class.call(name: "ZipCodeValidator").content.first[:text]
+
+      expect(text).to include("- Shippable (concern)")
+      expect(text).to include("- PlainMailing (module)")
+      expect(text).not_to include("PlainMailing (concern)")
+    end
+
     # An app with its own validator base class is the ordinary shape, and one
     # level of compare called every such validator a concern used by nothing.
     it "follows the app's own validator base class" do
@@ -1494,6 +1626,199 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
       expect(text).to include("## Validators (2)")
       expect(text).not_to include("## Model Concerns (2)")
+    end
+  end
+
+  # Zeitwerk loads Shop2::Tagging from shop2.rb once Shop2 is loaded; Shop2 itself only namespaces it.
+  [ "app/models/concerns/shop2.rb", "app/models/shop2.rb" ].each do |file|
+    context "with a concern nested in its namespace's file, #{file}" do
+      before do
+        File.write(File.join(tmpdir, file), <<~RUBY)
+          module Shop2
+            module Tagging
+              extend ActiveSupport::Concern
+
+              included do
+                has_many :tags
+              end
+
+              def tag_list
+                tags.map(&:name)
+              end
+            end
+
+            module Rating
+              extend ActiveSupport::Concern
+
+              included do
+                has_many :ratings
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(models_dir, "product.rb"), "class Product < ApplicationRecord\n  include Shop2::Tagging\nend\n")
+        described_class.reset_cache!
+      end
+
+      it "finds the nested concern by name" do
+        text = described_class.call(name: "Shop2::Tagging").content.first[:text]
+
+        expect(text).to include("# Shop2::Tagging")
+        expect(text).to include("tag_list")
+        expect(text).to include("has_many :tags")
+        expect(text).not_to include("has_many :ratings")
+        expect(text).to include("Product")
+      end
+
+      it "lists the nested concern and not its namespace, counted as the ActiveSupport introspector counts it" do
+        listing = described_class.call.content.first[:text]
+        listed = listing[/# Concerns \((\d+)\)/, 1].to_i
+
+        expect(listing).to include("**Shop2::Tagging**", "**Shop2::Rating**")
+        expect(listing).not_to include("**Shop2**")
+        expect(listed).to eq(active_support_total)
+      end
+
+      it "is the concern the ActiveSupport introspector names" do
+        names = RailsAiContext::Introspectors::ActiveSupportIntrospector
+                .new(RailsAiContext::StaticApp.new(tmpdir)).send(:extract_concerns).values.flatten.map { |m| m[:name] }
+
+        expect(names).to contain_exactly("Authenticatable", "Searchable", "Shop2::Tagging", "Shop2::Rating")
+      end
+
+      it "answers the namespace's name as no concern, pointing at the ones it holds" do
+        text = described_class.call(name: "Shop2").content.first[:text]
+
+        expect(text).not_to include("# Shop2\n")
+        expect(text).not_to include("has_many :tags")
+        expect(text).to include("Did you mean one of: Shop2::Rating, Shop2::Tagging? Give the full name.")
+      end
+    end
+  end
+
+  # Ruby runs a Module.new block with the new module as self, so its `included` is Billing::Helper's alone.
+  context "with a concern whose file nests another concern as a Module.new write" do
+    before do
+      File.write(File.join(model_concerns_dir, "billing.rb"), <<~RUBY)
+        module Billing
+          extend ActiveSupport::Concern
+          included do
+            has_many :invoices
+          end
+
+          Helper = Module.new do
+            extend ActiveSupport::Concern
+            included do
+              has_many :helper_rows
+            end
+          end
+        end
+      RUBY
+      described_class.reset_cache!
+    end
+
+    it "shows each concern's macros under its own name" do
+      outer = described_class.call(name: "Billing").content.first[:text]
+      inner = described_class.call(name: "Billing::Helper").content.first[:text]
+
+      expect(outer).to include("has_many :invoices")
+      expect(outer).not_to include("has_many :helper_rows")
+      expect(inner).to include("has_many :helper_rows")
+      expect(inner).not_to include("has_many :invoices")
+    end
+  end
+
+  # Ruby names `self::Sub =` in Ledger's body Ledger::Sub, and an `||=` that assigns Ledger::Orw a module like `=` does.
+  context "with a concern whose file nests concerns written as `self::Sub =` and an assigning `||=`" do
+    before do
+      File.write(File.join(model_concerns_dir, "ledger.rb"), <<~RUBY)
+        module Ledger
+          extend ActiveSupport::Concern
+          included do
+            has_many :entries
+          end
+          self::Sub = Module.new do
+            extend ActiveSupport::Concern
+            included do
+              has_many :sub_rows
+            end
+          end
+          Orw ||= Module.new do
+            extend ActiveSupport::Concern
+            included do
+              has_many :orw_rows
+            end
+          end
+        end
+      RUBY
+      described_class.reset_cache!
+    end
+
+    it "lists and finds each under the name Ruby gives it" do
+      listing = described_class.call.content.first[:text]
+
+      expect(listing).to include("Ledger::Sub", "Ledger::Orw")
+      expect(listing).not_to include("self::")
+      expect(described_class.call(name: "Ledger::Sub").content.first[:text]).to include("has_many :sub_rows")
+      expect(described_class.call(name: "Ledger::Orw").content.first[:text]).to include("has_many :orw_rows")
+    end
+  end
+
+  # Ruby runs Helpers' `included` block for Helpers' includers only, so Shop3's includer gets has_many :things alone.
+  context "with a concern whose file nests another concern" do
+    before do
+      File.write(File.join(model_concerns_dir, "shop3.rb"), <<~RUBY)
+        module Shop3
+          extend ActiveSupport::Concern
+          included do
+            has_many :things
+          end
+
+          module Helpers
+            extend ActiveSupport::Concern
+            included do
+              has_many :helpers
+              before_save :help
+            end
+          end
+        end
+      RUBY
+      described_class.reset_cache!
+    end
+
+    it "shows the outer concern's own macros and callbacks only" do
+      text = described_class.call(name: "Shop3").content.first[:text]
+
+      expect(text).to include("has_many :things")
+      expect(text).not_to include("has_many :helpers")
+      expect(text).not_to include("before_save :help")
+    end
+
+    it "reads the concern's file once and walks its mixins once to answer it" do
+      path = File.join(model_concerns_dir, "shop3.rb")
+      reads = 0
+      walks = 0
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, file, *rest|
+        reads += 1 if file.to_s.end_with?("shop3.rb")
+        original.call(file, *rest)
+      end
+      allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original do |original, source, map, *rest|
+        walks += 1 if source.start_with?("module Shop3") && map.key?(:mixins)
+        original.call(source, map, *rest)
+      end
+
+      described_class.call(name: "Shop3::Helpers")
+
+      # The second of each is the includer search, which reads every file under app/.
+      expect(File.exist?(path)).to be(true)
+      expect([ reads, walks ]).to eq([ 2, 2 ])
+    end
+
+    it "shows the nested concern's macros under its own name" do
+      text = described_class.call(name: "Shop3::Helpers").content.first[:text]
+
+      expect(text).to include("has_many :helpers", "before_save :help")
+      expect(text).not_to include("has_many :things")
     end
   end
 end

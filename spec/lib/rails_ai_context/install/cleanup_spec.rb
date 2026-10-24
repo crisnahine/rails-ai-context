@@ -22,6 +22,18 @@ RSpec.describe RailsAiContext::Install::Cleanup do
     FileUtils.mkdir_p(File.join(root, relative)).first
   end
 
+  describe ".generated" do
+    it "lists a root file's symlink to a file inside the app that holds the block, and not one out of it" do
+      File.symlink(touch("AGENTS.md", "mine\n#{MARKED}"), File.join(root, "CLAUDE.md"))
+      Dir.mktmpdir do |outside|
+        File.binwrite(File.join(outside, "rules.md"), MARKED)
+        File.symlink(File.join(outside, "rules.md"), File.join(root, ".cursorrules"))
+
+        expect(described_class.generated(tools: %i[claude cursor], root: root)).to eq(claude: [ "CLAUDE.md" ])
+      end
+    end
+  end
+
   describe ".remove" do
     it "removes a dropped tool's context files" do
       touch("CLAUDE.md")
@@ -65,7 +77,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
       expect(File.read(path)).to eq("# My own instructions\n")
-      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], failed: [])
+      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], linked: [], failed: [])
     end
 
     # A blank line under a block in the middle of a file is the user's own:
@@ -156,7 +168,31 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       result = described_class.remove(tools: [ :claude ], keeping: [ :codex ], root: root)
 
       expect(File.read(target)).to eq("mine\n#{MARKED}")
-      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], failed: [])
+      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], linked: [], failed: [])
+    end
+
+    it "trims the block through a root file's symlink to a file inside the app, as the writer wrote it" do
+      target = touch("AGENTS.md", "mine\n#{MARKED}")
+      File.symlink(target, File.join(root, "CLAUDE.md"))
+
+      result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
+
+      expect(File.read(target)).to eq("mine\n")
+      expect(File.symlink?(File.join(root, "CLAUDE.md"))).to be(true)
+      expect(result).to eq(removed: [], trimmed: [ "CLAUDE.md" ], kept: [], linked: [], failed: [])
+    end
+
+    it "names a root file's symlink out of the app that holds the block as left, and edits nothing" do
+      Dir.mktmpdir do |outside|
+        target = File.join(outside, "AGENTS.md")
+        File.binwrite(target, "mine\n#{MARKED}")
+        File.symlink(target, File.join(root, "CLAUDE.md"))
+
+        result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
+
+        expect(File.read(target)).to eq("mine\n#{MARKED}")
+        expect(result).to eq(removed: [], trimmed: [], kept: [], linked: [ "CLAUDE.md" ], failed: [])
+      end
     end
 
     it "leaves a rules directory that is a symlink" do
@@ -164,14 +200,15 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       FileUtils.mkdir_p(File.join(root, ".claude"))
       File.symlink(real, File.join(root, ".claude/rules"))
 
-      described_class.remove(tools: [ :claude ], keeping: [], root: root)
+      result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
       expect(File.exist?(File.join(real, "rails-schema.md"))).to be(true)
+      expect(result).to include(linked: [ ".claude/rules/" ], failed: [])
     end
 
     it "removes what the real writers produce" do
       path = File.join(root, "CLAUDE.md")
-      RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(path, "generated")
+      RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(path, "generated", root: root)
 
       described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
@@ -223,7 +260,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
 
     it "says nothing about a file that was never there" do
       expect(described_class.remove(tools: [ :claude ], keeping: [], root: root))
-        .to eq(removed: [], trimmed: [], kept: [], failed: [])
+        .to eq(removed: [], trimmed: [], kept: [], linked: [], failed: [])
     end
 
     it "leaves files belonging to a tool it was not asked about" do

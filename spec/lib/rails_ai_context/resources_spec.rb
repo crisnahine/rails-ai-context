@@ -165,6 +165,14 @@ RSpec.describe RailsAiContext::Resources do
       expect(parsed).to eq({ "tables" => [ "users" ] })
     end
 
+    it "reads the shared context the tools read, introspecting once for many reads" do
+      expect(RailsAiContext).to receive(:introspect).once.and_return(fake_context)
+      read_handler.call(uri: "rails://schema")
+      read_handler.call(uri: "rails://routes")
+      read_handler.call(uri: "rails-ai-context://models/User")
+      RailsAiContext::Tools::BaseTool.cached_context
+    end
+
     it "returns model data for a model URI" do
       result = read_handler.call(uri: "rails://models/User")
       expect(result).to be_an(Array)

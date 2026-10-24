@@ -31,6 +31,16 @@ module RailsAiContext
 
     module_function
 
+    # Dir.glob of `pattern` below `dir`, spelled under it. `dir` is a path, never
+    # a pattern: a folder named "work [old]" or "{x}" is matched literally.
+    # The one rule for globbing under a path: use this when the caller needs the
+    # paths, and `Dir.glob(pattern, base: dir)` when it needs only the names
+    # relative to `dir`, a count, or whether any match.
+    def glob(dir, pattern)
+      dir = dir.to_s
+      Dir.glob(pattern, base: dir).map { |relative| File.join(dir, relative) }
+    end
+
     def model_dirs(root) = dirs_for(root, "app/models")
 
     def controller_dirs(root) = dirs_for(root, "app/controllers")
@@ -46,11 +56,18 @@ module RailsAiContext
       (spelled.(prepended) + dirs_for(root, "app/views") + spelled.(appended) + engines).uniq.freeze
     end
 
+    # The environment files, sorted, without one a symlink carries out of the app.
+    def environment_paths(root)
+      glob(root, "config/environments/*.rb").sort.select do |path|
+        File.file?(path) && !linked_out?(path, root)
+      end
+    end
+
     # Every initializer Rails loads: railties globs config/initializers with **/*.rb, in path order,
     # a glob that enters no linked directory below it. A symlink out of the app (linked_out?), or
     # to nothing, is left out.
     def initializer_paths(root)
-      Dir.glob(File.join(root.to_s, "config", "initializers", "**", "*.rb")).sort.select do |path|
+      glob(root, "config/initializers/**/*.rb").sort.select do |path|
         File.file?(path) && !linked_out?(path, root)
       end
     end
@@ -88,7 +105,7 @@ module RailsAiContext
 
     def app_roots(root)
       APP_ROOTS.compute_if_absent(File.expand_path(root.to_s)) do
-        dirs_for(root, "app").flat_map { |tree| Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) }.sort }.freeze
+        dirs_for(root, "app").flat_map { |tree| glob(tree, "*").select { |dir| File.directory?(dir) }.sort }.freeze
       end
     end
 
@@ -129,7 +146,7 @@ module RailsAiContext
         next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), trusted)
 
         # Bundler's own glob for the gemspecs a path source holds.
-        Dir.glob(File.join(base, "{,*,*/*}.gemspec")).map { |spec| File.join(File.dirname(spec), "lib") }
+        glob(base, "{,*,*/*}.gemspec").map { |spec| File.join(File.dirname(spec), "lib") }
       end.uniq.select { |dir| Dir.exist?(dir) }.sort
     rescue StandardError => e
       RailsAiContext.debug_fail(e, [], label: "PathResolver.path_gem_libs")
@@ -187,20 +204,88 @@ module RailsAiContext
 
     # `roots:` takes pre-resolved roots, so a caller with many constants resolves once.
     def file_for_constant(root, name, roots: nil)
-      relative = name.to_s.underscore
-      return nil if relative.empty? || relative.include?("..")
-
-      (roots || autoload_roots(root)).lazy
-        .map { |dir| File.join(dir, "#{relative}.rb") }.find { |path| File.file?(path) } ||
-        namespaced_file(root, name.to_s)
+      constant_file(roots || autoload_roots(root), name.to_s) || namespaced_file(root, name.to_s)
     end
+
+    # The first of `dirs` holding the file Zeitwerk loads `name` from; a block refuses a found file.
+    def constant_file(dirs, name, declared: false)
+      dirs.lazy.filter_map { |dir| (path = constant_path(dir, name, declared: declared)) && (!block_given? || yield(path)) && path }.first
+    end
+
+    # The file under `dir` Zeitwerk loads `name` from (`namespace`: the root's own). An entry an unread inflector spells
+    # counts only when the file declares `name`; `declared: true` asks that of every file.
+    def constant_path(dir, name, namespace: nil, declared: false)
+      full = name.to_s.delete_prefix("::")
+      segments = (namespace ? full.delete_prefix("#{namespace}::") : full).split("::", -1)
+      return nil if segments.empty? || segments.any?(&:empty?)
+
+      entry_path(dir, segments, full, declared: declared, loose: false)
+    end
+
+    def entry_path(current, segments, full, declared:, loose:)
+      segment, *rest = segments
+      ext = rest.empty? ? ".rb" : ""
+      exact = exact_entry(current, segment, ext)
+      loose ||= exact.nil?
+      (exact ? [ exact ] : loose_entries(current, segment, ext)).each do |entry|
+        path = File.join(current, entry)
+        found = rest.empty? ? (path if file_declares?(path, full, loose: loose, declared: declared)) : entry_path(path, rest, full, declared: declared, loose: loose)
+        return found if found
+      end
+      nil
+    end
+    private_class_method :entry_path
+
+    # One that cannot be read is taken at its name, which only an exact spelling gives.
+    def file_declares?(path, name, loose:, declared:)
+      return false unless RunCache.fetch([ :file, path ]) { File.file?(path) }
+      return true unless loose || declared
+
+      source = SafeFile.read(path) or return !loose
+      declares?(source, name)
+    end
+    private_class_method :file_declares?
+
+    # Whether the source declares the constant in any form Zeitwerk accepts: a class, a module, or an assignment.
+    def declares?(source, name)
+      tree = source && AstCache.parse_string(source)&.value
+      !tree.nil? && Introspectors::DeclaredConstant.constants(tree, assignments: true).any? { |declared, _| declared == name }
+    end
+    private_class_method :declares?
+
+    def exact_entry(dir, segment, ext)
+      names = entries(dir)
+      guess = "#{segment.underscore}#{ext}"
+      return guess if names.include?(guess) && guess.delete_suffix(ext).camelize == segment
+
+      RunCache.fetch([ :camelized, dir, ext ]) do
+        names.each_with_object({}) { |entry, found| found[entry.delete_suffix(ext).camelize] ||= entry if entry.end_with?(ext) }
+      end[segment]
+    end
+    private_class_method :exact_entry
+
+    def loose_entries(dir, segment, ext)
+      RunCache.fetch([ :squashed, dir, ext ]) do
+        entries(dir).select { |entry| entry.end_with?(ext) }.group_by { |entry| loose_key(entry.delete_suffix(ext)) }
+      end.fetch(loose_key(segment), [])
+    end
+    private_class_method :loose_entries
+
+    # The key a constant segment and a file name share when only an inflector override could tell them apart.
+    def loose_key(name) = name.delete("_").downcase
+
+    # Each directory is listed once per run, so a name no listing holds costs no stat.
+    def entries(dir)
+      RunCache.fetch([ :children, dir ]) { children(dir).sort }
+    end
+    private_class_method :entries
 
     def namespaced_file(root, name)
       namespaced_roots(root).each do |dir, namespace|
         next unless name.start_with?("#{namespace}::")
 
-        path = File.join(dir, "#{name.delete_prefix("#{namespace}::").underscore}.rb")
-        return path if File.file?(path)
+        path = constant_path(dir, name, namespace: namespace)
+        return path if path
       end
       nil
     end
@@ -282,7 +367,7 @@ module RailsAiContext
     def bundle_engine_root(root)
       dir = GemLock.bundle(root).dir
       real_root = root_key(root)
-      return nil if dir == root || !real_root.start_with?("#{dir}#{File::SEPARATOR}") || Dir.glob(File.join(dir, "*.gemspec")).empty?
+      return nil if dir == root || !real_root.start_with?("#{dir}#{File::SEPARATOR}") || Dir.glob("*.gemspec", base: dir).empty?
 
       # In the root's own spelling, which every caller strips from the paths it prints.
       depth = real_root.delete_prefix("#{dir}#{File::SEPARATOR}").split(File::SEPARATOR).size
@@ -355,7 +440,7 @@ module RailsAiContext
     end
 
     def resolve_dirs(root, kind)
-      places(root, kind).flat_map { |_shown, path, glob| glob ? Dir.glob(path).sort : [ path ] }
+      places(root, kind).flat_map { |_shown, path, pattern| pattern ? glob(root, pattern).sort : [ path ] }
         .uniq.select { |dir| Dir.exist?(dir) && !linked_out?(dir, root) }.freeze
     end
     private_class_method :resolve_dirs
@@ -366,19 +451,19 @@ module RailsAiContext
       root = root.to_s
       expanded = File.expand_path(root)
       places = [
-        [ kind, File.join(root, kind), false ],
-        [ "packs/*/#{kind}", File.join(root, "packs", "*", kind), true ],
-        [ "engines/*/#{kind}", File.join(root, "engines", "*", kind), true ]
+        [ kind, File.join(root, kind), nil ],
+        [ "packs/*/#{kind}", nil, File.join("packs", "*", kind) ],
+        [ "engines/*/#{kind}", nil, File.join("engines", "*", kind) ]
       ]
-      places += code_roots(root).map { |dir| [ File.join(dir.delete_prefix("#{expanded}/"), kind), File.join(dir, kind), false ] }
+      places += code_roots(root).map { |dir| [ File.join(dir.delete_prefix("#{expanded}/"), kind), File.join(dir, kind), nil ] }
       Array(RailsAiContext.configuration.extra_app_paths).each do |extra|
-        places << [ File.join(extra, kind), File.join(root, extra, kind), false ]
+        places << [ File.join(extra, kind), File.join(root, extra, kind), nil ]
         # `custom/app` is the natural way to write an entry whose tree is
         # custom/app/models; appending the full kind would look in
         # custom/app/app/models and silently miss. Accept both spellings.
         if extra.to_s.chomp("/").end_with?("/app") || extra.to_s.chomp("/") == "app"
           short = kind.delete_prefix("app/")
-          places << [ File.join(extra, short), File.join(root, extra, short), false ]
+          places << [ File.join(extra, short), File.join(root, extra, short), nil ]
         end
       end
       places
@@ -434,8 +519,8 @@ module RailsAiContext
     private_class_method :code_root?
 
     def ruby_root?(path)
-      Dir.glob(File.join(path, "{*.gemspec,plugin.rb}")).any? ||
-        Dir.glob(File.join(path, "lib", "**", "engine.rb")).any?
+      Dir.glob("{*.gemspec,plugin.rb}", base: path).any? ||
+        Dir.glob("lib/**/engine.rb", base: path).any?
     end
     private_class_method :ruby_root?
 
@@ -444,7 +529,7 @@ module RailsAiContext
     def locale_roots(root)
       root = File.expand_path(root.to_s)
       depths = (1..MAX_ROOT_DEPTH).map { |depth| Array.new(depth, "*").join("/") }.join(",")
-      Dir.glob(File.join(root, "{#{depths}}", "config", "locales")).map { |dir| File.dirname(dir, 2) }
+      glob(root, "{#{depths}}/config/locales").map { |dir| File.dirname(dir, 2) }
         .reject { |dir| dir.delete_prefix("#{root}/").split("/").intersect?(SKIP_DIRS) }
         .select { |dir| ruby_root?(dir) }.sort
     end

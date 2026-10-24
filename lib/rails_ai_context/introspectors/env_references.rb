@@ -17,18 +17,28 @@ module RailsAiContext
         "."      => %w[config.ru]
       }.freeze
 
+      # Not scanned here: rails_get_config's env section reads these for their declared names
+      # and defaults (never .env or .env.local), and the fingerprint watches them with the scan's files.
+      EXAMPLE_FILES = %w[.env.example .env.sample .env.template].freeze
+      CREDENTIALS_EXAMPLES = %w[config/credentials.yml.example config/credentials.yml.sample].freeze
+      DOCKERFILES = %w[Dockerfile Dockerfile.production Dockerfile.dev].freeze
+
       RUBY_EXTENSIONS = %w[.rb .rake .ru].freeze
 
       COMPUTED_DEFAULT = :computed
 
       module_function
 
+      # Yields each file's realpath and source as it reads them, so a caller
+      # scanning the same files for something else reads each one once.
       # @return [Hash{String => Array<Hash>}] realpath => the references in it
       def scan(root)
         real_root = File.realpath(root.to_s)
         files(root.to_s, real_root).each_with_object({}) do |(path, names_only), found|
           source = RailsAiContext::SafeFile.read(path)
           next unless source
+
+          yield path, source if block_given?
           # Prefilter: ENV and the Rails.app.creds / .envs readers; the AST decides.
           next unless source.include?("ENV") || source.include?(".creds") || source.include?(".envs")
           next if script?(path) && !source.match?(/\A#!.*\bruby\b/)
@@ -45,6 +55,11 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "EnvReferences.scan")
       end
 
+      # The scan's globs from the app root.
+      def root_globs
+        SCAN_PATTERNS.flat_map { |dir, globs| globs.map { |glob| dir == "." ? glob : File.join(dir, glob) } }
+      end
+
       # [realpath, names_only] for every file the scan reads.
       def files(root, real_root)
         SCAN_PATTERNS.flat_map do |dir_name, patterns|
@@ -52,7 +67,7 @@ module RailsAiContext
           next [] unless Dir.exist?(dir)
 
           real_dir = File.realpath(dir)
-          patterns.flat_map { |pattern| Dir.glob(File.join(dir, pattern)) }.filter_map do |path|
+          patterns.flat_map { |pattern| PathResolver.glob(dir, pattern) }.filter_map do |path|
             # I18n loads locale YAML without ERB, so no ENV read is there to find;
             # One app keeps 126MB of it.
             next if path.start_with?(File.join(root, "config", "locales", ""))

@@ -46,7 +46,9 @@ module RailsAiContext
           args = node.arguments&.arguments || []
           table = literal_string(args[0])
 
-          if SINGLE_TABLE_ACTIONS.include?(node.name)
+          if node.name == :drop_table
+            args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each { |arg| extract_table_action(node, literal_string(arg), args) }
+          elsif SINGLE_TABLE_ACTIONS.include?(node.name)
             extract_table_action(node, table, args)
           elsif COLUMN_ACTIONS.include?(node.name)
             extract_column_action(node, table, args)
@@ -93,7 +95,7 @@ module RailsAiContext
 
           case node.name
           when :add_column, :remove_column
-            result[:column_type] = literal_string(args[2])
+            result.merge!(column_type: literal_string(args[2]), **default_fields(node))
           when :rename_column
             result[:new_name] = literal_string(args[2])
           when :change_column
@@ -103,7 +105,7 @@ module RailsAiContext
             result[:null] = boolean_value(args[2])
           when :change_column_default
             # The new default may be positional as well as from:/to:.
-            result[:new_default] = extract_value(args[2]) if args[2] && !args[2].is_a?(Prism::KeywordHashNode)
+            result.merge!(new_default_fields(node, args[2]))
           end
 
           @results << result

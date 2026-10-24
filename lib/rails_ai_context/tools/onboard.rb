@@ -33,6 +33,7 @@ module RailsAiContext
       ].freeze
       AUTH_GEMS = %w[devise omniauth rodauth-rails sorcery clearance authlogic].freeze
       AUTHZ_GEMS = %w[pundit cancancan action_policy rolify].freeze
+      PAYMENT_WORDS = %w[payment subscription charge invoice billing].freeze
       RAKE_TASKS_SHOWN = 15
 
       def self.call(detail: "standard", server_context: nil)
@@ -525,7 +526,11 @@ module RailsAiContext
 
           payment_gems = %w[stripe pay braintree paddle_pay]
           found = Payload.notable_gems(ctx).select { |g| payment_gems.include?(g[:name]) }
-          named = ->(name) { name.to_s.downcase.match?(/payment|subscription|charge|invoice|plan|billing/) }
+          # FloorPlan and LessonPlan are plans too, so only a model named Plan itself counts as one.
+          named = lambda do |name|
+            name.to_s.demodulize == "Plan" ||
+              name.to_s.underscore.split(%r{[_/]}).any? { |word| PAYMENT_WORDS.include?(word.singularize) }
+          end
           # An STI subclass is a payment model by its parent: BankTransfer < Payment.
           payment_models = models.keys.select do |m|
             chain = [ m ]

@@ -77,7 +77,7 @@ module RailsAiContext
 
         loader = Rails.autoloaders.main
         root = loader.dirs.select { |dir| file.start_with?("#{dir}/") }.max_by(&:length) if loader.respond_to?(:dirs)
-        root && unloadable(root, Dir.glob(File.join(root, "**/*.rb")).sort)[file]
+        root && unloadable(root, PathResolver.glob(root, "**/*.rb").sort)[file]
       end
 
       # Prism's first error in a file, worded as Ruby words a SyntaxError
@@ -101,7 +101,7 @@ module RailsAiContext
       # loaded here. eager_load_dir would require the files left out, so it
       # runs only when there are none.
       def load_dir(path)
-        files = Dir.glob(File.join(path, "**/*.rb")).sort
+        files = PathResolver.glob(path, "**/*.rb").sort
         left_out = unloadable(path, files)
         load_whole(path) if left_out.empty?
         load_individually(path, files - left_out.keys)
@@ -167,14 +167,15 @@ module RailsAiContext
         end
         return found if found.empty?
 
-        add_dependents(path, pending, found)
+        add_dependents(path, files, pending, found)
         found.each { |file, reason| note(file, reason) }
         found
       end
 
       # Each reason names the file that does not compile, however far down.
-      def add_dependents(path, pending, found)
+      def add_dependents(path, files, pending, found)
         loader = Rails.autoloaders.main
+        defined = files.to_set { |file| cpath_for(loader, path, file) }
         blocked = found.keys.to_h { |file| [ cpath_for(loader, path, file), file ] }
         cause = found.keys.to_h { |file| [ file, file ] }
         names = (pending - found.keys).to_h { |file| [ file, load_time_constants(file) ] }
@@ -182,7 +183,7 @@ module RailsAiContext
           added = names.filter_map do |file, refs|
             next if found.key?(file)
 
-            cpath = refs.lazy.filter_map { |ref| blocker(blocked, ref) }.first
+            cpath = refs.lazy.filter_map { |ref| blocker(blocked, defined, ref) }.first
             next unless cpath
 
             by = blocked[cpath]
@@ -197,26 +198,50 @@ module RailsAiContext
 
       # The constants loading a file evaluates: what its code names outside
       # method bodies and lambdas - a superclass, an included concern, the
-      # namespace it opens - each with the namespaces it is written under.
-      # Read once per file while one is broken, so the parse is not cached.
+      # namespace it opens. Each is the names Ruby may resolve it to where it
+      # is written: under each enclosing namespace, innermost first, then the
+      # top level. Read once per file while one is broken, so the parse is not cached.
       def load_time_constants(file)
         per_file(CONSTANTS, file) do
-          names = []
-          visit = lambda do |node|
+          refs = []
+          visit = lambda do |node, nesting|
             case node
             when Prism::DefNode, Prism::LambdaNode then nil
-            when Prism::ConstantReadNode then names << node.name.to_s
-            when Prism::ConstantPathNode
-              parts = (node.full_name rescue node.slice).delete_prefix("::").split("::")
-              parts.each_index { |i| names << parts[0..i].join("::") }
-            else node.compact_child_nodes.each(&visit)
+            when Prism::ClassNode, Prism::ModuleNode
+              visit.call(node.superclass, nesting) if node.is_a?(Prism::ClassNode) && node.superclass
+              path = node.constant_path
+              if path.is_a?(Prism::ConstantReadNode)
+                # `class Name` looks only in the namespace it is written in.
+                opened = [ nesting.first, path.name ].compact.join("::")
+                refs << [ opened ]
+              else
+                opened = lexical(path, nesting)&.first
+                visit.call(path, nesting)
+              end
+              visit.call(node.body, [ opened, *nesting ].compact) if node.body
+            when Prism::ConstantReadNode, Prism::ConstantPathNode
+              candidates = lexical(node, nesting)
+              refs << candidates if candidates
+              visit.call(node.parent, nesting) if node.is_a?(Prism::ConstantPathNode) && node.parent
+            else node.compact_child_nodes.each { |child| visit.call(child, nesting) }
             end
           end
-          visit.call(AstCache.parse_uncached(File.read(file)).value)
-          names.uniq
+          visit.call(AstCache.parse_uncached(File.read(file)).value, [])
+          refs.uniq
         end
       rescue StandardError
         []
+      end
+
+      # nil for a path on something other than a constant (`self::Name`).
+      def lexical(node, nesting)
+        case node
+        when Prism::ConstantReadNode then [ *nesting.map { |namespace| "#{namespace}::#{node.name}" }, node.name.to_s ]
+        when Prism::ConstantPathNode
+          return [ node.name.to_s ] unless node.parent
+
+          lexical(node.parent, nesting)&.map { |namespace| "#{namespace}::#{node.name}" }
+        end
       end
 
       # The block's answer for a file, kept while the file's stat holds. A
@@ -233,10 +258,10 @@ module RailsAiContext
         answer
       end
 
-      # A name written inside a namespace can mean that namespace's constant,
-      # so a broken Admin::BaseController blocks a `< BaseController`.
-      def blocker(blocked, ref)
-        blocked.keys.find { |cpath| cpath == ref || cpath.end_with?("::#{ref}") }
+      # Ruby takes the first candidate that exists, so a broken one behind it is never reached.
+      def blocker(blocked, defined, candidates)
+        cpath = candidates.find { |candidate| blocked.key?(candidate) || defined.include?(candidate) }
+        cpath if blocked.key?(cpath)
       end
 
       def note(file, reason)

@@ -288,15 +288,13 @@ RSpec.describe RailsAiContext::SafePath do
     end
 
     # A caller names the path, so its length is theirs: a folder check that tried each folder of it took minutes.
-    it "reads a long path in one pass per pattern" do
+    it "reads a long path in one pass per pattern", :cpu_timed do
       patterns = RailsAiContext.configuration.sensitive_patterns
       RailsAiContext.configuration.sensitive_patterns = patterns + %w[vault/**/*.yml /anchored/ deep/*/x.yml /vault **/docs/**/private]
-      cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
       [ "config/credentials/#{'a/' * 32_000}b.yml.enc/x", "vault/#{'a/' * 32_000}b.yml/z", "anchored/#{'a/' * 32_000}z",
         "deep/#{'a/' * 32_000}x.yml/z", "#{'a/' * 32_000}id_rsa/z", "vault/#{'a/' * 500_000}z", "docs/#{'a/' * 500_000}private" ].each do |path|
-        started = Process.clock_gettime(cpu)
-        expect(described_class.sensitive?(path)).to be(true), path[0, 40]
-        expect(Process.clock_gettime(cpu) - started).to be < 2
+        seconds = cpu_seconds { expect(described_class.sensitive?(path)).to be(true), path[0, 40] }
+        expect(seconds).to be < 2
       end
     ensure
       RailsAiContext.configuration.sensitive_patterns = patterns
@@ -435,6 +433,20 @@ RSpec.describe RailsAiContext::SafePath do
 
         File.write(File.join(dir, "repo", ".git"), "gitdir: /elsewhere\n")
         expect(described_class.git_root(nested)).to eq(File.join(dir, "repo"))
+      end
+    end
+  end
+
+  describe ".inside?" do
+    it "compares real paths, so a link into the folder and a path not there yet are inside it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app"))
+        File.symlink(File.join(dir, "app"), File.join(dir, "link"))
+
+        expect(described_class.inside?(File.join(dir, "link/rules/not/yet"), File.join(dir, "app"))).to be(true)
+        expect(described_class.inside?(File.join(dir, "app"), File.join(dir, "app"))).to be(true)
+        expect(described_class.inside?(File.join(dir, "apps"), File.join(dir, "app"))).to be(false)
+        expect(described_class.inside?(dir, File.join(dir, "app"))).to be(false)
       end
     end
   end

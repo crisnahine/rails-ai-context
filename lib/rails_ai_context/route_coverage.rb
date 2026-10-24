@@ -53,20 +53,32 @@ module RailsAiContext
         .sum { |_, entries| dedupe_put_patch_routes(Array(entries)).size }
     end
 
+    RESTFUL_ACTIONS = %w[index show new create edit update destroy].freeze
+
+    # A route path's dynamic (`:id`) or glob (`*path`) segment, its name captured.
+    PATH_PARAM = /[:*](\w+)/
+
+    # The names of a route path's dynamic and glob segments, optional ones included, in order.
+    def path_params(path)
+      path.to_s.scan(PATH_PARAM).flatten
+    end
+
     # Rails registers PATCH and PUT for one update action; every count and
     # listing merges the pair into one "PATCH|PUT" entry.
     def dedupe_put_patch_routes(actions)
       deduped = []
+      first_by_key = {}
       actions.each do |r|
         # The controller is part of the key: two API versions on one path each have their own
         # PUT/PATCH pair. Grouped entries carry no :controller, so nil matches nil.
-        existing = deduped.find do |d|
-          d[:path] == r[:path] && d[:action] == r[:action] && d[:controller] == r[:controller]
-        end
-        if existing && %w[PUT PATCH].include?(r[:verb]) && %w[PUT PATCH].include?(existing[:verb])
+        key = [ r[:path], r[:action], r[:controller] ]
+        pair = %w[PUT PATCH].include?(r[:verb])
+        existing = first_by_key[key] if pair
+        if existing
           existing[:verb] = "PATCH|PUT"
         else
           deduped << r.dup
+          first_by_key[key] ||= deduped.last if pair
         end
       end
       deduped

@@ -107,7 +107,7 @@ module RailsAiContext
           next RailsAiContext::PathResolver.app_initializer_files(root, File.basename(path)) if path.start_with?("config/initializers/")
           next [ path ] if !path.match?(/[*{]/) && File.exist?(File.join(root, path))
 
-          Dir.glob(File.join(root, path)).sort.map { |found| found.sub("#{root}/", "") }
+          Dir.glob(path, base: root.to_s).sort
         end
         present.any? ? present.join(", ") : nil
       end

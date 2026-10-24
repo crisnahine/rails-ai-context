@@ -73,7 +73,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
     it "reserves exactly the non-blank lines the writer wraps the block in" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "CLAUDE.md")
-        RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(path, "one\ntwo")
+        RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(path, "one\ntwo", root: dir)
 
         added = content_lines(File.read(path)) - 2
         expect(RailsAiContext::Serializers::SectionMarkerWriter::MARKER_LINES).to eq(added)

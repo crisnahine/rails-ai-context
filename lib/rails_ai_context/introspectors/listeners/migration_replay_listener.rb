@@ -19,7 +19,8 @@ module RailsAiContext
           remove: :remove_columns, remove_references: :remove_reference, remove_belongs_to: :remove_reference,
           remove_index: :remove_index, rename: :rename_column, remove_timestamps: :remove_columns,
           change: :change_column, change_default: :change_column_default, change_null: :change_column_null,
-          timestamps: :add_timestamps, check_constraint: :add_check_constraint, remove_check_constraint: :remove_check_constraint
+          timestamps: :add_timestamps, check_constraint: :add_check_constraint, remove_check_constraint: :remove_check_constraint,
+          remove_unique_constraint: :remove_unique_constraint
         }.freeze
 
         def on_call_node_enter(node)
@@ -30,33 +31,35 @@ module RailsAiContext
           elsif node.name == :revert && node.receiver.nil? && args.any?
             # `revert SomeMigration` runs another file's statements inverted, which this file does not hold.
             @results << { kind: :not_replayed, location: node.location.start_line }
-          elsif TABLE_OPS[node.name] == :remove_reference && block_column?(node.receiver)
+          elsif TABLE_OPS[node.name] == :remove_reference && table_receiver?(node.receiver)
             # Table#remove_references drops each name it is given.
             args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.each do |arg|
               @results << statement(node, :remove_reference, [ arg, *args.grep(Prism::KeywordHashNode) ]).merge(block: true)
             end
-          elsif TABLE_OPS.key?(node.name) && block_column?(node.receiver)
+          elsif TABLE_OPS.key?(node.name) && table_receiver?(node.receiver)
             @results << statement(node, TABLE_OPS[node.name], args).merge(block: true)
-          elsif node.name == :create_join_table && (node.receiver.nil? || node.receiver.is_a?(Prism::LocalVariableReadNode))
+          elsif %i[create_join_table drop_join_table].include?(node.name) && (node.receiver.nil? || node.receiver.is_a?(Prism::LocalVariableReadNode))
             tables = args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }.first(2).map { |arg| literal_string(arg) }
-            @results << { action: :create_join_table, tables: tables, options: extract_keyword_options(node),
+            @results << { action: node.name, tables: tables, options: extract_keyword_options(node),
                           location: node.location.start_line }
-          elsif %i[remove_columns add_timestamps rename_index add_check_constraint remove_check_constraint].include?(node.name) && node.receiver.nil?
+          elsif TOP_LEVEL.include?(node.name) && node.receiver.nil?
             @results << top_level(node, args)
-          elsif node.name == :execute && node.receiver.nil?
+          # shortcut: only a migration's own execute is read, bare or on self, not SQL run another way (a connection call, an app's DB helper); read those if an app needs them.
+          elsif node.name == :execute && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode))
             sql_node = args.first
             sql_node = sql_node.receiver if sql_node.is_a?(Prism::CallNode) && sql_node.name == :squish && sql_node.arguments.nil?
             statements = sql_statements(sql_node)
             # SQL built at run time that creates or drops a table is counted as not replayed.
             if statements.nil?
               literal = sql_node.respond_to?(:parts) ? sql_node.parts.grep(Prism::StringNode).map(&:unescaped).join : ""
-              @results << { kind: :not_replayed, location: node.location.start_line } if literal.match?(/\b(?:CREATE|DROP)\s+TABLE\b/i)
+              @results << { kind: :not_replayed, location: node.location.start_line } if literal.match?(/\b(?:CREATE(?:\s+UNLOGGED)?|DROP)\s+TABLE\b/i)
               return
             end
             statements.each do |sql|
               if (match = DROP_TABLE.match(sql))
                 match[1].split(",").each do |name|
-                  @results << { action: :drop_table, table: name.strip.delete('"`').split(".").last, options: {}, location: node.location.start_line }
+                  @results << { action: :drop_table, table: name.strip.delete('"`').split(".").last, options: match[2] ? { force: :cascade } : {},
+                                location: node.location.start_line }
                 end
               elsif sql.match?(CREATE_TABLE)
                 @results << { action: :create_table_sql, sql: sql, location: node.location.start_line }
@@ -65,8 +68,10 @@ module RailsAiContext
           end
         end
 
-        DROP_TABLE = /\A\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?((?:[\w."`]+\s*,\s*)*[\w."`]+)(?:\s+(?:CASCADE|RESTRICT))?\s*\z/i
-        CREATE_TABLE = /\A\s*CREATE\s+TABLE\s/i
+        TOP_LEVEL = %i[remove_columns add_timestamps rename_index add_check_constraint remove_check_constraint
+                       add_unique_constraint remove_unique_constraint].to_set.freeze
+        DROP_TABLE = /\A\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?((?:[\w."`]+\s*,\s*)*[\w."`]+)(?:\s+(?:(CASCADE)|RESTRICT))?\s*\z/i
+        CREATE_TABLE = /\A\s*CREATE\s+(?:UNLOGGED\s+)?TABLE\s/i
 
         private
 
@@ -104,21 +109,12 @@ module RailsAiContext
           when :change_column_null then result.merge!(column: names[0], null: boolean_value(positional[1]))
           when :change_column_default
             result[:column] = names[0]
-            result[:new_default] = extract_value(positional[1]) if positional[1]
+            result.merge!(new_default_fields(node, positional[1]))
           when :add_timestamps then result.merge!(default_fields(node))
           when :add_check_constraint, :remove_check_constraint then result[:expression] = names[0]
+          when :add_unique_constraint, :remove_unique_constraint then result[:columns] = literal_strings(positional.first) if positional.first
           end
           result
-        end
-
-        # The block parameter a create_table body names `t`, whether it reads
-        # as a local variable or as a bare call.
-        def block_column?(receiver)
-          case receiver
-          when Prism::LocalVariableReadNode then receiver.name == :t && table_param?(receiver)
-          when Prism::CallNode then receiver.name == :t && receiver.receiver.nil?
-          else false
-          end
         end
       end
     end

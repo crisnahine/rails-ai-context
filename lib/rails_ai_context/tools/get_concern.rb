@@ -140,13 +140,23 @@ module RailsAiContext
 
           matches << [ real, real.delete_prefix("#{real_root}/"), concern_type, real_dir ]
         end
+        sources = {}
+        # The path spells a namespace's name too, and a namespace is no concern of its file.
+        matches.reject! do |real, _relative, _type, dir|
+          text = sources[real] = RailsAiContext::SafeFile.read(real) or next false
+          real_dir = File.realpath(dir).to_s
+          !ConcernPaths.names_in(real, real_dir, text).include?(ConcernPaths.name_for(real, real_dir, text))
+        end
 
         # A file whose path does not spell its constant (a plugin's concerns/group.rb declaring
         # Plugin::Group) is found by the constant.
+        declared = nil
         if matches.empty?
           concern_files(concern_dirs, outside, real_root).each do |real, real_dir, concern_type|
-            next unless ConcernPaths.name_for(real, real_dir, RailsAiContext::SafeFile.read(real)).casecmp?(name.to_s)
+            sources[real] ||= RailsAiContext::SafeFile.read(real)
+            found = ConcernPaths.names_in(real, real_dir, sources[real]).find { |concern| concern.casecmp?(name.to_s) } or next
 
+            declared ||= found
             matches << [ real, real.delete_prefix("#{real_root}/"), concern_type, real_dir ]
           end
         end
@@ -162,11 +172,13 @@ module RailsAiContext
             recovery_tool: "Call rails_get_concern() to see all concerns")
         end
 
-        source = RailsAiContext::SafeFile.read(file_path)
+        source = sources[file_path]
         return text_response("Could not read concern file: #{file_path}") unless source
         # However the caller spelled it, the answer is headed by the constant
         # the file declares, so both spellings name the one concern.
-        name = ConcernPaths.name_for(file_path, File.realpath(concern_dir).to_s, source)
+        path_name = ConcernPaths.name_for(file_path, File.realpath(concern_dir).to_s, source)
+        name = declared || path_name
+        own_source = Introspectors::DeclaredConstant.own_module_source(source, name)
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
         validator = Introspectors::SuperclassChain.validator_base(source, name: name, lookup: Introspectors::SuperclassChain.lookup_for(root.to_s))
@@ -181,9 +193,7 @@ module RailsAiContext
         end
 
         # Only the module's own mixins: a class nested in the file includes for itself.
-        mixins = ConcernMembership.owned_by(
-          Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins], name
-        )
+        mixins = ConcernMembership.owned_by(ConcernPaths.mixins(source), name)
         conditions = mixin_conditions(source)
         included_modules = mixins.select { |m| m[:macro] == :include }.map { |m| mixin_label(m, conditions, name) }.uniq
         extended_modules = mixins.select { |m| m[:macro] == :extend }.map { |m| mixin_label(m, conditions, name) }.uniq
@@ -195,7 +205,7 @@ module RailsAiContext
         end
 
         # Parse class-level macros inside included/class_methods blocks
-        macros = parse_concern_macros(source)
+        macros = parse_concern_macros(own_source)
         if macros.any?
           lines << "" << "## Macros & DSL"
           macros.each { |m| lines << "- #{m}" }
@@ -212,7 +222,7 @@ module RailsAiContext
           unique(Introspectors::ActionResolver.private_methods_in(source, owner: name)))
 
         # Parse callbacks defined in the concern
-        callbacks = parse_concern_callbacks(source)
+        callbacks = parse_concern_callbacks(own_source)
         if callbacks.any?
           lines << "" << "## Callbacks"
           callbacks.each { |c| lines << "- `#{c}`" }
@@ -355,28 +365,29 @@ module RailsAiContext
         concern_files(concern_dirs, outside, real_root).each do |real, real_dir, concern_type|
           relative = real.sub("#{real_root}/", "")
           source = RailsAiContext::SafeFile.read(real)
-          concern_name = ConcernPaths.name_for(real, real_dir, source)
-          if ConcernMembership.excluded?(concern_name)
-            excluded_count += 1
-            next
-          end
+          ConcernPaths.names_in(real, real_dir, source).each do |concern_name|
+            if ConcernMembership.excluded?(concern_name)
+              excluded_count += 1
+              next
+            end
 
-          method_count = 0
-          if source
-            public_methods = Introspectors::ActionResolver.public_methods_from_source(source, owner: concern_name)
-            class_methods = concern_class_methods(source, concern_name)
-            method_count = public_methods.size + class_methods.size + module_methods(source, concern_name).size
-            private_count = Introspectors::ActionResolver.private_methods_from_source(source, owner: concern_name).size
-          end
+            method_count = 0
+            if source
+              public_methods = Introspectors::ActionResolver.public_methods_from_source(source, owner: concern_name)
+              class_methods = concern_class_methods(source, concern_name)
+              method_count = public_methods.size + class_methods.size + module_methods(source, concern_name).size
+              private_count = Introspectors::ActionResolver.private_methods_from_source(source, owner: concern_name).size
+            end
 
-          all_concerns << {
-            name: concern_name,
-            type: concern_type,
-            validator: source && Introspectors::SuperclassChain.validator_base(source, name: concern_name, lookup: lookup),
-            path: relative,
-            method_count: method_count,
-            private_count: private_count.to_i
-          }
+            all_concerns << {
+              name: concern_name,
+              type: concern_type,
+              validator: source && Introspectors::SuperclassChain.validator_base(source, name: concern_name, lookup: lookup),
+              path: relative,
+              method_count: method_count,
+              private_count: private_count.to_i
+            }
+          end
         end
 
         if all_concerns.empty?
@@ -454,38 +465,37 @@ module RailsAiContext
             # A file naming neither the class nor the key cannot wire it, and
             # this skips the parse for nearly every model.
             next unless source.include?(simple) || (!option_key.empty? && source.include?(option_key))
-            next unless wires_validator?(source, simple, option_key)
 
-            name = Introspectors::DeclaredConstant.declared_names(source).first ||
-              Introspectors::DeclaredConstant.declared_module_names(source).first ||
-              File.basename(file_path, ".rb").camelize
-            file_path.include?("/concerns/") ? "#{name} (concern)" : name
+            walked = Introspectors::SourceIntrospector.walk_source(source, {
+              validations: -> { Introspectors::Listeners::GenericMacroListener.new(:validates_with, :validates) },
+              mixins: Introspectors::Listeners::MixinsListener
+            })
+            wiring = Array(walked[:validations]).find { |macro| wires_validator?(macro, simple, option_key) } or next
+
+            owners = Array(wiring[:owner])
+            name = owners.empty? ? File.basename(file_path, ".rb").camelize : owners.join("::")
+            kind = Introspectors::Includers.kind(source, Array(walked[:mixins]), name)
+            kind == :class ? name : "#{name} (#{kind})"
           end
         }.uniq.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_validator_users")
       end
 
-      private_class_method def self.wires_validator?(source, simple, option_key)
-        macros = Introspectors::SourceIntrospector.walk_source(source, {
-          validations: -> { Introspectors::Listeners::GenericMacroListener.new(:validates_with, :validates) }
-        })[:validations] || []
-
-        macros.any? do |macro|
-          case macro[:macro]
-          when :validates_with
-            Array(macro[:values]).flatten.map(&:to_s).any? { |value| value.split("::").last == simple }
-          when :validates
-            !option_key.empty? && !FRAMEWORK_VALIDATION_KEYS.include?(option_key) &&
-              !VALIDATES_OWN_KEYS.include?(option_key) &&
-              macro[:options].key?(option_key.to_sym)
-          end
+      private_class_method def self.wires_validator?(macro, simple, option_key)
+        case macro[:macro]
+        when :validates_with
+          Array(macro[:values]).flatten.map(&:to_s).any? { |value| value.split("::").last == simple }
+        when :validates
+          !option_key.empty? && !FRAMEWORK_VALIDATION_KEYS.include?(option_key) &&
+            !VALIDATES_OWN_KEYS.include?(option_key) &&
+            macro[:options].key?(option_key.to_sym)
         end
       end
 
       private_class_method def self.collect_concern_names(concern_dirs, real_root, outside = [])
-        concern_files(concern_dirs, outside, real_root).map do |real, real_dir, _type|
-          ConcernPaths.name_for(real, real_dir, RailsAiContext::SafeFile.read(real))
+        concern_files(concern_dirs, outside, real_root).flat_map do |real, real_dir, _type|
+          ConcernPaths.names_in(real, real_dir, RailsAiContext::SafeFile.read(real))
         end.uniq.sort
       end
 
@@ -582,9 +592,25 @@ module RailsAiContext
         # Resolved as Ruby does, from the includer's namespace outward.
         real_root = File.realpath(root).to_s
         sources = includer_dirs(root).flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
-          .reject { |file_path| file_path.include?("/concerns/") }
           .filter_map { |file_path| (source = RailsAiContext::SafeFile.read(file_path)) && [ file_path, source ] }
-        Introspectors::Includers.of(root, sources, [ concern_name ], macros: %i[include prepend]).values.flatten.uniq.sort
+        # A concern that includes this one passes it on to everything that includes the concern.
+        # One scan per level of the chain, every concern on it at once.
+        seen = Set[concern_name]
+        level = [ concern_name ]
+        lines = []
+        until level.empty?
+          found = Introspectors::Includers.kinds(root, sources, level, macros: %i[include prepend])
+          level = level.flat_map do |name|
+            found.fetch(name, {}).sort.filter_map do |includer, kind|
+              next unless seen.add?(includer)
+
+              notes = [ (kind.to_s unless kind == :class), ("through #{name}" unless name == concern_name) ].compact
+              lines << (notes.empty? ? includer : "#{includer} (#{notes.join(', ')})")
+              includer unless kind == :class
+            end
+          end
+        end
+        lines
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_includers")
       end

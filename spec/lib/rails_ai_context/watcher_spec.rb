@@ -29,6 +29,20 @@ RSpec.describe RailsAiContext::Watcher do
       end
     end
 
+    it "watches the folders outside the scope dirs that hold a file the fingerprint reads, but no frontend root" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        %w[bin/setup .github/workflows/ci.yml .buildkite/pipeline.yml .circleci/config.yml frontend/package.json Gemfile].each do |file|
+          FileUtils.mkdir_p(File.dirname(File.join(root, file)))
+          File.write(File.join(root, file), "\n")
+        end
+        dirs = RailsAiContext::ChangeWatch.new(RailsAiContext::StaticApp.new(root)).watched_dirs
+
+        expect(dirs).to include(*%w[bin .github/workflows .buildkite .circleci].map { |dir| File.join(root, dir) })
+        expect(dirs).not_to include(root, File.join(root, "frontend"))
+      end
+    end
+
     it "watches a pack's models, so a pack edit reaches the reaction" do
       require "tmpdir"
       Dir.mktmpdir do |root|
@@ -177,6 +191,42 @@ RSpec.describe RailsAiContext::Watcher do
 
       expect(RailsAiContext::CodeReloader).to receive(:reload!)
       watcher.send(:handle_change)
+    end
+
+    # The static tier reloads no code, so only the folder lists say where models live.
+    it "writes a model from an app/ folder added while the static watch runs" do
+      require "tmpdir"
+      config = RailsAiContext.configuration
+      saved = [ RailsAiContext.tier, config.app_root, config.ai_tools ]
+      Dir.mktmpdir do |root|
+        write = lambda do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+          File.write(File.join(root, path), source)
+        end
+        write.("config/application.rb", "module Shop; class Application < Rails::Application; end; end\n")
+        write.("app/models/application_record.rb", "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\nend\n")
+        edit_user = lambda do |stamp|
+          write.("app/models/user.rb", "class User < ApplicationRecord\n  # #{stamp}\nend\n")
+          File.utime(Time.now + stamp, Time.now + stamp, File.join(root, "app/models/user.rb"))
+        end
+        edit_user.(1)
+        RailsAiContext.tier = :static
+        config.app_root = root
+        config.ai_tools = [ :claude ]
+        allow($stderr).to receive(:puts)
+        watcher = described_class.new(RailsAiContext::StaticApp.new(root))
+
+        edit_user.(5)
+        watcher.handle_change
+        write.("app/domain/widget.rb", "class Widget < ApplicationRecord\n  belongs_to :user\nend\n")
+        edit_user.(10)
+        watcher.handle_change
+
+        expect(File.read(File.join(root, ".claude/rules/rails-models.md"))).to include("Widget")
+      end
+    ensure
+      RailsAiContext.tier, config.app_root, config.ai_tools = saved
+      RailsAiContext::PathResolver.clear_code_roots
     end
   end
 

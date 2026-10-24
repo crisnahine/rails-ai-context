@@ -464,8 +464,9 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       before do
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
         allow(described_class).to receive(:cached_context).and_return({ stimulus: { controllers: [
-          { name: "search", targets: [], actions: %w[queue render reset], self_calls: %w[render], values: {},
-            outlets: %w[result-list], classes: %w[open noResults], file: "app/javascript/controllers/search_controller.js" }
+          { name: "search", targets: [], actions: %w[queue render reset], self_calls: %w[render],
+            values: { "step2Count" => "Number", "apiURL" => "String", "maxItems" => "Number" },
+            outlets: %w[result-list], classes: %w[open noResults activeURL], file: "app/javascript/controllers/search_controller.js" }
         ] } })
       end
 
@@ -485,6 +486,13 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
 
       it "writes the class and outlet attributes the controller reads" do
         expect(markup).to include(%(data-search-open-class="..."), %(data-search-no-results-class="..."), %(data-search-result-list-outlet="..."))
+      end
+
+      # Stimulus 3.2.2 names both as `data-${identifier}-${dasherize(key)}`, and
+      # its dasherize puts a dash before every capital letter.
+      it "names value and class attributes the way Stimulus dasherizes them" do
+        expect(markup).to include(%(data-search-step2-count-value="..."), %(data-search-api-u-r-l-value="..."),
+                                  %(data-search-max-items-value="..."), %(data-search-active-u-r-l-class="..."))
       end
     end
 

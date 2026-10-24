@@ -62,12 +62,12 @@ module RailsAiContext
     # reads it (FileWalk.glob); config as Rails globs it, entering no linked directory.
     def scanned_files(root)
       app_dirs = PathResolver.dirs_for(root, "app").flat_map do |tree|
-        Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) && File.basename(dir) != "models" }
+        PathResolver.glob(tree, "*").select { |dir| File.directory?(dir) && File.basename(dir) != "models" }
       end
       code_roots = PathResolver.code_roots(root)
       trees = [ File.join(root, "lib"), *PathResolver.declared_roots(root), *app_dirs, *code_roots.map { |dir| File.join(dir, "lib") } ]
-      globs = [ root, *code_roots ].map { |dir| File.join(dir, "config", "**", "*.rb") } + code_roots.map { |dir| File.join(dir, "*.rb") }
-      configs = globs.flat_map { |glob| Dir.glob(glob) }.reject { |path| PathResolver.linked_out?(path, root) }
+      globs = [ root, *code_roots ].map { |dir| [ dir, "config/**/*.rb" ] } + code_roots.map { |dir| [ dir, "*.rb" ] }
+      configs = globs.flat_map { |dir, glob| PathResolver.glob(dir, glob) }.reject { |path| PathResolver.linked_out?(path, root) }
       (trees.flat_map { |dir| FileWalk.glob(dir, "**/*.rb", root: root) } + configs).uniq.sort
     end
     private_class_method :scanned_files

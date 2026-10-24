@@ -3,7 +3,7 @@
 module RailsAiContext
   module Introspectors
     # How Rails' PostgreSQL connection and schema.rb dumper name extensions, enum types and
-    # relations, by Rails version, so the static tier names them as the booted app does.
+    # relations, and size a real, by Rails version, so the static tier answers as the booted app does.
     # Each rule cites the activerecord source it mirrors.
     module PgNaming
       DEFAULT_SEARCH_PATH = %w[public].freeze
@@ -12,23 +12,10 @@ module RailsAiContext
 
       module_function
 
-      # The running Rails when booted, else the lockfile's; nil when neither says.
-      def rails_version(root)
-        return Rails.version if defined?(Rails) && Rails.respond_to?(:version) && !RailsAiContext.static_tier?
-
-        lock = GemLock.for(root)
-        lock.version("rails") || lock.version("railties")
-      end
-
-      # An unknown version takes the newest rules.
-      def at_least?(version, release)
-        version.nil? || Gem::Version.new(version) >= Gem::Version.new(release)
-      end
-
       # 8.0 postgresql_adapter.rb:506-520 drops the schema only when it is current_schema;
       # 7.0 :453, 7.1 :497 and 7.2 :496 select extname alone.
       def extension_name(name, schema, path, version)
-        return name if schema.nil? || !at_least?(version, "8.0") || schema == path.first
+        return name if schema.nil? || !RailsVersion.at_least?(version, "8.0") || schema == path.first
 
         "#{schema}.#{name}"
       end
@@ -36,7 +23,7 @@ module RailsAiContext
       # 7.1 postgresql_adapter.rb:502-522 (to 8.1 :533-553): the types in current_schemas(false),
       # bare in current_schema. 7.0 :458-469 merges same-name types' labels; the static tier keeps the first set.
       def enum_list(enums, path, version)
-        legacy = !at_least?(version, "7.1")
+        legacy = !RailsVersion.at_least?(version, "7.1")
         listed = enums.filter_map do |name, values|
           schema, dot, bare = name.rpartition(".")
           shown = if dot.empty? || legacy then bare
@@ -51,7 +38,7 @@ module RailsAiContext
       # schema. Before, the dumper writes connection.tables, enum_types and column.sql_type
       # (7.2 postgresql/schema_dumper.rb:19-29, :94), the names the booted app reads.
       def dump_qualifies_names?(version)
-        at_least?(version, "8.1")
+        RailsVersion.at_least?(version, "8.1")
       end
 
       # Whether a bare name in the dump says its schema. Before 8.1 the dumper names each of
@@ -62,7 +49,14 @@ module RailsAiContext
 
       # 7.1 postgresql/schema_dumper.rb:31-40 writes create_schema for every schema; 7.0 has no schemas().
       def dump_lists_schemas?(version)
-        at_least?(version, "7.1")
+        RailsVersion.at_least?(version, "7.1")
+      end
+
+      # 7.2.2.1 postgresql_adapter.rb:655 reads a real (float4) as limit 24; 7.1 :655 reads it as the bare float.
+      def drop_real_limits(tables, version)
+        return if RailsVersion.at_least?(version, "7.2.2")
+
+        tables.each { |table| table[:columns].each { |column| column.delete(:limit) if column[:type] == "float" } }
       end
 
       # current_schemas(false) skips a schema that does not exist; pg_dump never creates public.
@@ -122,7 +116,7 @@ module RailsAiContext
       # A dump naming no schema off the path is the default; one that does has dump_schemas set.
       def missing_from_schema_rb(name, path, created, version, dump)
         schema, dot, = name.to_s.rpartition(".")
-        return if dot.empty? || !at_least?(version, "8.1") || path.include?(schema) || created.include?(schema)
+        return if dot.empty? || !RailsVersion.at_least?(version, "8.1") || path.include?(schema) || created.include?(schema)
         return unless (created - path).empty?
 
         "If schema '#{schema}' exists, #{dump} leaves it out: Rails 8.1 dumps only the search path schemas there by default. " \

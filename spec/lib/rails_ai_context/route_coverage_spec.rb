@@ -141,5 +141,16 @@ RSpec.describe RailsAiContext::RouteCoverage do
 
       expect(described_class.dedupe_put_patch_routes(routes).size).to eq(1)
     end
+
+    # `member do post :update end` draws POST at the member path, before the resource's own pair.
+    it "merges the pair when a POST to the same action and path comes first" do
+      routes = [
+        { verb: "POST",  path: "/reports/:id", action: "update", controller: "reports" },
+        { verb: "PATCH", path: "/reports/:id", action: "update", controller: "reports" },
+        { verb: "PUT",   path: "/reports/:id", action: "update", controller: "reports" }
+      ]
+
+      expect(described_class.dedupe_put_patch_routes(routes).map { |r| r[:verb] }).to eq(%w[POST PATCH|PUT])
+    end
   end
 end

@@ -104,6 +104,23 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay::Helpers do
       expect(entries).to contain_exactly(a_hash_including(action: :add_column, table: "users", column: "admin", location: 4))
     end
 
+    # Ruby runs a `Module.new` block as the module's body, so its methods are the module's.
+    it "replays a helper a module assigned with Module.new defines" do
+      FileUtils.mkdir_p(File.join(@root, "lib"))
+      File.write(File.join(@root, "lib", "migration_helpers.rb"), <<~RUBY)
+        MigrationHelpers = Module.new do
+          def add_flag(table, name)
+            add_column table, name, :boolean, default: false
+          end
+        end
+      RUBY
+      source = "class X < ActiveRecord::Migration[7.1]\n  include MigrationHelpers\n  def change\n    add_flag :users, :admin\n  end\nend\n"
+
+      entries = described_class.module_helper_entries(tree(source), @root)
+
+      expect(entries).to contain_exactly(a_hash_including(action: :add_column, table: "users", column: "admin"))
+    end
+
     it "substitutes a parameter read after multibyte text in the helper at its own place" do
       FileUtils.mkdir_p(File.join(@root, "lib"))
       File.write(File.join(@root, "lib", "migration_helpers.rb"), <<~RUBY)
@@ -118,6 +135,26 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay::Helpers do
       entries = described_class.module_helper_entries(tree(source), @root)
 
       expect(entries).to contain_exactly(a_hash_including(action: :add_column, table: "posts", column: "note", options: { comment: "é", default: "x" }))
+    end
+
+    it "reads a helper module whose path splits an acronym the app registers" do
+      FileUtils.mkdir_p([ File.join(@root, "lib"), File.join(@root, "config", "initializers") ])
+      File.write(File.join(@root, "config", "initializers", "inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'JsonLd' }\n")
+      File.write(File.join(@root, "lib", "json_ld_columns.rb"), <<~RUBY)
+        module JsonLdColumns
+          def add_pair(table)
+            add_column table, :a, :string
+            add_column table, :b, :string
+          end
+        end
+      RUBY
+      source = "class X < ActiveRecord::Migration[7.1]\n  include JsonLdColumns\n  def change\n    add_pair :users\n  end\nend\n"
+
+      entries = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(@root)) do
+        described_class.module_helper_entries(tree(source), @root)
+      end
+
+      expect(entries).to eq([ { kind: :not_replayed, location: 4 } ])
     end
 
     it "marks a larger helper that reaches the schema as not replayed" do
@@ -147,6 +184,19 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay::Helpers do
       source = "class X < ActiveRecord::Migration[7.1]\n  def change\n    SchemaTools.add_audit_columns(:users)\n  end\nend\n"
 
       expect(described_class.app_constant_call_markers(tree(source), @root)).to eq([ { kind: :not_replayed, location: 3 } ])
+    end
+
+    it "marks a call to a lib class whose path splits an acronym the app registers" do
+      FileUtils.mkdir_p([ File.join(@root, "lib"), File.join(@root, "config", "initializers") ])
+      File.write(File.join(@root, "config", "initializers", "inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'JsonLd' }\n")
+      File.write(File.join(@root, "lib", "json_ld_schema.rb"), "class JsonLdSchema\n  def self.add_audit_columns(t)\n  end\nend\n")
+      source = "class X < ActiveRecord::Migration[7.1]\n  def change\n    JsonLdSchema.add_audit_columns(:users)\n  end\nend\n"
+
+      markers = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(@root)) do
+        described_class.app_constant_call_markers(tree(source), @root)
+      end
+
+      expect(markers).to eq([ { kind: :not_replayed, location: 3 } ])
     end
   end
 end

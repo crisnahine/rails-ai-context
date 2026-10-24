@@ -14,7 +14,7 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
       path = File.join(dir, "CLAUDE.md")
       File.write(path, "# Mine\n\n#{begin_marker}\nold\n#{end_marker}\n\nmore of mine\n")
 
-      expect(described_class.write_with_markers(path, "new")).to eq(:written)
+      expect(described_class.write_with_markers(path, "new", root: dir)).to eq(:written)
       expect(File.read(path)).to eq("# Mine\n\n#{begin_marker}\nnew\n#{end_marker}\n\nmore of mine\n")
     end
   end
@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
       script = <<~RUBY
         require "rails_ai_context/safe_file"
         require "rails_ai_context/serializers/section_marker_writer"
-        print RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(ARGV[0], "new \\u2713")
+        print RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(ARGV[0], "new \\u2713", root: File.dirname(ARGV[0]))
       RUBY
 
       out, err, status = Open3.capture3({ "LANG" => "C", "LC_ALL" => "C" }, RbConfig.ruby, "-I", lib, "-e", script, path)
@@ -49,9 +49,9 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
         path = File.join(dir, "CLAUDE.md")
         File.binwrite(path, "# Mine\r\n\r\n#{begin_marker}\r\nold\r\n#{end_marker}\r\n\r\nmore of mine\r\n")
 
-        expect(described_class.write_with_markers(path, "new\nlines")).to eq(:written)
+        expect(described_class.write_with_markers(path, "new\nlines", root: dir)).to eq(:written)
         expect(File.binread(path)).to eq("# Mine\r\n\r\n#{begin_marker}\r\nnew\r\nlines\r\n#{end_marker}\r\n\r\nmore of mine\r\n")
-        expect(described_class.write_with_markers(path, "new\nlines")).to eq(:skipped)
+        expect(described_class.write_with_markers(path, "new\nlines", root: dir)).to eq(:skipped)
       end
     end
 
@@ -60,7 +60,7 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
         path = File.join(dir, "CLAUDE.md")
         File.binwrite(path, "# Mine\r\n")
 
-        described_class.write_with_markers(path, "new")
+        described_class.write_with_markers(path, "new", root: dir)
 
         expect(File.binread(path)).to eq("#{begin_marker}\r\nnew\r\n#{end_marker}\r\n\r\n# Mine\r\n")
       end
@@ -71,8 +71,8 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
         path = File.join(dir, "rails-context.md")
         File.binwrite(path, "# Rules\r\none\r\n")
 
-        expect(described_class.write_whole(path, "# Rules\none")).to eq(:skipped)
-        expect(described_class.write_whole(path, "# Rules\ntwo")).to eq(:written)
+        expect(described_class.write_whole(path, "# Rules\none", root: dir)).to eq(:skipped)
+        expect(described_class.write_whole(path, "# Rules\ntwo", root: dir)).to eq(:written)
         expect(File.binread(path)).to eq("# Rules\r\ntwo\r\n")
       end
     end
@@ -84,7 +84,7 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
       path = File.join(dir, "CLAUDE.md")
       File.binwrite(path, "caf\xE9\n\n#{begin_marker}\nold\n#{end_marker}\n".b)
 
-      described_class.write_with_markers(path, "new ✓")
+      described_class.write_with_markers(path, "new ✓", root: dir)
 
       expect(File.binread(path)).to eq("caf\xE9\n\n#{begin_marker}\nnew ✓\n#{end_marker}\n".b)
     end
@@ -97,9 +97,19 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
       path = File.join(dir, "CLAUDE.md")
       File.write(path, "#{begin_marker}\nold\n#{end_marker}\n")
 
-      described_class.write_with_markers(path, "a \\\\ b \\1")
+      described_class.write_with_markers(path, "a \\\\ b \\1", root: dir)
 
       expect(File.read(path)).to eq("#{begin_marker}\na \\\\ b \\1\n#{end_marker}\n")
+    end
+  end
+
+  it "reports a file under a directory link that leads nowhere as linked out, and creates nothing" do
+    Dir.mktmpdir do |dir|
+      File.symlink(File.join(dir, "missing"), File.join(dir, ".cursor"))
+
+      expect(described_class.write_with_markers(File.join(dir, ".cursor/rules/a.mdc"), "new", root: dir)).to eq(:linked_out)
+      expect(described_class.write_whole(File.join(dir, ".cursor/rules/b.mdc"), "new", root: dir)).to eq(:linked_out)
+      expect(File.exist?(File.join(dir, "missing"))).to be(false)
     end
   end
 
@@ -119,7 +129,7 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
           before = build.call(begin_marker, end_marker)
           File.write(path, before)
 
-          expect(described_class.write_with_markers(path, "new")).to eq(:unpaired)
+          expect(described_class.write_with_markers(path, "new", root: dir)).to eq(:unpaired)
           expect(File.read(path)).to eq(before)
         end
       end

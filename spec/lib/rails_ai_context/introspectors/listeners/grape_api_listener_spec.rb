@@ -7,6 +7,18 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GrapeApiListener do
     RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { grape: described_class })[:grape]
   end
 
+  it "names a class whose compact path starts at the module around it" do
+    expect(records("module V1\n  class V1::Users < Grape::API\n  end\nend\n")).to eq([ { kind: :class, owner: "V1::Users", superclass: "Grape::API" } ])
+  end
+
+  # Ruby: `V1 = Module.new` inside module V1 declares V1::V1, so `class V1::Users` is V1::V1::Users.
+  it "reads a compact path's first segment against a constant written above it" do
+    expect(records("module V1\n  V1 = Module.new\n  class V1::Users < Grape::API\n  end\nend\n")).to eq([ { kind: :class, owner: "V1::V1::Users", superclass: "Grape::API" } ])
+    # `V1 ||=` inside module V1 finds ::V1 already defined and assigns nothing.
+    expect(records("module V1\n  V1 ||= Module.new\n  class V1::Users < Grape::API\n  end\nend\n")).to eq([ { kind: :class, owner: "V1::Users", superclass: "Grape::API" } ])
+    expect(records("module V1\n  V1, V2 = Module.new, Module.new\n  class V1::Users < Grape::API\n  end\nend\n")).to eq([ { kind: :class, owner: "V1::V1::Users", superclass: "Grape::API" } ])
+  end
+
   it "records endpoints with their namespaces and params, and skips calls inside an endpoint body" do
     found = records(<<~RUBY)
       module V1

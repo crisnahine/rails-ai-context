@@ -167,15 +167,5 @@ module RailsAiContext
       self.response_body = McpEdge.error_frame(McpEdge::INVALID_REQUEST,
         "Method not allowed: this endpoint opens no server-push stream. Send requests with POST.")
     end
-
-    class << self
-      def mcp_transport
-        McpEdge.engine_transport
-      end
-
-      def reset_transport!
-        McpEdge.reset_engine_transport!
-      end
-    end
   end
 end

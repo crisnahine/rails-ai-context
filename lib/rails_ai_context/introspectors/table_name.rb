@@ -92,7 +92,7 @@ module RailsAiContext
         yield(name) || name
       end
 
-      # The model a derived name means, as the app spells it (AiMatch is AIMatch).
+      # The model a derived name means, as the app spells it (HtmlPage is HTMLPage).
       # An exact spelling at any depth wins, so Checkin and CheckIn stay apart.
       def model_for(candidate, owner, models)
         names = model_names(models)
@@ -142,7 +142,7 @@ module RailsAiContext
 
       def engine_files(root)
         roots = [ root ] + PathResolver.code_roots(root)
-        roots.flat_map { |dir| Dir.glob(File.join(dir, "lib", "**", "engine.rb")) }.uniq.sort
+        roots.flat_map { |dir| PathResolver.glob(dir, "lib/**/engine.rb") }.uniq.sort
       end
 
       # Every `isolate_namespace Foo::Bar` in the file, by the constant's own
@@ -176,29 +176,22 @@ module RailsAiContext
         root = AstCache.parse_string(source)&.value
         return nil unless root
 
-        body = body_of(root, [], name.to_s)
+        body = body_of(root, name.to_s)
         body && yield(body)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, nil, label: "TableName")
       end
 
-      # The statements of the class or module declared under this exact
-      # qualified name, nil when the file declares no such scope.
-      def body_of(node, scope, name)
-        case node
-        when Prism::ClassNode, Prism::ModuleNode
-          qualified = (scope + [ segment(node) ]).join("::")
-          return statements(node) if qualified == name
+      # The statements of the class or module declared under this exact qualified name, named the
+      # way Ruby names it where it is written, nil when the file declares no such scope.
+      def body_of(root, name)
+        DeclaredConstant.constants(root, assignments: true) do |found, node, _nesting|
+          next unless found == name
+          return statements(node) if node.is_a?(Prism::ClassNode) || node.is_a?(Prism::ModuleNode)
 
-          descend(node, scope + [ segment(node) ], name)
-        when Prism::ConstantWriteNode, Prism::ConstantPathWriteNode
-          written = node.is_a?(Prism::ConstantWriteNode) ? node.name.to_s : node.target.slice.delete_prefix("::")
-          return built_body(node.value) if (scope + [ written ]).join("::") == name
-
-          descend(node, scope, name)
-        else
-          descend(node, scope, name)
+          return built_body(node.value)
         end
+        nil
       end
 
       # `Name = Class.new(Base) do ... end` runs the block as Name's body.
@@ -209,20 +202,8 @@ module RailsAiContext
         block.is_a?(Prism::BlockNode) && block.body.is_a?(Prism::StatementsNode) ? block.body.body : []
       end
 
-      def descend(node, scope, name)
-        node.child_nodes.compact.each do |child|
-          found = body_of(child, scope, name)
-          return found if found
-        end
-        nil
-      end
-
       def statements(node)
         node.body.is_a?(Prism::StatementsNode) ? node.body.body : []
-      end
-
-      def segment(node)
-        node.constant_path.slice.delete_prefix("::")
       end
 
       # `self.table_name = "x"`, only in this scope's own body.
@@ -308,7 +289,7 @@ module RailsAiContext
         end
       end
 
-      private_class_method :affix, :read, :body_of, :built_body, :descend, :statements, :segment,
+      private_class_method :affix, :read, :body_of, :built_body, :statements,
                            :assigned, :declares?, :boolean_assigned, :primary_key_assigned, :returned, :literal, :read_namespace_prefixes,
                            :interpolated, :affixed_node, :affix_read,
                            :engine_files, :collect_isolate_calls

@@ -264,8 +264,7 @@ module RailsAiContext
 
         # The introspector emits frameworks as a hash of framework symbol =>
         # package.json version requirement (e.g. { react: "^19.0.0" }), not a
-        # singular framework/version pair. Render the primary (first) entry,
-        # stripping range operators from the version.
+        # singular framework/version pair. Render the primary (first) entry.
         def framework_label(data)
           frameworks = data[:frameworks]
           return nil unless frameworks.is_a?(Hash) && frameworks.any?
@@ -277,9 +276,7 @@ module RailsAiContext
 
         def named_framework(entry)
           sym, version = entry
-          label = display_name(sym)
-          clean_version = version.to_s.delete("^0-9.")
-          clean_version.empty? ? label : "#{label} #{clean_version}"
+          PackageJson.version_label(display_name(sym), version)
         end
 
         # :vite_rails -> "Vite Rails", "vite" -> "Vite"

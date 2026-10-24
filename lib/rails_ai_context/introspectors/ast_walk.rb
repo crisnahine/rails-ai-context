@@ -1,10 +1,27 @@
 # frozen_string_literal: true
 
+require "prism"
+
 module RailsAiContext
   module Introspectors
     # Every node of a Prism tree: the root, then each child's subtree in
     # source order. Without a block it returns an Enumerator.
     module AstWalk
+      # Nodes whose body has its own self and locals.
+      OWN_SCOPES = [ Prism::DefNode, Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode ].freeze
+      # Every write that keeps its value: in a variable, a constant, an attribute or an element, or spread over targets.
+      VALUE_WRITES = [
+        Prism::LocalVariableWriteNode, Prism::LocalVariableOperatorWriteNode, Prism::LocalVariableOrWriteNode, Prism::LocalVariableAndWriteNode,
+        Prism::InstanceVariableWriteNode, Prism::InstanceVariableOperatorWriteNode, Prism::InstanceVariableOrWriteNode,
+        Prism::InstanceVariableAndWriteNode, Prism::ClassVariableWriteNode, Prism::ClassVariableOperatorWriteNode,
+        Prism::ClassVariableOrWriteNode, Prism::ClassVariableAndWriteNode, Prism::GlobalVariableWriteNode,
+        Prism::GlobalVariableOperatorWriteNode, Prism::GlobalVariableOrWriteNode, Prism::GlobalVariableAndWriteNode,
+        Prism::ConstantWriteNode, Prism::ConstantOperatorWriteNode, Prism::ConstantOrWriteNode, Prism::ConstantAndWriteNode,
+        Prism::ConstantPathWriteNode, Prism::ConstantPathOperatorWriteNode, Prism::ConstantPathOrWriteNode, Prism::ConstantPathAndWriteNode,
+        Prism::CallOperatorWriteNode, Prism::CallOrWriteNode, Prism::CallAndWriteNode, Prism::IndexOperatorWriteNode,
+        Prism::IndexOrWriteNode, Prism::IndexAndWriteNode, Prism::MultiWriteNode
+      ].freeze
+
       module_function
 
       def each(node)
@@ -31,7 +48,7 @@ module RailsAiContext
 
         found << node
         case node
-        when Prism::DefNode, Prism::ClassNode, Prism::ModuleNode, Prism::SingletonClassNode then found
+        when *OWN_SCOPES then found
         else node.compact_child_nodes.each_with_object(found) { |child, into| scope(child, into) }
         end
       end

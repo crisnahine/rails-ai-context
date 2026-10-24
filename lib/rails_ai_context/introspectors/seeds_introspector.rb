@@ -35,7 +35,7 @@ module RailsAiContext
       def seed_paths
         @seed_paths ||= begin
           dir = File.join(root, "db/seeds")
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) } : []
+          Dir.exist?(dir) ? PathResolver.glob(dir, "**/*.rb").sort.reject { |path| PathResolver.linked_out?(path, root) } : []
         end
       end
 
@@ -80,20 +80,28 @@ module RailsAiContext
       def detect_seeded_models
         models = Set.new
         seed_files = [ File.join(root, "db/seeds.rb") ] + seed_paths
-
-        non_models = %w[File Dir ENV Rails Faker FactoryBot ActiveRecord IO Pathname YAML JSON CSV]
+        app_models = model_classes.map(&:first).to_set
 
         seed_files.each do |path|
           next unless File.exist?(path)
 
           chained_calls(path).each do |entry|
             model_name = entry[:receiver]
-            next unless model_name&.match?(/\A[A-Z]/)
-            models << model_name unless non_models.include?(model_name.split("::").first)
+            models << model_name if model_name && (app_models.include?(model_name) || loaded_record?(model_name))
           end
         end
 
         models.sort.to_a
+      end
+
+      # Booted, a record class a gem or engine defines (ActiveStorage::Blob) is seeded too.
+      def loaded_record?(name)
+        return false unless model_base_check && name.match?(/\A[A-Z]\w*(::[A-Z]\w*)*\z/)
+
+        klass = loaded_constant(name.split("::"))
+        klass.is_a?(Class) && klass < ActiveRecord::Base
+      rescue NameError
+        false
       end
     end
   end

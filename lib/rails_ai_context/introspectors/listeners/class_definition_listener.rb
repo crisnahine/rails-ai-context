@@ -42,11 +42,16 @@ module RailsAiContext
           @nestings.pop
         end
 
+        def on_constant_write_node_enter(node)
+          declare_constant(node, @nestings.last)
+        end
+        CONSTANT_WRITE_EVENTS.each { |event| alias_method event, :on_constant_write_node_enter }
+
         private
 
         def enter_scope(node)
           outer = @nestings.last
-          @nestings.push([ nested_name(node.constant_path, outer.first) ] + outer)
+          @nestings.push([ declare_constant(node, outer) ] + outer)
         end
 
         # nil for an anonymous or computed superclass (`< Struct.new(:a)`).

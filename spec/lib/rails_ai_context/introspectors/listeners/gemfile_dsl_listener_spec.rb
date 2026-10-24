@@ -75,6 +75,23 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
     expect(gems.first[:groups]).to eq([ :development ])
   end
 
+  # Expected groups are Bundler::Dsl.evaluate(...).dependencies on the same Gemfile.
+  it "reads groups the way Bundler does: groups: before group:, both added to the block's groups" do
+    results = parse_and_dispatch(<<~RUBY)
+      gem "rspec-rails", groups: [:development, :test]
+      group :development do
+        gem "web-console", group: :test
+      end
+      gem "both", groups: [:a], group: :b
+    RUBY
+
+    gems = results.select { |r| r[:type] == :gem }.to_h { |g| [ g[:name], g ] }
+    expect(gems["rspec-rails"][:groups]).to eq([ :development, :test ])
+    expect(gems["web-console"][:groups]).to eq([ :development, :test ])
+    expect(gems["both"][:groups]).to eq([ :a ])
+    expect(gems.values.map { |g| g[:options].keys }.flatten).not_to include(:group, :groups)
+  end
+
   it "detects source declarations" do
     results = parse_and_dispatch('source "https://rubygems.org"')
     sources = results.select { |r| r[:type] == :source }

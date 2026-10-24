@@ -16,6 +16,12 @@ module RailsAiContext
       end
 
       RAILS_CI = "config/ci.rb"
+      # Each CI service by the file or folder it reads, as a glob from the project root; a folder ends in a slash.
+      CI_CONFIGS = {
+        "rails_ci" => RAILS_CI, "github_actions" => ".github/workflows/", "circleci" => ".circleci/config.yml",
+        "gitlab_ci" => ".gitlab-ci.yml", "travis" => ".travis.yml", "buildkite" => "{.buildkite/,buildkite.{yml,yaml,json}}",
+        "jenkins" => "Jenkinsfile", "bitbucket_pipelines" => "bitbucket-pipelines.yml"
+      }.freeze
 
       def call
         ci_steps, ci_steps_dir = detect_ci_steps
@@ -73,7 +79,7 @@ module RailsAiContext
           dir = File.join(suite_root, rel)
           next unless Dir.exist?(dir)
 
-          count = Dir.glob(File.join(dir, "**", glob)).size
+          count = Dir.glob(File.join("**", glob), base: dir).size
           return { location: rel, count: count } if count > 0
         end
         nil
@@ -124,9 +130,9 @@ module RailsAiContext
       # ponytail: packs-specification's default pack_paths; a packs.yml that
       # sets its own pack_paths is not read.
       def pack_factory_paths
-        Dir.glob(File.join(suite_root, "packs", "{*,*/*}", "package.yml")).sort.flat_map do |manifest|
+        PathResolver.glob(suite_root, "packs/{*,*/*}/package.yml").sort.flat_map do |manifest|
           pack = File.dirname(manifest)
-          next [] if Dir.glob(File.join(pack, "*.gemspec")).any?
+          next [] if Dir.glob("*.gemspec", base: pack).any?
 
           rel = pack.delete_prefix("#{suite_root}/")
           [ File.join(rel, "spec/factories"), File.join(rel, "test/factories") ]
@@ -175,7 +181,7 @@ module RailsAiContext
       def app_files(pattern, read: true)
         real_root = (@real_root ||= File.realpath(suite_root))
         real_dirs = {}
-        Dir.glob(File.join(suite_root, pattern)).sort.select do |path|
+        PathResolver.glob(suite_root, pattern).sort.select do |path|
           real = if File.lstat(path).symlink?
             File.realpath(path)
           else
@@ -236,7 +242,7 @@ module RailsAiContext
       end
 
       def support_files
-        @support_files ||= HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(suite_root, rel, "**", "*.rb")).sort }
+        @support_files ||= HELPER_DIRS.flat_map { |rel| PathResolver.glob(File.join(suite_root, rel), "**/*.rb").sort }
       end
 
       def fixture_sets?(rel, real_root)
@@ -244,7 +250,7 @@ module RailsAiContext
 
         real = File.realpath(File.join(suite_root, rel))
         RailsAiContext::SafePath.contained?(real, real_root) && File.directory?(real) &&
-          Dir.glob(File.join(real, "**", "*.yml")).any?
+          Dir.glob("**/*.yml", base: real).any?
       rescue SystemCallError
         false
       end
@@ -256,7 +262,7 @@ module RailsAiContext
           dir = File.join(suite_root, rel)
           next unless Dir.exist?(dir)
 
-          count = Dir.glob(File.join(dir, "**/#{test_file_glob(rel.split("/").first)}")).size
+          count = Dir.glob("**/#{test_file_glob(rel.split("/").first)}", base: dir).size
           [ rel, count ] if count > 0
         end
         return nil if rows.empty?
@@ -269,7 +275,7 @@ module RailsAiContext
       HELPER_DIRS = %w[spec/support test/support test/test_helpers].freeze
 
       def detect_test_helpers
-        HELPER_DIRS.flat_map { |rel| Dir.glob(File.join(suite_root, rel, "**/*.rb")) }.map { |f| f.sub("#{suite_root}/", "") }.sort
+        HELPER_DIRS.flat_map { |rel| PathResolver.glob(File.join(suite_root, rel), "**/*.rb") }.map { |f| f.sub("#{suite_root}/", "") }.sort
       end
 
       def detect_factory_names
@@ -293,8 +299,9 @@ module RailsAiContext
             computed += named.count(&:empty?)
             named = named.reject(&:empty?)
             trait_names = ast_data[:traits].map { |hit| hit[:args].first.to_s }.reject(&:empty?)
-            names[path.sub("#{suite_root}/", "")] = named if named.any?
-            traits[File.basename(path)] = trait_names if trait_names.any?
+            relative = path.sub("#{suite_root}/", "")
+            names[relative] = named if named.any?
+            traits[relative] = trait_names if trait_names.any?
           end
           { names: names.presence, traits: traits.presence, computed: computed }
         end
@@ -376,16 +383,9 @@ module RailsAiContext
       # A dummy's own config/ci.rb and its engine's .github are both the project's CI.
       def detect_ci
         ci_roots.flat_map do |dir|
-          configs = []
-          configs << "rails_ci" if File.file?(File.join(dir, RAILS_CI))
-          configs << "github_actions" if Dir.exist?(File.join(dir, ".github/workflows"))
-          configs << "circleci" if File.exist?(File.join(dir, ".circleci/config.yml"))
-          configs << "gitlab_ci" if File.exist?(File.join(dir, ".gitlab-ci.yml"))
-          configs << "travis" if File.exist?(File.join(dir, ".travis.yml"))
-          configs << "buildkite" if Dir.exist?(File.join(dir, ".buildkite")) || Dir.glob(File.join(dir, "buildkite.{yml,yaml,json}")).any?
-          configs << "jenkins" if File.file?(File.join(dir, "Jenkinsfile"))
-          configs << "bitbucket_pipelines" if File.file?(File.join(dir, "bitbucket-pipelines.yml"))
-          configs
+          CI_CONFIGS.filter_map do |name, pattern|
+            name if Dir.glob(pattern, base: dir).any? { |found| found.end_with?("/") || File.file?(File.join(dir, found)) }
+          end
         end.uniq
       end
 
@@ -425,7 +425,7 @@ module RailsAiContext
         %w[spec test].each do |base|
           support_dir = File.join(suite_root, base, "support")
           next unless Dir.exist?(support_dir)
-          Dir.glob(File.join(support_dir, "**/*.rb")).each do |path|
+          PathResolver.glob(support_dir, "**/*.rb").each do |path|
             ast_data = SourceIntrospector.walk(path, {
               shared: -> { Listeners::GenericMacroListener.new(:shared_examples, :shared_context, :shared_examples_for) }
             })
@@ -488,11 +488,11 @@ module RailsAiContext
             dir = File.join(base_dir, entry)
             next unless File.directory?(dir)
 
-            count = Dir.glob(File.join(dir, "**/#{test_file_glob(base)}")).size
+            count = Dir.glob("**/#{test_file_glob(base)}", base: dir).size
             rows[entry] << [ "#{base}/#{entry}", count ] if count > 0
           end
 
-          loose = Dir.glob(File.join(base_dir, test_file_glob(base))).size
+          loose = Dir.glob(test_file_glob(base), base: base_dir).size
           rows[base] << [ base, loose ] if loose > 0
         end
 

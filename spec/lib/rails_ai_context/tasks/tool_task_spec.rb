@@ -23,8 +23,14 @@ RSpec.describe "ai:tool rake task" do
     ENV["JSON"] = "1"
     $stdout = StringIO.new
     $stderr = StringIO.new
-    Rake::Task["ai:tool"].invoke(tool)
-    [ $stdout.string, $stderr.string ]
+    %w[ai:tool environment].each { |task| Rake::Task[task].reenable }
+    status = begin
+      Rake::Task["ai:tool"].invoke(tool)
+      nil
+    rescue SystemExit => e
+      e.status
+    end
+    [ $stdout.string, $stderr.string, status ]
   ensure
     ARGV.replace(previous[0])
     $stdout, $stderr = previous[1], previous[2]
@@ -45,5 +51,59 @@ RSpec.describe "ai:tool rake task" do
       .with("search_code", { pattern: "params[:id]", path: "app/models" }, json_mode: true).and_call_original
 
     run_task("pattern=params[:id]", "path=app/models", tool: "search_code")
+  end
+
+  # Rake applies a trailing NAME=value word to ENV and leaves it in ARGV.
+  it "leaves a trailing env var word such as JSON=1 or RAILS_ENV=test to rake, and boots in that environment" do
+    previous_env = ENV["RAILS_ENV"]
+    booted_in = nil
+    Rake::Task[:environment].clear_actions
+    Rake::Task.define_task(:environment) { booted_in = ENV["RAILS_ENV"] }
+    Rake.application.collect_command_line_tasks([ "ai:tool[conventions]", "JSON=1", "RAILS_ENV=test" ])
+
+    stdout, stderr, status = run_task("JSON=1", "RAILS_ENV=test")
+
+    expect(status).to be_nil, stderr
+    expect(JSON.parse(stdout)).to include("tool" => "rails_get_config", "error" => false)
+    expect(booted_in).to eq("test")
+  ensure
+    ENV["RAILS_ENV"] = previous_env
+  end
+
+  it "answers an unknown param, an unknown tool and a failed boot with JSON=1 as one envelope, at exit 1" do
+    [
+      [ [ "limt=5", "pattern=User" ], "search_code", "rails_search_code", "did you mean 'limit='?" ],
+      [ [], "shema", "shema", "Did you mean 'schema'?" ]
+    ].each do |argv, tool, named, message|
+      stdout, _, status = run_task(*argv, tool: tool)
+
+      expect(status).to eq(1)
+      expect(JSON.parse(stdout)).to include("tool" => named, "error" => true, "output" => a_string_including(message))
+    end
+
+    Rake::Task["environment"].clear_actions
+    Rake::Task.define_task(:environment) { raise "the database is down" }
+    stdout, stderr, status = run_task
+
+    expect(status).to eq(1)
+    expect(stderr).to include("the database is down")
+    expect(JSON.parse(stdout)).to include("tool" => "conventions", "error" => true)
+  end
+
+  it "answers a boot that exits with JSON=1 as the envelope the binary gives" do
+    Rake::Task["environment"].clear_actions
+    Rake::Task.define_task(:environment) { exit 1 }
+    stdout, _, status = run_task
+
+    expect(status).to eq(1)
+    expect(JSON.parse(stdout)).to eq("tool" => "conventions", "error" => true,
+                                     "output" => "The tool did not run: rails-ai-context stopped before it could. stderr says why.")
+  end
+
+  it "still reads a lowercase tool param beside an all-caps env var word" do
+    expect(RailsAiContext::CLI::ToolRunner).to receive(:new)
+      .with("search_code", { pattern: "User" }, json_mode: true).and_call_original
+
+    run_task("pattern=User", "JSON=1", tool: "search_code")
   end
 end

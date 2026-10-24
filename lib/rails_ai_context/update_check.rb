@@ -133,7 +133,7 @@ module RailsAiContext
 
     # The newest copy installed for this Ruby, in any directory of the gem path.
     def newest_installed
-      Array(@gem_dirs).flat_map { |dir| Dir[File.join(dir, "specifications", "rails-ai-context-*.gemspec")] }.filter_map do |spec|
+      Array(@gem_dirs).flat_map { |dir| Dir.glob("specifications/rails-ai-context-*.gemspec", base: dir) }.filter_map do |spec|
         number = File.basename(spec, ".gemspec").delete_prefix("rails-ai-context-")
         Gem::Version.new(number) if Gem::Version.correct?(number)
       end.max

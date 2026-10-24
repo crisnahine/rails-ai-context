@@ -29,6 +29,26 @@ RSpec.describe RailsAiContext::Doctor do
       expect(result[:checks]).to all(be_a(RailsAiContext::Doctor::Check))
     end
 
+    # The health check and the context files' dry run read one introspection.
+    it "runs each introspector once when context files are there to check" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/post.rb"), "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "CLAUDE.md"), "# context\n")
+        runs = Hash.new(0)
+        allow_any_instance_of(RailsAiContext::Introspector).to receive(:resolve_introspector).and_wrap_original do |original, name|
+          runs[name] += 1
+          original.call(name)
+        end
+
+        checks = described_class.new(RailsAiContext::StaticApp.new(dir)).run[:checks].map(&:name)
+
+        expect(checks).to include("Introspector health", "Context files")
+        expect(runs.values.uniq).to eq([ 1 ])
+        expect(runs.size).to eq(RailsAiContext.configuration.introspectors.size)
+      end
+    end
+
     it "computes a score between 0 and 100" do
       expect(result[:score]).to be_between(0, 100)
     end
@@ -254,7 +274,7 @@ RSpec.describe RailsAiContext::Doctor do
       index = lines.index { |line| line.include?("Introspector health") }
 
       expect(lines[index]).to include("[WARN] Introspector health:")
-      expect(lines[index + 1]).to include("Fix: database_stats: StandardError: Database not found: no_such_db")
+      expect(lines[index + 1]).to include("Fix: database_stats: Database not found: no_such_db")
       expect(lines[index + 1]).not_to include("stimulus")
     end
 
@@ -314,7 +334,7 @@ RSpec.describe RailsAiContext::Doctor do
 
       expect(check.status).to eq(:warn)
       expect(check.message).to include("database_stats")
-      expect(check.fix).to include("database_stats: StandardError: Database not found: no_such_db")
+      expect(check.fix).to include("database_stats: Database not found: no_such_db")
       expect(check.fix).not_to include("stimulus")
     end
 
@@ -3813,6 +3833,35 @@ RSpec.describe RailsAiContext::Doctor do
         message: "the #{Rails.env} database warehouse (warehouse) cannot be reached: its sqlserver adapter did not load",
         fix: "Add the gem that provides the sqlserver adapter to the Gemfile and run `bundle install`"
       )
+    end
+  end
+  describe "an app folder whose name has glob characters" do
+    around do |example|
+      Dir.mktmpdir do |base|
+        @root = File.join(base, "my[app]")
+        FileUtils.mkdir_p(File.join(@root, "app/views/posts"))
+        FileUtils.mkdir_p(File.join(@root, "app/models"))
+        FileUtils.mkdir_p(File.join(@root, "config/initializers"))
+        example.run
+      end
+    end
+
+    let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(@root)) }
+
+    it "counts its views" do
+      File.write(File.join(@root, "app/views/posts/index.html.erb"), "<h1>Posts</h1>\n")
+
+      expect(doctor.send(:check_views).message).to eq("1 file under app/views")
+    end
+
+    it "names the folder changed since a context file was written, and not our initializer's" do
+      written = File.join(@root, "CLAUDE.md")
+      File.write(written, "# context\n")
+      File.utime(Time.now - 60, Time.now - 60, written)
+      File.write(File.join(@root, "app/models/post.rb"), "class Post\nend\n")
+      File.write(File.join(@root, "config/initializers/rails_ai_context.rb"), "\n")
+
+      expect(doctor.send(:staleness_reason, @root, [ "CLAUDE.md" ])).to eq("app/models changed since it was written")
     end
   end
 end

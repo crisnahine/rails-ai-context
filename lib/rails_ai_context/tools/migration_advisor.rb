@@ -65,6 +65,8 @@ module RailsAiContext
         action = action.to_s.strip
         table = table.to_s.strip
         column = column.to_s.strip.presence if column
+        # A reference is a column plus its index and key, which add_column cannot write.
+        action, type = "add_association", nil if action == "add_column" && %w[references belongs_to].include?(type.to_s.strip)
 
         # No database takes a name this long (PostgreSQL stops at 63 bytes,
         # MySQL at 64), and the generated code would carry it whole.
@@ -90,9 +92,11 @@ module RailsAiContext
         unless table.match?(/\A[a-z_][a-z0-9_]*\z/)
           return text_response("**Error:** Invalid table name `#{echo_input(table)}`. Use lowercase letters, digits, and underscores only.")
         end
-        # create_table uses column param as a comma-separated column:type definition string
-        if action != "create_table" && column && !column.empty? && !column.match?(/\A[a-z_][a-z0-9_]*\z/)
-          return text_response("**Error:** Invalid column name `#{echo_input(column)}`. Use lowercase letters, digits, and underscores only.")
+        rename_to = new_name.to_s.strip.presence || type.to_s.strip.presence if action == "rename_column"
+        # create_table's column param is a comma-separated list of name:type definitions.
+        written = action == "create_table" ? column.to_s.split(",").map { |definition| definition.split(":").first.to_s.strip } : [ column, rename_to ]
+        if (invalid = written.compact.find { |name| !name.match?(/\A[a-z_][a-z0-9_]*\z/) })
+          return text_response("**Error:** Invalid column name `#{echo_input(invalid)}`. Use lowercase letters, digits, and underscores only.")
         end
 
         unless VALID_ACTIONS.include?(action)
@@ -117,7 +121,6 @@ module RailsAiContext
         database_lines, target = database_option(table, databases)
         lines.concat(database_lines)
 
-        rename_to = new_name.to_s.strip.presence || type.to_s.strip.presence if action == "rename_column"
         if (unknown = unknown_type(action, column, type))
           return text_response((lines + [ unknown ]).join("\n"))
         end
@@ -304,11 +307,20 @@ module RailsAiContext
           COLUMN_TYPES
         end
 
+        # A create_table column's name, type and index modifier as GeneratedAttribute.parse reads them:
+        # `title:index` is an indexed string.
+        def column_definition(definition)
+          name, type, *modifier = definition.strip.split(":").map(&:strip)
+          modifier = modifier.join(":").presence
+          modifier, type = type, nil if %w[index uniq].include?(type)
+          [ name, type.presence || "string", modifier ]
+        end
+
         # A type no adapter knows writes a migration that fails when it runs.
         def unknown_type(action, column, type)
           written = case action
           when "add_column", "change_type" then [ type ]
-          when "create_table" then column.to_s.split(",").map { |definition| definition.split(":")[1]&.strip }
+          when "create_table" then column.to_s.split(",").map { |definition| column_definition(definition)[1] }
           end
           bad = Array(written).compact.reject(&:empty?).find { |t| !column_types.include?(t) }
           return nil unless bad
@@ -441,7 +453,7 @@ module RailsAiContext
           lines << "```ruby"
           lines << "class #{class_name} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    remove_column :#{table}, :#{column}, :#{col_type}"
+          lines << "    remove_column :#{table}, :#{column}, :#{col_type}#{column_options(table, column)}"
           lines << "  end"
           lines << "end"
           lines << "```"
@@ -542,10 +554,10 @@ module RailsAiContext
               to_table = nil
             elsif reference == "parent"
               lines << "**Note:** No `#{to_table}` table: `parent` on `#{table}` reads as a reference to `#{table}` itself, " \
-                       "written with `to_table:`. Pass the table it points at as `type` to point it elsewhere."
+                       "written with `to_table:`. Call `add_association` with the table it points at as `type` to point it elsewhere."
               to_table = table
             else
-              lines << "**Warning:** No `#{to_table}` table: `#{reference}` reads as a role. Pass the table it points at as `type` " \
+              lines << "**Warning:** No `#{to_table}` table: `#{reference}` reads as a role. Call `add_association` with the table it points at as `type` " \
                        "(e.g. `type:\"users\"`); the reference below has no foreign key until then."
               to_table = nil
             end
@@ -569,8 +581,9 @@ module RailsAiContext
           end
 
           fk_target = to_table unless across || composite
-          foreign_key = fk_target ? foreign_key_option(schema, fk_target, reference) : ""
-          reference_call = "add_reference :#{table}, :#{reference}#{key_type_option(schema, table, to_table)}"
+          given_key = option_value(options, :foreign_key)
+          foreign_key = fk_target && !given_key ? foreign_key_option(schema, fk_target, reference) : ""
+          reference_call = "add_reference :#{table}, :#{reference}#{key_type_option(schema, table, to_table)}#{", #{options}" if options}"
           lines << "```ruby"
           lines << "class Add#{written.camelize}To#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
@@ -582,8 +595,18 @@ module RailsAiContext
           lines << "**Reversible:** Yes"
           lines.concat(association_model_lines(table, reference, to_table))
           # A migration that fails on its existing column has nothing to make safe.
-          lines.concat(association_strong_migrations_lines(table, reference, reference_call, fk_target, schema)) if strong_migrations_gem_present? && !fk_column_exists
+          keyless = given_key.is_a?(Prism::FalseNode) || given_key.is_a?(Prism::NilNode)
+          lines.concat(association_strong_migrations_lines(table, reference, reference_call, (fk_target unless keyless), schema)) if strong_migrations_gem_present? && !fk_column_exists
           lines
+        end
+
+        # The value node `options` gives `key`, read as the keyword arguments it is written as.
+        def option_value(options, key)
+          call = RailsAiContext::AstCache.parse_uncached("f(#{options})").value.statements.body.first if options
+          hash = call.arguments&.arguments&.last if call.is_a?(Prism::CallNode)
+          return unless hash.is_a?(Prism::KeywordHashNode)
+
+          hash.elements.find { |pair| pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) && pair.key.unescaped == key.to_s }&.value
         end
 
         # The add_reference above as strong_migrations wants it on each
@@ -768,7 +791,7 @@ module RailsAiContext
           lines << "  end"
           lines << ""
           lines << "  def down"
-          lines << "    change_column :#{table}, :#{column}, :#{original_type}"
+          lines << "    change_column :#{table}, :#{column}, :#{original_type}#{column_options(table, column)}"
           lines << "  end"
           lines << "end"
           lines << "```"
@@ -794,15 +817,17 @@ module RailsAiContext
           lines << "class Create#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
           schema = cached_context[:schema]
-          key_type = app_key_type(schema)
-          lines << "    create_table :#{table}#{", id: :#{key_type}" if key_type} do |t|"
+          key_type = app_key_type(schema) unless option_value(options, :id)
+          lines << "    create_table :#{table}#{", id: :#{key_type}" if key_type}#{", #{options}" if options} do |t|"
 
           if columns_str
             columns_str.split(",").each do |col|
-              parts = col.strip.split(":")
-              name = parts[0]&.strip
-              type = parts[1]&.strip || "string"
-              if type == "references"
+              name, type, modifier = column_definition(col)
+              index = { "index" => "", "uniq" => ", unique: true" }[modifier] if modifier
+              if modifier && !index
+                return [ "**Error:** `#{echo_input(col.strip)}`: only `index` and `uniq` can follow a column's type." ]
+              end
+              if %w[references belongs_to].include?(type)
                 to_table = name.to_s.pluralize
                 missing = schema_known?(schema) && !table_in_schema?(schema, to_table)
                 composite = !missing && composite_key(schema, to_table)
@@ -810,9 +835,12 @@ module RailsAiContext
                 elsif composite then " # no foreign key: #{to_table} has the composite primary key (#{composite.join(', ')})"
                 else foreign_key_option(schema, to_table, name)
                 end
-                lines << "      t.references :#{name}#{key_type_option(schema, table, to_table)}#{foreign_key}"
+                # A reference is indexed already, so only `uniq` changes its index.
+                unique = ", index: { unique: true }" if modifier == "uniq"
+                lines << "      t.#{type} :#{name}#{key_type_option(schema, table, to_table)}#{unique}#{foreign_key}"
               else
                 lines << "      t.#{type} :#{name}"
+                lines << "      t.index :#{name}#{index}" if index
               end
             end
           end
@@ -1010,6 +1038,23 @@ module RailsAiContext
             cols = (idx[:columns] || [ idx[:column] ].compact).map(&:to_s)
             idx[:name].to_s == default_name || (idx[:name].nil? && cols == [ column.to_s ])
           }
+        end
+
+        # The options that rebuild the column as the schema holds it: change_column replaces the whole
+        # definition, and remove_column's rollback adds the column back from them.
+        def column_options(table, column)
+          col = Array(RailsAiContext::Payload.schema_table(cached_context[:schema], table)&.dig(:columns)).find { |c| c[:name] == column }
+          return "" unless col
+
+          options = %i[limit precision scale].filter_map { |key| "#{key}: #{col[key]}" if col[key].is_a?(Integer) }
+          options << "array: true" if col[:array]
+          options << "null: false" if col[:null] == false
+          default = col[:default].to_s
+          # The dump writes a boolean or number default as its literal, any other as a string (type_cast_for_schema).
+          literal = default.start_with?("-> {") ||
+                    (%w[boolean integer bigint float].include?(col[:type].to_s) && default.match?(/\A(?:true|false|-?\d+(?:\.\d+)?)\z/))
+          options << "default: #{literal ? default : default.inspect}" unless col[:default].nil?
+          options.map { |option| ", #{option}" }.join
         end
 
         def find_column_type(table, column, schema)

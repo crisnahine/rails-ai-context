@@ -243,7 +243,7 @@ rails ai:watch
 rails-ai-context watch
 ```
 
-Requires the `listen` gem. `rails ai:watch` needs it in the app's Gemfile; the standalone binary uses the app's when its bundle locks one, and otherwise one installed with `gem install listen`. Watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`.
+Requires the `listen` gem. `rails ai:watch` needs it in the app's Gemfile; the standalone binary uses the app's when its bundle locks one, and otherwise one installed with `gem install listen`. Watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the pack and engine folders the app's code lives in, and each folder outside those that holds a file a reader reads: `bin/`, `.github/workflows/`, `.circleci/`, `.buildkite/`, `sorbet/` and the mise config folders. An edit to a file at the app root (Gemfile, Dockerfile, Procfile, `.gitlab-ci.yml`), in a frontend root, or in a folder outside the app is picked up by the next change in a watched folder, or by a restart.
 
 ### `init` (standalone only)
 
@@ -455,6 +455,12 @@ JSON=1 rails 'ai:tool[schema]' table=users
 stdout then holds the envelope (`tool`, `output`, `error`) and nothing else.
 Whatever the app prints while it boots or while the tool runs - an
 initializer's `puts`, Sidekiq's Redis connection line - goes to stderr.
+
+A refused call answers the same way, at exit 1: an unknown tool, an unknown
+param or a flag with no value gives `"error": true` with the message in
+`output`. When the run stops before the tool (no app found, a failed boot),
+`output` says so and the reason is on stderr. A `-j` right after a flag that may take
+a value counts here too, since only the tool can tell whether it is that value.
 
 ---
 

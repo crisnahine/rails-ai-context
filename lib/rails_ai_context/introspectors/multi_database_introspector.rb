@@ -53,7 +53,7 @@ module RailsAiContext
       def example_adapters
         return nil if File.exist?(File.join(root, "config/database.yml"))
 
-        names = Dir.glob(File.join(root, "config/database.yml.*")).flat_map do |path|
+        names = PathResolver.glob(root, "config/database.yml.*").flat_map do |path|
           RailsAiContext::SafeFile.read(path).to_s.scan(/^\s*adapter:\s*["']?(\w+)["']?\s*(?:#.*)?$/).flatten
         end
         names.uniq.sort.presence

@@ -158,6 +158,40 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       expect(ZzGrandchild.superclass.superclass.name).to eq("ZzParent")
     end
 
+    # Ruby resolves `ZqBase` through the modules it is written in, then the top level,
+    # and `class Legacy::ZqOther` opens only Legacy::ZqOther, not Legacy.
+    it "blocks only a file whose names resolve to the broken constant where they are written" do
+      FileUtils.mkdir_p(File.join(dir, "legacy"))
+      File.write(File.join(dir, "legacy", "zq_base.rb"), "module Legacy\n  class ZqBase < ::ZqBase\n    def broken(\n  end\nend\n")
+      File.write(File.join(dir, "zq_base.rb"), "class ZqBase\nend\n")
+      File.write(File.join(dir, "zq_user.rb"), "class ZqUser < ZqBase\nend\n")
+      File.write(File.join(dir, "legacy", "zq_other.rb"), "class Legacy::ZqOther < ZqBase\nend\n")
+      File.write(File.join(dir, "legacy", "zq_member.rb"), "module Legacy\n  class ZqMember < ZqBase\n  end\nend\n")
+      File.write(File.join(dir, "legacy", "zq_note.rb"), "module Legacy\n  class ZqNote\n    KIND = ZqBase\n  end\nend\n")
+
+      left = described_class.send(:unloadable, dir, Dir.glob(File.join(dir, "**", "*.rb")))
+
+      expect(left.keys.map { |file| file.delete_prefix("#{dir}/") }).to contain_exactly(
+        "zz_parent.rb", "zz_child.rb", "zz_grandchild.rb", "legacy/zq_base.rb", "legacy/zq_member.rb", "legacy/zq_note.rb"
+      )
+    end
+
+    # Inside `module Zadmin`, `ZqHome` is Zadmin::ZqHome when that exists; the broken
+    # top-level ZqHome is never reached.
+    it "blocks a file only on the first constant its name resolves to that exists" do
+      FileUtils.mkdir_p(File.join(dir, "zadmin"))
+      File.write(File.join(dir, "zq_home.rb"), "class ZqHome\n  def broken(\nend\n")
+      File.write(File.join(dir, "zadmin", "zq_home.rb"), "module Zadmin\n  class ZqHome\n  end\nend\n")
+      File.write(File.join(dir, "zadmin", "zq_page.rb"), "module Zadmin\n  class ZqPage < ZqHome\n  end\nend\n")
+      File.write(File.join(dir, "zq_page.rb"), "class ZqPage < ZqHome\nend\n")
+
+      left = described_class.send(:unloadable, dir, Dir.glob(File.join(dir, "**", "*.rb")))
+
+      expect(left.keys.map { |file| file.delete_prefix("#{dir}/") }).to contain_exactly(
+        "zz_parent.rb", "zz_child.rb", "zz_grandchild.rb", "zq_home.rb", "zq_page.rb"
+      )
+    end
+
     # A tool that looks a class up by name - rails_diagnose's receiver, a
     # concern's mixin - safe_constantized it, outside any walk, and Ruby
     # compiled the file that does not compile, or the one a subclass needs.

@@ -91,15 +91,17 @@ module RailsAiContext
         return text_response("Could not read partial file.") unless source
 
         relative_path = located.relative
+        # The resolved file, not the caller's spelling: a bare name has no
+        # directory for a render site to be matched against.
         partial_name = view_relative(File.expand_path(relative_path, root), view_dirs)
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
-        # The resolved file, not the caller's spelling: a bare name has no
-        # directory for a render site to be matched against.
-        prefixed = prefix_partial_paths?(root)
-        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, prefixed) } +
-                       code_render_sites(root, canonical_name(partial_name))
+        # One memo for every view root, so the prefix setting and each model are read once a call.
+        records = {}
+        on_disk = Introspectors::RenderCalls.partials_on_disk(root)
+        render_sites = view_dirs.flat_map { |dir| find_render_sites(dir, partial_name, root, records, on_disk) } +
+                       code_render_sites(root, Introspectors::RenderCalls.canonical_name(partial_name))
         # `_post.html.erb` and `_post.json.jbuilder` share a name but not their
         # callers: each renders only where its format is the one looked up.
         partial_format = template_format(file_path)
@@ -461,12 +463,6 @@ module RailsAiContext
         RailsAiContext::ViewFile.format_of(path) || ("json" if path.end_with?(".jbuilder"))
       end
 
-      # "shared/_status_badge.html.erb" as a render call names it: "shared/status_badge".
-      private_class_method def self.canonical_name(partial_name)
-        parts = partial_name.split("/")
-        (parts[0...-1] + [ parts.last.delete_prefix("_").sub(/\..*\z/, "") ]).join("/")
-      end
-
       private_class_method def self.route_helper?(name)
         name.match?(/_(?:path|url)\z/)
       end
@@ -496,14 +492,14 @@ module RailsAiContext
       # and json.array! in jbuilder. Ruby code outside the views names a
       # partial by its full path, since it has no view directory of its own.
       CODE_DIRS = %w[app/models app/controllers app/jobs app/channels app/helpers].freeze
-      # The keywords Turbo and jbuilder take beside a partial, which are not its locals.
-      PARTIAL_CALL_KEYWORDS = %w[target targets action attributes method html content renderable request_id as].freeze
+      # The options jbuilder keeps from a partial's locals; every other key is one.
+      JBUILDER_OPTIONS = %w[partial as collection cached].freeze
 
       private_class_method def self.partial_arg_sites(content, relative, names, skip_spans: [], code: false)
         lines = content.lines
         sites = []
         blocks = nil
-        content.to_enum(:scan, Introspectors::ViewTemplateIntrospector::PARTIAL_ARG).each do
+        content.to_enum(:scan, Introspectors::RenderCalls::PARTIAL_ARG).each do
           match = Regexp.last_match
           at = match.begin(0)
           next unless names.include?(match[2])
@@ -537,11 +533,24 @@ module RailsAiContext
         taken.join.split("%>", 2).first
       end
 
-      # The locals a call hands the partial: its `locals:` hash, the name
-      # `as:` gives each record, or json.partial!'s own keywords.
+      # The locals a call hands the partial: its `locals:` hash and the record
+      # it renders, or for jbuilder without `locals:` every other key, as
+      # JbuilderTemplate#_render_partial_with_options reads its options.
       private_class_method def self.partial_call_locals(call)
-        named = call[/\bas:\s*:(\w+)/, 1]
-        (extract_locals_from_render(call) - PARTIAL_CALL_KEYWORDS + [ named ]).compact.uniq
+        reader = Introspectors::RenderCalls
+        verb, args = call.match(/\bjson\.(partial!)\s*(.*)/m)&.captures || call.match(/\A\s*json\.(\w+!?)\s*(.*)/m)&.captures
+        return reader.passed_locals(call) unless args
+
+        args = RailsAiContext::Brackets.unwrap(args.strip)
+        keys = reader.hash_keys(args)
+        own = keys.include?("locals") ? reader.locals_keys(args) : keys - JBUILDER_OPTIONS
+        records = case verb
+        when "partial!" then reader.record_locals(args)
+        when "array!" then reader.record_locals(args, collection: true)
+        # Any other json.<key> hands its value over under the `as:` name.
+        else [ args[reader::AS_NAME, 1] ].compact
+        end
+        (own + records).uniq
       end
 
       private_class_method def self.code_render_sites(root, canonical)
@@ -558,68 +567,46 @@ module RailsAiContext
       end
 
       # Find all views that render this partial and extract the locals they pass.
-      private_class_method def self.find_render_sites(views_dir, partial, root, prefixed)
+      private_class_method def self.find_render_sites(views_dir, partial, root, records, on_disk)
         sites = []
-        # Build search names: the partial can be referenced multiple ways
-        # Normalize: strip underscore prefix from basename and extensions
-        parts = partial.split("/")
-        basename = parts.last.delete_prefix("_").sub(/\..*\z/, "")
-        dir_prefix = parts[0...-1].join("/")
-
-        # Build the canonical render name (how Rails references partials in render calls)
-        # "shared/_status_badge.html.erb" → "shared/status_badge"
-        # "_status_badge" → "status_badge"
-        canonical = (dir_prefix.empty? ? basename : "#{dir_prefix}/#{basename}")
-
-        # Possible render references:
-        # render "shared/status_badge"
-        # render partial: "shared/status_badge"
-        # render "status_badge" (from same directory)
-        search_patterns = [
-          canonical,                                                # shared/status_badge
-          basename                                                  # status_badge
-        ].uniq
-
-        object_paths = {}
+        reader = Introspectors::RenderCalls
+        # A render names the partial whole ("shared/status_badge") or bare, from a folder it is looked up in.
+        canonical = reader.canonical_name(partial)
+        basename = canonical.split("/").last
 
         view_files = RailsAiContext::ViewFile.glob(root, views_dir, SITE_GLOB)
-
         view_files.each do |file|
           content = safe_read(file)
           next unless content
 
           relative = RailsAiContext::PortablePath.relativize(file, root)
+          view_dir = File.dirname(file.delete_prefix(views_dir + File::SEPARATOR))
+          names = [ canonical, basename ].uniq.select { |name| reader.partial_key(name, view_dir, on_disk) == canonical }
 
           lines = content.lines
+          builders = reader.form_builders(Introspectors::ViewTemplateIntrospector.strip_markup_comments(content), path: file)
           # Per call, not per line: `render(` and a call split over lines are
           # one call whose arguments the line alone does not hold.
           covered = 0
           spans = []
-          Introspectors::ViewTemplateIntrospector.render_calls(content).each do |at, args|
-            args = args.split("%>", 2).first
+          reader.render_calls(content).each do |at, args|
             spans << [ at, at + args.length ]
             # A render inside another's arguments is already part of that call's site.
             next if at < covered
 
             covered = at + args.length
             line_num = content[0...at].count("\n") + 1
-            line = Introspectors::ViewTemplateIntrospector.render_line(args)
+            line = reader.render_line(args)
             spanned = lines[(line_num - 1)..(line_num - 1 + args.chomp.count("\n"))]
             snippet = spanned.size > 1 ? spanned.join(" ").squish : lines[line_num - 1].strip
 
             matched_line = false
-            search_patterns.each do |search_name|
+            names.each do |search_name|
               # Match render "partial_name" or render partial: "partial_name",
               # the name whole: "comments/form" is another directory's form.
               next unless line.match?(/render\s.*["']#{Regexp.escape(search_name)}["']/)
 
-              # A bare name reaches the partial only from its own directory.
-              if search_name == basename && dir_prefix.length > 0
-                file_dir = File.dirname(file).sub("#{views_dir}/", "")
-                next unless file_dir == dir_prefix
-              end
-
-              locals_passed = extract_locals_from_render(line)
+              locals_passed = reader.render_locals(args)
 
               site = { file: relative, line: line_num, locals: locals_passed, snippet: snippet }
               named = named_formats(line, partial_key_at(line, search_name))
@@ -631,100 +618,23 @@ module RailsAiContext
 
             next if matched_line
 
-            chain = line[Introspectors::ViewTemplateIntrospector::IMPLICIT_RENDER, 1]
+            chain = line[reader::IMPLICIT_RENDER, 1]
             next unless chain && !line.include?("partial:")
 
-            view_dir = File.dirname(file.delete_prefix(views_dir + File::SEPARATOR))
-            next unless implicit_partial(chain, view_dir, prefixed, root, object_paths) == canonical
+            partial = builders.fetch(chain) do
+              Introspectors::RenderedRecord.rendered_partial(chain, view_dir, root, records, booted: booted_app?, partials: on_disk)
+            end
+            next unless partial && reader.partial_key(partial, view_dir, on_disk) == canonical
 
             sites << { file: relative, line: line_num, locals: [], snippet: snippet }
           end
 
-          # A bare name reaches the partial only from its own directory.
-          file_dir = File.dirname(file).sub("#{views_dir}/", "")
-          names = dir_prefix.empty? || file_dir == dir_prefix ? search_patterns : [ canonical ]
           sites.concat(partial_arg_sites(content, relative, names, skip_spans: spans))
         end
 
         sites
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_render_sites")
-      end
-
-      # The partial Rails renders for the records `chain` names from a view in
-      # view_dir, which stands in for the controller's path; nil when the
-      # model's to_partial_path or the chain cannot be read.
-      private_class_method def self.implicit_partial(chain, view_dir, prefixed, root, memo)
-        model, = Introspectors::RenderedRecord.resolve(chain, root, memo)
-        path = model && Introspectors::RenderedRecord.partial_path(model, root, memo)
-        return path unless path && prefixed
-
-        merge_prefix_into_object_path(view_dir == "." ? "" : view_dir, path)
-      end
-
-      # ActionView::AbstractRenderer#merge_prefix_into_object_path.
-      private_class_method def self.merge_prefix_into_object_path(prefix, object_path)
-        return object_path unless prefix.include?("/") && object_path.include?("/")
-
-        prefixes = []
-        object_dirs = object_path.split("/")[0..-3]
-        File.dirname(prefix).split("/").each_with_index do |dir, index|
-          break if dir == object_dirs[index]
-
-          prefixes << dir
-        end
-        (prefixes << object_path).join("/")
-      end
-
-      # Rails prefixes a record's partial with the controller namespace unless
-      # ActionView::Base.prefix_partial_path_with_controller_namespace is false.
-      PREFIX_SETTER = :prefix_partial_path_with_controller_namespace=
-
-      private_class_method def self.prefix_partial_paths?(root)
-        return ActionView::Base.prefix_partial_path_with_controller_namespace != false if booted_app? && defined?(ActionView::Base)
-
-        prefix = "#{root.to_s.chomp('/')}/"
-        files = [ "config/application.rb", "config/environments/#{rails_env_name}.rb" ] +
-          RailsAiContext::PathResolver.initializer_paths(root).map { |path| path.delete_prefix(prefix) }
-        last = nil
-        # The setter name is ActionView's own, so config.action_view, ActionView::Base and an on_load `self.` all match.
-        listener = -> { Introspectors::Listeners::MethodCallListener.new(names: [ PREFIX_SETTER ]) }
-        files.each do |relative|
-          next unless RailsAiContext::SafePath.locate(relative, under: root).ok?
-
-          walked = Introspectors::SourceIntrospector.walk(File.join(root, relative), { setting: listener })
-          walked[:setting].each { |call| last = call[:arguments].first if [ true, false ].include?(call[:arguments].first) }
-        end
-        last != false
-      rescue => e
-        RailsAiContext.debug_fail(e, true, label: "prefix_partial_paths?")
-      end
-
-      # Extract local variable names from a render call line.
-      private_class_method def self.extract_locals_from_render(line)
-        locals = []
-
-        # Pattern 1: render partial: "name", locals: { key1: val, key2: val }
-        if (match = line.match(/locals:\s*\{([^}]+)\}/))
-          match[1].scan(/(\w+):/) { |m| locals << m[0] }
-        end
-
-        # Pattern 2: render "name", key1: val, key2: val (shorthand)
-        # Match render "..." or render partial: "..." followed by comma-separated key: val pairs
-        if locals.empty?
-          # Strip the render call and partial name, look for remaining key: value pairs
-          remaining = line.sub(/render\s+(?:partial:\s*)?["'][^"']+["']\s*,?\s*/, "")
-          remaining = remaining.sub(/locals:\s*\{[^}]*\}/, "") # already handled above
-          remaining.scan(/(\w+):\s*(?!["']\w+["'])/) do |m|
-            name = m[0]
-            next if %w[partial locals collection as cached object spacer_template layout formats].include?(name)
-            locals << name
-          end
-        end
-
-        locals.uniq
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_locals_from_render")
       end
 
       # Extract method calls made on each local variable within the partial.
@@ -735,17 +645,12 @@ module RailsAiContext
         locals.each do |local|
           methods = Set.new
 
-          # Match: local.method_name or local.method_name(args)
-          source.scan(/\b#{Regexp.escape(local)}\.(\w+[?!]?)/).each do |match|
+          # local.method_name or local&.method_name
+          source.scan(/(?<![@$\w.])#{Regexp.escape(local)}&?\.(\w+[?!]?)/).each do |match|
             method_name = match[0]
             # Exclude common Ruby/ERB noise
             next if %w[to_s to_i to_f to_a to_h to_json to_param inspect class nil? is_a? respond_to? send freeze dup clone].include?(method_name)
             methods << method_name
-          end
-
-          # Match: local&.method_name (safe navigation)
-          source.scan(/\b#{Regexp.escape(local)}&\.(\w+[?!]?)/).each do |match|
-            methods << match[0]
           end
 
           calls[local] = methods.to_a.sort if methods.any?

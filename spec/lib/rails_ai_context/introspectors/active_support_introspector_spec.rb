@@ -30,6 +30,21 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       expect(result[:tagged_logging][:configured]).to eq(true).or(eq(false))
     end
 
+    context "with a lambda in config.log_tags" do
+      around do |example|
+        original = Rails.application.config.log_tags
+        Rails.application.config.log_tags = [ :request_id, ->(req) { req.subdomain } ]
+        example.run
+      ensure
+        Rails.application.config.log_tags = original
+      end
+
+      # Rails calls the Proc with each request; its inspect string carries a fresh address and an absolute path.
+      it "marks the lambda the same way on every run" do
+        expect(result[:tagged_logging][:tags]).to eq([ "request_id", "[UNAVAILABLE: computed at request time]" ])
+      end
+    end
+
     it "returns common on_load hooks as array" do
       expect(result[:on_load_hooks]).to be_an(Array)
     end
@@ -90,6 +105,91 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
         expect(names).to include("TestEdition::TestTrackable", "TestTrackable")
       ensure
         FileUtils.rm_rf(nested)
+      end
+
+      # Each module reads its own body: Ruby runs a nested module's `included` block for its own includers only.
+      it "reads each concern of a file from its own module, nested modules left out" do
+        paths = {
+          "test_outer.rb" => <<~RUBY,
+            module TestOuter
+              extend ActiveSupport::Concern
+              included do
+                has_many :things
+              end
+
+              module Helpers
+                extend ActiveSupport::Concern
+                included do
+                  has_many :helpers
+                end
+              end
+            end
+          RUBY
+          "test_prefixed.rb" => <<~RUBY,
+            module TestPrefixed
+              def self.table_name_prefix
+                "test_prefixed_"
+              end
+
+              module Alpha
+                extend ActiveSupport::Concern
+                included do
+                  has_many :alphas
+                end
+              end
+            end
+          RUBY
+          "test_built.rb" => <<~RUBY
+            module TestBuilt
+              def self.helper; end
+
+              Alpha = Module.new do
+                extend ActiveSupport::Concern
+                included do
+                  has_many :alphas
+                end
+              end
+            end
+          RUBY
+        }.to_h { |file, source| [ File.join(concerns_dir, file), source ] }
+        paths.each { |path, source| File.write(path, source) }
+
+        entries = described_class.new(Rails.application).call[:concerns]["app/models/concerns"]
+        read = %w[TestOuter TestOuter::Helpers TestPrefixed TestPrefixed::Alpha TestBuilt TestBuilt::Alpha].to_h do |name|
+          entry = entries.find { |e| e[:name] == name }
+          [ name, [ entry[:uses_active_support_concern] || false, entry[:included_blocks] ] ]
+        end
+
+        expect(read).to eq("TestOuter" => [ true, 1 ], "TestOuter::Helpers" => [ true, 1 ],
+                           "TestPrefixed" => [ false, 0 ], "TestPrefixed::Alpha" => [ true, 1 ],
+                           "TestBuilt" => [ false, 0 ], "TestBuilt::Alpha" => [ true, 1 ])
+      ensure
+        paths&.each_key { |path| FileUtils.rm_f(path) }
+      end
+
+      # A namespace's file holds its modules; the namespace is no mixin, whatever its modules are.
+      it "lists the modules a namespace-only file holds, not the namespace" do
+        path = File.join(concerns_dir, "test_store.rb")
+        File.write(path, "module TestStore\n  module Helpers\n    def helper; end\n  end\nend\n")
+
+        names = described_class.new(Rails.application).call[:concerns]["app/models/concerns"].map { |e| e[:name] }
+
+        expect(names).to include("TestStore::Helpers")
+        expect(names).not_to include("TestStore")
+      ensure
+        FileUtils.rm_f(path)
+      end
+
+      it "lists the modules a file of Module.new writes holds, not the namespace" do
+        path = File.join(concerns_dir, "test_built_store.rb")
+        File.write(path, "module TestBuiltStore\n  Inner = Module.new do\n    extend ActiveSupport::Concern\n  end\nend\n")
+
+        names = described_class.new(Rails.application).call[:concerns]["app/models/concerns"].map { |e| e[:name] }
+
+        expect(names).to include("TestBuiltStore::Inner")
+        expect(names).not_to include("TestBuiltStore")
+      ensure
+        FileUtils.rm_f(path)
       end
 
       # Some apps keep every ActiveModel validator in app/models/concerns.

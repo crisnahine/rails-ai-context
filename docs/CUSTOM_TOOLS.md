@@ -183,8 +183,8 @@ end
 
 | Method | Description |
 |:-------|:------------|
-| `execute_tool(name_or_class, **args)` | Execute a tool by name, short name, or class. Returns `MCP::Tool::Response`. |
-| `execute_tool_with_error(name_or_class, **args)` | Execute a tool expecting an error response. |
+| `execute_tool(name_or_class, **args)` | Execute a tool by name, short name, or class. Returns `MCP::Tool::Response`, and raises with the tool's text when it returns an error. |
+| `execute_tool_with_error(name_or_class, **args)` | Execute a tool expecting an error response. Returns it, and fails the test when the call succeeds. |
 | `assert_tool_findable(name_or_class)` | Assert the tool is registered and discoverable. |
 | `assert_tool_response_includes(response, text)` | Assert response contains the given text. |
 | `assert_tool_response_excludes(response, text)` | Assert response does NOT contain the given text. |

@@ -36,6 +36,21 @@ RSpec.describe RailsAiContext::LegacyCleanup do
       end
     end
 
+    it "deletes nothing a symlinked rules folder carries out of the app, and names it" do
+      Dir.mktmpdir do |dir|
+        Dir.mktmpdir do |outside|
+          create(outside, "rules/rails-ui-patterns.md")
+          FileUtils.mkdir_p(File.join(dir, ".claude"))
+          File.symlink(File.join(outside, "rules"), File.join(dir, ".claude/rules"))
+
+          described_class.prompt_legacy_files([ :claude ], root: dir, io: io, delete: true)
+
+          expect(File.exist?(File.join(outside, "rules/rails-ui-patterns.md"))).to be(true)
+          expect(io.string).to include("Left #{UI_CLAUDE} as it is - it is a symlink or behind one, which this run does not follow")
+        end
+      end
+    end
+
     it "no-ops silently when no legacy files exist" do
       Dir.mktmpdir do |dir|
         described_class.prompt_legacy_files(nil, root: dir, io: io)

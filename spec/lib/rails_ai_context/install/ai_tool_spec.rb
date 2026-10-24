@@ -60,7 +60,8 @@ RSpec.describe RailsAiContext::Install::AiTool do
         name: "OpenCode",
         files: "AGENTS.md",
         context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-        mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true },
+        mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true,
+                      env_key: "environment" },
         legacy_paths: []
       },
       codex: {

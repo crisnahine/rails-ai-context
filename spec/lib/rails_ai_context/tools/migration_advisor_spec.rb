@@ -288,6 +288,81 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("data loss")
     end
 
+    context "with a column that carries precision, scale, null and a default" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: {
+            "orders" => { columns: [
+              { name: "total", type: "decimal", precision: 10, scale: 2, null: false, default: "0.0" },
+              { name: "paid", type: "boolean", null: false, default: "false" },
+              { name: "items_count", type: "integer", default: "0" }
+            ] },
+            "customers" => { columns: [] }
+          } },
+          models: {}
+        })
+      end
+
+      # change_column replaces the whole column, so a bare `:decimal` would lose its precision, scale, null and default.
+      it "rolls change_type back to the whole column" do
+        text = described_class.call(action: "change_type", table: "orders", column: "total", type: "float").content.first[:text]
+
+        expect(text).to include("  def down\n    change_column :orders, :total, :decimal, precision: 10, scale: 2, null: false, default: \"0.0\"\n  end")
+      end
+
+      # remove_column's inverse is add_column with the type and options it is given.
+      it "writes remove_column with the options that add the column back" do
+        text = described_class.call(action: "remove_column", table: "orders", column: "total").content.first[:text]
+
+        expect(text).to include("    remove_column :orders, :total, :decimal, precision: 10, scale: 2, null: false, default: \"0.0\"\n")
+      end
+
+      # SchemaDumper writes a boolean or number default as its literal (type_cast_for_schema), a decimal as a string.
+      it "writes a boolean or integer default as its literal" do
+        paid = described_class.call(action: "change_type", table: "orders", column: "paid", type: "integer").content.first[:text]
+        count = described_class.call(action: "change_type", table: "orders", column: "items_count", type: "bigint").content.first[:text]
+
+        expect(paid).to include("    change_column :orders, :paid, :boolean, null: false, default: false\n")
+        expect(count).to include("    change_column :orders, :items_count, :integer, default: 0\n")
+      end
+
+      it "writes add_column with a references type as add_reference" do
+        %w[references belongs_to].each do |type|
+          text = described_class.call(action: "add_column", table: "orders", column: "customer", type: type).content.first[:text]
+
+          expect(text).to include("    add_reference :orders, :customer, foreign_key: true\n")
+          expect(text).not_to include("add_column")
+        end
+      end
+
+      # add_column's type is the column type, so the table a role points at goes to add_association's type.
+      it "says where a references column names the table a role points at" do
+        owner = described_class.call(action: "add_column", table: "orders", column: "owner", type: "references").content.first[:text]
+        parent = described_class.call(action: "add_column", table: "orders", column: "parent", type: "references").content.first[:text]
+
+        expect(owner).to include("`owner` reads as a role. Call `add_association` with the table it points at as `type`")
+        expect(parent).to include("Call `add_association` with the table it points at as `type` to point it elsewhere.")
+      end
+
+      it "adds its own foreign_key when the options only mention one inside a value" do
+        text = described_class.call(action: "add_association", table: "orders", column: "customer", options: "comment: \"no foreign_key: yet\"").content.first[:text]
+
+        expect(text).to include("    add_reference :orders, :customer, comment: \"no foreign_key: yet\", foreign_key: true\n")
+      end
+
+      it "keeps a foreign_key the options give in place of its own" do
+        text = described_class.call(action: "add_association", table: "orders", column: "customer", options: "foreign_key: false").content.first[:text]
+
+        expect(text).to include("    add_reference :orders, :customer, foreign_key: false\n")
+      end
+
+      it "puts create_table's options on the create_table line" do
+        text = described_class.call(action: "create_table", table: "payments", options: "id: :uuid").content.first[:text]
+
+        expect(text).to include("    create_table :payments, id: :uuid do |t|\n")
+      end
+    end
+
     it "shows affected models" do
       response = described_class.call(action: "add_column", table: "users", column: "age", type: "integer")
       text = response.content.first[:text]
@@ -476,17 +551,17 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         end
       end
 
-      # AIMatch is reached by `ai_match` only through an ActiveSupport acronym,
+      # HTMLPage is reached by `html_page` only through an ActiveSupport acronym,
       # never through a Zeitwerk-only one, and the static tier sees neither.
       context "when a model's name spells an acronym" do
-        let(:models) { { "AIMatch" => { table_name: "ai_matches" }, "Listing" => { table_name: "listings" } } }
+        let(:models) { { "HTMLPage" => { table_name: "html_pages" }, "Site" => { table_name: "sites" } } }
 
         [ true, false ].each do |static|
           it "names it where this process camelizes the name another way (static tier: #{static})" do
             allow(RailsAiContext).to receive(:static_tier?).and_return(static)
-            text = advice(table: "listings", column: "ai_match", type: "ai_matches")
+            text = advice(table: "sites", column: "html_page", type: "html_pages")
 
-            expect(text).to include("# app/models/listing.rb\nbelongs_to :ai_match, class_name: \"AIMatch\"")
+            expect(text).to include("# app/models/site.rb\nbelongs_to :html_page, class_name: \"HTMLPage\"")
           end
         end
       end
@@ -541,6 +616,43 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       response = described_class.call(action: "add_column", table: "users", column: "name; DROP")
       text = response.content.first[:text]
       expect(text).to include("Invalid column name")
+    end
+
+    it "rejects a new_name or a create_table column name that is not an identifier" do
+      [
+        { action: "rename_column", table: "users", column: "name", new_name: "Full Name" },
+        { action: "rename_column", table: "users", column: "name", new_name: "full-name" },
+        { action: "rename_column", table: "users", column: "name", type: "Full Name" },
+        { action: "create_table", table: "widgets", column: "full name:string,title:string" }
+      ].each do |args|
+        text = described_class.call(**args).content.first[:text]
+
+        expect(text).to match(/\*\*Error:\*\* Invalid column name `(Full Name|full-name|full name)`\. Use lowercase letters, digits, and underscores only\./)
+        expect(text).not_to include("```ruby")
+      end
+    end
+
+    # Rails' generator reads `title:string:index` as an indexed column and `:uniq` as a unique one.
+    it "writes the index a create_table definition asks for" do
+      text = described_class.call(action: "create_table", table: "widgets", column: "title:string:index,slug:string:uniq").content.first[:text]
+
+      expect(text).to include("      t.string :title\n      t.index :title\n      t.string :slug\n      t.index :slug, unique: true\n")
+    end
+
+    # GeneratedAttribute.parse: `name:index` is an indexed string, and a reference's `uniq` is `index: { unique: true }`.
+    it "reads a create_table index modifier the way the Rails generator does" do
+      text = described_class.call(action: "create_table", table: "widgets", column: "title:index,user:references:uniq,post:references:index").content.first[:text]
+
+      expect(text).to include("      t.string :title\n      t.index :title\n")
+      expect(text).to include("      t.references :user, index: { unique: true }, foreign_key: true\n")
+      expect(text).to include("      t.references :post, foreign_key: true\n")
+    end
+
+    it "refuses a create_table modifier it cannot write" do
+      text = described_class.call(action: "create_table", table: "widgets", column: "title:string:indexed").content.first[:text]
+
+      expect(text).to include("**Error:** `title:string:indexed`")
+      expect(text).not_to include("```ruby")
     end
 
     it "allows column definition strings for create_table" do
@@ -635,6 +747,13 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
           expect(text).to include("disable_ddl_transaction!")
           expect(text).to include("`validate_foreign_key :listings, :users, column: :owner_id`")
           expect(text).not_to include("add_foreign_key :listings, :owner")
+        end
+
+        it "describes no foreign key when the options turn it off" do
+          text = described_class.call(action: "add_association", table: "listings", column: "owner", type: "users", options: "foreign_key: false").content.first[:text]
+          expect(text).to include("which blocks writes. Instead:")
+          expect(text).to include("`add_reference :listings, :owner, foreign_key: false, index: { algorithm: :concurrently }`")
+          expect(text).not_to match(/add_foreign_key|validate_foreign_key|SHARE ROW EXCLUSIVE/)
         end
 
         it "names the table a plain reference points at" do
@@ -1130,6 +1249,12 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       text = advise(uuid_app, action: "create_table", table: "gadgets", column: "name:string")
 
       expect(text).to include("create_table :gadgets, id: :uuid do |t|")
+    end
+
+    it "keeps the app's key type when only a string option's text reads id:" do
+      text = advise(uuid_app, action: "create_table", table: "gadgets", column: "name:string", options: 'comment: "keyed by id: slug"')
+
+      expect(text).to include(%(create_table :gadgets, id: :uuid, comment: "keyed by id: slug" do |t|))
     end
 
     it "keys the references of a created table the way the tables they point at are keyed" do

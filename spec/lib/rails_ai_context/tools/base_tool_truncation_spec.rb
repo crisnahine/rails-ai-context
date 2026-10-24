@@ -28,6 +28,22 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(text).to eq("hello")
     end
 
+    # A cut inside a line leaves half a fact, such as an index named on no columns.
+    it "cuts at the end of the last whole line that fits" do
+      long_text = (1..20).map { |i| "- line #{i} on (a, b)" }.join("\n")
+      text = described_class.text_response(long_text).content.first[:text]
+      kept = text.split("\n\n---\n").first
+
+      expect(long_text.lines.map(&:chomp)).to include(*kept.lines.map(&:chomp))
+      expect(kept.length).to be <= 100
+    end
+
+    it "cuts a single line longer than the limit at the limit" do
+      text = described_class.text_response("y" * 200).content.first[:text]
+
+      expect(text).to start_with("y" * 100 + "\n\n---\n")
+    end
+
     it "includes hint to use detail:summary" do
       long_text = "x" * 200
       result = described_class.text_response(long_text)

@@ -191,6 +191,21 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).not_to include("Mass Assignment")
       end
 
+      it "reads a path written from the current directory as the same file, however many times" do
+        [ "./config/routes.rb", "././config/routes.rb" ].each do |file|
+          text = described_class.call(files: [ file ]).content.first[:text]
+
+          expect(text).to include("[Weak] config/routes.rb:323"), file
+        end
+      end
+
+      it "takes a folder name to mean that folder, not every name that starts the same way" do
+        report["warnings"] << report["warnings"].first.merge("file" => "app/controllers/api_keys_controller.rb")
+        text = described_class.call(files: [ "app/controllers/api" ]).content.first[:text]
+
+        expect(text).to include("No security warnings found in app/controllers/api.")
+      end
+
       it "skips an entry the report holds that is not a warning object" do
         allow(described_class).to receive(:run_brakeman_unbundled)
           .and_return([ report.merge("warnings" => report["warnings"] + [ nil, "oops" ]), nil ])

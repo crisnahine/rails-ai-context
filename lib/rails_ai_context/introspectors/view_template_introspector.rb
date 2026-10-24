@@ -41,14 +41,19 @@ module RailsAiContext
       # inside ERB tags: over the whole file the regex read the CSS rule
       # `@page` as an ivar the controller assigns.
       def self.ivars_in(content, path: nil)
+        code_in(content, path: path).scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+      end
+
+      # ERB tag bodies, HAML or Slim Ruby, or any other template whole; string literals blanked where it is Ruby.
+      def self.code_in(content, path: nil)
         text = content.to_s
+        if (pieces = RailsAiContext::MarkupSource.pieces(text, path))
+          return pieces.map { |code, ruby| ruby ? strip_string_literals(code) : code }.join("\n")
+        end
+
         erb = path ? path.to_s.end_with?(".erb") : RailsAiContext::ErbSource.tagged?(text)
         ruby = erb ? RailsAiContext::ErbSource.tag_bodies(text) : text
-        # Only where what is left is Ruby. A HAML or Slim template is prose
-        # with Ruby lines in it, and its apostrophes are apostrophes: reading
-        # them as string quotes swallows every ivar between two of them.
-        ruby = strip_string_literals(ruby) if erb || path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS)
-        ruby.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+        erb || path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS) ? strip_string_literals(ruby) : ruby
       end
 
       # Detect whether a view file is a Phlex view (Ruby DSL, not ERB)
@@ -224,7 +229,7 @@ module RailsAiContext
         templates = {}
         RailsAiContext::ViewFile.each(root).each do |path, relative|
           next if File.basename(path).start_with?("_") # skip partials
-          next if path.include?("/layouts/")
+          next if RailsAiContext::ViewFile.in_layouts?(relative)
           # An asset that happens to sit under app/views is not a template:
           # counted as one, and the ivar regex read names out of its bytes.
           next unless RailsAiContext::ViewFile.template?(path)
@@ -236,8 +241,8 @@ module RailsAiContext
 
           entry = {
             lines: content.lines.count,
-            ivars: extract_ivars(markup, path),
-            partials: extract_partial_refs(markup),
+            ivars: extract_ivars(content, path),
+            partials: extract_partial_refs(markup, File.dirname(relative), path),
             stimulus: extract_stimulus_refs(markup)
           }
           if self.class.phlex_view?(path, content)
@@ -266,11 +271,18 @@ module RailsAiContext
         # first owns the literal: `"Don't"` is not the start of a single-quoted
         # string.
         ruby.lines.map { |line|
-          line.gsub(/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/) do |literal|
-            literal.start_with?('"') ? literal.scan(/#\{.*?\}/).join(" ") : "''"
+          line.gsub(STRING_LITERAL) do |literal|
+            next "''" if literal.start_with?("'")
+
+            RailsAiContext::MarkupSource.interpolations(literal, sigils: true).map { |code| "\#{#{strip_string_literals(code)}}" }.join(" ")
           end
         }.join
       end
+
+      # Each part of a double-quoted body reads one way and nothing recurses, so Ruby memoizes the match.
+      # shortcut: `#{}` holds braces three deep and a string with deeper ones is not read as a string; add a level when a real view needs one.
+      BRACES = /\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/
+      STRING_LITERAL = /"(?:[^"\\\n#]|\\.|#+(?:#{BRACES}|\\.|[^{"\\\n#]))*#*"|'(?:\\.|[^'\\\n])*'/
 
       # Blanks HAML `-#` comments (and what is indented under them) and ERB `<%# %>`
       # tags, keeping their lines so nothing else shifts.
@@ -305,7 +317,8 @@ module RailsAiContext
           partials[relative] = {
             lines: content.lines.count,
             fields: extract_model_fields(markup),
-            helpers: extract_helper_calls(markup)
+            helpers: extract_helper_calls(markup),
+            partials: extract_partial_refs(markup, File.dirname(relative), path)
           }
         end
         partials
@@ -351,89 +364,39 @@ module RailsAiContext
         helpers.uniq
       end
 
-      RENDER_KEYWORD_ARGS = %w[
-        partial layout collection json plain html text xml body file inline
-        js status location content_type template formats spacer_template
-        cached as object each_serializer
-      ].to_set.freeze
-
-      # Not a method on a receiver: `turnstile.render(...)` in an inline script is JavaScript.
-      RENDER_CALL = /(?<![.\w])render\b/
-      RENDER_POSITIONAL = /\A\s*(["'])((?:\\.|(?!\1).)*)\1/m
-      # A partial or template name: a path, never text with spaces or quotes in it.
-      PARTIAL_NAME = %r{\A[\w./-]+\z}
-      RENDER_NAMED = /(?:\b(?:partial|template)\s*:|:(?:partial|template)\s*=>)\s*["']([^"']+)["']/
-      # A partial named outside a render call: turbo_stream.prepend and the
-      # broadcast_* methods take `partial:`, and jbuilder renders one with
-      # `json.partial!` or `json.array! ..., partial:`.
-      PARTIAL_ARG = /(?:\bjson\.partial!\s*\(?\s*|\bpartial:\s*|:partial\s*=>\s*)(["'])([^"']+)\1/
-      # `render @posts`, `render(post)`, `render @posts, cached: true`: a bare record or collection, or a
-      # chain on one (`@post.comments.recent`), matched against "render <args>"; RenderedRecord reads the chain.
-      IMPLICIT_RENDER = /\Arender\s*\(?\s*@?((?:[a-z_]\w*\.)*[a-z_]\w*)\s*(?:[,)]|\s(?:if|unless)\b|-?\s*\z)/
-
-      def extract_partial_refs(content)
+      def extract_partial_refs(content, folder = ".", path = nil)
         refs = []
         spans = []
+        builders = RenderCalls.form_builders(content, path: path)
         # The partial or template a render call names, positionally or as a
         # keyword anywhere in its arguments, with or without parentheses.
-        self.class.render_calls(content).each do |at, args|
+        RenderCalls.render_calls(content).each do |at, args|
           spans << (at...(at + args.length))
-          named = [ args[RENDER_POSITIONAL, 2], *top_level(args).scan(RENDER_NAMED).flatten ].compact
+          named = RenderCalls.rendered_names(args)
           # An interpolated name is decided at runtime, not a partial on disk.
-          refs.concat(named.select { |name| name.match?(PARTIAL_NAME) })
-          chain = self.class.render_line(args)[IMPLICIT_RENDER, 1] if named.empty?
-          model, collection = chain && !RENDER_KEYWORD_ARGS.include?(chain) && RenderedRecord.resolve(chain, root, @rendered_models ||= {})
-          # The records' model names the partial; `replies` with class_name "Comment" renders comments/_comment.
-          refs << (collection ? model.pluralize : model) if model
+          refs.concat(named.select { |name| name.match?(RenderCalls::PARTIAL_NAME) })
+          chain = RenderCalls.render_line(args)[RenderCalls::IMPLICIT_RENDER, 1] if named.empty?
+          partial = chain && !RenderCalls::RENDER_KEYWORD_ARGS.include?(chain.delete_prefix("@")) && builders.fetch(chain) do
+            RenderedRecord.rendered_partial(chain, folder, root, @rendered_models ||= {}, booted: booted?, partials: partial_names)
+          end
+          refs << partial if partial
         end
         # A render call's own arguments were read above, where a `partial:`
         # key nested in its locals is no partial of its own.
-        content.to_enum(:scan, PARTIAL_ARG).each do
+        content.to_enum(:scan, RenderCalls::PARTIAL_ARG).each do
           match = Regexp.last_match
           next if spans.any? { |span| span.cover?(match.begin(0)) }
 
-          refs << match[2] if match[2].match?(PARTIAL_NAME)
+          refs << match[2] if match[2].match?(RenderCalls::PARTIAL_NAME)
         end
         # Phlex: render ComponentName.new(...) or render(ComponentName.new(...))
         content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each { |m| refs << m[0] }
         refs.uniq
       end
 
-      # A render call's ERB-free arguments on one line, as IMPLICIT_RENDER reads them.
-      def self.render_line(args)
-        "render #{args.split("%>", 2).first.gsub(/\s+/, " ").strip}"
-      end
-
-      # Each render call as [offset, argument text]: its balanced parentheses,
-      # or the rest of the line and every line a trailing comma continues onto.
-      def self.render_calls(content)
-        content.to_enum(:scan, RENDER_CALL).map do
-          at = Regexp.last_match.end(0)
-          rest = content[at..]
-          open = rest[/\A\s*\(/]
-          next [ at, continued_line(rest) ] unless open
-
-          span = RailsAiContext::Brackets.span(rest, open.length - 1, comments: :ruby)
-          [ at, span ? span[1...-1] : rest[open.length..] ]
-        end
-      end
-
-      def self.continued_line(text)
-        lines = []
-        text.each_line do |line|
-          lines << line
-          break unless line.rstrip.end_with?(",", "\\")
-        end
-        lines.join
-      end
-      private_class_method :continued_line
-
-      # The argument text with every nested (), [] and {} group dropped, so a
-      # `template:` inside `locals: {...}` or `Foo.new(...)` is not the call's.
-      def top_level(args)
-        kept = +""
-        RailsAiContext::Brackets.each_top_level(args, comments: :ruby) { |piece, kind| kept << piece unless %i[group comment].include?(kind) }
-        kept
+      # Globbed on its own: scan_partials reads each partial's references, which need the whole set first.
+      def partial_names
+        @partial_names ||= RenderCalls.partials_on_disk(root)
       end
 
       def extract_stimulus_refs(content)

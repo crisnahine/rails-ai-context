@@ -39,6 +39,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::BaseListener do
     expect(read(%(probe :only))[:many]).to eq([ "only" ])
   end
 
+  # SchemaDumper#schema_expression writes a proc default as `-> { "sql" }`, the SQL's own inspect.
+  it "reads a proc whose body is one string as the dump writes it, and keeps any other proc as written" do
+    listener = Class.new(described_class) do
+      def on_call_node_enter(node)
+        @results << default_fields(node).slice(:default_source, :default_literal) if node.name == :probe
+      end
+    end.new
+    source = "probe default: -> { 'now()' }\nprobe default: lambda { \"it's\" }\nprobe default: -> { Time.now }\n"
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+    expect(listener.results).to eq([ { default_source: '-> { "now()" }', default_literal: "now()" },
+                                     { default_source: %(-> { "it's" }), default_literal: "it's" }, { default_source: "-> { Time.now }" } ])
+  end
+
   it "reads every proc spelling as a proc default, and a named callable as not one" do
     listener = Class.new(described_class) do
       def on_call_node_enter(node)
@@ -89,6 +103,36 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::BaseListener do
 
       expect(read[:source]).to eq(length: { maximum: 255, allow_nil: true })
       expect(read[:source]).to eq(read[:literal])
+    end
+  end
+
+  describe "a constant reference read through the constants the file writes" do
+    let(:constant_listener) do
+      Class.new(described_class) do
+        include RailsAiContext::Introspectors::Listeners::RoutesWalk
+
+        def on_call_node_enter(node)
+          @results << written_value(node.arguments.arguments.first).slice if node.name == :probe
+        end
+      end
+    end
+
+    def probe(source)
+      listener = constant_listener.new
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+      listener.results
+    end
+
+    # Ruby: a bare name in Ke < Base1 finds Base1::TO before the top level's TO.
+    it "looks a bare name up through the superclass of the class it is read in, before the top level" do
+      expect(probe(%(TO = "posts#show"\nclass Base1\n  TO = "posts#index"\nend\nclass Ke < Base1\n  probe TO\nend\n))).to eq([ %("posts#index") ])
+    end
+
+    # Ruby: Foo::M is Bar::M through Foo's superclass, so Foo::M::X is Bar::M::X.
+    it "reads each later segment of a path through the superclasses of the scope before it" do
+      source = %(class Bar\n  module M\n    X = "bar"\n  end\nend\nclass Foo < Bar\nend\nprobe Foo::M::X\n)
+
+      expect(probe(source)).to eq([ %("bar") ])
     end
   end
 end

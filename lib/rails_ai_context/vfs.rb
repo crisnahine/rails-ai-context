@@ -4,7 +4,7 @@ require "json"
 
 module RailsAiContext
   # Virtual File System - pattern-matched URI routing for MCP resources.
-  # Each resolve call introspects fresh (zero stale data).
+  # Each resolve reads the shared context the tools read; Resources.handle_read checks the files first.
   module VFS
     SCHEME = "rails-ai-context"
 
@@ -58,7 +58,7 @@ module RailsAiContext
       end
 
       def resolve_model(uri, name)
-        context = RailsAiContext.introspect
+        context = Tools::BaseTool.cached_context
         models = context[:models] || {}
 
         key = Payload.fuzzy_find_key(models.keys, name) || name
@@ -75,7 +75,7 @@ module RailsAiContext
       end
 
       def resolve_controller(uri, name)
-        context = RailsAiContext.introspect
+        context = Tools::BaseTool.cached_context
         controllers = context.dig(:controllers, :controllers) || {}
         key = Payload.find_controller(context, name)
 
@@ -85,7 +85,7 @@ module RailsAiContext
       end
 
       def resolve_controller_action(uri, controller_name, action_name)
-        context = RailsAiContext.introspect
+        context = Tools::BaseTool.cached_context
         controllers = context.dig(:controllers, :controllers) || {}
 
         # "admin/posts" is a namespaced controller unless "admin" is itself a
@@ -162,7 +162,7 @@ module RailsAiContext
       end
 
       def resolve_routes(uri, controller)
-        context = RailsAiContext.introspect
+        context = Tools::BaseTool.cached_context
         routes_data = context[:routes] || {}
 
         # The route introspector groups routes as {controller_name => [entries]}

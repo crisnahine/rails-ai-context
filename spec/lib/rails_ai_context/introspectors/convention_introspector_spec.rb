@@ -206,6 +206,13 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    it "reads every model file, however many the app has" do
+      models = (1..600).to_h { |i| [ format("a%03d.rb", i), "class A#{format("%03d", i)} < ApplicationRecord; end\n" ] }
+      models["zebra.rb"] = "class Zebra < ApplicationRecord\n  has_paper_trail\n  belongs_to :owner, polymorphic: true\nend\n"
+
+      expect(patterns_for(models: models)).to include("polymorphic", "versioning")
+    end
+
     context "soft delete" do
       it "detects the pattern from a deleted_at column in the dump" do
         patterns = patterns_for(

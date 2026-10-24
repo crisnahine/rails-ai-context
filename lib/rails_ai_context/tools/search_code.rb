@@ -484,7 +484,7 @@ module RailsAiContext
         # A symlink under the root can still resolve outside it; that check is
         # on the realpath below.
         unless File.exist?(search_path)
-          top_dirs = Dir.glob(File.join(root, "*")).select { |f| File.directory?(f) }.map { |f| File.basename(f) }.sort
+          top_dirs = RailsAiContext::PathResolver.glob(root, "*").select { |f| File.directory?(f) }.map { |f| File.basename(f) }.sort
           return [ nil, text_response("Path not found: #{echo_input(path)}. Top-level directories: #{top_dirs.first(15).join(', ')}") ]
         end
 

@@ -138,11 +138,11 @@ RSpec.describe "Composite tools in an app whose skip_tools turns tools off" do
       Dir.mktmpdir do |dir|
         @dir = dir
         git("init", "-q")
-        FileUtils.mkdir_p(File.join(dir, "app/models"))
-        File.write(File.join(dir, "app/models/post.rb"), "class Post < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), "class PostsController < ApplicationController\nend\n")
         git("add", "-A")
         git("commit", "-q", "-m", "init")
-        File.write(File.join(dir, "app/models/post.rb"), "class Post < ApplicationRecord\n  validates :title, presence: true\nend\n")
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), "class PostsController < ApplicationController\n  def index; end\nend\n")
         example.run
       end
     end
@@ -152,14 +152,14 @@ RSpec.describe "Composite tools in an app whose skip_tools turns tools off" do
       allow(RailsAiContext::Tools::ReviewChanges).to receive(:rails_app).and_return(double(root: Pathname.new(@dir)))
     end
 
-    it "leaves out the model context without running rails_get_model_details" do
-      skip("rails_get_model_details")
-      expect(RailsAiContext::Tools::GetModelDetails).not_to receive(:call)
+    it "leaves out a controller's routes without running rails_get_routes" do
+      skip("rails_get_routes")
+      expect(RailsAiContext::Tools::GetRoutes).not_to receive(:call)
 
       answer = text(RailsAiContext::Tools::ReviewChanges.call(ref: "HEAD"))
 
-      expect(answer).to include("app/models/post.rb")
-      expect(answer).to include(left_out("rails_get_model_details"))
+      expect(answer).to include("app/controllers/posts_controller.rb")
+      expect(answer).to include(left_out("rails_get_routes"))
     end
   end
 end

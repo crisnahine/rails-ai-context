@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "tmpdir"
+require "open3"
 
 # The one tool file that had no spec of its own. These drive the dispatcher
 # through its public seam; the rules gain coverage as they change.
@@ -613,6 +614,24 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         expect(warnings_for("<%= @real %>\n")).to include("@real used in view but not set in WidgetsController")
       end
 
+      # Only app/views/layouts/ holds the app's layouts; admin/layouts/ is a LayoutsController's views.
+      it "checks the views of a controller named layouts, and still skips the layouts folder" do
+        FileUtils.mkdir_p(File.join(@root, "app/controllers/admin"))
+        File.write(File.join(@root, "app/controllers/admin/layouts_controller.rb"),
+                   "module Admin\n  class LayoutsController < ApplicationController\n    def index\n    end\n  end\nend\n")
+        controllers = { "Admin::LayoutsController" => { file: "app/controllers/admin/layouts_controller.rb" } }
+        allow(described_class).to receive(:cached_context).and_return({ routes: { by_controller: {} }, schema: { tables: {} },
+                                                                         models: {}, controllers: { controllers: controllers } })
+        found = %w[app/views/admin/layouts/index.html.erb app/views/layouts/index.html.erb].map do |file|
+          FileUtils.mkdir_p(File.dirname(File.join(@root, file)))
+          File.write(File.join(@root, file), "<%= @ghost %>\n")
+          described_class.check_rails_semantics(file, File.join(@root, file)).join("\n")
+        end
+
+        expect(found[0]).to include("@ghost used in view but not set in Admin::LayoutsController")
+        expect(found[1]).not_to include("@ghost")
+      end
+
       # A before_action in ApplicationController, or in a concern it
       # includes, sets the ivar for every action below it.
       it "says nothing about an ivar an ancestor or an included concern sets" do
@@ -646,6 +665,96 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         expect(text).not_to include("@announcement")
         expect(text).not_to include("@cart")
         expect(text).to include("@ghost used in view but not set in WidgetsController, its ancestors or the modules they include")
+      end
+    end
+
+    context "a controller the performance check found loading Model.all" do
+      let(:source) { "class PostsController < ApplicationController\n  def index\n    @posts = Post.all\n  end\nend\n" }
+
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: {} },
+          schema: { tables: {} },
+          models: {},
+          performance: { model_all_in_controllers: [
+            { controller: "app/controllers/posts_controller.rb", model: "Post", suggestion: "Post.all loads all records into memory." }
+          ] }
+        })
+      end
+
+      it "warns on that controller's file" do
+        with_app_file("app/controllers/posts_controller.rb", source) do |file, path|
+          expect(described_class.check_rails_semantics(file, path)).to include("Post.all loaded in controller - consider pagination or scoping")
+        end
+      end
+
+      it "leaves a namespaced controller of the same base name alone" do
+        with_app_file("app/controllers/admin/posts_controller.rb", source.sub("PostsController", "Admin::PostsController")) do |file, path|
+          expect(described_class.check_rails_semantics(file, path).join).not_to include("Post.all loaded")
+        end
+      end
+    end
+
+    context "a model whose methods live in the classes it inherits from" do
+      around do |example|
+        Dir.mktmpdir do |root|
+          @root = root
+          {
+            "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\n\n  private\n\n  def assign_uuid\n    self.uuid ||= SecureRandom.uuid\n  end\nend\n",
+            "app/models/vehicle.rb" => "class Vehicle < ApplicationRecord\n  def normalize_name\n    self.name = name.strip\n  end\nend\n",
+            "app/models/car.rb" => "class Car < Vehicle\n  before_save :normalize_name\n  before_create :assign_uuid\n  before_update :touch_up\n" \
+                                   "  validates :display_name, length: { maximum: 50 }\n\n  private\n\n  def display_name\n    \"\#{name} car\"\n  end\nend\n",
+            "app/models/import.rb" => "class Import < Vendor::Record\n  before_save :checksum\nend\n"
+          }.each do |path, body|
+            FileUtils.mkdir_p(File.dirname(File.join(root, path)))
+            File.write(File.join(root, path), body)
+          end
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: {} },
+          schema: { tables: { "vehicles" => { columns: [ { name: "id" }, { name: "name" }, { name: "type" }, { name: "uuid" } ] },
+                              "imports" => { columns: [ { name: "id" } ] } } },
+          models: {
+            "Vehicle" => { file: "app/models/vehicle.rb", table_name: "vehicles", concerns: [], instance_methods: [ "normalize_name" ], instance_method_count: 1 },
+            "Car" => { file: "app/models/car.rb", table_name: "vehicles", concerns: [], instance_methods: [], instance_method_count: 0, parent_model: "Vehicle" },
+            "Import" => { file: "app/models/import.rb", table_name: "imports", concerns: [], instance_methods: [], instance_method_count: 0 }
+          }
+        })
+      end
+
+      def warnings_for(file)
+        described_class.check_rails_semantics(file, File.join(@root, file))
+      end
+
+      it "asks for no column for a validated attribute the model defines as a method" do
+        expect(warnings_for("app/models/car.rb").join("\n")).not_to include("display_name")
+      end
+
+      it "finds a callback method a parent class defines, and still flags one no class in the chain does" do
+        expect(warnings_for("app/models/car.rb")).to eq([ "before_update :touch_up - method not found in Car" ])
+      end
+
+      it "reads a def only from code, not from a comment that names one" do
+        File.write(File.join(@root, "app/models/vehicle.rb"), "class Vehicle < ApplicationRecord\n  # def touch_up was folded into normalize_name\n  def normalize_name\n  end\nend\n")
+
+        expect(warnings_for("app/models/car.rb")).to eq([ "before_update :touch_up - method not found in Car" ])
+      end
+
+      it "asks for no column for a validated method when the file is read without its tree" do
+        allow(described_class).to receive(:parse_and_visit).and_return(nil)
+        File.write(File.join(@root, "app/models/car.rb"), "class Car < Vehicle\n  validates :display_name, presence: true\n\n  def display_name\n    name\n  end\nend\n")
+
+        expect(warnings_for("app/models/car.rb").join("\n")).not_to include("display_name")
+      end
+
+      it "makes no claim on the static tier when the chain reaches a class it cannot read" do
+        expect(warnings_for("app/models/import.rb")).to eq([])
       end
     end
 
@@ -707,6 +816,7 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
 
       it "still flags a method a complete list lacks on the static tier" do
         allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(Rails.root.to_s))
 
         expect(warnings_for(context_with(30))).to include("before_save :normalize_email - method not found")
       end
@@ -761,6 +871,14 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       expect(ENV.fetch("DEBUG", nil)).to eq("1")
     end
 
+    # Brakeman reads a folder entry only with a trailing slash, and one with
+    # a leading slash from the app root rather than as any path's suffix.
+    it "parses only the files it was given, a folder as a folder" do
+      described_class.check_brakeman_security([ "././app/models/post.rb", "app/models", "/app/controllers/" ])
+
+      expect(seen[:options][:only_files]).to eq([ "/app/models/post.rb", "/app/models/", "/app/controllers/" ])
+    end
+
     it "reports the first five warnings of the best confidence in brakeman's order" do
       warning = Struct.new(:warning_type, :confidence, :confidence_name, :file, :line, :message, keyword_init: true)
       file = Struct.new(:relative)
@@ -773,6 +891,55 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
 
       found = described_class.check_brakeman_security([ "app/models" ])
       expect(found.values.flatten.map { |line| line[/rce \d\d/] }).to eq([ "rce 02", "rce 03", "rce 05", "rce 06", "rce 08" ])
+    end
+
+    it "files a warning under the entry that names its file, however the path is written" do
+      warning = Struct.new(:warning_type, :confidence, :confidence_name, :file, :line, :message, keyword_init: true)
+      file = Struct.new(:relative)
+      warnings = %w[app/controllers/admin_controller.rb app/controllers/admin/posts_controller.rb].map do |path|
+        warning.new(warning_type: "SQL Injection", confidence: 0, confidence_name: "High",
+                    file: file.new(path), line: 3, message: "Possible SQL injection")
+      end
+      allow(Brakeman).to receive(:run).and_return(Struct.new(:filtered_warnings).new(warnings))
+
+      found = described_class.check_brakeman_security([ "app/controllers/admin", "././app/controllers/admin_controller.rb" ])
+      expect(found.transform_values(&:size)).to eq("app/controllers/admin" => 1, "././app/controllers/admin_controller.rb" => 1)
+    end
+  end
+
+  # Brakeman is not in the test bundle, so this runs the one on the machine in a child outside it.
+  describe "the brakeman scan of one controller, run for real" do
+    let(:brakeman_on_machine) { Bundler.with_unbundled_env { system(RbConfig.ruby, "-e", 'require "brakeman"', err: File::NULL) } }
+
+    it "rates its SQL injection as a whole-app scan does" do
+      skip "brakeman is not installed on this machine" unless brakeman_on_machine
+
+      Dir.mktmpdir do |dir|
+        { "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\nend\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+          "app/controllers/application_controller.rb" => "class ApplicationController < ActionController::Base\nend\n",
+          "app/controllers/posts_controller.rb" => "class PostsController < ApplicationController\n  def index\n    @posts = Post.where(\"title = '\#{params[:q]}'\")\n  end\nend\n",
+          "config/application.rb" => "module Shop\n  class Application < Rails::Application\n  end\nend\n" }.each do |path, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), body)
+        end
+        script = [
+          "$LOAD_PATH.unshift #{File.expand_path('../../../../lib', __dir__).inspect}",
+          'require "rails_ai_context"',
+          "RailsAiContext.tier = :static",
+          "RailsAiContext.configuration.app_root = #{dir.inspect}",
+          'require "brakeman"',
+          "full = Brakeman.run(app_path: #{dir.inspect}, quiet: true, report_progress: false, print_report: false)",
+          'puts "whole app: [#{full.filtered_warnings.find { |w| w.warning_type == "SQL Injection" }&.confidence_name}]"',
+          'puts RailsAiContext::Tools::ValidateSemantics.check_brakeman_security([ "app/controllers/posts_controller.rb" ]).values.flatten'
+        ].join("\n")
+
+        output, = Bundler.with_unbundled_env { Open3.capture2e(RbConfig.ruby, "-e", script) }
+
+        whole_app = output[/^whole app: (\[\w+\])$/, 1]
+        expect(whole_app).not_to be_nil, output
+        expect(output).to include("#{whole_app} SQL Injection - app/controllers/posts_controller.rb:3")
+      end
     end
   end
 end

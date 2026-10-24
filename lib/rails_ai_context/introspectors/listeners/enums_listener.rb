@@ -9,6 +9,11 @@ module RailsAiContext
       class EnumsListener < BaseListener
         include OwnerScope
 
+        # The keywords Rails' `_enum` takes, and the underscored names the 7.x hash form
+        # (`enum status: {...}, _prefix: true`) gives them; any other key there is an enum.
+        OPTIONS = %i[prefix suffix scopes default instance_methods validate].freeze
+        LEGACY_OPTIONS = (OPTIONS - %i[validate]).map { |key| :"_#{key}" }.freeze
+
         def on_call_node_enter(node)
           return unless node.name == :enum && node.receiver.nil?
 
@@ -47,18 +52,17 @@ module RailsAiContext
         end
 
         def extract_legacy_enum(node, keyword_hash)
-          # Collect modifier options (_prefix, _suffix, etc.) first
           options = {}
           keyword_hash.elements.each do |assoc|
             next unless assoc.is_a?(Prism::AssocNode)
             key = extract_key(assoc.key)
-            options[key] = extract_value(assoc.value) if enum_modifier_key?(key)
+            options[key.to_s.delete_prefix("_").to_sym] = extract_value(assoc.value) if LEGACY_OPTIONS.include?(key)
           end
 
           keyword_hash.elements.each do |assoc|
             next unless assoc.is_a?(Prism::AssocNode)
             key = extract_key(assoc.key)
-            next if enum_modifier_key?(key)
+            next if LEGACY_OPTIONS.include?(key)
 
             @results << {
               name:       key.to_s,
@@ -71,16 +75,20 @@ module RailsAiContext
           end
         end
 
-        # A literal hash or array as its values; anything else (`Statuses.to_h`)
-        # as its source, which a String value in the enum map marks as computed.
+        # A literal hash or array as its values, or the bare keywords of `enum :status, active: 0`,
+        # which Rails reads as values whole; anything else (`Statuses.to_h`) as its source,
+        # which a String value in the enum map marks as computed.
         def enum_values(node)
           # `%i[low high].freeze` is the literal it freezes.
           node = node.receiver if node.is_a?(Prism::CallNode) && node.name == :freeze && literal_collection?(node.receiver)
           literal_collection?(node) ? extract_value(node) : one_line_source(node)
         end
 
+        # A `**splat` among the pairs is values the source does not spell.
         def literal_collection?(node)
-          node.is_a?(Prism::HashNode) || node.is_a?(Prism::ArrayNode)
+          return node.elements.all?(Prism::AssocNode) if node.is_a?(Prism::HashNode) || node.is_a?(Prism::KeywordHashNode)
+
+          node.is_a?(Prism::ArrayNode)
         end
 
         def extract_enum_modifiers(remaining_args)
@@ -91,7 +99,7 @@ module RailsAiContext
             arg.elements.each do |assoc|
               next unless assoc.is_a?(Prism::AssocNode)
               key = extract_key(assoc.key)
-              opts[key] = extract_value(assoc.value) if enum_modifier_key?(key)
+              opts[key] = extract_value(assoc.value) if OPTIONS.include?(key)
             end
           end
           opts
@@ -105,10 +113,6 @@ module RailsAiContext
             key = v.is_a?(Symbol) ? v : v.to_s.to_sym
             h[key] = i
           end
-        end
-
-        def enum_modifier_key?(key)
-          %i[prefix suffix _prefix _suffix default _default scopes _scopes].include?(key)
         end
       end
     end

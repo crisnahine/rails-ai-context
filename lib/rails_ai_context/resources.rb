@@ -96,7 +96,7 @@ module RailsAiContext
     ROUTES_TEMPLATE = MCP::ResourceTemplate.new(
       uri_template: "rails-ai-context://routes/{controller}",
       name: "Live Routes",
-      description: "Application routes introspected fresh on each request, optionally filtered by controller name",
+      description: "Application routes, as of the read, optionally filtered by controller name",
       mime_type: "application/json"
     ).freeze
 
@@ -191,14 +191,13 @@ module RailsAiContext
       # the handler's return value into the JSON-RPC response without renaming
       # keys, so snake_case would leak to clients as-is.
       def handle_read(params)
-        # A read introspects afresh, but the booted tier reads reflection,
-        # which only a code reload brings up to date after an edit.
+        # A read answers from the shared context, which this check drops,
+        # and reloads the code, once a file moved since the last call.
         Tools::BaseTool.refresh_if_files_changed!
-        # Resource reads introspect just like tool calls do, and they bypassed
-        # SafeCall entirely - so a reload on another thread could unload
-        # constants while one was reading them and hand back a short list
-        # with nothing raised.
-        RailsAiContext::CodeReloader.with_app_code { read_resource(params) }
+        # A read uses app code as a tool call does, so it holds the code against a
+        # reload on another thread, which would unload constants mid-read and
+        # hand back a short list with nothing raised.
+        RailsAiContext::CodeReloader.with_app_code { RailsAiContext::RunCache.around_app { read_resource(params) } }
       end
 
       def read_resource(params)
@@ -218,7 +217,7 @@ module RailsAiContext
         return VFS.resolve(uri) if uri.start_with?("#{VFS::SCHEME}://")
 
         # Legacy rails:// URI handling
-        context = RailsAiContext.introspect
+        context = Tools::BaseTool.cached_context
 
         if STATIC_RESOURCES.key?(uri)
           [ VFS.json_content(uri, context[STATIC_RESOURCES[uri][:key]] || {}) ]

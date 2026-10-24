@@ -40,11 +40,11 @@ module RailsAiContext
       # marker - is written whole. Any other is somebody's own, and gets the
       # content as a block the way a root file does, so their text stays and
       # Install::Cleanup takes out only the block.
-      def write_whole_or_block(filepath, content)
+      def write_whole_or_block(filepath, content, root:)
         existing = File.exist?(filepath) ? RailsAiContext::SafeFile.read_text(filepath) : nil
-        return write_whole(filepath, content) if existing.nil? || generated_whole?(existing)
+        return write_whole(filepath, content, root: root) if existing.nil? || generated_whole?(existing)
 
-        write_with_markers(filepath, content.sub(Install::Cleanup::GENERATED_LINE, "> #{BLOCK_NOTE}"))
+        write_with_markers(filepath, content.sub(Install::Cleanup::GENERATED_LINE, "> #{BLOCK_NOTE}"), root: root)
       end
 
       def generated_whole?(text)
@@ -54,7 +54,7 @@ module RailsAiContext
       # A file the gem owns whole, rewritten only when it says something else.
       # It ends with a newline, as a text file does: without one, editors and
       # end-of-file fixers rewrote every rule file and git flagged each.
-      def write_whole(filepath, content)
+      def write_whole(filepath, content, root:)
         content = "#{content}\n" unless content.end_with?("\n")
         if File.exist?(filepath)
           existing = RailsAiContext::SafeFile.read_text(filepath)
@@ -62,8 +62,7 @@ module RailsAiContext
           return :skipped if existing == content
         end
 
-        atomic_write(filepath, content)
-        :written
+        atomic_write(filepath, content, root)
       end
 
       # Write `content` to `filepath` wrapped in markers. If the file already
@@ -76,8 +75,9 @@ module RailsAiContext
       #
       # Returns :written if the file changed (created or block updated),
       # :skipped if the file already had the exact same marker block,
-      # :unpaired if its markers do not pair up.
-      def write_with_markers(filepath, content)
+      # :unpaired if its markers do not pair up, :linked_out if it is a link
+      # out of `root`.
+      def write_with_markers(filepath, content, root:)
         marked_content = "#{BEGIN_MARKER}\n#{content}\n#{END_MARKER}\n"
 
         if File.exist?(filepath)
@@ -97,11 +97,9 @@ module RailsAiContext
 
           return :skipped if same_but_for_timestamp?(existing, new_content)
 
-          atomic_write(filepath, new_content)
-          :written
+          atomic_write(filepath, new_content, root)
         else
-          atomic_write(filepath, marked_content)
-          :written
+          atomic_write(filepath, marked_content, root)
         end
       end
 
@@ -122,6 +120,7 @@ module RailsAiContext
         when :written then result[:written] << filepath
         when :skipped then result[:skipped] << filepath
         when :unpaired then result[:not_applicable][filepath] = UNPAIRED
+        when :linked_out then result[:not_applicable][filepath] = RailsAiContext::SafeFile::LINKED
         end
         result
       end
@@ -142,8 +141,11 @@ module RailsAiContext
           existing.gsub(GENERATED_LINE, "") == candidate.gsub(GENERATED_LINE, "")
       end
 
-      def atomic_write(filepath, content)
-        RailsAiContext::SafeFile.atomic_write(filepath, content)
+      def atomic_write(filepath, content, root)
+        RailsAiContext::SafeFile.atomic_write(filepath, content, root: root)
+        :written
+      rescue RailsAiContext::SafeFile::LinkedOut
+        :linked_out
       end
     end
   end

@@ -66,6 +66,12 @@ RSpec.describe RailsAiContext::DatabaseFamily do
     end
   end
 
+  describe "#postgres_rules?" do
+    it "is false on MySQL and SQLite only, so an adapter with no family reads as PostgreSQL does" do
+      expect(%w[postgresql mysql2 sqlite3 sqlserver].map { |s| described_class.of(s).postgres_rules? }).to eq([ true, false, false, true ])
+    end
+  end
+
   describe "#implicit_pk_type" do
     it "is integer on SQLite and bigint everywhere else" do
       expect(%w[sqlite3 postgresql trilogy sqlserver].map { |s| described_class.of(s).implicit_pk_type }).to eq(%w[integer bigint bigint bigint])

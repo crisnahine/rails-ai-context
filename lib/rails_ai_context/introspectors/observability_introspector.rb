@@ -18,7 +18,7 @@ module RailsAiContext
           server_timing: detect_server_timing,
           event_reporter: detect_event_reporter,
           log_level: app.config.log_level.to_s,
-          log_tags: Array(app.config.log_tags).map(&:to_s),
+          log_tags: Confidence.log_tags(app.config.log_tags),
           colorize_logging: !!app.config.colorize_logging,
           known_events: KNOWN_EVENTS
         }

@@ -288,6 +288,28 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    it "writes CLAUDE.md through its link to AGENTS.md, and leaves a link out of the app as it is" do
+      Dir.mktmpdir do |outside|
+        Dir.mktmpdir do |dir|
+          allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+          File.write(File.join(dir, "AGENTS.md"), "# Team notes\n")
+          File.symlink("AGENTS.md", File.join(dir, "CLAUDE.md"))
+          shared = File.join(outside, "copilot.md")
+          File.write(shared, "# Shared\n")
+          FileUtils.mkdir_p(File.join(dir, ".github"))
+          File.symlink(shared, File.join(dir, ".github/copilot-instructions.md"))
+
+          result = described_class.new(context, format: %i[claude copilot]).call
+
+          expect(File.symlink?(File.join(dir, "CLAUDE.md"))).to be(true)
+          expect(File.read(File.join(dir, "AGENTS.md"))).to include("<!-- BEGIN rails-ai-context -->", "# Team notes")
+          expect(File.symlink?(File.join(dir, ".github/copilot-instructions.md"))).to be(true)
+          expect(File.read(shared)).to eq("# Shared\n")
+          expect(result[:not_applicable][File.join(dir, ".github/copilot-instructions.md")]).to include("symlink")
+        end
+      end
+    end
+
     it "does not use markers for JSON format" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)

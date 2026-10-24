@@ -86,7 +86,7 @@ module RailsAiContext
         RailsAiContext::CodeReloader.with_app_code do
           begin
             # One call is one run: what it reads per controller or per route is read once.
-            response, left_out = with_left_out_frame { RailsAiContext::RunCache.around { yield } }
+            response, left_out = with_left_out_frame { RailsAiContext::RunCache.around_app { yield } }
             response = append_note(response, RailsAiContext::Tools::BaseTool.left_out_note(left_out))
             append_note(response, invalid_detail_note(discarded))
           # An app file that cannot load, a stack overflow or a SecurityError costs that call,

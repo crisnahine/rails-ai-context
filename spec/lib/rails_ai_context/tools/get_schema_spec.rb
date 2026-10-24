@@ -86,7 +86,8 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
               { name: "bio", type: "text", size: "medium" }
             ],
             indexes: [], foreign_keys: [],
-            unique_constraints: [ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ]
+            unique_constraints: [ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" },
+                                  { name: "uniq_seats", columns: [ "seats" ], nulls_not_distinct: true } ]
           },
           "users" => {
             columns: [ { name: "data", type: "jsonb" }, { name: "account_id", type: "bigint" } ],
@@ -115,7 +116,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = described_class.call(table: "accounts").content.first[:text]
 
       expect(text).to include("**Comment:** Tenant accounts")
-      expect(text).to include("### Unique constraints\n- `uniq_name` on (name), deferrable: immediate")
+      expect(text).to include("### Unique constraints\n- `uniq_name` on (name), deferrable: immediate\n- `uniq_seats` on (seats), nulls not distinct")
     end
 
     it "shows an index's options and a foreign key's actions" do
@@ -817,6 +818,25 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(described_class.call.content.first[:text]).to include("`format:\"json\"` lists all 33")
       json = JSON.parse(described_class.call(format: "json").content.first[:text])
       expect(json["tables_without_model_file"].size).to eq(33)
+    end
+
+    # Each table entry already carries its own constraints and generated columns, so a
+    # page lists only its tables' rows, and the app-wide lists stay out of the size cap.
+    it "keeps a json page's check constraints and generated columns to the page's tables" do
+      names = join_tables.keys
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: names.size,
+                  check_constraints: names.map { |name| { table: name, name: "#{name}_ok", expression: "id > 0" } },
+                  generated_columns: names.map { |name| { table: name, column: "twice", expression: "id * 2", stored: true } } },
+        models: {}
+      })
+
+      json = JSON.parse(described_class.call(detail: "summary", limit: 1, format: "json").content.first[:text])
+
+      expect(json["tables"].keys).to eq([ "comments" ])
+      expect(json["check_constraints"]).to eq([ { "table" => "comments", "name" => "comments_ok", "expression" => "id > 0" } ])
+      expect(json["generated_columns"]).to eq([ { "table" => "comments", "column" => "twice", "expression" => "id * 2", "stored" => true } ])
+      expect(json["tables_without_model_file"]).to include("users", "legacy_audits")
     end
 
     it "still names a table nothing declares" do

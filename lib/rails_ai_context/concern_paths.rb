@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "concurrent"
+require "prism"
 
 module RailsAiContext
   # One answer to "where does this app keep its concerns", for every surface
@@ -41,7 +42,7 @@ module RailsAiContext
           # with `Dir.exist?`, which a literal `app/*/concerns` never passes -
           # so the app trees are resolved first and globbed here. app/concerns
           # is one of Rails' `app/*` roots, and holds top-level concerns too.
-          PathResolver.dirs_for(root, "app").flat_map { |app_dir| Dir.glob(File.join(app_dir, "{concerns,*/concerns}")) }
+          PathResolver.dirs_for(root, "app").flat_map { |app_dir| PathResolver.glob(app_dir, "{concerns,*/concerns}") }
         else
           # A path that is already absolute is taken as given; `File.join`
           # would graft it onto the root and point at nothing.
@@ -127,118 +128,158 @@ module RailsAiContext
       Introspectors::DeclaredConstant.named(source, path_name)
     end
 
+    # The concerns a file holds: the module its path names, and each module nested in it that extends
+    # ActiveSupport::Concern, which Zeitwerk loads with it. A namespace is none itself: its file holds its modules.
+    # Nor is a class, where the file defines a concern beside it.
+    def names_in(path, dir, source)
+      RunCache.fetch([ :concern_names_in, path, dir, source ]) { read_names_in(path, dir, source).freeze }
+    end
+
+    def read_names_in(path, dir, source)
+      name = name_for(path, dir, source)
+      modules = Introspectors::DeclaredConstant.module_nodes(source && AstCache.parse_string(source)&.value)
+      # The modules it nests; in a file that declares no module of its name, every one but the namespaces around that name.
+      inner = modules.keys.select { |module_name| module_name.start_with?("#{name}::") || (!modules[name] && !"#{name}::".start_with?("#{module_name}::")) }
+      return [ name ] if inner.empty?
+
+      concerns = inner.select do |module_name|
+        ConcernMembership.owned_by(mixins(source), module_name, others: modules.keys - [ module_name ]).any? { |mixin| mixin[:macro] == :extend && mixin[:name] == "ActiveSupport::Concern" }
+      end
+      return concerns.presence || [ name ] unless modules[name]
+      return [ name, *concerns ] unless Introspectors::DeclaredConstant.namespace?(modules[name])
+
+      members = inner.select { |module_name| concerns.include?(module_name) || namespace_member?(module_name, name, modules) }
+      members.presence || [ name ]
+    end
+
+    # The MixinsListener records of a file's source, walked once per run.
+    def mixins(source)
+      RunCache.fetch([ :concern_mixins, source ]) do
+        Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins].freeze
+      end
+    end
+
+    # A module the namespace holds, directly or through namespaces, that is no namespace itself.
+    def namespace_member?(module_name, namespace, modules)
+      parts = module_name.delete_prefix("#{namespace}::").split("::")[0..-2]
+      between = parts.each_index.map { |n| [ namespace, *parts.first(n + 1) ].join("::") }
+      !Introspectors::DeclaredConstant.namespace?(modules[module_name]) &&
+        between.all? { |scope| !modules[scope] || Introspectors::DeclaredConstant.namespace?(modules[scope]) }
+    end
+    private_class_method :read_names_in, :namespace_member?
+
     # Source file for a concern named by its constant, or nil.
     #
     # @param root [String] application root
-    # @param concern_name [String] constant name, e.g. "BulkMailSettingsConcern"
+    # @param concern_name [String] constant name, e.g. "Searchable"
     # @param prefer [String, nil] owner kind ("model", "controller") whose
     #   concerns directory is searched first. `resolve` sorts, so without it
     #   app/controllers/concerns wins a basename two owners share.
     # @param within [String, nil] the enclosing constant of the reference. A
-    #   bare `include DebugConcern` inside Fasp::Provider resolves at runtime
-    #   to Fasp::Provider::DebugConcern, which the literal spelling misses.
+    #   bare `include DebugConcern` inside Shop::Provider resolves at runtime
+    #   to Shop::Provider::DebugConcern, which the literal spelling misses.
     # @param dirs [Array<String>, nil] pre-resolved concern directories
     # @param outer [Boolean] whether a module with no file of its own is found in its outer constant's file
     def find_file(root, concern_name, prefer: nil, within: nil, dirs: nil, outer: true)
-      found = find_named(root, concern_name, prefer: prefer, within: within, dirs: dirs)
-      (found || (outer_named(root, concern_name, within: within, dirs: dirs) if outer))&.last
+      name, path, in_outer = resolved(root, concern_name, prefer: prefer, within: within, dirs: dirs)
+      path if name && (outer || !in_outer)
     end
 
-    # The source of the module a reference resolves to: its file, or its own node in its outer constant's file.
+    # The source of the module a reference resolves to, the modules it nests left out: its file, or its own node
+    # in its outer constant's file.
     def module_source(root, concern_name, prefer: nil, within: nil)
-      path = find_file(root, concern_name, prefer: prefer, within: within, outer: false)
-      return SafeFile.read(path) if path
-
-      name, path = outer_named(root, concern_name, within: within)
-      path && Introspectors::DeclaredConstant.module_node(AstCache.parse(path).value, name)&.slice
+      named_module_source(root, concern_name, prefer: prefer, within: within)&.[](1)
     end
 
-    # [`Outer::Inner`, Outer's file] for a module with no file of its own, which Zeitwerk loads with Outer.
+    # The module's own source, then the own source of each module it includes or prepends itself, which Ruby
+    # mixes in with it, as deep as ActionPresence follows a controller's modules.
+    def included_sources(root, concern_name, prefer: nil, within: nil, depth: Introspectors::ActionPresence::MODULE_DEPTH)
+      name, own, = named_module_source(root, concern_name, prefer: prefer, within: within)
+      return [] unless own
+      return [ own ] unless depth.positive? && own.match?(/\b(?:include|prepend)\b/)
+
+      included = ConcernMembership.owned_by(mixins(own), name).select { |mixin| mixin[:ancestor] }.uniq { |mixin| mixin[:name] }
+      [ own ] + included.flat_map { |mixin| included_sources(root, mixin[:name], within: name, depth: depth - 1) }
+    end
+
+    # [the constant a reference resolves to, its own source, its file's source], or nil.
+    def named_module_source(root, concern_name, prefer: nil, within: nil)
+      name, path, in_outer = resolved(root, concern_name, prefer: prefer, within: within)
+      source = path && SafeFile.read(path) or return nil
+      own = Introspectors::DeclaredConstant.own_module_source(source, name)
+      return [ name, own, source ] unless in_outer
+
+      node = Introspectors::DeclaredConstant.module_node(AstCache.parse_string(source)&.value, name) or return nil
+      [ name, own.byteslice(node.location.start_offset, node.location.length), source ]
+    end
+    private_class_method :named_module_source
+
+    # [`Outer::Inner`, Outer's file] for a reference that resolves to a module with no file of its own, which
+    # Zeitwerk loads with Outer, or nil.
     def outer_named(root, concern_name, within: nil, dirs: nil)
-      RunCache.fetch([ :outer_named, root, concern_name, within, dirs ]) do
-        candidate_names(concern_name, within).lazy.filter_map do |name|
-          outer = name.rpartition("::").first
-          path = !outer.empty? && find_file(root, outer, dirs: dirs)
-          [ name, path ] if path && Introspectors::DeclaredConstant.module_node(AstCache.parse(path).value, name)
-        end.first
-      end
+      name, path, in_outer = resolved(root, concern_name, within: within, dirs: dirs)
+      [ name, path ] if in_outer
     end
 
-    # [the constant the reference resolves to, its file] for `find_file`'s file, or nil.
+    # [the constant the reference resolves to, its own file], or nil when it resolves to none or to a module in
+    # its outer constant's file.
     def find_named(root, concern_name, prefer: nil, within: nil, dirs: nil)
+      name, path, in_outer = resolved(root, concern_name, prefer: prefer, within: within, dirs: dirs)
+      [ name, path ] if name && !in_outer
+    end
+
+    # [constant, file, true, node] for the first candidate Ruby reaches declared in `file` (the file naming it) or its
+    # outer constant's file, [constant, file, false] in its own file, or nil.
+    def resolved(root, concern_name, prefer: nil, within: nil, dirs: nil, file: nil)
       # Every model asks for the same few names, each across hundreds of directories.
-      RunCache.fetch([ :find_named, root, concern_name, prefer, within, dirs ]) do
+      RunCache.fetch([ :resolved_named, root, concern_name, prefer, within, dirs, file ]) do
         # Wherever Zeitwerk would look, plus an in-repo path gem's lib. A lib the app does
         # not add to its autoload paths holds nothing it autoloads, so it is skipped.
         searched = ordered_dirs(root, prefer, dirs) + PathResolver.app_roots(root) + PathResolver.declared_roots(root) +
                    PathResolver.path_gem_libs(root)
-        candidate_names(concern_name, within).lazy.filter_map do |name|
-          underscore = name.underscore
-          next if underscore.empty? || underscore.include?("..")
+        nesting = scope(root, within)
+        Introspectors::DeclaredConstant.candidate_names(concern_name, nesting).lazy.filter_map do |name|
+          node = file && defined_at_reference(file, name, concern_name, nesting)
+          next [ name, file, true, node ] if node
 
-          found = searched.find { |dir| file_exist?(dir, "#{underscore}.rb") && !PathResolver.linked_out?(File.join(dir, "#{underscore}.rb"), root) }
-          [ name, File.join(found, "#{underscore}.rb") ] if found
+          path = PathResolver.constant_file(searched, name, declared: true) { |found| !PathResolver.linked_out?(found, root) }
+          next [ name, path, false ] if path
+
+          outer = name.rpartition("::").first
+          path = !outer.empty? && find_file(root, outer, dirs: dirs)
+          node = path && defined_at_reference(path, name, concern_name, nesting)
+          [ name, path, true, node ] if node
         end.first
       end
     end
 
-    # Each directory is listed once per run and a candidate is walked down
-    # from its root, so a name no listing holds costs no stat: a large app
-    # names concerns against a hundred roots. A listing matches a segment the
-    # way the filesystem does, case-folded where the disk ignores case, so a
-    # lookup answers the same inside a run and outside one.
-    def file_exist?(dir, relative)
-      current = dir
-      relative.split("/").each do |segment|
-        entries = listing(current)
-        return false unless entries.include?(segment) || entries.folded&.include?(segment.downcase)
+    # The node declaring `name` in `path`, when Ruby has run it by the line naming it.
+    def defined_at_reference(path, name, concern_name, nesting)
+      node = Introspectors::DeclaredConstant.module_node(AstCache.parse(path).value, name)
+      node unless node.nil? || below_reference?(node, path, concern_name, nesting)
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, nil, label: "module #{name} in #{path}")
+    end
+    private_class_method :defined_at_reference
 
-        current = File.join(current, segment)
+    # shortcut: every block counts as run after the file loads, though one Ruby runs at once (Class.new, Module.new, concerning,
+    # class_methods, class_eval, each, tap) runs before what follows it; tell them apart if an app declares the module below one.
+    DEFERRED = [ Prism::DefNode, Prism::BlockNode, Prism::LambdaNode ].freeze
+
+    # Ruby has not yet run a module its file declares below the line in that file that names it as the file loads.
+    # One in a method or a block runs when called, after the whole file.
+    def below_reference?(node, path, concern_name, nesting)
+      source = SafeFile.read(path) or return false
+      later = Introspectors::AstWalk.each(AstCache.parse_string(source)&.value).filter_map do |deferred|
+        deferred.location.start_line..deferred.location.end_line if DEFERRED.any? { |type| deferred.is_a?(type) }
       end
-      RunCache.fetch([ :exist, current ]) { File.exist?(current) }
+      written = mixins(source).filter_map do |mixin|
+        line = mixin[:location]
+        line if mixin[:name] == concern_name && mixin[:nesting] == nesting && later.none? { |lines| lines.cover?(line) }
+      end.min
+      written ? node.location.start_line > written : false
     end
-    private_class_method :file_exist?
-
-    # `relative` as the disk spells it: an app acronym underscores `ActivityPub` to `activitypub`,
-    # where this process, which has none of the app's acronyms, writes `activity_pub`. Nil when absent.
-    def spelled(dir, relative)
-      return relative if file_exist?(dir, relative)
-
-      current = dir
-      segments = relative.split("/").map do |segment|
-        found = listing(current).squashed[segment.delete("_")] or return nil
-        current = File.join(current, found)
-        found
-      end
-      RunCache.fetch([ :exist, current ]) { File.exist?(current) } ? segments.join("/") : nil
-    end
-
-    Listing = Struct.new(:names, :folded) do
-      def include?(name) = names.include?(name)
-
-      def squashed
-        @squashed ||= names.each_with_object({}) { |name, found| found[name.delete("_")] ||= name }
-      end
-    end
-
-    def listing(dir)
-      RunCache.fetch([ :children, dir ]) do
-        names = PathResolver.children(dir)
-        Listing.new(names.to_set, (names.map(&:downcase).to_set if case_insensitive?(dir, names)))
-      end
-    end
-    private_class_method :listing
-
-    # Whether this directory's filesystem ignores case: an entry answers to its
-    # name with the case swapped. A directory with no lettered entry has no
-    # lookup the answer could change.
-    def case_insensitive?(dir, names)
-      name = names.find { |entry| entry.swapcase != entry }
-      return false unless name
-
-      File.identical?(File.join(dir, name), File.join(dir, name.swapcase))
-    end
-    private_class_method :case_insensitive?
+    private_class_method :below_reference?
 
     def ordered_dirs(root, prefer, dirs = nil)
       dirs ||= resolve(root)
@@ -247,18 +288,17 @@ module RailsAiContext
       dirs.partition { |dir| type_for(dir) == prefer }.flatten
     end
 
-    # The enclosing namespaces from the innermost outward, then the reference
-    # itself - Ruby's own constant lookup order, which reaches the top level
-    # last. Bare-name-first would bind Fasp::Provider's `include DebugConcern`
-    # to a top-level DebugConcern the runtime never sees. A qualified name's
-    # first segment is looked up the same way; only a leading `::` skips it.
-    def candidate_names(concern_name, within)
-      name = concern_name.to_s
-      return [ name.delete_prefix("::") ] if name.start_with?("::")
-      return [ name ] if within.nil?
+    # The nesting a reference is written in, for a caller holding only the including constant's name: its body's.
+    def scope(root, within)
+      return within if within.is_a?(Array)
+      return [] if within.to_s.empty?
 
-      scopes = within.to_s.split("::")
-      scopes.size.downto(1).map { |n| "#{scopes.first(n).join('::')}::#{name}" } + [ name ]
+      RunCache.fetch([ :scope, root.to_s, within.to_s ]) do
+        path = PathResolver.file_for_constant(root.to_s, within.to_s)
+        Introspectors::DeclaredConstant.body_nesting(path && AstCache.parse(path).value, within.to_s)
+      rescue StandardError, ScriptError => e
+        RailsAiContext.debug_fail(e, Introspectors::DeclaredConstant.nesting(within.to_s.split("::")), label: "ConcernPaths.scope")
+      end
     end
   end
 end

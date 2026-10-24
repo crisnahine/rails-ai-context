@@ -64,6 +64,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationReplayListener
     ])
   end
 
+  it "counts an unlogged table built at run time as not replayed" do
+    results = parse_and_dispatch(<<~'RUBY')
+      execute "CREATE UNLOGGED TABLE #{name} (id bigint)"
+    RUBY
+
+    expect(results).to eq([ { kind: :not_replayed, location: 1 } ])
+  end
+
+  # Migration#execute is the migration's own method either way, so self.execute runs the same SQL.
+  it "reads a migration's execute called on self" do
+    results = parse_and_dispatch(%(self.execute "CREATE TABLE z5 (id integer)"\n))
+
+    expect(results).to eq([ { action: :create_table_sql, sql: "CREATE TABLE z5 (id integer)", location: 1 } ])
+  end
+
   it "does not see revert called with a migration class" do
     results = parse_and_dispatch("revert CreatePosts\n")
 

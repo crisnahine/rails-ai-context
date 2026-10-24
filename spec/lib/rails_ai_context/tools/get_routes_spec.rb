@@ -117,6 +117,38 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(paged).not_to include("`/posts` → index")
     end
 
+    it "passes a glob segment to the helper, since Rails requires it" do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 1, api_namespaces: [],
+                  by_controller: { "pages" => [ { verb: "GET", path: "/docs/*section", action: "doc", name: "doc" } ] } }
+      })
+
+      text = described_class.call(controller: "pages").content.first[:text]
+
+      expect(text).to include("`GET` `/docs/*section` → doc `doc_path(:section)` [section]")
+    end
+
+    it "folds three or more namespace siblings with one verb pattern into one summary line" do
+      pair = ->(c) { [ { verb: "GET", path: "/#{c}", action: "index" }, { verb: "POST", path: "/#{c}", action: "create" } ] }
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 11, api_namespaces: [], by_controller: {
+          "api/c1" => pair.("api/c1"), "api/c3" => pair.("api/c3"), "api/c2" => pair.("api/c2"),
+          "api/c4" => [ { verb: "GET", path: "/api/c4", action: "index" } ],
+          "admin/a" => pair.("admin/a"), "admin/b" => pair.("admin/b"), "posts" => pair.("posts")
+        } }
+      })
+
+      lines = described_class.call(detail: "summary").content.first[:text].lines.map(&:chomp).grep(/\A- \*\*/)
+
+      expect(lines).to eq([
+        "- **admin/a** - 2 routes (1 GET, 1 POST)",
+        "- **admin/b** - 2 routes (1 GET, 1 POST)",
+        "- **api/*** (c1, c2, c3) - 2 routes each (1 GET, 1 POST)",
+        "- **api/c4** - 1 route (1 GET)",
+        "- **posts** - 2 routes (1 GET, 1 POST)"
+      ])
+    end
+
     it "names the other paths an engine group is mounted at" do
       groups = engine_routes.map { |g| g.merge(also_mounted_at: [ "/shop2" ]) }
       allow(described_class).to receive(:cached_context).and_return({

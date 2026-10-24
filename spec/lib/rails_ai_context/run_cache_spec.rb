@@ -61,4 +61,16 @@ RSpec.describe RailsAiContext::RunCache do
 
     expect(seen).to eq([ false, :theirs ])
   end
+
+  it "opens a run against a static app with the app's inflections, and ends both" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+      File.write(File.join(dir, "config", "initializers", "inflections.rb"),
+                 "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.irregular \"hero\", \"heroes\" }\n")
+      inside = described_class.around_app(RailsAiContext::StaticApp.new(dir)) { [ described_class.active?, "hero".pluralize ] }
+
+      expect(inside).to eq([ true, "heroes" ])
+      expect([ described_class.active?, "hero".pluralize ]).to eq([ false, "heros" ])
+    end
+  end
 end

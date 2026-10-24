@@ -103,13 +103,13 @@ module RailsAiContext
 
         # If match is inside a method, expand to include the full method; a line asked for keeps its
         # window, which a 300-line method would push out of a caller's cut.
-        method_start = find_method_start(source_lines, match_idx)
-        method_end = find_method_end(source_lines, method_start) if method_start && !at_line
-        if method_start && method_end && source_lines[match_idx].match?(/\A\s*def\s/)
+        method = enclosing_method(file, source_lines, match_idx)
+        method_start, method_end = method && [ method[:location] - 1, method[:end_location] - 1 ]
+        if method && !at_line && match_idx == method_start
           # Match IS a method definition - show the complete method, no extra context
           start_idx = method_start
           end_idx = method_end
-        elsif method_start && method_end
+        elsif method && !at_line
           # Match is inside a method - expand to include full method + context
           start_idx = [ start_idx, method_start ].min
           end_idx = [ end_idx, method_end ].max
@@ -166,21 +166,16 @@ module RailsAiContext
         methods.empty? ? "  (no methods found)" : methods.join("\n")
       end
 
-      private_class_method def self.find_method_start(lines, from_idx)
-        from_idx.downto(0) do |i|
-          return i if lines[i].match?(/^\s*def\s+/)
-        end
-        nil
-      end
+      # The innermost method whose lines, as Prism reads them, hold the match; nil outside every method.
+      private_class_method def self.enclosing_method(file, source_lines, match_idx)
+        source = source_lines.join
+        # A .rake, Gemfile or .jbuilder is Ruby too, read only when it parses whole: error recovery finds a def in YAML's `def:` key.
+        return nil unless file.end_with?(".rb") || RailsAiContext::AstCache.parse_string(source).success?
 
-      private_class_method def self.find_method_end(lines, from_idx)
-        # Use indentation-based matching - the `end` for a `def` is always at the same indent level.
-        # This is much more reliable than regex depth counting which miscounts inline if/unless modifiers.
-        def_indent = lines[from_idx][/\A\s*/]&.length || 0
-        lines[(from_idx + 1)..].each_with_index do |line, i|
-          return from_idx + i + 1 if line.match?(/\A\s{#{def_indent}}end\b/)
-        end
-        nil
+        line = match_idx + 1
+        Introspectors::ActionResolver.methods_in(source)
+          .select { |m| m[:location] && m[:end_location] && (m[:location]..m[:end_location]).cover?(line) }
+          .min_by { |m| m[:end_location] - m[:location] }
       end
     end
   end

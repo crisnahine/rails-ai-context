@@ -82,7 +82,7 @@ module RailsAiContext
         dirs = PathResolver.locale_roots(root).map { |dir| File.join(dir, "config", "locales") }
         return {} if dirs.empty?
 
-        files = dirs.sum { |dir| Dir.glob(File.join(dir, RAILS_LOCALE_GLOB)).size }
+        files = dirs.sum { |dir| Dir.glob(RAILS_LOCALE_GLOB, base: dir).size }
         { in_repo_locale_dirs: dirs.size, in_repo_locale_files: files }
       end
 
@@ -140,7 +140,7 @@ module RailsAiContext
         # says nothing about this one. The rest are read only when the running
         # one is absent, where reading nothing would be the worse answer.
         env = ENV["RAILS_ENV"] || "development"
-        all_environments = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort.reject { |path| PathResolver.linked_out?(path, root) }
+        all_environments = PathResolver.environment_paths(root)
         running = all_environments.select { |path| File.basename(path, ".rb") == env }
         environments = running.any? ? running.map { |path| [ path, false ] }
                                     : all_environments.map { |path| [ path, true ] }
@@ -202,7 +202,7 @@ module RailsAiContext
       def load_path_files
         patterns = config_candidate_files.flat_map { |path, _| config_walk(path)&.dig(:load_path) || [] }
         patterns.reject { |pattern| SafePath.traversal?(pattern) }.flat_map do |pattern|
-          Dir.glob(File.join(root, pattern)).select do |file|
+          PathResolver.glob(root, pattern).select do |file|
             LOAD_PATH_EXTENSIONS.include?(File.extname(file)) &&
               SafePath.locate(file.delete_prefix("#{root}/"), under: root, max_size: Float::INFINITY, listed: true).ok?
           end
@@ -357,7 +357,7 @@ module RailsAiContext
       # The files Rails loads: config/locales by its glob, then what config.i18n.load_path adds.
       def locale_file_paths
         @locale_file_paths ||= begin
-          defaults = locales_dir ? Dir.glob(File.join(locales_dir, RAILS_LOCALE_GLOB)).reject { |path| PathResolver.linked_out?(path, root) } : []
+          defaults = locales_dir ? PathResolver.glob(locales_dir, RAILS_LOCALE_GLOB).reject { |path| PathResolver.linked_out?(path, root) } : []
           (defaults + load_path_files).uniq.sort
         end
       end

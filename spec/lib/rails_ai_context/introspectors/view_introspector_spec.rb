@@ -189,6 +189,25 @@ RSpec.describe RailsAiContext::Introspectors::ViewIntrospector do
     end
   end
 
+  # `layout "admin/application"` renders layouts/admin/application, so a
+  # layout in a subfolder is named by its path under layouts/ and never merges
+  # with the top-level one of the same file name.
+  describe "a layout in a subfolder of app/views/layouts" do
+    it "is listed by its path under layouts/ with its own slots" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/layouts/admin"))
+        File.write(File.join(root, "app/views/layouts/application.html.erb"), "<html><body><%= yield %></body></html>\n")
+        File.write(File.join(root, "app/views/layouts/admin/application.html.erb"),
+                   "<html><body><aside><%= yield :sidebar %></aside><%= yield %></body></html>\n")
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(root)).call[:layouts]).to eq([
+          { name: "admin/application.html.erb", yields: [ "sidebar", "(main)" ] },
+          { name: "application.html.erb", yields: [ "(main)" ] }
+        ])
+      end
+    end
+  end
+
   describe "what a layout yields" do
     def yields_for(name, source)
       Dir.mktmpdir do |root|
@@ -234,6 +253,12 @@ RSpec.describe RailsAiContext::Introspectors::ViewIntrospector do
       expect(yields_for("meta.html.haml", %(%meta{content: content_for?(:description) ? yield(:description) : "x"}\n)))
         .to eq([ "description" ])
       expect(yields_for("meta.html.slim", %(meta property="og:image" content=yield(:image)\n))).to eq([ "image" ])
+    end
+
+    it "reads a yield a HAML or Slim text line interpolates" do
+      expect(yields_for("title.html.haml", "%title\n  Shop: \#{yield(:title)}\n%body= yield\n")).to eq([ "title", "(main)" ])
+      expect(yields_for("title.html.slim", "title \#{yield(:title)}\nbody == yield\n")).to eq([ "title", "(main)" ])
+      expect(yields_for("tag.html.haml", "%title \#{yield(:title)}\n")).to eq([ "title" ])
     end
 
     it "reads HAML" do

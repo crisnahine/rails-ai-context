@@ -33,7 +33,7 @@ module RailsAiContext
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         rules_dir = File.join(output_dir, Install::AiTool.find(:cursor).rules_dir)
-        result = write_rule_table(rules_dir, RULE_FILES)
+        result = write_rule_table(rules_dir, RULE_FILES, root: output_dir)
 
         # .cursorrules is at the project root and may pre-date the gem
         # install (users frequently hand-write .cursorrules before
@@ -48,7 +48,8 @@ module RailsAiContext
         end
 
         SectionMarkerWriter.report(
-          SectionMarkerWriter.write_with_markers(cursorrules_path, render_cursorrules_legacy), cursorrules_path, result
+          SectionMarkerWriter.write_with_markers(cursorrules_path, render_cursorrules_legacy, root: output_dir),
+          cursorrules_path, result
         )
       end
 

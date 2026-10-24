@@ -140,10 +140,6 @@ module RailsAiContext
       File.expand_path(path)
     end
 
-    def relativize_all(paths, root)
-      Array(paths).map { |path| relativize(path, root) }.uniq
-    end
-
     # Every prefix a gem can be unpacked under, trailing separator included so
     # a prefix cannot match a sibling directory that merely starts the same.
     def gem_roots

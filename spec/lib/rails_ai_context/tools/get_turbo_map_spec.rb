@@ -480,6 +480,27 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       expect(text).not_to include("No broadcasters found for this stream")
     end
 
+    it "reads a has_one :through record as its source association's model" do
+      models["Product"] = { associations: [ { type: "belongs_to", name: "user" } ] }
+      models["Review"] = { associations: [ { type: "belongs_to", name: "product" },
+                                           { type: "has_one", name: "seller", through: "product", options: { source: :user } } ] }
+      turbo[:explicit_broadcasts] = [
+        { method: "broadcast_prepend_to", stream: "(dynamic)", parts: [ { expr: "seller" }, { literal: "notifications" } ],
+          owner: "Review", file: "app/models/review.rb", line: 14 }
+      ]
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(wiring(text, "current_user, notifications")).to include("**Broadcasters:** `broadcast_prepend_to (app/models/review.rb:14)`")
+    end
+
+    it "names no record for a polymorphic belongs_to, whose class Rails reads from each row" do
+      models["Notification"] = { associations: [ { type: "belongs_to", name: "user", polymorphic: true } ] }
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(wiring(text, "current_user, notifications")).not_to include("**Broadcasters:** `broadcast_prepend_to (app/models/notification.rb:24)`")
+      expect(text).to include("_Can't tell whether `broadcast_prepend_to (app/models/notification.rb:24)` broadcasts here")
+    end
+
     it "reads Current.user, Rails 8's signed-in user, as a User record" do
       turbo[:stream_subscriptions] = [
         { stream: "Current.user, notifications", parts: [ { expr: "Current.user" }, { literal: "notifications" } ],

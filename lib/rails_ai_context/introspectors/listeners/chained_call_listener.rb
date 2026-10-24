@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     module Listeners
       # Calls made on a receiver, e.g. `config.omniauth :github` or
-      # `inflect.acronym "API"`. Pass `receiver:` to only match a named one.
+      # `FactoryBot.create(:user)`. Pass `receiver:` to only match a named one.
       class ChainedCallListener < BaseListener
         def initialize(*methods, receiver: nil)
           super()

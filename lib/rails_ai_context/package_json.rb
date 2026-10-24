@@ -36,6 +36,14 @@ module RailsAiContext
 
     module_function
 
+    # The name with its version: "^19.0.0" reads as 19.0.0, a range of more than one part
+    # (`^18 || ^19`, `>=3 <4`) stays as written, and a requirement with no number leaves the name alone.
+    def version_label(name, requirement)
+      requirement = requirement.to_s.strip
+      version = requirement[/\A(?:[\^~]|>?=|v)?\s*(\d[\w.+-]*)\z/, 1] || (requirement.match?(/\d/) ? requirement : nil)
+      version ? "#{name} #{version}" : name
+    end
+
     def deps(root)
       outside = configured_outside(root).filter_map { |dir| outside_file(dir[:dir], "package.json") }
       inside = manifest_dirs(root).map { |dir| File.join(dir, "package.json") }

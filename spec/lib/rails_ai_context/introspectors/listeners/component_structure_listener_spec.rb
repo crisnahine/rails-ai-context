@@ -93,6 +93,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ComponentStructureListe
       )
     end
 
+    it "reads a frozen hash or percent-literal array as the literal itself" do
+      results = structure("SIZES = { sm: \"px-2\", md: \"px-4\" }.freeze\nVARIANTS = %i[primary secondary].freeze")
+
+      expect(results.map { |r| [ r[:name], r[:values] ] }).to eq([ [ "SIZES", %w[sm md] ], [ "VARIANTS", %w[primary secondary] ] ])
+    end
+
     it "extracts array constant elements" do
       results = structure("SIZES = [:sm, :md, :lg]")
 

@@ -38,6 +38,11 @@ module RailsAiContext
           @scopes.pop
         end
 
+        def on_constant_write_node_enter(node)
+          declare_constant(node, @scopes.compact.reverse)
+        end
+        CONSTANT_WRITE_EVENTS.each { |event| alias_method event, :on_constant_write_node_enter }
+
         def on_call_node_enter(node)
           frame = frame_for(node)
           @blocks.push(frame) if node.block.is_a?(Prism::BlockNode)
@@ -129,7 +134,7 @@ module RailsAiContext
         end
 
         def scope_name(node)
-          nested_name(node.constant_path, @scopes.last)
+          declare_constant(node, @scopes.compact.reverse)
         end
       end
     end

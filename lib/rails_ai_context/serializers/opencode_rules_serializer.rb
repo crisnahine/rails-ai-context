@@ -37,7 +37,7 @@ module RailsAiContext
           end
         end
 
-        write_rule_files(entries, shared: true)
+        write_rule_files(entries, shared: true, root: output_dir)
       end
 
       private

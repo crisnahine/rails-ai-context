@@ -1153,6 +1153,83 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # Ruby mixes a module the concern includes into each includer with it; one it only nests stays out.
+    it "reads a concern's actions and methods through the modules it nests and includes itself" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/exportable.rb"), <<~RUBY)
+          module Exportable
+            extend ActiveSupport::Concern
+            module Actions
+              def export; end
+              private def export_params = params.require(:export).permit(:kind)
+            end
+            module Unused
+              def unused; end
+              def unused_params; end
+            end
+            include Actions
+          end
+        RUBY
+        introspector = described_class.new(double("app", root: Pathname.new(dir)))
+        source = "class ExportsController < ApplicationController\n  include Exportable\nend\n"
+
+        expect(introspector.send(:concern_actions, [ "Exportable" ], "ExportsController", [])).to eq([ "export" ])
+        expect(introspector.send(:concern_methods, source, "ExportsController")).to eq(Set["export", "export_params"])
+      end
+    end
+
+    # Ruby: ExportsController.action_methods holds download, from the top-level module Exportable includes.
+    it "reads a concern's actions and methods through a top-level module it includes" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/exportable.rb"), <<~RUBY)
+          module Exportable
+            extend ActiveSupport::Concern
+            module Actions
+              def export; end
+            end
+            include Actions
+            include Exporting
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/concerns/exporting.rb"), <<~RUBY)
+          module Exporting
+            def download; end
+            private def download_params = params.require(:download).permit(:kind)
+          end
+        RUBY
+        introspector = described_class.new(double("app", root: Pathname.new(dir)))
+        source = "class ExportsController < ApplicationController\n  include Exportable\nend\n"
+
+        expect(introspector.send(:concern_actions, [ "Exportable" ], "ExportsController", [])).to contain_exactly("export", "download")
+        expect(introspector.send(:concern_methods, source, "ExportsController")).to eq(Set["export", "download", "download_params"])
+      end
+    end
+
+    # Ruby looks up `include Tools` in Homonym's body as Homonym::Tools, which homonym.rb declares, before a top-level Tools.
+    it "reads a concern's include as the module it nests when a top-level module shares the name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/tools.rb"), "module Tools\n  def wrong_one; end\nend\n")
+        File.write(File.join(dir, "app/controllers/concerns/homonym.rb"), <<~RUBY)
+          module Homonym
+            extend ActiveSupport::Concern
+            module Tools
+              def tool_action; end
+              private def tool_params = params.require(:tool).permit(:name)
+            end
+            include Tools
+          end
+        RUBY
+        introspector = described_class.new(double("app", root: Pathname.new(dir)))
+        source = "class HomonymsController < ApplicationController\n  include Homonym\nend\n"
+
+        expect(introspector.send(:concern_actions, [ "Homonym" ], "HomonymsController", [])).to eq([ "tool_action" ])
+        expect(introspector.send(:concern_methods, source, "HomonymsController")).to eq(Set["tool_action", "tool_params"])
+      end
+    end
+
     # `bin/rails generate authentication`: reflection takes the filter out of the chain, and the
     # body's call of the concern's class method is the only thing that says what did.
     it "shows the skip a class method the body calls makes, when nothing else is left in the chain" do
@@ -1608,6 +1685,27 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # With acronym "JsonLd", "JsonLdHelper".underscore is "jsonld_helper", but Zeitwerk camelizes
+    # json_ld_helper.rb to JsonLdHelper, so that is the file the include loads.
+    it "reads a module whose file splits an acronym the app registers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(%w[config/initializers app/controllers app/helpers].map { |sub| File.join(dir, sub) })
+        File.write(File.join(dir, "config", "initializers", "inflections.rb"),
+                   "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym 'JsonLd'\nend\n")
+        File.write(File.join(dir, "app", "helpers", "json_ld_helper.rb"),
+                   "module JsonLdHelper\n  extend ActiveSupport::Concern\n\n  included do\n    before_action :set_context\n  end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), "class ApplicationController < ActionController::Base\nend\n")
+        File.write(File.join(dir, "app", "controllers", "feeds_controller.rb"),
+                   "class FeedsController < ApplicationController\n  include JsonLdHelper\n\n  def show; end\nend\n")
+
+        app = RailsAiContext::StaticApp.new(dir)
+        feeds = RailsAiContext::RunCache.around_app(app) { described_class.new(app).static_call }[:controllers]["FeedsController"]
+
+        expect(feeds[:concerns_unread]).to be_nil
+        expect(feeds[:filters].map { |filter| filter[:name] }).to eq([ "set_context" ])
+      end
+    end
+
     it "reads a compact controller's bare superclass from the top level" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))
@@ -1694,6 +1792,112 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           "Api::V1::BaseController" => true, "Api::V1::PostsController" => true,
           "Api::V1::DraftsController" => true, "PagesController" => false
         )
+      end
+    end
+
+    it "lists a second controller a file declares, each with its own actions and filters" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin"))
+        File.write(File.join(dir, "app", "controllers", "admin", "base_controller.rb"), <<~RUBY)
+          module Admin
+            class BaseController < ApplicationController
+              before_action :require_admin
+
+              private
+
+              def require_admin; end
+            end
+
+            class AuditsController < BaseController
+              before_action :load_audit
+
+              def index; end
+
+              private
+
+              def load_audit; end
+            end
+
+            class Forbidden < StandardError; end
+          end
+        RUBY
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+
+        expect(controllers.keys).to contain_exactly("Admin::BaseController", "Admin::AuditsController")
+        expect(controllers["Admin::AuditsController"]).to include(actions: [ "index" ], parent_class: "BaseController")
+        expect(controllers["Admin::BaseController"][:actions]).to eq([])
+        expect(controllers["Admin::BaseController"][:filters].map { |f| f[:name] }).to eq([ "require_admin" ])
+      end
+    end
+
+    it "gives a controller beside another in its file only its own strong params" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "pair_alpha_controller.rb"), <<~RUBY)
+          class PairAlphaController < ApplicationController
+            def create; end
+            private
+            def alpha_params = params.require(:alpha).permit(:name)
+          end
+
+          class PairBetaController < ApplicationController
+            def create; end
+          end
+        RUBY
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+
+        expect(controllers["PairAlphaController"][:strong_params].map { |p| p[:name] }).to eq(%w[alpha_params])
+        expect(controllers["PairBetaController"][:strong_params]).to eq([])
+      end
+    end
+
+    it "does not take a parent whose name holds API for an API controller" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api_controller.rb"),
+                   "class APIController < ApplicationController\n  layout \"docs\"\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "widgets_controller.rb"),
+                   "class API::WidgetsController < ::APIController\n  def index\n  end\nend\n")
+
+        app = RailsAiContext::StaticApp.new(dir)
+        listing = described_class.new(app).static_call
+        controllers = listing[:controllers]
+
+        expect(controllers.transform_values { |info| info[:api_controller] }).to eq(
+          "APIController" => false, "API::WidgetsController" => false
+        )
+
+        context = { controllers: listing, tests: { framework: "minitest" }, routes: { by_controller: { "api/widgets" => [
+          { verb: "GET", path: "/api/widgets", action: "index", name: "api_widgets" }
+        ] } } }
+        [ RailsAiContext::Tools::GetControllers, RailsAiContext::Tools::GenerateTest ].each do |tool|
+          allow(tool).to receive(:cached_context).and_return(context)
+          allow(tool).to receive(:rails_app).and_return(app)
+        end
+        allow(RailsAiContext).to receive(:default_app).and_return(app)
+
+        expect(RailsAiContext::Tools::GetControllers.call(controller: "API::WidgetsController").content.first[:text])
+          .to include("**Layout:** `docs` (declared in APIController)")
+        expect(RailsAiContext::Tools::GenerateTest.call(controller: "API::WidgetsController").content.first[:text])
+          .to include("get api_widgets_url\n")
+      end
+    end
+
+    it "marks a controller an API controller when ApplicationController inherits ActionController::API" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::API\nend\n")
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"),
+                   "class PostsController < ApplicationController\n  def index; end\nend\n")
+
+        controllers = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:controllers]
+
+        expect(controllers["PostsController"][:api_controller]).to be(true)
       end
     end
 
@@ -2188,6 +2392,40 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         .to eq("packs/billing/app/controllers/billing_invoices_controller.rb")
     ensure
       FileUtils.rm_rf(File.join(Rails.root, "packs"))
+    end
+
+    # Rails gives each class only its own callbacks: AlphaController skips nothing.
+    it "reads a controller declared beside another in its file from its own class body" do
+      path = File.join(Rails.root, "app", "controllers", "pair_alpha_controller.rb")
+      File.write(path, <<~RUBY)
+        class PairAlphaController < ApplicationController
+          before_action :alpha_guard
+          def index; end
+          private
+          def alpha_guard; end
+          def alpha_params = params.require(:alpha).permit(:name)
+        end
+
+        class PairBetaController < ApplicationController
+          skip_before_action :verify_authenticity_token, raise: false
+          after_action :beta_after
+          def create; end
+          private
+          def beta_after; end
+        end
+      RUBY
+      load path
+
+      controllers = described_class.new(Rails.application).call[:controllers]
+
+      expect(controllers["PairAlphaController"][:filters]).to eq([ { name: "alpha_guard", kind: "before", declared: true } ])
+      expect(controllers["PairBetaController"][:filters]).to eq([ { name: "beta_after", kind: "after", declared: true },
+                                                                  { name: "verify_authenticity_token", kind: "before", skipped: true } ])
+      expect(controllers["PairAlphaController"][:strong_params].map { |p| p[:name] }).to eq(%w[alpha_params])
+      expect(controllers["PairBetaController"][:strong_params]).to eq([])
+    ensure
+      FileUtils.rm_f(path)
+      %i[PairAlphaController PairBetaController].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
     end
 
     # Booted from an engine's test/dummy, the engine's controller is defined above the app root.

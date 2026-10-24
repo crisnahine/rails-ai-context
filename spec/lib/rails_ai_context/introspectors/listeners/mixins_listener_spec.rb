@@ -13,6 +13,30 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
     expect(results.first).to include(macro: :include, name: "Publishable", ancestor: true, location: 2)
   end
 
+  it "flags a module written from the top level, and only that one" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Post < ApplicationRecord
+        include ::Publishable, Taggable
+        prepend ::Admin::Stamped
+      end
+    RUBY
+
+    expect(results.map { |r| [ r[:name], r[:top_level] ] }).to eq([ [ "Taggable", nil ], [ "Publishable", true ], [ "Admin::Stamped", true ] ])
+  end
+
+  # The block runs in the new struct class, so the include is Receipt's, under the scope around the assignment.
+  it "records an include in a Struct.new block as the struct's" do
+    results = parse_and_dispatch(<<~RUBY)
+      class Order < ApplicationRecord
+        Receipt = Struct.new(:total) do
+          include Printable
+        end
+      end
+    RUBY
+
+    expect(results.first).to include(name: "Printable", owner: %w[Order Receipt], nesting: %w[Order])
+  end
+
   it "records the module a concerning block builds and includes, under the class's name" do
     results = parse_and_dispatch(<<~RUBY)
       class WidgetLog < ApplicationRecord

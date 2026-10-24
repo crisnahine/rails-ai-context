@@ -490,7 +490,11 @@ module RailsAiContext
         # unread_calls is the static reader's note to validate; the booted tier has none.
         page = names.to_h { |name| [ name, tables[name].is_a?(Hash) ? tables[name].except(:unread_calls) : tables[name] ] }
         coverage = model_coverage(tables, models, schema)
-        json_response(schema.merge(tables: page, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed]))
+        # The app-wide lists repeat each table's own rows; a page keeps its tables' only.
+        listed = %i[check_constraints generated_columns].filter_map do |key|
+          [ key, schema[key].select { |row| page.key?(row[:table].to_s) } ] if schema[key].is_a?(Array)
+        end
+        json_response(schema.merge(tables: page, **listed.to_h, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed]))
       end
 
       COVERAGE_CAP = 15
@@ -628,7 +632,7 @@ module RailsAiContext
             display_default = default_val == "" ? '""' : default_val
             line += " | #{display_default}"
           end
-          line += " | #{col[:comment].to_s.gsub('|', '\\|').gsub(/\s*\n\s*/, ' ')}" if has_comments
+          line += " | #{table_cell(col[:comment]).gsub(/\s*\n\s*/, ' ')}" if has_comments
           lines << "#{line} |"
         end
         if data[:inherits_unresolved]&.any?
@@ -642,7 +646,8 @@ module RailsAiContext
           lines << "" << "### Unique constraints"
           data[:unique_constraints].each do |constraint|
             deferrable = constraint[:deferrable] ? ", deferrable: #{constraint[:deferrable]}" : ""
-            lines << "- `#{constraint[:name]}` on (#{Array(constraint[:columns]).join(', ')})#{deferrable}"
+            nulls = constraint[:nulls_not_distinct] ? ", nulls not distinct" : ""
+            lines << "- `#{constraint[:name]}` on (#{Array(constraint[:columns]).join(', ')})#{deferrable}#{nulls}"
           end
         end
 

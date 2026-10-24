@@ -85,10 +85,73 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).to include("**MetaTags:** display_meta_tags")
       end
 
+      it "reads no helper name across the end of one file and the start of the next" do
+        File.write(File.join(@root, "Gemfile"), %(gem "devise"\n))
+        File.write(File.join(@root, "app/views/posts/index.html.erb"), "<p>current_")
+        File.write(File.join(@root, "app/helpers/application_helper.rb"), "user = nil\nmodule ApplicationHelper\n  def page_title = \"t\"\nend\n")
+
+        expect(described_class.call(detail: "full").content.first[:text]).not_to include("**Devise:**")
+      end
+
+      it "counts a framework helper only where it is called by its own name" do
+        File.write(File.join(@root, "Gemfile"), %(gem "devise"\n))
+        File.write(File.join(@root, "app/views/posts/index.html.erb"), %(<%= @current_user_id %> <%= link_to "x", current_user_path %>\n))
+
+        expect(described_class.call(detail: "full").content.first[:text]).not_to include("**Devise:**")
+      end
+
       it "leaves out a gem the Gemfile only names in a comment" do
         text = described_class.call(detail: "full").content.first[:text]
 
         expect(text).not_to include("**Pundit:**")
+      end
+    end
+
+    context "when a helper's name shows up in a view only inside another name" do
+      around do |example|
+        Dir.mktmpdir("helper-words") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+          FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+          File.write(File.join(dir, "app/helpers/application_helper.rb"), <<~RUBY)
+            module ApplicationHelper
+              def title(text) = content_for(:title, text)
+              def icon(name) = tag.i(class: "icon-\#{name}")
+              def helper_m1 = 1
+              def admin? = true
+              def share_path = "#"
+            end
+          RUBY
+          File.write(File.join(dir, "app/views/posts/show.html.erb"),
+                     %(<title>Posts</title>\n<h1><%= @post.subtitle %></h1>\n<i class="icon-edit"></i>\n) +
+                     %(<%= helper_m10 %> <%= link_to "Edit title", "#" %> <%= render "form", title: "x" %>\n))
+          File.write(File.join(dir, "app/views/posts/index.html.erb"),
+                     %(<% title "Posts" %>\n<%= icon :edit %>\n<%= admin? ? helper_m1 : "" %>\n))
+          File.write(File.join(dir, "app/views/posts/edit.html.haml"), %(= title("Edit")\n))
+          File.write(File.join(dir, "app/views/posts/new.html.haml"), %(%a(href=share_path) Share\n))
+          File.write(File.join(dir, "app/views/posts/list.html.slim"), %(h1 Posts\np = icon :edit\np Hello \#{helper_m1}\n))
+          File.write(File.join(dir, "app/views/posts/head.html.haml"), %(%head\n  %title Posts\n%p Pick a title, admin?\n))
+          File.write(File.join(dir, "app/views/posts/heading.html.slim"), %(title Posts\np Pick a title, admin?\n))
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "counts only a view that calls the helper by its own name" do
+        text = described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+        refs = text[/## View References\n(.*?)(?:\n\n|\z)/m, 1]
+
+        expect(refs.lines.map(&:chomp)).to contain_exactly(
+          "- `title` used in: posts/edit.html.haml, posts/index.html.erb",
+          "- `icon` used in: posts/index.html.erb, posts/list.html.slim",
+          "- `helper_m1` used in: posts/index.html.erb, posts/list.html.slim",
+          "- `admin?` used in: posts/index.html.erb",
+          "- `share_path` used in: posts/new.html.haml"
+        )
       end
     end
 
@@ -604,6 +667,42 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         expect(text).to include("- `lead_mod_helper` (LeadMod, `lib/lead_mod.rb`)")
       end
 
+      it "lists the ones a lib module declares when its path splits an acronym the app registers" do
+        FileUtils.mkdir_p([ File.join(@root, "lib"), File.join(@root, "config/initializers") ])
+        File.write(File.join(@root, "config/initializers/inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'JsonLd' }\n")
+        File.write(File.join(@root, "lib/json_ld_helpers.rb"), "module JsonLdHelpers\n  def self.included(base)\n    base.helper_method :json_ld_tag\n  end\nend\n")
+        File.write(File.join(@root, "app/controllers/feed_controller.rb"), "class FeedController < ApplicationController\n  include JsonLdHelpers\nend\n")
+
+        text = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(@root)) do
+          described_class.call(detail: "standard").content.first[:text]
+        end
+
+        expect(text).to include("- `json_ld_tag` (JsonLdHelpers, `lib/json_ld_helpers.rb`)")
+      end
+
+      it "lists the ones a lib module declares when only an inflector override spells its file" do
+        FileUtils.mkdir_p(File.join(@root, "lib"))
+        File.write(File.join(@root, "lib/html_parser.rb"), "module HTMLParser\n  def self.included(base)\n    base.helper_method :parse_tag\n  end\nend\n")
+        File.write(File.join(@root, "app/controllers/page_controller.rb"), "class PageController < ApplicationController\n  include HTMLParser\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `parse_tag` (HTMLParser, `lib/html_parser.rb`)")
+      end
+
+      it "reads a controller's include from its compact namespace alone" do
+        FileUtils.mkdir_p(File.join(@root, "lib/admin"))
+        File.write(File.join(@root, "lib/admin/tags.rb"), "module Admin::Tags\n  def self.included(base)\n    base.helper_method :admin_tag\n  end\nend\n")
+        File.write(File.join(@root, "lib/tags.rb"), "module Tags\n  def self.included(base)\n    base.helper_method :plain_tag\n  end\nend\n")
+        FileUtils.mkdir_p(File.join(@root, "app/controllers/admin"))
+        File.write(File.join(@root, "app/controllers/admin/feed_controller.rb"), "class Admin::FeedController < ApplicationController\n  include Tags\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `plain_tag` (Tags, `lib/tags.rb`)")
+        expect(text).not_to include("admin_tag")
+      end
+
       it "parses a lib module kept in its outer constant's file once" do
         FileUtils.mkdir_p(File.join(@root, "lib"))
         source = "module OuterKit\n  module Helpers\n    extend ActiveSupport::Concern\n    included do\n      helper_method :kit_title\n    end\n  end\nend\n"
@@ -639,6 +738,27 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
         text = described_class.call(detail: "standard").content.first[:text]
 
         expect(text).to include("- `default_canonical` (Canonical::ControllerExtensions, `lib/canonical.rb`)")
+        expect(text).not_to include("outside_the_module")
+      end
+
+      it "lists the ones a Module.new module kept in its outer constant's lib file declares" do
+        FileUtils.mkdir_p(File.join(@root, "lib"))
+        File.write(File.join(@root, "lib/shop.rb"), <<~RUBY)
+          module Shop
+            helper_method :outside_the_module
+          end
+
+          Shop::Auth = Module.new do
+            def self.included(base)
+              base.helper_method :current_buyer
+            end
+          end
+        RUBY
+        File.write(File.join(@root, "app/controllers/base_controller.rb"), "class BaseController < ApplicationController\n  include Shop::Auth\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `current_buyer` (Shop::Auth, `lib/shop.rb`)")
         expect(text).not_to include("outside_the_module")
       end
     end

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "bigdecimal"
 require "set"
 
 module RailsAiContext
@@ -8,7 +9,7 @@ module RailsAiContext
     module MigrationReplay
       Counts = Struct.new(:unnamed, :unnamed_columns, :helper_calls, :failed_files)
       Result = Struct.new(:tables, :counts)
-      Run = Struct.new(:pk_type, :adapter, :root, :real_root, :db_dirs, :read, :helpers, :counts, keyword_init: true)
+      Run = Struct.new(:pk_type, :adapter, :rails_version, :root, :real_root, :db_dirs, :read, :helpers, :counts, :held, keyword_init: true)
 
       module_function
 
@@ -30,14 +31,18 @@ module RailsAiContext
         # Rails orders every migrations path by version, not one directory at a time.
         migration_files(dirs, root: run.real_root).each { |path| replay_file(path, tables, run) }
 
-        tables.delete("ar_internal_metadata")
-        tables.delete("schema_migrations")
+        tables.reject! { |name, _| SchemaConventions.bookkeeping_table?(name) }
+        Statements.composite_keys_not_null(tables, adapter)
+        Statements.dumped_decimals(tables, adapter)
+        Statements.nextval_defaults(tables) if Statements.postgres_rules?(adapter)
+        Statements.settle_sequences(tables)
+        PgNaming.drop_real_limits(tables.values, run.rails_version) if Statements.postgres_rules?(adapter)
         Result.new(tables, run.counts)
       end
 
       def new_run(dirs, pk_type:, root: nil, adapter: nil)
         root = File.expand_path((root || File.join(dirs.first.to_s, "..", "..")).to_s)
-        Run.new(pk_type: pk_type, adapter: adapter, root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new,
+        Run.new(pk_type: pk_type, adapter: adapter, rails_version: RailsVersion.of(root), root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new, held: {},
                 counts: Counts.new(0, 0, 0, 0))
       end
 
@@ -67,7 +72,7 @@ module RailsAiContext
       # Rails' own glob: versioned files at any depth, run in version order. With a root, a
       # file whose real path leaves the app is not read, so every reader counts the same files.
       def migration_files(dirs, root: nil)
-        files = Array(dirs).flat_map { |dir| Dir.glob(File.join(dir.to_s, "**", "[0-9]*_*.rb")) }
+        files = Array(dirs).flat_map { |dir| PathResolver.glob(dir, "**/[0-9]*_*.rb") }
           .sort_by { |path| [ File.basename(path), path ] }
         return files unless root
 
@@ -124,9 +129,8 @@ module RailsAiContext
       def required_db_files(content, path, run)
         literal_requires(content, File.dirname(path), run.root).flat_map do |spec, relative_to_file|
           base = relative_to_file ? File.dirname(path) : run.root
-          pattern = SafePath.absolute?(spec) ? spec : File.join(base, spec)
-          pattern += ".rb" unless File.extname(pattern) == ".rb"
-          Dir.glob(pattern)
+          spec += ".rb" unless File.extname(spec) == ".rb"
+          SafePath.absolute?(spec) ? Dir.glob(spec) : PathResolver.glob(base, spec)
         end.filter_map do |candidate|
           real = File.realpath(candidate) rescue next
           real if real.end_with?(".rb") && run.db_dirs.any? { |dir| SafePath.contained?(real, dir) }
@@ -218,50 +222,69 @@ module RailsAiContext
         entries.each { |entry| entry[:migration_version] = version }
 
         # Migration[5.0] and older run Compatibility::V5_0, which keys a table and its references with integer.
-        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type, run.adapter)
+        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type, run.adapter, run.rails_version, run.held)
         mark_inferred(tables, inferred, inferred_existed) if used_inferred
         count(entries, run.counts)
       end
 
       # Each statement on the table it names, a block's on the table its block
       # opened; only a table definition (create_table's block) indexes timestamps.
-      def dispatch(entries, tables, pk_type, adapter = nil)
+      def dispatch(entries, tables, pk_type, adapter, rails_version, held)
         current_table = nil
         creating = false
+        skipped_at = nil
         entries.each do |entry|
           next if entry[:kind] == :not_replayed
 
+          made = nil
           entry = entry.merge(table: current_table, definition: creating) if entry[:block]
+          target = entry[:table] || current_table
+          parent = Statements.inherited_state(tables, target) if Statements.postgres_rules?(adapter) && !defining?(entry, creating)
           if entry.key?(:action)
             case entry[:action]
             when :create_table, :change_table
               if entry[:action] == :create_table && skipped_create?(entry, tables)
                 current_table = nil
+                skipped_at = entry[:location]
                 next
               end
               current_table = entry[:table]
               creating = entry[:action] == :create_table
-            when :drop_table, :rename_table then current_table = nil
+            when :drop_table, :drop_join_table, :rename_table then current_table = nil
             end
-            made = Statements.apply(entry, tables, pk_type, adapter: adapter)
+            made = Statements.apply(entry, tables, pk_type, adapter: adapter, rails_version: rails_version)
             current_table, creating = made, true if entry[:action] == :create_join_table
           elsif entry[:type] == :create_table
-            current_table = entry[:table]
+            # schema.rb's reader sees the same string-named create_table; it skips what the migration skipped.
+            current_table = entry[:location] == skipped_at ? nil : entry[:table]
             creating = true
-            Statements.seed_table(tables, current_table, entry[:options], pk_type, default: SchemaConventions.key_default(entry[:options] || {}, entry))
+            Statements.seed_table(tables, current_table, entry[:options], pk_type, default: SchemaConventions.key_default(entry[:options] || {}, entry), adapter: adapter)
           elsif entry[:type] == :column && current_table
-            Statements.apply_schema_column(entry, current_table, tables, pk_type, adapter)
+            Statements.apply_schema_column(entry, current_table, tables, pk_type, adapter, rails_version)
           elsif entry[:type] == :index && current_table
             Statements.apply_schema_index(entry, current_table, tables)
+          elsif entry[:type] == :unique_constraint && current_table
+            Statements.add_unique_constraint(tables[current_table], entry[:columns], entry[:options] || {}, adapter, rails_version)
           elsif entry[:type] == :unread_call && current_table
             SchemaConventions.note_unread_call(tables[current_table], entry[:name])
           end
+          Statements.follow_parent(tables, entry[:action] == :rename_table ? entry[:new_name] : target, parent, entry, adapter, rails_version) if parent
+          touched = [ entry[:table], current_table, entry[:new_name], *(%i[create_table_sql create_join_table].include?(entry[:action]) ? Array(made.is_a?(Hash) ? made.keys : made) : []) ]
+          Statements.name_sequences(tables, touched.compact.uniq, adapter, held)
         end
+      end
+
+      # A statement that makes a table, or one inside its block, which no table can inherit yet.
+      def defining?(entry, creating)
+        return %i[create_table create_table_sql create_join_table].include?(entry[:action]) || entry[:definition] == true if entry.key?(:action)
+
+        entry[:type] == :create_table || creating
       end
 
       INVERSE = { create_table: :drop_table, add_column: :remove_column, add_index: :remove_index,
                   add_reference: :remove_reference, add_belongs_to: :remove_reference,
-                  add_foreign_key: :remove_foreign_key, add_check_constraint: :remove_check_constraint }.freeze
+                  add_foreign_key: :remove_foreign_key, add_check_constraint: :remove_check_constraint,
+                  add_unique_constraint: :remove_unique_constraint }.freeze
 
       # Migration#revert runs its block's statements inverted and last first.
       # CommandRecorder#revert flips reverting, so a revert inside one runs forward.
@@ -301,7 +324,10 @@ module RailsAiContext
         when :change_column_null then head.merge(null: !head[:null]) unless head[:null].nil?
         when :change_column_default
           options = head[:options] || {}
-          head.merge(options: options.merge(from: options[:to], to: options[:from])) if options.key?(:from) && options.key?(:to)
+          if options.key?(:from) && options.key?(:to)
+            head.merge(options: options.merge(from: options[:to], to: options[:from]), default_source: head[:from_source], default_proc: head[:from_proc],
+                       default_literal: head[:from_literal], from_source: head[:default_source], from_proc: head[:default_proc], from_literal: head[:default_literal])
+          end
         end
         return [ { kind: :not_replayed, location: head[:location] } ] unless inverse
 
@@ -316,9 +342,9 @@ module RailsAiContext
 
       # Counted after the flow, so a call only down or a rescue reaches is not.
       def count(entries, counts)
-        counts.helper_calls += entries.count { |e| e[:kind] == :not_replayed }
+        counts.helper_calls += entries.count { |e| e[:kind] == :not_replayed || e[:unread_query] }
         counts.unnamed += entries.count { |e| e[:table].nil? && e[:action] == :create_table }
-        counts.unnamed_columns += entries.count { |e| e[:action] == :add_column && e[:column].nil? && e[:table] }
+        counts.unnamed_columns += entries.count { |e| e[:action] == :add_column && e[:column].nil? && e[:table] } + entries.sum { |e| e[:unnamed_columns].to_i }
       end
 
       # [major, minor] from the first `ActiveRecord::Migration[6.0]`; nil for a
@@ -330,7 +356,7 @@ module RailsAiContext
           node.is_a?(Prism::CallNode) && node.name == :[] && node.arguments&.arguments&.first.is_a?(Prism::FloatNode) &&
             node.receiver&.slice&.delete_prefix("::") == "ActiveRecord::Migration"
         end
-        call && call.arguments.arguments.first.slice.split(".").map(&:to_i)
+        call && SchemaConventions.version_parts(call.arguments.arguments.first.slice)
       end
 
       # A class that names its table through itself (Tables::Base's
@@ -342,10 +368,9 @@ module RailsAiContext
         return nil if stem.empty?
 
         # Separator-blind: the app's inflections read OAuthApplications as oauth_applications.
-        squashed = stem.delete("_").downcase
         declared = DeclaredConstant.declarations(content, path_name: stem.camelize)
-          .map { |d| d.name.to_s.split("::").last.to_s.downcase }
-        declared.include?(squashed) ? stem : nil
+          .map { |d| PathResolver.loose_key(d.name.to_s.split("::").last.to_s) }
+        declared.include?(PathResolver.loose_key(stem)) ? stem : nil
       end
 
       def name_unnamed_tables(entries, name)

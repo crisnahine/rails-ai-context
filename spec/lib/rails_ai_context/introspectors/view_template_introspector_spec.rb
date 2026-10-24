@@ -125,15 +125,15 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(introspector.send(:extract_partial_refs, source)).to include("article")
     end
 
-    it "reads render @post.comments as the records the association holds, as partial_interface does" do
-      refs = introspector.send(:extract_partial_refs, "<%= render @post.comments %>\n<%= render @notes if @notes.any? -%>")
-      expect(refs).to contain_exactly("comments", "notes")
+    it "reads render @post.comments as the partial the records the association holds render, as partial_interface does" do
+      refs = introspector.send(:extract_partial_refs, "<%= render @post.comments %>\n<%= render @posts if @posts.any? -%>")
+      expect(refs).to contain_exactly("comments/comment", "posts/post")
     end
 
     # A trailing scope or Enumerable call keeps the records it was called on.
     it "names the records under a trailing call, and no name for a chain on something that is no model" do
       source = "<%= render @posts.first %>\n<%= render @post.comments.reverse %>\n<%= render current_account.widgets %>"
-      expect(introspector.send(:extract_partial_refs, source)).to contain_exactly("posts", "comments")
+      expect(introspector.send(:extract_partial_refs, source)).to contain_exactly("posts/post", "comments/comment")
     end
 
     it "names the records a class_name association holds, not the association" do
@@ -143,18 +143,254 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
         File.write(File.join(root, "app/models/comment.rb"), "class Comment < ApplicationRecord; end\n")
         File.write(File.join(root, "app/models/employee.rb"), "class Employee < ApplicationRecord; end\n")
         refs = described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @post.replies %>\n<%= render @post.starter %>\n<%= render @post.staff %>\n<%= render @posts %>")
-        expect(refs).to contain_exactly("comments", "comment", "employees", "posts")
+        expect(refs).to contain_exactly("comments/comment", "employees/employee", "posts/post")
+      end
+    end
+
+    it "names the partial a model's own to_partial_path gives, for a constant only the app's Zeitwerk inflector spells" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        FileUtils.mkdir_p(File.join(root, "config/initializers"))
+        File.write(File.join(root, "app/models/html_page.rb"), "class HTMLPage < ApplicationRecord\n  def to_partial_path = \"pages/html\"\nend\n")
+        File.write(File.join(root, "config/initializers/zeitwerk.rb"),
+                   "Rails.autoloaders.each { |loader| loader.inflector.inflect(\"html_page\" => \"HTMLPage\") }\n")
+        refs = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(root)) do
+          described_class.new(RailsAiContext::StaticApp.new(root)).send(:extract_partial_refs, "<%= render @html_pages %>")
+        end
+        expect(refs).to eq([ "pages/html" ])
+      end
+    end
+
+    it "keeps a lone local whose class the app does not declare as written, as Rails reads a form builder's partial" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/widgets"))
+        File.write(File.join(root, "app/views/admin/widgets/edit.html.erb"), "<%= form_with model: @widget do |form| %>\n<%= render form %>\n<% end %>\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/widgets/edit.html.erb"][:partials]
+        expect(refs).to eq([ "form" ])
+      end
+    end
+
+    it "reads a form builder block parameter of any name as the partial its builder's to_partial_path names" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/widgets"))
+        File.write(File.join(root, "app/views/admin/widgets/edit.html.erb"), <<~ERB)
+          <%= form_with model: @widget do |f| %><%= render f %><% end %>
+          <%= form_for @widget,
+                builder: Admin::WidgetFormBuilder do |builder| %><%= render(builder) %><% end %>
+          <% @survey.fields.each do |field| %><%= render field %><% end %>
+        ERB
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/widgets/edit.html.erb"][:partials]
+        expect(refs).to eq([ "form", "widget_form", "field" ])
+      end
+    end
+
+    it "reads a brace block's builder and a builder's own fields and fields_for, which keep the form's builder class" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        File.write(File.join(root, "app/views/admin/posts/edit.html.erb"), <<~ERB)
+          <%= form_with(model: Post.new, url: "/x") { |g| %><%= render g %><% } %>
+          <%= form_with(model: Post.new, url: "/x", builder: ReportFormBuilder) { |b| render b } %>
+          <%= form_with model: Post.new, url: "/x" do |f| %><%= f.fields :extra do |ef| %><%= render ef %><% end %><% end %>
+          <%= form_for Post.new, url: "/x", builder: WidgetFormBuilder do |w| %><%= w.fields_for :comments do |cf| %><%= render cf %><% end %><% end %>
+        ERB
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/posts/edit.html.erb"][:partials]
+        expect(refs).to eq([ "form", "report_form", "widget_form" ])
+      end
+    end
+
+    it "reads a builder's block past a brace block inside the helper's arguments, as Ruby binds the do block to the helper" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        File.write(File.join(root, "app/views/admin/posts/edit.html.erb"), <<~ERB)
+          <%= form_with model: Post.new, url: "/x" do |f| %><%= f.fields_for :comments, [Comment.new].reject { |c| c.nil? } do |cf| %><%= render cf %><% end %><% end %>
+          <%= form_with model: Post.new, url: "/x", data: { ids: [1].map { |c| c } } do |g| %><%= render g %><% end %>
+        ERB
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/posts/edit.html.erb"][:partials]
+        expect(refs).to eq([ "form" ])
+      end
+    end
+
+    it "reads a record's fields iterated or given a block as the records it yields, never a form builder" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/fields"))
+        File.write(File.join(root, "app/models/field.rb"), "class Field < ApplicationRecord; end\n")
+        File.write(File.join(root, "app/models/post.rb"), "class Post < ApplicationRecord; end\n")
+        File.write(File.join(root, "app/views/admin/fields/_field.html.erb"), "<%= field.id %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_post.html.erb"), "<%= post.id %>\n")
+        File.write(File.join(root, "app/views/admin/posts/show.html.erb"), <<~ERB)
+          <% @post.fields(:visible).each do |field| %><%= render field %><% end %>
+          <% Post.fields(:x).each do |post| %><%= render post %><% end %>
+          <% @survey.fields :public do |field| %><%= render field %><% end %>
+        ERB
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/posts/show.html.erb"][:partials]
+        expect(refs).to eq([ "admin/fields/field", "admin/posts/post" ])
+      end
+    end
+
+    it "reads fields on a builder handed to a partial as a local as the builder's, and a local record's chained fields as records" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/fields"))
+        File.write(File.join(root, "app/models/field.rb"), "class Field < ApplicationRecord; end\n")
+        File.write(File.join(root, "app/views/admin/fields/_field.html.erb"), "<%= field.id %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_form.html.erb"), "<%= form.text_field :name %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_address_fields.html.erb"),
+                   "<%= f.fields :address do |address| %><%= render address %><% end %>\n" \
+                   "<% post = Post.new %><% post.fields(:visible).each do |field| %><%= render field %><% end %>\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:partials]["admin/posts/_address_fields.html.erb"][:partials]
+        expect(refs).to eq([ "form", "admin/fields/field" ])
+      end
+    end
+
+    it "reads fields on a local the template assigns or a plain block binds as the record's, never the builder's" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/fields"))
+        File.write(File.join(root, "app/models/field.rb"), "class Field < ApplicationRecord; end\n")
+        File.write(File.join(root, "app/views/admin/fields/_field.html.erb"), "<%= field.id %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_form.html.erb"), "<%= form.text_field :name %>\n")
+        {
+          "r1" => "<% post = Post.new %><% post.fields :visible do |field| %><%= render field %><% end %>\n",
+          "r2" => "<% post = Post.new %><% post.fields(:visible) do |field| %><%= render field %><% end %>\n",
+          "r3" => "<% [Post.new].each do |post| %><% post.fields(:x) { |field| %><%= render field %><% } %><% end %>\n"
+        }.each { |name, erb| File.write(File.join(root, "app/views/admin/posts/#{name}.html.erb"), erb) }
+        templates = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]
+        %w[r1 r2 r3].each { |name| expect(templates["admin/posts/#{name}.html.erb"][:partials]).to eq([ "admin/fields/field" ]), name }
+      end
+    end
+
+    it "reads fields on a builder handed in, or assigned one, as the builder's, whatever a script or another block binds" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        File.write(File.join(root, "app/views/admin/posts/_form.html.erb"), "<%= form.text_field :name %>\n")
+        {
+          "_inner6.html.erb" => %(<%= form.fields :extra do |ef| %><%= render ef %><% end %>\n<script>const form = document.querySelector("form");</script>\n),
+          "_inner7.html.erb" => "<% [1].each do |f| %><% end %>\n<%= f.fields :extra do |ef| %><%= render ef %><% end %>\n",
+          "_slim.html.slim" => "button form=dom_id(@p)\n= form.fields :extra do |ef|\n  = render ef\n",
+          "q1.html.erb" => %(<%= form_with model: Post.new, url: "/x" do |form| %><% f = form %><%= f.fields :extra do |ef| %><%= render ef %><% end %><% end %>\n)
+        }.each { |name, source| File.write(File.join(root, "app/views/admin/posts", name), source) }
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+        %w[_inner6.html.erb _inner7.html.erb _slim.html.slim].each { |name| expect(result[:partials]["admin/posts/#{name}"][:partials]).to eq([ "form" ]), name }
+        expect(result[:templates]["admin/posts/q1.html.erb"][:partials]).to eq([ "form" ])
+      end
+    end
+
+    it "reads no partial off a file beside the views that no template handler renders" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        File.write(File.join(root, "app/views/admin/posts/index.html.erb"), "<% Post.all.each do |post| %><%= render post %><% end %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_post.html.erb.orig"), "<%= post.id %>\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/posts/index.html.erb"][:partials]
+        expect(refs).to eq([ "post" ])
+      end
+    end
+
+    it "reads a loop variable after prose naming fields as the record it is, not a form builder" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        File.write(File.join(root, "app/views/admin/posts/text.html.erb"), "<p>All fields</p><% @posts.each do |post| %><%= render post %><% end %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_post.html.erb"), "<%= post.id %>\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/posts/text.html.erb"][:partials]
+        expect(refs).to eq([ "admin/posts/post" ])
+      end
+    end
+
+    it "reads a lone record ivar whose class has no file here as that class's default partial, prefixed as Rails prefixes it" do
+      Dir.mktmpdir do |root|
+        %w[admin/widgets admin/posts posts].each { |dir| FileUtils.mkdir_p(File.join(root, "app/views", dir)) }
+        File.write(File.join(root, "app/views/admin/widgets/show.html.erb"), "<%= render @posts %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_post.html.erb"), "<%= post.id %>\n")
+        File.write(File.join(root, "app/views/posts/_post.html.erb"), "<%= post.id %>\n")
+        static = RailsAiContext::StaticApp.new(root)
+        expect(described_class.new(static).call[:templates]["admin/widgets/show.html.erb"][:partials]).to eq([ "admin/posts/post" ])
+
+        FileUtils.mkdir_p(File.join(root, "config"))
+        File.write(File.join(root, "config/application.rb"),
+                   "class App < Rails::Application\n  config.action_view.prefix_partial_path_with_controller_namespace = false\nend\n")
+        expect(described_class.new(static).call[:templates]["admin/widgets/show.html.erb"][:partials]).to eq([ "posts/post" ])
+      end
+    end
+
+    it "names no partial for a lone record ivar when no model file names its class and its default partial is not on disk" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/widgets"))
+        File.write(File.join(root, "app/views/admin/widgets/show.html.erb"), "<%= render @warnings %>\n")
+        File.write(File.join(root, "app/views/admin/widgets/_warnings.html.erb"), "x\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/widgets/show.html.erb"][:partials]
+        expect(refs).to eq([])
+      end
+    end
+
+    it "reads a lone local whose class has no model file as that class's default partial when the partial is on disk" do
+      Dir.mktmpdir do |root|
+        %w[admin/widgets admin/posts].each { |dir| FileUtils.mkdir_p(File.join(root, "app/views", dir)) }
+        File.write(File.join(root, "app/views/admin/widgets/show.html.erb"), "<% Post.all.each do |post| %><%= render post %><% end %>\n")
+        File.write(File.join(root, "app/views/admin/widgets/_post.html.erb"), "<%= post.id %>\n")
+        File.write(File.join(root, "app/views/admin/posts/_post.html.erb"), "<%= post.id %>\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/widgets/show.html.erb"][:partials]
+        expect(refs).to eq([ "admin/posts/post" ])
+      end
+    end
+
+    it "reads a lone name's class in the view folder's namespace first, as Ruby finds it from a controller nested in that module" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/widgets"))
+        FileUtils.mkdir_p(File.join(root, "app/models/admin"))
+        FileUtils.mkdir_p(File.join(root, "config"))
+        File.write(File.join(root, "app/models/audit_entry.rb"), "class AuditEntry < ApplicationRecord\nend\n")
+        File.write(File.join(root, "app/models/admin/audit_entry.rb"), "class Admin::AuditEntry < ApplicationRecord\nend\n")
+        File.write(File.join(root, "app/views/admin/widgets/show.html.erb"), "<%= render @audit_entries %>\n")
+        File.write(File.join(root, "config/application.rb"),
+                   "class App < Rails::Application\n  config.action_view.prefix_partial_path_with_controller_namespace = false\nend\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/widgets/show.html.erb"][:partials]
+        expect(refs).to eq([ "admin/audit_entries/audit_entry" ])
+      end
+    end
+
+    it "reads a lone name's class only from the model directories, so a service under the view's namespace holds no records" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/widgets"))
+        FileUtils.mkdir_p(File.join(root, "app/services/admin"))
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        FileUtils.mkdir_p(File.join(root, "config"))
+        File.write(File.join(root, "app/models/comment.rb"), "class Comment < ApplicationRecord\nend\n")
+        File.write(File.join(root, "app/services/admin/comment.rb"), "module Admin\n  class Comment\n  end\nend\n")
+        File.write(File.join(root, "app/views/admin/widgets/show.html.erb"), "<%= render @comments %>\n")
+        File.write(File.join(root, "config/application.rb"),
+                   "class App < Rails::Application\n  config.action_view.prefix_partial_path_with_controller_namespace = false\nend\n")
+        refs = described_class.new(RailsAiContext::StaticApp.new(root)).call[:templates]["admin/widgets/show.html.erb"][:partials]
+        expect(refs).to eq([ "comments/comment" ])
+      end
+    end
+
+    it "prefixes a record's partial with the namespace of the view's folder, unless the app turns that off" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin/posts"))
+        FileUtils.mkdir_p(File.join(root, "config"))
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        File.write(File.join(root, "app/models/comment.rb"), "class Comment < ApplicationRecord\nend\n")
+        File.write(File.join(root, "app/views/admin/posts/show.html.erb"), "<%= render @comments %>\n")
+        static = RailsAiContext::StaticApp.new(root)
+        expect(described_class.new(static).call[:templates]["admin/posts/show.html.erb"][:partials]).to eq([ "admin/comments/comment" ])
+
+        File.write(File.join(root, "config/application.rb"),
+                   "class App < Rails::Application\n  config.action_view.prefix_partial_path_with_controller_namespace = false\nend\n")
+        expect(described_class.new(static).call[:templates]["admin/posts/show.html.erb"][:partials]).to eq([ "comments/comment" ])
       end
     end
 
     it "reads a chain on a receiver that is no model from the records it names, when the app has that model" do
-      expect(introspector.send(:extract_partial_refs, "<%= render current_user.comments.recent %>")).to eq([ "comments" ])
+      expect(introspector.send(:extract_partial_refs, "<%= render current_user.comments.recent %>")).to eq([ "comments/comment" ])
       expect(introspector.send(:extract_partial_refs, "<%= render current_account.widgets %>")).to be_empty
     end
 
     it "still detects render @ivar" do
-      source = "<%= render @article %>"
-      expect(introspector.send(:extract_partial_refs, source)).to include("article")
+      source = "<%= render @post %>"
+      expect(introspector.send(:extract_partial_refs, source)).to include("posts/post")
     end
 
     it "does not mistake keyword-argument hashes for a bare local render" do
@@ -218,12 +454,84 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in(%(<%= "hello #{'#'}{@user.name}" %>))).to eq(%w[user])
     end
 
+    # Ruby interpolates `"#@ivar"` too, and an escaped `\#{` is text.
+    it "reads an ivar interpolated by its sigil and none behind an escaped interpolation" do
+      expect(described_class.ivars_in(%(<%= "by #{'#'}@author" %>))).to eq(%w[author])
+      expect(described_class.ivars_in(%(<%= "\\#{'#'}{@shown}" %>))).to eq([])
+    end
+
+    # A quote inside the interpolation does not end the string around it.
+    it "reads an ivar in an interpolation that has a quoted string of its own" do
+      expect(described_class.ivars_in(%(<%= "var x = '#{'#'}{render(@thing, { as: "row" })}';" %>))).to eq(%w[thing])
+      expect(described_class.ivars_in(%(= js "var x = '#{'#'}{render(@thing, { as: "row" })}';"\n), path: "a.html.haml")).to eq(%w[thing])
+    end
+
+    # An unclosed quote before many interpolations doubled the time per interpolation,
+    # and a run of opened ones was tried again from every quote.
+    it "reads a line of unclosed strings and interpolations in a fraction of a second", :cpu_timed do
+      [ %(<%= "x #{'#{a} ' * 30}%>), %(<%= #{'"#{' * 30_000} %>) ].each do |template|
+        expect(cpu_seconds { described_class.ivars_in(template, path: "a.html.erb") }).to be < 2
+      end
+    end
+
+    it "reads 100,000 characters of a non-ASCII string with interpolations in ERB and in a HAML attribute hash in a fraction of a second", :cpu_timed do
+      text = "日本\#{@a}語" * 10_000
+      { %(<%= "#{text}" %>) => "a.html.erb", %(%a{title: "#{text}"}\n) => "a.html.haml" }.each do |template, path|
+        ivars = nil
+        expect(cpu_seconds { ivars = described_class.ivars_in(template, path: path) }).to be < 1
+        expect(ivars).to eq(%w[a])
+      end
+    end
+
     # A HAML or Slim template is not Ruby: its prose carries apostrophes, and
     # treating those as string quotes swallows everything between them.
     it "keeps reading ivars in a template whose prose has apostrophes" do
       template = "%p Don't stop\n= @user.name\n%p We can't win\n= @order.total\n"
 
       expect(described_class.ivars_in(template, path: "app/views/posts/show.html.haml")).to eq(%w[order user])
+    end
+
+    # Ruby in a HAML or Slim view sits in attribute lists, object refs,
+    # multi-line hashes, continued calls and filters, not only after `=`.
+    it "reads ivars wherever a HAML or Slim view writes Ruby" do
+      {
+        "a.html.haml" => [ "%a(href=@url) Link\n", %w[url] ],
+        "b.html.haml" => [ "%div[@post]\n", %w[post] ],
+        "c.html.haml" => [ "%a{href: foo,\n   title: @bar}\n", %w[bar] ],
+        "d.html.haml" => [ %(= link_to "x",\n    @thing_path\n), %w[thing_path] ],
+        "e.html.haml" => [ "= call_me(@a, |\n    @b) |\n", %w[a b] ],
+        "f.html.haml" => [ ":ruby\n  x = @filtered\n", %w[filtered] ],
+        "g.html.slim" => [ %(= link_to "x", \\\n  @thing\n), %w[thing] ],
+        "h.html.slim" => [ "div *@attrs\n", %w[attrs] ],
+        "i.html.slim" => [ "a href=@url = @title\n", %w[title url] ]
+      }.each do |name, (template, ivars)|
+        expect(described_class.ivars_in(template, path: "app/views/posts/#{name}")).to eq(ivars), name
+      end
+    end
+
+    # Page text, a tag name and a comment are markup: only what the text
+    # interpolates is code.
+    it "reads no ivar from a HAML or Slim view's text, tags or comments" do
+      {
+        "a.html.haml" => [ "%p Write to info@example.com or follow @shop\n%h1= @post.title\n%p Hi \#{@user.name}\n", %w[post user] ],
+        "b.html.haml" => [ "/ ask @admin\n-# @hidden\n  @hidden_too\n\\= @escaped\n%p== Hi \#{@name}, @nobody\n", %w[name] ],
+        "c.html.haml" => [ "%p Total: \#@count\n%a(title=\"By \#{@author.name} for @team\") Link\n", %w[author count] ],
+        "d.html.haml" => [ ":javascript\n  var shop = '@shop', id = \#{@post.id};\n:erb\n  <%= @erb %> and @text\n", %w[erb post] ],
+        "e.html.haml" => [ "!!! 5\n%html{lang: @locale}\n  %p Follow @shop |\n    on the web |\n", %w[locale] ],
+        "f.html.slim" => [ "p Write to info@example.com or follow @shop\nh1 = @post.title\np Hi \#{@user.name}\n", %w[post user] ],
+        "g.html.slim" => [ "/ ask @admin\n  and @hidden\n| Follow @shop and \#{@user.name}\n  on the web @team\n", %w[user] ],
+        "h.html.slim" => [ "p Hello @no\n  more text @no_either\n- if @show\n  li: a href=@link Link to @nothing\n", %w[link show] ],
+        "i.html.slim" => [ "a href=\"/u/\#{@user.id}\" title=\"@no\" Link\na(href=@url\n  title=@title) Link\n", %w[title url user] ],
+        "j.html.slim" => [ "javascript:\n  var shop = '@shop', id = \#{@post.id};\nruby:\n  x = @ruby\n", %w[post ruby] ]
+      }.each do |name, (template, ivars)|
+        expect(described_class.ivars_in(template, path: "app/views/posts/#{name}")).to eq(ivars.sort), name
+      end
+    end
+
+    # A line the HAML or Slim reader cannot place is read whole, so no Ruby in it is lost.
+    it "reads a HAML or Slim line it cannot parse whole" do
+      expect(described_class.ivars_in("%a{href: @unclosed\n", path: "app/views/posts/a.html.haml")).to eq(%w[unclosed])
+      expect(described_class.ivars_in("&nbsp; @kept\n", path: "app/views/posts/a.html.slim")).to eq(%w[kept])
     end
 
     # Two ERB comments with apostrophes in them are not one string literal,
@@ -270,6 +578,30 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
 
     it "still reads a template with no ERB tags" do
       expect(described_class.ivars_in("%h1= @post.title")).to eq(%w[post])
+    end
+  end
+
+  # Only app/views/layouts holds layouts. Testing the path on disk dropped an
+  # Admin::LayoutsController's templates, and every template of an app checked
+  # out under a folder named layouts.
+  describe "a folder named layouts outside app/views/layouts" do
+    around do |example|
+      Dir.mktmpdir("view-templates") do |dir|
+        @root = File.join(dir, "layouts/shop")
+        { "layouts/application.html.erb" => "<%= yield %>\n",
+          "posts/index.html.erb" => "<%= @posts.size %>\n",
+          "admin/layouts/index.html.erb" => "<%= @layouts.size %>\n" }.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(@root, "app/views", relative)))
+          File.write(File.join(@root, "app/views", relative), body)
+        end
+        example.run
+      end
+    end
+
+    it "lists every template but the layouts" do
+      templates = described_class.new(RailsAiContext::StaticApp.new(@root)).call[:templates]
+
+      expect(templates.keys.sort).to eq([ "admin/layouts/index.html.erb", "posts/index.html.erb" ])
     end
   end
 
@@ -464,8 +796,8 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     end
 
     it "does not read a string that is not an argument to render" do
-      expect(partials_in("form.html.erb", %(<%= form_with layout: "horizontal" %>\n<%= render @products %>\n)))
-        .to eq([ "products" ])
+      expect(partials_in("form.html.erb", %(<%= form_with layout: "horizontal" %>\n<%= render product %>\n)))
+        .to eq([ "product" ])
     end
   end
 

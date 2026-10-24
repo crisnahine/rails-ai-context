@@ -520,6 +520,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Rails keeps one reflection per name, the last declared, in the order the body runs: Post's tags are
+    # the concern's (included after them), Note's its own (declared after the include).
+    it "lists associations as reflection does, a name declared twice once, where and as last declared" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/concerns/taggable.rb" => "module Taggable\n  extend ActiveSupport::Concern\n  included do\n    has_many :tags, dependent: :destroy\n    has_many :marks\n  end\nend\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\n  has_many :tags\n  belongs_to :author\n  include Taggable\n  has_many :comments\nend\n",
+          "app/models/note.rb" => "class Note < ApplicationRecord\n  include Taggable\n  has_many :tags\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Post"][:associations].map { |a| [ a[:name], a[:options] ] })
+          .to eq([ [ "author", {} ], [ "tags", { dependent: :destroy } ], [ "marks", {} ], [ "comments", {} ] ])
+        expect(models["Note"][:associations].map { |a| [ a[:name], a[:options] ] }).to eq([ [ "marks", {} ], [ "tags", {} ] ])
+      end
+    end
+
     # Eager loading loads both classes from the one file, and each keeps its own declarations.
     it "lists a second model class in a model file with its own declarations" do
       Dir.mktmpdir do |dir|
@@ -623,6 +646,183 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
 
         expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Payment"][:concerns]).to eq([ "Payment::Trackable" ])
+      end
+    end
+
+    # Zeitwerk loads shop/draft.rb for Shop::Draft, and `class Shop::Draft` inside `module Shop` defines it.
+    it "names a class whose compact path starts at the module around it" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/shop/draft.rb" => "module Shop\n  class Shop::Draft < ApplicationRecord\n    has_many :lines\n  end\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(models.keys).to eq([ "Shop::Draft" ])
+        expect(models["Shop::Draft"][:associations].map { |a| a[:name] }).to eq([ "lines" ])
+      end
+    end
+
+    # Module.nesting in `module Shop; class ::Order` is [Order, Shop], so `include Trackable` reaches Shop::Trackable.
+    it "names a module beside a root-opened class by the constant its nesting reaches" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/order.rb" => "module Shop\n  module Trackable\n    extend ActiveSupport::Concern\n  end\n\n" \
+                                   "  class ::Order < ApplicationRecord\n    include Trackable\n  end\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"][:concerns]).to eq([ "Shop::Trackable" ])
+      end
+    end
+
+    # Booted, this Order reflects tracks and lines: `Trackable = Module.new do` is a module as `module Trackable` is.
+    it "gives a class the associations of a Module.new concern its file assigns and it includes" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/order.rb" => "class Order < ApplicationRecord\n  Trackable = Module.new do\n    extend ActiveSupport::Concern\n" \
+                                   "    included do\n      has_many :tracks\n    end\n  end\n  include Trackable\n  has_many :lines\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"][:associations].map { |a| a[:name] }).to contain_exactly("tracks", "lines")
+      end
+    end
+
+    # Booted, Shop::Draft reflects lines and tracks: shop.rb defines Shop::Trackable before the model includes it.
+    it "gives a class the associations of a Module.new concern its namespace's file assigns" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/shop.rb" => "module Shop\nend\n\nShop::Trackable = Module.new do\n  extend ActiveSupport::Concern\n" \
+                                  "  included do\n    has_many :tracks\n  end\nend\n",
+          "app/models/shop/draft.rb" => "class Shop::Draft < ApplicationRecord\n  include Shop::Trackable\n  has_many :lines\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Shop::Draft"][:associations].map { |a| a[:name] }).to contain_exactly("lines", "tracks")
+      end
+    end
+
+    # Rails keeps one reflection per name: booted, Gkid reflects posts and belongs_to :avatar only.
+    it "keeps a child's association in place of a base's of the same name whatever its macro" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/gbase.rb" => "class Gbase < ApplicationRecord\n  has_many :avatar\n  has_many :posts\nend\n",
+          "app/models/gmid.rb" => "class Gmid < Gbase\n  has_one :avatar\nend\n",
+          "app/models/gkid.rb" => "class Gkid < Gmid\n  belongs_to :avatar\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(models["Gmid"][:associations].map { |a| [ a[:type], a[:name] ] }).to contain_exactly([ "has_many", "posts" ], [ "has_one", "avatar" ])
+        expect(models["Gkid"][:associations].map { |a| [ a[:type], a[:name] ] }).to contain_exactly([ "has_many", "posts" ], [ "belongs_to", "avatar" ])
+      end
+    end
+
+    # Booted, Rchild reflects has_one :avatar (the base method runs after its has_many) and Qchild has_many :avatar.
+    it "keeps the association a base's class method declares when the child calls it after its own" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/rbase.rb" => "class Rbase < ApplicationRecord\n  def self.with_avatar\n    has_one :avatar\n  end\nend\n",
+          "app/models/rchild.rb" => "class Rchild < Rbase\n  has_many :avatar\n  with_avatar\nend\n",
+          "app/models/qchild.rb" => "class Qchild < Rbase\n  with_avatar\n  has_many :avatar\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(models["Rchild"][:associations].map { |a| [ a[:type], a[:name] ] }).to eq([ [ "has_one", "avatar" ] ])
+        expect(models["Qchild"][:associations].map { |a| [ a[:type], a[:name] ] }).to eq([ [ "has_many", "avatar" ] ])
+      end
+    end
+
+    # A subclass's reflections start as a copy of its base's, and each declaration is moved to the end (add_reflection,
+    # Rails 7.0 to 8.1). Booted: Kchild [zs, xs, ys (has_one), ws, vs]; Tchild [as, tags, bs], tags where it calls taggable.
+    it "orders associations across a class and its bases as reflection lists them" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/kbase.rb" => "class Kbase < ApplicationRecord\n  has_many :ys\n  has_many :zs\nend\n",
+          "app/models/kchild.rb" => "class Kchild < Kbase\n  has_many :xs\n  has_one :ys\n  def self.extra\n    has_many :ws\n  end\n  extra\n  has_many :vs\nend\n",
+          "app/models/tbase.rb" => "class Tbase < ApplicationRecord\n  def self.taggable\n    has_many :tags\n  end\nend\n",
+          "app/models/tchild.rb" => "class Tchild < Tbase\n  has_many :as\n  taggable\n  has_many :bs\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(models["Kchild"][:associations].map { |a| [ a[:type], a[:name] ] })
+          .to eq([ %w[has_many zs], %w[has_many xs], %w[has_one ys], %w[has_many ws], %w[has_many vs] ])
+        expect(models["Tchild"][:associations].map { |a| a[:name] }).to eq(%w[as tags bs])
+      end
+    end
+
+    # Module.nesting in `class Admin::Billing` is [Admin::Billing], so its `include Helper` is the top-level Helper.
+    it "resolves a compact class's include from its own nesting, never its namespace" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/concerns/admin/helper.rb" => "module Admin::Helper\n  extend ActiveSupport::Concern\n  included do\n    has_many :admin_things\n  end\nend\n",
+          "app/models/concerns/helper.rb" => "module Helper\n  extend ActiveSupport::Concern\n  included do\n    has_many :things\n  end\nend\n",
+          "app/models/admin/billing.rb" => "class Admin::Billing < ApplicationRecord\n  include Helper\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        billing = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Admin::Billing"]
+
+        expect(billing[:concerns]).to eq([ "Helper" ])
+        expect(billing[:associations].map { |a| a[:name].to_s }).to eq([ "things" ])
+      end
+    end
+
+    # Inner is read from its slice of outer/sub.rb, where Module.nesting is [Outer::Sub::Inner, Outer::Sub].
+    it "resolves a nested module's include from the nesting of the file it is read from" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/concerns/outer/sub.rb" => "module Outer::Sub\n  module Inner\n    extend ActiveSupport::Concern\n    include Tools\n    include Kit\n  end\nend\n",
+          "app/models/concerns/outer/tools.rb" => "module Outer::Tools\n  extend ActiveSupport::Concern\n  included do\n    has_many :outer_tools\n  end\nend\n",
+          "app/models/concerns/tools.rb" => "module Tools\n  extend ActiveSupport::Concern\n  included do\n    has_many :tools\n  end\nend\n",
+          "app/models/concerns/outer/sub/kit.rb" => "module Outer::Sub::Kit\n  extend ActiveSupport::Concern\n  included do\n    has_many :sub_kits\n  end\nend\n",
+          "app/models/concerns/kit.rb" => "module Kit\n  extend ActiveSupport::Concern\n  included do\n    has_many :kits\n  end\nend\n",
+          "app/models/widget.rb" => "class Widget < ApplicationRecord\n  include Outer::Sub::Inner\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        widget = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Widget"]
+
+        expect(widget[:associations].map { |a| a[:name].to_s }).to contain_exactly("tools", "sub_kits")
       end
     end
 
@@ -736,6 +936,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "credits what an `||=` Class.new block declares to the constant it assigns, and to no model when it assigns nothing" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/outer.rb" => <<~RUBY
+            class Outer < ApplicationRecord
+              Fresh ||= Class.new(ApplicationRecord) do
+                has_many :fresh_items
+              end
+              Fresh ||= Class.new(ApplicationRecord) do
+                has_many :unrun_items
+              end
+              has_many :parts
+            end
+          RUBY
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Outer"][:associations].map { |a| a[:name] }).to eq([ "parts" ])
+        # Booted: Outer::Fresh.reflect_on_all_associations names fresh_items alone.
+        expect(models["Outer::Fresh"][:associations].map { |a| a[:name] }).to eq([ "fresh_items" ])
+      end
+    end
+
     it "credits a nested class's settings and gem macros to the nested class, not the model around it" do
       Dir.mktmpdir do |dir|
         files = {
@@ -805,6 +1034,23 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(models["Post"][:associations].map { |a| a[:name] }).to eq([ "flags" ])
         expect(models["Post"][:concerns]).to eq([ "Flaggable" ])
         expect(models["Post"]).not_to have_key(:concerns_unread)
+      end
+    end
+
+    # `Post.prepend` in Blog::Post's body resolves Post through [Blog::Post, Blog]: Blog::Post::Post is not there, Blog::Post is.
+    it "merges a prepend whose receiver resolves through the nesting it is written in" do
+      Dir.mktmpdir do |dir|
+        files = {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/concerns/flaggable.rb" => "module Flaggable\n  extend ActiveSupport::Concern\n  prepended do\n    has_many :flags\n  end\nend\n",
+          "app/models/blog/post.rb" => "module Blog\n  class Post < ApplicationRecord\n    Post.prepend(Flaggable)\n  end\nend\n"
+        }
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Blog::Post"][:concerns]).to eq([ "Flaggable" ])
       end
     end
 
@@ -6890,13 +7136,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "STI on the booted tier" do
+    # Rails: Vehicle.subclasses is [Car]; SportsCar is Car's child, as its own sti_parent says.
+    it "lists a base's direct subclasses as its children, not every class below it" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:zq_vehicles, force: true) { |t| t.string :type }
+      vehicle = stub_const("ZqVehicle", Class.new(ApplicationRecord) { self.table_name = "zq_vehicles" })
+      car = stub_const("ZqCar", Class.new(vehicle))
+      stub_const("ZqSportsCar", Class.new(car))
+      introspector = described_class.new(Rails.application)
+
+      expect(introspector.send(:extract_sti_info, vehicle)).to eq(sti_base: true, sti_children: [ "ZqCar" ], type_column: "type")
+      expect(introspector.send(:extract_sti_info, car)).to eq(sti_base: false, sti_parent: "ZqVehicle", sti_children: [ "ZqSportsCar" ], type_column: "type")
+    ensure
+      connection&.drop_table(:zq_vehicles, if_exists: true)
+    end
+
     it "reads the type column the model names, not a fixed one" do
       parent = Class.new do
         def self.name = "Vehicle"
         def self.abstract_class? = false
       end
       model = double("Car", inheritance_column: "kind", connected?: true, table_exists?: true,
-                     columns_hash: { "kind" => double }, descendants: [], superclass: parent)
+                     columns_hash: { "kind" => double }, subclasses: [], superclass: parent)
 
       sti = described_class.new(Rails.application).send(:extract_sti_info, model)
 
@@ -6924,8 +7185,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end)
         phone = stub_const("ZzPhone", Class.new(gadget))
         allow(ActiveRecord::Base).to receive(:descendants).and_return([ base, vehicle, car, lone, gadget, phone ])
-        { vehicle => [ car ], car => [], lone => [], gadget => [ phone ], phone => [] }.each do |model, descendants|
-          allow(model).to receive_messages(connected?: false, table_exists?: false, descendants: descendants)
+        { vehicle => [ car ], car => [], lone => [], gadget => [ phone ], phone => [] }.each do |model, subclasses|
+          allow(model).to receive_messages(connected?: false, table_exists?: false, subclasses: subclasses)
         end
 
         models = RailsAiContext::RunCache.around { described_class.new(RailsAiContext::StaticApp.new(dir)).call }
@@ -7116,6 +7377,45 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(details[:instance_methods].size).to eq(described_class::PAYLOAD_METHOD_CAP)
         expect(details[:source_instance_methods].size).to eq(35)
         expect(details[:source_instance_methods]).to include("step_35")
+      end
+    end
+  end
+
+  # Rails' own option lists: `_enum`'s keywords, and the underscored ones the hash form sets apart.
+  describe "enum options read without booting" do
+    def ticket(dir, body, rails: nil)
+      FileUtils.mkdir_p(File.join(dir, "app/models"))
+      File.write(File.join(dir, "app/models/ticket.rb"), "class Ticket < ApplicationRecord\n#{body}end\n")
+      if rails
+        File.write(File.join(dir, "Gemfile"), "gem \"rails\"\n")
+        File.write(File.join(dir, "Gemfile.lock"),
+                   "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+      end
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Ticket"].values_at(:enums, :enum_options)
+    end
+
+    it "reads the hash form's underscored options as options, never as enums" do
+      Dir.mktmpdir do |dir|
+        enums, options = ticket(dir, "  enum status: { open: 0, closed: 1 }, _instance_methods: false, _prefix: true\n")
+
+        expect(enums).to eq("status" => { "open" => 0, "closed" => 1 })
+        expect(options).to eq("status" => { prefix: true, instance_methods: false })
+      end
+    end
+
+    it "reads an underscored keyword after a symbol name as no option, which Rails ignores or refuses" do
+      Dir.mktmpdir do |dir|
+        _, options = ticket(dir, "  enum :level, { low: 0, high: 1 }, _scopes: false, suffix: true\n")
+
+        expect(options).to eq("level" => { suffix: true })
+      end
+    end
+
+    it "drops instance_methods: on Rails 7.0, whose enum ignores it" do
+      Dir.mktmpdir do |dir|
+        _, options = ticket(dir, "  enum :level, { low: 0, high: 1 }, instance_methods: false, prefix: true\n", rails: "7.0.8")
+
+        expect(options).to eq("level" => { prefix: true })
       end
     end
   end

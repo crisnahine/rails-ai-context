@@ -89,6 +89,22 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
       expect(queries).to all(satisfy { |sql| !sql.include?("pg_total_relation_size") })
     end
 
+    it "counts no Rails bookkeeping table on PostgreSQL or MySQL, as the schema lists none" do
+      conn = ActiveRecord::Base.connection
+      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_rows)
+        .and_return([ { name: "parcels", rows: 7, dead_rows: 0 }, { name: "schema_migrations", rows: 40, dead_rows: 0 },
+                      { name: "ar_internal_metadata", rows: 1, dead_rows: 0 } ])
+      allow(conn).to receive(:select_all).with(a_string_matching(/information_schema\.TABLES/i))
+        .and_return([ { "table_name" => "products", "approximate_row_count" => 3 },
+                      { "table_name" => "schema_migrations", "approximate_row_count" => 40 } ])
+
+      { "PostgreSQL" => "parcels", "Mysql2" => "products" }.each do |adapter, table|
+        allow(conn).to receive(:adapter_name).and_return(adapter)
+        result = introspector.call
+        expect([ result[:tables].map { |t| t[:table] }, result[:total_tables] ]).to eq([ [ table ], 1 ]), adapter
+      end
+    end
+
     it "says row estimates are not available on an adapter with no family" do
       allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("SQLServer")
 

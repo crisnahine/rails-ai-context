@@ -213,6 +213,66 @@ RSpec.describe RailsAiContext::Install::Uninstall do
     expect(said).to include([ :ok, "  Removed a/.rails-ai-context.yml" ], [ :ok, "  Removed b/.rails-ai-context.yml" ])
   end
 
+  it "deletes and edits nothing a symlinked directory carries out of the app, and names what it left" do
+    Dir.mktmpdir do |outside|
+      outside = File.realpath(outside)
+      app
+      write("claude/rules/rails-schema.md", "<!-- rails-ai-context:auto-generated -->\n# Schema\n", root: outside)
+      write("github/copilot-instructions.md", "<!-- BEGIN rails-ai-context -->\nx\n<!-- END rails-ai-context -->\nmine\n", root: outside)
+      write("cursor/rules/rails-project.mdc", "---\nalwaysApply: true\n---\n", root: outside)
+      write("initializers/rails_ai_context.rb", "RailsAiContext.configure { }\n", root: outside)
+      File.symlink(File.join(outside, "claude"), File.join(@root, ".claude"))
+      File.symlink(File.join(outside, "github"), File.join(@root, ".github"))
+      File.symlink(File.join(outside, "cursor"), File.join(@root, ".cursor"))
+      File.symlink(File.join(outside, "initializers"), File.join(@root, "config/initializers"))
+      before = tree(outside)
+
+      uninstall
+
+      expect(tree(outside)).to eq(before)
+      expect(said.select { |level, _| level == :warn }.map(&:last).join("\n"))
+        .to include("config/initializers/rails_ai_context.rb").and include(".cursor/rules/")
+        .and include(".claude/rules/").and include(".github/copilot-instructions.md")
+      expect(said.map(&:last).join("\n")).not_to include("check its permissions")
+    end
+  end
+
+  it "edits no .gitignore a symlink carries out of the app, and names it" do
+    Dir.mktmpdir do |outside|
+      outside = File.realpath(outside)
+      app
+      write("gitignore", "*.log\n\n#{json_note}\n.ai-context.json\n", root: outside)
+      File.symlink(File.join(outside, "gitignore"), File.join(@root, ".gitignore"))
+
+      uninstall
+
+      expect(File.binread(File.join(outside, "gitignore"))).to eq("*.log\n\n#{json_note}\n.ai-context.json\n")
+      expect(said).to include([ :warn, "Left .gitignore as it is - it is a symlink or behind one, which this run does not follow" ])
+    end
+  end
+
+  it "names a rules folder that is itself a symlink and holds the gem's files, and deletes nothing through it" do
+    Dir.mktmpdir do |outside|
+      outside = File.realpath(outside)
+      app
+      write("rules/rails-schema.md", "<!-- rails-ai-context:auto-generated -->\n# Schema\n", root: outside)
+      write("team-rules/house-style.md", "# Ours\n", root: outside)
+      FileUtils.mkdir_p(File.join(@root, ".claude"))
+      FileUtils.mkdir_p(File.join(@root, ".cursor"))
+      File.symlink(File.join(outside, "rules"), File.join(@root, ".claude/rules"))
+      File.symlink(File.join(outside, "team-rules"), File.join(@root, ".cursor/rules"))
+      before = tree(outside)
+
+      uninstall
+
+      expect(tree(outside)).to eq(before)
+      warned = said.select { |level, _| level == :warn }.map(&:last).join("\n")
+      expect(warned).to include("Left .claude/rules/ as it is - it is a symlink or behind one, which this run does not follow")
+      expect(warned).not_to include("check its permissions")
+      expect(warned).not_to include(".cursor/rules/")
+    end
+  end
+
   it "finds nothing to do on a second run" do
     app
     write(".rails-ai-context.yml", "ai_tools:\n- claude\n")

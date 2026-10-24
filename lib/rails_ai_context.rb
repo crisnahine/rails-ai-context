@@ -184,7 +184,8 @@ module RailsAiContext
     # format: nil means the recorded selection; all when nothing is recorded.
     # Always one serializer call for every format: opencode and codex share
     # AGENTS.md, and generating one format at a time defeats that dedup.
-    def generate_context(app = nil, format: nil)
+    # `context:` is an introspection of `app` already in hand.
+    def generate_context(app = nil, format: nil, context: nil)
       app ||= default_app
       # An explicit format names a file, so `ai:context:claude` still writes
       # it. Without one, an MCP-only install writes nothing at all.
@@ -196,8 +197,8 @@ module RailsAiContext
       format ||= selected.nil? ? :all : selected
       # One run for both halves: the serializers scan app/services again, and
       # the introspection just read those files.
-      RunCache.around do
-        context = introspect(app)
+      RunCache.around_app(app) do
+        context ||= introspect(app)
         Serializers::ContextFileSerializer.new(context, format: format).call
       end
     end

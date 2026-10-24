@@ -109,8 +109,7 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
       RUBY
 
       result = described_class.call(path, context: context)
-      expect(result.hints.map(&:model_name)).to include("Post")
-      expect(result.warnings).to be_empty
+      expect(result.hints.map(&:model_name)).to eq([ "Post" ])
     end
 
     it "detects models from params.require" do
@@ -127,7 +126,7 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
       expect(result.hints.map(&:model_name)).to include("Post")
     end
 
-    it "hints once, without a warning, for a model the acronym inflects two ways" do
+    it "hints once, for a model the acronym inflects two ways" do
       path = write_controller(<<~RUBY)
         class ConfigsController < ApplicationController
           def create
@@ -144,7 +143,6 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
 
       result = described_class.call(path, context: context)
       expect(result.hints.map(&:model_name)).to eq([ "OAuthClientConfig" ])
-      expect(result.warnings).to eq([])
     end
 
     it "respects hydration_max_hints configuration" do

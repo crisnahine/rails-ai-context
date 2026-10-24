@@ -318,6 +318,26 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
+    it "lists each job a file declares, each on its own queue" do
+      jobs = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/jobs"))
+        File.write(File.join(dir, "app/jobs/application_job.rb"), "class ApplicationJob < ActiveJob::Base\nend\n")
+        File.write(File.join(dir, "app/jobs/mailer_job.rb"), <<~RUBY)
+          class MailerJob < ApplicationJob
+            queue_as :default
+            def perform; end
+          end
+
+          class OtherJob < ApplicationJob
+            queue_as :critical
+            def perform; end
+          end
+        RUBY
+      end[:jobs]
+
+      expect(jobs.to_h { |job| [ job[:name], job[:queue] ] }).to eq("MailerJob" => "default", "OtherJob" => "critical")
+    end
+
     it "reads a base's class body from the candidate walk, with no second traversal" do
       base = "class ApplicationJob < ActiveJob::Base\n  queue_with_priority 5\n  before_perform :log\nend\n"
       walks = 0
@@ -1360,11 +1380,11 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           RUBY
         end
 
-        expect(result[:jobs].map { |j| [ j[:name], j[:unknown_base] ] }).to eq([ [ "Jobs::Cleanup", nil ] ])
+        expect(result[:jobs].map { |j| [ j[:name], j[:unknown_base] ] }).to eq([ [ "Jobs::Cleanup", nil ], [ "Jobs::Sweep", nil ] ])
       end
 
-      # An error class beside a job in one file is not a job. The file's own
-      # `perform` and the file's own ancestry both belong to the other class.
+      # An error class beside a job in one file is not a job, and the job beside
+      # it keeps its own `perform` and ancestry.
       it "does not read another class in the file as this one's job" do
         result = static_result do |dir|
           FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
@@ -1382,7 +1402,42 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           RUBY
         end
 
-        expect(result[:jobs].map { |j| j[:name] }).to eq([])
+        expect(result[:jobs].map { |j| j[:name] }).to eq(%w[Jobs::Rebuild])
+      end
+
+      # A class nested in a worker or job does not run the outer class's body:
+      # no `include Sidekiq::Job`, no `queue_as`.
+      it "does not give a nested class the body of the class around it, in either tier" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          FileUtils.mkdir_p(File.join(dir, "app", "workers"))
+          File.write(File.join(dir, "app", "jobs", "application_job.rb"), "class ApplicationJob < ActiveJob::Base; end\n")
+          File.write(File.join(dir, "app", "workers", "hard_worker.rb"), <<~RUBY)
+            class HardWorker
+              include Sidekiq::Job
+              class Error < StandardError; end
+              def perform; end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "sync_job.rb"), <<~RUBY)
+            class SyncJob < ApplicationJob
+              queue_as :sync
+              def perform; end
+              class Failed < StandardError
+                def perform; end
+              end
+            end
+          RUBY
+
+          static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+          expect(static[:workers].map { |w| w[:name] }).to eq(%w[HardWorker])
+          expect(static[:jobs].to_h { |j| [ j[:name], j[:queue] ] }).to eq("SyncJob" => "sync")
+
+          allow(Rails.application).to receive(:root).and_return(Pathname.new(dir))
+          booted = described_class.new(Rails.application).call
+          expect(booted[:workers].map { |w| w[:name] }).to eq(%w[HardWorker])
+          expect(booted[:jobs].map { |j| j[:name] }).not_to include("SyncJob::Failed")
+        end
       end
 
       # The path is still the only thing carrying the namespace when the
@@ -2438,5 +2493,30 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         end
       end
     end
+  end
+
+  # Reflection holds a queue_as block as a Proc; its text is read from the class that declared it.
+  it "reads a booted job's computed queue from its own body when another job shares its file" do
+    path = File.join(Rails.root, "app", "jobs", "pair_alpha_job.rb")
+    File.write(path, <<~RUBY)
+      class PairAlphaJob < ActiveJob::Base
+        queue_as { :alpha }
+        def perform; end
+      end
+
+      class PairBetaJob < ActiveJob::Base
+        queue_as { :beta }
+        def perform; end
+      end
+    RUBY
+    load path
+
+    jobs = described_class.new(Rails.application).call[:jobs].to_h { |j| [ j[:name], j[:queue] ] }
+
+    expect(jobs.slice("PairAlphaJob", "PairBetaJob")).to eq("PairAlphaJob" => "computed by a block: `{ :alpha }`",
+                                                             "PairBetaJob" => "computed by a block: `{ :beta }`")
+  ensure
+    FileUtils.rm_f(path)
+    %i[PairAlphaJob PairBetaJob].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
   end
 end

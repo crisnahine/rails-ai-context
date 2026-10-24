@@ -14,20 +14,18 @@ module RailsAiContext
         model_names = ivar_names.filter_map { |ivar| ivar_to_model_name(ivar) }.uniq
         return HydrationResult.new if model_names.empty?
 
-        ModelHints.resolve(model_names, context: context,
-          describe: ->(name) { "@#{name.underscore} used in view but '#{name}' model not found" })
+        ModelHints.resolve(model_names, context: context)
       rescue => e
         RailsAiContext.debug_fail(e, HydrationResult.new, label: "ViewHydrator")
       end
 
       # Convert an instance variable name to a model name by convention.
-      # @post → "Post", @posts → "Post", @current_user → "User"
+      # @post → "Post", @posts → "Post", @order_items → "OrderItem"
       def self.ivar_to_model_name(ivar_name)
         name = ivar_name.to_s
         # Skip framework/common non-model ivars
         return nil if SKIP_IVARS.include?(name)
 
-        # Singularize and classify: "posts" → "Post", "order_items" → "OrderItem"
         name.singularize.camelize
       rescue StandardError
         nil

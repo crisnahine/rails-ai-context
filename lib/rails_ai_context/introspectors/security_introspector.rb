@@ -123,16 +123,17 @@ module RailsAiContext
 
       def extract_csrf
         app_controller = File.join(root, "app/controllers/application_controller.rb")
-        result = { default: "enabled" }
-        return result unless File.exist?(app_controller)
-
-        ast = SourceIntrospector.walk(app_controller, {
-          csrf: -> { Listeners::GenericMacroListener.new(:protect_from_forgery, :skip_forgery_protection) }
-        })
-        hits = ast[:csrf]
-
+        hits = File.exist?(app_controller) ? SourceIntrospector.walk(app_controller, {
+          csrf: -> { Listeners::GenericMacroListener.new(:protect_from_forgery, :skip_forgery_protection, :skip_before_action) }
+        })[:csrf] : []
         protect = hits.find { |h| h[:macro] == :protect_from_forgery }
-        skip = hits.find { |h| h[:macro] == :skip_forgery_protection }
+        skip = hits.find { |h| h[:macro] == :skip_forgery_protection || (h[:macro] == :skip_before_action && h[:args].include?(:verify_authenticity_token)) }
+
+        protection = forgery_protection(protect, skip)
+        return { default: "not included (ActionController::API)" } if protection == :not_included
+
+        result = { default: protection == :off ? "off (verify_authenticity_token does not run)" : "enabled" }
+        return result unless File.exist?(app_controller)
 
         if protect
           opts = protect[:options]
@@ -141,8 +142,10 @@ module RailsAiContext
           if opts.empty? && protect[:args].any?
             result[:protect_from_forgery] = protect[:args].map { |a| ":#{a}" }.join(", ")
           end
-        elsif skip
-          result[:default] = "skipped (skip_forgery_protection present)"
+        end
+        if skip && (protect.nil? || protection == :off)
+          label = skip[:macro] == :skip_forgery_protection ? "skip_forgery_protection" : "skip_before_action :verify_authenticity_token"
+          result[:default] = "skipped (#{label} present)"
         end
 
         per_request_token = app.config.action_controller.respond_to?(:per_form_csrf_tokens) ? app.config.action_controller.per_form_csrf_tokens : nil
@@ -153,6 +156,26 @@ module RailsAiContext
         result
       rescue => e
         RailsAiContext.debug_fail(e, { default: "unknown" }, label: "extract_csrf")
+      end
+
+      # The loaded class answers what Rails runs: tokens are checked only when protect_from_forgery
+      # added the verify_authenticity_token callback. Where it cannot be loaded, the file's chain and
+      # macros decide, and Base adds the callback only under default_protect_from_forgery.
+      def forgery_protection(protect, skip)
+        klass = begin
+          "ApplicationController".safe_constantize
+        rescue StandardError, ScriptError
+          nil
+        end
+        unless klass.is_a?(Class)
+          return :not_included if ControllerSettings.api?("ApplicationController", root)
+
+          return !skip && (protect || app.config.action_controller.default_protect_from_forgery) ? :enabled : :off
+        end
+        return :not_included unless klass.ancestors.include?(ActionController::RequestForgeryProtection)
+
+        verifies = klass._process_action_callbacks.any? { |cb| cb.kind == :before && cb.filter == :verify_authenticity_token }
+        verifies ? :enabled : :off
       end
 
       def extract_cookie_config
@@ -214,7 +237,7 @@ module RailsAiContext
         when Symbol then value.to_s
         when Hash then value.each_with_object({}) { |(key, nested), result| result[key.to_s] = serializable(nested) }
         when Array then value.map { |nested| serializable(nested) }
-        when Proc then Confidence.unavailable("computed at request time")
+        when Proc then Confidence::AT_REQUEST
         else value
         end
       end

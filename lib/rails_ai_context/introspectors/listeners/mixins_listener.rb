@@ -38,8 +38,8 @@ module RailsAiContext
         end
 
         # The record of `node` mixing in `name`.
-        def self.record(node, macro, name, ancestor:, owner: [])
-          { macro: macro, name: name, ancestor: ancestor, owner: owner, location: node.location.start_line,
+        def self.record(node, macro, name, ancestor:, owner: [], nesting: [])
+          { macro: macro, name: name, ancestor: ancestor, owner: owner, nesting: nesting, location: node.location.start_line,
             confidence: confidence_for(node) }
         end
 
@@ -64,8 +64,9 @@ module RailsAiContext
             next unless name
 
             ancestor = receiver.nil? && @singleton_depth.zero? && ANCESTOR_MACROS.include?(macro)
-            record = self.class.record(node, macro, name, ancestor: ancestor, owner: @owner_stack.dup)
+            record = owned_record(node, macro, name, ancestor: ancestor)
             record[:receiver] = receiver if receiver
+            record[:top_level] = true if arg.slice.start_with?("::")
             @results << record
           end
         end
@@ -80,7 +81,12 @@ module RailsAiContext
 
           macro = extract_keyword_nodes(node)[:prepend].is_a?(Prism::TrueNode) ? :prepend : :include
           name = "#{@owner_stack.join("::")}::#{topic.unescaped}"
-          @results << self.class.record(node, macro, name, ancestor: @singleton_depth.zero?, owner: @owner_stack.dup).merge(inline: true)
+          @results << owned_record(node, macro, name, ancestor: @singleton_depth.zero?).merge(inline: true)
+        end
+
+        # The class method's record, with the owner and nesting it is written in.
+        def owned_record(node, macro, name, ancestor:)
+          self.class.record(node, macro, name, ancestor: ancestor, owner: @owner_stack.dup, nesting: @owner_nesting.dup)
         end
 
         # `include X`, and `send :include, X`, the same include written to reach a private method.

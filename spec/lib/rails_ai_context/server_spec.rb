@@ -800,32 +800,34 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
-  # The old warning said a non-loopback bind served the network. With the
-  # SDK's Host check a client addressing the machine by IP is refused, and a
-  # client sending `Host: localhost` is not, so it was true of neither.
+  # The server's own Host check refuses a client addressing the machine by IP,
+  # on every SDK, and serves a client sending `Host: localhost`, so the warning
+  # names both.
   describe "the warning for a bind beyond loopback" do
     let(:s) { described_class.new(app, transport: :http) }
 
-    # mcp 1.x's transport takes allowed_hosts and refuses a foreign Host; the
-    # 0.13 floor the gemspec allows has no such check.
-    it "knows whether the SDK in this bundle checks the Host header" do
-      takes_hosts = MCP::Server::Transports::StreamableHTTPTransport.instance_method(:initialize)
-        .parameters.any? { |_, name| name == :allowed_hosts }
-      expect(s.send(:host_checked?)).to be(takes_hosts)
-      expect(s.send(:host_checked?)).to be(true) if Gem::Version.new(MCP::VERSION) >= Gem::Version.new("1.7")
-    end
-
-    it "says who the SDK refuses and who it serves" do
-      allow(s).to receive(:host_checked?).and_return(true)
+    it "says who the server refuses and who it serves, on every SDK" do
       warning = s.send(:bind_warning, "0.0.0.0")
 
-      expect(warning).to include("0.0.0.0", %(403 "Invalid Host header"), "Host: localhost", "no authentication")
+      expect(warning).to include("0.0.0.0", "The server answers only requests whose Host header is 127.0.0.1, ::1 or localhost",
+                                 %(403 "Invalid Host header"), "Host: localhost", "no authentication")
+      expect(warning).not_to include("Every tool answers whoever reaches it")
     end
 
-    it "says every tool answers where the SDK has no Host check" do
-      allow(s).to receive(:host_checked?).and_return(false)
+    it "warns at start for a bind the Host check does not count as loopback, and only then" do
+      allow(s).to receive_messages(default_rack_handler: double("handler", run: nil), rack_handler_options: {}, tool_banner: "")
+      allow(s).to receive(:maybe_start_live_reload)
+      allow(MCP::Server::Transports::StreamableHTTPTransport).to receive(:new)
+        .and_return(instance_double(MCP::Server::Transports::StreamableHTTPTransport, close: nil))
+      config = RailsAiContext.configuration
+      before = config.http_bind
 
-      expect(s.send(:bind_warning, "0.0.0.0")).to include("Every tool answers whoever reaches it")
+      config.http_bind = "::1"
+      expect { s.send(:start_http, instance_double(MCP::Server)) }.not_to output(/WARNING/).to_stderr
+      config.http_bind = "0.0.0.0"
+      expect { s.send(:start_http, instance_double(MCP::Server)) }.to output(/WARNING: MCP HTTP transport binding to 0\.0\.0\.0/).to_stderr
+    ensure
+      config.http_bind = before
     end
   end
 

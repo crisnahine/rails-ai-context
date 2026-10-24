@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
   def routes_for(source)
@@ -90,6 +91,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(records.map { |r| r[:name] }).to eq([ "api_v1_gift_cards_redeem" ])
   end
 
+  it "names a path with a trailing or doubled slash as Rails does, after cleaning the path" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        post "/webhooks/payments/", to: "pages#hook"
+        get "foo//bar", to: "pages#show"
+        resources :heroes, only: [] do
+          member { get "stats/", action: :stats }
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| r[:name] }).to eq(%w[webhooks_payments foo_bar stats_hero])
+  end
+
   # A path with a character outside [\w\-/] contributes nothing to the name,
   # so a top-level one gets no name at all.
   it "leaves a dotted path out of the name" do
@@ -103,6 +118,716 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     RUBY
 
     expect(records.map { |r| r[:name] }).to eq([ nil, "api" ])
+  end
+
+  # Mapper#name_for_action returns nil under a parent resource when neither `as:` nor the path names the route.
+  it "leaves a resource block's route unnamed when its path holds a dynamic segment, so the default keeps its name" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :users, only: %i[destroy] do
+          delete "groups/:group_id" => "users#remove_group"
+          get "files/*rest", to: "users#files", as: :files
+          resources :posts, only: %i[show] do
+            get "tag/:t" => "posts#tag"
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:action], r[:name] ] }).to contain_exactly(
+      [ "/users/:user_id/groups/:group_id", "remove_group", nil ],
+      [ "/users/:user_id/files/*rest", "files", "user_files" ],
+      [ "/users/:user_id/posts/:post_id/tag/:t", "tag", nil ],
+      [ "/users/:user_id/posts/:id", "show", "user_post" ],
+      [ "/users/:id", "destroy", "user" ]
+    )
+  end
+
+  it "puts a symbol-named verb route at its path: option, keeping the action's name, as Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :heroes, only: [] do
+          member { get :stats, path: "statistics" }
+          collection { get :top, path: "best" }
+          get :ex, on: :member, path: "ex2"
+        end
+        get :plain, path: "pl", to: "a#b"
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:name], "#{r[:controller]}##{r[:action]}" ] }).to eq([
+      [ "/heroes/:id/statistics", "stats_hero", "heroes#stats" ],
+      [ "/heroes/best", "top_heroes", "heroes#top" ],
+      [ "/heroes/:id/ex2", "ex_hero", "heroes#ex" ],
+      [ "/pl", "plain", "a#b" ]
+    ])
+  end
+
+  it "counts a symbol-named verb route with a computed path: as a construct it could not expand" do
+    results = routes_for(<<~RUBY)
+      Rails.application.routes.draw do
+        get :stats, path: Config.stats_path, to: "a#b"
+      end
+    RUBY
+
+    expect(results).to eq([ { type: :dynamic, macro: :get, location: 2 } ])
+  end
+
+  # A live RouteSet draws /x, /a, /b, /x, /y and /z from what these constants hold, which only a boot can read:
+  # an unreadable target is a construct the walk could not expand, an unreadable controller or action is marked on its route.
+  it "counts a verb route whose target is a value it cannot read, and marks a controller or action it cannot read" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        get "x", to: HANDLERS[:x]
+        %w[a b].each do |x|
+          get x, to: MAP[x]
+        end
+        get "x", to: HANDLERS.fetch(:x)
+        get "y", controller: CTRL, action: "show"
+        get "z", controller: "pages", action: Actions::ZED
+      end
+    ROUTES
+
+    expect(results.map { |r| r[:type] == :route ? [ r[:path], r[:controller], r[:action] ] : [ r[:macro], r[:location] ] }).to eq(
+      [ [ :get, 2 ], [ :get, 4 ], [ :get, 4 ], [ :get, 6 ], [ "/y", "[INFERRED]", "show" ], [ "/z", "pages", "[INFERRED]" ] ]
+    )
+    expect(results.select { |r| r[:type] == :route }.map { |r| r[:confidence] }).to eq([ "[INFERRED]", "[INFERRED]" ])
+  end
+
+  # A live RouteSet draws GET /a to posts#index and GET /r to posts#new from the strings the file assigns,
+  # serves /e with the lambda, /u, /v and /w with values only a boot can read, and /x with the Api::V1 app.
+  it "reads a route target a constant the file assigns as the value Ruby reads, and counts one it cannot see" do
+    results = routes_for(<<~ROUTES)
+      TO = "posts#index"
+      ROCKET = "posts#new"
+      LAM = ->(env) { [200, {}, []] }
+      Rails.application.routes.draw do
+        get "a", to: TO
+        get "r" => ROCKET
+        get "e", to: LAM
+        get "u", to: UNSEEN
+        get "v" => UNSEEN
+        get "w" => HANDLERS[:w]
+        get "x", to: Api::V1
+      end
+    ROUTES
+
+    expect(results.map { |r| r[:type] == :route ? [ r[:path], r[:controller], r[:action] ] : [ r[:macro], r[:location] ] }).to eq(
+      [ [ "/a", "posts", "index" ], [ "/r", "posts", "new" ], [ :get, 7 ], [ :get, 8 ], [ :get, 9 ], [ :get, 10 ] ]
+    )
+  end
+
+  # A live RouteSet draws each to posts#index, from a value only a boot reads.
+  it "counts a verb route to a constant holding a call the file does not build as dynamic" do
+    results = routes_for(<<~ROUTES)
+      TOF = "posts#index".freeze
+      TOH = STRS[:a]
+      TOE = ENV.fetch("X_TO", "posts#index")
+      Rails.application.routes.draw do
+        get "a", to: TOF
+        get "b" => TOF
+        get "c", to: TOH
+        get "d" => TOH
+        get "e", to: TOE
+        get "f" => TOE
+      end
+    ROUTES
+
+    expect(results.map { |r| [ r[:type], r[:macro] ] }).to eq([ [ :dynamic, :get ] ] * 6)
+  end
+
+  # Ruby defines a constant written in a module or class body inside it (Shop::TO), so the draw's bare TO is
+  # another constant, which the live draw cannot find.
+  it "reads only a constant written outside a class or module body as the one a route names" do
+    results = routes_for(<<~ROUTES)
+      module Shop
+        TO = "posts#index"
+      end
+      class Widget
+        ROCKET = "posts#new"
+      end
+      Rails.application.routes.draw do
+        get "a", to: TO
+        get "r" => ROCKET
+      end
+    ROUTES
+
+    expect(results.map { |r| [ r[:type], r[:macro], r[:location] ] }).to eq([ [ :dynamic, :get, 8 ], [ :dynamic, :get, 9 ] ])
+  end
+
+  # A live RouteSet draws a, c, e, f and g to posts#index and b and d to posts#show: Ruby reads each constant
+  # through Module.nesting where the route is drawn, then the top level, and a path through the module it names.
+  it "reads a route target constant the file writes in a module as Ruby looks the reference up" do
+    results = routes_for(<<~ROUTES)
+      TOP = "posts#index"
+      module Shop
+        TOP = "posts#show"
+        module Config
+          HOME = "posts#index"
+        end
+      end
+      module Cfg; end
+      Cfg::HOME = "posts#show"
+      module Shop
+        Rails.application.routes.draw do
+          get "a", to: Config::HOME
+          get "b", to: TOP
+          get "c", to: ::TOP
+          get "d" => Cfg::HOME
+        end
+      end
+      Rails.application.routes.draw do
+        get "e", to: Shop::Config::HOME
+        get "f", to: TOP
+      end
+      module Social
+        WALL = "posts#index"
+        Rails.application.routes.draw do
+          get "g", to: WALL
+        end
+      end
+    ROUTES
+
+    expect(results.map { |r| r[:type] == :route ? [ r[:path], "#{r[:controller]}##{r[:action]}" ] : r[:macro] }).to eq(
+      [ [ "/a", "posts#index" ], [ "/b", "posts#show" ], [ "/c", "posts#index" ], [ "/d", "posts#show" ], [ "/e", "posts#index" ],
+        [ "/f", "posts#index" ], [ "/g", "posts#index" ] ]
+    )
+  end
+
+  # A live RouteSet names the redirects, the held-value route and the Rack app route a_q, c_q, e_q and f_q,
+  # so the POST drawn at each path after them gets no name.
+  it "keeps the name Rails gives a verb route to a redirect, a held value or a Rack app from the route after it" do
+    records = route_records(<<~ROUTES)
+      Rails.application.routes.draw do
+        get "/a/q" => redirect("/b")
+        get "/c/q", to: redirect("/d")
+        get "/e/q" => HANDLERS[:x]
+        get "/f/q", to: HealthCheck
+        post "/a/q" => "x#create"
+        post "/c/q" => "x#create"
+        post "/e/q" => "x#create"
+        post "/f/q" => "x#create"
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:name] ] }).to eq(
+      [ [ "POST", "/a/q", nil ], [ "POST", "/c/q", nil ], [ "POST", "/e/q", nil ], [ "POST", "/f/q", nil ] ]
+    )
+  end
+
+  # A live RouteSet names the mounts health_check, sidekiq_web, hc, admin_health_check, post_health_check and cnx, so the
+  # route at each name after them gets none; a Builder instance takes no name, so builtx keeps its own.
+  it "keeps the name Rails gives a mount from the route after it" do
+    records = route_records(<<~ROUTES)
+      BUILTX = Rack::Builder.new { run HealthCheck }
+      CNX = Class.new { def self.call(env) = [200, {}, []] }
+      Rails.application.routes.draw do
+        mount HealthCheck, at: "/hc"
+        get "health_check", to: "p#s"
+        mount Sidekiq::Web => "/sk"
+        get "sidekiq_web", to: "p#s"
+        mount HealthCheck, at: "/hc2", as: :hc
+        get "hc", to: "p#s"
+        namespace :admin do
+          mount HealthCheck, at: "/hc"
+          get "health_check", to: "p#s"
+        end
+        resources :posts, only: [] do
+          mount HealthCheck, at: "/hc"
+          get "health_check", to: "p#s"
+        end
+        mount CNX, at: "/c"
+        get "cnx", to: "p#s"
+        mount BUILTX, at: "/b"
+        get "builtx", to: "p#s"
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq(
+      [ [ "/health_check", nil ], [ "/sidekiq_web", nil ], [ "/hc", nil ], [ "/admin/health_check", nil ],
+        [ "/posts/:post_id/health_check", nil ], [ "/cnx", nil ], [ "/builtx", "builtx" ] ]
+    )
+  end
+
+  # A live RouteSet on 7.0 and 8.1 names the mount of a rooted `::Class.new` cn2, as it does a bare one.
+  it "keeps the name Rails gives a mount of a class built with a rooted Class.new" do
+    records = route_records(<<~ROUTES)
+      CN2 = ::Class.new { def self.call(env) = [200, {}, []] }
+      Rails.application.routes.draw do
+        mount CN2, at: "/c"
+        get "cn2", to: "p#s"
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([ [ "/cn2", nil ] ])
+  end
+
+  # A live RouteSet on 7.0 and 8.1 names the mount admin_ui, the class Ruby finds for UI inside module Admin.
+  it "names a mount by the class Ruby finds through Module.nesting" do
+    records = route_records(<<~ROUTES)
+      module Admin
+        class UI
+          def self.call(env) = [200, {}, []]
+        end
+        Rails.application.routes.draw do
+          mount UI, at: "/u"
+          get "admin_ui", to: "p#s"
+          get "ui", to: "p#t"
+        end
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([ [ "/admin_ui", nil ], [ "/ui", "ui" ] ])
+  end
+
+  # A live RouteSet on 7.0 and 8.1 draws /a to posts#index: `||=` assigns a constant not yet defined. TB's value is one
+  # only Ruby's multiple assignment reads, so /b stays unexpanded.
+  it "reads a constant an ||= assigns as its value" do
+    results = routes_for(<<~ROUTES)
+      TOW ||= "posts#index"
+      TA, TB = "posts#show", "posts#show"
+      Rails.application.routes.draw do
+        get "a", to: TOW
+        get "b", to: TB
+      end
+    ROUTES
+
+    expect(results.map { |r| [ r[:type], r[:path], r[:controller], r[:action] ] }).to eq([ [ :route, "/a", "posts", "index" ], [ :dynamic, nil, nil, nil ] ])
+  end
+
+  # A live RouteSet, with PRE = "pre" and NAME = "nm", names the shallow routes pre_c, pre_c and nm_c, and the index nm_posts.
+  it "marks a shallow route name a constant prefix or scope name gives it, never falling back to another name" do
+    records = route_records(<<~ROUTES)
+      Rails.application.routes.draw do
+        namespace :api, shallow_prefix: PRE do
+          resources :posts, only: [] do
+            resources :c, only: :show, shallow: true
+          end
+        end
+        scope shallow_prefix: PRE do
+          resources :posts, only: [] do
+            resources :c, only: :show, shallow: true
+          end
+        end
+        scope as: NAME do
+          resources :posts, only: :index do
+            resources :c, only: :show, shallow: true
+          end
+        end
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq(
+      [ [ "/api/c/:id", "[INFERRED]_c" ], [ "/c/:id", "[INFERRED]_c" ], [ "/c/:id", "[INFERRED]_c" ], [ "/posts", "[INFERRED]_posts" ] ]
+    )
+  end
+
+  # A live RouteSet, with SH = true, draws GET /c/:id three times: whether the children are shallow is what SH holds.
+  it "counts a resource or scope whose shallow: is a constant as a construct it could not expand" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        resources :posts, only: [], shallow: SH do
+          resources :c, only: :show
+        end
+        scope shallow: SH do
+          resources :posts, only: [] do
+            resources :c, only: :show
+          end
+        end
+        resources :posts, only: [] do
+          resources :c, only: :show, shallow: SH
+        end
+      end
+    ROUTES
+
+    expect(results.map { |r| r[:type] == :route ? r[:path] : [ r[:macro], r[:location] ] }).to eq(
+      [ [ :resources, 2 ], [ :scope, 5 ], [ :resources, 11 ] ]
+    )
+  end
+
+  # Rails draws a resource inside a scope of its own shallow_path: and shallow_prefix:; a live RouteSet, with PRE = "pre",
+  # draws these paths and names.
+  it "reads a resource's own shallow_path: and shallow_prefix: as a scope around it" do
+    records = route_records(<<~ROUTES)
+      Rails.application.routes.draw do
+        resources :posts, only: :show, shallow: true, shallow_path: "sp", shallow_prefix: "x" do
+          resources :c, only: [ :index, :show ]
+        end
+        scope shallow_path: "o" do
+          resources :tags, only: [], shallow_path: "sp" do
+            resources :d, only: :show, shallow: true
+          end
+        end
+        resources :notes, only: [], shallow_prefix: PRE do
+          resources :e, only: :show, shallow: true
+        end
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq(
+      [ [ "/sp/posts/:post_id/c", "x_post_c_index" ], [ "/sp/c/:id", "x_c" ], [ "/sp/posts/:id", "x_post" ],
+        [ "/o/sp/d/:id", "d" ], [ "/e/:id", "[INFERRED]_e" ] ]
+    )
+  end
+
+  # Rails' scope joins its positional arguments into the path, so `scope nil` adds no segment.
+  it "reads scope nil as a scope that adds no path" do
+    records = route_records(<<~ROUTES)
+      Rails.application.routes.draw do
+        scope nil do
+          get "x", to: "p#s"
+        end
+        scope nil, as: "q" do
+          get "y", to: "p#s"
+        end
+      end
+    ROUTES
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([ [ "/x", "x" ], [ "/y", "q_y" ] ])
+  end
+
+  # A live RouteSet serves each of these paths with the Rack app the value or the helper returns, with no action.
+  it "counts the path => value form of a verb route to a held value or a helper's app as a construct it could not expand" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        match "x" => HANDLERS[:x], via: :get
+        post "x" => HANDLERS.fetch(:x)
+        namespace :a do
+          get "x" => APPS[:admin]
+        end
+        get "x" => helper_app
+      end
+    ROUTES
+
+    expect(results).to eq(
+      [ { type: :dynamic, macro: :match, location: 2 }, { type: :dynamic, macro: :post, location: 3 },
+        { type: :dynamic, macro: :get, location: 5 }, { type: :dynamic, macro: :get, location: 7 } ]
+    )
+  end
+
+  # A live RouteSet, with PRE = "pre", MOD = "admin", VERBS = [:get], NAME = "nm" and PARAM = :slug, draws
+  # GET /pre/x, /x (admin/pages), GET /x, /pre/x, /pre, /api/x (admin/pages), /pre/:id, /x named nm_x and /posts/:slug.
+  it "reads an option given as a constant as a value it cannot see, never as the constant's name" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        scope path: PRE do
+          get "x", to: "pages#show"
+        end
+        scope module: MOD do
+          get "x", to: "pages#show"
+        end
+        match "x", to: "pages#show", via: VERBS
+        scope PRE do
+          get "x", to: "pages#show"
+        end
+        get :x, to: "pages#show", path: PRE
+        namespace :api, module: MOD do
+          get "x", to: "pages#show"
+        end
+        resources :posts, only: :show, path: PRE
+        scope as: NAME do
+          get "x", to: "pages#show"
+        end
+        resources :posts, only: :show, param: PARAM
+      end
+    ROUTES
+
+    expect(results.map { |r| r[:type] == :route ? [ r[:path], r[:name] ] : [ r[:macro], r[:location] ] }).to eq(
+      [ [ :scope, 2 ], [ :scope, 5 ], [ :match, 8 ], [ :scope, 9 ], [ :get, 12 ], [ :namespace, 13 ], [ :resources, 16 ],
+        [ "/x", "[INFERRED]_x" ], [ "/posts/:[INFERRED]", "post" ] ]
+    )
+  end
+
+  # A live RouteSet with ON = :member draws /posts/:id/x; with :collection, /posts/x. Only a boot can tell.
+  it "counts a route whose on: is a constant as a construct it cannot place" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        resources :posts, only: [] do
+          get :x, on: ON
+        end
+      end
+    ROUTES
+
+    expect(results.map { |r| r[:type] == :route ? r[:path] : [ r[:macro], r[:location] ] }).to eq([ [ :get, 3 ] ])
+  end
+
+  it "marks a route inferred when a namespace prefixes a controller it could not read" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        namespace :admin do
+          resources :posts, only: :index, controller: CTRL
+        end
+      end
+    ROUTES
+
+    expect(results.map { |r| r.values_at(:controller, :confidence) }).to eq([ %w[admin/[INFERRED] [INFERRED]] ])
+  end
+
+  it "leaves a mount of a value a constant holds to MountListener, which lists it at its path" do
+    results = routes_for(<<~ROUTES)
+      Rails.application.routes.draw do
+        mount APPS[:a] => "/a"
+        mount HANDLERS[:x], at: "/x"
+      end
+    ROUTES
+
+    expect(results).to be_empty
+  end
+
+  it "draws a resource's block, then its concerns, then its own routes, in Rails' order" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        concern :commentable do
+          resources :comments, only: :index
+        end
+        resources :posts, only: [:index, :show], concerns: :commentable do
+          get :preview, on: :member
+          resources :tags, only: :index
+        end
+        resource :account, only: [:show, :create], concerns: :commentable do
+          get :avatar, on: :member
+        end
+        resources :photos, only: :show, concerns: :commentable
+        resources :posts, only: :show, shallow: true do
+          resources :notes, only: [:index, :show]
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:name] ] }).to eq([
+      [ "GET", "/posts/:id/preview", "preview_post" ],
+      [ "GET", "/posts/:post_id/tags", "post_tags" ],
+      [ "GET", "/posts/:post_id/comments", "post_comments" ],
+      [ "GET", "/posts", "posts" ],
+      [ "GET", "/posts/:id", "post" ],
+      [ "GET", "/account/avatar", "avatar_account" ],
+      [ "GET", "/account/comments", "account_comments" ],
+      [ "GET", "/account", "account" ],
+      [ "POST", "/account", nil ],
+      [ "GET", "/photos/:photo_id/comments", "photo_comments" ],
+      [ "GET", "/photos/:id", "photo" ],
+      [ "GET", "/posts/:post_id/notes", "post_notes" ],
+      [ "GET", "/notes/:id", "note" ],
+      [ "GET", "/posts/:id", nil ]
+    ])
+  end
+
+  it "draws a singular resource's bare verb as a member, an empty resource path at the root, and a block per name" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resource :profile, only: :show do
+          get :avatar
+        end
+        resources :pages, path: "", only: :show
+        namespace :admin do
+          resources :users, :groups, only: :index do
+            get :export, to: "exports#run"
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:name], "#{r[:controller]}##{r[:action]}" ] }).to eq([
+      [ "GET", "/profile/avatar", "avatar_profile", "profiles#avatar" ],
+      [ "GET", "/profile", "profile", "profiles#show" ],
+      [ "GET", "/:id", "page", "pages#show" ],
+      [ "GET", "/admin/users/:user_id/export", "admin_user_export", "admin/exports#run" ],
+      [ "GET", "/admin/users", "admin_users", "admin/users#index" ],
+      [ "GET", "/admin/groups/:group_id/export", "admin_group_export", "admin/exports#run" ],
+      [ "GET", "/admin/groups", "admin_groups", "admin/groups#index" ]
+    ])
+  end
+
+  it "names what a member or collection block nests without the resource's name, as Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :posts, only: [] do
+          member do
+            resources :votes, only: :index do
+              get :tally
+            end
+            get :ping
+          end
+          collection do
+            resources :drafts, only: :index
+          end
+        end
+        namespace :admin do
+          resources :users, only: [] do
+            member { resources :notes, only: :index }
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([
+      [ "/posts/:id/votes/:vote_id/tally", "vote_tally" ],
+      [ "/posts/:id/votes", "votes" ],
+      [ "/posts/:id/ping", "ping_post" ],
+      [ "/posts/drafts", "drafts" ],
+      [ "/admin/users/:id/notes", "admin_notes" ]
+    ])
+  end
+
+  it "puts a scope opened inside a resource block before the resource's path and name, as Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :posts, only: [] do
+          scope "x" do
+            get :foo
+            member { get :bar }
+            get :baz, on: :collection
+            resources :tags, only: :index
+          end
+          scope "y", as: "why" do
+            get :qux
+          end
+        end
+        resource :settings, only: [] do
+          scope "x" do
+            get :inner
+            resources :keys, only: :index
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([
+      [ "/x/posts/:post_id/foo", "post_foo" ],
+      [ "/x/posts/:id/bar", "bar_post" ],
+      [ "/x/posts/baz", "baz_posts" ],
+      [ "/x/posts/:post_id/tags", "post_tags" ],
+      [ "/y/posts/:post_id/qux", "why_post_qux" ],
+      [ "/x/settings/inner", "inner_settings" ],
+      [ "/x/settings/keys", "settings_keys" ]
+    ])
+  end
+
+  it "keeps a scope inside a namespace inside a resource after the resource's path and name, as Rails nests the namespace" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :posts, only: [] do
+          namespace :admin do
+            scope "x", as: "ex" do
+              get :q
+            end
+            scope module: :m do
+              get :mq
+            end
+          end
+          namespace :ops do
+            scope "y" do
+              resources :logs, only: :index
+            end
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:name], "#{r[:controller]}##{r[:action]}" ] }).to eq([
+      [ "/posts/:post_id/admin/x/q", "post_admin_ex_q", "admin/posts#q" ],
+      [ "/posts/:post_id/admin/mq", "post_admin_mq", "admin/m/posts#mq" ],
+      [ "/posts/:post_id/ops/y/logs", "post_ops_logs", "ops/logs#index" ]
+    ])
+  end
+
+  it "names a route in a scope with as: inside a member, collection or new block with that as:, as Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        namespace :admin do
+          resources :heroes, only: [] do
+            member { scope("qq", as: "qux") { get :mm } }
+            collection { scope(as: "col") { get :cc } }
+            new { scope(as: "nn") { get :pv } }
+          end
+        end
+        resource :account, only: [] do
+          collection { scope(as: "c") { get :sc } }
+        end
+        resources :forums, only: [] do
+          resources :sheep, only: [], shallow: true do
+            member { scope(as: "z") { get :sm } }
+            collection { scope(as: "z") { get :sc } }
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([
+      [ "/admin/heroes/:id/qq/mm", "mm_admin_qux_hero" ],
+      [ "/admin/heroes/cc", "cc_admin_col_heroes" ],
+      [ "/admin/heroes/new/pv", "pv_new_admin_nn_hero" ],
+      [ "/account/sc", "sc_c_account" ],
+      [ "/sheep/:id/sm", "sm_z_sheep" ],
+      [ "/forums/:forum_id/sheep/sc", "sc_forum_z_sheep_index" ]
+    ])
+  end
+
+  it "puts a scope inside a shallow resource before its shallow path and prefix for member and nested routes" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :forums, only: [] do
+          resources :posts, only: [:index, :show], shallow: true do
+            scope "x" do
+              get :foo
+              member { get :bar }
+              resources :tags, only: [:index, :show]
+            end
+          end
+        end
+        scope shallow_path: "sp", shallow_prefix: "spx" do
+          resources :blogs, only: [], shallow: true do
+            resources :entries, only: [:show] do
+              scope "x", as: "ex" do
+                member { get :bar }
+                get :foo
+              end
+            end
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([
+      [ "/x/posts/:post_id/foo", "post_foo" ],
+      [ "/x/posts/:id/bar", "bar_post" ],
+      [ "/x/posts/:post_id/tags", "post_tags" ],
+      [ "/x/tags/:id", "tag" ],
+      [ "/forums/:forum_id/posts", "forum_posts" ],
+      [ "/posts/:id", "post" ],
+      [ "/sp/x/entries/:id/bar", "bar_spx_ex_entry" ],
+      [ "/sp/x/entries/:entry_id/foo", "spx_ex_entry_foo" ],
+      [ "/sp/entries/:id", "spx_entry" ]
+    ])
+  end
+
+  it "routes a resource block's own actions through the modules of scopes opened inside it, as Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :posts, only: [] do
+          namespace :admin do
+            get :foo
+          end
+          scope module: :m do
+            member { get :mem }
+          end
+        end
+        namespace :api do
+          resources :items, only: [], module: :shop do
+            scope module: :v2 do
+              get :pong
+            end
+          end
+          resources :abs, only: [], controller: "/top" do
+            scope module: :v3 do
+              get :zap
+            end
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| "#{r[:controller]}##{r[:action]}" }).to eq(%w[admin/posts#foo m/posts#mem api/shop/v2/items#pong top#zap])
   end
 
   it "drops a generated name another route already took" do
@@ -212,6 +937,58 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     end')
     expect(records.find { |r| r[:action] == "preview" }[:path]).to eq("/posts/:id/preview")
     expect(records.find { |r| r[:action] == "archived" }[:path]).to eq("/posts/archived")
+  end
+
+  it "draws a canonical action in a member, collection or new scope at the scope's path, named without the action" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resources :heroes, only: [] do
+          get :show, on: :member, path: "sh"
+          get :show, on: :member
+          get "show", on: :member
+          member { patch :update }
+          new { get :new }
+          collection do
+            get "index"
+            post :create, as: "mk"
+          end
+          get :destroy
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:name] ] }).to eq([
+      [ "GET", "/heroes/:id/sh", "hero" ],
+      [ "GET", "/heroes/:id", nil ],
+      [ "GET", "/heroes/:id/show", nil ],
+      [ "PATCH", "/heroes/:id", nil ],
+      [ "GET", "/heroes/new", "new_hero" ],
+      [ "GET", "/heroes/index", "heroes" ],
+      [ "POST", "/heroes", "mk_heroes" ],
+      [ "GET", "/heroes/:hero_id/destroy", "hero_destroy" ]
+    ])
+  end
+
+  it "draws a canonical action in a singular resource, whose bare verbs are member routes, at the member path" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resource :profile, only: [] do
+          get :show
+          get :index
+          post :update
+          scope "x", as: "ex" do
+            get :show
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:name], r[:action] ] }).to eq([
+      [ "GET", "/profile", "profile", "show" ],
+      [ "GET", "/profile", nil, "index" ],
+      [ "POST", "/profile", nil, "update" ],
+      [ "GET", "/x/profile", "ex_profile", "show" ]
+    ])
   end
 
   it "parses bare verb routes with to:" do
@@ -811,8 +1588,9 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       )
     end
 
-    it "adds nothing for a shallow_path the source computes" do
-      drawn = rows(<<~RUBY)
+    # A live RouteSet with Config.prefix = "pre" draws GET /pre/remarks/:id: the computed prefix is a construct the walk cannot expand.
+    it "counts a scope whose path and shallow_path the source computes as a construct it could not expand" do
+      results = routes_for(<<~RUBY)
         Rails.application.routes.draw do
           scope Config.prefix, shallow_path: Config.prefix do
             resources :posts, only: [] do
@@ -822,7 +1600,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
         end
       RUBY
 
-      expect(drawn).to eq([ [ "GET", "/remarks/:id", "remarks#show", "remark" ] ])
+      expect(results).to eq([ { type: :dynamic, macro: :scope, location: 2 } ])
     end
 
     it "takes the new and edit segments from path_names, on the resource or a scope" do
@@ -870,7 +1648,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     end
 
     it "draws every path of a multi-path route where Rails before 8.1 does" do
-      listener = described_class.new(multi_path: true)
+      listener = described_class.new(before_8_1: true)
       source = "Rails.application.routes.draw do\n  get \"/one\", \"/two\", to: \"pages#two\"\nend\n"
       RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
       drawn = listener.results.select { |r| r[:type] == :route }.map { |r| [ r[:verb], r[:path], "#{r[:controller]}##{r[:action]}", r[:name] ] }
@@ -880,7 +1658,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
 
     # Mapper#match groups the paths by class, so each group keeps its written order.
     it "draws many paths of one route in the order written, strings before symbols" do
-      listener = described_class.new(multi_path: true)
+      listener = described_class.new(before_8_1: true)
       paths = (1..20).map { |i| "\"/p#{i}\"" }
       source = "Rails.application.routes.draw do\n  get :sym, #{paths.join(', ')}, to: \"pages#show\"\nend\n"
       RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
@@ -1198,5 +1976,447 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       "/f" => nil,
       "/plain" => nil
     )
+  end
+
+  # Rails runs the block once per element; a later pass's name that is taken stays unnamed (Mapper#name_for_action).
+  describe "a block over a literal list" do
+    def rows(source)
+      route_records(source).map { |r| [ r[:verb], r[:path], "#{r[:controller]}##{r[:action]}", r[:name] ] }
+    end
+
+    it "draws the block's routes once per element" do
+      expect(rows('Rails.application.routes.draw do
+        %w[pages p].each do |root_path|
+          resources :widgets, only: %i[index update], path: root_path do
+            post "ping"
+            collection { get "search" }
+          end
+          get "#{root_path}/by-id/:id" => "widgets#show"
+          scope path: "#{root_path}/:name" do
+            get "activity" => "widgets#show"
+          end
+        end
+      end')).to eq([
+        [ "POST", "/pages/:widget_id/ping", "widgets#ping", "widget_ping" ],
+        [ "GET", "/pages/search", "widgets#search", "search_widgets" ],
+        [ "GET", "/pages", "widgets#index", "widgets" ],
+        [ "PATCH", "/pages/:id", "widgets#update", "widget" ],
+        [ "PUT", "/pages/:id", "widgets#update", nil ],
+        [ "GET", "/pages/by-id/:id", "widgets#show", nil ],
+        [ "GET", "/pages/:name/activity", "widgets#show", "activity" ],
+        [ "POST", "/p/:widget_id/ping", "widgets#ping", nil ],
+        [ "GET", "/p/search", "widgets#search", nil ],
+        [ "GET", "/p", "widgets#index", nil ],
+        [ "PATCH", "/p/:id", "widgets#update", nil ],
+        [ "PUT", "/p/:id", "widgets#update", nil ],
+        [ "GET", "/p/by-id/:id", "widgets#show", nil ],
+        [ "GET", "/p/:name/activity", "widgets#show", nil ]
+      ])
+    end
+
+    it "binds each_with_index's element, a symbol list's element, and a rocket key" do
+      expect(rows('Rails.application.routes.draw do
+        %w[members m].each_with_index do |root_path, index|
+          get "#{root_path}/session" => "members#session_info"
+          post "#{root_path}/ping" => "members#ping", :as => :"#{root_path}_pinged"
+        end
+        %w[about info].each do |page|
+          get page => "static#show", :as => page
+        end
+        %i[alpha beta].each { |kind| get "kinds/#{kind}", to: "kinds#show" }
+        %w[diff].each { |action| get "changes/#{action}", controller: "revisions", action:, as: "#{action}_revision" }
+      end')).to eq([
+        [ "GET", "/members/session", "members#session_info", "members_session" ],
+        [ "POST", "/members/ping", "members#ping", "members_pinged" ],
+        [ "GET", "/m/session", "members#session_info", "m_session" ],
+        [ "POST", "/m/ping", "members#ping", "m_pinged" ],
+        [ "GET", "/about", "static#show", "about" ],
+        [ "GET", "/info", "static#show", "info" ],
+        [ "GET", "/kinds/alpha", "kinds#show", "kinds_alpha" ],
+        [ "GET", "/kinds/beta", "kinds#show", "kinds_beta" ],
+        [ "GET", "/changes/diff", "revisions#diff", "diff_revision" ]
+      ])
+    end
+
+    # Rails draws /z twice, then /cq and /dq: a pass that writes its variable no longer holds the element.
+    it "does not unroll a block that writes its own variable" do
+      results = routes_for('Rails.application.routes.draw do
+        %w[a b].each do |x|
+          x = "z"
+          get x, to: "pages#show"
+        end
+        %w[c d].each_with_index do |y, i|
+          y += "q"
+          get y, to: "pages#show"
+        end
+      end')
+      expect(results.map { |r| [ r[:type], r[:macro] ] }).to eq([ %i[dynamic get], %i[dynamic get] ])
+    end
+
+    # A live RouteSet draws /a to /j: each `x` written below is another variable of the same name.
+    it "unrolls a block whose inner block, block-local, method or lambda has its own variable of that name" do
+      expect(rows('Rails.application.routes.draw do
+        %w[a b].each do |x|
+          [1].each { |x| x = 2 }
+          get x, to: "pages#show"
+        end
+        %w[c d].each do |x|
+          [1].each { |n; x| x = 2 }
+          get x, to: "pages#show"
+        end
+        %w[e f].each do |x|
+          def helper(x)
+            x = 1
+          end
+          get x, to: "pages#show"
+        end
+        %w[g h].each do |x|
+          def other
+            x = "q"
+          end
+          get x, to: "pages#show"
+        end
+        %w[i j].each do |x|
+          keep = ->(x) { x << "z" }
+          get x, to: "pages#show"
+        end
+      end').map { |row| row[1] }).to eq(%w[/a /b /c /d /e /f /g /h /i /j])
+    end
+
+    # A live RouteSet draws /z four times, then /ez to /nz: each pass changes the string it was given.
+    it "does not unroll a block that writes its variable from an inner block or by index, or hands it on" do
+      results = routes_for('Rails.application.routes.draw do
+        def add_z(s)
+          s << "z"
+        end
+        %w[a b].each do |x|
+          [1].each { x = "z" }
+          get x, to: "pages#show"
+        end
+        %w[c d].each do |x|
+          x[0] = "z"
+          get x, to: "pages#show"
+        end
+        %w[e f].each do |x|
+          x[0] += "z"
+          get x, to: "pages#show"
+        end
+        %w[g h].each do |x|
+          y = x
+          y << "z"
+          get x, to: "pages#show"
+        end
+        %w[i j].each do |x|
+          list = [x]
+          list[0] << "z"
+          get x, to: "pages#show"
+        end
+        %w[k l].each do |x|
+          add_z(x)
+          get x, to: "pages#show"
+        end
+        %w[m n].each do |x|
+          x.tap { |s| s << "z" }
+          get x, to: "pages#show"
+        end
+      end')
+      expect(results.map { |r| [ r[:type], r[:macro] ] }).to eq([ %i[dynamic get] ] * 5 + [ %i[dynamic add_z], %i[dynamic get], %i[dynamic get] ])
+    end
+
+    # A live RouteSet draws /admin/items, /staff/items and /home, then /a, /a/extra, /b, /b/extra, then /a, /b.
+    it "walks the body of a loop it does not unroll, so a call into a method of the file counts" do
+      results = routes_for('Rails.application.routes.draw do
+        def section(name)
+          namespace name do
+            resources :items, only: :index
+          end
+        end
+        def extra(s)
+          get "#{s}/extra", to: "pages#show"
+        end
+        %w[admin staff].each { |s| section(s) }
+        get "home", to: "pages#home"
+        %w[a b].each do |x|
+          get x, to: "pages#show"
+          extra(x)
+        end
+        PAGES.each { |x| extra(x) }
+      end')
+      expect(results.map { |r| r[:type] == :route ? r[:path] : r[:macro] }).to eq(
+        [ :section, :section, "/home", "/a", :extra, "/b", :extra, :extra ]
+      )
+    end
+
+    # A live RouteSet draws two routes for each iterator, whose block Ruby runs while the routes are drawn;
+    # Sidekiq::Web.use keeps its block for the requests it answers.
+    it "counts a call to a method of the file inside any iterator it does not unroll" do
+      results = routes_for(<<~ROUTES)
+        Rails.application.routes.draw do
+          def sec(s)
+            get s.to_s, to: "pages#show"
+          end
+          LOC.each_key { |l| sec(l) }
+          LOC.each_pair { |l, _| sec(l) }
+          2.times { |i| sec("t\#{i}") }
+          PAGES.each_slice(1) { |a| sec(a.first) }
+          PAGES.map { |x| sec(x) }
+          PAGES.each.with_index { |x, i| sec(x) }
+          Sidekiq::Web.use(Rack::Auth::Basic) { |user, _| sec(user) }
+        end
+      ROUTES
+
+      expect(results.map { |r| [ r[:type], r[:macro], r[:location] ] }).to eq(
+        [ 5, 6, 7, 8, 9, 10 ].map { |line| [ :dynamic, :sec, line ] }
+      )
+    end
+
+    # A live RouteSet draws each of these once per pass, the later copies unnamed, and /t once from tap.
+    it "counts every route a block Ruby runs more than once draws when the walk does not replay its passes" do
+      results = routes_for(<<~ROUTES)
+        Rails.application.routes.draw do
+          def draw_x
+            get "x", to: "pages#show"
+          end
+          2.times { draw_x }
+          2.times { get "y", to: "pages#show" }
+          LOC.each_key { |l| resources :posts, only: :index }
+          LOC.keys.each { |l| get "z", to: "pages#show" }
+          %w[a b].each { get "w", to: "pages#show" }
+          namespace :a do
+            LOC.each_key { scope "s" do get "v", to: "pages#show" end }
+          end
+          PRE.tap { get "t", to: "pages#show" }
+        end
+      ROUTES
+
+      expect(results.map { |r| r[:type] == :route ? r[:path] : [ r[:macro], r[:location] ] }).to eq(
+        [ [ :draw_x, 5 ], [ :get, 6 ], [ :resources, 7 ], [ :get, 8 ], [ :get, 9 ], [ :scope, 11 ], "/t" ]
+      )
+    end
+
+    # A live RouteSet serves /hc and each /<l>/hc with HealthCheck, which MountListener lists; /lam is a lambda.
+    it "leaves a mount or a route to a Rack app inside a repeated block to the mount list, and counts one only a boot can read" do
+      results = routes_for(<<~ROUTES)
+        Rails.application.routes.draw do
+          2.times { mount HealthCheck, at: "/hc" }
+          LIST.each { |l| get "\#{l}/hc", to: HealthCheck }
+          2.times { mount ->(env) { [200, {}, []] }, at: "/lam" }
+        end
+      ROUTES
+
+      expect(results.map { |r| [ r[:type], r[:macro], r[:location] ] }).to eq([ [ :dynamic, :mount, 4 ] ])
+    end
+
+    # A live RouteSet draws /x once, from the tap block Ruby runs once; define_singleton_method only keeps its block,
+    # which is Object's method on every collection, not one of their iterators.
+    it "walks a run-once block in place and leaves a block an Object method keeps alone" do
+      results = routes_for(<<~ROUTES)
+        Rails.application.routes.draw do
+          def draw_x
+            get "x", to: "pages#show"
+          end
+          PRE.define_singleton_method(:m) { draw_x }
+          PRE.tap { draw_x }
+        end
+      ROUTES
+
+      expect(results.map { |r| [ r[:type], r[:path], r[:name] ] }).to eq([ [ :route, "/x", "x" ] ])
+    end
+
+    # Ruby runs index_by's block once per element during the call; a process that loaded the gem before
+    # ActiveSupport's Enumerable extensions reads the same routes file the same way.
+    it "counts the routes of a collection's block method whatever the process loaded before the gem" do
+      script = <<~RUBY
+        require "rails_ai_context"
+        listener = RailsAiContext::Introspectors::Listeners::RoutesDslListener.new
+        source = "Rails.application.routes.draw do\n  LIST.index_by { get 'x', to: 'p#s' }\nend\n"
+        RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+        print listener.results.map { |r| r[:macro] }.inspect
+      RUBY
+      out, status = Open3.capture2(RbConfig.ruby, "-I", File.expand_path("../../../../../lib", __dir__), "-e", script)
+
+      expect([ out, status.success? ]).to eq([ "[:get]", true ])
+    end
+
+    # A live RouteSet draws /x and /y: a bare tap or yield_self runs its block once on the mapper.
+    it "walks a receiverless tap or yield_self block in place" do
+      records = route_records(<<~ROUTES)
+        Rails.application.routes.draw do
+          tap { get "x", to: "pages#show" }
+          yield_self { get "y", to: "pages#show" }
+        end
+      ROUTES
+
+      expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([ [ "/x", "x" ], [ "/y", "y" ] ])
+    end
+
+    # A live RouteSet draws every one of these: tap, then and yield_self hand their block the mapper.
+    it "draws the calls on the mapper a tap or yield_self block takes as its parameter" do
+      records = route_records(<<~ROUTES)
+        Rails.application.routes.draw do
+          tap { |m| m.get "a", to: "pages#show" }
+          self.tap do |m|
+            get "b", to: "pages#show"
+            m.get "c", to: "pages#show"
+          end
+          yield_self { |m| m.namespace(:admin) { m.get "d", to: "pages#show" } }
+          tap { |m| m.then { |n| n.get "e", to: "pages#show" } }
+          tap { _1.get "f", to: "pages#show" }
+        end
+      ROUTES
+
+      expect(records.map { |r| [ r[:path], r[:name] ] }).to eq(
+        [ [ "/a", "a" ], [ "/b", "b" ], [ "/c", "c" ], [ "/admin/d", "admin_d" ], [ "/e", "e" ], [ "/f", "f" ] ]
+      )
+    end
+
+    # A live RouteSet on 7.0 and 8.1 draws /op and /pp: tap yields the mapper, which a lone optional parameter takes,
+    # and a required one after an optional one takes first.
+    it "draws the calls on an optional parameter of a tap block on the mapper" do
+      records = route_records(<<~ROUTES)
+        Rails.application.routes.draw do
+          tap { |m = 1| m.get "op", to: "pages#show" }
+          tap { |n = 1, m| m.get "pp", to: "pages#show"; n.get "nn" }
+        end
+      ROUTES
+
+      expect(records.map { |r| [ r[:path], r[:name] ] }).to eq([ [ "/op", "op" ], [ "/pp", "pp" ] ])
+    end
+
+    # A live RouteSet draws /w: the block's parameter is 1, and its receiverless call is on the mapper.
+    it "leaves a call on the parameter of a tap on another object alone" do
+      records = route_records(<<~ROUTES)
+        Rails.application.routes.draw do
+          1.tap { |m| m.get "v"; get "w", to: "pages#show" }
+        end
+      ROUTES
+
+      expect(records.map { |r| r[:path] }).to eq([ "/w" ])
+    end
+
+    # A live RouteSet draws /kz and /lz both times: the helper changes the string through another one.
+    it "does not unroll a block that hands its variable to a method that changes it through another" do
+      results = routes_for('Rails.application.routes.draw do
+        def add_z(s)
+          s << "z"
+        end
+        def wrap(t)
+          add_z(t)
+        end
+        %w[k l].each do |x|
+          wrap(x)
+          get x, to: "pages#show"
+        end
+      end')
+      expect(results.map { |r| [ r[:type], r[:macro] ] }).to eq([ %i[dynamic wrap], %i[dynamic get] ])
+    end
+
+    # Symbols and frozen strings cannot change, so a live RouteSet draws /a and /b for each list; /z twice for the last.
+    it "unrolls a list that cannot be changed whatever the block does with its variable, unless it assigns it" do
+      symbols = 'Rails.application.routes.draw do
+        %i[a b].each do |x|
+          d = { page: x }
+          @y = x
+          x.to_s.each_char { |c| c }
+          get x, to: "pages#show", defaults: d
+        end
+        %i[q r].each do |x|
+          x = :z
+          get x, to: "pages#show"
+        end
+      end'
+      frozen = "# frozen_string_literal: true\n" + symbols.gsub("%i[", "%w[").sub("x.to_s", "x")
+      [ symbols, frozen ].each do |source|
+        results = routes_for(source)
+        expect(results.map { |r| r[:type] == :route ? r[:path] : r[:macro] }).to eq([ "/a", "/b", :get ])
+      end
+    end
+
+    # A live RouteSet draws /az and /bz for each of these: the string ends up changed through what holds it.
+    it "does not unroll a block that changes its variable through an alias, a holder, a block or a lambda" do
+      bodies = [
+        'y = true ? x : "q"; y << "z"', 'y = x || "q"; y << "z"', 'y = x.presence || "q"; y << "z"',
+        'y = x.itself; y << "z"', 'x.to_s << "z"', 'h = {}; h[:k] = x; h[:k] << "z"', 'l = []; l << x; l.last << "z"',
+        '[x].each { |s| s << "z" }', 'fix = ->(s) { s << "z" }; fix.(x)', 'x[0], b = "z", 1',
+        'x => y; y << "z"', 'x in y; y << "z"', 'o = Struct.new(:v).new; o.v = x; o.v << "z"'
+      ]
+      bodies.each do |body|
+        results = routes_for("Rails.application.routes.draw do\n  %w[a b].each do |x|\n    #{body}\n    get x, to: \"pages#show\"\n  end\nend\n")
+        expect(results.map { |r| [ r[:type], r[:macro] ] }).to eq([ %i[dynamic get] ]), body
+      end
+    end
+
+    # A live RouteSet draws /a and /b: a new string made from the variable leaves it as it was.
+    it "unrolls a block that only reads its variable into new values" do
+      expect(rows('Rails.application.routes.draw do
+        %w[a b].each do |x|
+          name = "#{x}_page"
+          up = x.upcase
+          /(?<first>.)/ =~ x
+          get x, to: "pages#show"
+        end
+      end').map { |row| row[1] }).to eq(%w[/a /b])
+    end
+
+    it "reads a bound element in only: and except: as the literal it is" do
+      expect(rows('Rails.application.routes.draw do
+        %i[index show].each { |a| resources :posts, only: [a] }
+        %w[create].each { |a| resources :notes, only: a }
+        %i[show].each { |a| resource :profile, except: [a, :new, :edit, :create] }
+      end')).to eq([
+        [ "GET", "/posts", "posts#index", "posts" ],
+        [ "GET", "/posts/:id", "posts#show", "post" ],
+        [ "POST", "/notes", "notes#create", "notes" ],
+        [ "PATCH", "/profile", "profiles#update", "profile" ],
+        [ "PUT", "/profile", "profiles#update", nil ],
+        [ "DELETE", "/profile", "profiles#destroy", nil ]
+      ])
+    end
+
+    # A concern's body and a method's body read the variables of where they are written.
+    it "binds a concern defined in the block wherever it is applied, and nothing in a method it calls" do
+      results = routes_for('Rails.application.routes.draw do
+        %w[photos videos].each do |kind|
+          concern :reviewable do
+            get kind, to: "media#show"
+          end
+          resources :posts, only: [] do
+            concerns :reviewable
+          end
+          scope "inner" do
+            resources :items, only: [] do
+              member { concerns :reviewable }
+            end
+          end
+        end
+        def extra
+          kind = "fixed"
+          get kind, to: "media#extra"
+        end
+        %w[one].each { |kind| extra }
+      end')
+      expect(results.select { |r| r[:type] == :route }.map { |r| [ r[:path], r[:name] ] }).to eq([
+        [ "/posts/:post_id/photos", "post_photos" ],
+        [ "/inner/items/:id/photos", "photos_item" ],
+        [ "/posts/:post_id/videos", "post_videos" ],
+        [ "/inner/items/:id/videos", "videos_item" ]
+      ])
+    end
+
+    # Mapper#draw reads "#{name}.rb", so each pass draws its element's file.
+    it "draws the file each element names" do
+      draws = routes_for('Rails.application.routes.draw do
+        %w[admin api].each { |file| draw file }
+      end').select { |r| r[:macro] == :draw }
+      expect(draws.map { |r| r[:target] }).to eq(%i[admin api])
+    end
+
+    # A live RouteSet draws /a and /b for Section.names = %w[a b]; a path the walk cannot read is a construct it could not expand.
+    it "leaves a list it cannot read drawn once, its value unknown" do
+      records = routes_for('Rails.application.routes.draw do
+        Section.names.each { |name| resources :widgets, only: :index, path: name }
+      end')
+      expect(records).to eq([ { type: :dynamic, macro: :resources, location: 2 } ])
+    end
   end
 end

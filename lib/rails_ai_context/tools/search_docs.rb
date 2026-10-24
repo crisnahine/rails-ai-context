@@ -133,7 +133,7 @@ module RailsAiContext
         end
 
         def detect_rails_branch
-          version = RailsAiContext::GemLock.for(rails_app.root).version("railties")
+          version = RailsAiContext::GemLock.for(rails_app.root).rails_version
           return "main" unless version && (match = version.match(/\A(\d+\.\d+)/))
 
           "#{match[1].tr('.', '-')}-stable"
@@ -230,7 +230,11 @@ module RailsAiContext
           max_fetch_bytes = 2_000_000 # 2MB safety cap
           if response.is_a?(Net::HTTPSuccess)
             body = response.body.byteslice(0, max_fetch_bytes).force_encoding(Encoding::UTF_8).scrub("?")
-            RailsAiContext::SafeFile.atomic_write(cache_file, body)
+            begin
+              RailsAiContext::SafeFile.atomic_write(cache_file, body, root: rails_app.root.to_s)
+            rescue RailsAiContext::SafeFile::LinkedOut
+              # tmp linked out of the app (a shared deploy tmp): serve the doc uncached.
+            end
             body
           else
             "#{topic['summary']}\n→ #{url}\n_(fetch failed: HTTP #{response.code})_"

@@ -180,7 +180,7 @@ RSpec.describe RailsAiContext::Introspectors::DevOpsIntrospector do
 
     context "with health check route" do
       let(:routes_file) { File.join(Rails.root, "config/routes.rb") }
-      let(:original_routes) { File.read(routes_file) }
+      let!(:original_routes) { File.read(routes_file) }
 
       before do
         File.write(routes_file, original_routes + "\n# get \"up\" => \"rails/health#show\"\n")

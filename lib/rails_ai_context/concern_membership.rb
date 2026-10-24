@@ -66,26 +66,26 @@ module RailsAiContext
     # that file is read for them on its own.
     OWNED_KEYS = %i[callbacks macros scopes associations validations enums].freeze
 
-    # Matched on the last segment: `module Edition; module Featurable` and
-    # `module Edition::Featurable` both write one constant.
+    # Matched on the last segment: `module Shop; module Trackable` and
+    # `module Shop::Trackable` both write one constant.
     def owned_by(records, name, others: [])
       return Array(records) if Array(records).none? { |record| record.key?(:owner) }
 
       own = own_owner(records, name, others: others)
       Array(records).filter_map do |record|
         if record[:receiver]
-          mixed_into(record, name)
+          mixed_into(record, name, others: others)
         elsif own && Array(record[:owner]).join("::") == own
           record
         end
       end
     end
 
-    # `Note.prepend X` mixes into Note as `prepend X` in its body would; `Other.include X` is Other's.
-    def mixed_into(record, name)
-      receiver = record[:receiver].to_s
-      target = receiver.start_with?("::") ? receiver.delete_prefix("::") : [ *Array(record[:owner]), receiver ].join("::")
-      return unless target == name.to_s
+    # `Note.prepend X` mixes X into Note as `prepend X` in Note's body would. The record is `name`'s
+    # when, of `name` and the file's `others`, `name` is the one the receiver's nesting reaches first.
+    def mixed_into(record, name, others: [])
+      candidates = Introspectors::DeclaredConstant.candidate_names(record[:receiver], Introspectors::DeclaredConstant.record_nesting(record))
+      return unless candidates.find { |candidate| candidate == name.to_s || others.include?(candidate) } == name.to_s
 
       own = record.except(:receiver)
       record.key?(:ancestor) ? own.merge(ancestor: CONCERN_BLOCKS.key?(record[:macro])) : own
@@ -148,13 +148,10 @@ module RailsAiContext
     # Trackable` in Payment's body is Payment::Trackable when the file defines it by `line`.
     def local_name(mixin, modules, line: mixin[:location])
       name = mixin[:name].to_s
-      return name.delete_prefix("::") if name.start_with?("::")
-
-      owner = Array(mixin[:owner])
-      owner.size.downto(1).map { |n| "#{owner.first(n).join("::")}::#{name}" }.find do |candidate|
+      Introspectors::DeclaredConstant.candidate_names(name, Introspectors::DeclaredConstant.record_nesting(mixin)).find do |candidate|
         node = modules[candidate]
         node && (line.nil? || node.location.start_line <= line)
-      end || name
+      end || name.delete_prefix("::")
     end
 
     # The full name; else the shortest owner ending in all its segments; else in its last,

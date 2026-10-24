@@ -30,7 +30,7 @@ RSpec.describe RailsAiContext::Introspectors::SeedsIntrospector do
 
     FileUtils.mkdir_p(File.join(@db_dir, "seeds"))
     File.write(File.join(@db_dir, "seeds/categories.rb"), <<~RUBY)
-      Category.find_or_create_by!(name: "General")
+      Comment.find_or_create_by!(body: "General")
     RUBY
   end
 
@@ -59,12 +59,53 @@ RSpec.describe RailsAiContext::Introspectors::SeedsIntrospector do
 
     it "detects seeded models" do
       models = result[:models_seeded]
-      expect(models).to include("User", "Post", "Category")
+      expect(models).to include("User", "Post", "Comment")
       expect(models).not_to include("Faker", "Rails", "Dir")
     end
 
     it "does not return an error" do
       expect(result[:error]).to be_nil
+    end
+
+    # Date, Time, Random and Set are Ruby classes, and Importer a plain object: none is a model.
+    context "when a seed file builds plain Ruby objects beside its records" do
+      before do
+        stub_const("Vendor::Widget", Class.new(ActiveRecord::Base))
+        File.write(File.join(@db_dir, "seeds.rb"), <<~RUBY)
+          Post.create!(title: "Hello", published_on: Date.new(2024, 5, 1), published_at: Time.new(2024))
+          rng = Random.new(42)
+          tags = Set.new
+          Importer.new.call
+          Vendor::Widget.create!(name: "A")
+        RUBY
+        FileUtils.rm_rf(File.join(@db_dir, "seeds"))
+      end
+
+      it "lists only the app's models and the records a loaded library defines" do
+        expect(result[:models_seeded]).to eq(%w[Post Vendor::Widget])
+      end
+    end
+  end
+
+  describe "#call on an app read without booting" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    after { FileUtils.rm_rf(tmpdir) }
+
+    it "lists only the models the app has" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app/models"))
+      FileUtils.mkdir_p(File.join(tmpdir, "db"))
+      File.write(File.join(tmpdir, "app/models/application_record.rb"), "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+      File.write(File.join(tmpdir, "app/models/post.rb"), "class Post < ApplicationRecord\nend\n")
+      File.write(File.join(tmpdir, "db/seeds.rb"), <<~RUBY)
+        Post.create!(title: "Hello", published_on: Date.new(2024, 5, 1), published_at: Time.new(2024))
+        rng = Random.new(42)
+        tags = Set.new
+      RUBY
+
+      result = described_class.new(RailsAiContext::StaticApp.new(tmpdir)).call
+
+      expect(result[:models_seeded]).to eq(%w[Post])
     end
   end
 end

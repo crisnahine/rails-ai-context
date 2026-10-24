@@ -385,6 +385,19 @@ Proof sources:
    and one large open-source app, booted; the unit suite on Ruby 3.4 and on
    Rails 7.0 (Ruby 3.1); and the unit suite and the E2E harness on Linux,
    macOS and Windows.
+   In the v5.37.0 release QA: each fix's example failing on the code before
+   it; every answer that changed from v5.36.9 on copies of three large
+   open-source apps, three small sample apps and one private app, static and
+   booted, read against the app's source and this changelog; the schema
+   replay against what PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite
+   build and Rails dumps from the same migrations; static routes against a
+   live RouteSet on Rails 7.0 and 8.1; views against booted Rails, and
+   constant lookups against Ruby's own; the QA ladder's regression checks in
+   the booted, static and failed-boot tiers and its answer checks; the
+   security advisories' repros; the E2E harness; the unit suite at seeds 1,
+   27377 and 90210 and in defined order, and on Ruby 3.1 to 4.0 with Rails
+   7.0 to 8.1; and the unit suite and the E2E harness on Linux, macOS and
+   Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
@@ -444,6 +457,14 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
 
 ## Known limits
 
+- **The static tier inflects with the rules the initializers write down.**
+  Rails derives a table name, a route name and a class name through the app's
+  inflections. Without a boot, a run reads the `ActiveSupport::Inflector.inflections(:en)`
+  calls under `config/initializers` (`acronym`, `plural`, `singular`,
+  `irregular`, `uncountable`, `human`) and applies those whose arguments are
+  literals, for that run only. A rule built from a computed value, one for
+  another locale, or one a gem registers is not applied. The booted tier uses
+  the app's own inflector.
 - **What a model inherits, and from where.** The model answer walks the model
   file, the files of the concerns it includes, and the files of every class it
   inherits from up to `ActiveRecord::Base`, in both tiers. An abstract base is

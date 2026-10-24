@@ -7,17 +7,6 @@ module RailsAiContext
   # Computes a SHA256 fingerprint of key application files to detect changes.
   # Used by BaseTool to invalidate cached introspection when files change.
   class Fingerprinter
-    # The root manifests.
-    WATCHED_FILES = (%w[
-      Gemfile
-      Gemfile.lock
-      gems.rb
-      gems.locked
-      package.json
-      tsconfig.json
-      config.ru
-    ] + Introspectors::RakeTaskIntrospector::RAKEFILES).freeze
-
     # One scope for fingerprint and watcher; app/, test/ and spec/ whole since readers scan any file there.
     WATCHED_DIRS = (%w[
       app/models
@@ -36,6 +25,18 @@ module RailsAiContext
     ] + Introspectors::ServiceClasses::ROOTS + Introspectors::JobIntrospector::JOB_DIRS + Introspectors::GrapeEndpoints::DIRS +
       %w[app test spec]).freeze
 
+    # The files outside WATCHED_DIRS a reader opens or checks for, as globs
+    # from the app root, each taken from the reader's own list. An entry that
+    # names a folder stands for every file under it.
+    WATCHED_FILES = (%w[Gemfile Gemfile.lock gems.rb gems.locked *.gemspec] + GemLock::VERSION_FILES +
+      Introspectors::RakeTaskIntrospector::RAKEFILES +
+      Introspectors::EnvReferences.root_globs.reject { |glob| WATCHED_DIRS.any? { |dir| glob.start_with?("#{dir}/") } } +
+      Introspectors::EnvReferences::EXAMPLE_FILES + Introspectors::EnvReferences::CREDENTIALS_EXAMPLES +
+      Introspectors::EnvReferences::DOCKERFILES + Introspectors::DevOpsIntrospector::PROCFILES +
+      Introspectors::DevOpsIntrospector::COMPOSE_FILES + Introspectors::DevOpsIntrospector::DEPLOY_MARKERS.keys +
+      Introspectors::TestIntrospector::CI_CONFIGS.values + Introspectors::ConventionIntrospector::CONFIG_FILES +
+      Introspectors::FrontendFrameworkIntrospector::MANIFESTS).uniq.freeze
+
     # The kinds whose homes PathResolver resolves beyond the conventional
     # tree - packs/*, engines/* and configured extras. Derived at compute
     # time so an edit in a pack invalidates the cache the way one in app/
@@ -50,7 +51,7 @@ module RailsAiContext
     # a change and a walk that names it read the same tree.
     # sql: a structure dump, under whatever name database.yml's schema_dump gives it.
     # tt: a generator template override under lib/templates.
-    WATCHED_EXTNAMES = %w[.rb .rake .js .jsx .mjs .cjs .ts .tsx .vue .svelte .erb .haml .slim .jbuilder .builder .ruby .yml .sql .tt].freeze
+    WATCHED_EXTNAMES = %w[.rb .rake .js .jsx .mjs .cjs .ts .tsx .vue .svelte .erb .haml .slim .jbuilder .builder .ruby .yml .yaml .sql .tt].freeze
     WATCHED_EXTENSIONS = "**/*{#{WATCHED_EXTNAMES.join(",")}}"
 
     # jsbundling and cssbundling rewrite this on every frontend save, and no reader reads it.
@@ -87,11 +88,12 @@ module RailsAiContext
         # cached_context hot path for path:-installed users.
         digest.update(gem_lib_fingerprint(root))
 
-        WATCHED_FILES.each do |file|
-          path = File.join(root, file)
-          digest.update(File.mtime(path).to_f.to_s) if File.exist?(path)
+        # Each path with its mtime, so a rename that keeps both moves the digest.
+        manifests(root).each do |file|
+          digest.update(file)
+          digest.update(File.mtime(File.expand_path(file, root)).to_f.to_s)
         rescue Errno::ENOENT
-          # File deleted between exist? check and mtime read - skip
+          # File deleted between glob and mtime read - skip
         end
 
         prefix = SafePath.dir_prefix(root)
@@ -99,7 +101,8 @@ module RailsAiContext
         RunCache.around do
           watched_dirs(root).each do |full_dir|
             watched_files(full_dir, root).sort.each do |path|
-              digest.update(cassette?(path, prefix) ? path : File.mtime(path).to_f.to_s)
+              digest.update(path)
+              digest.update(File.mtime(path).to_f.to_s) unless cassette?(path, prefix)
             rescue Errno::ENOENT
               # File deleted between glob and mtime read - skip
             end
@@ -109,13 +112,37 @@ module RailsAiContext
         digest.hexdigest
       end
 
+      # The WATCHED_FILES that exist and the manifests in each frontend root, root-relative, then
+      # the ones PackageJson reads outside the app (declared frontend_paths, the workspace root), absolute.
+      def manifests(root)
+        root = root.to_s
+        prefix = SafePath.dir_prefix(root)
+        names = Introspectors::FrontendFrameworkIntrospector::MANIFESTS
+        inside = PackageJson.manifest_dirs(root).reject { |dir| dir == root }.flat_map do |dir|
+          Dir.glob(names, base: dir).filter_map { |name| File.join(dir.delete_prefix(prefix), name) if File.file?(File.join(dir, name)) }
+        end
+        outside = (PackageJson.configured_outside(root) + [ PackageJson.workspace_root(root) ].compact).flat_map do |dir|
+          Dir.glob(names, base: dir[:dir]).filter_map { |name| PackageJson.outside_file(dir[:dir], name)&.to_s }
+        end
+        (matching(root, WATCHED_FILES) + inside + outside).uniq
+      end
+
+      # The folders outside the scope dirs that hold a WATCHED_FILES file (bin,
+      # .github/workflows), for a watcher; a frontend root is left out, since
+      # Listen would recurse into its node_modules.
+      def manifest_dirs(root)
+        root = root.to_s
+        scope = watched_dirs(root)
+        matching(root, WATCHED_FILES).filter_map { |file| File.join(root, File.dirname(file)) unless File.dirname(file) == "." }.uniq
+                                     .reject { |dir| scope.any? { |other| SafePath.contained?(dir, other) } }
+      end
+
       # Everything a change could hide in: the conventional dirs plus what
       # the resolvers add for this app (packs, engines, extra_app_paths,
       # concern homes such as app/serializers/concerns).
       def watched_dirs(root)
-        dirs = scope_dirs(root)
         # A dir under another one is already globbed and watched through it.
-        dirs.reject { |dir| dirs.any? { |other| dir.start_with?("#{other}/") } }
+        SafePath.outermost(scope_dirs(root))
       end
 
       def scope_dirs(root)
@@ -147,6 +174,21 @@ module RailsAiContext
 
       private
 
+      # A folder counts only where an entry names it (`.github/workflows`), not where a
+      # wildcard meant for files meets one (`bin/*`), and a linked folder is never entered
+      # (tested without the trailing slash, which would follow the link).
+      def matching(root, globs)
+        globs.flat_map do |glob|
+          Dir.glob(glob, base: root).flat_map do |hit|
+            full = File.join(root, hit)
+            next [ hit ] if File.file?(full)
+            next [] if glob.end_with?("*") || File.symlink?(full.chomp("/")) || !File.directory?(full)
+
+            Dir.glob("**/*", base: full).filter_map { |file| File.join(hit, file) if File.file?(File.join(full, file)) }
+          end
+        end.uniq
+      end
+
       # One walk with an extension filter: a brace glob walks the tree once per extension.
       # The glob lists a directory link and enters none, so a directory linked in
       # from the app's repository, which the readers walk (FileWalk), is globbed
@@ -157,7 +199,9 @@ module RailsAiContext
 
         files = []
         linked = []
-        Dir.glob(File.join(dir, "**/*")).each do |path|
+        # Relative to the dir, so its path is never read as glob syntax.
+        Dir.glob("**/*", base: dir).each do |relative|
+          path = File.join(dir, relative)
           extname = File.extname(path)
           if WATCHED_EXTNAMES.include?(extname)
             files << path unless path.include?(BUILD_OUTPUT)
@@ -196,7 +240,7 @@ module RailsAiContext
         return "" unless gem_lib.start_with?(root) || (defined?(Bundler) && local_gem_path?)
 
         sub = Digest::SHA256.new
-        Dir.glob(File.join(gem_lib, "**/*.rb")).sort.each do |path|
+        PathResolver.glob(gem_lib, "**/*.rb").sort.each do |path|
           sub.update(File.mtime(path).to_f.to_s)
         rescue Errno::ENOENT
           # File deleted between glob and mtime read - skip

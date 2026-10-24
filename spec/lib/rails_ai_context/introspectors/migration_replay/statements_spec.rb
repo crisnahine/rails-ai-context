@@ -13,10 +13,11 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay::Statements do
     tables[table][:columns].map { |column| column[:name] }
   end
 
+  # The replay keeps whether the key has its own sequence until its tables are read.
   it "seeds a created table with the key column a dump would show" do
     apply(action: :create_table, table: "users")
 
-    expect(tables["users"][:columns]).to eq([ { name: "id", type: "bigint", null: false, primary_key: true } ])
+    expect(tables["users"][:columns]).to eq([ { name: "id", type: "bigint", null: false, primary_key: true, own_sequence: true } ])
   end
 
   it "adds, renames and removes columns the way the migration runs them" do
@@ -59,6 +60,16 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay::Statements do
     apply(action: :add_index, table: "users", columns: [ "email" ], options: { unique: true })
 
     expect(tables["users"][:indexes]).to include(a_hash_including(columns: [ "email" ], unique: true))
+  end
+
+  # Compatibility::V5_0#create_table gives an integer or bigint key default: nil, except a bigint key on MySQL.
+  it "gives a Migration[5.0] key the default Rails' compatibility layer gives it" do
+    entry = { migration_version: [ 5, 0 ] }
+    given = %w[postgresql trilogy mysql2].product(%w[integer bigint]).map do |adapter, id|
+      described_class.legacy_key_options({ id: id }, entry, adapter).key?(:default)
+    end
+
+    expect(given).to eq([ true, true, true, false, true, false ])
   end
 
   it "leaves a statement on a table it never created alone" do

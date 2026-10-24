@@ -719,6 +719,33 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
+    it "appends nothing through a .gitignore that links out of the app, and names it" do
+      Dir.mktmpdir do |root|
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "gitignore"), "log/\n")
+          File.symlink(File.join(outside, "gitignore"), File.join(root, ".gitignore"))
+
+          surface = surface_class.new
+          described_class.mark_gitignore(surface, root: root)
+
+          expect(File.read(File.join(outside, "gitignore"))).to eq("log/\n")
+          expect(surface.text).to include("Left .gitignore as it is - it is a symlink or behind one, which this run does not follow")
+        end
+      end
+    end
+
+    it "appends through a .gitignore that links to a file inside the app" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "shared.gitignore"), "log/\n")
+        File.symlink("shared.gitignore", File.join(root, ".gitignore"))
+
+        described_class.mark_gitignore(surface_class.new, root: root)
+
+        expect(File.symlink?(File.join(root, ".gitignore"))).to be(true)
+        expect(File.read(File.join(root, "shared.gitignore"))).to start_with("log/\n").and include(".codex/config.toml")
+      end
+    end
+
     # Only the `:json` context format writes .ai-context.json, so an
     # MCP-only app never produces one.
     it "leaves the JSON cache out when no context files are written" do

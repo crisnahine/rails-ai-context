@@ -29,6 +29,38 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     expect(parse_and_dispatch("mount PgHero::Engine, at: 'pghero'").first).to include(path: "/pghero")
   end
 
+  # Live (Rails 7.0.10 and 8.1.4) draws each at the symbol's name: /hc, /hc2, GET /metrics.
+  it "reads a path written as a symbol" do
+    expect(parse_and_dispatch("mount HealthCheck, at: :hc").first).to include(path: "/hc")
+    expect(parse_and_dispatch("mount HealthCheck => :hc2").first).to include(path: "/hc2")
+    expect(parse_and_dispatch("get :metrics, to: HealthCheck").first).to include(path: "/metrics")
+  end
+
+  # Live (Rails 7.0.10 and 8.1.4): a symbol naming a canonical action draws at the member, collection or
+  # singular resource's own path; the same name as a string, or outside one, keeps its segment.
+  it "draws a symbol naming a canonical action at the scope's own path" do
+    routes = RailsAiContext::Introspectors::Listeners::RoutesDslListener.new
+    results = RailsAiContext::Introspectors::SourceIntrospector.walk_source(<<~ROUTES, { routes: -> { routes }, mounts: -> { described_class.new(routes: routes) } })[:mounts]
+      resources :posts do
+        collection do
+          get :index, to: HealthCheck
+          mount HealthCheck, at: :index
+          get "index", to: HealthCheck
+        end
+        member { get :show, to: HealthCheck }
+        get :show, on: :member, to: HealthCheck
+        get :new, on: :collection, to: HealthCheck
+        get :index, to: HealthCheck
+      end
+      resource(:account) { member { get :show, to: HealthCheck } }
+      get :index, to: HealthCheck
+    ROUTES
+
+    expect(results.map { |r| r[:path] }).to eq(
+      %w[/posts /posts /posts/index /posts/:id /posts/:id /posts /posts/:post_id/index /account /index]
+    )
+  end
+
   it "detects mount with simple constant" do
     results = parse_and_dispatch('mount GrapeApi, at: "/api"')
     expect(results.size).to eq(1)
@@ -74,6 +106,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     RUBY
 
     expect(results.first).to include(engine: "StatsApp", path: "/admin/stats")
+  end
+
+  # A live RouteSet attaches HealthCheck at /admin/hc and StatsApp at /stats: tap and then hand their block the mapper.
+  it "reads a mount on the mapper a tap block takes as its parameter" do
+    results = parse_and_dispatch(<<~RUBY)
+      tap { |m| m.namespace(:admin) { m.mount HealthCheck, at: "/hc" } }
+      self.then { it.mount StatsApp => "/stats" }
+    RUBY
+
+    expect(results.map { |r| r.slice(:engine, :path) }).to eq([ { engine: "HealthCheck", path: "/admin/hc" }, { engine: "StatsApp", path: "/stats" } ])
   end
 
   it "keeps the name Rails gives the mount" do
@@ -236,5 +278,205 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     RUBY
 
     expect(results.map { |r| r[:engine] }).to eq([ "Flipper::UI.app" ])
+  end
+
+  # A live RouteSet mounts what APPS[:a] holds at /a, and the booted tier counts it as an
+  # unrouted mount; a verb route to a held value is a dynamic route there, not a mount.
+  it "lists a mount of a value a constant holds at its path with an inferred app, and no verb route to one" do
+    results = parse_and_dispatch(<<~ROUTES)
+      get "x", to: HANDLERS[:x]
+      get "y", to: HANDLERS.fetch(:y)
+      get "z" => HANDLERS[:z]
+      match "w" => APPS.fetch(:w), via: :get
+      mount APPS.dig(:admin) => "/admin"
+      mount APPS[:a] => "/a"
+      mount HANDLERS[:x], at: "/x"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq(
+      [ [ "[INFERRED]", "/admin" ], [ "[INFERRED]", "/a" ], [ "[INFERRED]", "/x" ] ]
+    )
+  end
+
+  # A live RouteSet serves /b, /d and /m with HealthCheck, /api with API and /v with Api::V1, draws /a and /r
+  # to posts#index, serves /e and /l with a lambda, and /u with a value only a boot can read.
+  it "names a Rack app a constant the file assigns by what it holds, and no app for a string or a value it cannot see" do
+    results = parse_and_dispatch(<<~ROUTES)
+      TO = "posts#index"
+      ALIAS = HealthCheck
+      LAM = ->(env) { [200, {}, []] }
+      get "a", to: TO
+      get "r" => TO
+      get "b", to: HealthCheck
+      get "d", to: ALIAS
+      get "e", to: LAM
+      get "u", to: UNSEEN
+      get "v", to: Api::V1
+      mount ALIAS, at: "/m"
+      mount LAM, at: "/l"
+      mount API, at: "/api"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq(
+      [ [ "HealthCheck", "/b" ], [ "HealthCheck", "/d" ], [ "Api::V1", "/v" ], [ "HealthCheck", "/m" ], [ "API", "/api" ] ]
+    )
+  end
+
+  # Ruby defines APP inside Shop, so the mount's bare APP is another constant, named as written.
+  it "reads only a constant written outside a class or module body as the app a mount names" do
+    results = parse_and_dispatch(<<~ROUTES)
+      module Shop
+        APP = HealthCheck
+      end
+      mount APP, at: "/m"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "APP", "/m" ] ])
+  end
+
+  # A live RouteSet serves /m, /n and /p with HealthCheck, reading each constant where Ruby finds it, and /u with the class Admin::UI.
+  it "names a Rack app a constant written in a module holds, as Ruby looks the reference up" do
+    results = parse_and_dispatch(<<~ROUTES)
+      module Shop
+        APP = HealthCheck
+        mount APP, at: "/m"
+      end
+      mount Shop::APP, at: "/n"
+      module Ops; end
+      Ops::APP = HealthCheck
+      get "p", to: Ops::APP
+      get "u", to: Admin::UI
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "HealthCheck", "/m" ], [ "HealthCheck", "/n" ], [ "HealthCheck", "/p" ], [ "Admin::UI", "/u" ] ])
+  end
+
+  # A live RouteSet serves /n, /p, /g and /i with a HealthCheck and /b with a Rack::Builder, which the booted tier names
+  # by the instance's class, and /c with the class CN; what Builder.app returns at /a only a boot can read.
+  it "names a Rack app the file builds as the booted tier does: an instance by its class, a built class by its constant" do
+    results = parse_and_dispatch(<<~ROUTES)
+      NEWAPP = HealthCheck.new
+      PROBE = HealthCheck.new(:deep)
+      BUILT = Rack::Builder.new { run HealthCheck }
+      CN = Class.new { def self.call(env) = [200, {}, []] }
+      BA = Rack::Builder.app do
+        run HealthCheck
+      end
+      mount NEWAPP, at: "/n"
+      mount PROBE => "/p"
+      mount BUILT, at: "/b"
+      mount CN, at: "/c"
+      mount BA, at: "/a"
+      get "g", to: NEWAPP
+      mount HealthCheck.new, at: "/i"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq(
+      [ [ "HealthCheck", "/n" ], [ "HealthCheck", "/p" ], [ "Rack::Builder", "/b" ], [ "CN", "/c" ], [ "HealthCheck", "/g" ],
+        [ "HealthCheck", "/i" ] ]
+    )
+  end
+
+  # A live RouteSet on 7.0 and 8.1 mounts the class CN2 at /c and the module CM2 at /d: `::Class.new` is `Class.new`.
+  it "names an app built with a rooted Class.new or Module.new by its constant" do
+    results = parse_and_dispatch(<<~ROUTES)
+      CN2 = ::Class.new { def self.call(env) = [200, {}, []] }
+      CM2 = ::Module.new { def self.call(env) = [200, {}, []] }
+      mount CN2, at: "/c"
+      mount CM2, at: "/d"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "CN2", "/c" ], [ "CM2", "/d" ] ])
+  end
+
+  # A live RouteSet on 7.0 and 8.1 mounts a HealthCheck at /n and /g: AL is HealthCheck, so AL.new is one of its instances.
+  it "names an instance built through a constant holding a class by that class" do
+    results = parse_and_dispatch(<<~ROUTES)
+      AL = HealthCheck
+      mount AL.new, at: "/n"
+      get "g", to: AL.new
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "HealthCheck", "/n" ], [ "HealthCheck", "/g" ] ])
+  end
+
+  # A live RouteSet on 7.0 and 8.1 mounts Admin::UI at /u: inside module Admin, Ruby finds UI there before the top level.
+  it "names a mounted class by the constant Ruby finds through Module.nesting" do
+    results = parse_and_dispatch(<<~ROUTES)
+      module Admin
+        class UI
+          def self.call(env) = [200, {}, []]
+        end
+        Rails.application.routes.draw do
+          mount UI, at: "/u"
+        end
+      end
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "Admin::UI", "/u" ] ])
+  end
+
+  # A live RouteSet on 7.0 and 8.1 mounts HealthCheck at /hc: tap yields the mapper, which an optional first parameter takes.
+  it "lists a mount on an optional parameter of a tap block on the mapper" do
+    results = parse_and_dispatch('tap { |m = 1| m.mount HealthCheck, at: "/hc" }')
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "HealthCheck", "/hc" ] ])
+  end
+
+  # A live RouteSet on 7.0 and 8.1 mounts HealthCheck at /w and /v: `||=` assigns a constant not yet defined, and only then.
+  it "reads a constant an ||= assigns as its value, and one it leaves alone as before" do
+    results = parse_and_dispatch(<<~ROUTES)
+      APW ||= HealthCheck
+      APV = HealthCheck
+      APV ||= Other
+      mount APW, at: "/w"
+      mount APV, at: "/v"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "HealthCheck", "/w" ], [ "HealthCheck", "/v" ] ])
+  end
+
+  # A constant holding a call reads as the call written in place: a factory call is named by what builds it, a call
+  # with a block is no app this walk names, held or not.
+  it "names a mount of a constant holding a call as a mount of that call" do
+    results = parse_and_dispatch(<<~ROUTES)
+      FAPP = Flipper::UI.app(Flipper)
+      BAPP = Rack::Builder.app { run HealthCheck }
+      mount FAPP, at: "/f"
+      mount Flipper::UI.app(Flipper), at: "/g"
+      mount BAPP, at: "/b"
+      mount Rack::Builder.app { run HealthCheck }, at: "/c"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "Flipper::UI.app", "/f" ], [ "Flipper::UI.app", "/g" ] ])
+  end
+
+  # A live RouteSet draws /a to /f to posts#index, and mounts at /m what APPS[:a] holds, which only a boot can name.
+  it "lists no app for a verb route to a constant holding a call the file does not build, and an inferred one for its mount" do
+    results = parse_and_dispatch(<<~ROUTES)
+      TOF = "posts#index".freeze
+      TOH = STRS[:a]
+      TOE = ENV.fetch("X_TO", "posts#index")
+      TOM = APPS[:a]
+      get "a", to: TOF
+      get "b" => TOF
+      get "c", to: TOH
+      get "d" => TOH
+      get "e", to: TOE
+      get "f" => TOE
+      mount TOM, at: "/m"
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "[INFERRED]", "/m" ] ])
+  end
+
+  it "mounts an app under scope nil at its own path, as Rails' scope adds no segment for it" do
+    results = parse_and_dispatch(<<~ROUTES)
+      scope nil do
+        mount Web => "/s"
+      end
+    ROUTES
+
+    expect(results.map { |r| [ r[:engine], r[:path] ] }).to eq([ [ "Web", "/s" ] ])
   end
 end

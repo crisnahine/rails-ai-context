@@ -219,11 +219,31 @@ module RailsAiContext
           end
         end
 
+        # A value read from the app's files that the context does not hold, kept
+        # beside it for as long as its fingerprint holds and dropped with it.
+        # Computed outside the mutex, so a cold read blocks no other call, and
+        # kept only if no reset or re-introspection happened meanwhile (ADR 0003).
+        def kept_with_context(key)
+          cached_context
+          mark = SHARED_CACHE[:mutex].synchronize do
+            kept = SHARED_CACHE.dig(:kept, key)
+            return kept[:value].deep_dup if kept && kept[:mark] == SHARED_CACHE[:fingerprint]
+
+            SHARED_CACHE[:fingerprint]
+          end
+          value = yield
+          SHARED_CACHE[:mutex].synchronize do
+            (SHARED_CACHE[:kept] ||= {})[key] = { mark: mark, value: value.deep_dup } if mark && SHARED_CACHE[:fingerprint] == mark
+          end
+          value
+        end
+
         def reset_cache!
           SHARED_CACHE[:mutex].synchronize do
             SHARED_CACHE.delete(:context)
             SHARED_CACHE.delete(:timestamp)
             SHARED_CACHE.delete(:fingerprint)
+            SHARED_CACHE.delete(:kept)
           end
         end
 
@@ -460,6 +480,11 @@ module RailsAiContext
           SESSION_CONTEXT[:dropped].delete(queries.shift.first) while queries.size > MAX_SESSIONS
         end
         private :evict_oldest_sessions
+
+        # A bare pipe ends a Markdown table cell.
+        def table_cell(text)
+          text.to_s.gsub("|", "\\|")
+        end
 
         # Standardized pagination: slice items with offset/limit and produce a consistent hint.
         # Returns { items:, hint:, total:, offset:, limit: }
@@ -734,6 +759,8 @@ module RailsAiContext
 
         # Longer than any model, controller, table or file name an app has.
         MAX_NAME_LENGTH = 256
+        # Enough to steer a retry; the not-found answer lists what is available too.
+        MAX_SUGGESTIONS = 5
         ECHO_LENGTH = 80
 
         # The caller's input as an answer repeats it: a 100 KB argument came
@@ -747,10 +774,8 @@ module RailsAiContext
           value.to_s.length > MAX_NAME_LENGTH
         end
 
-        # Every name that matches as well as the best one does. A bare
-        # `ReportsController` names three real controllers under different
-        # namespaces, and answering with one of them arbitrarily hides the
-        # other two behind a truncated `Available:` list.
+        # Every exact match, by full name or last segment, any case or underscored; else up to MAX_SUGGESTIONS near
+        # spellings and names under the input as a namespace; else the shortest name containing the input or inside it.
         def find_closest_matches(input, available)
           return [] if available.empty?
           # A blank query matches everything via substring ("".include? anything),
@@ -764,8 +789,10 @@ module RailsAiContext
           exact = exact_matches(input, available)
           return exact if exact.any?
 
-          spelled = spelling_matches(input, available)
-          return spelled if spelled.any?
+          # A namespace's name answers with what it holds, after a name spelled near it.
+          held = available.select { |a| a.downcase.start_with?("#{input.downcase}::") }
+          suggested = (spelling_matches(input, available) + held).uniq.first(MAX_SUGGESTIONS)
+          return suggested if suggested.any?
 
           # Containment catches an abbreviation (`prod` for production). Shortest first, so `post`
           # does not answer with `post_comments`.
@@ -908,7 +935,7 @@ module RailsAiContext
 
         def fixture_class_sets(model_name)
           root = rails_app.root.to_s
-          helpers = FIXTURE_HELPER_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)) }.uniq.sort
+          helpers = FIXTURE_HELPER_GLOBS.flat_map { |glob| RailsAiContext::PathResolver.glob(root, glob) }.uniq.sort
           helpers.flat_map do |helper|
             hits = RailsAiContext::Introspectors::SourceIntrospector.walk(helper, {
               sets: -> { RailsAiContext::Introspectors::Listeners::GenericMacroListener.new(:set_fixture_class) }
@@ -1055,7 +1082,9 @@ module RailsAiContext
 
           max = RailsAiContext.configuration.max_tool_response_chars
           if max && text.length > max
-            truncated = text[0...max]
+            # Whole lines only, so no half a fact is left, unless the last line break is far back.
+            cut = text.rindex("\n", max)
+            truncated = text[0...(cut && cut > max / 2 ? cut : max)]
             truncated += "\n\n---\n_Response truncated (#{text.length} chars). Use `detail:\"summary\"` for an overview, or filter by a specific item (e.g. `table:\"users\"`)._"
             truncated += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: cli_form(truncated) } ])
@@ -1204,9 +1233,7 @@ module RailsAiContext
           RailsAiContext::ViewFile.alternate_of(path, RailsAiContext::RunCache.fetch([ :view_locales ]) { available_locales })
         end
 
-        def booted_app?
-          !RailsAiContext.static_tier? && !rails_app.is_a?(RailsAiContext::StaticApp)
-        end
+        def booted_app? = Introspectors::Base.booted?(rails_app)
 
         # Booted, as I18n holds them; unbooted, as the i18n section read them from config or the locale files.
         def available_locales
@@ -1275,6 +1302,18 @@ module RailsAiContext
           error_response(refused.join("\n")) if refused.any?
         end
 
+        # A path as written from the Rails root: `./app/x.rb` and `././app/x.rb` are `app/x.rb`.
+        def root_relative(path) = path.to_s.sub(%r{\A(?:\./)+}, "")
+
+        # A filter path from the root, where a leading `/` is the root and a trailing one a folder.
+        def filter_path(filter) = root_relative(filter.to_s.delete_prefix("/")).chomp("/")
+
+        # A filter names one file or a directory, never part of a name: `Gemfile` is not `Gemfile.lock`.
+        def path_matches?(path, filter)
+          wanted = filter_path(filter)
+          path == wanted || path.start_with?("#{wanted}/")
+        end
+
         # @return [String, nil] the refusal for a path the caller may not read
         def unsafe_path_message(path)
           case RailsAiContext::SafePath.locate(path.to_s, under: rails_app.root.to_s).refusal
@@ -1320,7 +1359,7 @@ module RailsAiContext
         def safe_glob(dir, pattern, real_root)
           return [] unless Dir.exist?(dir)
           real_dir = File.realpath(dir).to_s
-          Dir.glob(File.join(dir, pattern)).filter_map do |file_path|
+          RailsAiContext::PathResolver.glob(dir, pattern).filter_map do |file_path|
             safe_glob_realpath(file_path, real_dir, real_root)
           end
         rescue Errno::ENOENT, Errno::EACCES => e

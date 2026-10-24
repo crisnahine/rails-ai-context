@@ -170,7 +170,8 @@ module RailsAiContext
         found.first[:source] if found.one?
       end
 
-      # Only the app's own files are read; a job file reuses the walk that found it.
+      # Only the app's own files are read; a job file reuses the walk that found it. Each class
+      # of a file that declares several walked only its own body, so that file is walked whole.
       def queue_as_walk(file)
         @queue_as_walks ||= {}
         @queue_as_walks.fetch(file) do
@@ -179,7 +180,8 @@ module RailsAiContext
             root = app.root.to_s
             if SourceScan.under_root?(file, real, root, app_root_real) && !PathResolver.linked_out?(file, root)
               relative = SourceScan.relative_file(file, real, root, app_root_real)
-              job_candidates.values.find { |candidate| candidate.file == relative }&.ast ||
+              walked = job_candidates.values.select { |candidate| candidate.file == relative }
+              (walked.first.ast if walked.one?) ||
                 (source = SafeFile.read(file)) && SourceIntrospector.walk_source(source, QUEUE_AS_LISTENERS)
             end
           rescue SystemCallError
@@ -546,28 +548,46 @@ module RailsAiContext
       # Every class in every job directory, one walk each. The kind of job waits for the
       # whole map: the mixin or ActiveJob ancestry is often on a base in another file.
       def job_candidates
-        @job_candidates ||= JOB_DIRS.each_with_object({}) do |kind, found|
+        return @job_candidates if @job_candidates
+
+        siblings = []
+        @job_candidates = JOB_DIRS.each_with_object({}) do |kind, found|
           SourceScan.each(app.root, kind: kind) do |record|
             declarations = DeclaredConstant.declarations(record.source, path_name: record.path_name)
             next if declarations.empty?
 
             declaration = DeclaredConstant.declaration_for(declarations, record.path_name) || declarations.first
             name = job_name(declaration, record)
-            next if found.key?(name)
-            found[name] = Candidate.new(
-              file: record.file,
-              source: record.source,
-              declared: declaration.name,
-              declares: declarations.map(&:name),
-              superclass: declaration.superclass,
-              nesting: declaration.nesting,
-              ast: SourceIntrospector.walk_source(record.source, QUEUE_AS_LISTENERS.merge(
-                methods: Listeners::MethodsListener,
-                calls:   SourceCalls.listener
-              ))
-            )
+            found[name] ||= candidate(record, declaration, declarations)
+            # Eager loading loads every class the file declares, so one beside it with a superclass is a candidate too.
+            declarations.each do |sibling|
+              next if sibling == declaration || !sibling.superclass || found.key?(sibling.name)
+
+              found[sibling.name] = candidate(record, sibling, declarations)
+              siblings << sibling.name
+            end
           end
         end
+        # A class beside the file's own is a job only by its chain: an error class with a perform is none.
+        @job_candidates = @job_candidates.except(*siblings.reject { |name| worker?(name) || active_job?(name) || que_job?(name) })
+        @candidate_names = nil
+        @job_candidates
+      end
+
+      def candidate(record, declaration, declarations)
+        source = DeclaredConstant.own_source(record.source, declaration.name)
+        Candidate.new(
+          file: record.file,
+          source: source,
+          declared: declaration.name,
+          declares: declarations.map(&:name),
+          superclass: declaration.superclass,
+          nesting: declaration.nesting,
+          ast: SourceIntrospector.walk_source(source, QUEUE_AS_LISTENERS.merge(
+            methods: Listeners::MethodsListener,
+            calls:   SourceCalls.listener
+          ))
+        )
       end
 
       # A declaration that writes its own namespace names the job (the path may camelize
@@ -581,8 +601,7 @@ module RailsAiContext
       # Every name a candidate answers to, mapped to its key: a subclass's base is often
       # a second class in another file, not a file of its own.
       def candidate_names
-        @candidate_names ||= job_candidates.each_with_object({}) do |(name, candidate), index|
-          index[name] ||= name
+        @candidate_names ||= job_candidates.each_with_object(job_candidates.keys.to_h { |name| [ name, name ] }) do |(name, candidate), index|
           candidate.declares.each { |declared| index[declared] ||= name }
         end
       end
@@ -950,7 +969,7 @@ module RailsAiContext
       # welcome.html.erb and welcome.text.erb are one action in two formats; a partial is no action.
       def mailer_templates(name)
         dir = File.join(app.root.to_s, "app/views", name.underscore)
-        Dir.glob(File.join(dir, "*")).select { |path| File.file?(path) }.each_with_object({}) do |path, found|
+        PathResolver.glob(dir, "*").select { |path| File.file?(path) }.each_with_object({}) do |path, found|
           action, *middle, handler = File.basename(path).split(".")
           next if action.start_with?("_") || handler.nil?
 
@@ -980,7 +999,7 @@ module RailsAiContext
       end
 
       def app_config_files
-        @app_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(app.root.to_s, glob)).sort }
+        @app_config_files ||= MAILER_CONFIG_GLOBS.flat_map { |glob| PathResolver.glob(app.root, glob).sort }
           .reject { |path| PathResolver.linked_out?(path, app.root) }.map { |path| path.delete_prefix("#{app.root}/") }
       end
 
@@ -999,7 +1018,7 @@ module RailsAiContext
 
       # Mailer name => its preview class, file and the emails it previews.
       def mailer_previews
-        @mailer_previews ||= mailer_preview_dirs.flat_map { |dir| Dir.glob(File.join(app.root.to_s, dir, "**/*_preview.rb")).sort }
+        @mailer_previews ||= mailer_preview_dirs.flat_map { |dir| PathResolver.glob(app.root, File.join(dir, "**/*_preview.rb")).sort }
           .each_with_object({}) do |path, found|
             next unless SafePath.contained?(File.realpath(path), app_root_real)
 

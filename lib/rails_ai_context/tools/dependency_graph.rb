@@ -104,22 +104,25 @@ module RailsAiContext
         def build_graph(models_data)
           graph = {}
           unresolved = {}
-          polymorphic_interfaces = {} # { interface_name => [concrete_model, ...] }
+          polymorphic_interfaces = {} # { [owner_model, interface_name] => [concrete_model, ...] }
 
           # First pass: collect polymorphic interfaces
           models_data.each do |model_name, data|
             next unless data.is_a?(Hash) && !data[:error]
             (data[:associations] || []).each do |assoc|
               if assoc[:polymorphic]
-                polymorphic_interfaces[assoc[:name].to_s] ||= []
+                polymorphic_interfaces[[ model_name.to_s, assoc[:name].to_s ]] ||= []
               end
             end
           end
 
+          declared = models_data.transform_keys(&:to_s)
+          sti_parents = declared.transform_values { |data| data.dig(:sti, :sti_parent)&.to_s if data.is_a?(Hash) }
+
           # Second pass: a model implements an interface by declaring `as:` on
-          # it. The key's name says nothing: Tag's `has_many :products,
-          # through: :taggings, source: :taggable` reads the key taggable_id
-          # and implements nothing.
+          # it, toward the model the has_many points at. The key's name says
+          # nothing: Tag's `has_many :products, through: :taggings, source:
+          # :taggable` reads the key taggable_id and implements nothing.
           models_data.each do |model_name, data|
             next unless data.is_a?(Hash) && !data[:error]
             (data[:associations] || []).each do |assoc|
@@ -128,11 +131,17 @@ module RailsAiContext
               next if assoc[:through]
 
               interface = polymorphic_as(assoc)
-              polymorphic_interfaces[interface] |= [ model_name.to_s ] if polymorphic_interfaces.key?(interface)
+              next unless interface
+
+              target = Introspectors::AssociationClass.target(assoc, declared, owner: model_name.to_s)
+              next unless target
+
+              sti_family(target, sti_parents).each do |member|
+                key = [ member, interface ]
+                polymorphic_interfaces[key] |= [ model_name.to_s ] if polymorphic_interfaces.key?(key)
+              end
             end
           end
-
-          declared = models_data.transform_keys(&:to_s)
 
           # Build edges
           models_data.each do |model_name, data|
@@ -140,29 +149,23 @@ module RailsAiContext
             name = model_name.to_s
 
             associations = data[:associations] || []
-            by_name = associations.each_with_object({}) { |a, acc| acc[a[:name].to_s] = a }
+            by_name = Introspectors::AssociationClass.by_name(associations)
 
             edges = associations.filter_map do |assoc|
               next if assoc[:unavailable]
 
-              # An unreadable class_name names no class; camelizing the association instead
-              # draws a node the app does not define.
-              if (assoc[:class_name] && !readable_class?(assoc[:class_name])) ||
-                 (assoc[:class_name].nil? && assoc[:computed_name])
+              case Introspectors::AssociationClass.unresolved(assoc, by_name)
+              when :unreadable
                 (unresolved[name] ||= []) << assoc[:name].to_s
                 next
-              end
-
-              # `has_many :x, through: :buyer` with no `buyer` association fails
-              # when Rails reads it; it names no class to draw. A module the
-              # walk could not read might declare it, and the note says so.
-              if assoc[:through] && !by_name.key?(assoc[:through].to_s)
+              when :through
+                # A module the walk could not read might declare the hop, and the note says so.
                 unread = Array(data[:concerns_unread]) + Array(data[:bases_unread])
                 (unresolved[name] ||= []) << { name: assoc[:name].to_s, through: assoc[:through].to_s, unread: unread }
                 next
               end
 
-              target = resolve_target(assoc, models_data, by_name, declared, owner: name)
+              target = Introspectors::AssociationClass.target(assoc, declared, by_name: by_name, owner: name)
               next unless target
 
               edge = {
@@ -170,14 +173,13 @@ module RailsAiContext
                 name: assoc[:name].to_s,
                 target: target,
                 through: assoc[:through],
-                through_class: assoc[:through] && through_class(assoc, by_name, declared, owner: name),
+                through_class: assoc[:through] && Introspectors::AssociationClass.through_class(assoc, by_name, declared, owner: name),
                 polymorphic: assoc[:polymorphic]
               }
 
               # Resolve polymorphic: record concrete targets
               if assoc[:polymorphic]
-                interface = assoc[:name].to_s
-                edge[:polymorphic_targets] = polymorphic_interfaces[interface] || []
+                edge[:polymorphic_targets] = polymorphic_interfaces[[ name, assoc[:name].to_s ]] || []
               end
 
               edge
@@ -201,76 +203,12 @@ module RailsAiContext
         # How many of them the note spells out before it counts the rest.
         UNRESOLVED_NAMED = 10
 
-        COLLECTION_MACROS = %w[has_many has_and_belongs_to_many embeds_many].freeze
-
-        # A class name a node can be drawn from, rather than the expression a
-        # file wrote in place of one.
-        CLASS_SHAPED = /\A(::)?[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*\z/
-
-        def readable_class?(value)
-          value.to_s.match?(CLASS_SHAPED)
-        end
-
-        # Rails singularizes an association name only for a collection
-        # (`derive_class_name`), so `belongs_to :search_criteria` is
-        # `SearchCriteria` and never `SearchCriterium`. A computed name
-        # (`belongs_to owner_name`) camelizes into a class no app defines.
-        def derive_class(assoc, declared, owner: nil)
-          name = assoc[:name].to_s
-          return nil if name.empty? || assoc[:computed_name]
-
-          base = COLLECTION_MACROS.include?((assoc[:macro] || assoc[:type]).to_s) ? name.singularize : name
-          declared_spelling(base.camelize, declared, owner: owner)
-        end
-
-        # Camelizing here knows none of the app's acronyms, so `AiMatchResult`
-        # is drawn as the app's `AIMatchResult`.
-        def declared_spelling(candidate, declared, owner: nil)
-          Introspectors::TableName.model_for(candidate, owner, declared) || candidate.to_s.delete_prefix("::")
-        end
-
-        # The class the `through:` association points at - its own
-        # `class_name` when one is declared, never the association name
-        # camelized, which drew `PrimaryBuyer` and `InvoicePdfAttachment` as
-        # nodes no app defines.
-        def through_class(assoc, by_name, declared, owner: nil)
-          hop = by_name[assoc[:through].to_s]
-          return declared_spelling(assoc[:through].to_s.singularize.camelize, declared, owner: owner) unless hop
-
-          named = hop[:class_name] if readable_class?(hop[:class_name])
-          named ? declared_spelling(named, declared, owner: owner) : derive_class(hop, declared, owner: owner)
-        end
-
-        # Booted, a through reflection's `class_name` already follows
-        # `source:`. Static records none, so the far side is read off the
-        # source association on the class the through hop lands on.
-        def resolve_target(assoc, _models_data, by_name, declared, owner: nil)
-          # A polymorphic source names no class; `source_type:` does, in both
-          # tiers, ahead of a class_name reflection derived from the name.
-          source_type = assoc.dig(:options, :source_type) || assoc[:source_type]
-          return declared_spelling(source_type, declared, owner: owner) if assoc[:through] && readable_class?(source_type)
-          return declared_spelling(assoc[:class_name], declared, owner: owner) if assoc[:class_name]
-          return derive_class(assoc, declared, owner: owner) unless assoc[:through]
-
-          middle = through_class(assoc, by_name, declared, owner: owner)
-          source_name = (assoc.dig(:options, :source) || assoc[:source] || assoc[:name]).to_s
-          middle_data = declared[middle.to_s]
-          source_assoc = Array(middle_data.is_a?(Hash) ? middle_data[:associations] : nil)
-                           .find { |a| a[:name].to_s == source_name }
-
-          # The far side belongs to the middle class, and resolves from there.
-          if source_assoc
-            named = source_assoc[:class_name] if readable_class?(source_assoc[:class_name])
-            named ? declared_spelling(named, declared, owner: middle) : derive_class(source_assoc, declared, owner: middle)
-          else
-            derive_class(assoc, declared, owner: owner)
-          end
-        end
-
         def extract_subgraph(graph, center, depth)
           visited = Set.new
           queue = [ [ center, 0 ] ]
           subgraph = {}
+          incoming = Hash.new { |hash, key| hash[key] = [] }
+          graph.each { |model, model_edges| model_edges.each { |edge| incoming[edge[:target]] << model } }
 
           while queue.any?
             current, d = queue.shift
@@ -284,13 +222,7 @@ module RailsAiContext
               queue << [ edge[:target], d + 1 ] unless visited.include?(edge[:target])
             end
 
-            # Also find reverse associations pointing to current
-            graph.each do |model, model_edges|
-              next if visited.include?(model)
-              if model_edges.any? { |e| e[:target] == current }
-                queue << [ model, d + 1 ]
-              end
-            end
+            incoming[current].each { |model| queue << [ model, d + 1 ] unless visited.include?(model) }
           end
 
           subgraph
@@ -352,27 +284,43 @@ module RailsAiContext
           cycles.uniq { |c| c.sort }
         end
 
-        # Extract STI hierarchies from models data.
-        # Groups models that share the same table_name with sti info.
+        # A has_many to an STI class holds rows of that class and its subclasses, and each
+        # row is also a row of every ancestor: the classes whose belongs_to it can fill.
+        def sti_family(name, sti_parents)
+          family = [ name ]
+          family.each { |member| sti_parents.each { |child, parent| family << child if parent == member && !family.include?(child) } }
+          ancestor = sti_parents[name]
+          while ancestor && !family.include?(ancestor)
+            family << ancestor
+            ancestor = sti_parents[ancestor]
+          end
+          family
+        end
+
+        # One group per STI base. Each class lists only its direct subclasses, so the
+        # tree is walked down to reach every level: [parent, child, depth] in tree order.
         def extract_sti_groups(models_data)
-          groups = []
-
-          models_data.each do |model_name, data|
-            next unless data.is_a?(Hash) && !data[:error]
-            sti = data[:sti]
-            next unless sti
-
-            if sti[:sti_base]
-              children = sti[:sti_children] || []
-              groups << {
-                base: model_name.to_s,
-                table: data[:table_name],
-                children: children.map(&:to_s)
-              }
-            end
+          by_name = models_data.to_h { |name, data| [ name.to_s, data ] }
+          children_of = lambda do |name|
+            data = by_name[name]
+            data.is_a?(Hash) && !data[:error] && data[:sti] ? Array(data[:sti][:sti_children]).map(&:to_s) : []
           end
 
-          groups
+          by_name.filter_map do |name, data|
+            next unless data.is_a?(Hash) && !data[:error] && data.dig(:sti, :sti_base)
+
+            edges = []
+            walk = lambda do |parent, depth, seen|
+              children_of.call(parent).each do |child|
+                next if seen.include?(child)
+
+                edges << [ parent, child, depth ]
+                walk.call(child, depth + 1, seen | [ child ])
+              end
+            end
+            walk.call(name, 1, [ name ])
+            { base: name, table: data[:table_name], children: edges }
+          end
         end
 
         CYCLES_NOTE = "_Chains of foreign keys that lead back to the model they start from, through another: a belongs_to, or the " \
@@ -449,11 +397,11 @@ module RailsAiContext
 
           # STI: dotted lines
           sti_groups.each do |group|
-            group[:children].each do |child|
-              sti_key = "#{group[:base]}->#{child}:sti"
+            group[:children].each do |parent, child, _depth|
+              sti_key = "#{parent}->#{child}:sti"
               unless rendered.include?(sti_key)
                 rendered.add(sti_key)
-                lines << "  #{sanitize(group[:base])} -.-|STI| #{sanitize(child)}"
+                lines << "  #{sanitize(parent)} -.-|STI| #{sanitize(child)}"
               end
             end
           end
@@ -518,7 +466,7 @@ module RailsAiContext
             lines << "## STI Hierarchies"
             sti_groups.each do |group|
               lines << "- **#{group[:base]}** (table: #{group[:table]})"
-              group[:children].each { |child| lines << "  - #{child}" }
+              group[:children].each { |_parent, child, depth| lines << "#{"  " * depth}- #{child}" }
             end
             lines << ""
           end

@@ -8,6 +8,14 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
+      PROCFILES = %w[Procfile Procfile.dev].freeze
+      COMPOSE_FILES = %w[docker-compose.yml docker-compose.yaml].freeze
+      # The first one present names the deployment tool.
+      DEPLOY_MARKERS = {
+        "config/deploy.yml" => "kamal", "Capfile" => "capistrano", "app.json" => "heroku", "fly.toml" => "fly.io",
+        "render.yaml" => "render", "render.yml" => "render", "railway.toml" => "railway", "railway.json" => "railway"
+      }.freeze
+
       def call
         {
           puma: extract_puma_config,
@@ -68,7 +76,7 @@ module RailsAiContext
       end
 
       def extract_procfile
-        %w[Procfile Procfile.dev].filter_map do |filename|
+        PROCFILES.filter_map do |filename|
           path = File.join(root, filename)
           next unless File.exist?(path)
 
@@ -118,8 +126,7 @@ module RailsAiContext
         info[:base_images] = from_lines.flatten if from_lines.any?
         info[:multi_stage] = from_lines.size > 1
 
-        compose = File.exist?(File.join(root, "docker-compose.yml")) || File.exist?(File.join(root, "docker-compose.yaml"))
-        info[:compose] = compose
+        info[:compose] = COMPOSE_FILES.any? { |file| File.exist?(File.join(root, file)) }
 
         info
       rescue => e
@@ -127,14 +134,7 @@ module RailsAiContext
       end
 
       def detect_deployment_tool
-        tools = []
-        tools << "kamal" if File.exist?(File.join(root, "config/deploy.yml"))
-        tools << "capistrano" if File.exist?(File.join(root, "Capfile"))
-        tools << "heroku" if File.exist?(File.join(root, "app.json"))
-        tools << "fly.io" if File.exist?(File.join(root, "fly.toml"))
-        tools << "render" if File.exist?(File.join(root, "render.yaml")) || File.exist?(File.join(root, "render.yml"))
-        tools << "railway" if File.exist?(File.join(root, "railway.toml")) || File.exist?(File.join(root, "railway.json"))
-        tools.first # Return primary detected tool for backward compatibility
+        DEPLOY_MARKERS.find { |file, _tool| File.exist?(File.join(root, file)) }&.last
       end
     end
   end

@@ -124,6 +124,7 @@ module RailsAiContext
         end
 
         def table_values(node)
+          node = node.receiver while node.is_a?(Prism::CallNode) && node.name == :freeze && node.arguments.nil? && node.receiver
           case node
           when Prism::HashNode
             node.elements.grep(Prism::AssocNode).filter_map { |assoc| literal_string(assoc.key) }

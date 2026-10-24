@@ -2361,6 +2361,167 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).not_to include("owner_name")
       expect(text).not_to include("INFERRED")
     end
+
+    it "writes a minitest file that parses and tests only the associations it can name" do
+      allow(described_class).to receive(:cached_context).and_return(
+        tests: { framework: "minitest", fixture_names: {}, factory_names: {} },
+        models: {
+          "User" => {
+            table_name: "users",
+            associations: [ { type: "has_many", name: "posts" },
+                            { type: "has_many", name: ':"#{k}_posts"', computed_name: true } ],
+            validations: []
+          }
+        }
+      )
+
+      text = described_class.call(model: "User").content.first[:text]
+      source = text[/```ruby\n(.*)```/m, 1]
+
+      expect(Prism.parse(source).success?).to be(true)
+      expect(source).to include("test \"has_many posts\"")
+      expect(source).not_to include("_posts")
+    end
+  end
+
+  # Each expected line passes shoulda-matchers 7.0.1 and 8.0.1 against the model it is built from.
+  describe "shoulda matchers for declarations with options" do
+    before do
+      bundling_shoulda
+      allow(described_class).to receive(:cached_context).and_return(
+        tests: { framework: "rspec", factories: { count: 0 }, factory_names: {} },
+        schema: { tables: { "tickets" => { columns: [ { name: "status", type: "integer" }, { name: "kind", type: "string" }, { name: "level", type: "integer" } ] } } },
+        models: {
+          "Post" => {
+            table_name: "posts",
+            associations: [ { type: "belongs_to", name: "user", options: { optional: true }, optional: true },
+                            { type: "belongs_to", name: "author", options: { class_name: "User" }, class_name: "User" },
+                            { type: "belongs_to", name: "owner", options: { optional: "-> { draft? }" }, optional: "-> { draft? }" } ]
+          },
+          "Item" => {
+            table_name: "items",
+            validations: [ { kind: "uniqueness", attributes: [ "email" ], options: { case_sensitive: false } },
+                           { kind: "uniqueness", attributes: [ "slug" ], options: { scope: :account_id } },
+                           { kind: "uniqueness", attributes: [ "code" ], options: { scope: %i[account_id kind], case_sensitive: false } },
+                           { kind: "uniqueness", attributes: [ "name" ], options: {} },
+                           { kind: "uniqueness", attributes: [ "handle" ], options: { scope: "SCOPE_COLUMNS" } },
+                           { kind: "uniqueness", attributes: [ "token" ], options: {}, options_source: "**UNIQUE" } ]
+          },
+          "Ticket" => {
+            table_name: "tickets",
+            enums: { "status" => { "active" => 1, "archived" => 2 }, "kind" => { "small" => "small", "big" => "big" },
+                     "level" => { "low" => 0, "high" => 1 }, "state" => { "queued" => 0, "done" => 1 },
+                     "phase" => { "early" => 0, "late" => 1 }, "tier" => { "gold" => "GOLD_TIER" } },
+            enum_options: { "state" => { prefix: true }, "phase" => { suffix: :step } }
+          }
+        }
+      )
+    end
+
+    def matchers(model) = described_class.call(model: model).content.first[:text].lines.grep(/is_expected|expect\(/).map(&:strip)
+
+    it "qualifies an optional belongs_to, and falls back to reflection for an optional: it cannot read" do
+      expect(matchers("Post")).to eq([
+        "it { is_expected.to belong_to(:user).optional }",
+        "it { is_expected.to belong_to(:author) }",
+        "it { expect(described_class.reflect_on_association(:owner).macro).to eq(:belongs_to) }"
+      ])
+    end
+
+    it "scopes and case-folds a uniqueness matcher the way the validation does" do
+      expect(matchers("Item")).to include(
+        "it { is_expected.to validate_uniqueness_of(:email).case_insensitive }",
+        "it { is_expected.to validate_uniqueness_of(:slug).scoped_to(:account_id) }",
+        "it { is_expected.to validate_uniqueness_of(:code).scoped_to(:account_id, :kind).case_insensitive }",
+        "it { is_expected.to validate_uniqueness_of(:name) }"
+      )
+      expect(matchers("Item").grep(/handle|token/).join).not_to include("validate_uniqueness_of")
+    end
+
+    it "asserts an enum's value hash, a non-integer column's type and the method prefix or suffix" do
+      expect(matchers("Ticket")).to eq([
+        "it { is_expected.to define_enum_for(:status).with_values(active: 1, archived: 2) }",
+        "it { is_expected.to define_enum_for(:kind).with_values(small: \"small\", big: \"big\").backed_by_column_of_type(:string) }",
+        "it { is_expected.to define_enum_for(:level).with_values(low: 0, high: 1) }",
+        "it { is_expected.to define_enum_for(:state).with_values(queued: 0, done: 1).with_prefix }",
+        "it { is_expected.to define_enum_for(:phase).with_values(early: 0, late: 1).with_suffix(:step) }",
+        "it { expect(described_class.defined_enums[\"tier\"].keys).to match_array([\"gold\"]) }"
+      ])
+    end
+  end
+
+  # define_enum_for checks for the scopes and value methods unless told the enum skips them.
+  describe "an enum declared without scopes or value methods" do
+    it "says so on the matcher, and falls back to the values example when it cannot read the option" do
+      bundling_shoulda
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/ticket.rb"), <<~RUBY)
+          class Ticket < ApplicationRecord
+            enum :status, { open: 0, closed: 1 }, scopes: false
+            enum :level, { low: 0, high: 1 }, instance_methods: false, prefix: true
+            enum :tier, { gold: 0, silver: 1 }, scopes: Feature.enabled?
+          end
+        RUBY
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(
+          tests: { framework: "rspec", factories: { count: 0 }, factory_names: {} }, models: models.slice("Ticket")
+        )
+
+        lines = described_class.call(model: "Ticket").content.first[:text].lines.grep(/is_expected|expect\(/).map(&:strip)
+
+        expect(lines).to eq([
+          "it { is_expected.to define_enum_for(:status).with_values(open: 0, closed: 1).without_scopes }",
+          "it { is_expected.to define_enum_for(:level).with_values(low: 0, high: 1).with_prefix.without_instance_methods }",
+          "it { expect(described_class.defined_enums[\"tier\"].keys).to match_array([\"gold\", \"silver\"]) }"
+        ])
+      end
+    end
+  end
+
+  # validate_uniqueness_of(:title) fails on 7.0.1 and 8.0.1 here: the record it saves is
+  # unpublished, so the conditions leave it out and the second record is valid.
+  describe "a reflected uniqueness validation with a conditions: lambda" do
+    it "falls back to the reflection example instead of the plain matcher" do
+      bundling_shoulda
+      Object.const_set(:ScopedPost, Class.new(Post) { validates :title, uniqueness: { conditions: -> { where(published: true) } } })
+      models = RailsAiContext::Introspectors::ModelIntrospector.new(Rails.application).call
+      allow(described_class).to receive(:cached_context).and_return(
+        tests: { framework: "rspec", factories: { count: 0 }, factory_names: {} }, models: models.slice("ScopedPost")
+      )
+
+      text = described_class.call(model: "ScopedPost").content.first[:text]
+
+      expect(text).not_to include("validate_uniqueness_of(:title)")
+      expect(text).to include("expect(described_class.validators_on(:title).map(&:kind)).to include(:uniqueness)")
+    ensure
+      Object.send(:remove_const, :ScopedPost) if Object.const_defined?(:ScopedPost, false)
+    end
+  end
+
+  # User.bordered.to_sql is `... WHERE "users"."bordered" = 1`, no ORDER BY.
+  describe "a minitest scope test" do
+    it "expects ORDER BY only from a scope that calls order, reorder or in_order_of" do
+      allow(described_class).to receive(:cached_context).and_return(
+        tests: { framework: "minitest", fixture_names: {}, factory_names: {} },
+        models: {
+          "User" => {
+            table_name: "users", associations: [], validations: [],
+            scopes: [ { name: "buyers", body: "joins(:orders).distinct" },
+                      { name: "bordered", body: "where(bordered: true)" },
+                      { name: "by_order", body: "where(order: 1)" },
+                      { name: "latest", body: "order(created_at: :desc)" },
+                      { name: "ranked", body: "in_order_of(:pos, [ 2, 1 ])" } ]
+          }
+        }
+      )
+
+      source = described_class.call(model: "User").content.first[:text]
+      tests = source.split(/^  test /).drop(1).to_h { |t| [ t[/\A"scope \.(\w+)/, 1], t ] }
+
+      expect(tests.select { |_, body| body.include?("ORDER BY") }.keys).to contain_exactly("latest", "ranked")
+      expect(tests["bordered"]).to include("assert_kind_of ActiveRecord::Relation, results")
+    end
   end
 
   # `validators_on(:date_of_birth).map(&:kind)` never holds `:validates_date`,

@@ -249,7 +249,7 @@ class RailsAiContextCLI < Thor
         args << "--help"
       end
 
-      if args.include?("--help") || args.include?("-h")
+      if args.include?("--help") || short_flag_at(args, "-h")
         # The app's configuration file says which tools and sections it serves; reading it boots nothing.
         root = app_root.resolve(cwd: Dir.pwd, app_path: @app_path_override || options[:app_path]).root
         entry_boot.require_gem_without_app!
@@ -264,7 +264,10 @@ class RailsAiContextCLI < Thor
       # also stripping it from args here, mirroring the --help handling above.
       json_mode = options[:json]
       json_mode = true if args.delete("--json")
-      json_mode = true if args.delete("-j")
+      while (at = short_flag_at(args, "-j"))
+        args.delete_at(at)
+        json_mode = true
+      end
 
       # A tool that declares `environment` keeps it: booting in the env it filters for fails where the app has no database.
       environment_flag = extract_value_flag!(args, "--environment")
@@ -280,13 +283,28 @@ class RailsAiContextCLI < Thor
         @environment_override = environment_flag
       end
 
-      boot_rails!(command: "tool", allow_static: true, no_boot: no_boot)
+      runner = nil
+      # A -j left for ToolRunner may be its JSON flag, so a failure before it reads one answers as JSON.
+      json_answer = -> { json_mode || (runner ? runner.json_mode : args.include?("-j")) }
+      answer = begin
+        boot_rails!(command: "tool", allow_static: true, no_boot: no_boot)
 
-      # A custom tool can declare `environment` too; the binary cannot see its
-      # schema before boot, so it gets the value as RAILS_ENV and as its own.
-      runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode,
-                                                                environment: @environment_override)
-      puts runner.run
+        # A custom tool can declare `environment` too; the binary cannot see its
+        # schema before boot, so it gets the value as RAILS_ENV and as its own.
+        runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode,
+                                                                  environment: @environment_override)
+        runner.run
+      rescue SystemExit => e
+        raise if e.success? || !json_answer.call
+
+        # What stopped it is already on stderr. The name stays as typed: only the gem's tool registry resolves it.
+        exit_with_envelope!(name, entry_boot::NOT_RUN)
+      rescue StandardError, ScriptError => e
+        raise unless json_answer.call
+
+        exit_with_envelope!(runner&.tool_class&.tool_name || name, e.message)
+      end
+      puts answer
       exit 1 if runner.error
     end
 
@@ -1120,6 +1138,19 @@ class RailsAiContextCLI < Thor
           refuse_no_app!
         end
         exit 1
+      end
+    end
+
+    # The --json answer for a call that failed before the tool answered: stdout holds the envelope only.
+    def exit_with_envelope!(tool, message)
+      puts entry_boot.envelope(tool, message, true)
+      exit 1
+    end
+
+    # Where `flag` stands as a flag before boot; after a bare `--name` it may be a value, which only ToolRunner can tell.
+    def short_flag_at(args, flag)
+      args.each_index.find do |at|
+        args[at] == flag && !(at.positive? && args[at - 1].match?(/\A--(?!no-)[^=]+\z/) && !%w[--json --help].include?(args[at - 1]))
       end
     end
 

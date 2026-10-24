@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.37.0] - 2026-10-25
+
+### Security
+
+- **Install and uninstall leave a `.gitignore` or initializer that links out of
+  the app as it is, and name it.** They wrote through such a link before, and
+  the legacy rule-file cleanup deletes nothing a symlinked rules folder carries
+  out of the app.
+- **Uninstall and the dropped-tool cleanup no longer delete or edit a file that
+  a symlinked directory carries out of the app.** Such a file is left in place
+  and named as left behind a symlink the cleanup does not follow.
 
 ### Changed
 
@@ -13,6 +23,1039 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release whose `doctor` and update notice know it; an older one sent you to
   `init`, which adds a second server beside the plugin's. With an older gem the
   plugin's server connects with no tools and says to update it.
+- **`rails_validate` with `level: "rails"` has Brakeman parse only the files it
+  checks and the app's models, so one file no longer costs a whole-app scan.**
+  The models keep a query on a model at the confidence a full scan gives it. On
+  a generated app of 30-line models they took one file's scan from 0.02s to
+  0.32s at 250 models and from 0.04s to 0.92s at 700 (Brakeman 8.1.0, best of
+  3). A view's warning that comes from its controller's params shows when both
+  files are passed; `rails_security_scan` still scans the whole app. (#529)
+- **`TestHelper#execute_tool` raises when the tool returns an error, and
+  `execute_tool_with_error` fails the test when the call succeeds.** Before,
+  both helpers returned whatever the tool answered, so a test on a broken tool
+  passed. A suite that read an error text through `execute_tool` should call
+  `execute_tool_with_error` instead. (#593)
+- **The env section reads each source file once and keeps its scan until the
+  files change.** The ENV scan and the HTTP client check share one read, and the
+  result lives beside the shared context, so a repeated call costs milliseconds
+  rather than about a second. The read runs without holding the shared cache's
+  lock, so other tools do not wait on it. (#597)
+- **Doctor introspects once.** The introspector health check and the context
+  files' dry run read the same run, so doctor takes about half the time on a
+  large app, and the health check no longer reports introspectors that fail only
+  when run alone. (#598)
+
+### Fixed
+
+- **A route in a resource block whose path has a dynamic segment takes no name,
+  and the resource's own route keeps its name.** A route like
+  `delete "groups/:group_id" => "users#remove_group"` inside `resources :users`
+  was named after the resource (`user`), so `DELETE /users/:id` lost its name.
+  Rails gives such a route no name unless it has `as:`.
+- **A response cut at the size limit ends on a whole line.** It was cut
+  mid-line, so the last line could read as half a fact, such as an index named
+  on no columns.
+- **A static route whose path ends in a slash or holds `//` gets the helper name
+  Rails gives it.** The name is built from the cleaned path, so
+  `/reports/daily/` is `reports_daily`, not `reports_daily_`. (#540)
+- **`get_routes` and `analyze_feature` pass a glob segment to the route
+  helper.** `get "docs/*section", as: :doc` now reads `doc_path(:section)` with
+  `[section]`, since Rails requires the key. Both tiers list the glob among the
+  route's params. (#541)
+- **A static verb route named by a symbol takes its URL from `path:`.** `get
+  :stats, path: "statistics"` in a member block is `/heroes/:id/statistics`, and
+  the helper and action still come from the symbol. A computed `path:` is
+  counted as a construct the static tier could not expand. (#542)
+- **Both tiers name the root route when `GET /` also answers another verb or any
+  verb.** The static tier gave none for `match "/", via: [:get, :post]`, and the
+  booted tier gave none for `via: :all`. (#589)
+- **Static routes read an in-repo engine's routes whatever order the
+  introspectors run in.** When the engines section ran first, the routes section
+  reported the engine as needing a boot. (#587)
+- **`routes` lists a large table in seconds.** Summary folding and the PATCH/PUT
+  merge each rescanned every route per route. A namespace of 2000 controllers
+  took 24s and now takes 2s, with the same output. (#601)
+- **Static routes list a resource's block and concern routes before its default
+  ones, the order Rails matches them.** The static list put `/heroes/:id` ahead
+  of `/heroes/search`, unlike Rails and the booted tier. A member block that
+  draws `post :update` no longer splits the resource's own PATCH and PUT update
+  routes into two rows. (#528)
+- **Static routes match Rails for a singular resource's bare verb, a resource at
+  `path: ""`, and a multi-name `resources` block.** `get :avatar` in `resource
+  :profile` is `avatar_profile`, `resources :pages, path: ""` is `/:id`, and
+  `resources :users, :groups do ... end` draws the block under each. (#508)
+- **Static routes name a resource nested in a `member` or `collection` block the
+  way Rails does.** `resources :posts do member { resources :votes } end` names
+  its routes `votes` and `vote_tally`, not `post_votes` and `post_vote_tally`.
+- **A `scope` inside a static resource block goes before the resource's path and
+  name, as Rails draws it.** `scope "x"` inside `resource :settings` gives
+  `/x/settings/inner`, and `scope "y", as: "why"` inside `resources :posts`
+  names `why_post_qux`. A shallow resource's member and nested routes take the
+  scope after the shallow path and prefix.
+- **A static route in a `scope` with `as:` inside a `member`, `collection` or
+  `new` block keeps that `as:` in its name, as Rails gives it.** `member {
+  scope("qq", as: "qux") { get :mm } }` in `resources :heroes` is
+  `mm_qux_hero`, not `mm_hero`.
+- **Static routes draw a canonical action given in a member, collection or new
+  scope at that scope's path, named without the action.** `get :show, on:
+  :member, path: "sh"` in `resources :heroes` is named `hero`, not `show_hero`,
+  and without `path:` it is `/heroes/:id`. A singular resource's bare verbs are
+  member routes, so `get :index` in `resource :profile` is `/profile`, not
+  `/profile/index`.
+- **Static routes give the controller Rails does for a route inside a namespace
+  or `scope module:` within a resource block.** `resources :posts do namespace
+  :admin do get :foo end end` routes to `admin/posts#foo`, not `posts#foo`.
+- **get_autoload lists an app's custom inflections whatever the inflections
+  block calls its parameter.** A rule written as `inflections(:en).acronym "X"`,
+  on `_1` or `it`, on a local holding `inflections(:en)`, or inside
+  `instance_eval` is listed too, as Rails applies all of them. (#583)
+- **Without a boot, a table and a route helper get the names Rails gives them
+  under the app's own inflections.** The static tier now reads the literal
+  `irregular`, `plural`, `singular`, `uncountable`, `acronym` and `human` rules
+  in the app's initializers and applies them for that run only, in tool answers,
+  generated context files and resource reads alike, so `Hero` reads `heroes` and
+  `resources :staffers` names `staff_path`. The rules never reach another app,
+  another thread or the booted tier. (#521)
+- **Without a boot, a constant's file is the one Zeitwerk loads it from.** With
+  `acronym 'JsonLd'`, `include JsonLdHelper` reads
+  `app/helpers/json_ld_helper.rb`, found by the file name and not the
+  underscored constant, so its filters are no longer reported as not read, and a
+  lib module's `helper_method`s are listed when its path splits an app acronym.
+  Where only a Zeitwerk inflector override spells a name, the file counts when
+  it declares that constant, and when several such files share a name, the one
+  that declares it is taken. (#521)
+- **Without a boot, get_mailers names a mailbox and its routing target with the
+  app's acronym.** Each mailbox takes the class its file declares, and a route
+  takes the mailbox whose file its target names, so an app with
+  `inflect.acronym "SMS"` gets `SMSMailbox`, as Action Mailbox and Zeitwerk do,
+  even when the acronym is computed in a loop. (#571)
+- **The static tier reads a PostgreSQL unlogged table.** A `CREATE UNLOGGED
+  TABLE` in `db/structure.sql` or in a migration's `execute` was missing from
+  the schema, though Rails lists it as a table. (#543)
+- **The static tier keeps a float column's limit as Rails dumps it.** A MySQL
+  `double` reads as `float, limit: 53` and a PostgreSQL `real` as `float, limit:
+  24` (Rails 7.2.2 and later), from structure.sql and from replayed migrations.
+  A PostgreSQL `real[]` column reads with limit 24, as Rails reads its element.
+  (#546)
+- **A table whose name only starts with `schema_migrations` or
+  `ar_internal_metadata` is listed.** Tables such as `schema_migrations_archive`
+  were hidden on both tiers, and the static tier called them missing. The booted
+  tier now hides the bookkeeping tables under the app's `table_name_prefix` and
+  `table_name_suffix`, as SchemaDumper does. `rails_query` no longer treats a
+  prefixed `ar_internal_metadata.key` as a secret column. The static schema
+  summary no longer reports `schema_migrations` missing when db/schema.rb
+  declares it; the declared-table list leaves out the bookkeeping tables, as the
+  table list does. (#547)
+- **A hand-written `db/schema.rb` gets its `t.timestamps` columns and index
+  names on the static tier.** `created_at` and `updated_at` were missing, and an
+  index declared without `name:` had a blank name instead of Rails'
+  `index_<table>_on_<columns>`. In a `Schema[4.2]` or older file the timestamps
+  allow NULL, as Rails' 4.2 compatibility gives them. (#592)
+- **A `get_schema` JSON page lists only its own tables' check constraints and
+  generated columns.** On a large app those app-wide lists filled the response
+  cap and pushed out `tables_without_model_file` and `gem_owned_tables`. (#595)
+- **`migration_advisor` writes migrations that run and roll back to the same
+  column.** A `references` or `belongs_to` type on `add_column` now writes
+  `add_reference` with the key's `type:` and `foreign_key:`, keeping a
+  `foreign_key:` that `options` gives, and its strong_migrations hints add no
+  key when that is `foreign_key: false`. `change_type`'s `down` and
+  `remove_column` carry the column's limit, precision, scale, `array:`, null and
+  default, a boolean or number default as its literal, and `create_table` puts
+  `options` on its line. `create_table` keeps the app's key type unless the
+  options really pass `id:`; a string option that contains "id:" no longer drops
+  it. A reference whose table the app does not have (`editor` with no `editors`
+  table) is named as a role: the answer says to place it with `add_association`
+  and gives the `belongs_to` its model needs, and no longer offers the generator
+  line that would add a foreign key to a missing table; with strong_migrations,
+  it notes that `add_reference` builds its index without
+  `algorithm: :concurrently`. (#507)
+- **`migration_advisor` refuses a `new_name` or `create_table` column name that
+  is not a plain identifier, and writes the index `title:string:index` asks
+  for.** It returns the same "Invalid column name" error other actions give, and
+  `uniq` writes a unique index. `title:index` is an indexed string, and a
+  reference's `uniq` writes `index: { unique: true }`, as the Rails generator
+  reads them. (#526)
+- **Schema replay leaves an existing column or index alone when `add_column` or
+  `add_index` passes `if_not_exists: true`.** The static schema no longer swaps
+  the column's type or lists the index twice. From Rails 7.1 an `add_reference`
+  keeps an existing column and index the same way on every adapter. An existing
+  foreign key or check constraint is skipped under `if_not_exists: true` outside
+  SQLite, whose table rebuild adds them again. A check constraint
+  exists when its name matches, the given one or the `chk_rails_` name Rails
+  derives from the table and expression. A foreign key exists when one to the
+  same table matches the way the app's Rails compares them: 7.0 by table alone,
+  7.1 and 8.0 also by a column the call gives, and 8.1 by the column, the
+  default `<table>_id` when none is given, and a given primary key. (#545)
+- **Schema replay moves foreign keys through `rename_table` and
+  `rename_column`.** A key keeps pointing at the renamed table and column, as
+  the database's dump shows. A column inside a composite foreign key or
+  composite primary key follows the rename too. (#512)
+- **Schema replay drops every table `drop_table` names, and the join table
+  `drop_join_table` names.** The static schema no longer lists tables those
+  migrations removed. (#544)
+- **Recent migrations list only the schema calls a migration makes.**
+  `change_column_null` no longer also reads as `change_column`, `remove_columns`
+  reads as `remove_column`, and a name in a comment is not counted. A call on
+  the migration's connection still counts, also through a local or a
+  `with_connection` block parameter. (#548)
+- **A class built with `::Class.new(...) do ... end` inside a model gets its own
+  associations, scopes and validations on the static tier.** They were credited
+  to the model around it, and the nested class showed none. (#538)
+- **Static `model_details` lists the values of `enum :status, active: 0,
+  archived: 1`.** Rails reads every bare keyword after the name as a value,
+  `prefix:` included, and the static tier now does the same, where it used to
+  show the source text as computed. (#537)
+- **A concern macro called with `**hash` no longer takes a keyword's default
+  when the hash may set it.** The rules that depend on that keyword are listed
+  as not decided from the source, unless a literal `key:` pair follows the
+  spread. (#579)
+- **The conventions section reads every model file when it detects patterns.**
+  An app with more than 500 model files lost versioning, polymorphic and the
+  other patterns that only showed up in a later file. (#585)
+- **A booted STI base lists only its direct subclasses as its children.** A
+  grandchild was listed beside them, which disagreed with the static tier and
+  with the grandchild's own parent. (#531)
+- **A file that does not compile leaves out only the files whose constants
+  resolve to it.** Names now resolve the way Ruby resolves them where they are
+  written, so a broken `Legacy::ApplicationRecord` no longer marks every
+  top-level model as unloadable, and a broken `Admin::ApplicationController` no
+  longer takes every top-level controller. Inside a namespace that defines its
+  own class of that name, a broken top-level one blocks nothing. (#578)
+- **`rails_get_concern` names a concern that another concern includes, and the
+  classes that get it through that concern.** Before, a concern included only by
+  another concern read as "Nothing under app/ includes this concern." A module
+  passes its concern on the same way wherever its file sits, so the classes that
+  include it are listed too. Each includer is labelled by its own declaration,
+  `(concern)` or `(module)`, never by its folder, a module that wires a
+  validator is named by the module holding the `validates` call, and a plugin's
+  `concerns/group.rb` declaring `Billing::Group` is no longer taken for the
+  app's `Group`. A constant written inside `module A::B` resolves the way Ruby
+  resolves it there, never through `A`, for includers, a model's or controller's
+  concerns, a controller's base class and a spec's described class. A class
+  written `class ::Foo` inside a module is named Foo, for everything declared in
+  it, and a constant used in a `Class.new` block resolves from the scope around
+  the assignment. A class written `class Shop::Draft` inside `module Shop` is
+  Shop::Draft, as Ruby's lexical lookup finds the enclosing Shop, and
+  Shop::Shop::Draft below a `Shop = Class.new`: a constant written with `=`,
+  with `||=` where the name does not exist yet, or in a multiple assignment
+  counts as declared for every name read after it, in models, tests, Grape APIs
+  and mixin records alike. A module read out of another file finds its includes
+  through its own nesting, so `include Marks` in `module Shop::Tagging` inside
+  `module Shop`, in `module Foo::Tagging` inside `class ::Foo`, or in a
+  `Module.new` block reaches the module Ruby includes. A `Struct.new`,
+  `Module.new` or `Data.define` block owns its includes and declarations as a
+  `Class.new` block does. A receiver such as `Post.prepend(X)` inside
+  `Blog::Post` resolves through the nesting it is written in. A class assigned
+  as `Shop::Draft = Class.new(Base) do` inside `module Shop` is Shop::Draft, and
+  `class Billing::Invoice` inside another module is Billing::Invoice when the
+  file declares Billing above it, as Ruby's lexical lookup finds them. A model's
+  `self.table_name` is read off the class its written name resolves to the same
+  way, so `class Shop::Order` inside `module Shop` and `class ::Order` beside it
+  each keep their own. An `||=` and every segment of a compact path find a
+  constant the superclass declares when the file declares that superclass above
+  the class, as Ruby's lookup does, and so does a route constant read in a class
+  whose superclass writes it. `self::Sub =` inside Ledger is Ledger::Sub, and a
+  class opened in a `Class.new` block is named from the scope around the block,
+  as Ruby defines it. What a `Foo ||= Class.new(Base) do ... end` block declares
+  belongs to Foo when the `||=` assigns it, so
+  `Part ||= Class.new(ApplicationRecord) do` inside Widget is the model
+  Widget::Part with its associations; when Foo already exists the block never
+  runs, so nothing in it, a class opened in it included, is credited to
+  anything. (#514)
+- **Static model associations match the model's reflections.** A name declared
+  twice is listed once, with the options of the declaration that runs last, and
+  the associations a concern adds sit where the concern is included. Across a
+  class and its bases they list as `reflect_on_all_associations` does on Rails
+  7.0 to 8.1: the outermost base's first, each where it last ran. A child's
+  association replaces a base's of the same name whatever the macro, and one a
+  base's class method declares wins over the class's own, at the place the class
+  calls that method, when the class calls it after declaring its own.
+- **A file that declares a module as `X = Module.new do ... end` is named for
+  that module, as the `module X` form is.** An acronym the app registers names
+  it, and such a file under app/controllers or app/serializers is read as a
+  mixin, not as a controller or serializer class. (#514)
+- **`rails_dependency_graph` gives a polymorphic belongs_to only the models
+  whose `as:` association points at its own model.** Two models with `belongs_to
+  :record, polymorphic: true` no longer share targets, and the false cycle that
+  came from it is gone. An `as:` pointed at an STI subclass or base reaches the
+  classes of that family above and below it. A polymorphic `as:` whose class
+  cannot be named adds its model to no belongs_to list. (#551)
+- **A focused `rails_dependency_graph(model:)` costs about what the whole graph
+  does.** It finds the links into each model from one index built once, where it
+  used to rescan every model for every node. (#602)
+- **`rails_onboard` names a payment model by a whole word of its name.**
+  Airplane, Explanation, FloorPlan and Discharge are no longer listed as payment
+  models; PaymentPlan, Billing::Invoice, Subscription and Plan still are. (#553)
+- **Seeds list only the models the app has.** Plain Ruby classes built in a seed
+  file (`Date`, `Time`, `Random`, `Set`, a service object) are no longer
+  reported as seeded models; booted, a record class a gem defines, such as
+  `ActiveStorage::Blob`, still counts. (#570)
+- **`rails_dependency_graph` with `show_sti` shows every level of an STI tree.**
+  A grandchild such as `SportsCar < Car < Vehicle` is now drawn under its own
+  parent, on both tiers, where before only the base's direct subclasses showed.
+- **`rails_generate_test` writes no failing `validate_uniqueness_of` for a
+  uniqueness rule with `conditions:`.** A lambda option on a validation read
+  from reflection is now kept as `(proc)`, so the generator falls back to its
+  plain example, as it does for other options it cannot read.
+- **A controller declared beside another in its file gets only its own filters
+  and strong params.** The booted tier read skips and filter options from the
+  whole file, and both tiers read strong params from it, so one class showed the
+  other's; each is now read from its own class body. A booted job in such a file
+  also shows its own `queue_as` block source.
+- **performance_check keeps a controller's N+1 risks when one of its views
+  renders records whose `to_partial_path` is computed.** The scan used to crash
+  on that render and drop every risk in the controller, without a word. (#573)
+- **performance_check rates an N+1 as preloaded only when a preload call names
+  that association at its top level.** A `where(user: ...)`, a `joins(:user)` or
+  a nested `includes(comments: :user)` no longer turns a missing
+  `includes(:user)` into "no action needed". A preload written without
+  parentheses (`includes :user`), in an action or a scope, is read as one.
+  (#574)
+- **The N+1 scan no longer slows down with actions times views.** It builds its
+  template and partial lookups once, so 2,400 actions over 2,700 views take
+  about 5s where they took 20s. (#517)
+- **performance_check reads every model the app loads, whatever its superclass
+  is written as.** A subclass of a second abstract base, an STI child or a class
+  under `ActiveRecord::Base` now gets the missing counter_cache, Model.all and
+  eager-load checks. (#568)
+- **The GraphQL resolver list names only resolver classes.** An app that keeps
+  its resolvers in `app/graphql/resolvers` no longer gets a fake `Resolvers`
+  entry for the folder. (#588)
+- **API versioning lists only `api/v<number>` folders.** A resource namespace
+  such as `api/vendors` or `api/videos` is no longer reported as an API version.
+  (#569)
+- **`get_controllers` action detail lists every private method the action
+  calls.** One passed as an argument (`paginate(scope)`) or with a call chained
+  on it (`visible_posts.size`) now shows with its source, and a name that only
+  appears in a comment no longer does. (#586)
+- **A controller is an API controller only when its chain reaches
+  `ActionController::API`.** Without booting, a parent named `APIController` or
+  `API::BaseController` under `ApplicationController` was read as an API
+  controller, so it lost its layout and got JSON tests. It now keeps its layout
+  and gets HTML tests. A child of an API-only `ApplicationController` is now
+  marked as an API controller. (#539)
+- **The security section no longer says CSRF protection is on in an API-only
+  app.** When `ApplicationController` inherits `ActionController::API`, which
+  leaves out `RequestForgeryProtection`, `csrf` reports it as not included. An
+  API app that includes `RequestForgeryProtection` back reports it as enabled
+  only when `protect_from_forgery` turns it on, and as off when it never does.
+  The answer says CSRF is off when `verify_authenticity_token` does not run,
+  names a `skip_before_action :verify_authenticity_token` after protection as
+  skipped, and, when ApplicationController cannot load, reads
+  `default_protect_from_forgery` and the file's own protect and skip calls.
+  (#572)
+- **A controller or job file that declares a second controller or job lists both
+  without booting.** Each class is read from its own body, so one no longer
+  takes the other's actions, filters or queue, an error class nested in a worker
+  is not a worker, and a second controller routes by its own name. A class
+  declared beside a job is listed only when its own chain reaches a job or
+  worker base, and a controller declared in a file named for another routes by
+  its own class name, as Rails' `controller_path` does. (#513)
+- **Views list the templates of a folder named layouts anywhere but
+  app/views/layouts.** An admin/layouts controller and an app checked out under
+  a folder named layouts kept no templates, because the check read the path on
+  disk. (#575)
+- **A layout in a subfolder of app/views/layouts is listed, by its path under
+  layouts/.** The views answer and `get_view controller:"layouts"` read only the
+  top level, so `layouts/admin/application` and its slots were missing, and a
+  nested file of the same name would have merged with the top-level layout.
+  get_turbo_map finds the morph meta tag in a layout in a subfolder of
+  `layouts/`. (#576)
+- **get_view shows the locals each partial is rendered with.** Both `render
+  "posts/form", post: @post` and `render partial: "posts/form", locals: { ... }`
+  are read, from templates and from other partials, and only from calls that
+  name that partial. `rails_get_partial_interface` reads locals by the same
+  rule: a call split over lines keeps every key, a nested hash's keys are not
+  listed, and `render "x", locals: {...}` is one local named `locals`, as Rails
+  passes it. `rails_get_partial_interface` reads `json.partial!` in hash form
+  the way jbuilder does (every key beside `partial:`, `as:`, `collection:` and
+  `cached:` is a local unless `locals:` is given); a partial rendered with
+  `collection:` or `object:` lists the record local Rails gives it (the `as:`
+  name or the partial's own, plus `_counter` and `_iteration` for a collection);
+  and a bare name Rails finds under `application/` reaches that partial in both
+  tools. (#525)
+- **get_view returns a view named by path exactly as written.** Inline SVGs and
+  repeated class strings were rewritten in the text an agent edits from. The
+  full layouts listing shows each layout as written, and a controller's full
+  listing says when it shortened icons and repeated classes. (#511)
+- **The generated guide names a partial in app/views/application as
+  `application/<name>`.** It printed a `shared/` path that does not exist.
+  (#536)
+- **get_turbo_map reads a parenthesized `turbo_frame_tag(:comments)` or
+  `turbo_stream_from(:notifications)` call.** The frame id and stream name used
+  to come out as `(dynamic)`, and the map warned about a stream that does not
+  exist. Only `turbo_stream_from` itself counts, so `my_turbo_stream_from` is no
+  phantom subscription, and `turbo_stream_from (:a), :b` lists both streams.
+  (#577)
+- **rails_get_stimulus writes the value and class attributes Stimulus reads for
+  names with an acronym or a digit.** `apiURL` is `data-x-api-u-r-l-value` and
+  `step2Count` is `data-x-step2-count-value`, from Stimulus's own `dasherize`.
+  (#560)
+- **partial_interface credits a local only with calls made on the local
+  itself.** `@user.admin?` and `post.user.avatar` no longer show up as calls on
+  a `user` local. (#563)
+- **helper_methods counts a view as using a helper only where it calls the
+  helper by name.** `@post.subtitle`, the CSS class `icon-edit` and `helper_m10`
+  no longer count, and in an ERB view neither do plain markup and strings. A
+  framework helper is named only where a view calls it by its own name, so
+  `@current_user_id` and `current_user_path` no longer list Devise's
+  `current_user`. A HAML or Slim view is read the way haml and slim parse it, so
+  a tag such as `%title`, page text such as `follow @shop`, and comments name no
+  helper and no ivar. Attribute lists, object refs, continued lines, `:ruby`
+  filters and `#{}` in text still count, and a quote inside `#{...}` no longer
+  hides the Ruby after it. Ruby strings in a view are read the way Ruby reads
+  them, so `"by #@author"` counts `@author` and an escaped `"\#{@x}"` counts
+  nothing. (#562)
+- **helper_methods `detail:"full"` takes time in step with the views' total size
+  instead of its square.** On 2,000 views (16 MB) it runs about three times
+  faster. Each view is read once, and files no longer join into one name across
+  their boundary. (#596)
+- **component_catalog lists a prop's allowed values when its constant table ends
+  in `.freeze`.** (#581)
+- **view and context schema hints no longer warn about a missing model for an
+  ivar that holds no model.** `@stats` and `@chart_data` used to warn about
+  `Stat` and `ChartDatum` models that never existed. (#580)
+- **`rails_security_scan` and `rails_validate` read `./app/x.rb` (and
+  `././app/x.rb`) as `app/x.rb` and a folder name as that folder only.** A `./`
+  path used to be reported clean and `app/controllers/admin` picked up
+  `admin_controller.rb`. (#522)
+- **`rails_review_changes` shows a file's staged and unstaged changes together,
+  as `git diff HEAD` does.** A staged validation removal is still reported after
+  a later edit to the same file. (#523)
+- **`rails_review_changes` shows a namespaced controller's own routes and names
+  a namespaced model with its namespace.**
+  `app/controllers/admin/posts_controller.rb` no longer gets the top-level
+  `PostsController`'s routes. (#557)
+- **`rails_review_changes` counts a foreign key as indexed only by an
+  `add_index` on its own table that leads with it, or with its polymorphic
+  `[type, id]` pair.** An index on another table or column, or one that names
+  the key only in its `where:`, no longer hides a missing index, and one
+  `index: false` flags only its own reference. (#558)
+- **`rails_review_changes` warns when a change removes a `validates_presence_of`
+  line or any other `validates_*` macro.** A line rewritten as `validates :name,
+  ...` still reads as kept. A method named `validate_email` is no longer read as
+  a validation. (#559)
+- **`rails_validate` asks for no migration for a validated attribute the model
+  defines as a method, and finds a callback method a parent class defines on the
+  static tier.** A parent outside the app's files is no longer reported as
+  missing the method. (#509)
+- **`rails_validate` warns about `Model.all` in the controller
+  `rails_performance_check` found it in.** It matches the full path, so
+  `admin/posts_controller.rb` does not take `posts_controller.rb`'s finding.
+  (#594)
+- **`rails_get_edit_context` takes the method that actually holds the match.** A
+  line below a method that already ended keeps its window and names only the
+  class, and an endless method no longer takes in the next one. (#524)
+- **`rails_validate` checks the instance variables of views under a folder named
+  `layouts`, such as `app/views/admin/layouts/`.** Only `app/views/layouts/` is
+  skipped, since that is where the app's layouts are.
+- **`rails_get_test_info` with `detail: "full"` lists each factory's attributes
+  and traits.** It looked for the file under a doubled path, so it never found
+  one and printed only the factory names. Each factory file's traits stay under
+  its own path, so two files named `users.rb` in different folders no longer
+  lose one's traits; the JSON context's `factory_traits` are keyed by that path,
+  as `factory_names` already were. Each factory's attributes are read as
+  FactoryBot declares them, `do ... end` blocks, `association`, `sequence` and
+  bare names included, with transient ones marked, callbacks left out, and each
+  trait's and child factory's attributes listed under it. (#561)
+- **`rails_generate_test` and `rails_get_test_info` no longer give
+  `UsersController` the spec of `UserController`.** The app's learned test
+  layout tried the singular name for controllers too. (#555)
+- **`rails_generate_test` writes a Minitest file that parses when a model
+  declares an association with a computed name.** That association is left out,
+  as the RSpec output already did. (#554)
+- **`rails_generate_test` writes a Minitest `ORDER BY` assert only for a scope
+  that sorts.** A scope that joins `orders` or filters a `bordered` column no
+  longer gets a test that fails on its first run. (#556)
+- **`rails_generate_test` writes shoulda matchers that pass for an optional
+  `belongs_to`, a scoped or case-insensitive uniqueness, and an enum with
+  explicit values, string values, a prefix, or `scopes: false` or
+  `instance_methods: false`.** Each matcher now carries the qualifier the
+  declaration needs. Where an option can't be read or told to the matcher, it
+  falls back to the plain example: a reflection check for the association, the
+  validation's kind for the uniqueness, the values for the enum. The hash form
+  (`enum status: {...}, _instance_methods: false`) reads that key as the option,
+  not as a second enum, and on Rails 7.0, whose enum ignores
+  `instance_methods:`, the enum keeps its value methods. (#510)
+- **`rails_analyze_feature` lists a service's or job's ENV names only when its
+  path under `app/services` or `app/jobs` holds the feature word.** A folder
+  above the app (`Users`, the app's own name) matched every file. (#549)
+- **`rails_analyze_feature` says a model, controller, job or service has no test
+  unless a test is named for it or describes it.** Before, any test whose path
+  merely contained the name hid the gap, such as `postmark_event_spec.rb` for
+  Post or `user_mailer_spec.rb` for User. `rails_review_changes` reads the same
+  rule, so a controller has no test changes unless a changed test is named for
+  it or describes it, and the `posts_routing_spec.rb` and
+  `posts_request_spec.rb` rspec-rails writes count for `PostsController`. Those
+  names count only in a controller test folder, and a controller's name is never
+  singularized, so `spec/models/post_spec.rb` is no test of `PostsController`
+  and `user_controller_spec.rb` none of `UsersController`. A test under a
+  namespace folder covers only the subject in that namespace:
+  `spec/controllers/admin/posts_controller_spec.rb` no longer counts for a
+  top-level `PostsController`. A model spec named `widget_model_spec.rb` counts
+  for `Widget`, the suffix `rails_get_test_info` already looks up. The tests an
+  in-repo engine or pack keeps in its own `spec/` or `test/` count for that
+  component's classes only. A test filed anywhere else counts when any of its
+  example groups (`describe`, `context`, `feature`, nested or not) names the
+  subject's declared constant, resolved from the modules around it as Ruby
+  resolves it, or its minitest class does without `Test`, so
+  `spec/jobs/sweep_spec.rb` describing `Jobs::Sweep` covers
+  `app/jobs/scheduled/sweep.rb`. A test filed under a subject's name counts
+  unless its top-level example groups or test class describe another class the
+  app declares, and a controller test outside `controllers/` and `functional/`
+  (request, routing, integration, system), or a minitest
+  `ActionDispatch::IntegrationTest` anywhere, counts for the controller it is
+  filed as whatever it describes, since it reaches that controller through the
+  routes. (#552)
+- **`rails_get_context` with `feature:` adds the schema of only the models its
+  feature word names as whole words.** `post` no longer brings in
+  `PostmarkEvent` or controllers that merely start with the word. (#550)
+- **Running the install again keeps an `ai_tools`, `tool_mode` or
+  `context_files` line it does not rewrite, and says so.** An array spread over
+  several lines got its first line replaced and the initializer stopped parsing.
+  (#504)
+- **Context files, MCP configs and the selection record write through a symlink
+  to the file it names, and keep that file's mode.** A link that leads out of
+  the app, or nowhere, is left as it is and reported. Before, the write replaced
+  the link with a copy and reset the mode. A write into a directory a symlink
+  carries out of the app is refused too. Removing the gem's MCP entry through a
+  symlinked config takes it out of the file the link names and keeps the link,
+  and nothing a symlink carries out of the app is deleted. A fetched guide in
+  `rails_search_docs` is still answered when `tmp/` is a symlink out of the app;
+  it is not cached there, and the answer names no path. Uninstall and the
+  dropped-tool cleanup take the gem's block out of a root file that is a symlink
+  into the app (CLAUDE.md -> AGENTS.md), and a context file under a folder
+  symlink that leads nowhere is reported as left instead of stopping the run.
+  (#505)
+- **Removing the Codex entry leaves the rest of `.codex/config.toml` as it
+  was.** Blank lines inside a `"""` or `'''` string were squeezed, which changed
+  the value Codex reads. Your blank lines around the removed table are kept;
+  only the one the cut leaves is dropped. (#519)
+- **A context run keeps an MCP entry whose command the gem did not write, such
+  as SETUP.md's Docker entry, and says so.** When it rewrites its own entry it
+  merges into it, so keys and env vars it never writes (`cwd`,
+  `startup_timeout_sec`, `RAILS_ENV`) stay, and so do comments in the gem's
+  Codex table and its env table. A Codex env var set as a dotted key in the
+  gem's table survives, and a workspace write keeps a bare `rails-ai-context`
+  entry that starts the server through Docker, naming it in its note. A Codex
+  env var whose name needs quotes keeps them, and a line you typed in the gem's
+  env table stays. (#506)
+- **`.claude/rules/rails-models.md` lists the first 30 models and counts the
+  rest**, as the other models rules do. On a large app it grew to about 190 KB
+  and loaded on every model edit. (#530)
+- **`database_stats` and the runtime table sizes leave out `schema_migrations`
+  and `ar_internal_metadata` on PostgreSQL and MySQL too.** Every database
+  family now applies the schema's own rule, including the app's table prefix and
+  suffix, so the counts name only the tables the schema lists.
+- **A static run of an app with no `config/routes.rb` answers no routes, as the
+  booted tier does.** Doctor no longer lists `routes` as a failing introspector
+  there, and the routes section says there was no route file to parse.
+- **`facts` lists the tables of every database in `database.yml`.** A second
+  database's tables were missing from the list and the count. Each one now reads
+  `- dogs (animals; 2 cols, 0 indexes, 0 FKs)`. (#527)
+- **The `facts` title reads `Rails App` for an app whose Application class has
+  no module.** It used to read `#  - Schema Facts`. (#604)
+- **`rails 'ai:tool[NAME]'` accepts a trailing `JSON=1` or `RAILS_ENV=test`, the
+  form `docs/GUIDE.md` shows.** The task passed them to the tool as params, so
+  it failed. (#534)
+- **`session_context` status keeps one row per call when a param holds `|` or a
+  line break.** (#600)
+- **`tool search_code --pattern -h` searches for `-h`.** `-h` and `-j` right
+  after a flag that takes a value are read as that value. After a boolean flag
+  they are still help and JSON. `tool NAME --json -h` prints the tool's help
+  without booting the app. (#535)
+- **`tool --json` and `JSON=1` answer every refusal with the envelope on stdout,
+  at exit 1.** An unknown tool, unknown param, missing value or failed boot
+  printed nothing on stdout. Now `"error": true` carries the message, "did you
+  mean" included. A call whose `-j` is left for the tool answers a failed boot
+  with the envelope too. A run that stops before the tool starts says "The tool
+  did not run: rails-ai-context stopped before it could. stderr says why." from
+  the binary and from `rails 'ai:tool[NAME]'` alike. (#590)
+- **The standalone server's bind warning describes its own Host check on every
+  mcp SDK.** Below mcp 0.23 it said every tool answers anyone, but the server
+  refuses a non-loopback Host there too. (#599)
+- **A cached answer goes stale when a root file a reader reads changes, and when
+  a file is renamed.** The fingerprint now covers the Dockerfile, Procfile,
+  compose, CI and deploy configs, `.env` examples, JS lockfiles, framework and
+  bundler configs, the manifests in a declared `frontend_paths` folder (inside
+  the app or outside it) and in the JS workspace root above the app, Ruby
+  version files, `bin/` scripts and config `.yaml`, each taken from the list its
+  reader reads, and hashes each file's path with its mtime. `watch` and live
+  reload also watch `bin/`, `.github/workflows` and the other folders those
+  files sit in. A `.github/workflows` folder that is itself a symlink is never
+  walked or watched. (#515)
+- **An app whose folder path has brackets, braces, a star or a question mark
+  gets the same answers as one under a plain folder.** The fingerprint walk,
+  doctor and every introspector globbed with the app root inside the pattern, so
+  `/Users/me/work [old]/shop` found no models, jobs, helpers, rake tasks, packs,
+  locales, environments, credentials, mailer previews, migrations or test files,
+  and watch and live reload never saw a change. Every glob now matches below the
+  root and reads the root as a path; patterns the app configures still glob as
+  before. (#532)
+- **`watch --no-boot` picks up a folder added under `app/` while it runs.** Each
+  rewrite drops the cached folder lists, as a server does, so the new folder's
+  models reach the context files. (#533)
+- **The env section names a service on a `.co.uk`, `.com.au`, `.co.nz` or
+  `.or.jp` host by its own label.** Such services were shown as "Co" or "Com",
+  and two in one file merged into one row. (#566)
+- **A resource read answers from the shared context the tools read.** Each read
+  ran a full introspection outside the shared cache; it now costs what a tool
+  call costs, and concurrent reads introspect once. (#516)
+- **Percentages print the exact share.** 29 of 100 i18n keys showed 28.9%
+  because the floor ran on a float a hair under 29; the math is now exact.
+  (#591)
+- **Gemfile groups match Bundler.** A gem's `groups:` option is read, and
+  `group:` inside a `group` block adds to the block's groups instead of
+  replacing them. (#582)
+- **The context file's env section lists every name rails_get_config lists.**
+  Lowercase, one-letter and underscore-first ENV names are no longer dropped.
+  (#567)
+- **A lambda in `config.log_tags` reads as computed at request time.** The
+  active_support and observability sections no longer print a Proc address and
+  an absolute path that change on every boot. (#584)
+- **The frontend framework label keeps a version range as written.** `^18.2.0 ||
+  ^19.0.0` read as "React 18.2.019.0.0"; a single requirement still loses its
+  leading operator. (#564)
+- **The credentials section lists key names under the file Rails read.** With
+  `config/credentials/<env>.yml.enc` present, its keys are no longer shown under
+  `config/credentials.yml.enc`, and `master_key_source` names the key Rails
+  uses, or `missing`; a static run picks that key by the locked Rails version's
+  rule. A credentials file that is a symlink counts as the file it stands in
+  for. Credentials at a custom `config.credentials.content_path` get their own
+  `custom` entry with the key names, and a path outside the app root shows as
+  `(outside the app root)`. (#565)
+- **A static run reports the credentials files it can see.** The `default` entry
+  no longer comes back as `error: "inspection failed"` without a boot. It lists
+  the file and key-file presence, and no key names, since nothing is decrypted
+  without a boot.
+- **A static run reports `require_master_key` as the app sets it.** Without a boot
+  the credentials section said `false` whatever the config said; it now reads a
+  literal `config.require_master_key = true/false` from `config/application.rb`,
+  the environment file or an initializer, following a `require_relative` into
+  `config/` the way Ruby runs it, and answers Rails' default, `false`, when none
+  of them sets it. A value it cannot read (an expression, a condition, a `load`
+  or a required file outside `config/`) reports as unavailable. Only a call, or a
+  send that names the setting, counts as a mention, so the name in a string or
+  after `__END__` leaves the answer at Rails' default.
+- **`rails_analyze_feature` names each related model the class Rails would
+  load.** In the static tier a through association reads its class from its
+  source, and a singular association keeps its name singular, so
+  `belongs_to :preferences` is `Preferences` and
+  `has_many :followers, through: :subscriptions, source: :user` is `User`. The
+  dependency graph, the N+1 scan, the turbo map and the foreign key index check
+  use the same rule, and rendered records read a through association's class off
+  its source on the hop's model, wherever an autoload root keeps that model, a
+  pack or an engine included. The receiver a view renders through counts as a
+  model only when the model directories hold its file, so `render @cart.items`
+  with a `Cart` service still renders items. A hop or source counts when the
+  model's file, its included concerns or its parent models declare it, with its
+  `class_name`, a parent being read by the constant its superclass names; one
+  the app's source does not declare names no model. A `class_name` wins over
+  `source_type`, as Rails reads it, here and in the dependency graph. A
+  polymorphic `belongs_to` names no related model there, in the N+1 scan or in
+  the turbo map, since Rails reads its class from each row; the dependency graph
+  still draws it as a polymorphic interface.
+- **A rendered record whose model constant only a Zeitwerk `inflect` override
+  spells keeps its parent's associations and its own `to_partial_path`.**
+  `render @html_page.links`, a through association across such a model and
+  `render @html_pages` name the partial Rails renders, in the view,
+  partial-interface and N+1 answers.
+- **A view's "renders:" list names the partial Rails renders for a bare
+  `render @records`.** It reads the model's own `to_partial_path` and the view's
+  controller namespace, the way partial_interface does, so `render @comments` in
+  an admin view lists `admin/comments/comment`, and a has_many with a
+  `class_name` lists that class's partial. It used to list the plural model
+  name. The records' model comes from the names the view writes
+  (`@post.comments`, `@comments`), read from the model directories only, so a
+  service or presenter under the view's namespace is never taken for the
+  records. A lone name with no model file falls back to its default partial,
+  prefixed with the controller namespace, when that partial exists in any view
+  root; otherwise a local keeps its name and an ivar names none, since Rails
+  never looks a partial up by the ivar's name. A form helper's block parameter,
+  whatever it is called and in a `do` or a brace block, renders the partial its
+  builder's `to_partial_path` names (`form` for FormBuilder), and a builder's
+  own `fields` and `fields_for` keep its builder class, as
+  `FormBuilder#fields_for` passes it on, while a builder handed to a partial
+  as a local reads as FormBuilder's and a local assigned a builder reads as that
+  builder. Which locals a template binds is read from its Ruby the way Ruby
+  binds them, so a `<script>`, an HTML or Slim/HAML attribute or a string under
+  the same name never turns a builder's `fields` block into a record's, nor, in
+  ERB and Phlex, another block's parameter; the builder is read only off a real
+  helper call and the block that helper takes, so prose naming fields, a
+  `fields:` key, a `%i[fields]` symbol before a loop, a record's own `fields`
+  called on an ivar, a constant, a chain or a local the view assigns or a plain
+  block binds (`post = Post.new`, `[Post.new].each do |post|`), or iterated
+  (`@post.fields(:visible).each do |field|`), or a brace block inside the
+  helper's arguments changes nothing. This holds in the "renders:" list and in
+  partial_interface, which reads builders from the same comment-stripped markup
+  as the view scan and finds a bare `render form` at the form partial beside the
+  view, as get_view does.
+- **partial_interface finds a record's default partial kept in another view
+  root.** It reads the same partials set the view scan reads, built once a call,
+  so a partial in a root added with `config.paths["app/views"] <<` is credited
+  to the views that render it.
+- **performance_check follows the partial Rails renders for `render @records` in
+  a namespaced controller.** The controller's namespace prefixes the record's
+  partial whether or not that file exists, and
+  `prefix_partial_path_with_controller_namespace = false` turns the prefix off,
+  the rule views and partial_interface use.
+- **get_concern finds a concern nested in its namespace's file.**
+  `module Shop; module Tagging; extend ActiveSupport::Concern` kept in `shop.rb`
+  is looked up as `Shop::Tagging`, as Zeitwerk loads it with `Shop`, and the
+  concern listing and rails_get_active_support name it instead of the namespace
+  that only holds it. Each concern a file holds is read from its own module:
+  rails_get_concern and rails_get_active_support read its macros, callbacks and
+  `included` blocks from its own body, leaving out the modules it nests, so a
+  concern no longer shows a nested concern's associations or counts its
+  `included` block, and rails_get_concern with a namespace's name answers not
+  found and suggests the concerns it holds. A file whose module holds only
+  constant writes and modules is a namespace too,
+  `Error = Class.new(StandardError)` included, a concern defined beside a file's
+  class is listed and answered by name while the class is not, and a module
+  nested in a concern is listed only when it extends ActiveSupport::Concern
+  itself, whether it is written as a module, with `self::` or with an assigning
+  `||=`. A not-found answer from any tool suggests the nearest spellings and a
+  namespace's members together, five at most.
+- **A concern's associations, filters, devise modules, actions and strong params
+  leave out the modules it nests, a `Module.new` one included, unless the
+  concern includes or prepends that module itself.** Ruby runs a nested module's
+  body for that module alone, so the model and controller tools no longer credit
+  a nested concern's `included` block or macros to the outer concern's
+  includers. A module the concern includes or prepends is the constant Ruby's
+  lookup reaches first, for every tool that reads it (associations, callbacks,
+  validations, scopes, filters, layouts, actions, devise modules and strong
+  params): one declared in the file that names it, or nested in its outer
+  constant's file, comes before a top-level module of the same name, unless that
+  file declares it below an include that runs as the file loads. A top-level
+  module the concern includes is followed too, through three levels of
+  includes, for its actions, devise modules and strong params.
+- **A class's own include finds a module nested in one it included earlier.**
+  After `include Holdy`, a later `include Taggable` in the class body reads
+  `Holdy::Taggable` before the top-level `Taggable`, as Ruby looks constants up
+  through the class's ancestors, and a module it prepended comes before the ones
+  it includes after it. A mixin written from the top level (`include ::Taggable`)
+  reads the top-level module only, in the class body, a concern's `included`
+  block and a hook's `base.include`. A module only the superclass includes is
+  not read this way yet.
+- **Static routes draw a block over a literal list once per element, as Rails
+  runs it.** `%w[groups g].each do |root_path|` listed one set of routes under
+  `/[INFERRED]/...`. It now lists `/groups/...` and `/g/...`, each with the name
+  Rails gives it, and a name an earlier pass took stays unnamed. A route inside
+  a block over a list the source does not spell out counts as a construct the
+  static tier could not expand. A `draw` inside the block follows each element's
+  file, and a bound element reads as a literal in `only:` and `except:`. A
+  concern defined in the block keeps its element wherever it is applied, and a
+  block that assigns or changes its own variable is drawn once with that
+  variable unknown, so its routes count as dynamic constructs; a call in it to a
+  method the routes file defines counts too, so the table never reads as
+  complete. The same goes for a block that hands its string to a pattern match
+  (`x => y`) or an attribute setter. Inside a block Ruby runs more than once
+  that the static tier does not unroll, such as `2.times`, `LOC.each_key` or an
+  `each` over a list it cannot read, every routing call and every call to a
+  method the routes file defines counts as such a construct, since Rails draws
+  them once per pass, while a mount or a verb route to a Rack app in such a
+  block is listed once as a mounted app; a `tap`, `then` or `yield_self` block
+  still draws in place, the calls it makes on the mapper it takes as its
+  parameter (`tap { |m| m.get "x" }`, an optional `|m = 1|` too) included, and
+  so does a `tap` or `yield_self` with no receiver. A list of symbols, or of
+  strings under `# frozen_string_literal: true`, cannot be changed, so its block
+  is unrolled unless it assigns the variable.
+- **A static route to an app a constant holds is drawn where Rails draws it.**
+  `mount APPS[:admin] => "/admin"` and `mount HANDLERS[:x], at: "/x"` are listed
+  at their path with an inferred app, where they were named `APPS.[]` and
+  `HANDLERS.[]`. A verb route to such a value, such as
+  `get "y", to: HANDLERS[:x]` or `get "y" => HANDLERS[:x]`, counts as a
+  construct the static tier could not expand: it was listed as a mounted app
+  named `HANDLERS.[]`, so the table showed one route fewer than Rails draws. A
+  verb route to a constant the routes file assigns once, at its top level,
+  inside a module, through a path such as `Cfg::HOME =` or with `||=`, reads it
+  as Ruby looks the reference up, through Module.nesting where it is read and
+  then the top level: with `TO = "posts#index"`, `get "a", to: TO` is a route to
+  posts#index, `ALIAS = HealthCheck` names the app HealthCheck, and a lambda
+  counts as a construct the static tier could not expand. An app the file builds
+  with `.new` is named as booted Rails names it: an instance
+  (`Rack::Builder.new { ... }`, `HealthCheck.new`, `AL.new` with
+  `AL = HealthCheck`) by its class, a `Class.new` by its constant. A constant
+  holding any other call reads as that call written in place: a verb route to
+  `"posts#index".freeze` or `ENV.fetch(...)` counts as a construct the static
+  tier could not expand, a mount of `HealthCheck.app(1)` held in a constant is
+  named `HealthCheck.app`, one of `APPS[:a]` is listed with an `[INFERRED]` app,
+  and one of a call with a block (`Rack::Builder.app do`) counts as not
+  expanded. A verb route to a bare all-caps constant the file does not assign,
+  or assigns more than once, is no longer listed as a mounted app.
+- **A static route option given as a constant is no longer read as the
+  constant's name.** A `controller:`, `action:`, `as:`, `param:` or
+  `shallow_prefix:` given as a constant is marked inferred, in the names of the
+  shallow routes under it too. A scope, namespace, resource or route whose path,
+  module, verbs, `shallow:` or `on:` come from a constant, such as
+  `scope path: PREFIX`, `namespace :api, module: MOD`, `match "x", via: VERBS`
+  or `get :preview, on: ON`, or from a computed prefix (`scope PREFIX do`),
+  counts as a construct the static tier could not expand.
+- **A static verb route to a redirect, a held value or a Rack app takes the name
+  Rails gives it.** So does a mount, so a later `get "health_check"` after
+  `mount HealthCheck` is unnamed: an engine takes the railtie name its file
+  gives it (an isolated engine its namespace's), a constant ending in `Engine`
+  whose file is not in the app takes none, a bare `mount UI` inside the
+  `module Admin` that declares it is named Admin::UI and takes admin_ui, and
+  `as: nil` leaves a mount unnamed on Rails 8.1, and when no Rails version is
+  known, and named before 8.1. The route drawn at the same path or name after it
+  is unnamed, as it is live, where it used to take the name.
+- **A resource's own `shallow_path:` and `shallow_prefix:` place and name its
+  shallow routes and its children's, as the scope Rails draws it in does.**
+  `resources :posts, shallow_path: "sp"` with a shallow child lists `/sp/c/:id`,
+  where it listed `/c/:id`.
+- **A mount inside `scope nil` keeps its path.** `scope nil` adds no path
+  segment, as Rails reads it.
+- **A Rack app mounted or matched inside `resources`, `member` or `collection`
+  is listed at the path Rails attaches it, such as `/posts/:post_id/hc`.** It
+  was listed at the bare `at:` path. One inside a resource the static walk
+  cannot read, or a block in a resource that does not draw in place, has no
+  known path.
+- **A Rack app in a routing concern, a routes-file method, a literal list's
+  loop or a `resources :a, :b` block is listed at each place Rails draws it,
+  with that place's path.** A concern's app is listed at each `concerns` call
+  and `concerns:` option (`/adm/hc` under `namespace :adm`, `/posts/:post_id/hc`
+  on a resource), with the conditions around that call, then those the concern
+  or method is defined under, then its own. A concern or method defined in each
+  arm of an `if`/`else` or `case` is drawn at the site once per arm, under that
+  arm's condition; a later definition replaces an earlier one when every branch
+  it is written under is one the earlier one is written under (a branch counts
+  by its text, so a second `if ENV["A"]` block is the same branch), and an
+  earlier one that a later definition under one `if`/`unless` may replace
+  carries the opposite of that branch. Each arm names its routes from the names
+  taken before the site, and a later route finds a name taken if either arm
+  took it. A loop's `at:`, path, scope or
+  `as:` is read through the variable it binds. A concern the file never applies,
+  applies only in a file another `draw` reads, or redefines before any
+  `concerns` call still lists its apps once with no path, and a method called
+  with arguments lists them once where it is written. A constant a replayed body
+  writes counts as one write.
+- **A route in a routing concern or routes-file method defined under
+  `if`/`unless`/`case` carries that condition, and a concern defined in each arm
+  draws each arm's routes.** Only the last arm's routes were listed, with no
+  condition.
+- **A mount path written as a symbol is the path Rails draws.**
+  `mount App, at: :hc`, `mount App => :hc` and `get :metrics, to: App` list
+  `/hc` and `/metrics`, where they listed no path. A symbol naming a canonical
+  action inside a member, collection or singular resource scope, or with `on:`,
+  sits at the scope's own path (`get :index, to: App` in a collection is
+  `/posts`), as a verb route's symbol does; a string keeps its segment.
+- **The booted tier names a module mounted as a Rack app by the module's name,
+  as `rails routes` prints it.** It printed `Module`.
+- **A replayed column of a native type name reads the way the adapter reads it
+  back.** On PostgreSQL, `t.column :ratio, :real` is a float of limit 24 on
+  Rails 7.2.2 and later, and an array spelling such as `text[]` stays an array
+  of its element type. A MySQL `double`, `real` or `float8` is a float of limit
+  53, and MySQL's `serial` is a not null unsigned bigint, as a key or a column,
+  and the unique index MySQL adds for a serial column is listed under its name,
+  or `<name>_2` when that is taken. A `tinyint(1)` is a boolean on MySQL and an
+  integer of limit 1 on SQLite. An `int2` is an integer of limit 2, a
+  `varchar(40)` a string of limit 40, and a `bool` a boolean, as Rails' dump
+  writes them. A MySQL table an `execute` creates reads with MySQL's rules, and
+  an adapter with no family reads with PostgreSQL's.
+- **A PostgreSQL serial reads by the same name from schema.rb, structure.sql, a
+  replayed migration and the booted tier.** A column whose nextval default names
+  its own `<table>_<column>_seq` is a `serial`, or a `bigserial` when it is a
+  bigint, as Rails' dump writes it. An integer key `create_table` makes is a
+  serial unless a default is given or Migration[5.0] gives it one. A bigserial
+  that is the table's whole key reads as the default bigint key, while a
+  bigserial column of a composite key stays a bigserial. `change_column` keeps a
+  serial a serial whatever the new type, until a new default replaces the
+  sequence, and keeps a key with no sequence of its own
+  (`id: :bigint, default: nil`, a `Migration[5.0]` key, an `execute`'s
+  `bigint PRIMARY KEY`) an integer. A key `create_table` declares `serial` or
+  `smallserial` stays a serial through `change_column`. Once a serial's sequence
+  no longer follows its name (after `rename_column`, after `rename_table` for
+  any column but the key, after `change_column_default`, or in a
+  `CREATE TABLE AS` copy) it reads as the integer the dump writes, with the old
+  sequence as its default where one stays. A serial renamed away and back is a
+  serial again, as the dump reads a serial by the names it has at the end, and a
+  serial that `change_column` retypes once its sequence no longer follows its
+  names keeps the new type. A new serial whose `<table>_<column>_seq` a table,
+  an index or a renamed-away serial already holds gets the `_seq1` (or the next
+  free) sequence PostgreSQL picks, and every path reads a numbered `seq` suffix
+  as the serial's own. `rename_table` renames the key's sequence only where the
+  app's Rails version would: 7.1 to 8.1 cut the table name to fit PostgreSQL's
+  63 bytes, while 7.0 does not and PostgreSQL cuts the result. A nextval of any
+  other sequence stays the column's default, and an INHERITS child, from
+  structure.sql or a replayed `execute`, gets its parent's columns that way, the
+  default bigint key's nextval included.
+- **A replayed PostgreSQL child table follows the parent it INHERITS.** A
+  parent's `change_column`, `change_column_default` or `change_column_null` runs
+  on each child's column as PostgreSQL applies it, even where the parent already
+  had that value; a column the parent adds or renames changes in the child too,
+  one the parent drops goes unless the child declares it, and a renamed sequence
+  shows in the child's default. A child that declares one of its parent's
+  columns NOT NULL keeps it NOT NULL until such a statement on the parent
+  reaches it. A `create_table` with `INHERITS (...)` in its options gets its
+  parents' columns and keeps a parent it cannot find as unresolved, as an
+  executed CREATE TABLE does, and a drop under CASCADE drops the tables that
+  inherit from it and the foreign keys to it.
+- **A replayed MySQL column is unsigned where the statement that makes it says
+  so.** A key, a column, a reference or an `unsigned_integer` keeps it, and
+  `change_column` drops it unless the call gives it again, as Rails rebuilds the
+  column from the call's options.
+- **A replayed MySQL or MariaDB auto-increment column, a serial among them,
+  stays NOT NULL through `change_column_null` and `change_column`, as the server
+  keeps it.** `auto_increment: false` releases it.
+- **A replayed reference's id column reads its type and sizes as the dump writes
+  them.** `type: :unsigned_integer` is an unsigned integer on MySQL, and
+  `limit:` reads as the dump writes it, in `create_join_table` too.
+- **A key column a migration declares reads as the key `create_table` implies.**
+  `t.primary_key` with or without a type, `primary_key: true` and `add_column`
+  of a `primary_key` type give a not null key of the declared type, and an
+  integer key its own sequence on PostgreSQL.
+- **A replayed composite primary key's columns are not null on PostgreSQL and
+  MySQL, as those databases make them.** SQLite leaves them nullable.
+- **A replayed `timestamp` reads as the datetime the PostgreSQL and SQLite dumps
+  write, and stays a timestamp on MySQL.** A time, timestamp or timestamptz
+  keeps the precision schema.rb writes on every path: only a datetime's 6 is
+  left out, and only MySQL drops a 0. A dump that writes `precision: nil`
+  (PostgreSQL's plain timestamp, MySQL's `datetime(0)`) reads with no precision.
+- **A replayed `create_table` the migration skips stays skipped.** A temporary
+  table named by a string no longer appears in the replayed schema, and
+  `if_not_exists: true` on a table that exists no longer adds the block's
+  columns to it. An executed `CREATE TABLE IF NOT EXISTS` leaves an existing
+  table as it is, and a `create_table ..., force:` replaces the table it names.
+- **A replayed PostgreSQL nextval default reads as the dump writes it, and
+  follows a key sequence that `rename_table` renames.** One that names the
+  column's own sequence is a serial.
+- **A replayed column whose default is nil has no default, as the dump writes
+  it, and a `change_column_default` or `add_column` with a proc default keeps
+  that default.** A reverted `change_column_default` sets its `from:` value. A
+  proc default reads as the dump writes it (`-> { "now()" }`), and one whole
+  PostgreSQL literal in one, such as `-> { "'y'::character varying" }`, reads as
+  Rails decodes it, booleans, arrays and dates through the column's type, while
+  any other expression keeps its proc; a bare MySQL literal or number in one
+  reads as its value. A replayed SQLite proc default reads as the app's Rails
+  reads it back: a quoted or bare literal is its value, and an expression with
+  no function is no default. A boolean proc default goes through Rails' boolean
+  cast on SQLite and MySQL, PostgreSQL's `TRUE`, `('a')::text` and boolean array
+  words read as the server stores them, and a bare MySQL number reads as MySQL
+  stores it for the column's type (`2.5` on an integer reads `3`, `007` on a
+  string `7`, `1e3` anywhere `1000`, a decimal's rounded to the column's scale
+  with no negative zero, `07` on a year `2007` whether create_table or
+  change_column_default sets it, and one with a trailing point such as `1.` as
+  its value); on a date or time column, for a value MySQL refuses, and for one
+  no double holds on a float or double column, it keeps its proc, and the rest
+  of the migration file still replays.
+- **A UNIQUE that a replayed or hand-written CREATE TABLE declares is the key
+  the database makes.** MySQL lists an index named for its first column, and
+  PostgreSQL one constraint per column list named `<table>_<columns>_key`, or
+  the unique index behind it for a Rails 7.0 app.
+- **The migration replay reads Rails' PostgreSQL unique constraints.**
+  `t.unique_constraint` in `create_table` and `change_table`,
+  `add_unique_constraint` and `remove_unique_constraint` add and drop the
+  constraint the dump lists, and `using_index:` takes the index over.
+- **A unique constraint's `nulls_not_distinct` shows on every schema path.**
+  structure.sql, a replayed migration, schema.rb and the booted connection read
+  it as Rails 8.0 and later dump it, Rails 7.1 and 7.2 dumps leave it out, and
+  `rails_get_schema` prints it beside the constraint. A structure.sql index
+  reads `NULLS NOT DISTINCT` only for Rails 7.1 on, since Rails 7.0 cannot dump
+  the option.
+- **A replayed decimal reads as the dump writes it.** A precision with no scale
+  is scale 0 on every adapter, and a default at scale 0 is whole as Rails casts
+  it (`2.5` reads `2`), while MySQL's own `decimal(10,0)` still rounds a default
+  the server gets unscaled; any other default reads in the column's scale
+  (`"0.0"`). A `numeric` column is a decimal with no sizes, as `type_to_sql`
+  writes it, and MySQL's plain `decimal` has precision 10.
+- **Array and decimal defaults read as Rails dumps them on every schema path.**
+  Each PostgreSQL array element goes through the column's type, with NULL as
+  nil, quotes and backslashes decoded and floats as floats, and an `ARRAY[...]`
+  default is no longer cut at its first comma. A decimal default is rounded to
+  its scale and cut to a whole number at scale 0, so `numeric(5) DEFAULT 2.5`
+  reads `2`. A replayed PostgreSQL array default written as a Ruby array or an
+  array-literal string reads the same way, so `[1, 2.5]` on a float column reads
+  `[1.0, 2.5]` and `"{a,b}"` reads `["a", "b"]`.
+- **A PostgreSQL column default that Rails cannot read as a value or a function
+  shows as no default, as schema.rb has it.** The structure.sql reader and the
+  migration replay showed `ARRAY[...]`, `'a' || 'b'`, `(1 + 1)`, `CURRENT_TIME`
+  and similar expressions as `-> { ... }`; they now follow Rails'
+  `has_default_function?` and give a proc only for what it accepts.
+- **A structure.sql column with a quoted name that is not a plain word is
+  read**, PostgreSQL's `?column?` and names with spaces or doubled quotes among
+  them, with their `ALTER COLUMN` defaults.
+- **A MySQL `CREATE TABLE` in a migration's `execute` or a hand-written
+  structure.sql keeps an index written without quotes or a name as an index.**
+  `INDEX (a)`, `KEY k (b)` and `FULLTEXT (t)` read as made-up columns. They now
+  take the name MySQL gives them, and in a structure.sql a functional key reads
+  as Rails' connection reads it.
+- **A table a migration's `execute` makes with `CREATE TABLE ... AS SELECT`, or
+  `create_table` with `as:`, is read with the columns its database gives it,
+  where the replay can trace them.** MySQL keeps their not null and defaults,
+  PostgreSQL keeps neither, and SQLite types each column by its affinity. A
+  column it cannot trace stays untyped, and a column it cannot name or a query
+  it cannot read is counted in the schema note, so such a table never reads as
+  complete when it is not. It reads the query's own FROM, outside parentheses
+  and quotes, reads past DISTINCT and keeps the column `DISTINCT ON (k)` or
+  `DISTINCT(k)` names, and reads each select item with the database's own
+  quotes and numbers (dollar-quoted strings, `0x` and `0b` numbers, `x''`
+  blobs, a timestamp's precision, interval fields), so it keeps a bare alias
+  after any complete expression: a quoted one with every character in it, a
+  string one on MySQL and SQLite, a bare PostgreSQL one folded to lower case,
+  and a keyword that ends the item (`time w` names `w`). MySQL reads adjacent
+  strings as one, named by the first (`'a' 'b'` names `a`), and a number with a
+  leading zero reads in base ten. A computed column is named as each database
+  names it: on PostgreSQL as its FigureColname does (a function's name, a
+  cast's argument or its type, a CASE's ELSE or `case`, a scalar subquery its
+  own first column's name, a subquery selecting a star unnamed,
+  `IS NORMALIZED` `is_normalized`, `?column?` for an operator or a constant),
+  on MySQL and SQLite by its text. A literal column
+  is typed as MySQL 8.4's dump types it; MariaDB gives one no default and types
+  some integers smaller, which the replay cannot tell apart. MySQL's form
+  without AS makes its table, a MySQL column list before the SELECT keeps the
+  keys it declares and orders the columns as MySQL does (the declared ones the
+  query does not select, then the selected ones), and a query in parentheses
+  reads its own columns.
+- **A migration's `create_table` or `change_table` block reads its columns,
+  indexes and references whatever its parameter is named, `it` and `_1`
+  included.** Rails hands the block the table under any name, but the static
+  tier read a block's calls only on `t`, so `do |table|` added an empty table. A
+  block parameter of any other kind (`reversible do |dir|`,
+  `find_each { |t| ... }`) is still not read as the table.
+- **A SQLite structure.sql types each column the way Rails' SQLite type map
+  reads it.** A `REAL`, `NUM` or other type the map does not match reads with no
+  type, as booted Rails reads it, where it read as float or as its own name;
+  `number`, `clob`, `point`, `nvarchar`, `jsonb` and `smalldatetime` read as
+  decimal, text, integer, string, json and datetime; an uppercase `BIGINT` reads
+  as integer, as the dumper writes it; and a column that declares no type is
+  listed, not dropped. An `UNSIGNED BIG INT` reads as a plain integer, since
+  only MySQL's columns carry an unsigned mark, and a default reads as Rails'
+  SQLite adapter reads it: without the parentheses SQLite drops, a boolean's
+  `1`, `0`, `'t'` or `'f'` as Rails' boolean type casts it, an empty string as
+  no default, and an expression that is no function as no default. A primary key
+  declared without NOT NULL allows NULL, as SQLite and booted Rails read it. A
+  `DEFAULT TRUE` or `DEFAULT FALSE` reads as the app's Rails dumps it: no
+  default before 8.1; on 8.1.0 to 8.1.3 the uppercase words, which a number
+  column casts to 0 or 0.0 and a date or time column to none; and on 8.1.4
+  either case as a boolean, which a string column dumps as "t" or "f", a float
+  or decimal as 1.0 or 0.0, and an integer, a whole decimal or a date or time
+  column as no default.
+- **A MySQL structure.sql column of a type the reader does not name is typed as
+  Rails reads it.** A `point` or `multipoint` column and a `year` read as
+  integers, as Rails' MySQL type map matches them, a `bit` reads as binary with
+  its limit, and a `geometry` has no type, as booted Rails gives. A bare `bit`
+  reads as the `bit(1)` MySQL makes it, limit 1, in a structure.sql, an executed
+  CREATE TABLE and a replayed migration, and a MariaDB `uuid` has no type, as
+  booted Rails reads it.
+- **A migration helper module assigned with `Module.new`, such as
+  `MigrationHelpers = Module.new do`, replays the helpers it defines as a
+  `module` statement does.** A migration that includes it no longer drops the
+  columns those helpers add from the replayed schema.
+- **A migration's `self.execute` replays like a bare `execute`, and a migration
+  table helper class whose name keeps an underscore, such as `Shop_Items`, names
+  its table by its file.**
+
+### Removed
+
+- **An expression index read from `db/schema.rb` no longer carries an
+  `expression: true` key.** It now has the same name, columns and uniqueness
+  shape as the structure.sql reader and the booted tier give it. (#605)
+- **`ActionResolver.own_actions`, `PortablePath.relativize_all` and
+  `McpConfigGenerator.sub_table` are gone.** Nothing called them. (#518)
+- **`McpController.mcp_transport` and `.reset_transport!` are gone.** They only
+  forwarded to `McpEdge`. The bind warning and the Host check now read one
+  loopback list. (#603)
 
 ## [5.36.9] - 2026-10-23
 

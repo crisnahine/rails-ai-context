@@ -58,6 +58,19 @@ RSpec.describe RailsAiContext::Brackets do
     end
   end
 
+  describe ".unwrap" do
+    it "drops the group the text opens with when nothing or only a modifier follows it" do
+      expect(described_class.unwrap(%(("posts/post", post: @post)))).to eq(%("posts/post", post: @post))
+      expect(described_class.unwrap(%(("posts/post", post: @post) if x))).to eq(%("posts/post", post: @post))
+      expect(described_class.unwrap(%({ post: @post } unless x))).to eq(" post: @post ")
+    end
+
+    it "keeps text whose group a call or more text follows" do
+      expect(described_class.unwrap(%({ a: 1 }.merge(b: 2)))).to eq(%({ a: 1 }.merge(b: 2)))
+      expect(described_class.unwrap(%("posts/post", post: @post))).to eq(%("posts/post", post: @post))
+    end
+  end
+
   describe ".each_top_level" do
     it "yields whole bracket groups and strings, and every other character alone" do
       pieces = []

@@ -1610,36 +1610,17 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class.redact_log_line("to ada@example.com \xFF".b)).to eq("to [EMAIL] \xFF".b)
     end
 
-    # The work a pattern does, which backtracking multiplies; other processes taking the CPU add nothing to it.
-    # Windows has no process CPU clock; the bound is measured on whichever clock times the match.
-    let(:cpu_clock) { Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC }
-
     # One match's CPU seconds: the second a Rails 8 Regexp.timeout allows, or on a slower machine 50 scans
     # of the line by a pattern that cannot backtrack. A quadratic match costs thousands of such scans.
     def match_bound(line)
-      started = Process.clock_gettime(cpu_clock)
-      line.gsub(/[^\x00-\u{10FFFF}]/) { |match| match }
-      [ 1, 50 * (Process.clock_gettime(cpu_clock) - started) ].max
-    end
-
-    # Regexp.timeout counts wall time, so on a loaded machine it ends a match that did little work.
-    around(:each, :cpu_timed) do |example|
-      next example.run unless Regexp.respond_to?(:timeout=)
-
-      saved = Regexp.timeout
-      Regexp.timeout = nil
-      example.run
-    ensure
-      Regexp.timeout = saved if Regexp.respond_to?(:timeout=)
+      [ 1, 50 * cpu_seconds { line.gsub(/[^\x00-\u{10FFFF}]/) { |match| match } } ].max
     end
 
     it "takes a fraction of a second over a 1 MB line built to make a pattern backtrack", :cpu_timed do
       lines = [ ((("a" * 64) + "@") * 16_000), "a@#{"a." * 500_000}", "#{"a." * 500_000}@x", "a@b.#{"c" * 1_000_000}" ]
 
       lines.each do |line|
-        started = Process.clock_gettime(cpu_clock)
-        described_class.redact_log_line(line)
-        expect(Process.clock_gettime(cpu_clock) - started).to be < 2
+        expect(cpu_seconds { described_class.redact_log_line(line) }).to be < 2
       end
     end
 
@@ -1653,10 +1634,11 @@ RSpec.describe RailsAiContext::Redaction do
         %("Authorization"=>"x", ) * 50_000, "#{'a_' * 250_000}#{'a1' * 250_000}password=x",
         "--password 1a " * 75_000, "#{'aToken' * 170_000}x", %("api_token": { "value": "x" }, ) * 30_000,
         %("api_token": { ) * 70_000 ].each do |line|
-        started = Process.clock_gettime(cpu_clock)
-        described_class.redact_log_line(line)
-        described_class.redact_source_line(line, path: "app/models/x.rb")
-        expect(Process.clock_gettime(cpu_clock) - started).to be < 15
+        seconds = cpu_seconds do
+          described_class.redact_log_line(line)
+          described_class.redact_source_line(line, path: "app/models/x.rb")
+        end
+        expect(seconds).to be < 15
       end
     end
 
@@ -1665,13 +1647,9 @@ RSpec.describe RailsAiContext::Redaction do
     # took 2.5 seconds in one match, past the second a Rails 8 app sets as Regexp.timeout.
     it "reads a 1 MB word or dotted run in source, each match inside a Rails 8 Regexp.timeout on a quiet machine", :cpu_timed do
       [ %(blob = "#{'0123456789abcdef' * 62_500}"), "a." * 500_000, "f" * 1_000_000 ].each do |line|
-        started = Process.clock_gettime(cpu_clock)
-        described_class.redact_source_line(line, path: "spec/support/blob.rb")
-        expect(Process.clock_gettime(cpu_clock) - started).to be < 15
+        expect(cpu_seconds { described_class.redact_source_line(line, path: "spec/support/blob.rb") }).to be < 15
 
-        started = Process.clock_gettime(cpu_clock)
-        line.gsub(described_class::CALL_KEYED) { |match| match }
-        expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
+        expect(cpu_seconds { line.gsub(described_class::CALL_KEYED) { |match| match } }).to be < match_bound(line)
       end
     end
 
@@ -1682,15 +1660,14 @@ RSpec.describe RailsAiContext::Redaction do
       lines = [ "#{'dbpassword_' * 90_000}x = 1", "fetch(:#{'apassword_' * 100_000}x", "#{'userPassword_' * 75_000}x: 1",
                 "#{'token_' * 160_000}x =", "#{'aSecretB' * 120_000}x = 1", "--token #{'/a1' * 300_000}/=" ]
       lines.each do |line|
-        started = Process.clock_gettime(cpu_clock)
-        described_class.redact_source_line(line, path: "app/models/x.rb")
-        described_class.redact_log_line(line)
-        expect(Process.clock_gettime(cpu_clock) - started).to be < 15
+        seconds = cpu_seconds do
+          described_class.redact_source_line(line, path: "app/models/x.rb")
+          described_class.redact_log_line(line)
+        end
+        expect(seconds).to be < 15
 
         [ described_class::KEYED_LITERAL, described_class::ENV_ASSIGNMENT, described_class::LOG_SECRET_ASSIGNMENT ].each do |pattern|
-          started = Process.clock_gettime(cpu_clock)
-          line.gsub(pattern) { |match| match }
-          expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
+          expect(cpu_seconds { line.gsub(pattern) { |match| match } }).to be < match_bound(line)
         end
       end
     end
@@ -1707,15 +1684,14 @@ RSpec.describe RailsAiContext::Redaction do
         "{#{'"\\' * 400_000}}", "'$.#{'a' * 1_000_000}!'", "Duplicate entry 'x' for key 'index_#{'_on_' * 200_000}!'",
         "#{'eyJ-' * 250_000}", "{\"q\":\"#{'\\"api_key\\"=\\"v\\"w ' * 50_000}", "#{'eyJa.' * 200_000}",
         "#{'eyJ-' * 100_000}.#{'b' * 20}.c", "{\"items\":[#{'{"token":{"v":1}},' * 40_000}1]}" ].each do |line|
-        started = Process.clock_gettime(cpu_clock)
-        described_class.redact_log_line(line)
-        described_class.env_value("SETTING", line)
-        described_class.env_comment(line)
-        expect(Process.clock_gettime(cpu_clock) - started).to be < 15
+        seconds = cpu_seconds do
+          described_class.redact_log_line(line)
+          described_class.env_value("SETTING", line)
+          described_class.env_comment(line)
+        end
+        expect(seconds).to be < 15
 
-        started = Process.clock_gettime(cpu_clock)
-        line.gsub(described_class::URI_USERINFO) { |match| match }
-        expect(Process.clock_gettime(cpu_clock) - started).to be < match_bound(line)
+        expect(cpu_seconds { line.gsub(described_class::URI_USERINFO) { |match| match } }).to be < match_bound(line)
       end
     end
 

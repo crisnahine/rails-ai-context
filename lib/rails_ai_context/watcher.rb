@@ -96,9 +96,11 @@ module RailsAiContext
     end
 
     # Regenerating without reloading rewrote the files from the constants the
-    # watcher booted with, so a model added while it ran never appeared.
+    # watcher booted with, so a model added while it ran never appeared; the
+    # file caches go too, as a server drops them, since the static tier reloads nothing.
     def reload_and_regenerate
       CodeReloader.reload!
+      Tools::BaseTool.reset_all_caches!
       regenerate
     end
 

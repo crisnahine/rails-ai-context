@@ -19,7 +19,7 @@ module RailsAiContext
     # One scope, the fingerprint's: a directory the fingerprint reads but
     # nobody watches is a change that never reaches the reaction.
     def watched_dirs
-      Fingerprinter.watched_dirs(@app.root.to_s)
+      SafePath.outermost(Fingerprinter.watched_dirs(@app.root.to_s) + Fingerprinter.manifest_dirs(@app.root.to_s))
     end
 
     # Wires Listen to the watched directories and runs every change batch
@@ -32,6 +32,7 @@ module RailsAiContext
       return nil if dirs.empty?
 
       options = debounce ? { wait_for_delay: debounce } : {}
+      # shortcut: Listen takes directories only and inotify would recurse the whole root (node_modules too), so an edit to a file at the root the fingerprint reads (Gemfile, Dockerfile) or in a frontend root waits for the next change in a watched directory; watch the root once Listen can watch single files.
       @listener = Listen.to(*dirs, **options) do |modified, added, removed|
         changed = modified + added + removed
         next if changed.empty?

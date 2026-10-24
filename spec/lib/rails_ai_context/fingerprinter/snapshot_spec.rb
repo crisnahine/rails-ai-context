@@ -78,6 +78,17 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
       expect(snapshot.changed?).to be(true)
     end
 
+    it "sees a root file, bin script or config YAML a reader reads added, edited and removed" do
+      %w[Dockerfile Procfile.dev docker-compose.yml vite.config.ts .github/workflows/ci.yml bin/setup config/sidekiq.yaml].each do |file|
+        path = write(file, "a\n")
+        expect(snapshot.changed?).to be(true), "#{file} added"
+        File.write(path, "b\n")
+        expect(snapshot.changed?).to be(true), "#{file} edited"
+        File.delete(path)
+        expect(snapshot.changed?).to be(true), "#{file} removed"
+      end
+    end
+
     # A second write in the clock tick of the first keeps the mtime, and a
     # same-length edit keeps the size.
     it "sees a rewrite that leaves the stat as it was, while the file is young" do

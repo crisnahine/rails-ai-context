@@ -266,6 +266,18 @@ module RailsAiContext
       real == real_dir || real.start_with?(dir_prefix(real_dir))
     end
 
+    # The dirs no other one in the list holds.
+    def outermost(dirs)
+      dirs = dirs.uniq
+      dirs.reject { |dir| dirs.any? { |other| other != dir && contained?(dir, other) } }
+    end
+
+    # Whether `path` is `dir` or below it, compared by real paths, either of
+    # which may not exist yet or sit behind a symlink.
+    def inside?(path, dir)
+      contained?(canonical(path), canonical(dir))
+    end
+
     # One spelling of a place whatever links lead to it, for comparing two
     # paths: the real path, or for a path not there yet its nearest existing
     # ancestor's real path with the rest appended. Stdlib only, so it serves

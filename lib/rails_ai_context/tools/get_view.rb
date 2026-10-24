@@ -135,9 +135,13 @@ module RailsAiContext
           text_response(lines.join("\n"))
 
         when "standard"
-          # One read per template: the listing and the hydrator below both
-          # want the same file's metadata.
-          metadata = Hash.new { |h, name| h[name] = extract_view_metadata(name) }
+          # One read per template: the listing, the partial locals and the
+          # hydrator below all want the same file.
+          sources = Hash.new { |h, name| h[name] = read_view_content(name) }
+          metadata = Hash.new { |h, name| h[name] = extract_view_metadata(name, sources[name]) }
+          # A partial is rendered from any folder, by a template or by another partial.
+          renderers = (data[:templates] || {}).merge(data[:partials] || {})
+          on_disk = (data[:partials] || {}).keys.to_set { |name| Introspectors::RenderCalls.canonical_name(name) }
           all_dirs = view_groups(templates, partials)
           lines = views_header_lines(templates, partials, layouts, controller: controller)
 
@@ -186,7 +190,7 @@ module RailsAiContext
             ctrl_partials.sort.each do |name, meta|
               fields = meta[:fields]&.any? ? " fields: #{meta[:fields].join(', ')}" : ""
               helpers = meta[:helpers]&.any? ? " helpers: #{meta[:helpers].join(', ')}" : ""
-              locals = extract_partial_locals(name, templates)
+              locals = extract_partial_locals(name, renderers, sources, on_disk)
               locals_str = locals&.any? ? " **locals:** #{locals.join(', ')}" : ""
               alternate = (note = view_alternate_of(name)) ? " #{note}" : ""
               lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{alternate}#{fields}#{helpers}#{locals_str}"
@@ -210,16 +214,22 @@ module RailsAiContext
         when "full"
           if controller
             lines = [ "# Views: #{controller}/", "", *layout_lines(controller) ]
+            shortened = false
             # Combine all content first for cross-template Tailwind compression.
             # Each file is the app's source, so its secrets are filtered as
             # they are when one template is read by path.
             all_content = (templates.sort + partials.sort).map do |name, _meta|
-              [ name, RailsAiContext::Redaction.redact_source(strip_svg(read_view_content(name)), path: name) ]
+              raw = read_view_content(name)
+              stripped = strip_svg(raw)
+              shortened ||= stripped != raw
+              [ name, RailsAiContext::Redaction.redact_source(stripped, path: name) ]
             end
-            # Compress repeated Tailwind classes across all templates
             combined = all_content.map { |name, c| "## #{name}\n```#{RailsAiContext::ViewFile.fence(name)}\n#{c}\n```\n" }.join("\n")
-            combined = compress_tailwind(combined)
-            lines << combined
+            compressed = compress_tailwind(combined)
+            if shortened || compressed != combined
+              lines << "_Inline SVG icons and repeated class strings are shortened here; read a file by `path:` for its exact text._" << ""
+            end
+            lines << compressed
             text_response(lines.join("\n"))
           else
             # List available controllers when no controller specified.
@@ -290,11 +300,10 @@ module RailsAiContext
       end
 
       # The template map excludes app/views/layouts, so the directory is the
-      # only statement of what is in it.
+      # only statement of what is in it. Named the way Rails looks them up, so
+      # a layout another views root shadows is one layout.
       private_class_method def self.layout_files
-        RailsAiContext::ViewFile.each(rails_app.root.to_s, "layouts/*")
-          .select { |path, _relative| RailsAiContext::ViewFile.layout?(path) }
-          .map(&:first).sort
+        RailsAiContext::ViewFile.layouts(rails_app.root.to_s).map(&:last).uniq.sort
       end
 
       private_class_method def self.list_layouts(detail)
@@ -302,15 +311,14 @@ module RailsAiContext
         return text_response("No app/views/layouts/ directory found.") if files.empty?
 
         lines = [ "# Layouts (#{count_phrase(files.size, "file")})", "" ]
-        files.each do |path|
-          relative = "layouts/#{File.basename(path)}"
+        files.each do |relative|
           located = RailsAiContext::ViewFile.locate(rails_app.root.to_s, relative)
           next unless located.ok?
 
           real = located.realpath
           if RailsAiContext::DetailLevel.full?(detail)
             content = RailsAiContext::SafeFile.read(real) || "(error reading)"
-            shown = RailsAiContext::Redaction.redact_source(strip_svg(content), path: relative)
+            shown = RailsAiContext::Redaction.redact_source(content, path: relative)
             lines << "## #{relative}" << "```#{RailsAiContext::ViewFile.fence(relative)}" << shown << "```" << ""
           else
             content = RailsAiContext::SafeFile.read(real) || ""
@@ -344,7 +352,8 @@ module RailsAiContext
           return text_response("# #{result.relative}\n\n_No template handler renders this file._\n\n```\n#{shown}\n```")
         end
 
-        content = RailsAiContext::Redaction.redact_source(compress_tailwind(strip_svg(content)), path: result.relative)
+        # The file as written: an agent edits the view from this text.
+        content = RailsAiContext::Redaction.redact_source(content, path: result.relative)
         text_response("# #{result.relative}\n\n```#{RailsAiContext::ViewFile.fence(result.relative)}\n#{content}\n```")
       end
 
@@ -395,8 +404,7 @@ module RailsAiContext
       end
 
       # Extract instance variables and Turbo wiring from a view template
-      private_class_method def self.extract_view_metadata(relative_path)
-        content = read_view_content(relative_path)
+      private_class_method def self.extract_view_metadata(relative_path, content)
         return { ivars: [], turbo: [], components: [], helpers: [] } if content.nil? || content.include?("(file not found)")
 
         ivars = Introspectors::ViewTemplateIntrospector.ivars_in(content, path: relative_path)
@@ -424,18 +432,18 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, { ivars: [], turbo: [], components: [], helpers: [] }, label: "extract_view_metadata")
       end
 
-      # Scan templates that render a partial to extract locals keys
-      private_class_method def self.extract_partial_locals(partial_name, templates)
-        # Get the partial's short name for matching render calls
-        base = File.basename(partial_name).sub(/\A_/, "").sub(/\..*/, "")
+      private_class_method def self.extract_partial_locals(partial_name, renderers, sources, on_disk)
+        reader = Introspectors::RenderCalls
+        key = reader.canonical_name(partial_name)
         locals = Set.new
 
-        templates.each_value do |meta|
-          next unless meta[:partials]&.any? { |p| p.include?(base) }
-          content = read_view_content(meta[:path] || next)
-          # Match: render "partial", key: val OR render partial: "partial", locals: { key: val }
-          content.scan(/render\s+(?:partial:\s*)?["'][^"']*#{Regexp.escape(base)}["'][^%\n]*?(?:,|\blocals:\s*\{)\s*([^}%]+)/).each do |match|
-            match[0].scan(/(\w+):/) { |k| locals << k[0] }
+        reaches = ->(name, ref) { ref && reader.partial_key(ref, File.dirname(name), on_disk) == key }
+
+        renderers.each do |name, meta|
+          next unless Array(meta[:partials]).any? { |ref| reaches.(name, ref) }
+
+          reader.render_calls(sources[name].to_s).each do |_at, args|
+            locals.merge(reader.render_locals(args)) if reaches.(name, reader.rendered_name(args))
           end
         end
 
@@ -462,7 +470,7 @@ module RailsAiContext
 
         # List views from disk
         files = RailsAiContext::ViewFile.each(rails_app.root.to_s)
-          .reject { |path, _relative| path.include?("/layouts/") }
+          .reject { |_path, relative| RailsAiContext::ViewFile.in_layouts?(relative) }
           .select { |path, _relative| RailsAiContext::ViewFile.template?(path) }
           .map { |_path, relative| relative }
           .sort

@@ -34,11 +34,12 @@ module RailsAiContext
       unless response.is_a?(MCP::Tool::Response)
         raise "Expected MCP::Tool::Response, got #{response.class}"
       end
+      raise "#{tool_class.tool_name} returned an error: #{extract_response_text(response)}" if response.error?
 
       response
     end
 
-    # Execute a tool expecting an error response (non-empty error content).
+    # Execute a tool expecting an error response. Fails if the call succeeds.
     #
     #   response = execute_tool_with_error("rails_query", sql: "DROP TABLE users")
     #
@@ -46,7 +47,10 @@ module RailsAiContext
       tool_class = resolve_tool(name_or_class)
       raise ArgumentError, "Tool not found: #{name_or_class.inspect}" unless tool_class
 
-      tool_class.call(**args)
+      response = tool_class.call(**args)
+      _test_assert response.is_a?(MCP::Tool::Response) && response.error?,
+        "Expected #{tool_class.tool_name} to return an error, but it succeeded"
+      response
     end
 
     # Assert that a tool is registered and discoverable.

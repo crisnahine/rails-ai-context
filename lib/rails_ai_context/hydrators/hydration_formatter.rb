@@ -14,11 +14,6 @@ module RailsAiContext
           lines << ""
         end
 
-        if hydration_result.warnings.any?
-          hydration_result.warnings.each { |w| lines << "_#{w}_" }
-          lines << ""
-        end
-
         lines.join("\n")
       end
 

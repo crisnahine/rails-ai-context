@@ -264,6 +264,29 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         end
       end
 
+      # Rails singularizes only a collection's name: has_one :shop_settings is ShopSettings.
+      it "reports the column a has_one with a plural name reads on its model's table" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "shop.rb"), "class Shop < ApplicationRecord\n  has_one :shop_settings\nend\n")
+          File.write(File.join(dir, "app", "models", "shop_settings.rb"),
+                     "class ShopSettings < ApplicationRecord\n  self.table_name = \"preferences\"\nend\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "shops" do |t|
+            end
+
+            create_table "preferences" do |t|
+              t.bigint "shop_id"
+            end
+          RUBY
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_fk_indexes]
+
+          expect(missing.map { |m| [ m[:table], m[:column] ] }).to contain_exactly([ "preferences", "shop_id" ])
+        end
+      end
+
       # marketplace_transactions keeps the marketplace's own charge_id and
       # charge_type: a pair shaped like a polymorphic association that
       # no association reads.
@@ -849,6 +872,62 @@ end
       end
     end
 
+    # Rails reads a through association's class off its source association.
+    describe "a loop over a has_many :through with a source" do
+      it "reports the source model's association read in the loop" do
+        Dir.mktmpdir do |dir|
+          models = {
+            "shop" => "has_many :memberships\n  has_many :members, through: :memberships, source: :user",
+            "membership" => "belongs_to :shop\n  belongs_to :user",
+            "user" => "belongs_to :team",
+            "team" => ""
+          }
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          models.each do |file, body|
+            File.write(File.join(dir, "app", "models", "#{file}.rb"), "class #{file.camelize} < ApplicationRecord\n  #{body}\nend\n")
+          end
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+          File.write(File.join(dir, "app", "controllers", "shops_controller.rb"), <<~RUBY)
+            class ShopsController < ApplicationController
+              def show
+                @shop = Shop.find(params[:id])
+                @shop.members.each { |member| logger.info(member.team.name) }
+              end
+            end
+          RUBY
+
+          risks = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:n_plus_one_risks]
+
+          expect(risks.map { |r| r.values_at(:model, :association) }).to eq([ %w[User team] ])
+        end
+      end
+    end
+
+    describe "a loop through a polymorphic belongs_to" do
+      it "follows no model past it, since Rails reads the class from each row" do
+        Dir.mktmpdir do |dir|
+          models = { "comment" => "belongs_to :commentable, polymorphic: true", "commentable" => "has_many :notes", "note" => "belongs_to :author" }
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          models.each do |file, body|
+            File.write(File.join(dir, "app", "models", "#{file}.rb"), "class #{file.camelize} < ApplicationRecord\n  #{body}\nend\n")
+          end
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+          File.write(File.join(dir, "app", "controllers", "comments_controller.rb"), <<~RUBY)
+            class CommentsController < ApplicationController
+              def index
+                @comments = Comment.all
+                @comments.each { |comment| comment.commentable.notes.each { |note| logger.info(note.author.name) } }
+              end
+            end
+          RUBY
+
+          risks = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:n_plus_one_risks]
+
+          expect(risks.map { |r| r.values_at(:model, :association) }).to eq([ %w[Comment commentable] ])
+        end
+      end
+    end
+
     # Two models can demodulize to one word. The bare key is what the scan
     # captures, so the controller's own namespace has to break the tie, or the
     # row names whichever model happened to be written last.
@@ -1012,6 +1091,51 @@ end
           [ "app/controllers/admin/posts_controller.rb", "Admin::Post" ]
         )
         expect(findings.first[:suggestion]).to start_with("Admin::Post.all loads")
+      end
+    end
+
+    it "reads every model the app loads, whatever its superclass is written as" do
+      Dir.mktmpdir do |dir|
+        {
+          "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+          "app/models/animals_record.rb" => "class AnimalsRecord < ApplicationRecord\n  self.abstract_class = true\nend\n",
+          "app/models/dog.rb" => "class Dog < AnimalsRecord\n  has_many :toys\nend\n",
+          "app/models/toy.rb" => "class Toy < AnimalsRecord\n  belongs_to :dog\nend\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\n  has_many :comments\nend\n",
+          "app/models/comment.rb" => "class Comment < ApplicationRecord\n  belongs_to :post\nend\n",
+          "app/models/user.rb" => "class User < ActiveRecord::Base\n  has_many :posts\nend\n",
+          "app/models/admin.rb" => "class Admin < User\n  has_many :comments\nend\n",
+          "db/schema.rb" => <<~RUBY,
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "dogs" do |t|
+                t.integer "toys_count"
+              end
+              create_table "toys" do |t|
+                t.bigint "dog_id"
+              end
+              create_table "posts" do |t|
+                t.integer "comments_count"
+              end
+              create_table "comments" do |t|
+                t.bigint "post_id"
+              end
+              create_table "users" do |t|
+                t.string "type"
+              end
+            end
+          RUBY
+          "app/controllers/dogs_controller.rb" =>
+            "class DogsController < ApplicationController\n  def index\n    @dogs = Dog.all\n    @posts = Post.all\n" \
+            "    @users = User.all\n    @admins = Admin.all\n  end\nend\n"
+        }.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), source)
+        end
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:missing_counter_cache].map { |f| f[:model] }).to contain_exactly("Dog", "Post")
+        expect(result[:model_all_in_controllers].map { |f| f[:model] }).to contain_exactly("Dog", "Post", "User", "Admin")
       end
     end
 
@@ -1460,6 +1584,163 @@ end
 
         expect(risks.to_h { |r| [ r[:action], r[:risk] ] }).to eq("index" => "low", "show" => "low", "edit" => "high")
       end
+    end
+  end
+
+  # ActiveRecord 8.0 runs one users query per post for each of the first three.
+  describe "an association named in the chain outside a preload call's own arguments" do
+    it "is not read as preloaded" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def index = @posts = Post.includes(:comments).where(user: current_user)
+            def show = @posts = Post.includes(:comments).joins(:user)
+            def edit = @posts = Post.includes(comments: :user)
+            def feed = @posts = Post.preload(:comments, user: :profile)
+          end
+        RUBY
+        %w[index show edit feed].each do |action|
+          File.write(File.join(dir, "app/views/posts/#{action}.html.erb"), "<% @posts.each do |post| %><%= post.user.name %><% end %>\n")
+        end
+        models = {
+          "Post" => { associations: [ { name: "user", type: "belongs_to" }, { name: "comments", type: "has_many" } ] },
+          "Comment" => { associations: [ { name: "user", type: "belongs_to" } ] },
+          "User" => { associations: [ { name: "posts", type: "has_many" } ] }
+        }
+
+        risks = RailsAiContext::Introspectors::NPlusOneScan.new(dir, models).call
+
+        expect(risks.to_h { |r| [ r[:action], r[:risk] ] }).to eq("index" => "medium", "show" => "medium", "edit" => "medium", "feed" => "low")
+      end
+    end
+  end
+
+  describe "a collection render of a model whose to_partial_path is computed" do
+    it "keeps the risks the controller's actions have" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/models/comment.rb"),
+                   "class Comment < ApplicationRecord\n  belongs_to :post\n\n  def to_partial_path\n    \"comments/\#{kind}\"\n  end\nend\n")
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def index
+              @posts = Post.all
+              @comments = Comment.all
+            end
+
+            def feed
+              @posts = Post.all
+            end
+          end
+        RUBY
+        loop = "<% @posts.each do |post| %>\n  <%= post.user.name %>\n<% end %>\n"
+        File.write(File.join(dir, "app/views/posts/index.html.erb"), "<%= render @comments %>\n#{loop}")
+        File.write(File.join(dir, "app/views/posts/feed.html.erb"), loop)
+        models = {
+          "Post" => { associations: [ { name: "user", type: "belongs_to" }, { name: "comments", type: "has_many" } ] },
+          "Comment" => { associations: [ { name: "post", type: "belongs_to" } ] },
+          "User" => { associations: [] }
+        }
+
+        risks = RailsAiContext::Introspectors::NPlusOneScan.new(dir, models).call
+
+        expect(risks.map { |r| r.values_at(:model, :association, :action, :view, :risk) }).to contain_exactly(
+          [ "Post", "user", "index", "posts/index.html.erb", "high" ],
+          [ "Post", "user", "feed", "posts/feed.html.erb", "high" ]
+        )
+      end
+    end
+  end
+
+  # ActionView::AbstractRenderer#partial_path: the controller's namespace prefixes the record's partial whether or
+  # not that file exists, and prefix_partial_path_with_controller_namespace = false turns the prefix off.
+  describe "a bare render of records from a namespaced controller" do
+    def risks_for(setting: nil, admin_partial: true)
+      Dir.mktmpdir do |dir|
+        %w[app/models app/controllers/admin app/views/admin/posts app/views/comments app/views/admin/comments config].each do |sub|
+          FileUtils.mkdir_p(File.join(dir, sub))
+        end
+        File.write(File.join(dir, "config/application.rb"),
+                   "module Shop\n  class Application < Rails::Application\n#{setting}  end\nend\n")
+        File.write(File.join(dir, "app/models/comment.rb"), "class Comment < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app/controllers/admin/posts_controller.rb"),
+                   "module Admin\n  class PostsController < ApplicationController\n    def index\n      @comments = Comment.all\n    end\n  end\nend\n")
+        File.write(File.join(dir, "app/views/admin/posts/index.html.erb"), "<%= render @comments %>\n")
+        File.write(File.join(dir, "app/views/comments/_comment.html.erb"), "<%= comment.user.name %>\n")
+        File.write(File.join(dir, "app/views/admin/comments/_comment.html.erb"), "<%= comment.post.title %>\n") if admin_partial
+        models = { "Comment" => { associations: [ { name: "user", type: "belongs_to" }, { name: "post", type: "belongs_to" } ] } }
+
+        RailsAiContext::Introspectors::NPlusOneScan.new(dir, models).call.map { |r| r.values_at(:association, :view) }
+      end
+    end
+
+    it "walks the namespaced partial Rails renders" do
+      expect(risks_for).to eq([ [ "post", "admin/comments/_comment.html.erb" ] ])
+    end
+
+    it "walks the model's own partial when the app turns the prefix off" do
+      off = "    config.action_view.prefix_partial_path_with_controller_namespace = false\n"
+
+      expect(risks_for(setting: off)).to eq([ [ "user", "comments/_comment.html.erb" ] ])
+    end
+
+    it "walks no partial when the namespaced one is missing, as Rails raises for it" do
+      expect(risks_for(admin_partial: false)).to eq([])
+    end
+  end
+
+  describe "a preload call written without parentheses" do
+    it "is read as a preload, as Ruby reads it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def index
+              @posts = Post.includes :user
+            end
+
+            def feed
+              @posts = Post.recent
+            end
+          end
+        RUBY
+        %w[index feed].each do |action|
+          File.write(File.join(dir, "app/views/posts/#{action}.html.erb"), "<% @posts.each do |post| %><%= post.user.name %><% end %>\n")
+        end
+        models = { "Post" => { associations: [ { name: "user", type: "belongs_to" } ], scopes: [ { name: "recent", body: "preload :user" } ] } }
+
+        risks = RailsAiContext::Introspectors::NPlusOneScan.new(dir, models).call
+
+        expect(risks.to_h { |r| [ r[:action], r[:risk] ] }).to eq("index" => "low", "feed" => "low")
+      end
+    end
+  end
+
+  # The shared parse store holds files every introspector reuses; a scan's action bodies,
+  # template code and preload chains would evict them.
+  describe "the scan and the shared parse cache" do
+    def cache_size_after_scan(actions)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"),
+                   "class PostsController < ApplicationController\n#{actions.map { |a| "  def #{a} = @posts = Post.includes(:user).where(n: #{a.size})\n" }.join}end\n")
+        actions.each { |a| File.write(File.join(dir, "app/views/posts/#{a}.html.erb"), "<% @posts.each do |post| %><%= post.user.name %><%= '#{a}' %><% end %>\n") }
+        models = { "Post" => { associations: [ { name: "user", type: "belongs_to" } ] } }
+
+        RailsAiContext::AstCache.clear
+        expect(RailsAiContext::Introspectors::NPlusOneScan.new(dir, models).call.size).to eq(actions.size)
+        RailsAiContext::AstCache.size
+      end
+    end
+
+    it "adds no entry per action" do
+      expect(cache_size_after_scan(%w[a1 a22 a333 a4444 a55555 a666666])).to eq(cache_size_after_scan(%w[index]))
     end
   end
 

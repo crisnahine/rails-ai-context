@@ -374,6 +374,84 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
+    context "with a Devise module added by a module the concern nests and includes" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
+      let(:fixture_concern) { File.join(Rails.root, "app/models/lockdown.rb") }
+
+      before do
+        File.write(fixture_model, "class Member < ApplicationRecord\n  devise :database_authenticatable\n  include Lockdown\nend\n")
+        File.write(fixture_concern, <<~RUBY)
+          module Lockdown
+            extend ActiveSupport::Concern
+            module Devisey
+              extend ActiveSupport::Concern
+              included { devise :lockable }
+            end
+            module Unused
+              extend ActiveSupport::Concern
+              included { devise :confirmable }
+            end
+            include Devisey
+            included { devise :trackable }
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f([ fixture_model, fixture_concern ]) }
+
+      # Booted: Member.devise_modules is [:database_authenticatable, :lockable, :trackable].
+      it "lists the included module's modules and not the nested one's it never includes" do
+        expect(result[:devise_modules_per_model]["Member"]).to contain_exactly("database_authenticatable", "lockable", "trackable")
+      end
+    end
+
+    context "with a Devise module added by a top-level concern the concern includes" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
+      let(:fixture_concern) { File.join(Rails.root, "app/models/secured.rb") }
+      let(:fixture_included) { File.join(Rails.root, "app/models/lockable_member.rb") }
+
+      before do
+        File.write(fixture_model, "class Member < ApplicationRecord\n  devise :database_authenticatable\n  include Secured\nend\n")
+        File.write(fixture_concern, "module Secured\n  extend ActiveSupport::Concern\n  include LockableMember\nend\n")
+        File.write(fixture_included, "module LockableMember\n  extend ActiveSupport::Concern\n  included { devise :lockable }\nend\n")
+      end
+
+      after { FileUtils.rm_f([ fixture_model, fixture_concern, fixture_included ]) }
+
+      # Ruby: Member.ancestors holds LockableMember, whose included block runs on Member.
+      it "lists the included concern's modules" do
+        expect(result[:devise_modules_per_model]["Member"]).to contain_exactly("database_authenticatable", "lockable")
+      end
+    end
+
+    context "with a Devise module added by a nested module that shares a top-level concern's name" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
+      let(:fixture_concern) { File.join(Rails.root, "app/models/guarded.rb") }
+      let(:fixture_homonym) { File.join(Rails.root, "app/models/trackers.rb") }
+
+      before do
+        File.write(fixture_model, "class Member < ApplicationRecord\n  devise :database_authenticatable\n  include Guarded\nend\n")
+        File.write(fixture_homonym, "module Trackers\n  extend ActiveSupport::Concern\n  included { devise :confirmable }\nend\n")
+        File.write(fixture_concern, <<~RUBY)
+          module Guarded
+            extend ActiveSupport::Concern
+            module Trackers
+              extend ActiveSupport::Concern
+              included { devise :timeoutable }
+            end
+            include Trackers
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f([ fixture_model, fixture_concern, fixture_homonym ]) }
+
+      # Ruby: Member.ancestors holds Guarded::Trackers, never the top-level Trackers.
+      it "lists the nested module's modules" do
+        expect(result[:devise_modules_per_model]["Member"]).to contain_exactly("database_authenticatable", "timeoutable")
+      end
+    end
+
     context "with a Devise module added by a concern's included block" do
       let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
       let(:fixture_concern) { File.join(Rails.root, "app/models/member_omniauthable.rb") }

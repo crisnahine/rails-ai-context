@@ -717,6 +717,18 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Payment-related models: Payment, CardPayment, BankTransfer.")
     end
 
+    it "names a payment model by a whole word of its name, never by letters inside another word" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Shop", gems: { notable_gems: [] },
+        models: { "Airplane" => {}, "FloorPlan" => {}, "Explanation" => {}, "Discharge" => {}, "Post" => {},
+                  "PaymentPlan" => {}, "Billing::Invoice" => {}, "Subscription" => {}, "Plan" => {} }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("Payment-related models: PaymentPlan, Billing::Invoice, Subscription, Plan.")
+    end
+
     context "summary" do
       it "includes frontend summary from architecture conventions" do
         allow(described_class).to receive(:cached_context).and_return({

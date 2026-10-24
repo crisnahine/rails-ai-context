@@ -48,6 +48,8 @@ module RailsAiContext
         OutputGuard.quarantine_stdout(across_exec: false) do
           Server.with_custom_tools(@custom_tools) do
             kwargs = build_kwargs
+            next help if @help_asked
+
             schema = tool_schema
             validate_kwargs!(kwargs, schema)
             next extract_output(refusal_response) if @refused.any?
@@ -248,6 +250,7 @@ module RailsAiContext
       def parse_cli_args(args)
         args = args.map { |arg| utf8(arg) }
         result = {}
+        refusal = nil
         i = 0
         properties = (tool_schema[:properties] || {})
 
@@ -318,7 +321,11 @@ module RailsAiContext
               # A value-taking flag with nothing after it would reach the tool
               # as the Boolean true, a type it never accepts. An unknown flag
               # still passes through, so the unknown-param message names it.
-              raise InvalidArgumentError, missing_value_message(key, prop) if prop[:type]
+              if prop[:type]
+                refusal ||= missing_value_message(key, prop)
+                i += 1
+                next
+              end
 
               result[key] = true
               i += 1
@@ -331,13 +338,22 @@ module RailsAiContext
             key = key.tr("-", "_").to_sym
             result[key] = coerce_value(value, properties[key] || {}, key)
             i += 1
+          elsif arg == "-j"
+            @json_mode = true
+            i += 1
+          elsif arg == "-h"
+            @help_asked = true
+            i += 1
           else
             # Every parameter takes a flag, so a bare word is a mistype of
             # one. Dropping it answered a different question than the one
             # asked, and said nothing about it.
-            raise InvalidArgumentError, stray_argument_message(arg)
+            refusal ||= stray_argument_message(arg)
+            i += 1
           end
         end
+        # Raised once every word is read, so a -j after the refused word still asks for JSON.
+        raise InvalidArgumentError, refusal if refusal
 
         result
       end
@@ -527,8 +543,7 @@ module RailsAiContext
         text = response.content.first&.dig(:text) || ""
         @error = @missing_required || @refused.any? || (response.respond_to?(:error?) && response.error?)
         if json_mode
-          require "json"
-          JSON.pretty_generate(tool: tool_class.tool_name, output: text, error: @error)
+          EntryBoot.envelope(tool_class.tool_name, text, @error)
         else
           text
         end

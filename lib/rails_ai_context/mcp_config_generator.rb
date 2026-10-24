@@ -411,15 +411,6 @@ module RailsAiContext
         [ *data["command"], *data["args"] ].grep(String)
       end
 
-      # One sub-table of a section, `[mcp_servers.<name>.<key>]` or the
-      # section's own `<key>.<item> = ...`, as each item's string value.
-      def sub_table(lines, range, _name, key, found = statements(lines))
-        table = section_data(lines, range, found)[key]
-        return {} unless table.is_a?(Hash)
-
-        table.filter_map { |item, values| [ item, Array(values).grep(String).first ] if Array(values).grep(String).any? }.to_h
-      end
-
       def section_data(lines, range, found)
         header = found.find { |statement| statement.kind == :table && statement.first == range.begin && server_path?(statement.path) }
         return {} unless header
@@ -524,6 +515,23 @@ module RailsAiContext
 
       at = argv.index("rails-ai-context")
       !at.nil? && argv[at + 1] == "serve"
+    end
+
+    # The command lines the gem writes, and has written, ahead of an
+    # optional --app-path. An entry of the gem's spelled any other way - its
+    # server started through Docker - is the user's to keep.
+    WRITTEN_ARGV = [ %w[bundle exec rails-ai-context serve], %w[rails-ai-context serve], %w[bundle exec rails ai:serve] ].freeze
+
+    # The env vars the gem writes into an entry; any other is the user's.
+    WRITTEN_ENV = [ "BUNDLE_GEMFILE", SERVER_NAME_ENV ].freeze
+
+    # Whether a command line is one the gem writes, inside a Windows `cmd /c` or not.
+    def self.written_argv?(argv)
+      argv = unwrapped_argv(argv)
+      form = WRITTEN_ARGV.find { |written| argv.first(written.size) == written } or return false
+
+      rest = argv.drop(form.size)
+      rest.empty? || (rest.size == 2 && rest[0] == "--app-path") || (rest.one? && rest[0].start_with?("--app-path="))
     end
 
     # An HTTP entry under one of the gem's names: only the gem's mounted
@@ -637,6 +645,11 @@ module RailsAiContext
     # this folder, when that app is gone or now goes by another name. Every
     # other entry stays as somebody's own: a second one named by hand, one
     # naming an app outside the folder, or one only another machine has.
+    # The stale names split into the ones held, since the gem did not write them, and the ones dropped.
+    def stale_split(ours, &handmade)
+      stale_names(ours.to_h).partition(&handmade)
+    end
+
     def stale_names(existing)
       return [] unless workspace_write?
 
@@ -672,7 +685,7 @@ module RailsAiContext
       env = server.env(config[:folder_variable])
       opencode = config[:format] == :opencode_json
       entry = opencode ? { "type" => "local", "command" => argv } : { "command" => argv.first, "args" => argv[1..] }
-      entry[opencode ? "environment" : "env"] = env unless env.empty?
+      entry[config.fetch(:env_key, "env")] = env unless env.empty?
       entry
     end
 
@@ -698,11 +711,16 @@ module RailsAiContext
         [ name, self.class.entry_app_root(argv, config[:folder_variable], @output_dir) ] if self.class.own_entry?(name, argv)
       end
       # An entry under one of this write's names that is not the gem's - the
-      # HTTP one SETUP.md describes - is kept in place of the gem's.
-      kept = entries.keys.select { |name| servers.key?(name) && !self.class.own_entry?(name, self.class.json_argv(servers[name])) }
-      note_kept(path, kept, kept.select { |name| self.class.http_entry?(name, servers[name]) })
-      entries = entries.except(*kept)
-      stale = stale_names(ours.to_h)
+      # HTTP one SETUP.md describes - or that starts the gem's server some way
+      # the gem does not write is kept in place of the gem's. The gem's own
+      # is merged into, so keys it never writes stay.
+      handmade = ->(name) { !self.class.written_argv?(self.class.json_argv(servers[name])) }
+      held, stale = stale_split(ours, &handmade)
+      kept = entries.keys.select { |name| servers.key?(name) && handmade.call(name) }
+      note_kept(path, kept + held, kept.select { |name| self.class.http_entry?(name, servers[name]) },
+                kept.select { |name| self.class.own_entry?(name, self.class.json_argv(servers[name])) } + held)
+      env_key = config.fetch(:env_key, "env")
+      entries = entries.except(*kept).to_h { |name, entry| [ name, merged_entry(servers[name], entry, env_key) ] }
       return :skipped if text && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
       # JSON.parse passes over comments, and the file written back would
       # have none.
@@ -710,7 +728,7 @@ module RailsAiContext
 
       stale.each { |name| servers.delete(name) }
       servers.merge!(entries)
-      RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n")
+      RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n", root: @output_dir)
       :written
     rescue NotUtf8Error => e
       # The entry added by hand would sit in a file JSON still cannot read.
@@ -722,6 +740,17 @@ module RailsAiContext
       raise ShapeError, "#{e.message}, so it is left as it is. Add #{JSON.generate(config[:root_key] => entries)} to it by hand"
     end
 
+    # The gem's entry over the one there: the keys and env vars the gem
+    # writes come from the new entry, every other stays as it was.
+    def merged_entry(existing, entry, env_key)
+      return entry unless existing.is_a?(Hash)
+
+      env = existing[env_key].is_a?(Hash) ? existing[env_key].except(*WRITTEN_ENV) : {}
+      env = env.merge(entry.fetch(env_key, {}))
+      merged = entry.merge(existing.except(*entry.keys, env_key))
+      env.empty? ? merged : merged.merge(env_key => env)
+    end
+
     # A file JSON cannot parse is never replaced: a fresh file would drop
     # everything somebody wrote there.
     def parse_json(text, config)
@@ -730,11 +759,13 @@ module RailsAiContext
       raise ShapeError, self.class.parse_problem(e, text)
     end
 
-    def note_kept(path, kept, http)
+    def note_kept(path, kept, http, own)
       return if kept.empty?
 
-      other = kept - http
+      own -= http
+      other = kept - http - own
       said = [ (http.any? && "#{http.join(', ')}, which #{http.one? ? 'reaches' : 'reach'} the gem's HTTP endpoint"),
+               (own.any? && "#{own.join(', ')}, which #{own.one? ? 'starts' : 'start'} the gem's server with a command of its own"),
                (other.any? && "#{other.join(', ')}, which #{other.one? ? 'runs' : 'run'} something other than the gem's server") ]
       @notes[path] = "kept #{said.select { |part| part }.join(', and ')}, in place of the gem's"
     end
@@ -750,17 +781,18 @@ module RailsAiContext
       # A file kept with Windows line endings keeps them, and one that is not
       # UTF-8 gets the new sections as bytes beside its own.
       newline = content.include?("\r\n") ? "\r\n" : "\n"
-      by_name = @servers.to_h do |server|
-        section = toml_section(server).gsub("\n", newline)
-        [ server.name, content.encoding == Encoding::BINARY ? section.b : section ]
-      end
+      in_file = ->(section) { section.gsub("\n", newline).then { |text| content.encoding == Encoding::BINARY ? text.b : text } }
+      by_name = @servers.to_h { |server| [ server.name, server ] }
 
       found = Toml.statements(lines)
       own_name = ->(name) { name.match?(OWN_SERVER_NAME) }
       named = Toml.sections(lines, found, &own_name)
-      ours = Toml.own_sections(lines, found).map do |range, name|
+      own_sections = Toml.own_sections(lines, found)
+      ours = own_sections.map do |range, name|
         [ name, self.class.entry_app_root(Toml.argv(lines, range, found), nil, @output_dir) ]
       end
+      handmade = own_sections.reject { |range, _| self.class.written_argv?(Toml.argv(lines, range, found)) }.map(&:last)
+      held, stale = stale_split(ours) { |name| handmade.include?(name) }
       # A server of this write's spelled any way but one table - an inline
       # table, dotted keys - is never written beside: a table next to it
       # declares the server twice, which Codex refuses to read.
@@ -769,13 +801,18 @@ module RailsAiContext
       # A section or entry under one of this write's names that is not the
       # gem's is kept in place of the gem's, which would be a second table of
       # one name, and that does not parse.
-      kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first) + unwritable.map(&:name)
+      # So is one of the gem's that starts its server some way the gem does
+      # not write; the gem's own is merged into, so keys it never writes stay.
+      own_command = named.filter_map do |range, name|
+        name if by_name.key?(name) && ours.map(&:first).include?(name) && !self.class.written_argv?(Toml.argv(lines, range, found))
+      end
+      kept = named.map(&:last).select { |name| by_name.key?(name) } - ours.map(&:first) + unwritable.map(&:name) + own_command + held
       kept = kept.uniq
-      note_kept(path, kept, kept.select { |name| toml_http?(found, name) })
+      note_kept(path, kept, kept.select { |name| toml_http?(found, name) }, own_command + held)
       # Written all the same, as it always was: the bytes are the user's.
       @notes[path] = [ @notes[path], TOML_NOT_UTF8 ].compact.join("; ") if content.encoding == Encoding::BINARY
       by_name = by_name.except(*kept)
-      drop = stale_names(ours.to_h)
+      drop = stale - kept
       starts = named.select { |_, name| by_name.key?(name) || drop.include?(name) }
         .to_h { |range, name| [ range.begin, [ range, name ] ] }
 
@@ -789,7 +826,7 @@ module RailsAiContext
           out << lines[index]
           index += 1
         elsif by_name.key?(name) && !written.key?(name)
-          out << by_name.fetch(name)
+          out << in_file.call(toml_section(by_name.fetch(name), toml_kept(lines, range, found, name)))
           written[name] = true
           index = range.end
         else
@@ -805,7 +842,7 @@ module RailsAiContext
       new_content = out.join.force_encoding(content.encoding)
       # A section dropped from the end leaves no blank line behind it.
       new_content = new_content.sub(/(?:\r?\n)+\z/, newline) if dropped && !new_content.empty?
-      by_name.each do |name, section|
+      by_name.each do |name, server|
         next if written.key?(name)
 
         separator = if new_content.empty? then ""
@@ -813,12 +850,12 @@ module RailsAiContext
         elsif new_content.end_with?(newline) then newline
         else newline * 2
         end
-        new_content = new_content + separator + section
+        new_content = new_content + separator + in_file.call(toml_section(server))
       end
 
       return :skipped if File.exist?(path) && new_content == content
 
-      RailsAiContext::SafeFile.atomic_write(path, bom + new_content)
+      RailsAiContext::SafeFile.atomic_write(path, bom + new_content, root: @output_dir)
       :written
     end
 
@@ -856,23 +893,75 @@ module RailsAiContext
                         "#{tables} by hand, or delete #{it}, and the next run keeps #{it} current"
     end
 
-    def toml_section(server)
+    # The gem's table for a server, holding what `kept` (toml_kept) carries
+    # over from the table it replaces.
+    def toml_section(server, kept = { pairs: [], env_lines: [], env: {}, tables: [] })
       argv = server.argv
       lines = [ "[mcp_servers.#{server.name}]" ]
       lines << "command = #{toml_string(argv.first)}"
       lines << "args = [#{argv[1..].map { |arg| toml_string(arg) }.join(', ')}]"
+      lines.concat(kept[:pairs])
 
       # Codex CLI env_clear()s the process environment. Capture the current
       # Ruby environment so the MCP server can find gems regardless of version
       # manager (rbenv, rvm, asdf, mise, or system Ruby).
       env = ruby_env_snapshot.merge(server.env)
-      unless env.empty?
+      env_lines = env.map { |key, value| "#{toml_key(key)} = #{toml_string(value)}" } + kept[:env_lines] +
+                  kept[:env].map { |key, value| "#{toml_key(key)} = #{toml_string(value)}" }
+      unless env_lines.empty?
         lines << ""
         lines << "[mcp_servers.#{server.name}.env]"
-        env.each { |key, value| lines << "#{key} = #{toml_string(value)}" }
+        lines.concat(env_lines)
       end
+      kept[:tables].each { |table| lines << "" << table }
 
       lines.join("\n") + "\n"
+    end
+
+    # What the user added to the gem's table, as written: every key and env var the gem does not write, and sub-tables.
+    def toml_kept(lines, range, found, name)
+      own = found.select { |statement| range.cover?(statement.first) }
+      headers = own.reject { |statement| statement.kind == :pair }
+      env_path = [ Toml::SERVERS, name, "env" ]
+      text = ->(from, to) { lines[from..to].join.gsub("\r\n", "\n").chomp }
+      region = lambda do |header, at|
+        finish = (headers[at + 1]&.first || range.end) - 1
+        finish -= 1 while finish > header.first && Toml.trivia?(lines[finish])
+        [ header.first, finish ]
+      end
+      # Each line of a table's body but those of the keys the gem writes and
+      # the blank ones between statements.
+      body = lambda do |from, to, written|
+        (from..to).filter_map do |index|
+          statement = own.find { |pair| pair.kind == :pair && (pair.first..pair.last).cover?(index) }
+          next if statement ? written.call(statement.path) : lines[index].strip.empty?
+          next if statement && index != statement.first
+
+          statement ? text.call(statement.first, statement.last) : text.call(index, index)
+        end
+      end
+
+      main = headers.first
+      main_last = headers[1] ? headers[1].first - 1 : range.end - 1
+      pairs = body.call(main.first + 1, main_last, ->(path) { path.nil? || %w[command args env].include?(path[2]) })
+      gem_env = RUBY_ENV_KEYS + WRITTEN_ENV
+      env_lines = []
+      in_table = []
+      tables = []
+      headers.each_with_index do |header, at|
+        next if header.equal?(main) || header.path.nil?
+
+        from, to = region.call(header, at)
+        if header.path == env_path
+          env_lines.concat(body.call(from + 1, to, ->(path) { path&.size == 4 && gem_env.include?(path[3]) }))
+          in_table.concat(own.select { |pair| pair.kind == :pair && pair.path&.size == 4 && (from..to).cover?(pair.first) }.map { |pair| pair.path[3] })
+        else
+          tables << text.call(from, to)
+        end
+      end
+      env = Toml.entry_data(own.select { |statement| statement.path&.first(2) == [ Toml::SERVERS, name ] })["env"]
+      env = env.is_a?(Hash) ? env.select { |_, value| value.is_a?(String) } : {}
+      { pairs: pairs, env_lines: env_lines, env: env.except(*gem_env, *in_table), tables: tables }
     end
 
     # A TOML basic string. JSON's string escapes are a subset of TOML's, where
@@ -881,6 +970,10 @@ module RailsAiContext
     # read as the UTF-8 they almost always are.
     def toml_string(value)
       JSON.generate(value.to_s.dup.force_encoding(Encoding::UTF_8).scrub)
+    end
+
+    def toml_key(key)
+      key.to_s.match?(/\A#{Toml::BARE_KEY}\z/) ? key.to_s : toml_string(key)
     end
 
     # Snapshot environment variables needed for Ruby/Bundler to work.
@@ -963,8 +1056,7 @@ module RailsAiContext
       servers = data.is_a?(Hash) ? data[config[:root_key]] : nil
       return [] unless servers.is_a?(Hash)
 
-      # OpenCode calls its environment `environment`, as json_entry writes it.
-      env_key = config[:format] == :opencode_json ? "environment" : "env"
+      env_key = config.fetch(:env_key, "env")
       servers.filter_map do |name, entry|
         next unless name.match?(OWN_SERVER_NAME)
 
@@ -1008,7 +1100,7 @@ module RailsAiContext
         next unless File.exist?(path)
 
         begin
-          left = config[:format] == :codex_toml ? remove_toml_entry(path) : remove_json_entry(path, config, http_entries: http_entries)
+          left = config[:format] == :codex_toml ? remove_toml_entry(path, output_dir) : remove_json_entry(path, config, output_dir, http_entries: http_entries)
           if left == true then cleaned << path
           elsif left then warn.call(path, left)
           end
@@ -1024,7 +1116,7 @@ module RailsAiContext
     # @return [true, String, nil] true when the entries went, the reason they
     #   stay when the file cannot be written back faithfully, nil when it
     #   holds none of the gem's
-    def self.remove_json_entry(path, config, http_entries: false)
+    def self.remove_json_entry(path, config, root, http_entries: false)
       root_key = config[:root_key]
       text, bom, problem = json_text(path)
       # A file that cannot be read says so only when it names the gem.
@@ -1049,16 +1141,17 @@ module RailsAiContext
       own.each { |name| servers.delete(name) }
       data.delete(root_key) if servers.empty?
 
-      if data.empty?
-        File.delete(path)
+      # A link stays, and the file it names is what loses the entries.
+      if data.empty? && !File.symlink?(path)
+        RailsAiContext::SafeFile.delete(path, root: root)
       else
-        RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n")
+        RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n", root: root)
       end
       true
     end
 
     # @return [true, String, nil] as remove_json_entry
-    def self.remove_toml_entry(path)
+    def self.remove_toml_entry(path, root)
       content, bom = split_bom(RailsAiContext::SafeFile.read_text(path))
       lines = content.lines
       found = Toml.statements(lines)
@@ -1071,17 +1164,19 @@ module RailsAiContext
       sections = Toml.own_sections(lines, found)
       return nil if sections.empty?
 
-      # A comment above a section stays: it may be a key of the table before,
-      # set aside by hand.
-      sections.reverse_each { |range, _| lines.slice!(range) }
-      # Clean up extra blank lines left behind, in the file's own line ending
+      # Dropped as merge_toml drops a section, so the user's spacing and a comment above stay.
       newline = content.include?("\r\n") ? "\r\n" : "\n"
-      new_content = lines.join.force_encoding(content.encoding).gsub(/(?:\r?\n){3,}/, newline * 2).strip
+      sections.reverse_each do |range, _|
+        last = range.end
+        last += 1 if (range.begin.zero? || lines[range.begin - 1].strip.empty?) && lines[last]&.strip&.empty?
+        lines[range.begin...last] = []
+      end
+      new_content = lines.join.force_encoding(content.encoding).sub(/(?:\r?\n)+\z/, "")
 
-      if new_content.empty?
-        File.delete(path)
+      if new_content.empty? && !File.symlink?(path)
+        RailsAiContext::SafeFile.delete(path, root: root)
       else
-        RailsAiContext::SafeFile.atomic_write(path, bom + new_content + newline)
+        RailsAiContext::SafeFile.atomic_write(path, bom + new_content + newline, root: root)
       end
       true
     end

@@ -307,7 +307,27 @@ module RailsAiContext
       end
 
       private_class_method def self.scan_env_vars(root)
-        Introspectors::EnvReferences.scan(root)
+        source_scan(root)[:env_vars]
+      end
+
+      # The ENV reads and HTTP client calls in the app's source.
+      private_class_method def self.source_scan(root)
+        return read_sources(root) unless root == rails_app.root.to_s
+
+        kept_with_context(:source_scan) { read_sources(root) }
+      end
+
+      # One read of each file for both scans.
+      private_class_method def self.read_sources(root)
+        real_root = File.realpath(root).to_s
+        http = []
+        env_vars = Introspectors::EnvReferences.scan(root) do |path, source|
+          relative = path.delete_prefix("#{real_root}/")
+          next unless relative.end_with?(".rb") && relative.start_with?("app/", "config/", "lib/")
+
+          http.concat(http_clients_in(relative, source))
+        end
+        { env_vars: env_vars, http_services: http.uniq { |s| "#{s[:name]}:#{s[:file]}" } }
       end
 
       KAMAL_DEPLOY = "config/deploy.yml"
@@ -394,7 +414,7 @@ module RailsAiContext
         return [] unless RailsAiContext::GemLock.for(root).present?("config")
 
         files = [ "config/settings.yml" ] +
-          %w[settings environments].flat_map { |dir| Dir.glob(File.join(root, "config", dir, "*.yml")).sort.map { |path| path.delete_prefix("#{root}/") } }
+          %w[settings environments].flat_map { |dir| Dir.glob(File.join("config", dir, "*.yml"), base: root.to_s).sort }
         files.filter_map do |file|
           data = RailsAiContext::ConfigYaml.read(root, file, label: "config gem settings")
           next unless data.is_a?(Hash) && data.any?
@@ -434,11 +454,9 @@ module RailsAiContext
       ENV_EXAMPLE_LINE = /\A(?:export\s+)?(?<name>[A-Z_][A-Z0-9_]*)\s*=\s*(?<value>"(?:\\.|[^"\\])*"\s*+|'[^']*'\s*+|(?>(?:[^\s#]+|\s+(?!#)|(?<=\S)#)*))(?:\s*#(?<comment>.*))?\z/
 
       private_class_method def self.scan_env_example(root)
-        # Only the example files - NEVER .env or .env.local
-        candidates = %w[.env.example .env.sample .env.template]
         vars = []
 
-        candidates.each do |name|
+        RailsAiContext::Introspectors::EnvReferences::EXAMPLE_FILES.each do |name|
           path = File.join(root, name)
           source = safe_read(path)
           next unless source
@@ -461,9 +479,8 @@ module RailsAiContext
 
       private_class_method def self.scan_dockerfile(root)
         vars = []
-        candidates = %w[Dockerfile Dockerfile.production Dockerfile.dev]
 
-        candidates.each do |name|
+        RailsAiContext::Introspectors::EnvReferences::DOCKERFILES.each do |name|
           path = File.join(root, name)
           source = safe_read(path)
           next unless source
@@ -582,35 +599,29 @@ module RailsAiContext
       # Prefilter: the AST decides, on the files that name a client at all.
       HTTP_CLIENT_NAME = /(?:#{Regexp.union(Introspectors::Listeners::HttpClientCallListener::CLIENTS).source})\.|URI\.open/
       BARE_HOST = /\A[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\z/i
+      # The labels that sit under a country code in its common two-label public suffixes (co.uk, com.au, or.jp, gob.mx).
+      # shortcut: a fixed list, so a city or prefecture suffix (kawasaki.jp) and a deeper one (k12.ma.us) are still
+      # named by their own label; read the Public Suffix List if the gem ever bundles it.
+      COUNTRY_SECOND_LEVEL = %w[ac co com edu go gob gouv gov govt ltd mil ne net nhs nic nom or org plc sch].to_set.freeze
 
       private_class_method def self.detect_http_clients(root)
-        services = []
-        real_root = File.realpath(root).to_s
+        source_scan(root)[:http_services]
+      end
 
-        %w[app config lib].each do |dir|
-          scan_dir = File.join(root, dir)
-          next unless Dir.exist?(scan_dir)
+      private_class_method def self.http_clients_in(relative, source)
+        return [] unless source.match?(HTTP_CLIENT_NAME)
 
-          safe_glob(scan_dir, "**/*.rb", real_root).each do |file|
-            source = safe_read(file)
-            next unless source&.match?(HTTP_CLIENT_NAME)
-
-            relative = file.sub("#{real_root}/", "")
-            calls = Introspectors::SourceIntrospector.walk_source(source, { http: Introspectors::Listeners::HttpClientCallListener })[:http]
-            calls.each do |call|
-              name = if call[:url]
-                extract_service_name_from_url(call[:url])
-              else
-                call[:host].match?(BARE_HOST) && service_name_from_host(call[:host])
-              end
-              services << { name: name, detection: call[:client], file: relative } if name
-            end
+        calls = Introspectors::SourceIntrospector.walk_source(source, { http: Introspectors::Listeners::HttpClientCallListener })[:http]
+        calls.filter_map do |call|
+          name = if call[:url]
+            extract_service_name_from_url(call[:url])
+          else
+            call[:host].match?(BARE_HOST) && service_name_from_host(call[:host])
           end
+          { name: name, detection: call[:client], file: relative } if name
         end
-
-        services.uniq { |s| "#{s[:name]}:#{s[:file]}" }
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "detect_http_clients")
+        RailsAiContext.debug_fail(e, [], label: "http_clients_in")
       end
 
       private_class_method def self.extract_service_name_from_url(url)
@@ -630,10 +641,11 @@ module RailsAiContext
           return ip.loopback? || ip.private? || ip.link_local? || ip.to_i.zero? ? nil : host
         end
 
-        parts = host.split(".")
+        parts = host.downcase.split(".")
         return nil if parts.size < 2
 
-        parts[-2]&.capitalize
+        parts.pop if parts.size > 2 && parts[-1].size == 2 && COUNTRY_SECOND_LEVEL.include?(parts[-2])
+        parts[-2].capitalize
       end
 
       # An encrypted credentials file the tool could not open is a different
@@ -643,7 +655,7 @@ module RailsAiContext
         # Rails 6+ apps commonly carry only per-environment credentials, with
         # no top-level file at all.
         File.exist?(File.join(root, "config", "credentials.yml.enc")) ||
-          Dir.glob(File.join(root, "config", "credentials", "*.yml.enc")).any?
+          Dir.glob("config/credentials/*.yml.enc", base: root.to_s).any?
       rescue StandardError
         false
       end
@@ -696,12 +708,7 @@ module RailsAiContext
       private_class_method def self.parse_credentials_structure
         # Look for credentials template or example
         root = rails_app.root.to_s
-        candidates = %w[
-          config/credentials.yml.example
-          config/credentials.yml.sample
-        ]
-
-        candidates.each do |file|
+        RailsAiContext::Introspectors::EnvReferences::CREDENTIALS_EXAMPLES.each do |file|
           path = File.join(root, file)
           source = safe_read(path)
           next unless source

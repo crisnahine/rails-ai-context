@@ -407,12 +407,15 @@ module RailsAiContext
 
     # The key Rails routes a controller by: its path, minus the controllers
     # root and the _controller suffix. Packs and in-repo engines put that root
-    # somewhere other than the start of the path.
+    # somewhere other than the start of the path. A controller declared in a file
+    # named for another routes by its class name, as Rails' controller_path does.
     def controller_route_key(ctx, name)
-      file = controller_file(ctx, name)
-      return name.to_s.underscore.delete_suffix("_controller") unless file
+      by_name = name.to_s.underscore.delete_suffix("_controller")
+      file = controller_file(ctx, name) or return by_name
 
-      file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/(?:_controller)?\.rb\z/, "")
+      key = file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/(?:_controller)?\.rb\z/, "")
+      own = name.to_s.split("::").last.to_s.delete_suffix("Controller")
+      own.empty? || key.split("/").last.to_s.delete("_").casecmp?(own) ? key : by_name
     end
 
     # Case-insensitive fuzzy key lookup for hashes keyed by class or table

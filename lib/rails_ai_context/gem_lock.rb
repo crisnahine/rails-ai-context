@@ -101,6 +101,11 @@ module RailsAiContext
         @versions[name.to_s]
       end
 
+      # An app can bundle railties without the `rails` meta-gem.
+      def rails_version
+        version("rails") || version("railties")
+      end
+
       # Named in the Gemfile, as opposed to resolved as some other gem's
       # dependency. Every Rails app resolves minitest through activesupport,
       # and reporting that as the app's test framework sent agents to a

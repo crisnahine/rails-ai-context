@@ -9,7 +9,7 @@ module RailsAiContext
     # since a gem class or module there could define the action.
     module ActionPresence
       BASES = %w[ActionController::Base ActionController::API ActionController::Metal].freeze
-      # How deep included modules are followed into the modules they include.
+      # shortcut: included modules are followed this many levels into the modules they include and no deeper, raise it when an app nests deeper.
       MODULE_DEPTH = 3
 
       # `defs` are the def nodes of the controller and its ancestors, nearest
@@ -73,7 +73,7 @@ module RailsAiContext
 
       def template?(root, chain, action)
         roots = [ root.to_s, *PathResolver.enclosing_engine_roots(root.to_s) ]
-        chain.prefixes.any? { |prefix| roots.any? { |dir| Dir.glob(File.join(dir, "app", "views", prefix, "#{action}.*")).any? } }
+        chain.prefixes.any? { |prefix| roots.any? { |dir| Dir.glob(File.join("app", "views", prefix, "#{action}.*"), base: dir).any? } }
       end
 
       def read_class(source, name, defs, names)

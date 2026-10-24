@@ -6,12 +6,12 @@ require "digest"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
-  def replay(migrations, pk_type: "bigint")
+  def replay(migrations, pk_type: "bigint", adapter: nil)
     Dir.mktmpdir do |dir|
       migrations.each_with_index do |content, i|
         File.write(File.join(dir, "202401010000#{i}_step#{i}.rb"), content)
       end
-      return described_class.tables(dir, pk_type: pk_type)
+      return described_class.tables(dir, pk_type: pk_type, adapter: adapter)
     end
   end
 
@@ -47,7 +47,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
   end
 
   it "types the implicit key and references per adapter" do
-    tables = replay([ <<~RUBY ], pk_type: "integer")
+    tables = replay([ <<~RUBY ], pk_type: "integer", adapter: "sqlite3")
       class CreateComments < ActiveRecord::Migration[7.1]
         def change
           create_table :comments do |t|
@@ -134,6 +134,8 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             t.string :role, default: "member"
             t.string :plan, default: "free"
             t.string :tier, default: "basic"
+            t.integer :age, default: nil
+            t.timestamps default: nil
           end
         end
       end
@@ -150,8 +152,8 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
 
     cols = tables["users"][:columns].to_h { |c| [ c[:name], c ] }
     expect(cols["role"][:default]).to eq("admin")
-    expect(cols["plan"]).to have_key(:default)
-    expect(cols["plan"][:default]).to be_nil
+    # A nil default is none: the dump writes no default: for it.
+    expect(cols.values_at("plan", "age", "created_at").map { |c| c.key?(:default) }).to eq([ false ] * 3)
     expect(cols["tier"][:default]).to eq("basic")
   end
 
@@ -303,7 +305,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     it "keeps a proc default on a plain column" do
       expect(column("notes", "seen_at")[:default]).to eq('-> { "now()" }')
       expect(column("notes", "checked_at")).not_to have_key(:default)
-      expect(column("notes", "read_at")[:default]).to eq('lambda { "now()" }')
+      expect(column("notes", "read_at")[:default]).to eq('-> { "now()" }')
     end
 
     it "adds no index from change_table's timestamps, which run add_timestamps" do
@@ -432,6 +434,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             end
             create_table :user_copies, as: "SELECT id, email FROM users"
             execute "CREATE TABLE raw_things (id integer primary key, name varchar)"
+            execute "CREATE UNLOGGED TABLE cache_entries (id bigserial primary key, key varchar NOT NULL)"
           end
         end
       RUBY
@@ -458,8 +461,35 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables["user_copies"][:columns].map { |c| c[:name] }).to eq(%w[id email])
     end
 
+    # schema.rb's own reader also sees a string-named create_table; it must skip what the migration skips.
+    it "leaves out a string-named temporary table and an existing table's if_not_exists block" do
+      skipped = replay([ <<~RUBY ])
+        class Scratch < ActiveRecord::Migration[8.1]
+          def change
+            create_table "posts"
+            create_table "posts", if_not_exists: true do |t|
+              t.string :never_added
+            end
+            create_table "scratch", temporary: true do |t|
+              t.string :x
+            end
+            create_table "tags", if_not_exists: true do |t|
+              t.string :name
+            end
+          end
+        end
+      RUBY
+
+      expect(skipped.keys).to eq(%w[posts tags])
+      expect(skipped.transform_values { |t| t[:columns].map { |c| c[:name] } }).to eq("posts" => %w[id], "tags" => %w[id name])
+    end
+
     it "reads a table an execute creates" do
       expect(tables["raw_things"][:columns].map { |c| c[:name] }).to eq(%w[id name])
+    end
+
+    it "reads an unlogged table an execute creates" do
+      expect(tables["cache_entries"][:columns].map { |c| c[:name] }).to eq(%w[id key])
     end
 
     it "survives SQL it cannot read" do
@@ -473,12 +503,13 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
         end
       RUBY
 
-      expect(odd["copies"][:columns]).to eq([])
-      expect(odd["empty_copies"][:columns]).to eq([])
+      expect(odd["copies"][:columns]).to eq([ { name: "lower", type: nil } ])
+      expect(odd).not_to have_key("empty_copies")
     end
 
+    # V5_0 keys the table with integer, which PostgreSQL's rules back with a sequence: the dump's id: :serial.
     it "gives a Migration[5.0] table integer keys" do
-      expect(tables["legacies"][:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id integer], %w[user_id integer] ])
+      expect(tables["legacies"][:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id serial], %w[user_id integer] ])
     end
   end
 
@@ -787,6 +818,21 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables.keys).to eq([ "oauth_applications" ])
     end
 
+    # "Shop_Items".underscore is shop_items, the file's name.
+    it "matches a class whose name keeps an underscore to its file" do
+      tables = replay_file("db/migrate/tables/shop_items.rb", <<~RUBY)
+        class Tables::Shop_Items < Tables::Base
+          def self.table(migration)
+            create_table migration do |t|
+              t.string :name
+            end
+          end
+        end
+      RUBY
+
+      expect(tables.keys).to eq([ "shop_items" ])
+    end
+
     it "invents nothing when the class name does not match the file" do
       tables = replay_file("db/migrate/20240101_create_foos.rb", <<~RUBY)
         class CreateFoos < ActiveRecord::Migration[7.1]
@@ -1045,6 +1091,60 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(tables["posts"]).not_to have_key(:unread_calls)
     end
 
+    it "replays a table block whose parameter is not t" do
+      tables = replay([ <<~RUBY ])
+        class CreatePosts < ActiveRecord::Migration[7.1]
+          def change
+            create_table :posts do |table|
+              table.string :title
+              table.references :user
+              table.index :title
+              table.timestamps
+            end
+            change_table :posts do |tbl|
+              tbl.integer :views
+              tbl.rename :title, :headline
+            end
+            reversible do |dir|
+              dir.up { add_column :posts, :x, :string }
+            end
+          end
+        end
+      RUBY
+
+      expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id headline user_id created_at updated_at views x])
+      expect(tables["posts"][:indexes].map { |i| i[:columns] }).to contain_exactly(%w[headline], %w[user_id])
+    end
+
+    it "replays a table block that names its table _1 or it" do
+      tables = replay([ <<~RUBY ])
+        class CreatePosts < ActiveRecord::Migration[7.1]
+          def change
+            create_table :posts do
+              _1.string :title
+              _1.index :title
+            end
+            create_table :tags do
+              it.string :name
+              it.timestamps
+            end
+            change_table :posts do
+              it.integer :views
+              it.rename :title, :headline
+            end
+            change_table :tags do
+              _1.remove :name
+            end
+          end
+        end
+      RUBY
+
+      expect(tables.transform_values { |table| table[:columns].map { |c| c[:name] } }).to eq(
+        "posts" => %w[id headline views], "tags" => %w[id created_at updated_at]
+      )
+      expect(tables["posts"][:indexes].map { |i| i[:columns] }).to eq([ %w[headline] ])
+    end
+
     it "reads a call on another block's `t` as no table call" do
       tables = replay([ <<~RUBY ])
         class CreateTags < ActiveRecord::Migration[7.1]
@@ -1166,6 +1266,233 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(table[:indexes].map { |i| i[:name] }).to include("by_slug")
     end
   end
+  # Each expectation is what Rails' dumper writes after running the same migrations on SQLite.
+  describe "renames, drops and if_not_exists as Rails runs them" do
+    it "moves foreign keys with rename_table and rename_column" do
+      tables = replay([ <<~RUBY, <<~RUBY2 ])
+        class CreateThings < ActiveRecord::Migration[7.1]
+          def change
+            create_table :authors do |t|
+              t.string :name
+            end
+            create_table :posts do |t|
+              t.references :user, foreign_key: { to_table: :authors }
+              t.bigint :editor_id
+            end
+            add_foreign_key :posts, :authors, column: :editor_id
+          end
+        end
+      RUBY
+        class RenameThings < ActiveRecord::Migration[7.1]
+          def change
+            rename_table :authors, :writers
+            rename_column :posts, :user_id, :writer_id
+            rename_table :posts, :articles
+          end
+        end
+      RUBY2
+
+      keys = tables["articles"][:foreign_keys].map { |fk| fk.slice(:from_table, :to_table, :column, :primary_key) }
+      expect(keys).to contain_exactly(
+        { from_table: "articles", to_table: "writers", column: "writer_id", primary_key: "id" },
+        { from_table: "articles", to_table: "writers", column: "editor_id", primary_key: "id" }
+      )
+    end
+
+    # PostgreSQL's dump after the same migration; SQLite's rebuild keeps the old name.
+    it "renames the primary_key a foreign key points at" do
+      migration = <<~RUBY
+        create_table :authors, id: false do |t|
+          t.string :code, primary_key: true
+        end
+        create_table :posts do |t|
+          t.string :author_code
+        end
+        add_foreign_key :posts, :authors, column: :author_code, primary_key: :code
+        rename_column :authors, :code, :slug
+      RUBY
+
+      expect(replay([ migration ], adapter: "postgresql")["posts"][:foreign_keys].first).to include(to_table: "authors", column: "author_code", primary_key: "slug")
+      expect(replay([ migration ], adapter: "sqlite3")["posts"][:foreign_keys].first).to include(primary_key: "code")
+    end
+
+    # PostgreSQL keeps a key on the column, so each renamed column of a composite key follows.
+    it "renames a column of a composite foreign key on both of its tables" do
+      migration = <<~RUBY
+        create_table :orders, primary_key: [:shop_id, :id] do |t|
+          t.integer :shop_id
+          t.integer :id
+        end
+        create_table :items do |t|
+          t.integer :order_shop_id
+          t.integer :order_id
+        end
+        add_foreign_key :items, :orders, column: [:order_shop_id, :order_id], primary_key: [:shop_id, :id]
+        rename_column :items, :order_id, :order_ref
+        rename_column :orders, :shop_id, :store_id
+      RUBY
+
+      tables = replay([ migration ], adapter: "postgresql")
+      expect(tables["items"][:foreign_keys].first).to include(column: %w[order_shop_id order_ref], primary_key: %w[store_id id])
+      expect(tables["orders"][:primary_key]).to eq(%w[store_id id])
+    end
+
+    it "drops every table drop_table names, and drop_join_table's table" do
+      tables = replay([ <<~RUBY, <<~RUBY2 ])
+        class CreateThings < ActiveRecord::Migration[7.1]
+          def change
+            create_table :users
+            create_table :old_logs
+            create_table :old_events
+            create_join_table :users, :roles
+            create_join_table :users, :teams, table_name: :memberships
+          end
+        end
+      RUBY
+        class DropThings < ActiveRecord::Migration[7.1]
+          def change
+            drop_table :old_logs, :old_events
+            drop_join_table :users, :roles
+            drop_join_table :users, :teams, table_name: :memberships
+          end
+        end
+      RUBY2
+
+      expect(tables.keys).to eq(%w[users])
+    end
+
+    it "leaves an existing column and index as they are under if_not_exists" do
+      tables = replay([ <<~RUBY, <<~RUBY2 ])
+        class CreateUsers < ActiveRecord::Migration[8.0]
+          def change
+            create_table :users do |t|
+              t.string :email, null: false
+              t.string :name
+              t.index :email, unique: true
+            end
+          end
+        end
+      RUBY
+        class AddEmailAgain < ActiveRecord::Migration[8.0]
+          def change
+            add_index :users, :email, unique: true, if_not_exists: true
+            add_column :users, :email, :text, if_not_exists: true
+            add_column :users, :phone, :string, if_not_exists: true
+          end
+        end
+      RUBY2
+
+      users = tables["users"]
+      expect(users[:columns].map { |c| [ c[:name], c[:type], c[:null] ] })
+        .to eq([ [ "id", "bigint", false ], [ "email", "string", false ], [ "name", "string", nil ], [ "phone", "string", nil ] ])
+      expect(users[:indexes].map { |i| [ i[:name], i[:unique] ] }).to eq([ [ "index_users_on_email", true ] ])
+    end
+
+    # PostgreSQL and MySQL skip an existing key, check and reference column (schema_statements.rb, 7.1 to 8.1);
+    # SQLite's add_foreign_key and add_check_constraint rebuild the table and ignore the option.
+    it "skips a foreign key, check constraint and reference that exist under if_not_exists" do
+      migration = <<~RUBY
+        create_table :users
+        create_table :posts do |t|
+          t.integer :user_id
+          t.integer :score
+        end
+        add_foreign_key :posts, :users
+        add_check_constraint :posts, "score > 0"
+        add_foreign_key :posts, :users, if_not_exists: true
+        add_check_constraint :posts, "score > 0", if_not_exists: true
+        add_reference :posts, :user, foreign_key: true, if_not_exists: true
+      RUBY
+
+      posts = replay([ migration ], adapter: "postgresql")["posts"]
+      expect(posts[:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ %w[id bigint], %w[user_id integer], %w[score integer] ])
+      expect(posts[:indexes].map { |i| i[:name] }).to eq(%w[index_posts_on_user_id])
+      expect(posts[:foreign_keys].size).to eq(1)
+      expect(posts[:check_constraints].size).to eq(1)
+
+      sqlite = replay([ migration ], adapter: "sqlite3")["posts"]
+      expect([ sqlite[:foreign_keys].size, sqlite[:check_constraints].size ]).to eq([ 3, 2 ])
+    end
+
+    # Rails 7.0's add_foreign_key checks foreign_key_exists?(from, to); 7.1 and 8.0 also compare a given column.
+    it "skips a foreign key to a table that already has one under if_not_exists on Rails 7.0, and compares the column from 7.1" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      key_columns = lambda do |rails|
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+          File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+            create_table :users
+            create_table :posts do |t|
+              t.integer :user_id
+              t.integer :editor_id
+            end
+            add_foreign_key :posts, :users
+            add_foreign_key :posts, :users, column: :editor_id, if_not_exists: true
+          RUBY
+          described_class.tables(dir, pk_type: "bigint", adapter: "postgresql", root: dir)["posts"][:foreign_keys].map { |fk| fk[:column] }
+        end
+      end
+
+      expect(key_columns.("7.0.10")).to eq(%w[user_id])
+      expect(key_columns.("7.1.6")).to eq(%w[user_id editor_id])
+    end
+
+    # 8.1's add_foreign_key fills the default column before the check and compares it with
+    # primary_key; 7.1 to 8.0 compare only a column the call gives.
+    it "compares the default column and primary key of a foreign key under if_not_exists from Rails 8.1" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      keys = lambda do |rails|
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n") if rails
+          File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+            create_table :users
+            create_table :posts do |t|
+              t.integer :user_id
+              t.integer :editor_id
+            end
+            add_foreign_key :posts, :users, column: :editor_id
+            add_foreign_key :posts, :users, if_not_exists: true
+            create_table :comments do |t|
+              t.integer :user_id
+            end
+            add_foreign_key :comments, :users
+            add_reference :comments, :user, foreign_key: { primary_key: :uuid }, if_not_exists: true
+          RUBY
+          tables = described_class.tables(dir, pk_type: "bigint", adapter: "postgresql", root: dir)
+          %w[posts comments].map { |t| tables[t][:foreign_keys].map { |fk| [ fk[:column], fk[:primary_key] ] } }
+        end
+      end
+
+      expect(keys.("8.0.5")).to eq([ [ %w[editor_id id] ], [ %w[user_id id] ] ])
+      newest = [ [ %w[editor_id id], %w[user_id id] ], [ %w[user_id id], %w[user_id uuid] ] ]
+      expect(keys.("8.1.4")).to eq(newest)
+      expect(keys.(nil)).to eq(newest)
+    end
+
+    # Rails 7.1+ fills name ||= chk_rails_<hash of table and expression> and compares names only;
+    # chk_rails_bb777d5bd8 is the name Rails derives for posts "score > 1".
+    it "finds an existing check constraint by its given or derived name under if_not_exists" do
+      migration = <<~RUBY
+        create_table :posts do |t|
+          t.integer :score
+        end
+        add_check_constraint :posts, "score > 0", name: "positive"
+        add_check_constraint :posts, "score > 1"
+        add_check_constraint :posts, "score > 0", if_not_exists: true
+        add_check_constraint :posts, "score > 1", name: "chk_rails_e2f4e0d1aa", if_not_exists: true
+        add_check_constraint :posts, "score > 2", name: "chk_rails_bb777d5bd8", if_not_exists: true
+      RUBY
+
+      posts = replay([ migration ], adapter: "postgresql")["posts"]
+      expect(posts[:check_constraints]).to eq([
+        { name: "positive", expression: "score > 0" },
+        { expression: "score > 1" },
+        { expression: "score > 0" },
+        { name: "chk_rails_e2f4e0d1aa", expression: "score > 1" }
+      ])
+    end
+  end
+
   # The migration's own Rails version decides a reference's index
   # (migration/compatibility.rb, 8.1): V6_0 and earlier give a polymorphic
   # pair the default name, V4_2 and earlier add no index by default.
@@ -1640,8 +1967,9 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
   # A declared size reads as the dump writes it: an integer limit picks smallint or bigint on PostgreSQL
   # and MySQL, a string's 255 is MySQL's default, a datetime's 6 is the default, and MySQL sizes text by limit.
   describe "declared sizes" do
-    def sizes(adapter)
+    def sizes(adapter, rails: nil)
       Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n") if rails
         File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
           create_table :widgets do |t|
             t.integer :tiny, limit: 1
@@ -1656,21 +1984,27 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
             t.decimal :price, precision: 10, scale: 2
             t.text :body, limit: 16777215
             t.binary :blob, limit: 1024
+            t.float :ratio
+            t.float :single, limit: 24
+            t.float :double, limit: 53
           end
           add_column :widgets, :later, :integer, limit: 8
           change_column :widgets, :normal, :integer, limit: 8
         RUBY
-        described_class.tables(dir, pk_type: "bigint", adapter: adapter)["widgets"][:columns]
+        described_class.tables(dir, pk_type: "bigint", adapter: adapter, root: dir)["widgets"][:columns]
           .drop(1).to_h { |c| [ c[:name], [ c[:type], c.slice(:limit, :precision, :scale, :size) ] ] }
       end
     end
 
+    # A real keeps limit 24 only from Rails 7.2.2, so the dump is read as an 8.1 app's.
     it "matches what the PostgreSQL dump writes" do
-      expect(sizes("postgresql")).to eq(
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      expect(sizes("postgresql", rails: "8.1.0")).to eq(
         "tiny" => [ "integer", { limit: 2 } ], "small" => [ "integer", { limit: 2 } ], "normal" => [ "bigint", {} ],
         "big" => [ "bigint", {} ], "code" => [ "string", { limit: 2 } ], "name" => [ "string", { limit: 255 } ],
         "seen_at" => [ "datetime", {} ], "at3" => [ "datetime", { precision: 3 } ], "t2" => [ "time", { precision: 2 } ],
         "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", {} ], "blob" => [ "binary", {} ],
+        "ratio" => [ "float", {} ], "single" => [ "float", { limit: 24 } ], "double" => [ "float", {} ],
         "later" => [ "bigint", {} ]
       )
     end
@@ -1681,12 +2015,894 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
         "big" => [ "bigint", {} ], "code" => [ "string", { limit: 2 } ], "name" => [ "string", {} ],
         "seen_at" => [ "datetime", {} ], "at3" => [ "datetime", { precision: 3 } ], "t2" => [ "time", { precision: 2 } ],
         "price" => [ "decimal", { precision: 10, scale: 2 } ], "body" => [ "text", { size: "medium" } ],
-        "blob" => [ "binary", { limit: 1024 } ], "later" => [ "bigint", {} ]
+        "blob" => [ "binary", { limit: 1024 } ], "ratio" => [ "float", {} ], "single" => [ "float", {} ],
+        "double" => [ "float", { limit: 53 } ], "later" => [ "bigint", {} ]
       )
     end
 
     it "keeps an integer's declared limit on SQLite" do
       expect(sizes("sqlite3").values_at("tiny", "big", "later")).to eq([ [ "integer", { limit: 1 } ], [ "integer", { limit: 8 } ], [ "integer", { limit: 8 } ] ])
+    end
+
+    # Rails reads a real as limit 24 from 7.2.2; before it a real dumps as the bare float, on an adapter with no family too.
+    it "gives a PostgreSQL real no limit before Rails 7.2.2" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      expect(sizes("postgresql", rails: "7.2.1").values_at("single", "double")).to eq([ [ "float", {} ], [ "float", {} ] ])
+      expect(sizes("postgresql", rails: "7.2.2").fetch("single")).to eq([ "float", { limit: 24 } ])
+      expect(sizes("sqlserver", rails: "7.2.1").fetch("single")).to eq([ "float", {} ])
+    end
+
+    it "keeps a float's declared limit on SQLite" do
+      expect(sizes("sqlite3").values_at("ratio", "single", "double")).to eq([ [ "float", {} ], [ "float", { limit: 24 } ], [ "float", { limit: 53 } ] ])
+    end
+  end
+
+  # Rails passes a type name its adapter does not list to the server as written, and the dump names
+  # the column the way the adapter reads it back. Expected values are each server's live dump.
+  describe "native type names" do
+    def native(adapter, types, sql: nil)
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.1.0)\n\nDEPENDENCIES\n  rails\n")
+        columns = types.each_with_index.map { |type, i| "    t.column :c#{i}, #{type.inspect}" }.join("\n")
+        File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+          create_table :widgets do |t|
+          #{columns}
+          end
+          add_column :widgets, :added, #{types.first.inspect}
+          #{"execute #{sql.inspect}" if sql}
+        RUBY
+        described_class.tables(dir, pk_type: "bigint", adapter: adapter, root: dir).transform_values do |table|
+          table[:columns].reject { |c| c[:primary_key] }.map { |c| [ c[:type], c.slice(:limit, :precision, :scale, :size) ] }
+        end
+      end
+    end
+
+    it "reads PostgreSQL's spellings the way its type map does" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      types = [ "real", "float4", "float(10)", "float8", "double precision", "float(30)", "int4", "int8", "int2", "smallint",
+                "varchar", "character varying", "varchar(40)", "bool", "bytea", "timestamptz", "timestamp" ]
+      expect(native("postgresql", types)["widgets"]).to eq(
+        [ [ "float", { limit: 24 } ] ] * 3 + [ [ "float", {} ] ] * 3 +
+        [ [ "integer", {} ], [ "bigint", {} ], [ "integer", { limit: 2 } ], [ "integer", { limit: 2 } ],
+          [ "string", {} ], [ "string", {} ], [ "string", { limit: 40 } ], [ "boolean", {} ], [ "binary", {} ], [ "timestamptz", {} ],
+          [ "datetime", {} ], [ "float", { limit: 24 } ] ]
+      )
+    end
+
+    it "reads MySQL's spellings the way its type map does, in a table an execute creates too" do
+      types = [ "double", "double precision", "real", "float8", "float(30)", "float", "float4", "float(10)", "int4", "int8", "int2",
+                "mediumint", "tinyint", "tinyint(1)", "bool", "character varying(40)" ]
+      tables = native("trilogy", types, sql: "CREATE TABLE gauges (d double, r real, f float(30), s float)")
+      expect(tables["widgets"]).to eq(
+        [ [ "float", { limit: 53 } ] ] * 5 + [ [ "float", {} ] ] * 3 +
+        [ [ "integer", {} ], [ "bigint", {} ], [ "integer", { limit: 2 } ], [ "integer", { limit: 3 } ], [ "integer", { limit: 1 } ],
+          [ "boolean", {} ], [ "boolean", {} ], [ "string", { limit: 40 } ], [ "float", { limit: 53 } ] ]
+      )
+      expect(tables["gauges"]).to eq([ [ "float", { limit: 53 } ] ] * 3 + [ [ "float", {} ] ])
+    end
+
+    it "reads a bare MySQL bit as the bit(1) MySQL makes it" do
+      expect(native("trilogy", [ "bit", "bit(8)" ])["widgets"]).to eq([ [ "binary", { limit: 1 } ], [ "binary", { limit: 8 } ], [ "binary", { limit: 1 } ] ])
+    end
+
+    # A serial is an integer of its size with a sequence: the dump names it serial, or bigserial for a
+    # bigint, gives it null: false, and writes a bigserial key as the default key (postgresql/schema_dumper.rb).
+    it "reads PostgreSQL's serials the way its dump writes them, as a key and as a column" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        execute "CREATE TABLE big_keys (id bigserial primary key, body text)"
+        execute "CREATE TABLE int_keys (id serial primary key, n serial, s smallserial, b bigserial)"
+        execute "CREATE TABLE small_keys (id smallserial primary key)"
+        execute "CREATE TABLE late_keys (id bigserial, PRIMARY KEY (id))"
+        execute "CREATE TABLE shared (id bigint PRIMARY KEY DEFAULT nextval('shared_seq'), n integer DEFAULT nextval('shared_seq'))"
+        execute "CREATE TABLE odd (id bigint PRIMARY KEY, n integer DEFAULT nextval('odd_n_seq'))"
+        create_table :declared_big, id: :bigserial
+        create_table :declared_small, id: :smallserial
+        create_table :counters do |t|
+          t.column :n, :smallserial
+          t.serial :m
+          t.bigserial :q
+        end
+      RUBY
+      shape = ->(name) { tables[name][:columns].to_h { |c| [ c[:name], [ c[:type], c.slice(:limit, :null) ] ] } }
+      expect([ shape.("big_keys")["id"], shape.("late_keys")["id"] ]).to eq([ [ "bigint", { null: false } ] ] * 2)
+      expect(shape.("int_keys")).to eq(
+        "id" => [ "serial", { null: false } ], "n" => [ "serial", { null: false } ], "s" => [ "serial", { limit: 2, null: false } ],
+        "b" => [ "bigserial", { null: false } ]
+      )
+      expect(shape.("small_keys")).to eq("id" => [ "serial", { limit: 2, null: false } ])
+      expect(shape.("declared_big")).to eq("id" => [ "bigint", { null: false } ])
+      expect(shape.("declared_small")).to eq("id" => [ "serial", { limit: 2, null: false } ])
+      nextval = %q(-> { "nextval('shared_seq'::regclass)" })
+      expect(tables["shared"][:columns].map { |c| c.values_at(:type, :default) }).to eq([ [ "bigint", nextval ], [ "integer", nextval ] ])
+      expect(shape.("odd")["n"]).to eq([ "serial", { null: true } ])
+      expect(shape.("counters").except("id")).to eq(
+        "n" => [ "serial", { limit: 2, null: false } ], "m" => [ "serial", { null: false } ], "q" => [ "bigserial", { null: false } ]
+      )
+    end
+
+    # An adapter with no family reads with PostgreSQL's rules, as the structure.sql reader reads an unmarked dump;
+    # each expected value is PostgreSQL's live dump of the same column.
+    it "reads every type of an adapter with no family the way PostgreSQL does" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      types = [ "real", "float(10)", "smallint", "varchar(40)" ]
+      tables = native("sqlserver", types)
+      sized = replay([ <<~RUBY ], adapter: "sqlserver")
+        create_table :widgets do |t|
+          t.float :ratio, limit: 10
+          t.integer :tiny, limit: 1
+          t.text :body, limit: 100
+          t.binary :blob, limit: 100
+        end
+      RUBY
+
+      expect(tables["widgets"]).to eq([ [ "float", { limit: 24 } ] ] * 2 + [ [ "integer", { limit: 2 } ], [ "string", { limit: 40 } ], [ "float", { limit: 24 } ] ])
+      expect(sized["widgets"][:columns].drop(1).map { |c| c.slice(:type, :limit) }).to eq(
+        [ { type: "float", limit: 24 }, { type: "integer", limit: 2 }, { type: "text" }, { type: "binary" } ]
+      )
+    end
+
+    it "leaves a type it cannot read unnamed" do
+      tables = replay([ "create_table :widgets\nadd_column :widgets, :kind, computed_type\n" ], adapter: "postgresql")
+
+      expect(tables["widgets"][:columns].last).to eq(name: "kind", type: nil)
+    end
+
+    it "keeps a time type's precision the way each dump writes it" do
+      expect(native("postgresql", [ "timestamptz(3)", "timestamptz(6)", "timestamp(0)", "time(0)" ])["widgets"]).to eq(
+        [ [ "timestamptz", { precision: 3 } ], [ "timestamptz", { precision: 6 } ], [ "datetime", { precision: 0 } ], [ "time", { precision: 0 } ],
+          [ "timestamptz", { precision: 3 } ] ]
+      )
+      expect(native("sqlite3", [ "timestamptz(3)", "time(0)" ])["widgets"]).to eq(
+        [ [ "datetime", { precision: 3 } ], [ "time", { precision: 0 } ], [ "datetime", { precision: 3 } ] ]
+      )
+      mysql = replay([ "create_table :widgets do |t|\n  t.time :e, precision: 0\n  t.timestamp :i, precision: 0\nend\n" ], adapter: "trilogy")
+      expect(mysql["widgets"][:columns].drop(1).map { |c| c.slice(:type, :precision) }).to eq([ { type: "time" }, { type: "timestamp" } ])
+    end
+
+    it "keeps a MySQL timestamp's precision the way its dump writes it" do
+      tables = native("trilogy", [ "timestamp(3)", "timestamp(6)", "timestamp" ], sql: "CREATE TABLE stamps (at timestamp(3) NULL)")
+
+      expect(tables["widgets"]).to eq([ [ "timestamp", { precision: 3 } ], [ "timestamp", {} ], [ "timestamp", {} ], [ "timestamp", { precision: 3 } ] ])
+      expect(tables["stamps"]).to eq([ [ "timestamp", { precision: 3 } ] ])
+    end
+
+    # change_column keeps the sequence default, so the integer it makes is still a serial (serial? reads the default).
+    it "keeps a PostgreSQL serial a serial of its new size through change_column" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :counters do |t|
+          t.serial :n
+          t.bigserial :m
+        end
+        change_column :counters, :n, :bigint
+        change_column :counters, :m, :integer
+      RUBY
+
+      expect(tables["counters"][:columns].drop(1).map { |c| c.slice(:type, :null) }).to eq([ { type: "bigserial", null: false }, { type: "serial", null: false } ])
+    end
+
+    # PostgreSQL copies each parent's columns, with their defaults, into an INHERITS child and keeps no key on it.
+    it "gives a child an execute creates with INHERITS its parent's columns, as PostgreSQL's dump writes them" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        execute "CREATE TABLE parents (id serial PRIMARY KEY, name varchar NOT NULL)"
+        execute "CREATE TABLE children (extra integer, name varchar) INHERITS (parents)"
+      RUBY
+
+      expect(tables["children"][:columns]).to eq(
+        [ { name: "id", type: "integer", null: false, default: %q(-> { "nextval('parents_id_seq'::regclass)" }) },
+          { name: "name", type: "string", null: false }, { name: "extra", type: "integer", null: true } ]
+      )
+    end
+
+    # PostgreSQL backs an integer or bigint key create_table makes with its own sequence unless a default is given
+    # (ColumnMethods#primary_key), and change_column keeps that default, so the dump names the key by serial?.
+    it "names a PostgreSQL key create_table makes, and after change_column, as the dump does" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :ints, id: :integer
+        create_table :plain_ints, id: :integer, default: nil
+        create_table :defaults
+        change_column :defaults, :id, :integer
+        create_table :bigs, id: :bigint
+        change_column :bigs, :id, :integer
+        create_table :codes, primary_key: :code
+        change_column :codes, :code, :integer
+        create_table :strings
+        change_column :strings, :id, :string
+      RUBY
+
+      expect(tables.transform_values { |t| t[:columns].first[:type] }).to eq(
+        "ints" => "serial", "plain_ints" => "integer", "defaults" => "serial", "bigs" => "serial", "codes" => "serial", "strings" => "serial"
+      )
+
+      legacy = replay([ "class Legacy < ActiveRecord::Migration[5.0]\n  def change\n    create_table :olds\n    create_table :old_ints, id: :integer\n  end\nend\n" ],
+                      pk_type: "integer", adapter: "postgresql")
+      expect(legacy.transform_values { |t| t[:columns].first[:type] }).to eq("olds" => "serial", "old_ints" => "integer")
+    end
+
+    # change_column keeps a key's own sequence, or its lack of one, and an INHERITS child copies the parent's
+    # sequence as its key's default. Expected values are PostgreSQL 16's dump of the same migrations.
+    it "follows whether a PostgreSQL key has its own sequence, through change_column and into an INHERITS child" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :no_seqs, id: :bigint, default: nil
+        change_column :no_seqs, :id, :integer
+        execute "CREATE TABLE raw_keys (id bigint PRIMARY KEY, n integer)"
+        change_column :raw_keys, :id, :integer
+        execute "CREATE TABLE big_keys (id bigserial PRIMARY KEY)"
+        change_column :big_keys, :id, :integer
+        create_table :parents
+        execute "CREATE TABLE children (x integer) INHERITS (parents)"
+        execute "CREATE TABLE big_parents (id bigserial PRIMARY KEY)"
+        execute "CREATE TABLE big_children (x integer) INHERITS (big_parents)"
+        create_table :serial_parents, id: :serial
+        execute "CREATE TABLE serial_children (x integer) INHERITS (serial_parents)"
+        create_table :old_parents, id: :serial
+        rename_table :old_parents, :new_parents
+        execute "CREATE TABLE new_children (x integer) INHERITS (new_parents)"
+        create_table :serial_keys, id: :serial
+        change_column :serial_keys, :id, :integer
+        create_table :small_keys, id: :smallserial
+        change_column :small_keys, :id, :integer
+      RUBY
+      legacy = replay([ "class Legacy < ActiveRecord::Migration[5.0]\n  def change\n    create_table :olds, id: :bigint\n    change_column :olds, :id, :integer\n  end\nend\n" ],
+                      adapter: "postgresql")
+
+      expect(%w[no_seqs raw_keys big_keys].map { |name| tables[name][:columns].first[:type] } + [ legacy["olds"][:columns].first[:type] ]).to eq(
+        %w[integer integer serial integer]
+      )
+      expect(%w[serial_keys small_keys].map { |name| tables[name][:columns].first.slice(:type, :limit, :null) }).to eq([ { type: "serial", null: false } ] * 2)
+      expect(%w[serial_children new_children].map { |name| tables[name][:columns].first }).to eq(
+        %w[serial_parents new_parents].map { |parent| { name: "id", type: "integer", null: false, default: %(-> { "nextval('#{parent}_id_seq'::regclass)" }) } }
+      )
+      expect(tables["parents"][:columns]).to eq([ { name: "id", type: "bigint", null: false, primary_key: true } ])
+      expect(%w[children big_children].map { |name| tables[name][:columns].first }).to eq(
+        %w[parents big_parents].map { |parent| { name: "id", type: "bigint", null: false, default: %(-> { "nextval('#{parent}_id_seq'::regclass)" }) } }
+      )
+    end
+
+    # PostgreSQL names a serial by its sequence: rename_column and a renamed table keep the old sequence, and a new default
+    # or a copy drops it, so the dump writes the integer it was made from. Expected values are PostgreSQL 16 dumps.
+    it "reads a PostgreSQL serial whose sequence no longer follows its name as the integer the dump writes" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :renamed do |t|
+          t.serial :n
+          t.column :s, :smallserial
+          t.bigserial :b
+        end
+        rename_column :renamed, :n, :m
+        rename_column :renamed, :s, :s2
+        rename_column :renamed, :b, :b2
+        execute "CREATE TABLE renamed_children (x integer) INHERITS (renamed)"
+        change_column :renamed, :m, :bigint
+        create_table :keys
+        rename_column :keys, :id, :uid
+        create_table :defaulted do |t|
+          t.serial :n
+          t.column :s, :smallserial
+          t.bigserial :b
+        end
+        change_column_default :defaulted, :n, 5
+        change_column_default :defaulted, :s, from: nil, to: 3
+        change_column_default :defaulted, :b, nil
+        create_table :moved do |t|
+          t.serial :n
+        end
+        rename_table :moved, :moves
+        create_table :sources do |t|
+          t.serial :n
+          t.bigserial :b
+        end
+        create_table :copies, id: false, as: "SELECT id, n, b FROM sources"
+      RUBY
+      nextval = ->(sequence) { %(-> { "nextval('#{sequence}'::regclass)" }) }
+      shape = ->(name) { tables[name][:columns].to_h { |c| [ c[:name], c.slice(:type, :limit, :null, :default) ] } }
+
+      expect(shape.("renamed").except("id")).to eq(
+        "m" => { type: "bigint", null: false, default: nextval.("renamed_n_seq") },
+        "s2" => { type: "integer", limit: 2, null: false, default: nextval.("renamed_s_seq") },
+        "b2" => { type: "bigint", null: false, default: nextval.("renamed_b_seq") }
+      )
+      expect(shape.("renamed_children")["m"]).to eq(type: "bigint", null: false, default: nextval.("renamed_n_seq"))
+      expect(shape.("keys")).to eq("uid" => { type: "bigint", null: false, default: nextval.("keys_id_seq") })
+      expect(shape.("defaulted").except("id")).to eq(
+        "n" => { type: "integer", null: false, default: "5" }, "s" => { type: "integer", limit: 2, null: false, default: "3" },
+        "b" => { type: "bigint", null: false }
+      )
+      expect(shape.("moves")).to eq("id" => { type: "bigint", null: false }, "n" => { type: "integer", null: false, default: nextval.("moved_n_seq") })
+      expect(shape.("copies")).to eq("id" => { type: "bigint" }, "n" => { type: "integer" }, "b" => { type: "bigint" })
+    end
+
+    # The dump decides serial? by name (PostgreSQL::Column#serial?), so a column or table renamed back to the names its
+    # sequence was made from is a serial again. Expected values are PostgreSQL 16 dumps.
+    it "reads a PostgreSQL serial renamed away and back as the serial the dump writes" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :columns_back do |t|
+          t.serial :n
+        end
+        rename_column :columns_back, :n, :m
+        rename_column :columns_back, :m, :n
+        create_table :tables_back do |t|
+          t.serial :n
+        end
+        rename_table :tables_back, :tables_away
+        rename_table :tables_away, :tables_back
+        create_table :keys_back
+        rename_column :keys_back, :id, :uid
+        rename_table :keys_back, :keys_away
+        rename_table :keys_away, :keys_back
+        rename_column :keys_back, :uid, :id
+        create_table :resized_back do |t|
+          t.serial :n
+        end
+        rename_column :resized_back, :n, :m
+        change_column :resized_back, :m, :bigint
+        rename_column :resized_back, :m, :n
+      RUBY
+      shape = ->(name, column) { tables[name][:columns].find { |c| c[:name] == column }.slice(:type, :null, :default) }
+
+      expect([ shape.("columns_back", "n"), shape.("tables_back", "n"), shape.("keys_back", "id"), shape.("resized_back", "n") ]).to eq(
+        [ { type: "serial", null: false }, { type: "serial", null: false }, { type: "bigint", null: false }, { type: "bigserial", null: false } ]
+      )
+    end
+
+    # change_column keeps a column's sequence default, so the dump names it serial whatever its type while the names
+    # follow the sequence (schema_type), and writes the changed type with the nextval default once they do not.
+    # Expected values are PostgreSQL 16 dumps.
+    it "reads a PostgreSQL serial change_column retypes as its new type once its sequence no longer follows its names" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :b1 do |t|
+          t.serial :n
+        end
+        change_column :b1, :n, :string
+        create_table :b2 do |t|
+          t.serial :n
+        end
+        rename_column :b2, :n, :m
+        change_column :b2, :m, :string
+        rename_column :b2, :m, :n
+        create_table :b3 do |t|
+          t.serial :n
+        end
+        rename_column :b3, :n, :m
+        change_column :b3, :m, :decimal, precision: 10
+        create_table :b4 do |t|
+          t.serial :n
+        end
+        rename_table :b4, :c4
+        change_column :c4, :n, :string
+      RUBY
+      nextval = ->(sequence) { %(-> { "nextval('#{sequence}'::regclass)" }) }
+      shape = ->(name) { tables[name][:columns].last.slice(:type, :precision, :null, :default) }
+
+      expect(%w[b1 b2 b3 c4].map { |name| shape.(name) }).to eq(
+        [ { type: "serial", null: false }, { type: "serial", null: false },
+          { type: "decimal", precision: 10, null: false, default: nextval.("b3_n_seq") },
+          { type: "string", null: false, default: nextval.("b4_n_seq") } ]
+      )
+    end
+
+    # PostgreSQL's ALTER TABLE on a parent reaches the tables that INHERITS it: a column added, renamed, retyped or given a
+    # default or NOT NULL changes in each child, a dropped one goes unless the child declares it too, and a renamed
+    # sequence shows in the child's copied default. Expected values are PostgreSQL 16 dumps.
+    it "changes a PostgreSQL child table when a statement changes the parent it inherits" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        execute "CREATE TABLE a3 (id serial PRIMARY KEY, n integer)"
+        execute "CREATE TABLE a3c (x integer) INHERITS (a3)"
+        rename_column :a3, :n, :m
+        execute "CREATE TABLE a4 (id serial PRIMARY KEY, n integer)"
+        execute "CREATE TABLE a4c (x integer) INHERITS (a4)"
+        add_column :a4, :k, :string
+        remove_column :a4, :n
+        execute "CREATE TABLE a5 (id serial PRIMARY KEY, n integer)"
+        execute "CREATE TABLE a5c (x integer) INHERITS (a5)"
+        change_column :a5, :n, :bigint
+        change_column_null :a5, :n, false
+        change_column_default :a5, :n, 7
+        execute "CREATE TABLE a6 (id serial PRIMARY KEY, n integer)"
+        execute "CREATE TABLE a6c (n integer, x integer) INHERITS (a6)"
+        remove_column :a6, :n
+        rename_table :a6, :a7
+      RUBY
+      shape = ->(name) { tables[name][:columns].to_h { |c| [ c[:name], c.slice(:type, :null, :default) ] } }
+      id = ->(sequence) { { "id" => { type: "integer", null: false, default: %(-> { "nextval('#{sequence}'::regclass)" }) } } }
+      nullable = { type: "integer", null: true }
+
+      expect(%w[a3c a4c a5c a6c].map { |name| shape.(name) }).to eq(
+        [ id.("a3_id_seq").merge("m" => nullable, "x" => nullable),
+          id.("a4_id_seq").merge("x" => nullable, "k" => { type: "string" }),
+          id.("a5_id_seq").merge("n" => { type: "bigint", null: false, default: "7" }, "x" => nullable),
+          id.("a7_id_seq").merge("n" => nullable, "x" => nullable) ]
+      )
+    end
+
+    # Rails' PostgreSQL unique constraints, in create_table, change_table or alone; the dump leaves out a uniq_rails_ name
+    # Rails made up, and a constraint made from an index takes that index over. Expected values are PostgreSQL 16 dumps.
+    it "replays PostgreSQL unique constraints as the dump writes them" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :ks do |t|
+          t.integer :v_id
+          t.integer :w
+        end
+        change_table :ks do |t|
+          t.unique_constraint :v_id
+          t.unique_constraint [:v_id, :w], name: "ks_vw", deferrable: :deferred
+        end
+        create_table :kt do |t|
+          t.integer :v
+          t.integer :x
+          t.unique_constraint :v
+          t.unique_constraint :x, name: "kt_x"
+        end
+        add_unique_constraint :kt, :id
+        add_unique_constraint :kt, [:v, :x], deferrable: :immediate
+        remove_unique_constraint :kt, :v
+        remove_unique_constraint :kt, name: "kt_x"
+        create_table :ku do |t|
+          t.integer :a
+          t.index :a, unique: true, name: "ku_a_idx"
+        end
+        add_unique_constraint :ku, using_index: "ku_a_idx"
+        add_unique_constraint :ku, :id
+        revert { add_unique_constraint :ku, :id }
+        change_table :ks do |t|
+          t.remove_unique_constraint name: "ks_vw"
+        end
+        rename_column :ks, :v_id, :vv
+      RUBY
+
+      expect(%w[ks kt ku].map { |name| tables[name].slice(:unique_constraints, :indexes) }).to eq(
+        [ { unique_constraints: [ { columns: %w[vv] } ], indexes: [] },
+          { unique_constraints: [ { columns: %w[id] }, { columns: %w[v x], deferrable: "immediate" } ], indexes: [] },
+          { unique_constraints: [ { columns: %w[a] } ], indexes: [] } ]
+      )
+    end
+
+    # Rails 8.0 writes NULLS NOT DISTINCT for nulls_not_distinct: and dumps it; 7.1 and 7.2 ignore the option.
+    it "keeps a PostgreSQL unique constraint's nulls_not_distinct from Rails 8.0" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      constraints = lambda do |rails|
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+          File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+            create_table :kn do |t|
+              t.integer :a
+              t.integer :b
+              t.unique_constraint :a, nulls_not_distinct: true
+            end
+            add_unique_constraint :kn, :b, nulls_not_distinct: true, deferrable: :deferred
+          RUBY
+          described_class.replayed(dir, pk_type: "bigint", root: dir, adapter: "postgresql").tables["kn"][:unique_constraints]
+        end
+      end
+
+      expect(constraints.("8.0.5")).to eq([ { columns: %w[a], nulls_not_distinct: true }, { columns: %w[b], deferrable: "deferred", nulls_not_distinct: true } ])
+      expect(constraints.("7.2.3")).to eq([ { columns: %w[a] }, { columns: %w[b], deferrable: "deferred" } ])
+    end
+
+    # create_table's options: string ends the CREATE TABLE, so INHERITS there gives the table its parents' columns first,
+    # a declared column of the same name merged in place. Expected values are PostgreSQL 16 dumps.
+    it "gives a PostgreSQL create_table with INHERITS in its options its parents' columns" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :ie do |t|
+          t.string :a
+          t.integer :m
+        end
+        create_table :iec, id: false, options: "INHERITS (ie)" do |t|
+          t.integer :y
+          t.integer :m, null: false, default: 4
+        end
+        create_table :ied, options: "INHERITS (ie)" do |t|
+          t.integer :y
+        end
+        add_column :ie, :b, :integer
+        remove_column :ie, :m
+        create_table :iee, id: false, options: "INHERITS (ied)" do |t|
+          t.text :w
+        end
+      RUBY
+      shape = ->(name) { tables[name][:columns].map { |c| [ c[:name], c[:type], c[:null] != false, c[:default] ].compact } }
+      nextval = ->(sequence) { %(-> { "nextval('#{sequence}'::regclass)" }) }
+
+      expect(%w[iec ied iee].map { |name| shape.(name) }).to eq(
+        [ [ [ "id", "bigint", false, nextval.("ie_id_seq") ], [ "a", "string", true ], [ "m", "integer", false, "4" ], [ "y", "integer", true ], [ "b", "integer", true ] ],
+          [ [ "id", "bigint", false ], [ "a", "string", true ], [ "y", "integer", true ], [ "b", "integer", true ] ],
+          [ [ "id", "bigint", false, nextval.("ied_id_seq") ], [ "a", "string", true ], [ "y", "integer", true ], [ "b", "integer", true ], [ "w", "text", true ] ] ]
+      )
+    end
+
+    # A parent no statement the replay read made is noted, whichever way the INHERITS is written.
+    it "keeps an INHERITS parent it cannot find as unresolved, in an execute and in create_table's options" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :ip
+        execute "CREATE TABLE ic (y integer) INHERITS (ip, gone)"
+        create_table :io, id: false, options: 'INHERITS (ip, "gone")' do |t|
+          t.integer :y
+        end
+      RUBY
+
+      expect(%w[ic io].map { |name| [ tables[name][:inherits_unresolved], tables[name][:columns].map { |c| c[:name] } ] }).to eq(
+        [ [ %w[gone], %w[id y] ], [ %w[gone], %w[id y] ] ]
+      )
+    end
+
+    # ALTER COLUMN on a parent runs on every child as well, so it sets what the child declared itself even where the
+    # parent already had that value. Expected values are PostgreSQL 16 dumps.
+    it "runs a PostgreSQL parent's column change on each INHERITS child, whatever the child declared" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :ja do |t|
+          t.integer :b
+          t.string :s, default: "p"
+        end
+        execute "CREATE TABLE jac (b integer NOT NULL, s varchar DEFAULT 'c') INHERITS (ja)"
+        execute "CREATE TABLE jag (z int) INHERITS (jac)"
+        change_column_null :ja, :b, true
+        change_column_default :ja, :s, "p"
+        create_table :ih do |t|
+          t.string :a
+        end
+        execute "CREATE TABLE ihc (a varchar NOT NULL DEFAULT 'c') INHERITS (ih)"
+        change_column :ih, :a, :text
+        change_column_default :ih, :a, nil
+      RUBY
+      shape = lambda do |name, column|
+        found = tables[name][:columns].find { |c| c[:name] == column }
+        found.slice(:type, :default).merge(null: found[:null] != false)
+      end
+
+      expect([ shape.("jac", "b"), shape.("jac", "s"), shape.("jag", "b"), shape.("jag", "s"), shape.("ihc", "a") ]).to eq(
+        [ { type: "integer", null: true }, { type: "string", default: "p", null: true }, { type: "integer", null: true },
+          { type: "string", default: "p", null: true }, { type: "text", null: false } ]
+      )
+    end
+
+    # DROP TABLE ... CASCADE drops the tables that INHERITS the one it names, and create_table's force: drops the old
+    # table before it makes the new one. Expected values are PostgreSQL 16 dumps.
+    it "drops a PostgreSQL parent's INHERITS children with it under CASCADE, and a forced create_table replaces its table" do
+      result = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_one.rb"), <<~RUBY)
+          create_table :zp do |t|
+            t.string :a
+          end
+          execute "CREATE TABLE zc (y int) INHERITS (zp)"
+          execute "CREATE TABLE zg (z int) INHERITS (zc)"
+          create_table :zp2
+          execute "CREATE TABLE zc2 (y int) INHERITS (zp2)"
+          create_table :zp3 do |t|
+            t.string :old
+          end
+          execute "CREATE TABLE zc3 (y int) INHERITS (zp3)"
+          create_table :zp4 do |t|
+            t.string :old
+          end
+        RUBY
+        File.write(File.join(dir, "20240101000001_two.rb"), <<~RUBY)
+          drop_table :zp, force: :cascade
+          drop_table :zp, if_exists: true
+          execute "DROP TABLE zp2 CASCADE"
+          create_table :zp3, force: :cascade do |t|
+            t.string :n
+          end
+          create_table :zp4, force: true do |t|
+            t.string :n
+          end
+          create_table :keep
+        RUBY
+        described_class.replayed(dir, pk_type: "bigint", adapter: "postgresql")
+      end
+      names = result.tables.transform_values { |table| table[:columns].map { |c| c[:name] } }
+
+      expect([ names, result.counts.failed_files ]).to eq([ { "zp3" => %w[id n], "zp4" => %w[id n], "keep" => %w[id] }, 0 ])
+    end
+
+    # CASCADE drops the foreign keys other tables hold to the dropped table. Expected values are PostgreSQL 16 dumps.
+    it "drops the foreign keys to a table PostgreSQL drops under CASCADE" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :fas
+        create_table :fb do |t|
+          t.references :fa, foreign_key: true
+        end
+        create_table :fcs
+        create_table :fd do |t|
+          t.references :fc, foreign_key: true
+        end
+        drop_table :fas, force: :cascade
+        create_table :fcs, force: :cascade do |t|
+          t.string :n
+        end
+      RUBY
+
+      expect([ tables["fb"][:foreign_keys], tables["fd"][:foreign_keys] ]).to eq([ [], [] ])
+    end
+
+    # PostgreSQL merges a column the child declares with the parent's, NOT NULL if either is (MergeAttributes).
+    it "keeps a child's own NOT NULL on a column it shares with a parent create_table made" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :k1 do |t|
+          t.string :a
+        end
+        execute "CREATE TABLE k2 (a varchar NOT NULL DEFAULT 'q') INHERITS (k1)"
+        change_column_default :k1, :a, "p"
+      RUBY
+
+      expect(tables["k2"][:columns].find { |c| c[:name] == "a" }).to include(null: false, default: "p")
+    end
+
+    # PostgreSQL numbers a serial's sequence <table>_<column>_seq1 when another relation holds the plain name, and the
+    # dump reads seq\d* as the serial's own (new_column_from_field). Expected values are PostgreSQL 16 dumps.
+    it "names a PostgreSQL serial's sequence with a number when its plain name is taken" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :sd, id: false do |t|
+          t.serial :n
+        end
+        rename_table :sd, :se
+        create_table :sd, id: false do |t|
+          t.serial :n
+        end
+        rename_column :sd, :n, :m
+        create_table :sf, id: false do |t|
+          t.serial :n
+        end
+        rename_table :sf, :sg
+        create_table :sf, id: false do |t|
+          t.serial :n
+        end
+        rename_column :sf, :n, :m
+        rename_column :sf, :m, :n
+        execute "CREATE TABLE pe_id_seq (x integer)"
+        create_table :pe
+        rename_table :pe, :pf
+        create_table :ia do |t|
+          t.integer :x
+          t.index :x, name: "ib_n_seq"
+        end
+        create_table :ib, id: false do |t|
+          t.serial :n
+        end
+        rename_column :ib, :n, :m
+        execute "CREATE TABLE xs (id serial PRIMARY KEY, n serial)"
+        rename_table :xs, :xt
+        execute "CREATE TABLE xs (id serial PRIMARY KEY, n serial)"
+        rename_column :xs, :n, :m
+      RUBY
+      nextval = ->(sequence) { %(-> { "nextval('#{sequence}'::regclass)" }) }
+      shape = ->(name, column) { tables[name][:columns].find { |c| c[:name] == column }.slice(:type, :null, :default) }
+
+      expect([ shape.("sd", "m"), shape.("se", "n"), shape.("sf", "n"), shape.("pf", "id"), shape.("ib", "m"), shape.("xs", "id"), shape.("xs", "m") ]).to eq(
+        [ { type: "integer", null: false, default: nextval.("sd_n_seq1") }, { type: "integer", null: false, default: nextval.("sd_n_seq") },
+          { type: "serial", null: false }, { type: "bigint", null: false, default: nextval.("pe_id_seq1") },
+          { type: "integer", null: false, default: nextval.("ib_n_seq1") }, { type: "serial", null: false },
+          { type: "integer", null: false, default: nextval.("xs_n_seq1") } ]
+      )
+    end
+
+    # rename_table renames the key's sequence only when it has the name Rails builds from the old table: 7.1 to 8.1 cut
+    # the table to fit 63 bytes, 7.0 does not and PostgreSQL cuts the new name. Expected values are PostgreSQL 16 dumps.
+    it "renames a PostgreSQL key's sequence with a long table the way each Rails line's rename_table does" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      long = "c" * 58
+      keys = lambda do |rails|
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+          File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+            create_table :short_t
+            rename_table :short_t, :#{long}
+            create_table :#{"d" * 40}, primary_key: :#{"k" * 40}
+            rename_table :#{"d" * 40}, :#{"e" * 40}
+          RUBY
+          tables = described_class.tables(dir, pk_type: "bigint", adapter: "postgresql", root: dir)
+          [ long, "e" * 40 ].map { |name| tables[name][:columns].first.slice(:type, :default) }
+        end
+      end
+      nextval = ->(sequence) { %(-> { "nextval('#{sequence}'::regclass)" }) }
+      long_key = nextval.("#{"d" * 29}_#{"k" * 29}_seq")
+
+      expect(keys.("7.0.10")).to eq([ { type: "bigint", default: nextval.("#{long}_id_s") }, { type: "bigint", default: long_key } ])
+      expect(keys.("8.1.0")).to eq([ { type: "bigint" }, { type: "bigint", default: long_key } ])
+    end
+
+    # TableDefinition#primary_key makes a column of its type, :primary_key unless given, that is the key; an integer or
+    # bigint one gets its own sequence on PostgreSQL. Expected values are PostgreSQL 16 and MySQL 8.4 dumps.
+    it "reads a key a column declares the way it reads the key create_table implies" do
+      body = <<~RUBY
+        create_table :plain_keys, id: false do |t|
+          t.primary_key :id
+        end
+        create_table :typed_keys, id: false do |t|
+          t.primary_key :id, :integer
+        end
+        create_table :serial_keys, id: false do |t|
+          t.primary_key :id, :serial
+        end
+        execute "CREATE TABLE serial_children (x integer) INHERITS (serial_keys)"
+        create_table :changed_keys, id: false do |t|
+          t.primary_key :id, :serial
+        end
+        change_column :changed_keys, :id, :bigint
+        create_table :string_keys, id: false do |t|
+          t.primary_key :uid, :string
+        end
+        create_table :flagged_keys, id: false do |t|
+          t.integer :id, primary_key: true
+        end
+        create_table :added_keys, id: false do |t|
+          t.string :x
+        end
+        add_column :added_keys, :id, :primary_key
+      RUBY
+      keys = ->(adapter) { replay([ body ], adapter: adapter).transform_values { |t| t[:columns].find { |c| c[:name] != "x" }.slice(:type, :null, :primary_key, :default) } }
+      key = ->(type) { { type: type, null: false, primary_key: true } }
+
+      expect(keys.("postgresql")).to eq(
+        "plain_keys" => key.("bigint"), "typed_keys" => key.("serial"), "serial_keys" => key.("serial"),
+        "serial_children" => { type: "integer", null: false, default: %(-> { "nextval('serial_keys_id_seq'::regclass)" }) },
+        "changed_keys" => key.("bigint"), "string_keys" => key.("string"), "flagged_keys" => key.("serial"), "added_keys" => key.("bigint")
+      )
+      expect(keys.("trilogy").except("serial_children", "serial_keys", "changed_keys")).to eq(
+        "plain_keys" => key.("bigint"), "typed_keys" => key.("integer"), "string_keys" => key.("string"), "flagged_keys" => key.("integer"),
+        "added_keys" => key.("bigint")
+      )
+    end
+
+    # PostgreSQL and MySQL make every column of a primary key not null; SQLite leaves a composite key's columns nullable.
+    it "makes a composite key's columns not null as the database does" do
+      nulls = %w[postgresql trilogy sqlite3].map do |adapter|
+        replay([ "create_table :lines, primary_key: [:a, :b] do |t|\n  t.integer :a\n  t.string :b\n  t.integer :c\nend\n" ], adapter: adapter)["lines"][:columns].map { |c| c[:null] }
+      end
+
+      expect(nulls).to eq([ [ false, false, nil ], [ false, false, nil ], [ nil, nil, nil ] ])
+    end
+
+    # MySQL's serial is BIGINT UNSIGNED NOT NULL AUTO_INCREMENT UNIQUE, which its dump writes as an unsigned bigint.
+    it "reads MySQL's serial as the unsigned bigint its dump writes, as a key and as a column" do
+      tables = replay([ <<~RUBY ], adapter: "trilogy")
+        create_table :keyed, id: :serial
+        create_table :counters, id: false do |t|
+          t.column :n, :serial
+        end
+        execute "CREATE TABLE raw_keys (id serial primary key)"
+      RUBY
+      unsigned = { type: "bigint", null: false, unsigned: true }
+
+      expect(%w[keyed counters raw_keys].map { |name| tables[name][:columns].first.slice(:type, :null, :unsigned) }).to eq([ unsigned ] * 3)
+    end
+
+    # MySQL's change_column_null runs change_column, which keeps a column's AUTO_INCREMENT unless told otherwise, and the
+    # server keeps an AUTO_INCREMENT column NOT NULL. Expected values are MySQL 8.4 and MariaDB 11.4 dumps.
+    it "keeps a MySQL auto-increment column not null through change_column_null and change_column" do
+      tables = replay([ <<~RUBY ], adapter: "trilogy")
+        create_table :ns, id: false do |t|
+          t.column :n, :serial
+        end
+        change_column_null :ns, :n, true
+        execute "CREATE TABLE nx (id bigint PRIMARY KEY, n SERIAL)"
+        change_column_null :nx, :n, true
+        execute "CREATE TABLE na (id bigint PRIMARY KEY, n bigint NOT NULL AUTO_INCREMENT UNIQUE)"
+        change_column_null :na, :n, true
+        create_table :nd, id: false do |t|
+          t.bigint :n, auto_increment: true, index: { unique: true }
+        end
+        change_column_null :nd, :n, true
+        create_table :nc, id: false do |t|
+          t.column :n, :serial
+        end
+        change_column :nc, :n, :bigint, null: true
+        create_table :ne, id: false do |t|
+          t.column :n, :serial
+        end
+        change_column :ne, :n, :bigint, null: true, auto_increment: false
+      RUBY
+
+      expect(%w[ns nx na nd nc ne].map { |name| tables[name][:columns].find { |c| c[:name] == "n" }.slice(:type, :null, :unsigned) }).to eq(
+        [ { type: "bigint", null: false, unsigned: true } ] * 2 + [ { type: "bigint", null: false } ] * 3 + [ { type: "bigint" } ]
+      )
+    end
+
+    # MySQL writes unsigned after the type a column declares it on (type_to_sql), and change_column builds the column from
+    # its own options alone (change_column_for_alter). Expected values are MySQL 8.4 and MariaDB 11.4 dumps.
+    it "keeps a MySQL column unsigned where the statement that makes it says so" do
+      body = <<~RUBY
+        create_table :gauges, id: :bigint, unsigned: true do |t|
+          t.integer :n, unsigned: true
+          t.decimal :d, precision: 5, scale: 2, unsigned: true
+          t.float :f, unsigned: true
+          t.references :owner, unsigned: true
+          t.unsigned_integer :u
+          t.integer :changed, unsigned: true
+          t.integer :kept, unsigned: true
+        end
+        add_column :gauges, :a, :integer, unsigned: true
+        change_column :gauges, :changed, :bigint
+        change_column :gauges, :kept, :bigint, unsigned: true
+        create_table :keys, id: { type: :bigint, unsigned: true }
+        create_table :counters, id: false do |t|
+          t.column :n, :serial
+        end
+        change_column :counters, :n, :integer
+      RUBY
+      unsigned = ->(adapter) { replay([ body ], adapter: adapter).transform_values { |t| t[:columns].select { |c| c[:unsigned] }.map { |c| c.values_at(:name, :type) } } }
+
+      expect(unsigned.("trilogy")).to eq(
+        "gauges" => [ %w[id bigint], %w[n integer], %w[d decimal], %w[f float], %w[owner_id bigint], %w[u integer], %w[kept bigint], %w[a integer] ],
+        "keys" => [ %w[id bigint] ], "counters" => []
+      )
+      expect(unsigned.("postgresql").values.flatten).to eq([])
+    end
+
+    # ReferenceDefinition gives the id column the reference's own options (columns, 7.0 to 8.1), so its type and sizes read
+    # as any column's do. Expected values are PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite dumps.
+    it "reads a reference's id column type and sizes the way the dump writes a column's" do
+      body = "create_table :links do |t|\n  t.references :r, type: :unsigned_integer\n  t.references :s, type: :integer, limit: 2\nend\n"
+      ids = ->(adapter) { replay([ body ], adapter: adapter)["links"][:columns].drop(1).map { |c| c.slice(:name, :type, :limit, :unsigned) } }
+
+      expect(ids.("trilogy")).to eq([ { name: "r_id", type: "integer", unsigned: true }, { name: "s_id", type: "integer", limit: 2 } ])
+      expect(ids.("sqlite3").last).to eq(name: "s_id", type: "integer", limit: 2)
+      expect(ids.("postgresql").last).to eq(name: "s_id", type: "integer", limit: 2)
+    end
+
+    # create_join_table adds each side with references and its column_options (7.0 to 8.1), so the ids read as a
+    # reference's do on each adapter. Expected values are MySQL 8.4, MariaDB 11.4, SQLite and PostgreSQL 16 dumps.
+    it "reads a join table's id columns the way each adapter's dump writes a reference's" do
+      body = <<~RUBY
+        create_join_table :as, :bs, column_options: { type: :unsigned_integer }
+        create_join_table :cs, :ds, column_options: { type: :integer, unsigned: true }
+        create_join_table :es, :fs, column_options: { type: :integer, limit: 8 }
+      RUBY
+      ids = ->(adapter) { replay([ body ], adapter: adapter).values.map { |t| t[:columns].first.slice(:type, :limit, :unsigned) } }
+      unsigned = { type: "integer", unsigned: true }
+
+      expect(ids.("trilogy")).to eq([ unsigned, unsigned, { type: "bigint" } ])
+      expect(ids.("sqlite3").last).to eq(type: "integer", limit: 8)
+      expect(ids.("postgresql").last).to eq(type: "bigint")
+    end
+
+    # MySQL 8.4 and MariaDB 11.4 add a unique index named after each column a statement declares serial, or
+    # <column>_2 on where the name is taken, and the dump lists each one; only MySQL adds one to a whole-key serial.
+    it "lists the unique index MySQL adds for a serial column, as its dump does" do
+      tables = replay([ <<~RUBY ], adapter: "trilogy")
+        create_table :keyed, id: :serial
+        create_table :counters, id: false do |t|
+          t.column :n, :serial
+          t.integer :k
+        end
+        add_column :counters, :m, :serial
+        change_column :counters, :k, :serial
+        create_table :taken, id: false do |t|
+          t.integer :k
+          t.index :k, name: "n"
+        end
+        add_column :taken, :n, :serial
+        execute "CREATE TABLE raw_keys (id serial primary key)"
+        execute "CREATE TABLE raw_cols (id bigint primary key, n serial)"
+      RUBY
+      unique = ->(name, column) { { name: name, columns: [ column ], unique: true } }
+
+      expect(%w[keyed counters taken raw_keys raw_cols].to_h { |name| [ name, tables[name][:indexes].select { |i| i[:unique] } ] }).to eq(
+        "keyed" => [], "counters" => [ unique.("n", "n"), unique.("m", "m"), unique.("k", "k") ],
+        "taken" => [ unique.("n_2", "n") ], "raw_keys" => [], "raw_cols" => [ unique.("n", "n") ]
+      )
+      expect(replay([ "create_table :counters do |t|\n  t.serial :n\nend\n" ], adapter: "postgresql")["counters"][:indexes]).to eq([])
+    end
+
+    it "keeps a PostgreSQL array spelling an array of its element type" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :widgets do |t|
+          t.column :tags, "text[]"
+          t.column :codes, "varchar(40)[]"
+          t.column :scores, "real[]"
+        end
+      RUBY
+
+      expect(tables["widgets"][:columns].drop(1).map { |c| c.except(:name) }).to eq(
+        [ { type: "text", array: true }, { type: "string", limit: 40, array: true }, { type: "float", limit: 24, array: true } ]
+      )
+    end
+
+    it "reads SQLite's spellings the way its type map does" do
+      types = [ "double", "double precision", "float4", "float8", "float(10)", "int4", "int8", "int2", "smallint", "tinyint", "varchar(40)",
+                "integer(1)", "bigint(8)", "timestamp", "tinyint(1)" ]
+      expect(native("sqlite3", types)["widgets"]).to eq(
+        [ [ "float", {} ] ] * 4 + [ [ "float", { limit: 10 } ] ] + [ [ "integer", {} ] ] * 5 +
+        [ [ "string", { limit: 40 } ], [ "integer", { limit: 1 } ], [ "bigint", {} ], [ "datetime", {} ], [ "integer", { limit: 1 } ], [ "float", {} ] ]
+      )
     end
   end
 
@@ -1742,8 +2958,16 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
   describe "a positional change_column_default" do
     let(:posts) do
       replay([
-        "create_table :posts do |t|\n  t.string :state\n  t.integer :views\n  t.boolean :draft, default: true\n  t.string :kind\nend\n",
+        "create_table :posts do |t|\n  t.string :state\n  t.integer :views\n  t.boolean :draft, default: true\n  t.string :kind\n  t.uuid :key\n  t.datetime :seen\n  t.string :tag\n  t.datetime :stamp\nend\n",
         <<~RUBY
+          change_column_default :posts, :key, -> { "gen_random_uuid()" }
+          change_column_default :posts, :seen, from: nil, to: -> { "CURRENT_TIMESTAMP" }
+          change_column_default :posts, :tag, "a"
+          change_column_default :posts, :stamp, -> { "now()" }
+          revert do
+            change_column_default :posts, :tag, from: "a", to: -> { "now()" }
+            change_column_default :posts, :stamp, from: -> { "clock_timestamp()" }, to: -> { "now()" }
+          end
           change_column_default :posts, :state, "open"
           change_column_default :posts, :views, 0
           change_column_default :posts, :draft, nil
@@ -1760,6 +2984,12 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
 
     it "clears a default set to nil" do
       expect(posts["draft"]).to be_nil
+    end
+
+    it "reads a proc as the dump writes it" do
+      expect(posts.values_at("key", "seen", "tag", "stamp")).to eq(
+        [ %(-> { "gen_random_uuid()" }), %(-> { "CURRENT_TIMESTAMP" }), "a", %(-> { "clock_timestamp()" }) ]
+      )
     end
 
     it "reads it inside change_table" do
@@ -2196,6 +3426,1004 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       RUBY
 
       expect(reverted["posts"][:check_constraints].to_a).to eq([])
+    end
+  end
+
+  # The names each server gives, read from PostgreSQL 16's and MySQL 8.4's dumps of these statements.
+  describe "a UNIQUE an execute's CREATE TABLE declares" do
+    let(:source) do
+      <<~RUBY
+        execute "CREATE TABLE u5 (id bigint PRIMARY KEY, n int UNIQUE, m int UNIQUE)"
+        rename_column :u5, :n, :nn
+        remove_column :u5, :m
+      RUBY
+    end
+    let(:keys) { ->(entries) { Array(entries).map { |e| [ e[:name], e[:columns] ] }.sort } }
+
+    it "is a constraint on PostgreSQL, named for its table and columns, that follows its column" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      tables = replay([ source + <<~RUBY ], adapter: "postgresql")
+        execute "CREATE TABLE u1 (id bigint PRIMARY KEY, n bigint NOT NULL UNIQUE, m integer UNIQUE, k text CONSTRAINT k_uq UNIQUE)"
+        execute "CREATE TABLE u6 (id bigint PRIMARY KEY UNIQUE, a int, b int UNIQUE, CONSTRAINT ab_uq UNIQUE (a, b), UNIQUE (b), UNIQUE (a), c int UNIQUE, CONSTRAINT c_named UNIQUE (c))"
+        create_table :ip9 do |t|
+          t.string :a
+          t.string :b
+        end
+        execute "CREATE TABLE ic9 (x int, UNIQUE (a), UNIQUE (b)) INHERITS (ip9)"
+        rename_column :ip9, :a, :aa
+        remove_column :ip9, :b
+      RUBY
+
+      expect(keys.(tables["u1"][:unique_constraints])).to eq([ [ "k_uq", %w[k] ], [ "u1_m_key", %w[m] ], [ "u1_n_key", %w[n] ] ])
+      expect(keys.(tables["u5"][:unique_constraints])).to eq([ [ "u5_n_key", %w[nn] ] ])
+      expect(keys.(tables["u6"][:unique_constraints])).to eq([ [ "ab_uq", %w[a b] ], [ "c_named", %w[c] ], [ "u6_a_key", %w[a] ], [ "u6_b_key", %w[b] ] ])
+      expect(keys.(tables["ic9"][:unique_constraints])).to eq([ [ "ic9_a_key", %w[aa] ] ])
+      expect(tables["u1"][:indexes]).to eq([])
+    end
+
+    # Rails 7.0 dumps a PostgreSQL UNIQUE as the unique index behind it, under the same name.
+    it "is the unique index behind it on PostgreSQL for a Rails 7.0 app" do
+      allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_return("7.0.10")
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        execute "CREATE TABLE u1 (id bigint PRIMARY KEY, n bigint NOT NULL UNIQUE, m integer UNIQUE, k text CONSTRAINT k_uq UNIQUE)"
+      RUBY
+
+      expect(tables["u1"][:unique_constraints]).to be_nil
+      expect(tables["u1"][:indexes].map { |i| [ i[:name], i[:columns], i[:unique] ] }).to contain_exactly(
+        [ "u1_n_key", %w[n], true ], [ "u1_m_key", %w[m], true ], [ "k_uq", %w[k], true ]
+      )
+    end
+
+    it "is an index on MySQL, named for its first column" do
+      tables = replay([ source + <<~RUBY ], adapter: "trilogy")
+        execute "CREATE TABLE u1 (id bigint PRIMARY KEY, n int UNIQUE, m int UNIQUE KEY, k varchar(9) NOT NULL UNIQUE)"
+        execute "CREATE TABLE u6 (id bigint PRIMARY KEY, a int, b int UNIQUE, CONSTRAINT ab_uq UNIQUE (a, b), UNIQUE (b), UNIQUE KEY bk2 (b, a), UNIQUE (a))"
+        execute "CREATE TABLE na (id bigint PRIMARY KEY, n bigint NOT NULL AUTO_INCREMENT UNIQUE)"
+      RUBY
+
+      expect(keys.(tables["u1"][:indexes])).to eq([ [ "k", %w[k] ], [ "m", %w[m] ], [ "n", %w[n] ] ])
+      expect(keys.(tables["u5"][:indexes])).to eq([ [ "n", %w[nn] ] ])
+      expect(keys.(tables["u6"][:indexes])).to eq([ [ "a", %w[a] ], [ "ab_uq", %w[a b] ], [ "b", %w[b] ], [ "b_2", %w[b] ], [ "bk2", %w[b a] ] ])
+      expect(tables["na"][:indexes]).to eq([ { name: "n", columns: %w[n], unique: true } ])
+      expect(tables["u1"]).not_to have_key(:unique_constraints)
+    end
+  end
+
+  # Each table as PostgreSQL 16's, MySQL 8.4's and SQLite's dumps (SQLite's booted columns where the dump cannot write one) give it.
+  describe "a table made from a query" do
+    let(:source) do
+      <<~RUBY
+        create_table :c1src do |t|
+          t.string :s, null: false
+          t.integer :k, default: 3
+        end
+        execute "CREATE TABLE c1 AS SELECT s, k AS kk FROM c1src"
+        create_table :c2, id: false, as: "SELECT * FROM c1src"
+        execute "CREATE TABLE IF NOT EXISTS c3 AS SELECT * FROM c1src"
+        execute "CREATE TABLE IF NOT EXISTS c3 AS SELECT s FROM c1src"
+      RUBY
+    end
+    let(:shape) { ->(tables, name) { tables[name][:columns].map { |c| [ c[:name], c[:type], c.slice(:limit, :null, :default) ] } } }
+
+    it "takes PostgreSQL's columns with no key, not null or default" do
+      tables = replay([ source + %(execute "CREATE TABLE c5 AS (SELECT s FROM c1src)"\n) ], adapter: "postgresql")
+      plain = [ [ "id", "bigint", {} ], [ "s", "string", {} ], [ "k", "integer", {} ] ]
+      expect(shape.(tables, "c1")).to eq([ [ "s", "string", {} ], [ "kk", "integer", {} ] ])
+      expect(shape.(tables, "c5")).to eq([ [ "s", "string", {} ] ])
+      expect([ shape.(tables, "c2"), shape.(tables, "c3") ]).to eq([ plain, plain ])
+    end
+
+    it "keeps MySQL's not null and defaults, and gives an auto-increment column a 0 default" do
+      tables = replay([ source + <<~RUBY ], adapter: "trilogy")
+        execute "CREATE TABLE ng (id bigint PRIMARY KEY, n bigint AUTO_INCREMENT UNIQUE)"
+        execute "CREATE TABLE nh AS SELECT n FROM ng"
+      RUBY
+      full = [ [ "id", "bigint", { null: false, default: "0" } ], [ "s", "string", { null: false } ], [ "k", "integer", { default: "3" } ] ]
+      expect(shape.(tables, "c1")).to eq([ [ "s", "string", { null: false } ], [ "kk", "integer", { default: "3" } ] ])
+      expect([ shape.(tables, "c2"), shape.(tables, "c3") ]).to eq([ full, full ])
+      expect(shape.(tables, "nh")).to eq([ [ "n", "bigint", { null: false, default: "0" } ] ])
+    end
+
+    # A column the query computes, or takes from a table other than the FROM one, has a type only the database knows: it
+    # stays untyped, one with no name is counted, and a query the replay cannot read is counted, never an empty table.
+    it "leaves a PostgreSQL column it cannot trace untyped, and counts what it cannot name or read" do
+      result = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_step.rb"), source + <<~RUBY)
+          create_table :c9o do |t|
+            t.date :k
+          end
+          execute "CREATE TABLE ca1 AS SELECT s, count(*) AS n FROM c1src GROUP BY s"
+          execute "CREATE TABLE ca2 AS SELECT s s2, k FROM c1src"
+          execute "CREATE TABLE ca3 AS SELECT o.k FROM c1src c JOIN c9o o ON o.id = c.id"
+          execute "CREATE TABLE ca4 (x, y) AS SELECT s, k FROM c1src"
+          execute "CREATE TABLE ca5 AS SELECT c.k, c.s AS t FROM c1src c"
+          execute "CREATE TABLE ca7 (x) AS SELECT s, k FROM c1src WITH NO DATA"
+          execute "CREATE TABLE ct1 AS SELECT 1 AS n"
+          execute "CREATE TABLE ct2 AS TABLE c1src"
+          create_table :ct9, as: "SELECT 1 AS n"
+          execute "CREATE TABLE cu AS SELECT s, lower(s) FROM c1src"
+          execute "CREATE TABLE cv AS SELECT s, (SELECT max(k) FROM c1src), (VALUES (1)) FROM c1src"
+          execute "CREATE TABLE cj AS SELECT * FROM c1src c JOIN c9o o ON o.id = c.id"
+        RUBY
+        described_class.replayed(dir, pk_type: "bigint", adapter: "postgresql")
+      end
+      columns = %w[ca1 ca2 ca3 ca4 ca5 ca7 ct1 ct2 ct9 cu cv].to_h { |name| [ name, result.tables[name][:columns].map { |c| [ c[:name], c[:type] ] } ] }
+
+      expect(columns).to eq(
+        "ca1" => [ [ "s", "string" ], [ "n", nil ] ], "ca2" => [ [ "s2", "string" ], [ "k", "integer" ] ], "ca3" => [ [ "k", nil ] ],
+        "ca4" => [ [ "x", "string" ], [ "y", "integer" ] ], "ca5" => [ [ "k", "integer" ], [ "t", "string" ] ],
+        "ca7" => [ [ "x", "string" ], [ "k", "integer" ] ], "ct1" => [ [ "n", "integer" ] ],
+        "ct2" => [ [ "id", "bigint" ], [ "s", "string" ], [ "k", "integer" ] ], "ct9" => [ [ "n", "integer" ] ], "cu" => [ [ "s", "string" ], [ "lower", nil ] ],
+        "cv" => [ [ "s", "string" ], [ "max", nil ] ]
+      )
+      expect([ result.tables.key?("cj"), result.counts.unnamed_columns, result.counts.helper_calls ]).to eq([ false, 1, 1 ])
+    end
+
+    # The FROM is the one outside parentheses, DISTINCT is no column, PostgreSQL names a bare number ?column? where MySQL
+    # and SQLite name it by its text, and MySQL needs no AS before the SELECT.
+    it "reads the query's own FROM, DISTINCT and a bare number as each database does" do
+      queries = <<~RUBY
+        create_table :src do |t|
+          t.date :k
+          t.string :name
+          t.integer :qty
+        end
+        create_table :oth do |t|
+          t.integer :k
+        end
+        execute "CREATE TABLE q1 AS SELECT k, (SELECT count(*) FROM oth) AS n FROM src"
+        execute "CREATE TABLE q2 AS SELECT EXTRACT(YEAR FROM k) AS y, name FROM src"
+        execute "CREATE TABLE q4 AS SELECT DISTINCT k, qty FROM src"
+        execute "CREATE TABLE q5 AS SELECT name FROM src WHERE qty IN (1, 2)"
+        execute "CREATE TABLE q7 AS SELECT name, 2 FROM src"
+        execute "CREATE TABLE q8 SELECT name, qty FROM src"
+      RUBY
+      columns = lambda do |adapter|
+        tables = replay([ queries ], adapter: adapter)
+        %w[q1 q2 q4 q5 q7 q8].to_h { |name| [ name, tables[name]&.dig(:columns)&.map { |c| [ c[:name], c[:type] ] } ] }
+      end
+      read = { "q1" => [ [ "k", "date" ], [ "n", nil ] ], "q2" => [ [ "y", nil ], [ "name", "string" ] ], "q4" => [ [ "k", "date" ], [ "qty", "integer" ] ],
+               "q5" => [ [ "name", "string" ] ] }
+
+      expect(columns.("postgresql")).to eq(read.merge("q7" => [ [ "name", "string" ], [ "?column?", "integer" ] ], "q8" => nil))
+      expect(columns.("trilogy")).to eq(read.merge("q7" => [ [ "name", "string" ], [ "2", "integer" ] ], "q8" => [ [ "name", "string" ], [ "qty", "integer" ] ]))
+    end
+
+    # PostgreSQL 16, MySQL 8.4 and SQLite: PostgreSQL names a literal or an operator's result ?column?, MySQL a literal by
+    # its value and anything else by its text, SQLite by its text; a column in parentheses is that column.
+    it "names and types a literal or computed column as each database does" do
+      queries = <<~RUBY
+        create_table :src do |t|
+          t.date :k
+          t.string :name
+          t.integer :qty
+        end
+        execute "CREATE TABLE l1 AS SELECT k + 1, name FROM src"
+        execute "CREATE TABLE l2 AS SELECT 1, -1 AS n, 'x' AS s, (name) FROM src"
+        execute "CREATE TABLE l4 AS SELECT DISTINCT(k), qty FROM src"
+        execute "CREATE TABLE l5 AS SELECT 2.5 AS d, TRUE AS b, 12345678901 AS big"
+      RUBY
+      columns = lambda do |adapter, extra = ""|
+        tables = replay([ queries + extra ], adapter: adapter)
+        tables.except("src").transform_values { |t| t[:columns].map { |c| [ c[:name], c[:type] ] } }
+      end
+      dated = [ %w[k date], %w[qty integer] ]
+
+      expect(columns.("postgresql", %(execute "CREATE TABLE l3 AS SELECT DISTINCT ON (k) k, qty FROM src"\n))).to eq(
+        "l1" => [ [ "?column?", nil ], %w[name string] ], "l2" => [ %w[?column? integer], %w[n integer], %w[s text], %w[name string] ],
+        "l3" => dated, "l4" => dated, "l5" => [ %w[d decimal], %w[b boolean], %w[big bigint] ]
+      )
+      expect(columns.("trilogy")).to eq(
+        "l1" => [ [ "k + 1", nil ], %w[name string] ], "l2" => [ %w[1 integer], %w[n integer], %w[s string], %w[name string] ],
+        "l4" => dated, "l5" => [ %w[d decimal], %w[b integer], %w[big bigint] ]
+      )
+      expect(columns.("sqlite3")).to eq(
+        "l1" => [ [ "k + 1", nil ], %w[name text] ], "l2" => [ [ "1", nil ], [ "n", nil ], [ "s", nil ], %w[name text] ],
+        "l4" => [ [ "k", nil ], %w[qty integer] ], "l5" => [ [ "d", nil ], [ "b", nil ], [ "big", nil ] ]
+      )
+      mysql = replay([ queries ], adapter: "trilogy")
+      expect(%w[l2 l5].flat_map { |name| mysql[name][:columns].map { |c| c.except(:type) } }).to eq(
+        [ { name: "1", null: false, default: "0" }, { name: "n", null: false, default: "0" }, { name: "s", null: false, default: "", limit: 1 }, { name: "name" },
+          { name: "d", null: false, default: "0.0", precision: 2, scale: 1 }, { name: "b", null: false, default: "0" }, { name: "big", null: false, default: "0" } ]
+      )
+    end
+
+    # MySQL 8.4's dump: an integer by its text's length (sign and leading zeros counted), then by its value; a decimal's
+    # precision counts no leading zero but the one before the point; a string's length in characters.
+    it "types a MySQL literal column as MySQL 8.4 does" do
+      literals = {
+        "12345678" => [ "integer" ], "123456789" => [ "bigint" ], "000000001" => [ "bigint" ], "-1234567890" => [ "integer" ],
+        "-2147483649" => [ "integer" ], "-00000000001" => [ "bigint" ], "2147483647" => [ "bigint" ], "9223372036854775808" => [ "bigint", true ],
+        "18446744073709551616" => [ "decimal", nil, 20 ], "-9223372036854775809" => [ "decimal", nil, 19 ], "00000000000000000001" => [ "bigint" ],
+        ".5" => [ "decimal", nil, 1, 1 ], "-.5" => [ "decimal", nil, 1, 1 ], "0.5" => [ "decimal", nil, 2, 1 ], "00.5" => [ "decimal", nil, 2, 1 ],
+        "1.50" => [ "decimal", nil, 3, 2 ], "5." => [ "decimal", nil, 1 ], "''" => [ "string" ], "'it''s'" => [ "string" ], "'héllo'" => [ "string" ],
+        "TRUE" => [ "integer" ], "FALSE" => [ "integer" ]
+      }
+      sql = literals.keys.each_with_index.map { |literal, i| %(execute "CREATE TABLE l#{i} AS SELECT #{literal} AS v FROM src"\n) }.join
+      tables = replay([ "create_table :src\n#{sql}" ], adapter: "trilogy")
+      read = literals.keys.each_with_index.to_h do |literal, i|
+        c = tables["l#{i}"][:columns].first
+        [ literal, [ c[:type], c[:unsigned], c[:precision], c[:scale] ].reverse.drop_while(&:nil?).reverse ]
+      end
+      expect(read).to eq(literals)
+      expect(%w[l17 l18 l19].map { |name| tables[name][:columns].first[:limit] }).to eq([ 0, 4, 5 ])
+    end
+
+    # PostgreSQL 16's FigureColname: a column's last field, a function's name, a cast's argument when that is named and
+    # else its type, a CASE's ELSE when that is named and else case, ARRAY; ?column? for an operator or a constant.
+    it "names a computed PostgreSQL column as PostgreSQL does" do
+      names = {
+        "lower(name)" => "lower", %q("Mixed"(k)) => "Mixed", "pg_catalog.LOWER(name)" => "lower", "count(*) OVER ()" => "count", "COALESCE(k, 0)" => "coalesce",
+        "EXISTS (SELECT 1)" => "exists", "ARRAY[k]" => "array", "(ARRAY[k])[1]" => "array", "CURRENT_TIMESTAMP" => "current_timestamp", "current_timestamp(3)" => "current_timestamp",
+        "k::text" => "k", "((k))::text" => "k", "(k + 1)::text" => "text", "CAST(k + 1 AS bigint)" => "int8", "1::double precision" => "float8", "1::float(10)" => "float4",
+        "'a'::varchar(5)" => "varchar", "'a'::char(2)" => "bpchar", "now()::timestamp with time zone" => "now", "'1:00'::time with time zone" => "timetz", "'{}'::int[]" => "int4",
+        "'a'::pg_catalog.text" => "text", %q('a'::"char") => "char", "(k + 1)::int::text" => "text", "date '2020-01-01'" => "date",
+        "CASE WHEN k > 1 THEN 1 END" => "case", "CASE WHEN k > 1 THEN 1 ELSE k END" => "k", "CASE WHEN k > 1 THEN 'a' ELSE (k + 1)::text END" => "case",
+        "CASE k WHEN 1 THEN 'a' ELSE CASE WHEN k > 2 THEN name ELSE name END END" => "name", "CASE WHEN k > 1 THEN 1 END::text" => "text",
+        "trim(name)" => "btrim", "trim(leading 'a' from name)" => "ltrim", "trim(trailing from name)" => "rtrim", "k :: text" => "k",
+        "INTERVAL '1' day" => "interval", "interval '1 day'::text" => "text", "now() AT TIME ZONE 'utc'" => "timezone", %q(name COLLATE "C") => "name",
+        "k IS NULL" => "?column?", "k BETWEEN 1 AND 2" => "?column?", "k IN (1, 2)" => "?column?", "NOT (k > 1)" => "?column?", "k ISNULL" => "?column?",
+        "NULL" => "?column?", "E'a'" => "?column?", "upper(name) || 'x'" => "?column?", "CASE WHEN k > 1 THEN 1 END + 1" => "?column?"
+      }
+      sql = names.keys.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src s~\n) }.join
+      result = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_step.rb"), "create_table :src do |t|\n  t.integer :k\n  t.string :name\nend\n#{sql}")
+        described_class.replayed(dir, pk_type: "bigint", adapter: "postgresql")
+      end
+      expect(names.keys.each_with_index.to_h { |item, i| [ item, result.tables["e#{i}"][:columns].first&.dig(:name) ] }).to eq(names)
+      expect(result.counts.unnamed_columns).to eq(0)
+    end
+
+    # PostgreSQL 16 reads SELECT before a parenthesis or a star; a subquery whose first item is a star takes a name from
+    # a table the replay does not follow, so that column stays unnamed and counted.
+    it "names a PostgreSQL scalar subquery written with no space after SELECT, and leaves one that selects a star unnamed" do
+      items = [ "(SELECT(1))", "(SELECT * FROM (SELECT 1 z) q)", "(SELECT*FROM (SELECT 1 z) q)" ]
+      sql = items.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src~\n) }.join
+      result = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_step.rb"), "create_table :src do |t|\n  t.integer :k\nend\n#{sql}")
+        described_class.replayed(dir, pk_type: "bigint", adapter: "postgresql")
+      end
+      expect(items.each_index.map { |i| result.tables["e#{i}"][:columns].map { |c| c[:name] } }).to eq([ [ "?column?" ], [], [] ])
+      expect(result.counts.unnamed_columns).to eq(2)
+    end
+
+    # PostgreSQL 16 names a scalar subquery by its own first column's name, ?column? included, and rewrites IS NORMALIZED
+    # to is_normalized(), which NOT or AND outside it turns back into ?column?.
+    it "names a PostgreSQL scalar subquery and IS NORMALIZED as PostgreSQL does" do
+      names = {
+        "(SELECT name FROM src WHERE k = 1 LIMIT 1)" => "name", "(SELECT 1)" => "?column?", "(SELECT max(k) FROM src)" => "max",
+        "(SELECT k AS kk FROM src LIMIT 1)" => "kk", "(SELECT k kk2 FROM src LIMIT 1)" => "kk2", "(SELECT k + 1 FROM src LIMIT 1)" => "?column?",
+        "((SELECT k FROM src LIMIT 1))" => "k", "(SELECT DISTINCT k FROM src LIMIT 1)" => "k", "(SELECT s.k FROM src s LIMIT 1)" => "k",
+        "(SELECT k FROM src LIMIT 1)::int8" => "k", "(SELECT 1)::text" => "?column?", "(SELECT (SELECT max(k) FROM src))" => "max",
+        "(SELECT k FROM src LIMIT 1) + 1" => "?column?", "(SELECT CASE WHEN k > 1 THEN 1 END FROM src LIMIT 1)" => "case",
+        "name IS NORMALIZED" => "is_normalized", "name IS NFKD NORMALIZED" => "is_normalized", "name || 'x' IS NORMALIZED" => "is_normalized",
+        "name IS NOT NORMALIZED" => "?column?", "k = 1 AND name IS NORMALIZED" => "?column?"
+      }
+      sql = names.keys.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src~\n) }.join
+      result = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_step.rb"), "create_table :src do |t|\n  t.integer :k\n  t.string :name\nend\n#{sql}")
+        described_class.replayed(dir, pk_type: "bigint", adapter: "postgresql")
+      end
+      expect(names.keys.each_with_index.to_h { |item, i| [ item, result.tables["e#{i}"][:columns].first&.dig(:name) ] }).to eq(names)
+    end
+
+    # PostgreSQL 16, MySQL 8.4 and SQLite read 08 and -09 as base-ten numbers.
+    it "reads a number with a leading zero and keeps replaying the file" do
+      queries = <<~RUBY
+        create_table :src do |t|
+          t.integer :qty
+        end
+        execute "CREATE TABLE z AS SELECT 08 AS n, qty FROM src"
+        execute "CREATE TABLE z2 AS SELECT -09 AS m, 007 AS o FROM src"
+        create_table :after_it
+      RUBY
+      types = { "postgresql" => "integer", "trilogy" => "integer", "sqlite3" => nil }
+      types.each do |adapter, type|
+        tables = replay([ queries ], adapter: adapter)
+        expect(tables.keys).to eq(%w[src z z2 after_it])
+        expect(tables["z2"][:columns].map { |c| [ c[:name], c[:type] ] }).to eq([ [ "m", type ], [ "o", type ] ])
+      end
+    end
+
+    # PostgreSQL 16, MySQL 8.4 and SQLite: a bare word after an expression is its alias, unless an operator or a keyword
+    # before it takes it as an operand, or it is END, NULL, TRUE or FALSE.
+    it "reads a bare alias after a literal, a negative number, a cast or an operator expression" do
+      queries = <<~RUBY
+        create_table :src do |t|
+          t.integer :qty
+          t.integer :total
+          t.boolean :flag
+          t.string :name
+        end
+        execute "CREATE TABLE b1 AS SELECT 1 n, 'x' s, -2 m, qty + 1 total, name nm FROM src"
+        execute "CREATE TABLE b2 AS SELECT CASE WHEN qty > 1 THEN 1 END c, qty IS NOT NULL nn, qty - total d FROM src"
+        execute "CREATE TABLE b3 AS SELECT NOT flag FROM src"
+        execute "CREATE TABLE b4 AS SELECT qty + total FROM src"
+        execute "CREATE TABLE b6 AS SELECT qty ISNULL FROM src"
+      RUBY
+      names = ->(adapter, extra = "") { replay([ queries + extra ], adapter: adapter).except("src").transform_values { |t| t[:columns].map { |c| c[:name] } } }
+      read = { "b1" => %w[n s m total nm], "b2" => %w[c nn d] }
+
+      expect(names.("trilogy")).to eq(read.merge("b3" => [ "NOT flag" ], "b4" => [ "qty + total" ], "b6" => [ "ISNULL" ]))
+      expect(names.("sqlite3")).to eq(read.merge("b3" => [ "NOT flag" ], "b4" => [ "qty + total" ], "b6" => [ "qty ISNULL" ]))
+      pg = names.("postgresql", %(execute "CREATE TABLE b5 AS SELECT qty::text t, qty::double precision dp, qty :: text FROM src"\n))
+      expect(pg.slice("b1", "b2", "b4", "b6")).to eq(read.merge("b4" => [ "?column?" ], "b6" => [ "?column?" ]))
+      expect(pg["b5"].first(2)).to eq(%w[t dp])
+      expect(pg.values.flatten).not_to include("flag", "text", "precision")
+    end
+
+    # PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite: a word that is a column, after nothing, a dot or an operator,
+    # ends an expression the next word aliases; a type's, an interval's or a window's last word is the expression's own.
+    it "reads a bare alias only after a complete expression" do
+      source = <<~RUBY
+        create_table :src do |t|
+          t.integer :qty
+          t.integer :k
+          t.string :zone
+          t.string :escape
+          t.integer :mod
+          t.integer :any
+          t.integer :"my col"
+          t.datetime :created_at
+        end
+      RUBY
+      names = lambda do |adapter, items|
+        sql = items.each_with_index.map { |(item, suffix), i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src s #{suffix}~\n) }.join
+        tables = replay([ source + sql ], adapter: adapter)
+        items.each_with_index.to_h { |(item, _), i| [ item, tables["e#{i}"][:columns].map { |c| c[:name] } ] }
+      end
+      window = "WINDOW w AS (ORDER BY k)"
+      every = { "zone z" => [ "z" ], "s.zone z" => [ "z" ], "sum(k) OVER w sw" => [ "sw" ] }
+
+      expect(names.("postgresql", [ *every.keys, "escape e", "mod m", "s.escape e2", "qty + mod m", "created_at::timestamp with time zone tz",
+                                    "created_at::timestamp without time zone ts", "created_at::timestamp with time zone", "sum(k) OVER w",
+                                    "INTERVAL '1-2' YEAR TO MONTH", "INTERVAL '1-2' YEAR TO MONTH ym", "INTERVAL '1 day' iv", "INTERVAL '1' DAY",
+                                    %q(k AS "my alias"), %q(k "my ""alias"""), "k Kk", %q("my col") ].map { |item| [ item, (window if item.include?("OVER")) ] })).to eq(
+        every.merge("escape e" => [ "e" ], "mod m" => [ "m" ], "s.escape e2" => [ "e2" ], "qty + mod m" => [ "m" ], "created_at::timestamp with time zone tz" => [ "tz" ],
+                    "created_at::timestamp without time zone ts" => [ "ts" ], "created_at::timestamp with time zone" => [ "created_at" ], "sum(k) OVER w" => [ "sum" ],
+                    "INTERVAL '1-2' YEAR TO MONTH" => [ "interval" ], "INTERVAL '1-2' YEAR TO MONTH ym" => [ "ym" ], "INTERVAL '1 day' iv" => [ "iv" ],
+                    "INTERVAL '1' DAY" => [ "interval" ], %q(k AS "my alias") => [ "my alias" ], %q(k "my ""alias""") => [ %q(my "alias") ],
+                    "k Kk" => [ "kk" ], %q("my col") => [ "my col" ])
+      )
+      expect(names.("trilogy", [ *every.keys, "escape e", "any a", "qty + zone z", "sum(k) OVER w", "now() + INTERVAL 1 DAY", "k AS `my alias`", "k Kk", "`my col`", "k 'str'", "k AS 'it''s'",
+                                   "DATE '2020-01-01' 'd'", "DATE '2020-01-01'" ]
+                                 .map { |item| [ item, (window if item.include?("OVER")) ] })).to eq(
+        every.merge("escape e" => [ "e" ], "any a" => [ "a" ], "qty + zone z" => [ "z" ], "sum(k) OVER w" => [ "sum(k) OVER w" ],
+                    "now() + INTERVAL 1 DAY" => [ "now() + INTERVAL 1 DAY" ], "k AS `my alias`" => [ "my alias" ], "k Kk" => [ "Kk" ],
+                    "`my col`" => [ "my col" ], "k 'str'" => [ "str" ], "k AS 'it''s'" => [ "it's" ], "DATE '2020-01-01' 'd'" => [ "d" ],
+                    "DATE '2020-01-01'" => [ "DATE '2020-01-01'" ])
+      )
+      expect(names.("sqlite3", [ *every.keys, "mod m", "any a", "qty AND mod m", "sum(k) OVER w", %q(k AS "my alias"), "k AS `my alias`", "k 'str'" ]
+                                 .map { |item| [ item, (window if item.include?("OVER")) ] })).to eq(
+        every.merge("mod m" => [ "m" ], "any a" => [ "a" ], "qty AND mod m" => [ "m" ], "sum(k) OVER w" => [ "sum(k) OVER w" ],
+                    %q(k AS "my alias") => [ "my alias" ], "k AS `my alias`" => [ "my alias" ], "k 'str'" => [ "str" ])
+      )
+    end
+
+    # PostgreSQL 16, MySQL 8.4 and SQLite: a dollar-quoted string, a hex or binary number and a blob are one constant, a
+    # precision or an interval's fields stay with their type, and MySQL reads adjacent strings as one.
+    it "reads a select item's constants and types as the database tokenizes them" do
+      source = "create_table :src do |t|\n  t.integer :k\n  t.datetime :created_at\nend\n"
+      names = lambda do |adapter, items|
+        sql = items.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src~\n) }.join
+        tables = replay([ source + sql ], adapter: adapter)
+        items.each_with_index.to_h { |item, i| [ item, tables["e#{i}"][:columns].map { |c| c[:name] } ] }
+      end
+      postgres = {
+        "created_at::timestamp(3) with time zone tz" => [ "tz" ], "created_at::timestamp(3) with time zone" => [ "created_at" ],
+        "created_at::timestamp(3) without time zone ts" => [ "ts" ], "'1 day'::interval day iv" => [ "iv" ],
+        "'1 day'::interval day to second iv" => [ "iv" ], "'1'::interval second(3) iv" => [ "iv" ],
+        "timestamp(3) with time zone '2020-01-01' t" => [ "t" ], "k BETWEEN SYMMETRIC 2 AND 1 bs" => [ "bs" ],
+        "k NOT BETWEEN SYMMETRIC 1 AND 2 nb" => [ "nb" ], "k BETWEEN ASYMMETRIC 1 AND 2 ab" => [ "ab" ], "k BETWEEN SYMMETRIC 1 AND 2" => [ "?column?" ],
+        "$$a$$ d" => [ "d" ], "$t$a$t$ d" => [ "d" ]
+      }
+      mysql = { "0b101 b" => [ "b" ], "0x1F h" => [ "h" ], "0x1F" => [ "0x1F" ], %q('a' "b" c) => [ "c" ] }
+      sqlite = { "0x1F h" => [ "h" ], "0x1F" => [ "0x1F" ], "x'1F' h" => [ "h" ], "k [x y]" => [ "x y" ] }
+
+      expect(names.("postgresql", postgres.keys)).to eq(postgres)
+      expect(names.("trilogy", mysql.keys)).to eq(mysql)
+      expect(names.("sqlite3", sqlite.keys)).to eq(sqlite)
+    end
+
+    # MySQL 8.4, MariaDB 11.4 and SQLite name an e-notation number by its text; PostgreSQL 16 names a constant ?column?.
+    it "names an e-notation number as the database does, never by the part after its point" do
+      source = "create_table :src do |t|\n  t.integer :k\nend\n"
+      names = lambda do |adapter, items|
+        sql = items.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src~\n) }.join
+        tables = replay([ source + sql ], adapter: adapter)
+        items.each_with_index.to_h { |item, i| [ item, tables["e#{i}"][:columns].map { |c| c[:name] } ] }
+      end
+
+      expect(names.("trilogy", [ "1.5e3", "10.25E2" ])).to eq("1.5e3" => [ "1.5e3" ], "10.25E2" => [ "10.25E2" ])
+      expect(names.("sqlite3", [ "k, 1.5e3" ])).to eq("k, 1.5e3" => [ "k", "1.5e3" ])
+      expect(names.("postgresql", [ "1.5e3" ])).to eq("1.5e3" => [ "?column?" ])
+    end
+
+    # PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite: a word that only starts a multi-word type's next word is an alias.
+    it "reads an alias after a type's first word as the alias" do
+      source = "create_table :src do |t|\n  t.datetime :time\n  t.integer :bit\n  t.integer :double\n  t.string :character\nend\n"
+      names = lambda do |adapter, items|
+        sql = items.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src s~\n) }.join
+        tables = replay([ source + sql ], adapter: adapter)
+        items.each_with_index.to_h { |item, i| [ item, tables["e#{i}"][:columns].map { |c| c[:name] } ] }
+      end
+      every = { "time w" => [ "w" ], "s.time w" => [ "w" ], "time wi" => [ "wi" ], "bit v" => [ "v" ], "double p" => [ "p" ], "character v" => [ "v" ] }
+
+      expect(names.("postgresql", every.keys)).to eq(every)
+      expect(names.("trilogy", [ *every.keys, "time without" ])).to eq(every.merge("time without" => [ "without" ]))
+      expect(names.("sqlite3", [ *every.keys, "time without", "time with" ])).to eq(every.merge("time without" => [ "without" ], "time with" => [ "with" ]))
+    end
+
+    # PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite take a keyword with nothing after it as the alias, CASE with no END too.
+    it "reads a keyword that ends a select item as its alias" do
+      names = lambda do |adapter, words|
+        sql = words.each_with_index.map { |word, i| %(execute %q~CREATE TABLE e#{i} AS SELECT k #{word} FROM src~\n) }.join
+        tables = replay([ "create_table :src do |t|\n  t.integer :k\nend\n" + sql ], adapter: adapter)
+        words.each_with_index.to_h { |word, i| [ word, tables["e#{i}"][:columns].map { |c| c[:name] } ] }
+      end
+      postgres = %w[member operator match escape glob div mod xor regexp collate between like in is and or not ilike similar case]
+      mysql = %w[operator escape glob ilike similar]
+      sqlite = %w[member operator div mod xor over rlike sounds ilike similar]
+
+      expect(names.("postgresql", postgres)).to eq(postgres.to_h { |word| [ word, [ word ] ] })
+      expect(names.("trilogy", mysql)).to eq(mysql.to_h { |word| [ word, [ word ] ] })
+      expect(names.("sqlite3", sqlite)).to eq(sqlite.to_h { |word| [ word, [ word ] ] })
+    end
+
+    # MySQL 8.4 and MariaDB 11.4 read N, X or B as a literal's prefix only when the quote touches it; apart, it is a column.
+    it "reads a MySQL string after a column named n, x or b as the alias" do
+      items = [ "n 'a1'", "b 'a2'", "x 'a3'", "N'a' n1", "b'1' b1", "x'1F' x1" ]
+      sql = items.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src~\n) }.join
+      tables = replay([ "create_table :src do |t|\n  t.string :n\n  t.integer :b\n  t.integer :x\nend\n" + sql ], adapter: "trilogy")
+      expect(items.each_index.map { |i| tables["e#{i}"][:columns].map { |c| c[:name] } }).to eq([ [ "a1" ], [ "a2" ], [ "a3" ], [ "n1" ], [ "b1" ], [ "x1" ] ])
+    end
+
+    # PostgreSQL 16, MySQL 8.4 and SQLite read a string and a quoted name that touch as two tokens; MySQL's "q" is a string.
+    it "reads a string and a quoted name that touch as the database splits them" do
+      names = lambda do |adapter, items|
+        sql = items.each_with_index.map { |item, i| %(execute %q~CREATE TABLE e#{i} AS SELECT #{item} FROM src~\n) }.join
+        tables = replay([ "create_table :src\n" + sql ], adapter: adapter)
+        items.each_index.map { |i| tables["e#{i}"][:columns].map { |c| c[:name] } }
+      end
+
+      expect(names.("postgresql", [ %q('x'"q") ])).to eq([ [ "q" ] ])
+      expect(names.("trilogy", [ %q('x'"q"), "'x'`q`" ])).to eq([ [ "x" ], [ "q" ] ])
+      expect(names.("sqlite3", [ %q('x'"q"), "'x'`q`" ])).to eq([ [ "q" ], [ "q" ] ])
+    end
+
+    # MySQL 8.4 joins adjacent strings into one literal and names its column by the first: 'a' 'b' is a varchar(2) named a.
+    it "names adjacent MySQL strings by the first, as one string literal" do
+      tables = replay([ "create_table :src\nexecute %q~CREATE TABLE e AS SELECT 'a' 'b', 'x' \"yz\" c FROM src~\n" ], adapter: "trilogy")
+      expect(tables["e"][:columns].map { |c| c.slice(:name, :type, :limit, :null, :default) }).to eq(
+        [ { name: "a", type: "string", limit: 2, null: false, default: "" }, { name: "c", type: "string", limit: 3, null: false, default: "" } ]
+      )
+    end
+
+    it "reads a plain CREATE TABLE whose name ends in as or select as that table" do
+      sql = <<~RUBY
+        execute "CREATE TABLE quotas (id integer, n text)"
+        execute "CREATE TABLE areas (id integer)"
+        execute "CREATE TABLE x_preselect (id integer, n text)"
+      RUBY
+      %w[postgresql trilogy sqlite3].each do |adapter|
+        tables = replay([ sql ], adapter: adapter)
+        expect(tables.transform_values { |t| t[:columns].map { |c| c[:name] } }).to eq("quotas" => %w[id n], "areas" => %w[id], "x_preselect" => %w[id n])
+      end
+    end
+
+    it "leaves a table an earlier statement made when a CREATE TABLE IF NOT EXISTS names it" do
+      sql = <<~RUBY
+        create_table :src do |t|
+          t.string :name
+        end
+        execute "CREATE TABLE IF NOT EXISTS src (id integer)"
+        execute "CREATE TABLE IF NOT EXISTS fresh (id integer)"
+      RUBY
+      %w[postgresql trilogy sqlite3].each do |adapter|
+        tables = replay([ sql ], adapter: adapter)
+        expect(tables.transform_values { |t| t[:columns].map { |c| c[:name] } }).to eq("src" => %w[id name], "fresh" => %w[id])
+      end
+    end
+
+    # MySQL 8.4: the declared columns come first and keep their definition, then each selected column they do not name.
+    it "merges MySQL's declared columns with the selected ones, and reads a query in parentheses" do
+      tables = replay([ <<~RUBY ], adapter: "trilogy")
+        create_table :src do |t|
+          t.date :k
+          t.integer :qty
+        end
+        execute "CREATE TABLE m1 (z int) SELECT k FROM src"
+        execute "CREATE TABLE m2 (z int) AS SELECT k FROM src"
+        execute "CREATE TABLE m3 (k int) SELECT k, qty FROM src"
+        execute "CREATE TABLE m4 (SELECT k FROM src)"
+        execute "CREATE TABLE m5 (n varchar(5)) SELECT k FROM src"
+      RUBY
+      expect(%w[m1 m2 m3 m4 m5].to_h { |name| [ name, tables[name]&.dig(:columns)&.map { |c| [ c[:name], c[:type] ] } ] }).to eq(
+        "m1" => [ %w[z integer], %w[k date] ], "m2" => [ %w[z integer], %w[k date] ],
+        "m3" => [ %w[k integer], %w[qty integer] ], "m4" => [ %w[k date] ], "m5" => [ %w[n string], %w[k date] ]
+      )
+    end
+
+    # MySQL 8.4's dump keeps the PRIMARY KEY, UNIQUE KEY and KEY a column list declares, on its own or a selected column.
+    # MySQL 8.4: the declared columns the query does not select, then the selected ones in SELECT order.
+    it "orders a MySQL column list's columns as MySQL does" do
+      tables = replay([ <<~RUBY ], adapter: "trilogy")
+        create_table :src do |t|
+          t.string :name
+          t.integer :qty
+        end
+        execute "CREATE TABLE ctq (qty bigint NOT NULL DEFAULT 0, z int) AS SELECT qty, name FROM src"
+        execute "CREATE TABLE ctw (name varchar(9), qty bigint, z int) SELECT qty, name FROM src"
+      RUBY
+      expect(%w[ctq ctw].to_h { |name| [ name, tables[name][:columns].map { |c| [ c[:name], c[:type], c.slice(:limit, :null, :default).compact.reject { |_, v| v == true } ] } ] }).to eq(
+        "ctq" => [ [ "z", "integer", {} ], [ "qty", "bigint", { null: false, default: "0" } ], [ "name", "string", {} ] ],
+        "ctw" => [ [ "z", "integer", {} ], [ "qty", "bigint", {} ], [ "name", "string", { limit: 9 } ] ]
+      )
+    end
+
+    it "keeps the keys a MySQL column list declares" do
+      tables = replay([ <<~RUBY ], adapter: "trilogy")
+        create_table :src do |t|
+          t.string :name
+          t.integer :qty
+        end
+        execute "CREATE TABLE ctk (id int AUTO_INCREMENT, PRIMARY KEY (id)) SELECT qty FROM src"
+        execute "CREATE TABLE ctu (z int, UNIQUE KEY uz (z)) SELECT qty FROM src"
+        execute "CREATE TABLE ctr (z decimal(5,2), KEY ix_z (z)) SELECT name FROM src"
+        execute "CREATE TABLE ctx (z int, KEY ix_q (qty)) SELECT qty FROM src"
+      RUBY
+      expect(tables["ctk"][:primary_key]).to eq("id")
+      expect(%w[ctu ctr ctx].to_h { |name| [ name, tables[name][:indexes] ] }).to eq(
+        "ctu" => [ { name: "uz", columns: %w[z], unique: true } ], "ctr" => [ { name: "ix_z", columns: %w[z], unique: false } ],
+        "ctx" => [ { name: "ix_q", columns: %w[qty], unique: false } ]
+      )
+    end
+
+    it "types SQLite's columns by their affinity" do
+      tables = replay([ source + <<~RUBY ], pk_type: "integer", adapter: "sqlite3")
+        create_table :c4src do |t|
+          t.datetime :d
+          t.float :f
+          t.bigint :g
+          t.binary :y
+          t.string :s, limit: 20
+          t.text :x
+        end
+        execute "CREATE TABLE c4 AS SELECT * FROM c4src"
+      RUBY
+      expect(shape.(tables, "c1")).to eq([ [ "s", "text", {} ], [ "kk", "integer", {} ] ])
+      expect(shape.(tables, "c3")).to eq([ [ "id", "integer", {} ], [ "s", "text", {} ], [ "k", "integer", {} ] ])
+      expect(tables["c4"][:columns].map { |c| [ c[:name], c[:type] ] }).to eq(
+        [ [ "id", "integer" ], [ "d", nil ], [ "f", nil ], [ "g", "integer" ], [ "y", nil ], [ "s", "text" ], [ "x", "text" ] ]
+      )
+    end
+  end
+
+  # PostgreSQL 16 stores a nextval default by the sequence, so it reads back under the name a rename gives the sequence.
+  # numeric is decimal's alias, and the dump writes a decimal's default as its type reads it back: rounded to the scale,
+  # a whole number where the scale is 0 (DecimalWithoutScale), which is MySQL's decimal(10,0) when none is given.
+  # Expected values are PostgreSQL 16, MySQL 8.4 and SQLite dumps.
+  it "reads numeric as decimal and a decimal's default as each adapter's dump writes it" do
+    source = <<~RUBY
+      create_table :n1 do |t|
+        t.column :n, :numeric, precision: 5, scale: 2
+        t.column :m, :numeric
+        t.decimal :d, precision: 10, scale: 2, default: 0
+        t.decimal :e, precision: 8, scale: 2, default: 1.555
+        t.decimal :f, default: "10"
+        t.decimal :g, precision: 6, scale: 0, default: 5
+        t.decimal :h
+      end
+      add_column :n1, :k, :decimal, precision: 4, scale: 1, default: 2
+      change_column_default :n1, :h, 3
+      change_column :n1, :n, :decimal, precision: 5, scale: 2, default: 7
+    RUBY
+    shape = lambda do |adapter|
+      replay([ source ], adapter: adapter)["n1"][:columns].drop(1).to_h { |c| [ c[:name], c.slice(:type, :precision, :scale, :default) ] }
+    end
+    decimal = ->(**rest) { { type: "decimal", **rest } }
+
+    expect(shape.("postgresql")).to eq(
+      "n" => decimal.(precision: 5, scale: 2, default: "7.0"), "m" => decimal.(), "d" => decimal.(precision: 10, scale: 2, default: "0.0"),
+      "e" => decimal.(precision: 8, scale: 2, default: "1.56"), "f" => decimal.(default: "10.0"), "g" => decimal.(precision: 6, default: "5"),
+      "h" => decimal.(default: "3.0"), "k" => decimal.(precision: 4, scale: 1, default: "2.0")
+    )
+    expect(shape.("trilogy").slice("m", "f", "h")).to eq(
+      "m" => decimal.(precision: 10), "f" => decimal.(precision: 10, default: "10"), "h" => decimal.(precision: 10, default: "3")
+    )
+    expect(shape.("sqlite3").slice("m", "f", "g")).to eq("m" => decimal.(), "f" => decimal.(default: "10.0"), "g" => decimal.(precision: 6, default: "5"))
+  end
+
+  # A precision with no scale is scale 0 on every adapter (extract_scale), and DecimalWithoutScale casts a default with
+  # to_i, which truncates; MySQL's own decimal(10,0) rounds a default the migration sent unscaled. numeric is no native
+  # type, so type_to_sql drops its sizes. Expected values are PostgreSQL 16, MySQL 8.4, MariaDB 11.4 and SQLite dumps.
+  it "reads a decimal default with no scale as each adapter's dump writes it" do
+    source = <<~RUBY
+      create_table :dq do |t|
+        t.decimal :a, precision: 5, default: 3
+        t.decimal :b, precision: 5, default: 1.5
+        t.decimal :c, precision: 5, scale: 0, default: -2.5
+        t.decimal :d, default: 2.5
+        t.column :g, :numeric, precision: 6, scale: 3, default: "2"
+      end
+      add_column :dq, :k, :decimal, precision: 7, default: 100
+      add_column :dq, :m, :decimal, precision: 5
+      change_column_default :dq, :m, 7.9
+    RUBY
+    shape = lambda do |adapter|
+      replay([ source ], adapter: adapter)["dq"][:columns].drop(1).to_h { |c| [ c[:name], c.slice(:precision, :scale, :default) ] }
+    end
+
+    expect(shape.("postgresql")).to eq(
+      "a" => { precision: 5, default: "3" }, "b" => { precision: 5, default: "1" }, "c" => { precision: 5, default: "-2" },
+      "d" => { default: "2.5" }, "g" => { default: "2.0" }, "k" => { precision: 7, default: "100" }, "m" => { precision: 5, default: "7" }
+    )
+    expect(shape.("sqlite3")).to eq(shape.("postgresql"))
+    expect(shape.("trilogy")).to eq(
+      "a" => { precision: 5, default: "3" }, "b" => { precision: 5, default: "1" }, "c" => { precision: 5, default: "-2" },
+      "d" => { precision: 10, default: "3" }, "g" => { precision: 10, default: "2" }, "k" => { precision: 7, default: "100" }, "m" => { precision: 5, default: "7" }
+    )
+    raw = ->(adapter) { replay([ %(execute "CREATE TABLE dr (id int PRIMARY KEY, a decimal(5) DEFAULT 2.5)") ], adapter: adapter)["dr"][:columns].last[:default] }
+    expect([ raw.("trilogy"), raw.("postgresql") ]).to eq([ "3", "2" ])
+  end
+
+  # PostgreSQL's adapter casts only change_column_default's value, through the column it reads back; create_table,
+  # add_column and change_column send theirs as written, which a later change to a plain decimal shows. PostgreSQL 16 dump.
+  it "keeps a PostgreSQL decimal default as sent when the column later loses its precision" do
+    tables = replay([ <<~RUBY ], adapter: "postgresql")
+      create_table :dw do |t|
+        t.decimal :a, precision: 5, default: 1.5
+        t.decimal :b, precision: 5
+        t.decimal :c
+      end
+      add_column :dw, :e, :decimal, precision: 5, default: 1.5
+      change_column_default :dw, :b, 1.5
+      change_column :dw, :c, :decimal, precision: 5, default: 1.5
+      change_column :dw, :a, :decimal
+      change_column :dw, :b, :decimal
+      change_column :dw, :c, :decimal
+      change_column :dw, :e, :decimal
+    RUBY
+
+    expect(tables["dw"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] }).to eq("a" => "1.5", "b" => "1.0", "c" => "1.5", "e" => "1.5")
+  end
+
+  # The dump writes a proc default as its SQL text in double quotes, and PostgreSQL's adapter reads a literal there back
+  # as its value (extract_value_from_default). Expected values are PostgreSQL 16 dumps.
+  it "reads a proc default the way the PostgreSQL dump writes it" do
+    tables = replay([ <<~RUBY ], adapter: "postgresql")
+      create_table :d1 do |t|
+        t.datetime :a, default: -> { 'now()' }
+        t.string :c, default: -> { "'y'::character varying" }
+        t.integer :n, default: -> { "5" }
+        t.boolean :b, default: -> { "true" }
+        t.datetime :e
+        t.date :dd, default: -> { "'2024-01-02'::date" }
+      end
+      add_column :d1, :q, :string, default: -> { "'it''s'" }
+      change_column_default :d1, :e, -> { 'CURRENT_TIMESTAMP' }
+      create_table :d2 do |t|
+        t.string :s, default: -> { "'z'" }
+      end
+      revert { change_column_default :d2, :s, from: -> { "'k'::character varying" }, to: -> { "'z'" } }
+    RUBY
+    defaults = %w[d1 d2].flat_map { |name| tables[name][:columns].filter_map { |c| [ c[:name], c[:default] ] if c.key?(:default) } }.to_h
+
+    expect(defaults).to eq(
+      "a" => '-> { "now()" }', "c" => "y", "n" => "5", "b" => "true", "dd" => "2024-01-02", "q" => "it's",
+      "e" => '-> { "CURRENT_TIMESTAMP" }', "s" => "k"
+    )
+  end
+
+  # PostgreSQL stores one whole literal as the column's type reads it, which Rails decodes back (extract_value_from_default);
+  # an expression is a proc only where has_default_function? accepts it, else no default. MySQL stores a bare literal or
+  # number as the value. Expected values are PostgreSQL 16, MySQL 8.4 and MariaDB 11.4 dumps; the kept procs are the
+  # declared SQL, where the dump writes PostgreSQL's own spelling of it.
+  it "reads a proc default that is one literal as the server stores it" do
+    pg = replay([ <<~RUBY ], adapter: "postgresql")
+      create_table :la do |t|
+        t.text :cc, default: -> { "'a' || 'b'" }
+        t.string :s1, default: -> { "('q')" }
+        t.string :s4, default: -> { "'a'::text || 'b'" }
+        t.string :s5, default: -> { "'x' :: text" }
+        t.string :s6, default: -> { "('a')::text" }
+        t.boolean :b1, default: -> { "'t'" }
+        t.boolean :b2, default: -> { "'no'" }
+        t.boolean :b3, default: -> { "'off'::boolean" }
+        t.boolean :b5, default: -> { "TRUE" }
+        t.boolean :b6, default: -> { "False" }
+        t.integer :i2, default: -> { "(-7)" }
+        t.string :a1, array: true, default: -> { "'{}'::character varying[]" }
+        t.text :a2, array: true, default: -> { "'{a,b}'::text[]" }
+        t.integer :a4, array: true, default: -> { "'{1,2}'" }
+        t.boolean :a5, array: true, default: -> { "'{no,yes,of,n,1}'::boolean[]" }
+        t.boolean :a6, array: true, default: [ "no", "on", true, false ]
+        t.string :e1, array: true, default: -> { "ARRAY['a', 'b']" }
+        t.string :e2, array: true, default: -> { "ARRAY[]::varchar[]" }
+        t.integer :e3, default: -> { "1 + 1" }
+        t.time :e4, default: -> { "CURRENT_TIME" }
+        t.text :e5, default: -> { "current_user" }
+        t.datetime :f1, default: -> { "current_timestamp" }
+        t.date :f2, default: -> { "current_date + 1" }
+        t.text :f3, default: -> { "(current_user)::text" }
+        t.integer :f4, default: 4
+      end
+      change_column_default :la, :f4, -> { "1 + 1" }
+    RUBY
+    my = replay([ <<~RUBY ], adapter: "trilogy")
+      create_table :la do |t|
+        t.string :s2, default: -> { "'y'" }
+        t.string :s1, default: -> { "('q')" }
+        t.string :s3, default: -> { "'it''s'" }
+        t.integer :i1, default: -> { "5" }
+        t.integer :i3, default: -> { "2.5" }
+        t.bigint :i4, default: -> { "-2.5" }
+        t.float :f1, default: -> { "2.50" }
+        t.float :f2, default: -> { "3" }
+        t.string :s4, default: -> { "2.50" }
+        t.boolean :b4, default: -> { "true" }
+        t.decimal :dp, precision: 5, default: -> { "1.5" }
+      end
+    RUBY
+    defaults = ->(tables) { tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] } }
+
+    expect(defaults.(pg)).to eq(
+      "cc" => nil, "s1" => "q", "s4" => nil, "s5" => "x", "s6" => "a", "b1" => "true", "b2" => "false",
+      "b3" => "false", "b5" => "true", "b6" => "false", "i2" => "-7", "a1" => "[]", "a2" => '["a", "b"]', "a4" => "[1, 2]", "a5" => "[false, true, false, false, true]", "a6" => "[false, true, true, false]",
+      "e1" => nil, "e2" => nil, "e3" => nil, "e4" => nil, "e5" => nil, "f1" => '-> { "current_timestamp" }',
+      "f2" => '-> { "current_date + 1" }', "f3" => '-> { "(current_user)::text" }', "f4" => nil
+    )
+    expect(defaults.(my)).to eq("s2" => "y", "s1" => %q(-> { "('q')" }), "s3" => "it's", "i1" => "5", "i3" => "3", "i4" => "-3", "f1" => "2.5", "f2" => "3", "s4" => "2.50", "b4" => "true", "dp" => "2")
+  end
+
+  # MySQL 8.4 stores a bare number a string column takes as the number's own text, and an e-notation one as the value on
+  # every number type; a date or time column turns it into a date, which the replay leaves as the proc.
+  it "reads a bare MySQL number on a string, number or date column as MySQL stores it" do
+    numbers = { "a" => "007", "b" => "-07", "c" => "00.10", "d" => "-0.50", "e" => "2.50", "f" => "1e3", "g" => "-1.5e2", "h" => ".5", "i" => "5.",
+                "j" => "1e15", "k" => "1.5e-3", "l" => "-0.0", "m" => "1e-16", "n" => "12345678901234567e0" }
+    columns = numbers.map { |name, number| %(  t.string :#{name}, default: -> { "#{number}" }) }
+    tables = replay([ <<~RUBY ], adapter: "trilogy")
+      create_table :la do |t|
+      #{columns.join("\n")}
+        t.binary :x, limit: 20, default: -> { "007" }
+        t.integer :y, default: -> { "1e3" }
+        t.float :z, default: -> { "-1.5e2" }
+        t.float :z2, default: -> { "1.23456789" }
+        t.float :z3, limit: 53, default: -> { "1.23456789" }
+        t.decimal :w, precision: 6, scale: 2, default: -> { "1e3" }
+        t.date :v, default: -> { "20200101" }
+      end
+    RUBY
+    expect(tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] }).to eq(
+      "a" => "7", "b" => "-7", "c" => "0.10", "d" => "-0.50", "e" => "2.50", "f" => "1000", "g" => "-150", "h" => "0.5", "i" => "5",
+      "j" => "1e15", "k" => "0.0015", "l" => "0.0", "m" => "1e-16", "n" => "1.2345678901234568e16",
+      "x" => "7", "y" => "1000", "z" => "-150", "z2" => "1.23457", "z3" => "1.23456789", "w" => "1000.0", "v" => '-> { "20200101" }'
+    )
+  end
+
+  # MySQL 8.4 rounds a decimal default half away from zero to the column's scale before it stores it, a zero with no
+  # sign, and an e-notation number from the double's shortest digits.
+  it "reads a bare MySQL number on a decimal column rounded to its scale, a zero unsigned" do
+    numbers = { "a" => "-2.5e-3", "b" => "-0.004", "c" => "-0.005", "d" => "0.005", "e" => "-0.0049", "f" => "-1.005", "g" => "2.345",
+                "h" => "-0.0", "i" => "-1e-3", "j" => "-5e-3", "k" => "1.0049999999999999e0", "l" => "-0.125e0" }
+    columns = numbers.map { |name, number| %(  t.decimal :#{name}, precision: 8, scale: 2, default: -> { "#{number}" }) }
+    tables = replay([ <<~RUBY ], adapter: "trilogy")
+      create_table :la do |t|
+      #{columns.join("\n")}
+        t.decimal :z, precision: 8, scale: 0, default: -> { "-0.4" }
+      end
+    RUBY
+    expect(tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] }).to eq(
+      "a" => "0.0", "b" => "0.0", "c" => "-0.01", "d" => "0.01", "e" => "0.0", "f" => "-1.01", "g" => "2.35", "h" => "0.0", "i" => "0.0",
+      "j" => "-0.01", "k" => "1.01", "l" => "-0.13", "z" => "0"
+    )
+  end
+
+  # MySQL 8.4 and MariaDB 11.4 store a number on a YEAR column rounded to a year: 1 to 69 in the 2000s, 70 to 99 in the
+  # 1900s and 0 as 0000, which the dump reads as 0; a value outside 1901 to 2155 or below zero they refuse.
+  it "reads a bare MySQL number on a year column as MySQL stores it, and keeps the proc for one MySQL refuses" do
+    years = { "a" => [ "07", "2007" ], "b" => [ "70", "1970" ], "c" => [ "0", "0" ], "d" => [ "00", "0" ], "e" => [ "2155", "2155" ], "f" => [ "1901", "1901" ],
+              "g" => [ "69", "2069" ], "h" => [ "99", "1999" ], "i" => [ "7.5", "2008" ], "j" => [ "2.0e3", "2000" ], "k" => [ "0.4", "0" ],
+              "l" => [ "69.5", "1970" ], "m" => [ "1.", "2001" ], "n" => [ "1900.5", "1901" ], "o" => [ "1900", nil ], "p" => [ "2156", nil ],
+              "q" => [ "-1", nil ], "r" => [ "1e3", nil ], "s" => [ "-0.4", nil ], "t" => [ "99.5", nil ], "u" => [ "2155.5", nil ] }
+    columns = years.map { |name, (number, _)| %(  t.column :#{name}, :year, default: -> { "#{number}" }) }
+    tables = replay([ <<~RUBY ], adapter: "trilogy")
+      create_table :la, id: false do |t|
+      #{columns.join("\n")}
+      end
+      add_column :la, :v, :year, default: -> { "70" }
+      add_column :la, :w, :integer
+      change_column :la, :w, :year, default: -> { "72" }
+      add_column :la, :x, :year, default: 7
+    RUBY
+    expect(tables["la"][:columns].to_h { |c| [ c[:name], c[:default] ] }).to eq(
+      years.transform_values { |number, stored| stored || %(-> { "#{number}" }) }.merge("v" => "1970", "w" => "1972", "x" => "2007")
+    )
+  end
+
+  # change_column_default names no type: MySQL 8.4 stores 08 as 2008 and 74 as 1974 on a year column and 07 as 7 on an
+  # int one, though the dump reads both as integer.
+  it "reads a bare MySQL number change_column_default sets as the column's declared type stores it" do
+    tables = replay([ <<~RUBY ], adapter: "trilogy")
+      create_table :y, id: false do |t|
+        t.column :a, :year
+        t.column :b, :year
+        t.column :c, :year
+        t.integer :n
+        t.column :d, :year
+        t.column :e, :year
+      end
+      change_column_default :y, :a, -> { "08" }
+      change_column_default :y, :b, from: nil, to: -> { "75" }
+      change_column_default :y, :c, from: 7, to: 74
+      change_column_default :y, :n, -> { "07" }
+      change_column :y, :d, :year, default: -> { "09" }
+      change_column :y, :e, :integer
+      change_column_default :y, :e, 7
+    RUBY
+    expect(tables["y"][:columns].to_h { |c| [ c[:name], c[:default] ] }).to eq(
+      "a" => "2008", "b" => "1975", "c" => "1974", "n" => "7", "d" => "2009", "e" => "7"
+    )
+    expect(tables["y"][:columns].map(&:keys).flatten.uniq).not_to include(:year)
+  end
+
+  # MySQL 8.4 reads a number with a trailing point as its value, which bigdecimal before 3.2 refuses to parse, and
+  # refuses a number no double holds, so that default stays the proc and the rest of the file still replays. A whole
+  # number past a double's range is refused on a float column and stored as 1e65 on a double one; both stay the proc.
+  it "reads a bare MySQL number with a trailing point or out of a double's range and keeps replaying the file" do
+    huge = "1#{"0" * 400}"
+    tables = replay([ <<~RUBY ], adapter: "trilogy")
+      create_table :la do |t|
+        t.integer :n, default: -> { "1." }
+        t.decimal :m, precision: 5, scale: 1, default: -> { "1.e3" }
+        t.float :f, default: -> { "5." }
+        t.float :g, default: -> { "1e400" }
+        t.string :s, default: -> { "-1.e3" }
+        t.float :h, default: -> { "#{huge}" }
+        t.float :w, limit: 53, default: -> { "#{huge}" }
+      end
+      create_table :after_it
+    RUBY
+    expect(tables.keys).to eq(%w[la after_it])
+    expect(tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] }).to eq(
+      "n" => "1", "m" => "1000.0", "f" => "5", "g" => '-> { "1e400" }', "s" => "-1000", "h" => %(-> { "#{huge}" }), "w" => %(-> { "#{huge}" })
+    )
+  end
+
+  # SQLite stores a proc's SQL as written, and the adapter reads it back by its own rule (the reader's sqlite_default).
+  # Expected values are SQLite dumps under Rails 7.0.10, 7.1.6 and 8.1.4.
+  it "reads a SQLite proc default as the adapter of the app's Rails reads it back" do
+    source = <<~'RUBY'
+      create_table :la do |t|
+        t.string :s1, default: -> { "'y'" }
+        t.string :s2, default: -> { "('q')" }
+        t.integer :i1, default: -> { "5" }
+        t.integer :i2, default: -> { "(1 + 1)" }
+        t.string :s3, default: -> { "'a|b'" }
+        t.datetime :d1, default: -> { "CURRENT_TIMESTAMP" }
+        t.string :s4, default: -> { "lower('X')" }
+        t.boolean :b1, default: -> { "TRUE" }
+        t.boolean :b2, default: -> { "1" }
+        t.boolean :b3, default: -> { "'f'" }
+        t.boolean :b4, default: -> { "'t'" }
+      end
+      add_column :la, :s6, :string, default: -> { "'z'" }
+      add_column :la, :b5, :boolean, default: -> { "0" }
+    RUBY
+    defaults = lambda do |rails|
+      allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_return(rails)
+      replay([ source ], adapter: "sqlite3")["la"][:columns].filter_map { |c| [ c[:name], c[:default] ] if c.key?(:default) }.to_h
+    end
+    newest = { "s1" => "y", "s2" => "q", "i1" => "5", "d1" => '-> { "CURRENT_TIMESTAMP" }', "s4" => %q(-> { "lower('X')" }), "s6" => "z",
+               "b2" => "true", "b3" => "false", "b4" => "true", "b5" => "false" }
+
+    expect(defaults.("8.1.4")).to eq(newest.merge("b1" => "true"))
+    expect(defaults.("8.1.3")).to eq(newest.merge("b1" => "true"))
+    expect(defaults.("7.1.6")).to eq(newest)
+    expect(defaults.("7.0.10")).to eq(newest.merge("s3" => "a|b"))
+  end
+
+  # Rails 8.1.4's SQLite dump: a decimal with a scale casts TRUE to 1.0, a whole one cannot dump it, and an empty
+  # string on a boolean is no default, as ActiveModel's Boolean cast reads it.
+  it "reads a SQLite proc default through the column's scale and Rails' boolean cast" do
+    source = <<~'RUBY'
+      create_table :lb do |t|
+        t.decimal :d1, precision: 5, scale: 2, default: -> { "TRUE" }
+        t.decimal :d2, precision: 5, scale: 0, default: -> { "TRUE" }
+        t.boolean :b1, default: -> { "''" }
+      end
+    RUBY
+    allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_return("8.1.4")
+    columns = replay([ source ], adapter: "sqlite3")["lb"][:columns].to_h { |c| [ c[:name], c ] }
+
+    expect(columns["d1"][:default]).to eq("1.0")
+    expect(columns["d2"]).not_to have_key(:default)
+    expect(columns["b1"]).not_to have_key(:default)
+  end
+
+  # PostgreSQL 16 and Rails 8.1.4's dump: each element goes through the column's type, NULL included.
+  it "reads a PostgreSQL array proc default's elements as the dump casts them" do
+    tables = replay([ <<~'RUBY' ], adapter: "postgresql")
+      create_table :la do |t|
+        t.integer :a1, array: true, default: -> { "'{1,NULL}'" }
+        t.float :a2, array: true, default: -> { "'{1,2.5}'" }
+        t.decimal :a3, precision: 5, array: true, default: -> { "'{2.5}'" }
+        t.text :a4, array: true, default: -> { %q('{"b\\\\c",NULL}') }
+        t.boolean :a5, array: true, default: -> { "'{t,NULL}'" }
+      end
+    RUBY
+
+    expect(tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] })
+      .to eq("a1" => "[1, nil]", "a2" => "[1.0, 2.5]", "a3" => '["2"]', "a4" => '["b\\\\c", nil]', "a5" => "[true, nil]")
+  end
+
+  # Rails 7.0.10 and 8.1.4's dump on PostgreSQL 16: a Ruby array or array-literal string default is stored as the
+  # column's array and read back through its element type.
+  it "reads a PostgreSQL array default given as a value as the dump casts it" do
+    tables = replay([ <<~'RUBY' ], adapter: "postgresql")
+      create_table :la do |t|
+        t.string :g1, array: true, default: ["a", "b"]
+        t.string :g3, array: true, default: []
+        t.integer :g4, array: true, default: [1, nil]
+        t.decimal :g6, precision: 5, array: true, default: [2.5]
+        t.float :g8, array: true, default: [1, 2.5]
+        t.integer :g9, array: true, default: [[1, 2], [3, 4]]
+        t.string :g10, array: true, default: "{a,b}"
+        t.float :g11, array: true
+        t.float :g12, array: true
+      end
+      change_column :la, :g11, :float, array: true, default: [3]
+      change_column_default :la, :g12, [4, nil]
+    RUBY
+
+    expect(tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] }).to eq(
+      "g1" => '["a", "b"]', "g3" => "[]", "g4" => "[1, nil]", "g6" => '["2"]', "g8" => "[1.0, 2.5]", "g9" => "[[1, 2], [3, 4]]",
+      "g10" => '["a", "b"]', "g11" => "[3.0]", "g12" => "[4.0, nil]"
+    )
+  end
+
+  describe "a nextval default naming another table's key sequence" do
+    it "reads as PostgreSQL writes it, and follows the sequence when rename_table renames it" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :a5
+        create_table :o5 do |t|
+          t.bigint :n, default: -> { "nextval('a5_id_seq'::regclass)" }
+        end
+        rename_table :a5, :c5
+        create_table :a6
+        create_table :o6 do |t|
+          t.bigint :n, default: -> { "nextval('a6_id_seq')" }
+          t.bigint :p, default: -> { "nextval('public.a6_id_seq'::regclass)" }
+        end
+        rename_table :a6, :c6
+        create_table :a7
+        create_table :o7 do |t|
+          t.bigint :n, default: -> { "nextval('a7_id_seq')" }
+        end
+        create_table :a9
+        rename_column :a9, :id, :uid
+        create_table :o9 do |t|
+          t.bigint :n, default: -> { "nextval('a9_id_seq'::regclass)" }
+        end
+        rename_table :a9, :c9
+        create_table :d2 do |t|
+          t.serial :n
+        end
+        change_column_default :d2, :n, -> { "nextval('d2_n_seq'::regclass)" }
+        create_table :a10
+        execute "CREATE SEQUENCE a10_m_seq"
+        add_column :a10, :m, :bigint, default: -> { "nextval('a10_m_seq')" }
+        add_column :a10, :at, :datetime, default: -> { "CURRENT_TIMESTAMP" }
+      RUBY
+      nextval = ->(sequence) { %(-> { "nextval('#{sequence}'::regclass)" }) }
+      defaults = ->(name) { tables[name][:columns].drop(1).map { |c| c[:default] } }
+
+      expect(defaults.("o5")).to eq([ nextval.("c5_id_seq") ])
+      expect(defaults.("o6")).to eq([ nextval.("c6_id_seq") ] * 2)
+      expect(defaults.("o7")).to eq([ nextval.("a7_id_seq") ])
+      expect(defaults.("o9")).to eq([ nextval.("a9_id_seq") ])
+      expect(tables["d2"][:columns].last).to eq(name: "n", type: "serial", null: false)
+      expect(tables["a10"][:columns].drop(1)).to eq([ { name: "m", type: "bigserial" }, { name: "at", type: "datetime", default: %(-> { "CURRENT_TIMESTAMP" }) } ])
     end
   end
 

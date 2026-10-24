@@ -24,6 +24,9 @@ RSpec.describe "Listener registration properties" do
       module Probe
         class Thing < Base
           SETTING = 1
+          LIMIT ||= 2
+          Probe::DEPTH ||= 3
+          FIRST, Probe::SECOND = 1, 2
           RULE = -> { :rule }
           Probe::Nested = Class.new(Base) do
           end

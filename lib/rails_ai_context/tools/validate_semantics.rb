@@ -268,15 +268,17 @@ module RailsAiContext
           # tag subscribes to a channel that broadcasts render their own
           # partials into, and nothing renders a template for it.
         elsif file.end_with?(".rb")
+          model = RailsAiContext::Payload.model_for_file(context, file) if file.start_with?("app/models/")
+          methods, reaches_base = model_method_names(model, content)
           if visitor
             warnings.concat(check_route_helpers_ast(file, visitor, context))
             warnings.concat(check_partial_existence_ast(file, visitor, qualified_only: true))
-            warnings.concat(check_column_references_ast(file, visitor, context))
+            warnings.concat(check_column_references_ast(file, visitor, context, methods))
             warnings.concat(check_strong_params_ast(file, visitor, context))
-            warnings.concat(check_callback_existence_ast(file, visitor, context))
+            warnings.concat(check_callback_existence_ast(visitor, model, methods, reaches_base))
           else
             warnings.concat(check_route_helpers_regex(file, content, context))
-            warnings.concat(check_column_references_regex(file, content, context))
+            warnings.concat(check_column_references_regex(file, content, context, methods))
             # Three AST checks have no regex twin. Saying so keeps a partial
             # answer from reading as "checked and clean".
             warnings << "AST parse failed - strong_params, callback and partial checks skipped for this file"
@@ -441,8 +443,7 @@ module RailsAiContext
       # The sources the globs name under the app root, skipping a file a
       # symlink carries out of it.
       private_class_method def self.app_sources(root, *patterns)
-        patterns.flat_map { |pattern| Dir.glob(pattern, base: root) }.uniq.filter_map do |relative|
-          path = File.join(root, relative)
+        patterns.flat_map { |pattern| RailsAiContext::PathResolver.glob(root, pattern) }.uniq.filter_map do |path|
           RailsAiContext::SafeFile.read(path) unless RailsAiContext::PathResolver.linked_out?(path, root)
         end
       end
@@ -512,7 +513,8 @@ module RailsAiContext
 
       # ── CHECK 3: Column references (AST) ─────────────────────────────
 
-      private_class_method def self.check_column_references_ast(file, visitor, context)
+      # A validator reads the value through read_attribute_for_validation, which calls the method.
+      private_class_method def self.check_column_references_ast(file, visitor, context, methods)
         warnings = []
         return warnings unless file.start_with?("app/models/")
 
@@ -521,7 +523,7 @@ module RailsAiContext
 
         visitor.validates_calls.each do |vc|
           vc[:columns].each do |col|
-            next if visitor.virtual_attributes.include?(col)
+            next if visitor.virtual_attributes.include?(col) || methods.include?(col)
 
             unless valid[:columns].include?(col)
               warnings << "validates :#{col} - column \"#{col}\" not found in #{valid[:table]} table. Fix: add migration `rails g migration Add#{col.camelize}To#{valid[:table].camelize} #{col}:string` or check concerns"
@@ -532,7 +534,7 @@ module RailsAiContext
       end
 
       # Regex fallback
-      private_class_method def self.check_column_references_regex(file, content, context)
+      private_class_method def self.check_column_references_regex(file, content, context, methods)
         warnings = []
         return warnings unless file.start_with?("app/models/")
 
@@ -546,7 +548,8 @@ module RailsAiContext
           after.scan(/:(\w+)/).each do |m|
             col = m[0]
             break if after.include?("#{col}:")
-            next if col == col.capitalize
+            next if col == col.capitalize || methods.include?(col)
+
             warnings << "validates :#{col} - column \"#{col}\" not found in #{valid[:table]} table" unless valid[:columns].include?(col)
           end
         end
@@ -645,22 +648,11 @@ module RailsAiContext
 
       # ── CHECK 5: Callback method existence (AST) ─────────────────────
 
-      private_class_method def self.check_callback_existence_ast(file, visitor, context)
+      # `model` is the model file's [name, data] from the payload, nil for any other file.
+      private_class_method def self.check_callback_existence_ast(visitor, model, known, reaches_base)
         warnings = []
-        return warnings unless file.start_with?("app/models/")
-        return warnings if visitor.callback_registrations.empty?
-
-        models = Payload.models(context)
-        return warnings if models.empty?
-
-        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
-        return warnings unless model_data
-
-        # Build set of known methods (instance + from source content)
-        known = Set.new(model_data[:instance_methods] || [])
-        # Also check the file source for private methods
-        source = RailsAiContext::SafeFile.read(rails_app.root.join(file))
-        source&.scan(/\bdef\s+(\w+[?!]?)/)&.each { |m| known << m[0] }
+        model_name, model_data = model
+        return warnings if model_data.nil? || visitor.callback_registrations.empty?
 
         # Skip check if model has concerns (method may be in concern)
         has_concerns = (model_data[:concerns] || []).any?
@@ -674,12 +666,28 @@ module RailsAiContext
             next if has_concerns # uncertain - method may come from concern
 
             live = live_method_defined?(model_name, method_name)
-            next if live || (live.nil? && truncated)
+            # Unread on the static tier, a parent the walk could not follow may define it.
+            next if live || (live.nil? && (truncated || !reaches_base))
 
             warnings << "#{reg[:type]} :#{method_name} - method not found in #{model_name}"
           end
         end
         warnings
+      end
+
+      # The instance methods the payload lists for a model file's model and every one its file and the app
+      # classes it inherits from define, private ones included, and whether that walk reached ActiveRecord::Base.
+      private_class_method def self.model_method_names(model, content)
+        model_name, model_data = model
+        return [ Set.new, false ] unless model_data
+
+        chain = Introspectors::SuperclassChain.to(content, bases: %w[ActiveRecord::Base], only: model_name,
+                                                  lookup: Introspectors::SuperclassChain.lookup_for(rails_app.root.to_s))
+        names = Set.new(Array(model_data[:instance_methods]))
+        [ content, *chain.map(&:source) ].uniq.each do |source|
+          Introspectors::ActionResolver.methods_in(source).each { |m| names << m[:name].to_s if m[:scope] == :instance }
+        end
+        [ names, chain.any? ]
       end
 
       # ── CHECK 6: Route-action consistency (cache only) ───────────────
@@ -874,7 +882,7 @@ module RailsAiContext
 
       private_class_method def self.check_instance_variable_usage(file, content, context)
         warnings = []
-        return warnings unless file.start_with?("app/views/") && !file.include?("/layouts/")
+        return warnings unless file.start_with?("app/views/") && !RailsAiContext::ViewFile.in_layouts?(file.delete_prefix("app/views/"))
 
         # Tag bodies only, so HTML and JS text cannot look like an ivar. The
         # in-place form blanks `<%#` comments, whose bodies are not code.
@@ -1007,8 +1015,8 @@ module RailsAiContext
 
         if file.start_with?("app/controllers/") && perf[:model_all_in_controllers]&.any?
           perf[:model_all_in_controllers].each do |finding|
-            next unless finding.is_a?(Hash) && finding[:file]&.end_with?(File.basename(file))
-            warnings << "#{finding[:model]}.all loaded in controller - consider pagination or scoping (line #{finding[:line]})"
+            next unless finding.is_a?(Hash) && finding[:controller] == file
+            warnings << "#{finding[:model]}.all loaded in controller - consider pagination or scoping"
           end
         end
 
@@ -1024,9 +1032,17 @@ module RailsAiContext
       def self.check_brakeman_security(files)
         return {} unless brakeman_available?
 
+        root = rails_app.root
+        # Brakeman roots an entry by its leading slash, reads a folder by its trailing one, and rates a query lower on an unparsed model.
+        # shortcut: a view's warning fed by its controller's params needs both files passed; scan the whole app if that matters more than the seconds.
+        only_files = files.map do |f|
+          relative = filter_path(f)
+          "/#{relative}#{"/" if File.directory?(root.join(relative))}"
+        end | [ "/app/models/" ]
         tracker = BrakemanGuard.quietly do
           Brakeman.run(
-            app_path: rails_app.root.to_s,
+            app_path: root.to_s,
+            only_files: only_files,
             quiet: true,
             report_progress: false,
             print_report: false,
@@ -1041,11 +1057,10 @@ module RailsAiContext
 
         # The validated file each warning belongs to: a caller may name a
         # directory, and then every warning under it is that entry's.
-        normalized = files.to_h { |f| [ f.delete_prefix("/"), f ] }
         found = {}
         warnings.sort_by.with_index { |w, i| [ w.confidence, i ] }.each do |warning|
           path = warning.file.relative
-          owner = normalized.find { |name, _| path == name || path.start_with?(name) }&.last
+          owner = files.find { |name| path_matches?(path, name) }
           next unless owner
           break if found.values.sum(&:size) >= 5
 

@@ -113,6 +113,173 @@ RSpec.describe RailsAiContext::TestFramework do
 
       expect(list).to include("spec/requests/payments_controller_spec.rb", "spec/controllers/payments_spec.rb")
     end
+
+    # UserController owns spec/requests/user_spec.rb; UsersController has no test yet.
+    it "keeps a controller's plural name in the app's learned layout" do
+      write("spec/requests/user_spec.rb", "RSpec.describe \"User\", type: :request do\nend\n")
+      context = { controllers: { controllers: { "UsersController" => {}, "UserController" => {} } } }
+
+      list = described_class.candidates(@root, :controller, "users", context)
+
+      expect(list).to include("spec/requests/users_spec.rb")
+      expect(list).not_to include("spec/requests/user_spec.rb")
+    end
+  end
+
+  describe ".controller_test?" do
+    # The paths rspec-rails 8 and Rails 8 generators write for a controller (rspec-rails 4 wrote
+    # posts_request_spec), and the near names that belong to another subject.
+    {
+      [ "spec/controllers/posts_controller_spec.rb", "posts" ] => true,
+      [ "spec/requests/posts_spec.rb", "posts" ] => true,
+      [ "spec/requests/posts_request_spec.rb", "posts" ] => true,
+      [ "spec/routing/posts_routing_spec.rb", "posts" ] => true,
+      [ "spec/system/posts_spec.rb", "posts" ] => true,
+      [ "spec/requests/posts_controller_spec.rb", "posts" ] => true,
+      [ "test/controllers/posts_controller_test.rb", "posts" ] => true,
+      [ "test/system/posts_test.rb", "posts" ] => true,
+      [ "test/integration/posts_test.rb", "posts" ] => true,
+      [ "test/functional/posts_controller_test.rb", "posts" ] => true,
+      [ "spec/controllers/admin/posts_controller_spec.rb", "admin/posts" ] => true,
+      [ "spec/requests/admin/badges_controller_spec.rb", "admin/badges" ] => true,
+      [ "engines/billing/spec/controllers/invoices_controller_spec.rb", "invoices" ] => true,
+      [ "engines/billing/spec/requests/invoices_spec.rb", "invoices" ] => true,
+      [ "engines/billing/spec/models/invoice_spec.rb", "invoices" ] => false,
+      [ "spec/models/post_spec.rb", "posts" ] => false,
+      [ "spec/models/posts_spec.rb", "posts" ] => false,
+      [ "test/models/post_test.rb", "posts" ] => false,
+      [ "spec/post_spec.rb", "posts" ] => false,
+      [ "spec/requests/reposts_spec.rb", "posts" ] => false,
+      [ "spec/requests/user_spec.rb", "users" ] => false,
+      [ "spec/controllers/user_controller_spec.rb", "users" ] => false,
+      [ "spec/requests/tags_spec.rb", "admin/tags" ] => false,
+      [ "spec/controllers/admin/posts_controller_spec.rb", "posts" ] => false,
+      [ "spec/requests/api/v1/posts_spec.rb", "posts" ] => false
+    }.each do |(path, key), owned|
+      it "#{owned ? "counts" : "does not count"} #{path} as the #{key} controller's test" do
+        expect(described_class.controller_test?(path, key)).to be(owned)
+      end
+    end
+  end
+
+  describe ".suite_folders" do
+    {
+      "spec/models/widget_spec.rb" => [ "", "models" ],
+      "engines/billing/test/controllers/admin/invoices_controller_test.rb" => [ "engines/billing/", "controllers" ],
+      "spec/widget_spec.rb" => [ "", nil ],
+      "app/models/widget.rb" => [ "", nil ],
+      nil => [ "", nil ]
+    }.each do |path, folders|
+      it "reads #{folders.inspect} from #{path.inspect}" do
+        expect(described_class.suite_folders(path)).to eq(folders)
+      end
+    end
+  end
+
+  describe ".named_test?" do
+    {
+      [ "spec/models/widget_spec.rb", :model, "widget" ] => true,
+      [ "spec/models/widget_model_spec.rb", :model, "widget" ] => true,
+      [ "test/models/widget_model_test.rb", :model, "widget" ] => true,
+      [ "packs/shop/spec/models/widget_spec.rb", :model, "widget" ] => true,
+      [ "spec/models/widget_model_spec.rb", :service, "widget" ] => false,
+      [ "spec/models/user_mailer_spec.rb", :model, "user" ] => false,
+      [ "spec/models/postmark_event_spec.rb", :model, "post" ] => false,
+      [ "spec/jobs/admin/badge_job_spec.rb", :job, "badge_job" ] => false,
+      [ "spec/jobs/admin/badge_job_spec.rb", :job, "admin/badge_job" ] => true
+    }.each do |(path, kind, key), owned|
+      it "#{owned ? "counts" : "does not count"} #{path} as the #{kind} #{key}'s test" do
+        expect(described_class.named_test?(path, kind, key)).to be(owned)
+      end
+    end
+  end
+
+  describe ".test_subjects" do
+    {
+      "require \"rails_helper\"\n\nRSpec.describe Shop::Order, type: :model do\nend\n" => [ %w[Shop::Order] ],
+      "describe ::Widget do\nend\n" => [ %w[Widget] ],
+      "RSpec.describe \"Widgets\", type: :request do\nend\n" => [],
+      "module Shop\n  class OrderTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Order] ],
+      "RSpec.describe Widget do\n  context Gadget do\n  end\nend\n" => [ %w[Widget], %w[Gadget] ],
+      "RSpec.describe \"flows\" do\n  fdescribe Shop::Order do\n    xfeature Shop::Cart do\n    end\n  end\nend\n" => [ %w[Shop::Order], %w[Shop::Cart] ],
+      "module Shop\n  module Admin\n    RSpec.describe OrdersController do\n    end\n  end\nend\n" =>
+        [ %w[Shop::Admin::OrdersController Shop::OrdersController OrdersController] ],
+      "module Shop\n  describe ::OrdersController do\n  end\nend\n" => [ %w[OrdersController] ],
+      "module Jobs::Inner\n  RSpec.describe Sweep do\n  end\nend\n" => [ %w[Jobs::Inner::Sweep Sweep] ],
+      "module Shop\n  module Admin::Tools\n    describe Export do\n    end\n  end\nend\n" =>
+        [ %w[Shop::Admin::Tools::Export Shop::Export Export] ],
+      "RSpec.shared_examples Widget do\nend\n" => [],
+      "module Shop\n  class Admin::Test < ActiveSupport::TestCase\n  end\nend\n" => [],
+      "module Shop\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Draft] ],
+      "module Shop\n  module Shop; end\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Shop::Draft] ],
+      "module A\n  Shop = Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ %w[A::Shop::Draft] ],
+      "module A\n  Shop ||= Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ %w[A::Shop::Draft] ],
+      "module A\n  Shop, Mall = Module.new, Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ %w[A::Shop::Draft] ],
+      "module Shop\n  Shop ||= Module.new\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Draft] ],
+      "class Bar\n  M = Module.new\nend\nclass Foo < Bar\n  M ||= Module.new\n  class M::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Bar::M::Draft] ],
+      "module Shop\n  class Shop::Draft\n    RSpec.describe Item do\n    end\n  end\nend\n" => [ %w[Shop::Draft::Item Shop::Item Item] ]
+    }.each do |source, constants|
+      it "reads #{constants.inspect} from #{source.lines.grep(/describe|class|shared/).first.strip}" do
+        expect(described_class.test_subjects(source).described).to match_array(constants)
+      end
+    end
+
+    it "reads only the groups and test classes no other one holds, when asked for the top level" do
+      source = "module Shop\n  RSpec.describe \"Order\" do\n    describe Presenter do\n    end\n  end\n  " \
+               "RSpec.describe Cart do\n    context Item do\n    end\n  end\n  class CartTest < ActiveSupport::TestCase\n    describe Item do\n    end\n  end\nend\n"
+
+      expect(described_class.test_subjects(source).top_level).to contain_exactly(%w[Shop::Cart Cart], %w[Shop::Cart])
+    end
+
+    it "reads a top-level group inside a block or a condition whatever comes before or after it" do
+      wrapped = "[1].each do\n  RSpec.describe OrderPresenter do\n  end\nend\n"
+      conditional = "if true\n  RSpec.describe OrderPresenter do\n  end\nend\n"
+
+      expect(described_class.test_subjects("#{wrapped}RSpec.describe Order do\nend\n").top_level).to contain_exactly(%w[OrderPresenter], %w[Order])
+      expect(described_class.test_subjects("RSpec.describe Order do\nend\n#{wrapped}").top_level).to contain_exactly(%w[OrderPresenter], %w[Order])
+      expect(described_class.test_subjects("#{conditional}RSpec.describe \"x\" do\nend\n").top_level).to contain_exactly(%w[OrderPresenter])
+    end
+
+    it "leaves the shared parse cache as it found it" do
+      source = "module Shop\n  class OrderTest < ActiveSupport::TestCase\n  end\nend\n# #{SecureRandom.hex}\n"
+
+      expect { described_class.test_subjects(source).described }.not_to change(RailsAiContext::AstCache, :size)
+    end
+
+    it "reads each class as ClassDefinitionListener does" do
+      source = "module Admin\n  class OrdersControllerTest < BaseTest\n    class Helper < ::Struct\n    end\n  end\n  class Shop::CartTest < Struct.new(:a)\n  end\nend\n" \
+               "class TopTest < ActionDispatch::IntegrationTest\nend\n"
+      listener = RailsAiContext::Introspectors::SourceIntrospector.walk_source(
+        source, { classes: -> { RailsAiContext::Introspectors::Listeners::ClassDefinitionListener.new } }
+      )[:classes]
+
+      expect(described_class.test_subjects(source).classes).to eq(listener)
+    end
+
+    it "parses the file once for its groups and its classes" do
+      source = "module Admin\n  class OrdersControllerTest < BaseTest\n  end\nend\nRSpec.describe Order do\nend\n"
+      allow(Prism).to receive(:parse).and_call_original
+
+      found = described_class.test_subjects(source)
+
+      expect(found.classes.map { |klass| klass.values_at(:name, :superclass, :nesting) }).to eq([ [ "OrdersControllerTest", "BaseTest", [ "Admin" ] ] ])
+      expect(found.top_level).to contain_exactly(%w[Admin::OrdersController], %w[Order])
+      expect(Prism).to have_received(:parse).once
+    end
+  end
+
+  describe "Suite#tested?" do
+    it "reads an integration test filed under test/controllers without touching the shared parse cache" do
+      Dir.mktmpdir do |root|
+        test = "test/controllers/admin/orders_controller_test.rb"
+        FileUtils.mkdir_p(File.join(root, "test/controllers/admin"))
+        File.write(File.join(root, test), "class OrdersControllerTest < ActionDispatch::IntegrationTest\nend\n# #{SecureRandom.hex}\n")
+        suite = described_class::Suite.new(root, [ test ])
+
+        expect { expect(suite.tested?(:controller, "admin/orders", "Admin::OrdersController")).to be(true) }
+          .not_to change(RailsAiContext::AstCache, :size)
+      end
+    end
   end
 
   describe ".test_style" do

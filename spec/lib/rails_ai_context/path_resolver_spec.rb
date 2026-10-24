@@ -50,6 +50,20 @@ RSpec.describe RailsAiContext::PathResolver do
     end
   end
 
+  describe ".glob" do
+    it "matches the pattern below a directory whose own name holds glob syntax, sorted and spelled under it" do
+      dir = File.join(@root, "work [old] {x}*?")
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+      %w[app/models/user.rb app/models/admin/role.rb app/models/notes.txt].each { |rel| File.write(File.join(dir, rel), "") }
+
+      expect(described_class.glob(dir, "app/models/**/*.rb")).to eq(
+        [ File.join(dir, "app/models/admin/role.rb"), File.join(dir, "app/models/user.rb") ]
+      )
+      expect(described_class.glob(dir, "{app,lib}/models/")).to eq([ File.join(dir, "app/models/") ])
+      expect(described_class.glob(File.join(@root, "missing"), "*")).to eq([])
+    end
+  end
+
   describe ".view_dirs" do
     it "searches the views of the engine a booted test/dummy runs in, after the app's own" do
       dummy = File.join(@root, "test", "dummy")
@@ -238,6 +252,20 @@ RSpec.describe RailsAiContext::PathResolver do
         .to eq(File.join(@root, "engines/store/lib/store/checkout.rb"))
     end
 
+    # Zeitwerk camelizes json_ld/feed_builder.rb to JsonLd::FeedBuilder; the constant underscores to jsonld/.
+    it "finds a constant whose path splits an acronym the app registers" do
+      mkdirs("config/initializers", "app/services/json_ld")
+      File.write(File.join(@root, "config/initializers/inflections.rb"),
+                 "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  inflect.acronym 'JsonLd'\nend\n")
+      File.write(File.join(@root, "app/services/json_ld/feed_builder.rb"), "class JsonLd::FeedBuilder\nend\n")
+
+      found = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(@root)) do
+        described_class.file_for_constant(@root, "JsonLd::FeedBuilder")
+      end
+
+      expect(found).to eq(File.join(@root, "app/services/json_ld/feed_builder.rb"))
+    end
+
     it "finds a constant under a root config/application.rb adds" do
       mkdirs("config", "lib_static/task_tracker/authentication")
       File.write(File.join(@root, "config/application.rb"), <<~RUBY)
@@ -271,6 +299,15 @@ RSpec.describe RailsAiContext::PathResolver do
       expect(described_class.file_for_constant(@root, "SharedLib::Thing")).to be_nil
     ensure
       FileUtils.rm_rf(outside)
+    end
+
+    # Zeitwerk loads FOOBAR from foobar.rb under an inflector override for it; foo_bar.rb stays FooBar.
+    it "takes the file that declares a constant among every one only an inflector override could spell" do
+      mkdirs("app/models")
+      File.write(File.join(@root, "app/models/foo_bar.rb"), "class FooBar\nend\n")
+      File.write(File.join(@root, "app/models/foobar.rb"), "module FOOBAR\nend\n")
+
+      expect(described_class.file_for_constant(@root, "FOOBAR")).to eq(File.join(@root, "app/models/foobar.rb"))
     end
 
     it "answers nil for a constant no autoload root spells" do
@@ -475,6 +512,20 @@ RSpec.describe RailsAiContext::PathResolver do
       expect(described_class.namespaced_roots(@root)).to eq([ [ File.join(@root, "app/components"), "Components" ] ])
     ensure
       FileUtils.rm_rf(outside) if outside
+    end
+
+    it "finds a namespace's constant whose path splits an acronym the app registers" do
+      FileUtils.mkdir_p([ File.join(@root, "app/components/json_ld"), File.join(@root, "config/initializers") ])
+      File.write(File.join(@root, "app/components/json_ld/card.rb"), "class Components::JsonLd::Card\nend\n")
+      File.write(File.join(@root, "config/initializers/inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'JsonLd' }\n")
+      File.write(File.join(@root, "config/initializers/phlex.rb"),
+                 "Rails.autoloaders.main.push_dir(Rails.root.join(\"app/components\"), namespace: Components)\n")
+
+      found = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(@root)) do
+        described_class.file_for_constant(@root, "Components::JsonLd::Card")
+      end
+
+      expect(found).to eq(File.join(@root, "app/components/json_ld/card.rb"))
     end
 
     it "skips an initializer whose bytes are not UTF-8" do

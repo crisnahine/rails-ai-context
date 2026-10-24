@@ -63,6 +63,13 @@ jobs:
       - name: Ensure ripgrep
         run: command -v rg || sudo apt-get install -y ripgrep
 
+      # The real Brakeman scan spec runs the brakeman installed outside the
+      # bundle and skips without one. In the bundle it would run inside every
+      # rails-level validate spec, so one leg installs it on the machine.
+      - name: Install Brakeman outside the bundle
+        if: matrix.ruby == '3.4' && matrix.rails == '8.1'
+        run: gem install brakeman --no-document && ruby -e 'require "brakeman"; puts Brakeman::Version'
+
       - name: Run specs
         if: ${{ !inputs.release_gate }}
         run: bundle exec rspec

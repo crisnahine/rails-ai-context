@@ -707,6 +707,14 @@ RSpec.describe RailsAiContext::Tools::Validate do
 
       expect(text).to include("user_id in posts - foreign key without index (slow queries)")
     end
+
+    it "reports it for the file written from the current folder, however many times" do
+      [ "./app/models/post.rb", "././app/models/post.rb" ].each do |file|
+        text = described_class.call(files: [ file ], level: "rails").content.first[:text]
+
+        expect(text).to include("user_id in posts - foreign key without index (slow queries)"), file
+      end
+    end
   end
   # A link that resolves nowhere was offered back as the file to try.
   describe "a file that is a link to nothing" do

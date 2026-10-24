@@ -71,7 +71,7 @@ module RailsAiContext
 
     def gem_root?(root)
       !File.exist?(File.join(root.to_s, "config", "application.rb")) &&
-        Dir.glob(File.join(root.to_s, "*.gemspec")).any?
+        Dir.glob("*.gemspec", base: root.to_s).any?
     end
 
     # `root:` asks about one app; without it, the app under analysis. Either

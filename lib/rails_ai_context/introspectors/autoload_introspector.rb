@@ -9,8 +9,6 @@ module RailsAiContext
       extend StaticTier
       static_tier :runtime_only
 
-      INFLECTION_DIRECTIVES = %i[acronym plural singular irregular uncountable human].freeze
-
       # @return [Hash] autoloader configuration
       def call
         once = config_paths(:autoload_once_paths)
@@ -139,7 +137,7 @@ module RailsAiContext
         PathResolver.initializer_paths(root).each do |path|
           rel = path.sub("#{root}/", "")
           ast = SourceIntrospector.walk(path, {
-            directives: -> { Listeners::ChainedCallListener.new(INFLECTION_DIRECTIVES, receiver: :inflect) },
+            directives: Listeners::InflectionsListener,
             chained:    -> { Listeners::ChainedCallListener.new(:inflect) },
             bare:       -> { Listeners::GenericMacroListener.new(:inflect) }
           })

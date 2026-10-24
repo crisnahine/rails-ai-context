@@ -468,10 +468,8 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     # cache in a config-level before(:each), which runs after any around hook.
     before do
       context = IntrospectedFixture.context.deep_dup
-      # A controller the loose by-name match finds and the word match does not,
-      # which is the only way into the related-controllers branch.
-      context[:controllers][:controllers]["CommentaryController"] =
-        { actions: %w[index show], file: "app/controllers/commentary_controller.rb" }
+      context[:controllers][:controllers]["CommentsController"] =
+        { actions: %w[index show], file: "app/controllers/comments_controller.rb" }
       cache = RailsAiContext::Tools::BaseTool::SHARED_CACHE
       cache[:context] = context
       cache[:timestamp] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -479,14 +477,19 @@ RSpec.describe RailsAiContext::Tools::GetContext do
 
     after { RailsAiContext::Tools::BaseTool.reset_cache! }
 
+    # With the feature analysis off, the by-name list is the only one that names controllers.
     it "names the controllers that match by name and keeps the schema enrichment above them", :aggregate_failures do
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature]
+
       text = described_class.call(feature: "comment").content.first[:text]
 
       expect(text).to include("## Related Controllers (by name)")
-      expect(text).to include("- **CommentaryController** - index, show")
+      expect(text).to include("- **CommentsController** - index, show")
       # GetSchema's own table heading, which only the enrichment block appends.
-      # The rescued fallback names the table too, in AnalyzeFeature's summary.
-      expect(text).to include("## Table: comments")
+      expect(text.index("## Table: comments")).to be < text.index("## Related Controllers (by name)")
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
     end
   end
 
@@ -500,6 +503,42 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       text = described_class.call(model: "User").content.first[:text]
 
       expect(text.scan("Serving static analysis").size).to eq(1)
+    end
+  end
+
+  # The feature analysis matches whole words, so "post" is not PostmarkEvent.
+  describe "a feature word that only starts another model's or controller's name" do
+    before do
+      context = {
+        models: { "Post" => { table_name: "posts" }, "PostmarkEvent" => { table_name: "postmark_events" } },
+        schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] },
+                            "postmark_events" => { columns: [ { name: "message_id", type: "string" } ] } } },
+        controllers: { controllers: { "PostsController" => { actions: %w[index] }, "PostmarkHooksController" => { actions: %w[create] } } }
+      }
+      cache = RailsAiContext::Tools::BaseTool::SHARED_CACHE
+      cache[:context] = context
+      cache[:timestamp] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    after { RailsAiContext::Tools::BaseTool.reset_cache! }
+
+    it "adds the schema of the models the word names" do
+      text = described_class.call(feature: "post").content.first[:text]
+
+      expect(text).to include("## Table: posts")
+      expect(text).not_to include("postmark_events")
+    end
+
+    it "lists by name only the controllers the word names, with the feature analysis off" do
+      saved = RailsAiContext.configuration.skip_tools
+      RailsAiContext.configuration.skip_tools = %w[rails_analyze_feature]
+
+      text = described_class.call(feature: "post").content.first[:text]
+
+      expect(text).to include("- **PostsController** - index")
+      expect(text).not_to include("PostmarkHooksController")
+    ensure
+      RailsAiContext.configuration.skip_tools = saved
     end
   end
 end

@@ -57,8 +57,10 @@ RSpec.describe RailsAiContext::Introspectors::HelperNames do
     RUBY
     write("app/lib/link_helpers.rb", "module LinkHelpers\n  def self.included(base) = nil\n  def nav_link = nil\nend\n")
     write("lib/canonical_url.rb", "module CanonicalURL\n  module Helpers\n    def canonical_link_tag = nil\n  end\n\n  def self.other = nil\nend\n")
+    write("config/initializers/inflections.rb", "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'URL' }\n")
 
-    expect(described_class.for(@root)).to contain_exactly("page_title", "nav_link", "canonical_link_tag")
+    names = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(@root)) { described_class.for(@root) }
+    expect(names).to contain_exactly("page_title", "nav_link", "canonical_link_tag")
   end
 
   it "reads no include written in a comment or a string" do

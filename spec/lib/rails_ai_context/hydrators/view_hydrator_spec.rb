@@ -75,10 +75,9 @@ RSpec.describe RailsAiContext::Hydrators::ViewHydrator do
       expect(result.any?).to be false
     end
 
-    it "includes warnings for unresolved models" do
-      result = described_class.call(%w[post widget], context: context)
-      expect(result.hints.map(&:model_name)).to include("Post")
-      expect(result.warnings).to include(match(/Widget.*not found/))
+    it "reads an ivar that names no model as no model" do
+      result = described_class.call(%w[posts stats chart_data], context: context)
+      expect(result.hints.map(&:model_name)).to eq([ "Post" ])
     end
 
     it "deduplicates singular and plural forms" do
@@ -93,11 +92,10 @@ RSpec.describe RailsAiContext::Hydrators::ViewHydrator do
       expect(result.hints.size).to eq(1)
     end
 
-    it "hints once, without a warning, for a model the acronym inflects two ways" do
+    it "hints once, for a model the acronym inflects two ways" do
       result = described_class.call(%w[oauth_client_config oauth_client_configs], context: context)
 
       expect(result.hints.map(&:model_name)).to eq([ "OAuthClientConfig" ])
-      expect(result.warnings).to eq([])
     end
   end
 end

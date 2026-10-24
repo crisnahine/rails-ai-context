@@ -409,17 +409,15 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
     end
 
     # Ten aliases a level, six levels deep: a million names in a file of a few hundred bytes.
-    it "names a wrong-shaped value built from nested aliases by its shape, in one short line" do
+    it "names a wrong-shaped value built from nested aliases by its shape, in one short line", :cpu_timed do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
         lines = [ "l0: &l0 [x, x, x, x, x, x, x, x, x, x]" ]
         (1..5).each { |level| lines << "l#{level}: &l#{level} [#{([ "*l#{level - 1}" ] * 10).join(', ')}]" }
         File.write(yaml_path, "#{lines.join("\n")}\nexcluded_models: *l5\n")
 
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        output = capture_stderr { described_class.load_from_yaml(yaml_path) }
-
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+        output = nil
+        expect(cpu_seconds { output = capture_stderr { described_class.load_from_yaml(yaml_path) } }).to be < 2
         warning = output.lines.find { |line| line.include?("excluded_models:") }
         expect(warning).to include("excluded_models must be a list of names (got a list of 10 items)")
         expect(warning.sub(yaml_path, "").length).to be < 300

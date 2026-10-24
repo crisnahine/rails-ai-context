@@ -39,11 +39,6 @@ module RailsAiContext
       # The callers named under each service; rails_get_service_pattern(service:) lists more.
       CALLERS_SHOWN = 5
 
-      # The directories rspec-rails and minitest file tests under by kind.
-      SUITE_TYPE_DIRS = %w[
-        channels components controllers features functional helpers integration jobs lib mailboxes
-        mailers models policies requests routing serializers services system unit views workers
-      ].freeze
       AUTH_GEM_NAMES = %w[devise omniauth rodauth sorcery clearance authlogic warden jwt].freeze
 
       def self.call(feature:, server_context: nil)
@@ -116,6 +111,23 @@ module RailsAiContext
         end
       end
 
+      # Whether the pattern's words are a run of whole words in text, either in singular or plural: "post" is not "postmark".
+      def self.feature_word_match?(text, pattern)
+        return false if text.nil? || pattern.nil? || pattern.empty?
+
+        text_words = text.to_s.underscore.scan(/[a-z0-9]+/)
+        # A class name splits at its capitals (HTMLPage) or, where an app
+        # acronym joins them, not at all (Token::ICal in token/ical.rb).
+        [ pattern.to_s.underscore, pattern.to_s.downcase.underscore ].uniq.any? do |form|
+          pattern_words = form.scan(/[a-z0-9]+/)
+          next false if pattern_words.empty?
+
+          text_words.each_cons(pattern_words.size).any? do |window|
+            window.zip(pattern_words).all? { |w, p| same_word?(w, p) }
+          end
+        end
+      end
+
       class << self
         private
 
@@ -127,28 +139,7 @@ module RailsAiContext
             "#{Serializers::SectionFacts.filter_condition_tail(filter)}"
         end
 
-        # Word-boundary match against the feature keyword: `pattern` must align
-        # with a contiguous run of whole "words" in `text` (as split by
-        # underscores, path separators, and CamelCase boundaries), allowing
-        # for simple singular/plural variance on each word (e.g. "post"
-        # matches "posts" and "PostsController", and "dos_service" matches
-        # "dos_service_0"). A plain substring check would also match "post"
-        # against "postmark" - an unrelated word that merely starts the same.
-        def feature_word_match?(text, pattern)
-          return false if text.nil? || pattern.nil? || pattern.empty?
-
-          text_words = text.to_s.underscore.scan(/[a-z0-9]+/)
-          # A class name splits at its capitals (AIMatchResult) or, where an app
-          # acronym joins them, not at all (Token::ICal in token/ical.rb).
-          [ pattern.to_s.underscore, pattern.to_s.downcase.underscore ].uniq.any? do |form|
-            pattern_words = form.scan(/[a-z0-9]+/)
-            next false if pattern_words.empty?
-
-            text_words.each_cons(pattern_words.size).any? do |window|
-              window.zip(pattern_words).all? { |w, p| w == p || w.singularize == p.singularize }
-            end
-          end
-        end
+        def same_word?(word, other) = word == other || word.singularize == other.singularize
 
         # SignUp, sign_up and signup alike.
         def auth_keyword?(pattern)
@@ -260,7 +251,7 @@ module RailsAiContext
             lines << "## Routes (#{route_count})"
             matched.sort.each do |ctrl, actions|
               actions.each do |r|
-                params = r[:path].scan(/:(\w+)/).flatten
+                params = RouteCoverage.path_params(r[:path])
                 helper = if r[:name]
                   args = params.any? ? "(#{params.map { |p| p == "id" ? "@record" : ":#{p}" }.join(', ')})" : ""
                   " `#{r[:name]}_path#{args}`"
@@ -432,24 +423,6 @@ module RailsAiContext
         end
 
         # --- AF5: Tests ---
-        # The path a test is named by: without the root, without the suite
-        # directory it sits in, and without the extension. The suite directory
-        # is every test's own name for itself; left in, "spec" and "test"
-        # would match the whole suite.
-        def relative_test_name(path, real_root)
-          relative = path.to_s.sub("#{real_root}/", "").sub(%r{\A(?:spec|test)/}, "").sub(/\.rb\z/, "")
-          # The type directory a suite files a test under is the suite's word
-          # too: spec/models/account_spec.rb tests Account, not "models".
-          relative = relative.sub(%r{\A(?:#{SUITE_TYPE_DIRS.join("|")})/}, "")
-          without_suffix = relative.sub(/_(?:spec|test)\z/, "")
-          # One convention or the other, never both: stripping a `spec_`
-          # prefix from a file already named `..._spec` takes a word out of
-          # the feature's own name (spec_runner_spec.rb).
-          return without_suffix unless without_suffix == relative
-
-          relative.sub(%r{(\A|/)(?:spec|test)_}, "\\1")
-        end
-
         # @return [Array<String>] every test in the suite, relative to the suite's root
         def discover_tests(root, pattern, lines)
           real_root = File.realpath(root).to_s
@@ -458,19 +431,19 @@ module RailsAiContext
 
           base = RailsAiContext::PathResolver.test_root(root)
           real_base = File.realpath(base).to_s
-          [ File.join(base, "spec"), File.join(base, "test") ].each do |dir|
-            next unless Dir.exist?(dir)
+          # An in-repo engine or pack keeps its tests in its own spec/ or test/.
+          (PathResolver.dirs_for(base, "spec") + PathResolver.dirs_for(base, "test")).each do |dir|
             suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_base)
             # The path, not the basename: the gap checker below matches this
             # way for the same reason, and a spec whose feature word is a
             # directory (billing/invoices/create_spec.rb) is the normal shape
             # of a namespaced suite.
             suffix_glob.each do |path|
-              found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
+              found << path if feature_word_match?(TestFramework.test_name(path.delete_prefix("#{real_base}/")), pattern)
             end
             prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_base)
             prefix_glob.each do |path|
-              found << path if feature_word_match?(relative_test_name(path, real_base), pattern)
+              found << path if feature_word_match?(TestFramework.test_name(path.delete_prefix("#{real_base}/")), pattern)
             end
             all.concat(suffix_glob, prefix_glob)
           end
@@ -504,7 +477,8 @@ module RailsAiContext
           # against spec/requests/admin/badges_controller_spec.rb. Every test
           # in the suite, not only those the feature word names: the auth rule
           # matches User for `authentication`, a word its user_test.rb lacks.
-          test_basenames = test_files.map { |f| f.to_s.sub(/\.rb\z/, "") }
+          real_root = File.realpath(root).to_s
+          suite = TestFramework::Suite.new(PathResolver.test_root(root), test_files, app_root: root)
 
           # Check models
           matched_models&.each do |name, data|
@@ -512,7 +486,7 @@ module RailsAiContext
             # does not, when it is the model's own file and not one it shares.
             stem = data[:file].to_s[%r{app/models/(.+)\.rb\z}, 1]
             snake = stem && Introspectors::DeclaredConstant.path_for?(stem, name) ? stem : name.underscore
-            unless test_basenames.any? { |t| t.include?(snake) }
+            unless suite.tested?(:model, snake, name, file: data[:file])
               gaps << "Model `#{name}` - no test file found"
             end
           end
@@ -522,23 +496,22 @@ module RailsAiContext
           controllers.each_key do |ctrl_name|
             next unless feature_word_match?(ctrl_name, pattern)
             snake = RailsAiContext::Payload.controller_route_key(ctx, ctrl_name)
-            unless test_basenames.any? { |t| t.include?(snake) }
+            unless suite.tested?(:controller, snake, ctrl_name, file: Payload.controller_file(ctx, ctrl_name))
               gaps << "Controller `#{ctrl_name}` - no test file found"
             end
           end
 
-          real_root = File.realpath(root).to_s
-
-          { "Job" => "jobs", "Service" => "services" }.each do |label, dir|
+          { job: "jobs", service: "services" }.each do |kind, dir|
             path_dir = File.join(root, "app", dir)
             next unless Dir.exist?(path_dir)
 
+            real_dir = File.realpath(path_dir)
             safe_glob(path_dir, "**/*.rb", real_root).each do |path|
-              snake = File.basename(path, ".rb")
-              next unless feature_word_match?(snake, pattern)
-              next if test_basenames.any? { |t| t.include?(snake) }
+              snake = path.delete_prefix("#{real_dir}/").delete_suffix(".rb")
+              next unless feature_word_match?(File.basename(snake), pattern)
+              next if suite.tested?(kind, snake, TestFramework.declared_constant(path, snake), file: path)
 
-              gaps << "#{label} `#{snake}` - no test file found"
+              gaps << "#{kind.to_s.capitalize} `#{snake}` - no test file found"
             end
           end
 
@@ -559,13 +532,9 @@ module RailsAiContext
           all_models = Payload.models(ctx)
           matched_models.each do |name, data|
             next unless data.is_a?(Hash)
-            (data[:associations] || []).each do |a|
-              next unless a.is_a?(Hash)
-              # A computed name classifies into a model the app does not have.
-              next if a[:computed_name] && a[:class_name].nil?
-
-              written = a[:class_name] || a[:name].to_s.classify
-              related_name = Introspectors::TableName.model_for(written, name, all_models) || written.delete_prefix("::")
+            by_name = Introspectors::AssociationClass.by_name(data[:associations])
+            Array(data[:associations]).grep(Hash).each do |a|
+              related_name = Introspectors::AssociationClass.resolve(a, all_models, by_name: by_name, owner: name) or next
               next if matched_models.key?(related_name)
               related[related_name] ||= []
               related[related_name] << "#{a[:type]} from #{name}"
@@ -668,8 +637,10 @@ module RailsAiContext
           truncated = false
 
           dirs.each do |dir|
+            real_dir = File.realpath(dir).to_s
+            # The path under the directory: the folders above the app hold any word.
             matched = safe_glob(dir, "**/*.rb", real_root).select do |path|
-              feature_word_match?(File.basename(path, ".rb"), pattern) || feature_word_match?(path, pattern)
+              feature_word_match?(path.delete_prefix("#{real_dir}/"), pattern)
             end
             truncated ||= matched.size > MAX_SCAN_FILES
             matched.first(MAX_SCAN_FILES).each do |path|

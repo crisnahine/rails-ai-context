@@ -441,8 +441,7 @@ module RailsAiContext
       root ||= default_root
       return nil unless root
 
-      relative = "#{name.to_s.underscore}.rb"
-      PathResolver.controller_dirs(root.to_s).map { |dir| File.join(dir, relative) }.find { |candidate| File.exist?(candidate) }
+      PathResolver.constant_file(PathResolver.controller_dirs(root.to_s), name.to_s)
     end
 
     # Gem controllers whose base class is set in the app's initializers:

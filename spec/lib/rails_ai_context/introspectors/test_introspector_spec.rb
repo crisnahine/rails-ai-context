@@ -236,7 +236,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     it "returns factory_traits from existing factory files" do
       # Permanent factory fixtures have traits defined
       expect(result[:factory_traits]).to be_a(Hash)
-      expect(result[:factory_traits]["users.rb"]).to include("admin", "active", "inactive")
+      expect(result[:factory_traits]["spec/factories/users.rb"]).to include("admin", "active", "inactive")
     end
 
     it "returns test_count_by_category as hash" do
@@ -573,6 +573,21 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
+  describe "factory files that share a basename" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    it "keeps each file's traits under its own path" do
+      { "spec/factories/users.rb" => "FactoryBot.define do\n  factory :user do\n    trait :admin do\n    end\n  end\nend\n",
+        "spec/factories/admin/users.rb" => "FactoryBot.define do\n  factory :admin_user do\n    trait :suspended do\n    end\n  end\nend\n" }.each do |rel, body|
+        FileUtils.mkdir_p(File.dirname(File.join(@root, rel)))
+        File.write(File.join(@root, rel), body)
+      end
+
+      expect(described_class.new(double("app", root: @root)).call[:factory_traits])
+        .to eq("spec/factories/users.rb" => %w[admin], "spec/factories/admin/users.rb" => %w[suspended])
+    end
+  end
+
   # An app can define a comment factory per model in a loop,
   # `factory :"#{model}_comment"`. Its name is computed, so it is left out of
   # the names, and counted so no total claims to be exact.
@@ -598,7 +613,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       expect(result[:factory_names]).to eq("spec/factories/comments.rb" => %w[comment])
       expect(result[:computed_factories]).to eq(1)
-      expect(result[:factory_traits]).to eq("comments.rb" => %w[hidden])
+      expect(result[:factory_traits]).to eq("spec/factories/comments.rb" => %w[hidden])
     end
   end
 
@@ -640,6 +655,14 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
 
       expect(payload[:ci_config]).to eq(%w[circleci gitlab_ci buildkite jenkins bitbucket_pipelines])
       expect(payload[:ci_steps]).to be_nil
+    end
+
+    it "reads a CI service's file only as a file and its folder only as a folder" do
+      FileUtils.mkdir_p(File.join(@root, "Jenkinsfile"))
+      FileUtils.mkdir_p(File.join(@root, ".gitlab-ci.yml"))
+      write(".github/workflows")
+
+      expect(payload[:ci_config]).to eq([])
     end
 
     it "keeps a config/ci.rb that does not parse to its name" do

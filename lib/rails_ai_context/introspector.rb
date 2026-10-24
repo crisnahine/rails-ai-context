@@ -17,7 +17,7 @@ module RailsAiContext
     #
     # @return [Hash] complete application context
     def call
-      RunCache.around { introspect_all }
+      RunCache.around_app(app) { introspect_all }
     end
 
     # Every reader names a database's adapter from this section, so a preset without it, or one where it failed,
@@ -227,10 +227,9 @@ module RailsAiContext
       return Rails.version if defined?(Rails) && Rails.respond_to?(:version) && !RailsAiContext.static_tier?
 
       # The lockfile names what is installed, and this string is written
-      # mid-sentence into files the user commits. An app can bundle railties
-      # without the `rails` meta-gem and still be a Rails app at that version.
+      # mid-sentence into files the user commits.
       lock = GemLock.for(app.root)
-      lock.version("rails") || lock.version("railties") || Confidence.unavailable(lock.outside_gemfile ? lock.reason : "app not booted")
+      lock.rails_version || Confidence.unavailable(lock.outside_gemfile ? lock.reason : "app not booted")
     end
 
     def environment_name

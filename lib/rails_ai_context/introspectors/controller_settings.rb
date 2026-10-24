@@ -8,7 +8,8 @@ module RailsAiContext
     # declare. Read from source in both tiers; the chain is walked over the finished listing.
     module ControllerSettings
       MACROS = %i[allow_browser protect_from_forgery add_flash_types default_form_builder wrap_parameters].freeze
-      FRAMEWORK = %w[ActionController::Base ActionController::API].freeze
+      API = "ActionController::API"
+      FRAMEWORK = [ "ActionController::Base", API ].freeze
 
       module_function
 
@@ -75,12 +76,16 @@ module RailsAiContext
         controllers = Payload.controllers(ctx)
         chain, stop = chain_for(controllers, controller_name, root)
         settings = chain.reverse.flat_map { |name, decl| Array(decl[:settings]).map { |setting| setting.merge(from: name) } }
-        api = controllers.dig(controller_name, :api_controller) || stop == "ActionController::API"
+        api = controllers.dig(controller_name, :api_controller) || stop == API
         return { settings: settings } if api
 
         { layout: layout_for(ctx, chain, stop, root), settings: settings }
       rescue => e
         RailsAiContext.debug_fail(e, { settings: [] }, label: "ControllerSettings.resolve")
+      end
+
+      def api?(controller_name, root, controllers: {})
+        lineage(controllers, controller_name, root).last == API
       end
 
       def chain_for(controllers, controller_name, root)
@@ -149,9 +154,7 @@ module RailsAiContext
 
       def layout_names(root)
         RunCache.fetch([ :layout_names, root.to_s ]) do
-          ViewFile.each(root.to_s, "layouts/**/*").filter_map do |path, relative|
-            relative.delete_prefix("layouts/").sub(/\.[^\/]*\z/, "") if ViewFile.layout?(path)
-          end.to_set
+          ViewFile.layouts(root.to_s).to_set { |_path, relative| relative.delete_prefix(ViewFile::LAYOUTS).sub(/\.[^\/]*\z/, "") }
         end
       end
 

@@ -18,9 +18,9 @@ RSpec.describe RailsAiContext::ConcernMembership do
 
     it "follows only the mixins that reach the ancestor chain" do
       mixins = [
-        { name: "A", owner: [ "Payment" ], ancestor: true, location: 9 },
-        { name: "B", owner: [ "Payment", "A" ], ancestor: false, location: 9 },
-        { name: "Trackable", owner: [ "Payment", "A" ], ancestor: true, location: 9 }
+        { name: "A", owner: [ "Payment" ], nesting: [ "Payment" ], ancestor: true, location: 9 },
+        { name: "B", owner: [ "Payment", "A" ], nesting: [ "Payment::A", "Payment" ], ancestor: false, location: 9 },
+        { name: "Trackable", owner: [ "Payment", "A" ], nesting: [ "Payment::A", "Payment" ], ancestor: true, location: 9 }
       ]
 
       expect(described_class.included_modules(mixins, "Payment", [ "Payment" ], modules)).to contain_exactly("Payment::A", "Payment::Trackable")
@@ -78,12 +78,67 @@ RSpec.describe RailsAiContext::ConcernMembership do
 
     it "hands on only the mixins the file does not define" do
       mixins = [
-        { name: "A", owner: [ "Payment" ], ancestor: true, location: 9 },
-        { name: "Trackable", owner: [ "Payment", "A" ], ancestor: true, location: 9 },
-        { name: "Auditable", owner: [ "Payment", "A" ], ancestor: true, location: 9 }
+        { name: "A", owner: [ "Payment" ], nesting: [ "Payment" ], ancestor: true, location: 9 },
+        { name: "Trackable", owner: [ "Payment", "A" ], nesting: [ "Payment::A", "Payment" ], ancestor: true, location: 9 },
+        { name: "Auditable", owner: [ "Payment", "A" ], nesting: [ "Payment::A", "Payment" ], ancestor: true, location: 9 }
       ]
 
       expect(described_class.mixins_with_modules(mixins, "Payment", [ "Payment" ], modules).map { |m| m[:name] }).to eq([ "Auditable" ])
+    end
+  end
+
+  describe ".owned_with_modules" do
+    def walk(source)
+      introspectors = RailsAiContext::Introspectors
+      data = introspectors::SourceIntrospector.walk_source(
+        source, { associations: introspectors::Listeners::AssociationsListener, mixins: introspectors::Listeners::MixinsListener }
+      )
+      tree = RailsAiContext::AstCache.parse_string(source).value
+      [ data, introspectors::DeclaredConstant.declarations(source, all: true).map(&:name), introspectors::DeclaredConstant.module_nodes(tree) ]
+    end
+
+    # Module.nesting in `module Shop; class ::Order` is [Order, Shop], so `include Trackable` reaches Shop::Trackable.
+    it "reads a module a root-opened class includes through the class's nesting" do
+      data, classes, modules = walk(<<~RUBY)
+        module Shop
+          module Trackable
+            extend ActiveSupport::Concern
+            included do
+              has_many :tracks
+            end
+          end
+
+          class ::Order < ApplicationRecord
+            include Trackable
+            has_many :lines
+          end
+        end
+      RUBY
+
+      owned = described_class.owned_with_modules(data[:associations], "Order", classes, data[:mixins], modules)
+      expect(owned.map { |a| a[:name] }).to contain_exactly(:lines, :tracks)
+    end
+
+    # `Shop = Class.new` declares Shop::Shop, so Module.nesting in `class Shop::Draft` is [Shop::Shop::Draft, Shop].
+    it "reads a compact path's first segment against a constant written above it" do
+      data, classes, modules = walk(<<~RUBY)
+        module Shop
+          Shop = Class.new
+          class Shop::Draft < ApplicationRecord
+            module Trackable
+              extend ActiveSupport::Concern
+              included do
+                has_many :tracks
+              end
+            end
+            include Trackable
+            has_many :lines
+          end
+        end
+      RUBY
+
+      owned = described_class.owned_with_modules(data[:associations], "Shop::Shop::Draft", classes, data[:mixins], modules)
+      expect(owned.map { |a| a[:name] }).to contain_exactly(:lines, :tracks)
     end
   end
 
@@ -93,6 +148,15 @@ RSpec.describe RailsAiContext::ConcernMembership do
     it "takes the full name first, then every segment of it" do
       expect(described_class.owned_by(records, "Legacy::Payment").map { |r| r[:name] }).to eq([ "b" ])
       expect(described_class.owned_by(records, "Payment").map { |r| r[:name] }).to eq([ "a" ])
+    end
+
+    # Inside `module Blog`, Ruby reads the receiver of `Post.include(Flaggable)` as Blog::Post, the nearer Post the file declares.
+    it "gives a receiver's mixin to the nearest constant its nesting reaches, never a farther one of the same name" do
+      source = "class Post < ApplicationRecord\nend\nmodule Blog\n  class Post\n  end\n  Post.include(Flaggable)\nend\n"
+      mixins = RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { mixins: RailsAiContext::Introspectors::Listeners::MixinsListener })[:mixins]
+
+      expect(described_class.owned_by(mixins, "Post", others: [ "Blog::Post" ])).to be_empty
+      expect(described_class.owned_by(mixins, "Blog::Post", others: [ "Post" ]).map { |m| m[:name] }).to eq([ "Flaggable" ])
     end
 
     # A module read from its outer constant's file is a slice holding only its own name.

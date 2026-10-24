@@ -67,6 +67,14 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
     expect(text).to include("**Framework:** Angular 22.0.7 (also React 19.2.6)")
   end
 
+  # npm ranges: `||` joins alternatives and a space joins comparators; rails_onboard prints them as written.
+  it "keeps a version range as written instead of running its numbers together" do
+    frontend_data[:frameworks] = { react: "^18.2.0 || ^19.0.0", vue: ">=3 <4" }
+    text = described_class.call(detail: "standard").content.first[:text]
+
+    expect(text).to include("**Framework:** React ^18.2.0 || ^19.0.0 (also Vue >=3 <4)")
+  end
+
   describe ".call" do
     context "with detail:summary" do
       it "returns a one-liner with framework, tools, and component count" do

@@ -84,8 +84,7 @@ module RailsAiContext
             models
           else
             introspector = ModelIntrospector.new(app)
-            static = RailsAiContext.static_tier? || app.is_a?(RailsAiContext::StaticApp)
-            static ? introspector.static_call : introspector.call
+            booted? ? introspector.call : introspector.static_call
           end
         rescue StandardError => e
           RailsAiContext.debug_fail(e, {}, label: "resolved_models")
@@ -98,10 +97,6 @@ module RailsAiContext
         table_of(class_name, resolved_models)
       end
 
-      def active_record_class_name(classes)
-        classes.find { |c| c[:superclass] == "ApplicationRecord" }&.fetch(:name)
-      end
-
       def declared_name(record)
         DeclaredConstant.resolve(record.source, record.path_name)
       end
@@ -111,24 +106,19 @@ module RailsAiContext
         own_files = model_sources.map { |record| declared_name(record) }.to_set
         model_sources.flat_map do |record|
           ast = SourceIntrospector.walk_source(record.source, {
-            classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
             column_macros: COLUMN_MACRO_LISTENER,
             mixins: Listeners::MixinsListener,
             counter_culture: -> { Listeners::GenericMacroListener.new(:counter_culture) }
           })
 
-          # The listener names the class node alone, so the qualified name is
-          # the one the app can resolve; the superclass check stays the guard
-          # that this file holds a model at all.
-          next [] unless active_record_class_name(ast[:classes])
-
           declared = DeclaredConstant.declarations(record.source, all: true).map(&:name)
           modules = DeclaredConstant.module_nodes(AstCache.parse_string(record.source)&.value)
           primary = declared_name(record)
           # Another class the file declares is a model of its own wherever the model walk lists it.
           siblings = declared.select { |name| name != primary && !own_files.include?(name) && resolved_models.key?(name) }
-          [ primary, *siblings ].map { |class_name| model_record(record, ast, class_name, declared, modules) }
+          # The model walk says what is a model, whatever its superclass is written as.
+          [ primary, *siblings ].select { |name| resolved_models.key?(name) }.map { |class_name| model_record(record, ast, class_name, declared, modules) }
         rescue => e
           RailsAiContext.debug_fail(e, [], label: "load_model_data")
         end
@@ -187,7 +177,7 @@ module RailsAiContext
       # The scan reads the run models section, so an association a concern or a
       # base declares is one it can follow.
       def detect_n_plus_one
-        NPlusOneScan.new(root, resolved_models).call
+        NPlusOneScan.new(root, resolved_models, booted: booted?).call
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "detect_n_plus_one")
       end
@@ -305,7 +295,7 @@ module RailsAiContext
 
             key = (assoc[:foreign_key] || options[:foreign_key])&.to_s
             own_key = "#{name.to_s.demodulize.underscore}_id"
-            written = assoc[:class_name] || options[:class_name] || assoc[:name].to_s.camelize.singularize
+            written = assoc[:class_name] || options[:class_name] || AssociationClass.derived_name(assoc)
             other = TableName.resolve_class(written, name) { |candidate| candidate if models.key?(candidate) }
             case assoc[:type].to_s
             when "belongs_to"

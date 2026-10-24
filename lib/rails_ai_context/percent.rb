@@ -10,7 +10,7 @@ module RailsAiContext
       return 0 if whole.to_f.zero?
 
       scale = 10**decimals
-      value = ((part.to_f / whole) * 100 * scale).floor / scale.to_f
+      value = (part.to_r * 100 * scale / whole.to_r).floor / scale.to_f
       decimals.zero? ? value.to_i : value
     end
   end

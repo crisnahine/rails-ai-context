@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Wraps hydration output: hints for detected models + any warnings.
-  HydrationResult = Data.define(:hints, :warnings) do
-    def initialize(hints: [], warnings: [])
+  # Wraps hydration output: hints for detected models.
+  HydrationResult = Data.define(:hints) do
+    def initialize(hints: [])
       super
     end
 

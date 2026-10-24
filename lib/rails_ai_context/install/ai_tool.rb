@@ -76,7 +76,8 @@ module RailsAiContext
           number: "4", key: :opencode, name: "OpenCode",
           files: "AGENTS.md",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-          mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true },
+          mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true,
+                        env_key: "environment" },
           next_step: "restart OpenCode in this folder; opencode mcp list shows rails-ai-context",
           legacy_paths: []
         ),

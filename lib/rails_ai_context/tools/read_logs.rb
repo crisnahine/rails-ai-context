@@ -278,8 +278,7 @@ module RailsAiContext
       private_class_method def self.available_log_files
         log_dir = File.join(rails_app.root.to_s, "log")
         return [] unless Dir.exist?(log_dir)
-        Dir.glob(File.join(log_dir, "*.log{,.*}"))
-          .map { |f| File.basename(f) }
+        Dir.glob("*.log{,.*}", base: log_dir)
           .select { |f| f.match?(/\A[\w.\-]+\.log(?:\.\d+)?\z/) } # Only clean filenames (alphanumeric, dots, hyphens, underscores)
           .select { |f| locate_log(File.join("log", f), listed: true).refusal.nil? }
           .sort

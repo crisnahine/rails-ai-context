@@ -50,6 +50,18 @@ RSpec.describe RailsAiContext::Serializers::GuideExamples do
     end
   end
 
+  # Rails renders app/views/application/_flash.html.erb as application/flash;
+  # no shared/flash exists to look up.
+  it "names a partial in app/views/application by its own folder" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "app/views/application"))
+      File.write(File.join(root, "app/views/application/_flash.html.erb"), "<div><%= flash[:notice] %></div>\n")
+      views = RailsAiContext::Introspectors::ViewIntrospector.new(RailsAiContext::StaticApp.new(root)).call
+
+      expect(described_class.new(views: views).partial).to eq("application/flash")
+    end
+  end
+
   # The live database lacks `books`, so the add_column example would name a table that does not exist.
   it "passes over a model whose table the live database lacks" do
     examples = described_class.new(library.merge(schema: { adapter: "postgresql", tables: { "authors" => { columns: [] } } }))

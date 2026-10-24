@@ -378,7 +378,7 @@ module RailsAiContext
 
     # An environment has a config/environments file. Any other key holds an anchor (`default: &default`).
     def with_environment_file(root, environments)
-      files = Dir.glob(File.join(root, "config/environments/*.rb")).map { |path| File.basename(path, ".rb") }
+      files = Dir.glob("config/environments/*.rb", base: root.to_s).map { |path| File.basename(path, ".rb") }
       return environments if files.empty?
 
       current = RailsAiContext.environment_name
@@ -386,7 +386,7 @@ module RailsAiContext
     end
 
     def dump_files(root)
-      DUMP_GLOBS.flat_map { |format, glob| Dir.glob(File.join(root, "db", glob)).sort.map { |path| [ format, path ] } }
+      DUMP_GLOBS.flat_map { |format, glob| PathResolver.glob(File.join(root, "db"), glob).sort.map { |path| [ format, path ] } }
     end
   end
 end

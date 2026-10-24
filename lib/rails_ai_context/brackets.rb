@@ -19,6 +19,7 @@ module RailsAiContext
     REGEX_LITERAL = %r{\G/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n])+/[a-z]*}
     RUBY_CHAR = /\G\?(?:\\.|[^\s\w])(?![\w])/
     RUBY_PERCENT = /\G%[qQwWiIrs]?([(\[{<|!\/])/
+    MODIFIER = /\A(?:if|unless|while|until|rescue)\b/
 
     module_function
 
@@ -62,6 +63,16 @@ module RailsAiContext
         i += 1
       end
       nil
+    end
+
+    # The inside of the group `text` opens with, when nothing but a trailing
+    # modifier (`... if x`) follows it; otherwise `text` as it is.
+    def unwrap(text, comments: :ruby)
+      group = span(text, 0, comments: comments)
+      return text unless group
+
+      rest = text[group.length..].strip
+      rest.empty? || rest.match?(MODIFIER) ? group[1...-1] : text
     end
 
     # The length and kind of a string, comment or other literal starting at i, or nil.

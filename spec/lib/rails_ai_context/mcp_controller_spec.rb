@@ -8,24 +8,24 @@ require "timeout"
 
 RSpec.describe RailsAiContext::McpController do
   # McpController inherits from ActionController::API.
-  # We test the class-level transport memoization, double-checked locking,
+  # We test the engine transport's memoization, double-checked locking,
   # and the #handle instance method at the unit level (no routing required).
 
   # Before as well as after: this file asserts the transport gets built, so it
-  # must not inherit one that another file left memoized on the class.
-  before { described_class.reset_transport! }
+  # must not inherit one that another file left memoized.
+  before { RailsAiContext::McpEdge.reset_engine_transport! }
 
-  after { described_class.reset_transport! }
+  after { RailsAiContext::McpEdge.reset_engine_transport! }
 
-  describe ".mcp_transport" do
+  describe "the engine transport" do
     it "returns an MCP StreamableHTTPTransport" do
-      transport = described_class.mcp_transport
+      transport = RailsAiContext::McpEdge.engine_transport
       expect(transport).to be_a(MCP::Server::Transports::StreamableHTTPTransport)
     end
 
     it "memoizes the transport across calls" do
-      first  = described_class.mcp_transport
-      second = described_class.mcp_transport
+      first  = RailsAiContext::McpEdge.engine_transport
+      second = RailsAiContext::McpEdge.engine_transport
       expect(first).to equal(second)
     end
 
@@ -34,27 +34,27 @@ RSpec.describe RailsAiContext::McpController do
         .with(Rails.application, transport: :http)
         .and_call_original
 
-      described_class.mcp_transport
+      RailsAiContext::McpEdge.engine_transport
     end
   end
 
-  describe ".reset_transport!" do
+  describe "a transport reset" do
     it "clears the memoized transport" do
-      first = described_class.mcp_transport
-      described_class.reset_transport!
-      second = described_class.mcp_transport
+      first = RailsAiContext::McpEdge.engine_transport
+      RailsAiContext::McpEdge.reset_engine_transport!
+      second = RailsAiContext::McpEdge.engine_transport
 
       expect(first).not_to equal(second)
     end
 
     it "does not raise when no transport is set" do
-      expect { described_class.reset_transport! }.not_to raise_error
+      expect { RailsAiContext::McpEdge.reset_engine_transport! }.not_to raise_error
     end
   end
 
   describe "thread safety" do
     it "initializes the transport only once under concurrent access" do
-      described_class.reset_transport!
+      RailsAiContext::McpEdge.reset_engine_transport!
 
       build_count = Concurrent::AtomicFixnum.new(0)
       allow(RailsAiContext::Server).to receive(:new).and_wrap_original do |original, *args, **kwargs|
@@ -63,7 +63,7 @@ RSpec.describe RailsAiContext::McpController do
       end
 
       threads = 10.times.map do
-        Thread.new { described_class.mcp_transport }
+        Thread.new { RailsAiContext::McpEdge.engine_transport }
       end
 
       transports = threads.map(&:value)
@@ -75,35 +75,33 @@ RSpec.describe RailsAiContext::McpController do
     end
   end
 
-  describe "inherited subclasses" do
-    it "serve the one transport the engine keeps" do
-      subclass = Class.new(described_class)
-
-      expect(subclass.mcp_transport).to equal(described_class.mcp_transport)
-    end
-  end
-
   # The engine's app/controllers is reloaded with the app's code, and the
   # transport memoized on the class went with every edit: each session's next
   # call answered 404 "Session not found", and the old transport's session
   # reaper ran on.
   describe "a reload of the controller class" do
     it "keeps the transport, and with it every session" do
-      transport = described_class.mcp_transport
+      transport = RailsAiContext::McpEdge.engine_transport
+      allow(transport).to receive(:handle_request).and_return([ 200, { "Content-Type" => "application/json" }, [ "{}" ] ])
       file = described_class.instance_method(:handle).source_location.first
       RailsAiContext.send(:remove_const, :McpController)
       load file
 
-      expect(RailsAiContext::McpController).not_to equal(described_class)
-      expect(RailsAiContext::McpController.mcp_transport).to equal(transport)
+      reloaded = RailsAiContext::McpController.new
+      reloaded.instance_variable_set(:@_request, ActionDispatch::TestRequest.create("REQUEST_METHOD" => "POST"))
+      reloaded.instance_variable_set(:@_response, ActionDispatch::TestResponse.new)
+      reloaded.handle
+
+      expect(reloaded.class).not_to equal(described_class)
+      expect(transport).to have_received(:handle_request)
     end
 
     it "is not what a reset is: that closes the transport it drops, stopping its session reaper" do
-      transport = described_class.mcp_transport
+      transport = RailsAiContext::McpEdge.engine_transport
       expect(transport).to receive(:close).and_call_original
 
-      described_class.reset_transport!
-      expect(described_class.mcp_transport).not_to equal(transport)
+      RailsAiContext::McpEdge.reset_engine_transport!
+      expect(RailsAiContext::McpEdge.engine_transport).not_to equal(transport)
     end
   end
 
@@ -125,7 +123,7 @@ RSpec.describe RailsAiContext::McpController do
     let(:controller) { described_class.new }
 
     before do
-      described_class.reset_transport!
+      RailsAiContext::McpEdge.reset_engine_transport!
       RailsAiContext::McpEdge.instance_variable_set(:@engine_transport, transport)
 
       # Set up a minimal request/response for the controller. A POST: a GET
@@ -442,7 +440,7 @@ RSpec.describe RailsAiContext::McpController do
     context "with the transport the engine builds" do
       let(:accept) { { "HTTP_ACCEPT" => "application/json, text/event-stream" } }
 
-      before { described_class.reset_transport! }
+      before { RailsAiContext::McpEdge.reset_engine_transport! }
 
       it "answers a request inside a session with the SDK's SSE stream, whole" do
         _status, headers, = post_mcp(JSON.generate(jsonrpc: "2.0", id: 1, method: "initialize",

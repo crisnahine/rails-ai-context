@@ -21,6 +21,11 @@ module RailsAiContext
       end
     end
 
+    # A run against one app: the shared answers, and a static app's own inflections.
+    def around_app(*app, &block)
+      around { AppInflections.around(*app, &block) }
+    end
+
     # What an open run holds was read before this moment; the run goes on empty.
     def clear
       Thread.current[KEY]&.clear

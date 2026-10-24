@@ -46,7 +46,7 @@ module RailsAiContext
       def extract_turbo_frames
         frames = []
         each_view_line do |file, line, line_num|
-          next unless line.include?("turbo_frame_tag")
+          next unless line.match?(/(?<![\w.])turbo_frame_tag\b/)
 
           frames << { id: frame_id(line), src: frame_src(line), file: file, line: line_num, snippet: line.strip }
         end
@@ -58,7 +58,7 @@ module RailsAiContext
       def extract_stream_subscriptions
         subscriptions = []
         each_view_line do |file, line, line_num|
-          next unless line.include?("turbo_stream_from")
+          next unless line.match?(/(?<![\w.])turbo_stream_from\b/)
 
           subscriptions << { stream: subscription_stream(line), parts: subscription_parts(line), file: file, line: line_num, snippet: line.strip }
         end
@@ -105,13 +105,24 @@ module RailsAiContext
       # `:post` and `"post"` are the frame `post`, while `dom_id(@post, :edit)`
       # stays whole because the split happens at a top-level comma only.
       def frame_id(line)
-        match = line.match(/turbo_frame_tag\s+(.+?)\s*(?:%>|\bdo\b|$)/)
-        return "(dynamic)" unless match
+        text = call_arguments(line, "turbo_frame_tag") or return "(dynamic)"
 
-        first = first_argument(match[1])
+        first = first_argument(text)
         return "(dynamic)" if first.empty? || first.start_with?("%") || first == "do"
 
         first.sub(/\A:/, "").gsub(/\A["']|["']\z/, "")
+      end
+
+      # The argument text of a call written `name args` or `name(args)`, up to
+      # the tag's `%>` or a block's `do`; a group left open on this line runs to
+      # the end of it. A `(` after a space opens an argument, not the call.
+      def call_arguments(line, name)
+        match = line.match(/(?<![\w.])#{name}(?:(\()|\s+)/) or return nil
+        if match[1] && (group = RailsAiContext::Brackets.span(line, match.begin(1), comments: :ruby))
+          return group[1..-2]
+        end
+
+        line[match.end(0)..].sub(/\s*(?:-?%>|\bdo\b).*\z/m, "").strip
       end
 
       def first_argument(text)
@@ -119,7 +130,7 @@ module RailsAiContext
       end
 
       # Splits on commas outside any bracket, so `[a, :b]` and `f(x, :y)` stay
-      # one argument.
+      # one argument; an argument wrapped whole in parentheses is its inside.
       def top_level_arguments(text)
         args = [ +"" ]
         RailsAiContext::Brackets.each_top_level(text, comments: :ruby) do |piece, kind|
@@ -127,7 +138,9 @@ module RailsAiContext
 
           kind == :char && piece == "," ? args << +"" : args.last << piece
         end
-        args.map(&:strip).reject(&:empty?)
+        args.map(&:strip).reject(&:empty?).map do |arg|
+          arg.start_with?("(") && RailsAiContext::Brackets.span(arg, 0, comments: :ruby) == arg ? arg[1..-2].strip : arg
+        end
       end
 
       # The src value whole, up to the comma or bracket that ends it at the top
@@ -149,10 +162,9 @@ module RailsAiContext
       # `current_user, :notifications`, `"post_#{@post.id}"`: a symbol colon
       # and quotes go, an interpolation reads as its last call (`post_{id}`).
       def subscription_stream(line)
-        match = line.match(/turbo_stream_from\s+(.+?)(?:\s*%>|\s*$|\s*do\b)/)
-        return "(dynamic)" unless match
+        args = call_arguments(line, "turbo_stream_from")&.strip
+        return "(dynamic)" if args.nil? || args.empty?
 
-        args = match[1].strip
         return normalize_interpolation(args) if args.include?("#")
 
         top_level_arguments(args).map { |arg| bare_stream_name(arg) }.join(", ")
@@ -328,7 +340,7 @@ module RailsAiContext
       # string is a literal, anything else an expression (`@product`,
       # `current_user`) the tool resolves against the app's models.
       def subscription_parts(line)
-        code = line[/turbo_stream_from\b.*?(?=\s*-?%>|\s*\bdo\b|\z)/m] or return nil
+        code = line[/(?<![\w.])turbo_stream_from\b.*?(?=\s*-?%>|\s*\bdo\b|\z)/m] or return nil
         call = first_node(AstCache.parse_string(code).value) { |node| node.is_a?(Prism::CallNode) && node.name == :turbo_stream_from }
         arguments = call&.arguments&.arguments&.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
         return nil if arguments.nil? || arguments.empty?
@@ -385,7 +397,7 @@ module RailsAiContext
       end
 
       def detect_morph_meta
-        RailsAiContext::ViewFile.each(root, "layouts/*.{erb,haml,slim}").any? do |path, _relative|
+        RailsAiContext::ViewFile.each(root, "#{RailsAiContext::ViewFile::LAYOUTS}**/*.{erb,haml,slim}").any? do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
           content.include?('name="turbo-refresh-method"') && content.include?('content="morph"')
         end

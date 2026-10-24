@@ -112,7 +112,13 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
       let(:db_path) { File.join(Rails.root, "config/database_pa_s.yml") }
 
       before do
-        File.write(db_path, %(default:\n  host: <%= ENV["PA_S_DATABASE_HOST"] %>\n))
+        File.write(db_path, <<~YAML)
+          default:
+            host: <%= ENV["PA_S_DATABASE_HOST"] %>
+            port: <%= ENV["pa_s_port"] %>
+            flag: <%= ENV["Z"] %>
+            priv: <%= ENV["_pa_s_private"] %>
+        YAML
       end
 
       after { FileUtils.rm_f(db_path) }
@@ -121,8 +127,10 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
         tool_names = RailsAiContext::Introspectors::EnvReferences.scan(Rails.root.to_s).values.flatten.map { |v| v[:name] }
         introspected = result[:referenced_in_code].map { |e| e[:name] }
 
-        expect(tool_names).to include("PA_S_DATABASE_HOST")
-        expect(introspected).to include("PA_S_DATABASE_HOST")
+        # ENV is case sensitive, so `pa_s_port` is its own variable.
+        names = %w[PA_S_DATABASE_HOST pa_s_port Z _pa_s_private]
+        expect(tool_names).to include(*names)
+        expect(introspected).to include(*names)
       end
     end
 

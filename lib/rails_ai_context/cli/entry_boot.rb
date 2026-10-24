@@ -18,6 +18,9 @@ module RailsAiContext
 
       NO_APP_HINT = "Run this command inside a Rails app or a folder holding one (or pass --app-path)."
 
+      # A --json call's answer when the tool never ran; what stopped it is on stderr.
+      NOT_RUN = "The tool did not run: rails-ai-context stopped before it could. stderr says why."
+
       # A restored gem path must land ahead of these, or a gem with a
       # default-gem twin (prism, json) loads half from Ruby and half from itself.
       RUBY_OWN_DIRS = %w[
@@ -35,6 +38,13 @@ module RailsAiContext
       end
       self.preboot_gem_specs = {}
       self.preboot_framework_names = []
+
+      # The --json answer: stdout holds this and nothing else. Here, so the
+      # binary can give it before the gem loads.
+      def self.envelope(tool, output, error)
+        require "json"
+        JSON.pretty_generate(tool: tool, output: output, error: error)
+      end
 
       # The boot tier needs config/environment.rb. The static tier only needs
       # source: an engine keeps its dummy app under spec/dummy, so its root

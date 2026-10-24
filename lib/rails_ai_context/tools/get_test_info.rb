@@ -142,8 +142,10 @@ module RailsAiContext
 
             if data[:factory_names]&.any?
               lines << "" << "## Factories"
+              factories = data[:factory_names].values.flatten
+              traits = (data[:factory_traits] || {}).values.flatten
               data[:factory_names].each do |file, names|
-                detail_str = parse_factory_details(file)
+                detail_str = parse_factory_details(file, factories, traits)
                 if detail_str
                   lines << detail_str
                 else
@@ -367,7 +369,7 @@ module RailsAiContext
           real_dir = File.realpath(dir)
           next [] unless RailsAiContext::SafePath.contained?(real_dir, real_root)
 
-          Dir.glob(File.join(real_dir, "*")).map { |f| shown(f.delete_prefix("#{real_root}/")) }.first(10)
+          RailsAiContext::PathResolver.glob(real_dir, "*").map { |f| shown(f.delete_prefix("#{real_root}/")) }.first(10)
         end
 
         nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
@@ -503,39 +505,85 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "generate_test_template")
       end
 
-      # Parse factory file to extract attributes and traits
-      private_class_method def self.parse_factory_details(relative_path)
-        # Try common factory locations
-        candidates = [
-          File.join(suite_root, "spec/factories/#{relative_path}"),
-          File.join(suite_root, "test/factories/#{relative_path}"),
-          File.join(suite_root, "spec/factories", relative_path),
-          File.join(suite_root, "test/factories", relative_path)
-        ]
-        path = candidates.find { |p| File.exist?(p) }
-        return nil unless path
+      # A factory file's factories, attributes and traits, by its path under the suite root.
+      # `factories` and `traits` are every name the suite defines, to read a bare name as
+      # FactoryBot's Implicit declaration does: a factory, else a global sequence unless a trait.
+      private_class_method def self.parse_factory_details(relative_path, factories, traits)
+        path = File.join(suite_root, relative_path)
+        return nil unless File.file?(path)
         return nil if File.size(path) > max_test_file_size
 
         content = RailsAiContext::SafeFile.read(path)
         return nil unless content
+
+        tree = AstCache.parse_string(content).value
         lines = []
-        current_factory = nil
-
-        content.each_line do |line|
-          if (match = line.match(/\A\s*factory\s+:(\w+)/))
-            current_factory = match[1]
-            lines << "- **#{relative_path}** → `:#{current_factory}`"
-          elsif current_factory && (match = line.match(/\A\s*trait\s+:(\w+)/))
-            lines << "  - trait `:#{match[1]}`"
-          elsif current_factory && line.match?(/\A\s+\w+\s*\{/)
-            attr = line.strip.sub(/\s*\{.*/, "")
-            lines << "  - `#{attr}`" unless attr.empty?
-          end
+        top_factories(tree).each do |call|
+          name = factory_dsl_name(call) or next
+          lines << "- **#{relative_path}** → `:#{name}`"
+          factory_body_lines(call.block, 1, lines, factories: factories, traits: traits)
         end
-
         lines.any? ? lines.join("\n") : nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "parse_factory_details")
+      end
+
+      # DefinitionProxy calls that declare no attribute.
+      FACTORY_SETUP_CALLS = %i[to_create skip_create initialize_with traits_for_enum before after callback].freeze
+
+      private_class_method def self.top_factories(node, found = [])
+        if dsl_call?(node, :factory)
+          found << node
+        else
+          node.compact_child_nodes.each { |child| top_factories(child, found) }
+        end
+        found
+      end
+
+      private_class_method def self.dsl_call?(node, name = nil)
+        node.is_a?(Prism::CallNode) && node.receiver.nil? && (name.nil? || node.name == name)
+      end
+
+      private_class_method def self.factory_dsl_name(call)
+        first = call.arguments&.arguments&.first
+        first.unescaped if first.is_a?(Prism::SymbolNode) || first.is_a?(Prism::StringNode)
+      end
+
+      private_class_method def self.factory_body_lines(block, depth, lines, factories:, traits:, transient: false)
+        body = block.is_a?(Prism::BlockNode) ? block.body : nil
+        statements = body.is_a?(Prism::StatementsNode) ? body.body : []
+        indent = "  " * depth
+        statements.each do |call|
+          next unless dsl_call?(call)
+
+          case call.name
+          when :factory, :trait
+            name = factory_dsl_name(call) or next
+            lines << "#{indent}- #{call.name} `:#{name}`"
+            factory_body_lines(call.block, depth + 1, lines, factories: factories, traits: traits)
+          when :transient
+            factory_body_lines(call.block, depth, lines, transient: true, factories: factories, traits: traits)
+          when *FACTORY_SETUP_CALLS
+            next
+          else
+            name = factory_attribute(call, factories, traits) or next
+            lines << "#{indent}- `#{name}`#{' (transient)' if transient}"
+          end
+        end
+      end
+
+      # The attribute a DefinitionProxy call declares, or nil for a trait applied by name.
+      private_class_method def self.factory_attribute(call, factories, traits)
+        return factory_dsl_name(call) if %i[association sequence add_attribute].include?(call.name)
+
+        args = call.arguments&.arguments || []
+        name = call.name.to_s
+        return name if call.block && args.empty?
+        return name if args.size == 1 && args.first.is_a?(Prism::KeywordHashNode) &&
+                       args.first.elements.any? { |e| e.is_a?(Prism::AssocNode) && e.key.is_a?(Prism::SymbolNode) && e.key.unescaped == "factory" }
+        return nil unless args.empty?
+
+        name if factories.include?(name) || !traits.include?(name)
       end
 
       FIXTURE_SKIP_KEYS = %w[created_at updated_at id].freeze
@@ -589,7 +637,7 @@ module RailsAiContext
         results = {}
         Array(fixtures[:locations]).each do |rel|
           dir = File.join(root, rel)
-          Dir.glob(File.join(dir, "**", "*.yml")).sort.each do |path|
+          RailsAiContext::PathResolver.glob(dir, "**/*.yml").sort.each do |path|
             set = path.delete_prefix("#{dir}/").delete_suffix(".yml")
             next if results.key?(set)
 

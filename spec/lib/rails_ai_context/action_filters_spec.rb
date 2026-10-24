@@ -1040,6 +1040,22 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
   end
 
+  describe "a base controller whose path splits an acronym the app registers" do
+    it "reads its file the way Zeitwerk finds it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p([ File.join(dir, "app", "controllers", "json_ld"), File.join(dir, "config", "initializers") ])
+        File.write(File.join(dir, "config", "initializers", "inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'JsonLd' }\n")
+        File.write(File.join(dir, "app", "controllers", "json_ld", "base_controller.rb"), "class JsonLd::BaseController < ApplicationController\nend\n")
+
+        source = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(dir)) do
+          described_class.base_controller_source("JsonLd::BaseController", dir)
+        end
+
+        expect(source).to eq("class JsonLd::BaseController < ApplicationController\nend\n")
+      end
+    end
+  end
+
   describe ".for_controller" do
     it "keeps every declared filter, whatever action it constrains itself to" do
       result = described_class.for_controller(context, "PostsController")

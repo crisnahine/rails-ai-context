@@ -195,7 +195,7 @@ No, as long as the gem sits in the Gemfile's `:development` group, where `bundle
 
 ### How does live reload work?
 
-The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, and when files change, MCP clients are notified. Debounce interval: 1.5s (configurable).
+The `listen` gem watches `app/`, `config/`, `db/`, `lib/`, `rakelib/`, `test/`, `spec/`, the pack and engine folders, and the folders outside those that hold a file a reader reads (`bin/`, `.github/workflows/`, `.circleci/`, `.buildkite/`), and when files change, MCP clients are notified. Debounce interval: 1.5s (configurable). A file at the app root (Gemfile, Dockerfile, `.gitlab-ci.yml`), in a frontend root, or in a folder outside the app sends no notice of its own; the next tool call still sees the edit.
 
 Answers do not depend on it. Every tool call first checks those files, with `listen` or without it (a new Rails 8 app does not bundle it), and when one changed it reloads the app's code and drops the caches, so a call sees an edit made a moment before it. The check costs about a millisecond on a small app and about 30 ms at 10,000 files.
 

@@ -345,27 +345,24 @@ module RailsAiContext
         def initialize(real_root)
           @real_root = real_root
           @dirs = PathResolver.dirs_for(real_root, "lib")
-          @basenames = @dirs.flat_map { |dir| Dir.glob("**/*.rb", base: dir) }.to_set { |file| File.basename(file, ".rb") }
+          @segments = @dirs.flat_map { |dir| Dir.glob("**/*.rb", base: dir) }.to_set { |file| PathResolver.loose_key(File.basename(file, ".rb")) }
           @lookups = {}
           @found = []
         end
 
         # A prefilter before the parse: the source mixes something in and names a constant a lib file could hold, wherever it is written.
         def may_include?(source)
-          return false if @basenames.empty? || !source.match?(/\b(?:include|prepend)\b/)
+          return false if @segments.empty? || !source.match?(/\b(?:include|prepend)\b/)
 
-          source.scan(/\b[A-Z][\w:]*/).any? do |written|
-            written.split("::").any? { |segment| @basenames.include?(segment.underscore) }
-          end
+          source.scan(/\b[A-Z][\w:]*/).any? { |written| written.split("::").any? { |segment| @segments.include?(PathResolver.loose_key(segment)) } }
         end
 
         def note(mixins)
           Array(mixins).each do |mixin|
             next unless %i[include prepend].include?(mixin[:macro])
 
-            within = Array(mixin[:owner]).join("::")
             # Controllers share most candidates, so each is looked up once.
-            hit = ConcernPaths.candidate_names(mixin[:name], within.empty? ? nil : within).lazy.filter_map do |candidate|
+            hit = Introspectors::DeclaredConstant.candidate_names(mixin[:name], Introspectors::DeclaredConstant.record_nesting(mixin)).lazy.filter_map do |candidate|
               @lookups.fetch(candidate) { @lookups[candidate] = lookup(candidate) || false }
             end.first
             @found << hit if hit && !@found.include?(hit)
@@ -385,33 +382,34 @@ module RailsAiContext
         end
 
         def path_for(constant)
-          relative = "#{constant.underscore}.rb"
-          dir = @dirs.find { |d| File.file?(File.join(d, relative)) }
-          path = dir && File.realpath(File.join(dir, relative))
+          found = PathResolver.constant_file(@dirs, constant)
+          path = found && File.realpath(found)
           path if path && RailsAiContext::SafePath.contained?(path, @real_root)
         end
       end
       private_constant :LibModules
 
       private_class_method def self.find_view_references(method_names, real_root)
-        references = {}
-        view_files = markup_views(real_root)
-
-        method_names.each do |method_name|
-          matching_views = []
-
-          view_files.each do |real, relative|
-            content = RailsAiContext::SafeFile.read(real) or next
-
-            matching_views << relative if content.include?(method_name)
-          end
-
-          references[method_name] = matching_views if matching_views.any?
+        views = markup_views(real_root).filter_map do |real, relative|
+          content = RailsAiContext::SafeFile.read(real)
+          [ relative, called_names(Introspectors::ViewTemplateIntrospector.code_in(content, path: real)) ] if content
         end
 
-        references
+        method_names.each_with_object({}) do |method_name, references|
+          matching_views = views.filter_map { |relative, names| relative if names.include?(method_name) }
+          references[method_name] = matching_views if matching_views.any?
+        end
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "find_view_references")
+      end
+
+      # The names a template calls by themselves: not `@post.subtitle`, `:title`,
+      # the `icon` of `icon-edit` or a `title:` key.
+      CALLED_NAME = /(?<![\w@.:-])[A-Za-z_]\w*[?!]?(?![\w?!:-])/
+      private_constant :CALLED_NAME
+
+      private_class_method def self.called_names(code)
+        code.scan(CALLED_NAME).to_set
       end
 
       # Every markup view across the app's views roots, as [realpath, name it renders by].
@@ -430,19 +428,19 @@ module RailsAiContext
         declared = RailsAiContext::Introspectors::GemfileGems.names(real_root)
         return detected if declared.empty?
 
-        # Collect all view file content for scanning
-        scan_content = ""
-
         files = markup_views(real_root).map(&:first) +
                 PathResolver.dirs_for(real_root, "app/helpers").flat_map { |d| safe_glob(d, "**/*.rb", real_root) }
-        files.each { |real| scan_content += (RailsAiContext::SafeFile.read(real) || "") }
+        called = files.each_with_object(Set.new) do |real, names|
+          content = RailsAiContext::SafeFile.read(real)
+          names.merge(called_names(Introspectors::ViewTemplateIntrospector.code_in(content, path: real))) if content
+        end
 
         FRAMEWORK_HELPERS.each do |lib, methods|
           gem_name = FRAMEWORK_GEMS.fetch(lib) { lib.downcase }
           next unless declared.include?(gem_name)
 
           # Find which framework methods are actually used
-          used = methods.select { |m| scan_content.include?(m) }
+          used = methods.select { |m| called.include?(m) }
           detected[lib] = used if used.any?
         end
 

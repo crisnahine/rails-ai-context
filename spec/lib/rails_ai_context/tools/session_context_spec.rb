@@ -41,6 +41,15 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(text).to include("rails_get_schema")
     end
 
+    it "keeps a recorded param's pipe and line break inside its table cell" do
+      described_class.call(mark: "search_code:has_many|belongs_to")
+      described_class.call(mark: "get_schema:a\nb")
+      text = described_class.call(action: "status").content.first[:text]
+
+      expect(text).to include("| `rails_search_code` | has_many\\|belongs_to | 0s ago |\n")
+      expect(text).to include("| `rails_get_schema` | a b | 0s ago |\n")
+    end
+
     it "shows recorded queries in status" do
       described_class.call(mark: "get_schema:users")
       result = described_class.call(action: "status")

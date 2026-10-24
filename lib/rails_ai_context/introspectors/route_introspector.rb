@@ -11,11 +11,11 @@ module RailsAiContext
       # A drawn file can draw again. Rails allows it; this stops a cycle of
       # symlinked or mutually-drawing files from walking forever.
       MAX_DRAW_DEPTH = 5
+      ENGINE_CLASS = /<\s*(?:::)?Rails::Engine\b/
 
       # @return [Hash] routes grouped by controller
       def call
         routes = extract_routes
-        root = routes.find { |r| r[:path] == "/" && r[:verb]&.include?("GET") }
 
         {
           # Merged, because that is how every surface that lists routes counts
@@ -29,7 +29,7 @@ module RailsAiContext
           # Everything routable that has no controller#action and is not a
           # redirect or a lambda: the same set the list above names.
           unrouted_mounts: count_unrouted_mounts,
-          root_route: root ? "#{root[:controller]}##{root[:action]}" : nil
+          root_route: root_route(routes)
         }.tap do |result|
           # `get "/", to: redirect(...)` is routable, has no controller#action
           # and is not a mount, so no row and no count mentioned it. The static
@@ -56,7 +56,6 @@ module RailsAiContext
       # fabricated.
       def static_call
         top_files, computed = route_files
-        return { error: "config/routes.rb not found in #{app.root}" } if top_files.empty?
 
         records, mounts, files = walk_route_files(top_files)
         records = records.map { |r| r.except(:engine) } if engine_root?
@@ -71,6 +70,7 @@ module RailsAiContext
         # list above. Counting it would overstate what is missing by exactly
         # the number of files this pass just read.
         dynamic = app_records.count { |r| r[:type] == :dynamic && !r[:followed] }
+        source = top_files.empty? ? "No route file to parse" : "Parsed statically from #{static_sources_phrase(files, top_files)}"
 
         result = {
           # Merged, for the reason `call` gives above: a raw total here made the
@@ -83,9 +83,8 @@ module RailsAiContext
           # Every mount parsed from routes.rb is controller-less by
           # construction, so the booted tier's count has a static answer too.
           unrouted_mounts: mounts.size,
-          root_route: static_root_route(entries),
-          note: "Parsed statically from #{static_sources_phrase(files, top_files)}" \
-                "#{initializers_phrase}" \
+          root_route: root_route(entries),
+          note: "#{source}#{initializers_phrase}" \
                 "#{computed ? ', plus route files config/application.rb computes (not read)' : ''} (app not booted)",
           confidence: Confidence::STATIC
         }
@@ -203,9 +202,9 @@ module RailsAiContext
       # gem's constant is read nowhere here, so its name is all there is.
       def engine_constant?(name, roots)
         path = PathResolver.file_for_constant(app.root.to_s, name, roots: roots)
-        return name.to_s.match?(/(?:\A|::)Engine\z/) unless path
+        return name.to_s.match?(Listeners::RoutesDslListener::ENGINE_NAME) unless path
 
-        SafeFile.read(path).to_s.match?(/<\s*(?:::)?Rails::Engine\b/)
+        SafeFile.read(path).to_s.match?(ENGINE_CLASS)
       end
 
       # Rails names the proxy after the mount: its `as:`, else the engine's
@@ -215,18 +214,35 @@ module RailsAiContext
         [ mount&.dig(:name_prefix), name ].compact.join("_")
       end
 
+      # The engine's railtie name from its file; an engine outside the repo is read by its namespace.
+      def engine_name(engine)
+        source = constant_source(engine)
+        source ? railtie_name(source, engine) : Listeners::RoutesDslListener.engine_namespace(engine)
+      end
+
+      # Mapper#app_name for a mounted class: an engine's railtie name from its file, else the listener's reading of the name.
+      def mount_name(class_name)
+        source = constant_source(class_name)
+        return Listeners::RoutesDslListener.mount_name(class_name) unless source
+
+        source.match?(ENGINE_CLASS) ? railtie_name(source, class_name) : Listeners::RoutesDslListener.underscored(class_name)
+      end
+
+      # The source of the file the app keeps a constant in, read once per name; nil when the app holds none it can read.
+      def constant_source(name)
+        (@constant_sources ||= {}).fetch(name) do
+          path = PathResolver.file_for_constant(app.root.to_s, name)
+          @constant_sources[name] = path && SafeFile.read(path)
+        end
+      end
+
       # `engine_name "x"`, else `isolate_namespace Mod` as mod, else Rails'
       # railtie name from the class (wiki/engine -> wiki_engine).
-      def engine_name(engine)
-        path = PathResolver.file_for_constant(app.root.to_s, engine)
-        # An engine outside the repo has no file here to read its name from.
-        return Listeners::RoutesDslListener.engine_namespace(engine) unless path
-
-        source = SafeFile.read(path)
+      def railtie_name(source, engine)
         declared = AstWalk.each(AstCache.parse_string(source).value)
           .find { |n| n.is_a?(Prism::CallNode) && n.receiver.nil? && n.name == :engine_name }&.then { |c| literal_arg(c) }
         isolated = TableName.isolated_namespaces(source).first
-        declared || isolated&.underscore&.tr("/", "_") || engine.underscore.tr("/", "_")
+        declared || Listeners::RoutesDslListener.underscored(isolated || engine)
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, Listeners::RoutesDslListener.engine_namespace(engine), label: "engine_name #{engine}")
       end
@@ -273,7 +289,10 @@ module RailsAiContext
       # Booted, the routes section walks these for mount conditions and the
       # engines section for its mount list, so one run walks them once.
       def walk_route_files(top_files)
-        RunCache.fetch([ :route_walk, app.root.to_s, top_files ]) { walk_route_files!(top_files) }
+        *walk, names = RunCache.fetch([ :route_walk, app.root.to_s, top_files ]) { walk_route_files!(top_files) }
+        # The in-repo engine walk adds to the names, so each instance takes its own copy.
+        @route_names = names.dup
+        walk
       end
 
       def walk_route_files!(top_files)
@@ -291,7 +310,7 @@ module RailsAiContext
         # An after_initialize hook adds its blocks after every initializer has added its own.
         prepended, appended = added.sort_by.with_index { |r, i| [ r[:late] ? 1 : 0, i ] }.partition { |r| r[:prepend] }
         records = (prepended + records + appended).map { |r| r.except(:prepend, :late) }
-        [ records, distinct_mounts(mounts + added_mounts), files.uniq ]
+        [ records, distinct_mounts(mounts + added_mounts), files.uniq, @route_names ]
       end
 
       # Both arms of an if/else can mount one app at one path; a mount is named once per app and
@@ -355,10 +374,10 @@ module RailsAiContext
             constraints: extract_constraints(route)
           }
 
-          params = route_path.scan(/:(\w+)/).flatten
+          params = RouteCoverage.path_params(route_path)
           entry[:params] = params if params.any?
 
-          entry[:restful] = %w[index show new create edit update destroy].include?(action)
+          entry[:restful] = RouteCoverage::RESTFUL_ACTIONS.include?(action)
 
           entry.compact
         end
@@ -385,10 +404,11 @@ module RailsAiContext
 
         scope = draw[:scope] || []
         already_read << [ path, scope ]
+        routes = Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names,
+                                                  before_8_1: rails_before_8_1?, api_only: api_only_app?, mount_name: method(:mount_name))
         ast = SourceIntrospector.walk(path, {
-          routes: -> { Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names,
-                                                        multi_path: multi_path_routes?, api_only: api_only_app?) },
-          mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix]) }
+          routes: -> { routes },
+          mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix], routes: routes) }
         })
         records = ast[:routes] || []
         mounts = (ast[:mounts] || []).map { |m| m[:arm] ? m.merge(arm: [ path, *m[:arm] ]) : m }
@@ -477,7 +497,6 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [ [], [], [] ], label: "draw target #{target}")
       end
 
-      # Rails 8.1 raises on `get "/a", "/b"`; with no version locked the routes are not guessed.
       # config.api_only reaches the route set Rails builds for the app, which
       # then draws no new or edit route for a resource.
       def api_only_app?
@@ -486,13 +505,13 @@ module RailsAiContext
         @api_only_app = AppKind.api_only?(app.root)
       end
 
-      def multi_path_routes?
-        return @multi_path_routes if defined?(@multi_path_routes)
+      # Rails 8.1 raises on `get "/a", "/b"` and leaves `mount App, as: nil` unnamed; an unknown version takes 8.1's rules.
+      def rails_before_8_1?
+        return @rails_before_8_1 if defined?(@rails_before_8_1)
 
-        locked = GemLock.for(app.root.to_s).version("actionpack")
-        @multi_path_routes = !locked.nil? && Gem::Version.new(locked) < Gem::Version.new("8.1.0.a")
+        @rails_before_8_1 = !RailsVersion.at_least?(RailsVersion.of(app.root.to_s), "8.1.0.a")
       rescue ArgumentError
-        @multi_path_routes = false
+        @rails_before_8_1 = false
       end
 
       # `draw(:"admin/users")` is legal and resolves under config/routes/, but
@@ -630,7 +649,7 @@ module RailsAiContext
         source = static_mounts
         mounted_routes.map do |r|
           mounted = r.app.respond_to?(:app) ? r.app.app : r.app
-          name = mounted.is_a?(Class) ? mounted.name : mounted.class.name
+          name = mounted.is_a?(Module) ? mounted.name : mounted.class.name
           # An app mounted as an instance of an anonymous class has no name to
           # print and is still one of the endpoints the count counts, so it is
           # named for what it is rather than dropped into a disagreement
@@ -642,8 +661,8 @@ module RailsAiContext
         end
       end
 
-      # Source names an instance or a factory mount by what it wrote
-      # (`MetricsApp.new`) and a computed path not at all, so after the exact
+      # Source names a factory mount by what it wrote (`FlagsUI.app`)
+      # and a computed path not at all, so after the exact
       # app and path, the one mount at that path, then the one of that app
       # with no literal path. Two candidates (an if/else at one path, or one
       # entry merged from several mounts) are a guess, so none is taken.
@@ -678,8 +697,9 @@ module RailsAiContext
         entries.filter_map { |e| e[:path][%r{\A/api(?:/v\d+)?(?=/|\z)}] }.uniq.sort
       end
 
-      def static_root_route(entries)
-        root = entries.find { |e| e[:path] == "/" && e[:verb] == "GET" }
+      # The first route GET / matches: one answering GET among its verbs, or any verb.
+      def root_route(entries)
+        root = entries.find { |e| e[:path] == "/" && e[:verb].to_s.split("|").intersect?(%w[GET ANY]) }
         root && "#{root[:controller]}##{root[:action]}"
       end
     end

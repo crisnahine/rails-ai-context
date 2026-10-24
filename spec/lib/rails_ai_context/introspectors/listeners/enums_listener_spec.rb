@@ -9,6 +9,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnumsListener do
     expect(parse_and_dispatch("enum priority: %i[low high].freeze").first[:values]).to eq({ low: 0, high: 1 })
   end
 
+  it "keeps values with a double splat in them as their source, since the splat is not read" do
+    expect(parse_and_dispatch("enum :status, **STATUSES").first[:values]).to eq("**STATUSES")
+    expect(parse_and_dispatch("enum :status, active: 0, **EXTRA").first[:values]).to eq("active: 0, **EXTRA")
+    expect(parse_and_dispatch("enum :status, { active: 0, **EXTRA }").first[:values]).to eq("{ active: 0, **EXTRA }")
+  end
+
   it "detects Rails 7+ enum syntax" do
     results = parse_and_dispatch("enum :role, { admin: 0, member: 1 }")
     expect(results.size).to eq(1)
@@ -24,6 +30,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnumsListener do
   it "detects Rails 7+ enum with prefix option" do
     results = parse_and_dispatch("enum :status, { active: 0, inactive: 1 }, prefix: true")
     expect(results.first[:options]).to include(prefix: true)
+  end
+
+  it "reads bare keywords after the name as the values, every one of them, as Rails does" do
+    status, kind = parse_and_dispatch("enum :status, active: 0, archived: 1\nenum :kind, digital: 0, physical: 1, prefix: true")
+
+    expect(status).to include(values: { active: 0, archived: 1 }, options: {})
+    expect(kind).to include(values: { digital: 0, physical: 1, prefix: true }, options: {})
   end
 
   it "detects legacy enum syntax" do
@@ -50,12 +63,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnumsListener do
   it "detects legacy enum with _prefix option" do
     results = parse_and_dispatch("enum status: { draft: 0, published: 1 }, _prefix: true")
     expect(results.first[:name]).to eq("status")
-    expect(results.first[:options]).to include(_prefix: true)
+    expect(results.first[:options]).to include(prefix: true)
   end
 
   it "detects legacy enum with _suffix option" do
     results = parse_and_dispatch("enum role: { admin: 0, member: 1 }, _suffix: :type")
     expect(results.first[:name]).to eq("role")
-    expect(results.first[:options]).to include(_suffix: :type)
+    expect(results.first[:options]).to include(suffix: :type)
   end
 end

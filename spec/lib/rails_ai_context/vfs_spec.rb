@@ -499,10 +499,13 @@ RSpec.describe RailsAiContext::VFS do
       end
     end
 
-    it "calls introspect fresh each time" do
-      expect(RailsAiContext).to receive(:introspect).twice.and_return(context)
+    # handle_read checks the files first, so the shared context is as fresh as a new walk.
+    it "reads the shared context the tools read, introspecting once for every template" do
+      expect(RailsAiContext).to receive(:introspect).once.and_return(context)
       described_class.resolve("rails-ai-context://models/Post")
       described_class.resolve("rails-ai-context://routes/posts")
+      described_class.resolve("rails-ai-context://controllers/PostsController")
+      described_class.resolve("rails-ai-context://controllers/PostsController/index")
     end
   end
 

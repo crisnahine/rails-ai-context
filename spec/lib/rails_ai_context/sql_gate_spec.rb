@@ -92,17 +92,14 @@ RSpec.describe RailsAiContext::SqlGate do
       end
     end
 
-    it "reads a run of opening brackets and a nest of VALUES lists in time that grows with their length" do
-      cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+    it "reads a run of opening brackets and a nest of VALUES lists in time that grows with their length", :cpu_timed do
       nest = 200_000 / 23
       [ "SELECT 1 AS v, #{"[" * 200_000}", "SELECT * FROM #{"(VALUES (" * nest}1#{")) AS t(a)" * nest}" ].each do |sql|
         families.each do |key, family|
           gate = described_class.new(family: family, secrets: RailsAiContext::SecretColumns.new, connection: connection,
                                      budget: described_class::Budget.new(5), text_timeout: 600)
-          started = Process.clock_gettime(cpu)
-          gate.check(sql)
           # A reader whose time grows with the square of the length takes minutes here.
-          expect(Process.clock_gettime(cpu) - started).to be < 20, "#{key}: #{sql[0, 30]}"
+          expect(cpu_seconds { gate.check(sql) }).to be < 20, "#{key}: #{sql[0, 30]}"
         end
       end
     end

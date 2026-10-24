@@ -43,9 +43,8 @@ RSpec.describe RailsAiContext::HydrationResult do
   describe "with defaults" do
     let(:result) { described_class.new }
 
-    it "defaults to empty hints and warnings" do
+    it "defaults to empty hints" do
       expect(result.hints).to eq([])
-      expect(result.warnings).to eq([])
     end
 
     it "returns false for any?" do

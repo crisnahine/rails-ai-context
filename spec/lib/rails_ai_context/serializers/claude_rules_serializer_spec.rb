@@ -47,6 +47,20 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
   end
 
+  it "lists the first 30 models and counts the rest, as the schema rule does" do
+    models = (0..30).to_h { |i| [ format("Post%02d", i), { associations: [], validations: [], table_name: format("post%02ds", i) } ] }
+
+    Dir.mktmpdir do |dir|
+      described_class.new(serializer_context(models: models)).call(dir)
+      content = File.read(File.join(dir, ".claude", "rules", "rails-models.md"))
+
+      expect(content).to include("# ActiveRecord Models (31)", "- Post29 (table: post29s)")
+      expect(content).not_to include("- Post30")
+      expect(content.lines.last).to start_with("- ...1 more model")
+      expect(content).to include("rails_get_model_details")
+    end
+  end
+
   it "summarizes a foreign key over two columns as the column list" do
     ctx = serializer_context(schema: { adapter: "postgresql", total_tables: 1, tables: {
       "posts" => { columns: [ { name: "id" }, { name: "user_id" } ], primary_key: "id",

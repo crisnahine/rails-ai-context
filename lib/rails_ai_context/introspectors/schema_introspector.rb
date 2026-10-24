@@ -165,7 +165,7 @@ module RailsAiContext
 
       def table_names
         @table_names ||= (connection.tables - @partitions.to_a - sqlite_hidden_tables)
-          .reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
+          .reject { |t| SchemaConventions.bookkeeping_table?(t) }
       end
 
       def extract_tables
@@ -262,12 +262,13 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "table_comment")
       end
 
-      # Rails 7.1+ on PostgreSQL.
+      # Rails 7.1+ on PostgreSQL; nulls_not_distinct from 8.0.
       def unique_constraints(table)
         return unless connection.respond_to?(:unique_constraints) && connection.supports_unique_constraints?
 
         found = connection.unique_constraints(table).map do |constraint|
-          SchemaConventions.unique_constraint_entry(constraint.name, constraint.column, constraint.deferrable)
+          SchemaConventions.unique_constraint_entry(constraint.name, constraint.column, constraint.deferrable,
+                                                    (constraint.nulls_not_distinct if constraint.respond_to?(:nulls_not_distinct)))
         end
         found if found.any?
       rescue => e
@@ -300,9 +301,11 @@ module RailsAiContext
       def column_detail(table, col, bigint)
         native_limit = (connection.native_database_types[col.type] || {})[:limit]
         limit = col.limit unless bigint || col.limit == native_limit || col.sql_type.to_s.match?(/\A(?:tiny|medium|long)?(?:text|blob)\b/i)
-        # A datetime's default precision is 6, and MySQL writes none as 0.
-        precision = col.precision unless col.type == :datetime && [ nil, 0, 6 ].include?(col.precision) ||
-                                         col.type == :time && col.precision.to_i.zero? && col.sql_type.to_s.start_with?("time")
+        precision = if %i[datetime time timestamptz].include?(col.type)
+          StructureSqlReader.dumped_precision(col.type.to_s, col.precision, RailsAiContext::DatabaseFamily.of(connection).key)[:precision]
+        else
+          col.precision
+        end
         {
           limit: limit,
           precision: precision,
@@ -325,16 +328,24 @@ module RailsAiContext
 
       def extract_columns(table)
         schema_defaults = parse_schema_defaults_for_table(table)
+        key = nil
 
         connection.columns(table).map do |col|
           # schema.rb's dumper names a bigint `bigint`, not integer with limit 8;
           # the static tier reads that name, so the booted one says it too.
           bigint = col.respond_to?(:bigint?) && col.bigint?
+          type = bigint ? "bigint" : dumped_type(col)
+          if col.respond_to?(:serial?) && col.serial?
+            key ||= Array(connection.primary_key(table))
+            type = StructureSqlReader.serial_name(type, key == [ col.name ])
+          end
+          # A precision with no scale is DecimalWithoutScale to the dumper.
+          scale = col.scale || (0 if col.precision) if col.type == :decimal
           entry = {
             name: col.name,
-            type: bigint ? "bigint" : dumped_type(col),
+            type: type,
             null: col.null,
-            default: col.default,
+            default: col.type == :decimal ? StructureSqlReader.dumped_decimal(col.default, scale) : col.default,
             **column_detail(table, col, bigint),
             comment: col.comment
           }
@@ -351,7 +362,7 @@ module RailsAiContext
           # static tier reads the way Rails dumps it ([]).
           if col.respond_to?(:array?) && col.array?
             entry[:array] = true
-            entry[:default] = SchemaConventions.format_default(StructureSqlReader.array_default(col.default, col.sql_type_metadata.sql_type)) if col.default.is_a?(String)
+            entry[:default] = SchemaConventions.format_default(StructureSqlReader.array_default(col.default, col.type.to_s, scale)) if col.default.is_a?(String)
           end
           # Supplement with schema.rb default when live DB returns nil
           if entry[:default].nil? && schema_defaults[col.name]
@@ -461,6 +472,7 @@ module RailsAiContext
 
         # Virtual tables and tables the dumper skipped count as tables, as the connection lists them.
         names = (schema_reader.tables.keys + schema_reader.virtual_tables.keys + schema_reader.not_dumped.keys).map(&:to_s).uniq
+          .reject { |name| SchemaConventions.bookkeeping_table?(name) }
         names.any? ? names : nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "declared_table_names")
@@ -723,14 +735,12 @@ module RailsAiContext
         entry
       end
 
-      def static_index(index)
+      def static_index(index, table)
         columns = index[:columns]
         return nil if columns.empty?
 
-        entry = SchemaConventions.index_entry(index[:options][:name]&.to_s, columns, index[:options])
-        # An expression index (e.g. "lower(email)") names no plain column.
-        entry[:expression] = true if columns.size == 1 && !columns.first.match?(/\A\w+\z/)
-        entry
+        name = index[:options][:name]&.to_s || SchemaConventions.default_index_name(table, index[:string_key] ? columns.first : columns)
+        SchemaConventions.index_entry(name, columns, index[:options])
       end
 
       def parse_dump(format, path)
@@ -797,7 +807,7 @@ module RailsAiContext
           table = every[constraint[:table]] or next
           (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
         end
-        views = schema.views.transform_values { |view| view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i) }) }
+        views = schema.views.to_h { |name, view| [ name, view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i, name) }) ] }
         SchemaConventions.add_relations(tables, views: views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
         # A view outside the search path is findable only by its qualified name, as a table is.
         tables.keys.select { |name| name.include?(".") }.each { |name| qualified[name] = tables.delete(name) }
@@ -831,15 +841,16 @@ module RailsAiContext
 
       def static_tables(declared_tables)
         declared_tables.each_with_object({}) do |(table_name, declared), tables|
-          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
+          next if SchemaConventions.bookkeeping_table?(table_name)
 
           comment = declared.dig(:options, :comment)
           unique = Array(declared[:unique_constraints]).map do |constraint|
-            SchemaConventions.unique_constraint_entry(constraint.dig(:options, :name), constraint[:columns], constraint.dig(:options, :deferrable))
+            SchemaConventions.unique_constraint_entry(constraint.dig(:options, :name), constraint[:columns], constraint.dig(:options, :deferrable),
+                                                      constraint.dig(:options, :nulls_not_distinct))
           end
           tables[table_name] = {
             columns: declared[:columns].map { |c| static_column(c) },
-            indexes: declared[:indexes].filter_map { |i| static_index(i) },
+            indexes: declared[:indexes].filter_map { |i| static_index(i, table_name) },
             foreign_keys: [],
             comment: (comment if comment.is_a?(String)),
             unique_constraints: (unique if unique.any?),
@@ -885,7 +896,7 @@ module RailsAiContext
       end
 
       def rails_version
-        @rails_version ||= PgNaming.rails_version(app.root)
+        @rails_version ||= RailsVersion.of(app.root)
       end
 
       def search_path_for(dump_path)

@@ -16,13 +16,13 @@ module RailsAiContext
         "rails-components.md" => { renderer: :render_components_reference, reason: "no view components" }
       }.freeze
 
-      # Per database; the tools have the rest.
-      TABLES_SHOWN = 30
+      # Tables per database, or models, a rules file lists; the tools have the rest.
+      ROWS_SHOWN = 30
 
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES, root: output_dir)
       end
 
       private
@@ -109,7 +109,7 @@ module RailsAiContext
         # Get enum values from models introspection if available
         models = Payload.models(context)
 
-        tables.keys.sort.first(TABLES_SHOWN).each do |name|
+        tables.keys.sort.first(ROWS_SHOWN).each do |name|
           data = tables[name]
           columns = data[:columns] || []
           col_count = columns.size
@@ -165,9 +165,9 @@ module RailsAiContext
           end
         end
 
-        if tables.size > TABLES_SHOWN
+        if tables.size > ROWS_SHOWN
           use = " (use #{tool_named("rails_get_schema")})" if served?("rails_get_schema")
-          lines << "- ...#{count_phrase(tables.size - TABLES_SHOWN, "more table")}#{use}"
+          lines << "- ...#{count_phrase(tables.size - ROWS_SHOWN, "more table")}#{use}"
         end
 
         lines
@@ -206,7 +206,7 @@ module RailsAiContext
         end
         lines << ""
 
-        models.keys.sort.each do |name|
+        models.keys.sort.first(ROWS_SHOWN).each do |name|
           data = models[name]
           if (unread = SectionFacts.unread_row("- #{name}", data))
             lines << unread
@@ -252,6 +252,11 @@ module RailsAiContext
           enums.each do |attr, values|
             lines << "  #{attr}: #{SectionFacts.enum_values(values)}"
           end
+        end
+
+        if models.size > ROWS_SHOWN
+          use = " (use #{tool_named("rails_get_model_details")})" if served?("rails_get_model_details")
+          lines << "- ...#{count_phrase(models.size - ROWS_SHOWN, "more model")}#{use}"
         end
 
         lines.join("\n")

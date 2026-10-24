@@ -475,23 +475,30 @@ module RailsAiContext
         changes << "guard" if changed
 
         if changes.any?
-          File.write(full_path, existing)
+          RailsAiContext::SafeFile.atomic_write(full_path.to_s, existing, root: install_root.to_s)
           say "Updated #{full_path.relative_path_from(install_root)}: #{changes.join(', ')}", :green
         else
           say "#{full_path.relative_path_from(install_root)} is up to date - no changes needed", :green
         end
+      rescue RailsAiContext::SafeFile::LinkedOut
+        say "Left #{full_path.relative_path_from(install_root)} as it is - #{RailsAiContext::SafeFile::LINKED}", :yellow
       end
 
       # A key's line, rewritten where it stands. An assignment in the shape
       # the record writes keeps its indentation and whatever follows the
       # value, and is left alone when it already holds the value; any other
-      # assignment, or the commented-out default, becomes the generated line.
-      # A key with no line is not added: it comes with its section.
+      # assignment is left alone with a warning, and the commented-out default
+      # becomes the generated line. A key with no line is not added: it comes
+      # with its section.
       # Returns [new_content, changed?]
       def update_config_line(content, key, value)
         record = RailsAiContext::Install::SelectionRecord
         edited, status = record.edit_config_line(content, key, value, insert: false)
-        return [ edited, status == :updated ] unless %i[conflict absent].include?(status)
+        if (conflict = record.conflict_message(key, status))
+          say conflict.last, :red
+          return [ content, false ]
+        end
+        return [ edited, status == :updated ] unless status == :absent
 
         pattern = /^([ \t]*)#?[ \t]*config\.#{key}[ \t]*=.*$/
         updated = content.sub(pattern) { "#{Regexp.last_match(1)}#{record.config_line(key, value)}" }
@@ -608,13 +615,6 @@ module RailsAiContext
         nil
       end
 
-      # Whether `path` is `dir` or below it, compared by real paths: a hooks
-      # directory may not exist yet, and a temp or home directory may sit
-      # behind a symlink.
-      def inside?(path, dir)
-        RailsAiContext::SafePath.contained?(RailsAiContext::SafePath.canonical(path), RailsAiContext::SafePath.canonical(dir))
-      end
-
       # Whether git tracks any file of the app, asked from inside it.
       def app_tracked?
         out, status = Open3.capture2("git", "ls-files", "-z", "--", ".", chdir: install_root.to_s, err: File::NULL)
@@ -682,7 +682,7 @@ module RailsAiContext
 
         # A core.hooksPath outside the repository is shared by every
         # repository that uses it, so this app's hook does not belong there.
-        unless inside?(repo[:hooks], repo[:toplevel]) || inside?(repo[:hooks], repo[:common_dir])
+        unless RailsAiContext::SafePath.inside?(repo[:hooks], repo[:toplevel]) || RailsAiContext::SafePath.inside?(repo[:hooks], repo[:common_dir])
           say "  Skipped pre-commit hook (core.hooksPath points outside this repository, at #{repo[:hooks]}, " \
               "where every repository using it would run it - add it there by hand)", :yellow
           return

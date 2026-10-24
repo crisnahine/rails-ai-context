@@ -363,7 +363,8 @@ module RailsAiContext
           matched_tables = Set.new
 
           models.each_key do |model_name|
-            next unless model_name.downcase.include?(feature_name.downcase)
+            next unless AnalyzeFeature.feature_word_match?(model_name, feature_name) ||
+                        AnalyzeFeature.feature_word_match?(models[model_name][:table_name], feature_name)
             matched_models << model_name
             table_name = models[model_name][:table_name]
             next unless table_name
@@ -377,11 +378,7 @@ module RailsAiContext
           has_controllers = analyze_text.include?("## Controllers")
           unless has_controllers
             # Check if any controllers or services reference this feature by name
-            related_ctrls = Payload.controllers(ctx).select do |c_name, _|
-              c_name.downcase.include?(feature_name.downcase) ||
-                c_name.downcase.include?(feature_name.singularize.downcase) ||
-                c_name.downcase.include?(feature_name.pluralize.downcase)
-            end
+            related_ctrls = Payload.controllers(ctx).select { |c_name, _| AnalyzeFeature.feature_word_match?(c_name, feature_name) }
             if related_ctrls.any?
               related << "## Related Controllers (by name)"
               related_ctrls.each do |c_name, c|

@@ -24,6 +24,17 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       expect(described_class.explicit(source, "Admin::ActionLog")).to eq("legacy_logs")
     end
 
+    # Ruby names a class from where it is written: `class Shop::Order` inside `module Shop` is
+    # Shop::Order, and `class ::Order` inside it is the top-level Order.
+    it "reads the class a written path names the way Ruby resolves it" do
+      compact = "module Shop\n  class Shop::Order < ApplicationRecord\n    self.table_name = 'shop_orders_x'\n  end\nend\n"
+      rooted = "module Shop\n  class ::Order < ApplicationRecord\n    self.table_name = 'top_orders'\n  end\nend\n"
+
+      expect(described_class.explicit(compact, "Shop::Order")).to eq("shop_orders_x")
+      expect(described_class.explicit(rooted, "Order")).to eq("top_orders")
+      expect(described_class.explicit(rooted, "Shop::Order")).to be_nil
+    end
+
     # A second class in the file, nested or not, is not this file's class, and
     # its table is not this file's table.
     it "ignores an assignment made by another class in the file" do
@@ -313,10 +324,10 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
   end
 
   describe ".model_for" do
-    let(:models) { { "AIMatch" => {}, "Shop::Payment" => {}, "Payment" => {} } }
+    let(:models) { { "HTMLPage" => {}, "Shop::Payment" => {}, "Payment" => {} } }
 
     it "spells a derived name as the model set does, from the owner's namespace outward" do
-      expect(described_class.model_for("AiMatch", nil, models)).to eq("AIMatch")
+      expect(described_class.model_for("HtmlPage", nil, models)).to eq("HTMLPage")
       expect(described_class.model_for("Payment", "Shop::Order", models)).to eq("Shop::Payment")
       expect(described_class.model_for("::Payment", "Shop::Order", models)).to eq("Payment")
       expect(described_class.model_for("Missing", nil, models)).to be_nil

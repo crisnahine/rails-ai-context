@@ -739,6 +739,22 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(JSON.parse(output)["error"]).to eq(false)
     end
 
+    # A boolean flag takes only a boolean word, so -j and -h after it are the runner's own flags.
+    it "reads -j and -h after a boolean flag as flags, and after a value flag as its value" do
+      expect(JSON.parse(described_class.new("search_code", %w[--pattern Post --exact-match -j]).run))
+        .to include("tool" => "rails_search_code", "error" => false)
+      expect(described_class.new("search_code", %w[--pattern Post --exact-match -h]).run).to start_with("rails_search_code - ")
+      expect(described_class.new("search_code", %w[--pattern -j]).run).to start_with("# Search: `-j`")
+    end
+
+    # The binary answers a refusal as an envelope when the runner read -j, so it reads every word first.
+    it "reads a -j that follows a refused word before it refuses" do
+      runner = described_class.new("search_code", %w[--pattern --exact-match -j])
+
+      expect { runner.run }.to raise_error(described_class::InvalidArgumentError, /'--pattern' takes a string value/)
+      expect(runner.json_mode).to be(true)
+    end
+
     # Sidekiq's logger, made the first time a tool reaches it, announced its
     # Redis connection on stdout ahead of the envelope.
     it "keeps what the app prints while the tool runs off stdout" do

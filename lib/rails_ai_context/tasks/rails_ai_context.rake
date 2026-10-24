@@ -209,12 +209,20 @@ module RailsAiContext::RakeTasks
   namespace :ai do
     desc "Run an MCP tool from the CLI: rails 'ai:tool[schema]' table=users detail=full"
     task :tool, [ :name ] do |_t, args|
+      name = args[:name]
+      json_mode = ENV["JSON"] == "1"
       # Booted here rather than as a prerequisite, so what the app prints while
       # it boots goes to stderr, as it does from the binary: with JSON=1, stdout
       # is the envelope and nothing else.
-      boot_quietly
+      begin
+        boot_quietly
+      rescue SystemExit => e
+        raise if e.success? || !json_mode || !name
 
-      name = args[:name]
+        # What stopped it is already on stderr.
+        puts RailsAiContext::CLI::EntryBoot.envelope(name, RailsAiContext::CLI::EntryBoot::NOT_RUN, true)
+        raise
+      end
 
       unless name
         puts RailsAiContext::CLI::ToolRunner.tool_list
@@ -228,11 +236,12 @@ module RailsAiContext::RakeTasks
         next if arg.start_with?("-") || arg.match?(/\Aai:tool(?:\[|\z)/)
         if arg.include?("=")
           key, value = arg.split("=", 2)
+          # Rake already applied an env var word (JSON=1) to ENV; every tool param is lowercase.
+          next if key.match?(/\A[A-Z][A-Z0-9_]*\z/)
+
           params[key.to_sym] = value
         end
       end
-
-      json_mode = ENV["JSON"] == "1"
 
       if params.delete(:help) || ARGV.include?("--help")
         puts RailsAiContext::CLI::ToolRunner.new(name, {}).help
@@ -247,7 +256,11 @@ module RailsAiContext::RakeTasks
     # it. This task answered 3 for a bad argument and 2 for anything else, so a
     # wrapper keying on the status got two answers to one typo.
     rescue => e
-      $stderr.puts "Error: #{e.message}"
+      if json_mode
+        puts RailsAiContext::CLI::EntryBoot.envelope(runner&.tool_class&.tool_name || name, e.message, true)
+      else
+        $stderr.puts "Error: #{e.message}"
+      end
       exit 1
     end
 

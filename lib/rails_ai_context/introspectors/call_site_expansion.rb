@@ -256,9 +256,12 @@ module RailsAiContext
             end
         end
         parameters.keywords.each do |param|
-          given = keywords&.elements&.find { |pair| pair.is_a?(Prism::AssocNode) && key_of(pair) == param.name }
+          # The last pair or `**hash` that can set the keyword is the one Ruby keeps.
+          given = keywords&.elements&.reverse_each&.find do |element|
+            element.is_a?(Prism::AssocSplatNode) || (element.is_a?(Prism::AssocNode) && key_of(element) == param.name)
+          end
           bindings[param.name] =
-            if arguments.nil? then unknown
+            if arguments.nil? || given.is_a?(Prism::AssocSplatNode) then unknown
             elsif given then literal(given.value)
             elsif param.respond_to?(:value) then literal(param.value)
             else unknown

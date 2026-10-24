@@ -11,7 +11,11 @@ module RailsAiContext
         @app = app
       end
 
+      def self.booted?(app) = !RailsAiContext.static_tier? && !app.is_a?(RailsAiContext::StaticApp)
+
       private
+
+      def booted? = Base.booted?(app)
 
       def root
         app.root.to_s

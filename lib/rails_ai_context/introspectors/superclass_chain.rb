@@ -96,7 +96,7 @@ module RailsAiContext
         name == base || name.end_with?("::#{base}")
       end
 
-      # A bare superclass resolves through Module.nesting: `module Fasp; class W < BaseWorker` tries Fasp::BaseWorker first.
+      # A bare superclass resolves through Module.nesting: `module Shop; class W < BaseWorker` tries Shop::BaseWorker first.
       # A nil `nesting` is read off the declared name, which is right for the nested form only.
       def resolve_in_scope(declared, parent, nesting: nil)
         parent = parent.to_s.delete_prefix("::")

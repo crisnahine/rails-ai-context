@@ -91,6 +91,32 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # Ruby: the Module.new block runs with Gate::Inner as self, so its `included` block runs only where Inner is included.
+    it "keeps the filters of a concern nested as a Module.new write out of the outer concern's includers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  def self.guard\n    before_action :guarded\n  end\nend\n")
+        concern(dir, "Gate", <<~BODY)
+          included do
+              before_action :gate_outer
+            end
+            Inner = Module.new do
+              extend ActiveSupport::Concern
+              included do
+                before_action :gate_inner
+                guard
+              end
+            end
+        BODY
+        source = "class GatesController < ApplicationController\n  include Gate\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "GatesController")
+
+        expect(filters.map { |f| [ f[:name], f[:from_concern] ] }).to eq([ [ "gate_outer", "Gate" ] ])
+      end
+    end
+
     # Ruby: `include Alpha, Beta` appends Beta first, so Beta's block runs before Alpha's; a hook's `base.include` too.
     it "runs the blocks of one multi-argument include last argument first" do
       Dir.mktmpdir do |dir|
@@ -143,6 +169,22 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         filters, = described_class.with_concerns(source, root: dir, within: "LeafController")
 
         expect(filters.map { |f| [ f[:name], f[:only] ] }).to eq([ [ "guard", [ "show" ] ] ])
+      end
+    end
+
+    # `class Admin::ReportsController < BaseController` reads its superclass at the top level: Module.nesting there is empty.
+    it "follows a compact class's superclass from the top level, past a base its namespace holds" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin"))
+        File.write(File.join(dir, "app", "controllers", "base_controller.rb"),
+                   "class BaseController < ActionController::Base\n  def self.gate\n    before_action :top_gate\n  end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "admin", "base_controller.rb"),
+                   "module Admin\n  class BaseController < ActionController::Base\n    def self.gate\n      before_action :admin_gate\n    end\n  end\nend\n")
+        source = "class Admin::ReportsController < BaseController\n  gate\nend\n"
+
+        filters, = described_class.with_concerns(source, root: dir, within: "Admin::ReportsController")
+
+        expect(filters.map { |f| f[:name] }).to eq([ "top_gate" ])
       end
     end
 
@@ -217,6 +259,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "inflections.rb"),
+                   "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'ActivityPub' }\n")
         concern(dir, "CacheConcern", <<~BODY.strip)
           class_methods do
               def vary_by(value, **kwargs)
@@ -230,7 +275,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
                    "class ActivityPub::BaseController < ApplicationController\nend\n")
         source = "class ActivityPub::OutboxesController < ActivityPub::BaseController\n  vary_by \"Signature\"\nend\n"
 
-        filters, = described_class.with_concerns(source, root: dir, within: "ActivityPub::OutboxesController")
+        filters, = RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(dir)) do
+          described_class.with_concerns(source, root: dir, within: "ActivityPub::OutboxesController")
+        end
 
         expect(filters.map { |f| f[:name] }).to eq([ "block (line 5 of app/controllers/concerns/cache_concern.rb)" ])
       end

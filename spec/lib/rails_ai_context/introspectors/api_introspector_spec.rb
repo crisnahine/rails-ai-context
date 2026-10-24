@@ -199,6 +199,23 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
     end
 
+    context "with a resource namespace under api whose name starts with v" do
+      let(:vendors_dir) { File.join(Rails.root, "app/controllers/api/vendors") }
+
+      before do
+        FileUtils.mkdir_p(vendors_dir)
+        File.write(File.join(vendors_dir, "invoices_controller.rb"),
+                   "module Api; module Vendors; class InvoicesController < ApplicationController; end; end; end\n")
+      end
+
+      after { FileUtils.rm_rf(vendors_dir) }
+
+      it "does not report the namespace as an API version" do
+        expect(result[:api_versioning]).to eq([ "v1" ])
+        expect(result[:api_versioning_dirs]).to eq([ "app/controllers/api/v1" ])
+      end
+    end
+
     context "with a Grape API under lib/api" do
       let(:grape_dir) { File.join(Rails.root, "lib/api/v3/work_packages") }
 
@@ -212,6 +229,24 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       it "reports the version and the directory it came from" do
         expect(result[:api_versioning]).to include("v3")
         expect(result[:api_versioning_dirs]).to include("lib/api/v3")
+      end
+    end
+
+    context "with resolvers kept in app/graphql/resolvers" do
+      let(:graphql_dir) { File.join(Rails.root, "app/graphql") }
+
+      before do
+        FileUtils.mkdir_p(File.join(graphql_dir, "resolvers"))
+        File.write(File.join(graphql_dir, "resolvers/base_resolver.rb"),
+                   "module Resolvers\n  class BaseResolver < GraphQL::Schema::Resolver\n  end\nend\n")
+        File.write(File.join(graphql_dir, "resolvers/posts_resolver.rb"),
+                   "module Resolvers\n  class PostsResolver < BaseResolver\n  end\nend\n")
+      end
+
+      after { FileUtils.rm_rf(graphql_dir) }
+
+      it "lists the resolver classes and not their folder" do
+        expect(result[:graphql_details][:resolvers]).to contain_exactly("BaseResolver", "PostsResolver")
       end
     end
 

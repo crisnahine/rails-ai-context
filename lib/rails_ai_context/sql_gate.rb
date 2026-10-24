@@ -388,6 +388,20 @@ module RailsAiContext
       true
     end
 
+    # [kind, text] for each token of comment-free text: :word (bare, a keyword or a name), :quoted (a name in
+    # double quotes, backticks or brackets), :string, :number, or :punct, one character. brackets: whether [name] quotes a name.
+    def self.tokens(text, family, brackets: true, backslash: family.backslash_escapes?)
+      scanner = Scanner.new(text)
+      found = []
+      until scanner.eos?
+        next if scanner.skip(/\s+/) || scanner.skip(/[uU]&(?=["'])/)
+
+        found << (quoted(scanner, family, brackets: brackets, backslash: backslash) ||
+          scanner.scan(BARE_WORD)&.then { |span| [ span.match?(NUMBER) ? :number : :word, span ] } || [ :punct, scanner.getch ])
+      end
+      found
+    end
+
     private
 
     def refuse(reason)
@@ -735,19 +749,9 @@ module RailsAiContext
       self.class.mask_quoted(text, @family, backslash: @backslash, &picks)
     end
 
-    # [kind, text] for each token of comment-free text: :word (bare, a keyword or a name), :quoted (a name in
-    # double quotes, backticks or brackets), :string, :number, or :punct, one character.
+    # A bracketed name is read on every family: an alias list is told by its shape, whatever quotes its names.
     def tokens(text)
-      scanner = Scanner.new(text)
-      found = []
-      until scanner.eos?
-        next if scanner.skip(/\s+/) || scanner.skip(/[uU]&(?=["'])/)
-
-        # A bracketed name is read on every family: an alias list is told by its shape, whatever quotes its names.
-        found << (self.class.quoted(scanner, @family, brackets: true, backslash: @backslash) ||
-          scanner.scan(BARE_WORD)&.then { |span| [ span.match?(NUMBER) ? :number : :word, span ] } || [ :punct, scanner.getch ])
-      end
-      found
+      self.class.tokens(text, @family, backslash: @backslash)
     end
 
     # PostgreSQL's string literals emptied, with the E, B, X or U& that stands before one. A quoted name stays.

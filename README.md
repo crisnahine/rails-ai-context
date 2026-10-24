@@ -202,7 +202,7 @@ Over MCP each name gets a `rails_` prefix (`rails_get_schema`). From the CLI the
 
 <br>
 
-MCP clients can also read structured data as resources. Templates introspect fresh on every request:
+MCP clients can also read structured data as resources. Templates read the context the tools share, checked against the files on every request:
 
 | URI | Returns |
 |:---|:---|

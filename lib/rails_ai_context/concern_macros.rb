@@ -211,11 +211,12 @@ module RailsAiContext
         short = label.to_s.split("::").last
         read = [ short, *(own&.body ? nested_modules(own).map { |node| module_name(node) } : []) ]
         hooks(own, macro).flat_map { |hook| hook_joins(hook) }.filter_map do |added, arg, call|
-          next if read.include?(short_name(arg, short))
+          next if read.include?(short_name(arg, short)) && !arg.slice.start_with?("::")
 
-          Introspectors::Listeners::MixinsListener.record(
+          record = Introspectors::Listeners::MixinsListener.record(
             call, added, arg.slice.delete_prefix("::"), ancestor: Introspectors::Listeners::MixinsListener::ANCESTOR_MACROS.include?(added)
           )
+          arg.slice.start_with?("::") ? record.merge(top_level: true) : record
         end
       end
 
@@ -557,6 +558,10 @@ module RailsAiContext
         @skipped_methods = Set.new
         @consulted = Set.new
         @placement = {}
+        # The modules the class has mixed in so far, as Ruby orders its ancestors.
+        # shortcut: starts empty, so a module only the superclass includes is never searched; seed it from the superclass's mixins once a superclass's nested module is reported missing.
+        @ancestors = []
+        @prepended = 0
         @mixins = []
         @inside = nil
       end
@@ -565,7 +570,9 @@ module RailsAiContext
       # place that sees every name at every depth, with the namespace and the
       # directories the lookup needs. `file` is the concern file the names
       # were written in, which can declare the module a name means.
-      def walk(names, within, depth, file = nil)
+      # `within` is the nesting a name with no owner of its own is written in; `slice` is [Module.nesting, name as written]
+      # of the module `file` was sliced from, which its records' owners do not carry.
+      def walk(names, within, depth, file = nil, slice = nil)
         return if depth.negative?
 
         # `names` may be the mixin records themselves, which say how each
@@ -577,22 +584,17 @@ module RailsAiContext
           # A `concerning` block is the class's own body, read with the class.
           next if mixin.is_a?(Hash) && mixin[:inline]
 
-          @top = name if file.nil?
+          @top, @top_prepended = name, written == :prepend if file.nil?
           next unless ConcernMembership.candidate?(name)
 
           source = file || @own_file
-          # In the class's own file the include is a class-body line, so a module below it is not yet defined.
-          before = mixin[:location] if mixin.is_a?(Hash) && file.nil?
-          nested = !base && source && nested_module(source, name, within, before: before)
-          label, path =
-            if base then [ name, given ]
-            elsif nested then [ nested.first, source ]
-            else named(name, within) || beside(file, name, within)
-            end
-          if path.nil? && !base && (outer = in_outer_file(name, within))
-            source, nested = outer
-            label, path = nested.first, source
-          end
+          owners = Array(mixin[:owner]) if mixin.is_a?(Hash)
+          scope = owners&.any? ? Introspectors::DeclaredConstant.record_nesting(mixin, *slice) : within
+          # `::Name` is Object's constant only: no lexical scope, no module the class mixed in.
+          reference = mixin.is_a?(Hash) && mixin[:top_level] ? "::#{name}" : name
+          label, path, _, node = base ? [ name, given ] : named(reference, scope, source, file ? [] : @ancestors) || beside(file, reference, scope)
+          nested = [ label, node ] if node
+          source = path if nested
           # A module is walked once, as the constant the name resolves to where it is written;
           # a name resolving to none keeps no module's place.
           next unless @seen.add?(path ? label : [ :unresolved, name ])
@@ -642,15 +644,22 @@ module RailsAiContext
           end
           hooked_mixins = memo([ :hook_mixins, source_key, label, macro ]) { hook_mixins(tree, label, macro) }
           joined.concat(hooked_mixins.map { |mixin| [ mixin, SingletonLookup.in_hook(label) ] })
+          body = memo([ :body_nesting, source_key, label ]) do
+            nested ? Introspectors::DeclaredConstant.body_nesting(AstCache.parse(source).value, label, node: nested.last) : Introspectors::DeclaredConstant.body_nesting(tree, label)
+          end
           joined.sort_by.with_index { |(mixin, _), index| [ mixin[:location].to_i, index ] }.each do |mixin, added|
             outer = @inside
             @inside = [ added, mixin[:location] ] if added
-            walk([ dependency(mixin, macro, concern && !added) ], label, depth - 1, path)
+            inner_slice = [ body, (nested.last.constant_path.slice if nested.last.is_a?(Prism::ModuleNode)) ] if nested
+            walk([ dependency(mixin, macro, concern && !added) ], body, depth - 1, path, inner_slice)
             @inside = outer
           end
           # ActiveSupport::Concern runs a concern's dependencies before it, so
           # the walk's post-order is the order the class receives them.
           @placement[label] = [ @top, @placement.size, path ]
+          # Ruby searches what the class prepends, the last first, before what it includes.
+          @ancestors.insert(@top_prepended ? 0 : @prepended, label) unless singleton
+          @prepended += 1 if @top_prepended && !singleton
         end
       end
 
@@ -660,39 +669,26 @@ module RailsAiContext
       # base-class mixin reaches every model, and one app walked its 2,000-line
       # initializer three ways per model. The cache carries a file the walk
       # could not read as well, so 100 models including one reads it once.
+      # Keyed by the app and its directories too: two apps' walks can share one cache.
       def memo(key)
         return yield if @cache.nil?
+
+        key = [ @root, @dirs, *key ]
         return @cache[key] if @cache.key?(key)
 
         @cache[key] = yield
       end
 
-      # Resolved as Ruby does, from the enclosing namespace outward: `prepend Wrapper`
-      # in DryRunnable is DryRunnable::Wrapper when the concern file declares it.
-      # With `before`, only a module defined above that line.
-      def nested_module(file, name, within, before: nil)
-        memo([ :nested, file, name, within, before ]) { find_nested_module(file, name, within, before) }
-      end
-
-      def find_nested_module(file, name, within, before)
-        modules = memo([ :modules, file ]) { Introspectors::DeclaredConstant.module_nodes(AstCache.parse(file).value) }
-        ConcernPaths.candidate_names(name, within).each do |candidate|
-          node = modules[candidate]
-          return [ candidate, node ] if node && (before.nil? || node.location.start_line <= before)
-        end
-        nil
-      rescue StandardError => e
-        RailsAiContext.debug_fail(e, nil, label: "nested module #{name} in #{file}")
-      end
-
-      # The first candidate Ruby would find, a base module or a file.
-      def named(name, within)
-        found = memo([ :named, @dirs, name, within ]) { ConcernPaths.find_named(@root, name, within: within, dirs: @dirs) }
-        candidates = ConcernPaths.candidate_names(name, within)
+      # [constant, file, ...] for the first candidate Ruby reaches, a base module or ConcernPaths.resolved's, or nil;
+      # a top-level name is read through `ancestors` first, as Ruby reads the class's constants through its ancestors.
+      def named(name, within, file, ancestors = [])
+        found = memo([ :named, name, within, file ]) { ConcernPaths.resolved(@root, name, within: within, dirs: @dirs, file: file) }
+        candidates = Introspectors::DeclaredConstant.candidate_names(name, within)
         extra = candidates.find { |candidate| @paths.key?(candidate) }
-        return found unless extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
+        found = [ extra, @paths[extra] ] if extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
+        return found unless (found.nil? || found.first == candidates.last) && !name.start_with?("::")
 
-        [ extra, @paths[extra] ]
+        ancestors.lazy.filter_map { |owner| named("#{owner}::#{name}", [], file) }.first || found
       end
 
       # A plugin's lib is on the load path, so a module it names can sit under the
@@ -702,20 +698,11 @@ module RailsAiContext
 
         memo([ :beside, file, name, within ]) do
           dir = File.dirname(file)
-          candidates = ConcernPaths.candidate_names(name, within)
-          candidate, path = candidates.map { |each| [ each, File.join(dir, "#{each.underscore}.rb") ] }.find { |_, each| File.file?(each) }
+          candidates = Introspectors::DeclaredConstant.candidate_names(name, within)
+          candidate, path = candidates.lazy.filter_map { |each| (found = PathResolver.constant_path(dir, each)) && [ each, found ] }.first
           # The file can sit under a shorter path than the constant it declares.
           declared = path && Introspectors::DeclaredConstant.named(SafeFile.read(path), candidate)
           [ candidates.include?(declared) ? declared : candidate, path ] if path
-        end
-      end
-
-      # `Outer::Inner` with no file of its own, from Outer's file, which Zeitwerk loads it with.
-      def in_outer_file(name, within)
-        memo([ :outer, name, within ]) do
-          candidate, file = ConcernPaths.outer_named(@root, name, within: within, dirs: @dirs)
-          found = file && nested_module(file, candidate, nil)
-          [ file, found ] if found
         end
       end
 
@@ -817,7 +804,7 @@ module RailsAiContext
       def own_node(tree, name)
         short = name.to_s.split("::").last.to_s
         Introspectors::DeclaredConstant.definition(Introspectors::AstWalk.each(tree).select do |node|
-          constant_node?(node) && node.constant_path.slice.split("::").last.casecmp?(short)
+          (node.is_a?(Prism::ModuleNode) || node.is_a?(Prism::ClassNode)) && node.constant_path.slice.split("::").last.casecmp?(short)
         end)
       end
 
@@ -827,7 +814,7 @@ module RailsAiContext
 
         # A class nested deeper sits inside one of these ranges already.
         ranges = Introspectors::AstWalk.each(own).filter_map do |node|
-          node.location.start_line..node.location.end_line if !node.equal?(own) && constant_node?(node)
+          node.location.start_line..node.location.end_line if !node.equal?(own) && Introspectors::DeclaredConstant.scope?(node)
         end
         [ own.location.start_line..own.location.end_line, ranges, own.body && SingletonLookup.concern?(own) ]
       end
@@ -839,10 +826,6 @@ module RailsAiContext
         return mixin unless in_concern_body && mixable.include?(macro) && mixable.include?(mixin[:macro] || :include)
 
         mixin.merge(macro: macro)
-      end
-
-      def constant_node?(node)
-        node.is_a?(Prism::ModuleNode) || node.is_a?(Prism::ClassNode)
       end
 
       # Receiverless calls in `included do` outside any method are the includer's;
@@ -862,6 +845,8 @@ module RailsAiContext
           case node
           when Prism::ClassNode, Prism::ModuleNode
             owner = node.constant_path.slice.split("::").last
+          when *Introspectors::DeclaredConstant::WRITES
+            owner = Introspectors::DeclaredConstant.written(node).split("::").last if Introspectors::DeclaredConstant.scope?(node)
           when Prism::CallNode
             if node.name == block && node.receiver.nil? && node.block && owner.to_s.casecmp?(short)
               Introspectors::SourceIntrospector.calls_outside_methods(node.block, found)
@@ -1066,8 +1051,9 @@ module RailsAiContext
       # change in-process, so a cache keyed on root goes stale with no reset
       # hook.
       dirs = ConcernPaths.ordered_dirs(root.to_s, prefer)
+      scope = ConcernPaths.scope(root, within)
       run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file)
-      run.walk(walked, within, MAX_DEPTH)
+      run.walk(walked, scope, MAX_DEPTH)
       consulted = run.consulted.dup
       # An `included do` can call a method a concern read before the block did, so walk
       # again with the known calls until no method the walk asked about has a new call.
@@ -1078,7 +1064,7 @@ module RailsAiContext
 
         known = run.included_calls
         run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, known: known)
-        run.walk(walked, within, MAX_DEPTH)
+        run.walk(walked, scope, MAX_DEPTH)
         consulted.merge(run.consulted)
       end
 

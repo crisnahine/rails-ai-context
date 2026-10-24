@@ -7,6 +7,7 @@ require "fileutils"
 RSpec.describe RailsAiContext::ConcernMacros do
   let(:tmpdir) { Dir.mktmpdir }
   let(:concern_dir) { File.join(tmpdir, "app", "models", "concerns") }
+  let(:shared_cache) { {} }
 
   before { FileUtils.mkdir_p(concern_dir) }
   after { FileUtils.remove_entry(tmpdir) }
@@ -29,6 +30,20 @@ RSpec.describe RailsAiContext::ConcernMacros do
     found = described_class.collect(tmpdir, mixin("Localized"), keys: %i[filters], cache: cache, listeners: filters)
 
     expect(found.collected[:filters].map { |entry| entry[:args] }).to eq([ [ :set_locale ] ])
+  end
+
+  it "keeps two apps' walks apart in one cache" do
+    answers = %w[User Admin].map do |owner|
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "billing.rb"),
+                   "module Billing\n  module Tracked\n    extend ActiveSupport::Concern\n    included do\n      belongs_to :member, class_name: \"#{owner}\"\n    end\n  end\nend\n")
+        found = described_class.collect(dir, mixin("Billing::Tracked"), keys: %i[associations], cache: shared_cache)
+        found.collected[:associations].map { |a| a.dig(:options, :class_name) }
+      end
+    end
+
+    expect(answers).to eq([ [ "User" ], [ "Admin" ] ])
   end
 
   it "collects the macros a concern declares inside included do" do
@@ -104,6 +119,257 @@ RSpec.describe RailsAiContext::ConcernMacros do
       .to include([ :dry_runs, "DryRunnable::Wrapper" ])
   end
 
+  # Ruby: Shop includes Shop::Tagging, which includes Shop::Tagging::Marks; Shop::Marks is never mixed in.
+  it "resolves an include inside a nested module written as a path, through that module's own nesting" do
+    File.write(File.join(concern_dir, "shop.rb"), <<~RUBY)
+      module Shop
+        module Marks
+          has_many :shop_marks
+        end
+        module Shop::Tagging
+          module Marks
+            has_many :tagging_marks
+          end
+          include Marks
+        end
+        include Tagging
+      end
+    RUBY
+
+    collected, = *described_class.collect(tmpdir, mixin("Shop"), keys: %i[associations])
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :tagging_marks, "Shop::Tagging::Marks" ] ])
+  end
+
+  # Ruby: `module Foo::Tagging` inside `class ::Foo` is Foo::Tagging, so its `include Marks` is Foo::Tagging::Marks.
+  it "resolves an include inside a nested module under a rooted class through the root" do
+    File.write(File.join(concern_dir, "shop.rb"), <<~RUBY)
+      module Shop
+        module Marks
+          has_many :shop_marks
+        end
+        class ::Foo
+          module Foo::Tagging
+            module Marks
+              has_many :tagging_marks
+            end
+            include Marks
+          end
+        end
+        include ::Foo::Tagging
+      end
+    RUBY
+
+    collected, = *described_class.collect(tmpdir, mixin("Shop"), keys: %i[associations])
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :tagging_marks, "Foo::Tagging::Marks" ] ])
+  end
+
+  # Ruby: the block runs with the new module as self, so its `included` belongs to Billing::Helper alone.
+  it "keeps a concern nested as a Module.new write out of the outer concern's includers" do
+    File.write(File.join(concern_dir, "billing.rb"), <<~RUBY)
+      module Billing
+        extend ActiveSupport::Concern
+        Helper = Module.new do
+          extend ActiveSupport::Concern
+          included do
+            has_many :helper_rows
+          end
+        end
+        included do
+          has_many :invoices
+        end
+      end
+    RUBY
+
+    outer, = *described_class.collect(tmpdir, mixin("Billing"), keys: %i[associations])
+    inner, = *described_class.collect(tmpdir, mixin("Billing::Helper"), keys: %i[associations])
+
+    expect(outer[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :invoices, "Billing" ] ])
+    expect(inner[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :helper_rows, "Billing::Helper" ] ])
+  end
+
+  # Answers from Zeitwerk loading these files: the include runs as tracky.rb loads, before Tracky::Trackable exists.
+  describe "an include in a concern's file and a module that file declares" do
+    before do
+      File.write(File.join(concern_dir, "trackable.rb"), "module Trackable\n  extend ActiveSupport::Concern\n  included do\n    has_many :top_tracks\n    before_action :top_guard\n  end\nend\n")
+    end
+
+    def nested_below(include_line)
+      File.write(File.join(concern_dir, "tracky.rb"), <<~RUBY)
+        module Tracky
+          extend ActiveSupport::Concern
+          #{include_line}
+          module Trackable
+            extend ActiveSupport::Concern
+            included do
+              has_many :inner_tracks
+              before_action :inner_guard
+            end
+          end
+        end
+      RUBY
+    end
+
+    it "reads the top-level module for an include above the nested one, as associations" do
+      nested_below("include Trackable")
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky"), keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :top_tracks, "Trackable" ] ])
+    end
+
+    it "reads the top-level module for an include above the nested one, as filters" do
+      nested_below("include Trackable")
+      listeners = RailsAiContext::Introspectors::ControllerFilters::LISTENERS
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky"), keys: %i[filters], listeners: listeners)
+
+      expect(collected[:filters].map { |entry| entry[:args] }).to eq([ [ :top_guard ] ])
+    end
+
+    it "reads the nested module for an include an included block makes, which runs after the file loads" do
+      nested_below("included { include Trackable }")
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky"), keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :inner_tracks, "Tracky::Trackable" ] ])
+    end
+
+    # Ruby reads the class's own `include Trackable` through the modules it included earlier: Tracky::Trackable.
+    it "reads a later include of the class through a module it included earlier, before the top-level name" do
+      nested_below("include Trackable")
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky") + mixin("Trackable"), keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to contain_exactly([ :top_tracks, "Trackable" ], [ :inner_tracks, "Tracky::Trackable" ])
+    end
+
+    it "reads no top-level module for a later include the earlier module already mixed in" do
+      File.write(File.join(concern_dir, "tracky.rb"), <<~RUBY)
+        module Tracky
+          extend ActiveSupport::Concern
+          module Trackable
+            extend ActiveSupport::Concern
+            included do
+              has_many :inner_tracks
+            end
+          end
+          include Trackable
+        end
+      RUBY
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky") + mixin("Trackable"), keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :inner_tracks, "Tracky::Trackable" ] ])
+    end
+
+    # Ruby: `::Trackable` is Object's constant, never one the earlier modules or the lexical scope hold.
+    it "reads a later include written from the top level as the top-level module only" do
+      nested_below("")
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky") + [ { name: "Trackable", top_level: true, ancestor: true } ], keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :top_tracks, "Trackable" ] ])
+    end
+
+    it "reads an include written from the top level in a concern's file as the top-level module" do
+      File.write(File.join(concern_dir, "tracky.rb"), <<~RUBY)
+        module Tracky
+          extend ActiveSupport::Concern
+          module Trackable
+            extend ActiveSupport::Concern
+            included do
+              has_many :inner_tracks
+            end
+          end
+          included do
+            include ::Trackable
+          end
+        end
+      RUBY
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky"), keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :top_tracks, "Trackable" ] ])
+    end
+
+    it "reads a hook's include written from the top level as the top-level module" do
+      File.write(File.join(concern_dir, "tracky.rb"), <<~RUBY)
+        module Tracky
+          module Trackable
+            extend ActiveSupport::Concern
+            included do
+              has_many :inner_tracks
+            end
+          end
+          def self.included(base)
+            base.include ::Trackable
+          end
+        end
+      RUBY
+
+      collected, = *described_class.collect(tmpdir, mixin("Tracky"), keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :top_tracks, "Trackable" ] ])
+    end
+
+    # Ruby: M.ancestors is [Pre, M, Tracky, ...], so `include Trackable` reaches Pre::Trackable first.
+    it "reads a later include through a module the class prepended before the modules it included" do
+      nested_below("")
+      File.write(File.join(concern_dir, "pre.rb"), "module Pre\n  module Trackable\n    extend ActiveSupport::Concern\n    included do\n      has_many :pre_tracks\n    end\n  end\nend\n")
+      mixins = [ { name: "Pre", macro: :prepend, ancestor: true } ] + mixin("Tracky") + mixin("Trackable")
+
+      collected, = *described_class.collect(tmpdir, mixins, keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :pre_tracks, "Pre::Trackable" ] ])
+    end
+
+    # Ruby: M.ancestors is [Pre, Dep, M, Tracky, ...] when Pre's body includes Dep.
+    it "reads a later include through what a prepended module includes before the modules the class included" do
+      nested_below("")
+      File.write(File.join(concern_dir, "pre.rb"), "module Pre\n  include Dep\nend\n")
+      File.write(File.join(concern_dir, "dep.rb"), "module Dep\n  module Trackable\n    extend ActiveSupport::Concern\n    included do\n      has_many :dep_tracks\n    end\n  end\nend\n")
+      mixins = [ { name: "Pre", macro: :prepend, ancestor: true } ] + mixin("Tracky") + mixin("Trackable")
+
+      collected, = *described_class.collect(tmpdir, mixins, keys: %i[associations])
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :dep_tracks, "Dep::Trackable" ] ])
+    end
+
+    # Holder::Sub's `include Trackable` reaches Holder::Trackable, in holder.rb, before the top-level name.
+    it "reads a module in the outer constant's file before a base module of a later name" do
+      FileUtils.mkdir_p(File.join(concern_dir, "holder"))
+      File.write(File.join(concern_dir, "holder.rb"), "module Holder\n  module Trackable\n    extend ActiveSupport::Concern\n    included do\n      has_many :holder_tracks\n    end\n  end\nend\n")
+      File.write(File.join(concern_dir, "holder", "sub.rb"), "module Holder\n  module Sub\n    extend ActiveSupport::Concern\n    include Trackable\n  end\nend\n")
+      extra = [ RailsAiContext::BaseMixins::Mixin.new("Trackable", File.join(concern_dir, "trackable.rb"), :include) ]
+
+      collected, = *described_class.collect(tmpdir, mixin("Holder::Sub"), keys: %i[associations], extra: extra)
+
+      expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to contain_exactly([ :top_tracks, "Trackable" ], [ :holder_tracks, "Holder::Trackable" ])
+    end
+  end
+
+  # Ruby: a Module.new block opens no scope, so its `include Marks` inside module Shop is Shop::Marks.
+  it "resolves an include inside a Module.new block through the nesting it is written in" do
+    File.write(File.join(concern_dir, "shop.rb"), <<~RUBY)
+      module Shop
+        module Marks
+          has_many :shop_marks
+        end
+        Tagging = Module.new do
+          include Marks
+        end
+        include Tagging
+      end
+    RUBY
+    File.write(File.join(concern_dir, "marks.rb"), "module Marks\n  has_many :top_marks\nend\n")
+
+    collected, = *described_class.collect(tmpdir, mixin("Shop"), keys: %i[associations])
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :shop_marks, "Shop::Marks" ] ])
+  end
+
   # An acts_as_customizable can extend with HumanAttributeName from lib/human_attribute_name.rb,
   # which declares Plugin::Acts::Customizable::HumanAttributeName.
   it "names a module found beside the file naming it by the constant that file declares" do
@@ -115,6 +381,68 @@ RSpec.describe RailsAiContext::ConcernMacros do
     collected, = *described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
 
     expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :helped, "Ns::Helper" ] ])
+  end
+
+  it "finds a module beside the file naming it when its path splits an acronym the app registers" do
+    lib = File.join(tmpdir, "plugins", "cust", "lib")
+    FileUtils.mkdir_p([ lib, File.join(tmpdir, "config", "initializers") ])
+    File.write(File.join(tmpdir, "config", "initializers", "inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'JsonLd' }\n")
+    File.write(File.join(lib, "thing.rb"), "module Ns\n  module Thing\n    extend ActiveSupport::Concern\n    include JsonLdHelper\n  end\nend\n")
+    File.write(File.join(lib, "json_ld_helper.rb"), "module Ns\n  module JsonLdHelper\n    extend ActiveSupport::Concern\n    included do\n      has_many :helped\n    end\n  end\nend\n")
+    extra = [ RailsAiContext::BaseMixins::Mixin.new("Ns::Thing", File.join(lib, "thing.rb"), :include) ]
+    collected, = *RailsAiContext::RunCache.around_app(RailsAiContext::StaticApp.new(tmpdir)) do
+      described_class.collect(tmpdir, [], keys: %i[associations], extra: extra)
+    end
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :helped, "Ns::JsonLdHelper" ] ])
+  end
+
+  it "resolves a Class.new block's include from the scope around the assignment, which the block does not change" do
+    FileUtils.mkdir_p(File.join(concern_dir, "shop", "draft"))
+    File.write(File.join(concern_dir, "shop", "pricing.rb"), "module Shop::Pricing\n  extend ActiveSupport::Concern\n  included do\n    has_many :shop_priced\n  end\nend\n")
+    File.write(File.join(concern_dir, "shop", "draft", "pricing.rb"), "module Shop::Draft::Pricing\n  extend ActiveSupport::Concern\n  included do\n    has_many :draft_priced\n  end\nend\n")
+    source = "module Shop\n  Draft = Class.new(ApplicationRecord) do\n    include Pricing\n  end\nend\n"
+    mixins = RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { mixins: RailsAiContext::Introspectors::Listeners::MixinsListener })[:mixins]
+
+    collected, = *described_class.collect(tmpdir, mixins, keys: %i[associations], within: "Shop::Draft")
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :shop_priced, "Shop::Pricing" ] ])
+  end
+
+  it "resolves each of two base modules in one file inside its own body, in either order" do
+    file = File.join(tmpdir, "config", "initializers", "ext.rb")
+    FileUtils.mkdir_p(File.dirname(file))
+    File.write(file, <<~RUBY)
+      module Ext
+        module Auditable
+          def self.included(base)
+            base.include Tracker
+          end
+        end
+
+        module Tracker
+          extend ActiveSupport::Concern
+          included do
+            has_many :ext_tracked
+          end
+        end
+      end
+
+      module Other
+        def self.included(base)
+          base.include Tracker
+        end
+      end
+    RUBY
+    File.write(File.join(concern_dir, "tracker.rb"), "module Tracker\n  extend ActiveSupport::Concern\n  included do\n    has_many :top_tracked\n  end\nend\n")
+
+    answers = [ %w[Ext::Auditable Other], %w[Other Ext::Auditable] ].map do |order|
+      extra = order.map { |name| RailsAiContext::BaseMixins::Mixin.new(name, file, :include) }
+      collected, = *described_class.collect(tmpdir, [], keys: %i[associations], extra: extra, cache: {})
+      collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }.sort
+    end
+
+    expect(answers).to all(eq([ [ :ext_tracked, "Ext::Tracker" ], [ :top_tracked, "Tracker" ] ]))
   end
 
   # An app that adds lib to its autoload paths has a mixin there autoloaded

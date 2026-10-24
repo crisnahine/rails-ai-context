@@ -202,7 +202,11 @@ module RailsAiContext
 
             case a[:type]
             when "belongs_to"
-              "    it { is_expected.to belong_to(:#{a[:name]}) }"
+              case a[:optional]
+              when true then "    it { is_expected.to belong_to(:#{a[:name]}).optional }"
+              when nil, false then "    it { is_expected.to belong_to(:#{a[:name]}) }"
+              else reflection_example(a)
+              end
             when "has_many"
               if a[:through]
                 "    it { is_expected.to have_many(:#{a[:name]}).through(:#{a[:through]}) }"
@@ -250,7 +254,8 @@ module RailsAiContext
                 when "presence"
                   lines << "    it { is_expected.to validate_presence_of(:#{attr}) }"
                 when "uniqueness"
-                  lines << "    it { is_expected.to validate_uniqueness_of(:#{attr}) }"
+                  matcher = uniqueness_matcher(attr, v)
+                  matcher ? lines << "    it { is_expected.to #{matcher} }" : lines.concat(plain_validation_example(v, attr))
                 when "length"
                   opts = v[:options] || {}
                   matcher = "validate_length_of(:#{attr})"
@@ -305,8 +310,9 @@ module RailsAiContext
               next if values.is_a?(String) # computed: no literal values to assert
 
               vals = values.is_a?(Hash) ? values.keys : Array(values)
-              lines << if shoulda
-                "    it { is_expected.to define_enum_for(:#{attr}).with_values(#{vals.inspect}) }"
+              matcher = enum_matcher(attr, values, data) if shoulda
+              lines << if matcher
+                "    it { is_expected.to #{matcher} }"
               else
                 "    it { expect(described_class.defined_enums[\"#{attr}\"].keys).to match_array(#{vals.map(&:to_s).inspect}) }"
               end
@@ -427,14 +433,12 @@ module RailsAiContext
           end
 
           # Associations
-          assocs = data[:associations] || []
-          if assocs.any?
-            assocs.each do |a|
-              lines << "  test \"#{a[:type]} #{a[:name]}\" do"
-              lines << "    assert_respond_to @#{setup_var}, :#{a[:name]}"
-              lines << "  end"
-              lines << ""
-            end
+          # A computed name is no symbol the test can call.
+          (data[:associations] || []).reject { |a| a[:computed_name] }.each do |a|
+            lines << "  test \"#{a[:type]} #{a[:name]}\" do"
+            lines << "    assert_respond_to @#{setup_var}, :#{a[:name]}"
+            lines << "  end"
+            lines << ""
           end
 
           # Scopes
@@ -455,12 +459,9 @@ module RailsAiContext
               next
             end
             lines << "  test \"scope .#{scope_name} returns expected records\" do"
-            if scope_body&.include?("order")
+            if sorting_scope?(scope_body)
               lines << "    sql = #{name}.#{scope_name}.to_sql"
               lines << "    assert_match(/ORDER BY/i, sql)"
-            elsif scope_body&.include?("where")
-              lines << "    results = #{name}.#{scope_name}"
-              lines << "    assert_kind_of ActiveRecord::Relation, results"
             else
               lines << "    results = #{name}.#{scope_name}"
               lines << "    assert_kind_of ActiveRecord::Relation, results"
@@ -1017,7 +1018,7 @@ module RailsAiContext
             end
           end
           # A glob segment (*path) is required the same as a named one.
-          route[:path].to_s.scan(/[:*](\w+)/).flatten - optional - [ "format" ]
+          RouteCoverage.path_params(route[:path]) - optional - [ "format" ]
         end
 
         OUTCOME_REASONS = {
@@ -1408,7 +1409,7 @@ module RailsAiContext
             prelude = params.each_with_index.map { |p, i| "#{p} = #{args[i]}#{".id" if p == "id" || p.end_with?("_id")}" }
             path = route[:path] || "/#{res[:table]}"
             path = path.gsub(/\([^()]*\)/, "") while path.match?(/\([^()]*\)/)
-            quoted = path.gsub(/[:*](\w+)/, "\#{\\1}")
+            quoted = path.gsub(RouteCoverage::PATH_PARAM, "\#{\\1}")
             { url: "\"#{quoted}\"", prelude: prelude }
           end
         end
@@ -1789,6 +1790,61 @@ module RailsAiContext
             end
           end
           nil
+        end
+
+        SORT_CALLS = %i[order reorder in_order_of].freeze
+
+        # Whether a scope body calls a method that writes ORDER BY.
+        def sorting_scope?(body)
+          return false unless body
+
+          RailsAiContext::Introspectors::AstWalk.each(RailsAiContext::AstCache.parse_string(body).value)
+            .any? { |node| node.is_a?(Prism::CallNode) && SORT_CALLS.include?(node.name) }
+        end
+
+        UNIQUENESS_MATCHED_OPTIONS = %i[scope case_sensitive on if unless allow_nil allow_blank].freeze
+
+        # nil when an option is one the matcher cannot be told, or a value the walk could not read.
+        def uniqueness_matcher(attr, validation)
+          return nil if validation[:options_source]
+
+          options = validation[:options] || {}
+          scopes = Array(options[:scope])
+          return nil unless (options.keys - UNIQUENESS_MATCHED_OPTIONS).empty? && scopes.all?(Symbol) &&
+            [ nil, true, false ].include?(options[:case_sensitive])
+
+          matcher = "validate_uniqueness_of(:#{attr})"
+          matcher += ".scoped_to(#{scopes.map(&:inspect).join(', ')})" if scopes.any?
+          matcher += ".case_insensitive" if options[:case_sensitive] == false
+          matcher
+        end
+
+        # An array asserts the values 0, 1, ... and an integer column, so a mapping is passed whole.
+        # nil when a value is a constant the walk named but could not read.
+        def enum_matcher(attr, values, data)
+          if values.is_a?(Hash)
+            return nil if values.each_value.any? { |value| value.is_a?(String) && (value == Confidence::INFERRED || value.match?(/\A[A-Z][\w:]*\z/)) }
+
+            pairs = values.map { |key, value| "#{key.to_s.match?(/\A[a-z_]\w*\z/) ? "#{key}:" : "#{key.to_s.inspect} =>"} #{value.inspect}" }
+            matcher = "define_enum_for(:#{attr}).with_values(#{pairs.join(', ')})"
+            matcher += ".backed_by_column_of_type(:#{schema_column_type(data[:table_name], attr.to_s).presence || "string"})" unless values.each_value.all?(Integer)
+          else
+            matcher = "define_enum_for(:#{attr}).with_values(#{Array(values).map(&:to_s).inspect})"
+          end
+          options = (data[:enum_options] || {}).then { |all| all[attr.to_s] || all[attr.to_sym] || {} }
+          %i[prefix suffix].each do |key|
+            next unless (affix = options[key])
+            return nil unless affix == true || affix.to_s.match?(/\A\w+\z/)
+
+            matcher += affix == true ? ".with_#{key}" : ".with_#{key}(:#{affix})"
+          end
+          %i[scopes instance_methods].each do |key|
+            next unless options.key?(key)
+            return nil unless options[key] == false
+
+            matcher += ".without_#{key}"
+          end
+          matcher
         end
 
         # Without shoulda-matchers, a reflection check needs no gem at all.

@@ -165,15 +165,10 @@ module RailsAiContext
           lines
         end
 
-        # Rails-managed bookkeeping tables - real tables, but noise in a
-        # "table sizes" view aimed at application data (matches the schema
-        # introspector, which also skips them).
-        INTERNAL_TABLES = %w[schema_migrations ar_internal_metadata].freeze
-
         def gather_table_sizes(conn, family)
           return nil unless family.known?
 
-          AppDatabases.bounded(conn) { family.table_sizes(conn) }&.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
+          AppDatabases.bounded(conn) { family.table_sizes(conn) }
         rescue => e
           RailsAiContext.debug_fail(e, :unread, label: "gather_table_sizes")
         end

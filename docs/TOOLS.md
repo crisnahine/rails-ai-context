@@ -376,7 +376,7 @@ outlet the controller reads.
 
 ### `rails_get_partial_interface`
 
-What locals to pass to a partial and what methods are called on them. Render sites are `render` calls, a `partial:` passed to a Turbo Stream action (`turbo_stream.prepend`) or a broadcast (`broadcast_prepend_to` in a model, controller, job or channel), and jbuilder's `json.partial!` and `json.array! ..., partial:`. A site counts only where Rails would render this file: `_post.html.erb` gets the html, Turbo Stream and broadcast sites and `_post.json.jbuilder` the jbuilder ones, and `render "comments/form"` names comments' form, never the one beside the view. A call that names `formats:` among the options it renders with - beside `partial:` (`render partial: "posts/post", formats: [:json]`), or among `json.partial!`'s keywords - counts for those formats. Rails reads no other key as one: a `format:` is a local, as is any key inside `locals:`, and `render "shared/date", date: d, format: :short` passes every key as a local. In a controller or helper a call inside `format.json { }` counts for json, and any other renders the request's format, so it counts for both. A jbuilder partial's locals are the bare names it reads; a helper, a route helper or a call with parentheses is not a local.
+What locals to pass to a partial and what methods are called on them. Render sites are `render` calls, a `partial:` passed to a Turbo Stream action (`turbo_stream.prepend`) or a broadcast (`broadcast_prepend_to` in a model, controller, job or channel), and jbuilder's `json.partial!` and `json.array! ..., partial:`. A site counts only where Rails would render this file: `_post.html.erb` gets the html, Turbo Stream and broadcast sites and `_post.json.jbuilder` the jbuilder ones, and `render "comments/form"` names comments' form, never the one beside the view. A bare name is looked up in the view's own folder, then in `application/`, as a controller's prefixes are. A `collection:` or `object:` hands the partial its record under the `as:` name or the partial's own (`item`), and a collection adds `item_counter` and `item_iteration`. A call that names `formats:` among the options it renders with - beside `partial:` (`render partial: "posts/post", formats: [:json]`), or among `json.partial!`'s keywords - counts for those formats. Rails reads no other key as one: a `format:` is a local, as is any key inside `locals:`, and `render "shared/date", date: d, format: :short` passes every key as a local. In a controller or helper a call inside `format.json { }` counts for json, and any other renders the request's format, so it counts for both. A jbuilder partial's locals are the bare names it reads; a helper, a route helper or a call with parentheses is not a local.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -433,7 +433,7 @@ JavaScript (`.js`, `.mjs`, `.cjs`) is parsed by `node --check` as the module sys
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `files` | array | required | File paths to validate |
-| `level` | enum | `syntax` | `syntax`, `rails` (rails includes the Brakeman security pass) |
+| `level` | enum | `syntax` | `syntax`, `rails` (rails includes a Brakeman security pass over the given files only: a view's warning that comes from its controller's params shows when both are passed, and `rails_security_scan` scans the whole app) |
 
 ### `rails_security_scan`
 
@@ -713,7 +713,14 @@ the column or creates the table when it runs (a `def down`, a `dir.down` or a
 about a `create_table` for a table that exists and a `null: false` column with
 no default on a table with rows. The row count is the primary database's
 estimate, so a table on another database has no count and the warning says
-"if `<table>` holds any rows". It refuses a column type no adapter knows. For
+"if `<table>` holds any rows". It refuses a column type no adapter knows, and
+a `column` or `new_name` that is not a plain lowercase identifier (each name in
+a `create_table` list too). `add_column` with type `references` or
+`belongs_to` writes `add_reference`. A `create_table` definition takes
+`index` or `uniq` after its type (`title:string:index`), as Rails' generator
+does, and `options` go on the `create_table` line. The `down` of
+`change_type` restores the whole column: its limit, precision, scale, null
+and default. For
 `remove_column`, `rename_column` and `change_type` it lists the lines in
 `app/`, `lib/` and `config/` that name the column, the code the change breaks.
 Index and lock advice follows the database family of the database that holds
@@ -866,7 +873,7 @@ Each conversation has its own record: over HTTP, one server process serves every
 
 ## Live Resources (VFS)
 
-In addition to tools, AI clients can read structured data through **resource templates** - `rails-ai-context://` URIs introspected afresh on every request, after the app's code is reloaded for any edit.
+In addition to tools, AI clients can read structured data through **resource templates** - `rails-ai-context://` URIs answered from the context the tools share, which every request checks against the files first, reloading the app's code and introspecting again after any edit.
 
 | URI Pattern | Returns |
 |:------------|:--------|

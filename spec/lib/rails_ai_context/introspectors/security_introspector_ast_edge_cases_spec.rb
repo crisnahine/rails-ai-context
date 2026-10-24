@@ -54,7 +54,7 @@ RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector, "AST edge ca
 
   describe "controller with skip_forgery_protection (no args)" do
     let(:app_controller) { File.join(Rails.root, "app/controllers/application_controller.rb") }
-    let(:original_content) { File.read(app_controller) }
+    let!(:original_content) { File.read(app_controller) }
 
     before do
       File.write(app_controller, <<~RUBY)
@@ -74,6 +74,155 @@ RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector, "AST edge ca
     it "does not include protect_from_forgery key" do
       result = introspector.call
       expect(result[:csrf]).not_to have_key(:protect_from_forgery)
+    end
+  end
+
+  describe "an ApplicationController without the verify_authenticity_token callback" do
+    let(:app_controller) { File.join(Rails.root, "app/controllers/application_controller.rb") }
+    let!(:original_content) { File.read(app_controller) }
+
+    after { File.write(app_controller, original_content) }
+
+    it "names the skip when the file turns protection on and then skips the callback" do
+      File.write(app_controller, <<~RUBY)
+        class ApplicationController < ActionController::Base
+          protect_from_forgery with: :exception
+          skip_before_action :verify_authenticity_token
+        end
+      RUBY
+      stub_const("ApplicationController", Class.new(ActionController::Base) {
+        protect_from_forgery with: :exception
+        skip_before_action :verify_authenticity_token
+      })
+
+      expect(introspector.call[:csrf]).to include(default: "skipped (skip_before_action :verify_authenticity_token present)")
+    end
+
+    # Base gains the callback from default_protect_from_forgery, so each example builds the class one default gives.
+    it "says the callback does not run when the file neither calls nor skips it" do
+      File.write(app_controller, "class ApplicationController < ActionController::Base\nend\n")
+      stub_const("ApplicationController", Class.new(ActionController::Base) {
+        skip_before_action :verify_authenticity_token, raise: false
+      })
+
+      expect(introspector.call[:csrf]).to include(default: "off (verify_authenticity_token does not run)")
+    end
+
+    it "reads protection as enabled when Base already runs the callback and the file says nothing" do
+      File.write(app_controller, "class ApplicationController < ActionController::Base\nend\n")
+      stub_const("ApplicationController", Class.new(ActionController::Base) {
+        protect_from_forgery with: :exception
+      })
+
+      expect(introspector.call[:csrf]).to include(default: "enabled")
+    end
+  end
+
+  describe "an API-only ApplicationController" do
+    let(:app_controller) { File.join(Rails.root, "app/controllers/application_controller.rb") }
+    let!(:original_content) { File.read(app_controller) }
+
+    after { File.write(app_controller, original_content) }
+
+    # ActionController::API leaves RequestForgeryProtection out of its modules.
+    it "reports CSRF protection as not included, with no token settings" do
+      File.write(app_controller, "class ApplicationController < ActionController::API\nend\n")
+      stub_const("ApplicationController", Class.new(ActionController::API))
+
+      expect(introspector.call[:csrf]).to eq(default: "not included (ActionController::API)")
+    end
+
+    it "reports CSRF protection when the app includes it back" do
+      File.write(app_controller, <<~RUBY)
+        class ApplicationController < ActionController::API
+          include ActionController::RequestForgeryProtection
+          protect_from_forgery with: :exception
+        end
+      RUBY
+      stub_const("ApplicationController", Class.new(ActionController::API) {
+        include ActionController::RequestForgeryProtection
+        protect_from_forgery with: :exception
+      })
+
+      expect(introspector.call[:csrf]).to include(default: "enabled", protect_from_forgery: "with: :exception")
+    end
+
+    # Including the module adds the macro; only protect_from_forgery adds the verify_authenticity_token callback.
+    it "reports CSRF protection as off when the app includes it back but never turns it on" do
+      File.write(app_controller, <<~RUBY)
+        class ApplicationController < ActionController::API
+          include ActionController::RequestForgeryProtection
+        end
+      RUBY
+      stub_const("ApplicationController", Class.new(ActionController::API) {
+        include ActionController::RequestForgeryProtection
+      })
+
+      expect(introspector.call[:csrf]).to include(default: "off (verify_authenticity_token does not run)")
+    end
+  end
+
+  describe "an ApplicationController that cannot be loaded" do
+    let(:app_controller) { File.join(Rails.root, "app/controllers/application_controller.rb") }
+    let!(:original_content) { File.read(app_controller) }
+    let(:fresh_dir) { Dir.mktmpdir }
+    let(:config) { Rails.application.config.action_controller }
+    let!(:original_default) { config.default_protect_from_forgery }
+
+    after do
+      File.write(app_controller, original_content)
+      FileUtils.rm_rf(fresh_dir)
+      config.default_protect_from_forgery = original_default
+    end
+
+    # The app's copy is already required, so the autoload points at a fresh path with the same source.
+    def autoload_application_controller(source)
+      hide_const("ApplicationController")
+      File.write(app_controller, source)
+      fresh = File.join(fresh_dir, "application_controller.rb")
+      File.write(fresh, source)
+      Object.autoload(:ApplicationController, fresh)
+    end
+
+    it "reads the file's chain when the file has a syntax error" do
+      config.default_protect_from_forgery = true
+      autoload_application_controller("class ApplicationController < ActionController::Base\n  def broken(\nend\n")
+
+      expect(introspector.call[:csrf]).to include(default: "enabled")
+    end
+
+    it "reads the file's chain when the file names a missing constant" do
+      config.default_protect_from_forgery = true
+      autoload_application_controller("class ApplicationController < ActionController::Base\n  include MissingConcern\nend\n")
+
+      expect(introspector.call[:csrf]).to include(default: "enabled")
+    end
+
+    # Without default_protect_from_forgery, Base adds no verify_authenticity_token callback.
+    it "reads protection as off on old defaults when the file never turns it on" do
+      config.default_protect_from_forgery = false
+      autoload_application_controller("class ApplicationController < ActionController::Base\n  include MissingConcern\nend\n")
+
+      expect(introspector.call[:csrf]).to include(default: "off (verify_authenticity_token does not run)")
+    end
+
+    it "reads protection as enabled on old defaults when the file calls protect_from_forgery" do
+      config.default_protect_from_forgery = false
+      autoload_application_controller(<<~RUBY)
+        class ApplicationController < ActionController::Base
+          include MissingConcern
+          protect_from_forgery with: :exception
+        end
+      RUBY
+
+      expect(introspector.call[:csrf]).to include(default: "enabled", protect_from_forgery: "with: :exception")
+    end
+
+    it "reads protection as skipped when the file skips it" do
+      config.default_protect_from_forgery = true
+      autoload_application_controller("class ApplicationController < ActionController::Base\n  include MissingConcern\n  skip_forgery_protection\nend\n")
+
+      expect(introspector.call[:csrf]).to include(default: "skipped (skip_forgery_protection present)")
     end
   end
 

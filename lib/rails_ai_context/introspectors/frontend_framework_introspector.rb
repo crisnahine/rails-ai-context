@@ -113,18 +113,22 @@ module RailsAiContext
         }
       end
 
+      # The bundlers named by a `<tool>.config.*`, in the order one wins when several have one.
+      BUNDLERS = %w[vite webpack rollup bun].freeze
+
       # A config file the bundler reads comes first: jsbundling-rails writes
       # webpack.config.js, rollup.config.js or bun.config.js, and bun has no package.
+      # A webpacker or shakapacker yml beats every root config but vite's.
       def self.build_tool(root)
         root = root.to_s
-        return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
+        in_root = BUNDLERS.find { |tool| Dir.glob("#{tool}.config.*", base: root).any? }
+        return in_root if in_root == "vite"
         return "webpack" if File.exist?(File.join(root, "config/webpacker.yml")) ||
                             File.exist?(File.join(root, "config/shakapacker.yml"))
-        %w[webpack rollup bun].each do |tool|
-          return tool if Dir.glob(File.join(root, "#{tool}.config.*")).any?
-        end
+        return in_root if in_root
+
         dirs = RailsAiContext::PackageJson.frontend_roots(root).map { |dir| dir[:dir] }
-        %w[vite webpack rollup bun].each do |tool|
+        BUNDLERS.each do |tool|
           return tool if dirs.any? { |dir| frontend_config?(dir, "#{tool}.config.*") }
         end
         %w[esbuild webpack rollup].find { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
@@ -190,7 +194,7 @@ module RailsAiContext
 
         score = 0
         if markers[:config]
-          score += 1000 if ([ root ] + dirs).uniq.any? { |dir| Dir.glob(File.join(dir, markers[:config])).any? }
+          score += 1000 if ([ root ] + dirs).uniq.any? { |dir| Dir.glob(markers[:config], base: dir).any? }
         end
         score += dirs.sum { |dir| component_files(dir, markers[:components]).size } if markers[:components]
         score
@@ -244,12 +248,17 @@ module RailsAiContext
       # ---- Monorepo ----
 
       MONOREPO_MARKERS = { "turbo.json" => "turborepo", "nx.json" => "nx", "lerna.json" => "lerna" }.freeze
+      PNPM_WORKSPACE = "pnpm-workspace.yaml"
+
+      # The files this and ModuleAliases read in the app root and in each frontend root.
+      MANIFESTS = ([ "package.json", "tsconfig.json", PNPM_WORKSPACE, *MONOREPO_MARKERS.keys, *RailsAiContext::PackageJson::LOCKFILES.keys,
+                     *ModuleAliases::CONFIG_NAMES, *ModuleAliases::BUNDLER_CONFIGS, *BUNDLERS.map { |tool| "#{tool}.config.*" },
+                     *FRAMEWORK_EVIDENCE.values.filter_map { |markers| markers[:config] } ]).uniq.freeze
 
       def detect_monorepo
         result = { detected: false, tool: nil, workspaces: [] }
 
-        # pnpm workspaces
-        pnpm_ws = File.join(root, "pnpm-workspace.yaml")
+        pnpm_ws = File.join(root, PNPM_WORKSPACE)
         if File.exist?(pnpm_ws)
           data = YAML.safe_load(RailsAiContext::SafeFile.read(pnpm_ws) || "", permitted_classes: []) rescue nil
           if data.is_a?(Hash) && data["packages"].is_a?(Array)
@@ -386,8 +395,7 @@ module RailsAiContext
 
         # Primary framework + version
         frameworks.each do |sym, version|
-          label = sym.to_s.split("_").map(&:capitalize).join(" ")
-          parts << (version ? "#{label} #{version.to_s.delete("^0-9.")}" : label)
+          parts << PackageJson.version_label(sym.to_s.split("_").map(&:capitalize).join(" "), version)
           break # only the primary
         end
 

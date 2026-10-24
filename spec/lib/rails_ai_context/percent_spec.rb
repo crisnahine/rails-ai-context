@@ -23,6 +23,13 @@ RSpec.describe RailsAiContext::Percent do
       expect(described_class.floor(200, 200, decimals: 0)).to eq(100)
     end
 
+    # In floats 29 / 100 * 100 * 10 is 289.99999999999994, which floors a full step low.
+    it "answers an exact share exactly" do
+      expect(described_class.floor(29, 100)).to eq(29.0)
+      expect(described_class.floor(57, 100)).to eq(57.0)
+      expect(described_class.floor(29, 50, decimals: 0)).to eq(58)
+    end
+
     it "answers zero rather than dividing by zero" do
       expect(described_class.floor(5, 0)).to eq(0)
     end

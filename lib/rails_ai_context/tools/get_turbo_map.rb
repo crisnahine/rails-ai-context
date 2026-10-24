@@ -527,10 +527,11 @@ module RailsAiContext
         return (models.key?(owner) ? owner : nil) if name == "self"
         return nil unless name.match?(/\A[a-z_]\w*\z/) && models[owner].is_a?(Hash)
 
-        assoc = Array(models[owner][:associations]).find do |a|
-          a.is_a?(Hash) && a[:name].to_s == name && %w[belongs_to has_one].include?(a[:type].to_s) && !a[:polymorphic]
-        end
-        assoc && Introspectors::TableName.model_for(assoc[:class_name] || name.camelize, owner, models)
+        by_name = Introspectors::AssociationClass.by_name(models[owner][:associations])
+        assoc = by_name[name]
+        return nil unless assoc && %w[belongs_to has_one].include?(assoc[:type].to_s)
+
+        Introspectors::AssociationClass.model(assoc, models, owner: owner, by_name: by_name)
       end
 
       # In a view, `@product`, `product`, `current_user` and `Current.user`

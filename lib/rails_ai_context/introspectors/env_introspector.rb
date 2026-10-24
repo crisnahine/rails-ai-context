@@ -113,7 +113,6 @@ module RailsAiContext
         EnvReferences.scan(root).each do |path, entries|
           entries.each do |entry|
             name = entry[:name]
-            next unless name.match?(/\A[A-Z][A-Z0-9_]{1,}\z/)
             next if KNOWN_ENV_VARS.any? { |spec| spec[:name] == name }
 
             refs[name] ||= []

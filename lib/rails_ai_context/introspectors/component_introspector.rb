@@ -347,14 +347,14 @@ module RailsAiContext
       # from the default directories and the ones the app configures.
       def previews_index
         @previews_index ||= preview_dirs.each_with_object({}) do |dir, index|
-          Dir.glob(File.join(dir, "**/*_preview.rb")).sort.each do |path|
+          PathResolver.glob(dir, "**/*_preview.rb").sort.each do |path|
             index[path.delete_prefix("#{dir}/").delete_suffix("_preview.rb")] ||= path.sub("#{root}/", "")
           end
         end
       end
 
       def preview_dirs
-        files = PREVIEW_CONFIG_GLOBS.flat_map { |glob| Dir.glob(File.join(root, glob)).sort }.reject { |path| PathResolver.linked_out?(path, root) } +
+        files = PREVIEW_CONFIG_GLOBS.flat_map { |glob| PathResolver.glob(root, glob).sort }.reject { |path| PathResolver.linked_out?(path, root) } +
                 PathResolver.initializer_paths(root)
         configured = files.flat_map do |file|
           SourceIntrospector.walk(file, { previews: Listeners::PreviewPathsListener })[:previews]
@@ -368,7 +368,7 @@ module RailsAiContext
         assets = []
 
         # Direct sidecar: component_name.html.erb, component_name.css, etc.
-        Dir.glob("#{base}.*").each do |path|
+        PathResolver.glob(File.dirname(base), "#{File.basename(base)}.*").each do |path|
           next if path == component_path
           assets << File.basename(path)
         end
@@ -376,7 +376,7 @@ module RailsAiContext
         # Sidecar directory: component_name/ with assets
         sidecar_dir = base
         if Dir.exist?(sidecar_dir) && File.directory?(sidecar_dir)
-          Dir.glob(File.join(sidecar_dir, "*")).each do |path|
+          PathResolver.glob(sidecar_dir, "*").each do |path|
             assets << "#{File.basename(sidecar_dir)}/#{File.basename(path)}" if File.file?(path)
           end
         end

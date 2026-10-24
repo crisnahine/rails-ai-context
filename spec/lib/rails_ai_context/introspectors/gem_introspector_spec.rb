@@ -181,6 +181,17 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         expect(result[:gem_groups]).to eq({ "test" => [ "rspec-rails" ] })
       end
 
+      # Bundler::Dsl gives the gem [:development, :development]: one group, named twice.
+      it "lists a gem once under a group its group: option repeats as a string" do
+        File.write(File.join(tmpdir, "Gemfile"), <<~RUBY)
+          group :development do
+            gem "c", group: "development"
+          end
+        RUBY
+
+        expect(introspector.call[:gem_groups]).to eq({ "development" => [ "c" ] })
+      end
+
       # The URL went out as the Gemfile has it, and `rails ai:context` writes
       # it into .ai-context.json, a file it asks the team to commit.
       it "filters the credentials a git source carries" do

@@ -63,11 +63,12 @@ module RailsAiContext
 
       # The calls that put a job on a queue, in source order: each adapter's
       # own, and the app's enqueue helpers (`Jobs.enqueue(:x)`) on their owner.
-      def enqueue_calls(source, helpers = [])
+      def enqueue_calls(source, helpers = [], tree: nil)
         return [] if source.nil?
 
         names = QUEUEING + helpers.map { |helper| helper[:method].to_s }
-        hits = SourceIntrospector.walk_source(source, { calls: -> { Listeners::MethodCallListener.new(names: names) } })[:calls]
+        listeners = { calls: -> { Listeners::MethodCallListener.new(names: names) } }
+        hits = SourceIntrospector.walk_dispatch(tree || AstCache.parse_string(source), listeners)[:calls]
         hits.select do |hit|
           receiver = hit[:receiver].to_s.delete_prefix("::")
           next false if receiver.empty?

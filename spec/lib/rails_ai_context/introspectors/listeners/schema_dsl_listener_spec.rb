@@ -23,6 +23,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
     expect(cols.first[:options]).to include(null: false, default: 0)
   end
 
+  it "reads t.primary_key as a key column of its type, :primary_key unless given" do
+    results = parse_and_dispatch("t.primary_key :id\nt.primary_key :code, :serial, limit: 2\nt.primary_key :x, kind")
+    cols = results.select { |r| r[:type] == :column }
+
+    expect(cols.map { |c| [ c[:name], c[:column_type], c[:options] ] }).to eq(
+      [ [ "id", "primary_key", { primary_key: true } ], [ "code", "serial", { limit: 2, primary_key: true } ] ]
+    )
+  end
+
   it "detects various column types" do
     results = parse_and_dispatch(<<~RUBY)
       t.string "name"
@@ -124,5 +133,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
   it "keeps a t.virtual with no type: typed virtual" do
     results = parse_and_dispatch('t.virtual "area", as: "w * h"')
     expect(results.find { |r| r[:type] == :column }).to include(column_type: "virtual", virtual: true)
+  end
+
+  it "reads a table block whose parameter has another name, and no other block's" do
+    results = parse_and_dispatch(<<~RUBY)
+      create_table "posts" do |table|
+        table.string "title"
+        table.index ["title"]
+      end
+      change_table :posts do |tbl|
+        tbl.integer :views
+      end
+      reversible do |dir|
+        dir.up { execute "SELECT 1" }
+      end
+      Post.find_each { |table| table.string }
+    RUBY
+
+    expect(results.select { |r| r[:type] == :column }.map { |c| c[:name] }).to eq(%w[title views])
+    expect(results.select { |r| r[:type] == :index }.map { |i| i[:columns] }).to eq([ %w[title] ])
+    expect(results.none? { |r| r[:type] == :unread_call }).to be(true)
   end
 end

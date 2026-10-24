@@ -474,7 +474,7 @@ module RailsAiContext
 
           text = val.gsub(/\r\n|\r|\n/, "\\n")
           text = "#{text[0...100]}..." if text.length > 100
-          return text.gsub("|", "\\|")
+          return table_cell(text)
         end
 
         val.to_s

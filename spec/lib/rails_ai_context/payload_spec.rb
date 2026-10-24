@@ -226,6 +226,20 @@ RSpec.describe RailsAiContext::Payload do
         .to eq("invoices")
     end
 
+    # Rails' controller_path comes from the class name, whatever file declares it.
+    it "keys a controller that shares another's file by its own class name" do
+      file = "app/controllers/admin/base_controller.rb"
+      ctx = { controllers: { controllers: {
+        "Admin::AuditsController" => { file: file },
+        "AuditsController" => { file: file },
+        "Reports::ExportsController" => { file: file }
+      } } }
+
+      expect(described_class.controller_route_key(ctx, "Admin::AuditsController")).to eq("admin/audits")
+      expect(described_class.controller_route_key(ctx, "AuditsController")).to eq("audits")
+      expect(described_class.controller_route_key(ctx, "Reports::ExportsController")).to eq("reports/exports")
+    end
+
     # The name is all there is for a controller reflection found and the
     # filesystem did not - and it is right whenever no inflection is involved.
     it "falls back to the underscored name when no file was carried" do

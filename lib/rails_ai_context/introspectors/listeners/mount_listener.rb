@@ -15,6 +15,7 @@ module RailsAiContext
       # form was invisible here, which left the endpoint out of every tool.
       class MountListener < BaseListener
         include BranchConditions
+        include RoutesWalk
 
         VERB_MACROS = %i[match get post put patch delete].freeze
 
@@ -22,13 +23,26 @@ module RailsAiContext
         SCOPE_MACROS = %i[namespace scope].freeze
 
         # `prefix` and `name_prefix` are the path and route name a `draw` of this file sits under.
-        def initialize(prefix: nil, name_prefix: nil)
+        # `routes` is the RoutesDslListener walking the same tree, which places an app a resource scope holds,
+        # binds a loop's variable, reads a literal and walks this listener through each body it replays; without one,
+        # a routes listener that walks nothing reads only what the source spells out.
+        def initialize(prefix: nil, name_prefix: nil, routes: nil)
           super()
+          @routes = routes || RoutesDslListener.new
           @scopes = [ { node: nil, prefix: prefix && prefix != "/" ? prefix : nil, name: name_prefix } ]
+          # A record read in a body Rails runs only where it is replayed, with that body's keys.
+          @held = {}.compare_by_identity
+          @routes.join(self)
+        end
+
+        # A held body's records stand only when the routes walk never replays it; each replay lists its own.
+        def results
+          @results.reject { |record| (keys = @held[record]) && @routes.replayed?(keys) }
         end
 
         def on_call_node_enter(node)
-          return unless node.receiver.nil?
+          note_mapper_call(node)
+          return unless mapper_call?(node)
 
           if node.block && SCOPE_MACROS.include?(node.name)
             @scopes << { node: node, prefix: scope_prefix(node), name: scope_name(node) }
@@ -43,7 +57,7 @@ module RailsAiContext
           engine, path = node.name == :mount ? [ resolve_engine(args), resolve_path(args) ] : resolve_rack_endpoint(args)
           return unless engine
 
-          record = { engine: engine, path: prefixed_path(path), location: node.location.start_line }
+          record = { engine: engine, path: attached_path(node, path), location: node.location.start_line }
           condition = current_condition
           if condition
             record[:condition] = condition
@@ -52,11 +66,13 @@ module RailsAiContext
           end
           # The mount's route name, which names an engine's route proxy.
           if node.name == :mount
-            as = extract_keyword_nodes(node)[:as]
-            record[:as] = as.unescaped if as.is_a?(Prism::SymbolNode) || as.is_a?(Prism::StringNode)
+            as = @routes.literal_or_bound(extract_keyword_nodes(node)[:as])&.to_s
+            record[:as] = as if as
             names = @scopes.filter_map { |scope| scope[:name] }.reject(&:empty?)
             record[:name_prefix] = names.join("_") if names.any?
           end
+          keys = @routes.held_keys
+          @held[record] = keys if keys.any?
           @results << record
         end
 
@@ -78,13 +94,10 @@ module RailsAiContext
           # walk cannot read.
           # `path: nil` is Rails' way of adding no segment, which is known.
           return nil if path_node.is_a?(Prism::NilNode)
-          return :unknown if path_node && !path_node.is_a?(Prism::StringNode) && !path_node.is_a?(Prism::SymbolNode)
+          return :unknown if path_node && !@routes.literal_or_bound(path_node)
 
-          options = { path: path_node && extract_value(path_node) }
-          literal = case first
-          when Prism::SymbolNode then first.unescaped
-          when Prism::StringNode then first.unescaped
-          end
+          options = { path: path_node && @routes.literal_or_bound(path_node)&.to_s }
+          literal = @routes.literal_or_bound(first)&.to_s
 
           if node.name == :namespace
             name = options[:path] || literal
@@ -105,21 +118,16 @@ module RailsAiContext
         # What a scope adds to the names inside it: `namespace :admin` adds
         # admin, a scope only its `as:`.
         def scope_name(node)
-          as = extract_keyword_nodes(node)[:as]
-          return as.unescaped if as.is_a?(Prism::SymbolNode) || as.is_a?(Prism::StringNode)
+          as = @routes.literal_or_bound(extract_keyword_nodes(node)[:as])&.to_s
+          return as if as
           return unless node.name == :namespace
 
-          first = node.arguments&.arguments&.first
-          first.unescaped if first.is_a?(Prism::SymbolNode) || first.is_a?(Prism::StringNode)
+          @routes.literal_or_bound(node.arguments&.arguments&.first)&.to_s
         end
 
-        # A first positional argument that is not a literal string or symbol
-        # is a prefix expression: `scope PREFIX do`, `scope "/v#{version}" do`.
-        def positional_prefix?(node)
-          first = node.arguments&.arguments&.first
-          return false if first.nil?
-
-          !first.is_a?(Prism::KeywordHashNode) && !first.is_a?(Prism::HashNode)
+        def attached_path(node, path)
+          scoped = @routes.resource_scoped_path(node, path) unless path.nil? || @scopes.any? { |scope| scope[:prefix] == :unknown }
+          scoped == :unknown ? nil : scoped || prefixed_path(path)
         end
 
         def prefixed_path(path)
@@ -136,7 +144,7 @@ module RailsAiContext
           return [ nil, nil ] unless target
 
           first = args.first
-          path = first.is_a?(Prism::StringNode) ? first.unescaped : rocket_path(args)
+          path = @routes.literal_or_bound(first) || rocket_path(args)
           [ target, path ]
         end
 
@@ -146,7 +154,7 @@ module RailsAiContext
             next unless arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode)
 
             arg.elements.each do |assoc|
-              return assoc.key.unescaped if assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::StringNode) && app_name(assoc.value)
+              return assoc.key.unescaped if assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::StringNode) && rack_app_name(assoc.value)
             end
           end
           nil
@@ -196,10 +204,12 @@ module RailsAiContext
           nil
         end
 
-        # Only a string the source spells out: a constant or a call is a path
-        # nothing here can read, and an expression prints no path at all.
+        # Only a string or symbol the source spells out or a loop binds: a constant or a call
+        # is a path nothing here can read, and an expression prints no path at all.
         def literal_path(node)
-          return nil unless node.is_a?(Prism::StringNode) || node.is_a?(Prism::InterpolatedStringNode)
+          literal = @routes.literal_or_bound(node)
+          return literal if literal
+          return nil unless node.is_a?(Prism::InterpolatedStringNode)
 
           value = extract_value(node)
           value == RailsAiContext::Confidence::INFERRED ? nil : value

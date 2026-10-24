@@ -29,10 +29,6 @@ module RailsAiContext
 
     HEURISTIC_SUFFIXES = %w[password secret token key digest hash].freeze
 
-    # Rails' own bookkeeping tables. ar_internal_metadata.key ends in "key": counted,
-    # it would refuse every statement whose text holds the word "key".
-    BOOKKEEPING_TABLES = %w[ar_internal_metadata schema_migrations].freeze
-
     # A wildcard in a select list. `count(*)` reads no column, so it is left out.
     WILDCARD = /(?:\b(?:SELECT|DISTINCT|ALL)\b|[,.])\s*\*/i
 
@@ -131,13 +127,13 @@ module RailsAiContext
         family = DatabaseFamily.of(source)
         return nil unless family.known?
 
-        family.relation_columns(source, schemas).reject { |table, _columns| BOOKKEEPING_TABLES.include?(table.to_s.downcase) }
+        family.relation_columns(source, schemas).reject { |table, _columns| Introspectors::SchemaConventions.bookkeeping_table?(table.to_s.downcase) }
       else
         tables = source&.dig(:schema, :tables)
         return nil unless tables.is_a?(Hash) && tables.any?
 
         tables.each_with_object({}) do |(table, data), acc|
-          next if BOOKKEEPING_TABLES.include?(table.to_s.downcase)
+          next if Introspectors::SchemaConventions.bookkeeping_table?(table.to_s.downcase)
           acc[table.to_s] = Array(data.is_a?(Hash) && data[:columns]).map { |col| col.is_a?(Hash) ? col[:name] : col }.compact
         end
       end

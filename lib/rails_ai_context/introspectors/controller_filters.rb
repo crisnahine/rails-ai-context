@@ -272,18 +272,16 @@ module RailsAiContext
         site && Array(calls.sites_by_name[site.name.to_s]).any? { |call| call.equal?(site) }
       end
 
-      # [superclass, the namespace it is written in] of the class `within` names in `source`.
+      # [superclass, Module.nesting where it is read] of the class `within` names in `source`.
       def superclass_of(source, within)
-        written = DeclaredConstant.parent_declaration(source, within.to_s)&.superclass
-        return nil unless written
-
-        written.start_with?("::") ? [ written.delete_prefix("::"), nil ] : [ written, within ]
+        declaration = DeclaredConstant.parent_declaration(source, within.to_s)
+        declaration&.superclass && [ declaration.superclass, declaration.nesting ]
       end
 
       # [constant, source, realpath, app-relative path] of the app controller base the name resolves to, as Ruby looks it up.
       def base_source(root, name, scope)
         RunCache.fetch([ :controller_base, root.to_s, name, scope ]) do
-          ConcernPaths.candidate_names(name, scope).lazy.filter_map do |candidate|
+          DeclaredConstant.candidate_names(name, scope).lazy.filter_map do |candidate|
             RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { constant_source(root, candidate) }
           end.first
         end
@@ -291,14 +289,13 @@ module RailsAiContext
 
       def constant_source(root, candidate)
         prefix = "#{root.to_s.chomp("/")}/"
-        underscored = "#{candidate.underscore}.rb"
         PathResolver.controller_dirs(root.to_s).each do |dir|
-          file = dir.start_with?(prefix) && ConcernPaths.spelled(dir, underscored)
+          file = dir.start_with?(prefix) && PathResolver.constant_path(dir, candidate, declared: true)
           next unless file
 
-          relative = File.join(dir.delete_prefix(prefix), file)
+          relative = file.delete_prefix(prefix)
           source, resolution = SafePath.read(relative, under: root.to_s)
-          next unless source && (file == underscored || DeclaredConstant.declarations(source, path_name: candidate).any? { |d| d.name == candidate })
+          next unless source
 
           return [ candidate, source, resolution.realpath, relative ]
         end

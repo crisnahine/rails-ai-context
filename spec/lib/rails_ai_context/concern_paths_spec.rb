@@ -153,6 +153,26 @@ RSpec.describe RailsAiContext::ConcernPaths do
     end
   end
 
+  describe ".names_in" do
+    # Only Shop::Tagging and Shop::Tagging::Helpers extend ActiveSupport::Concern; the innermost Helpers is a plain module.
+    it "names a module a concern only when it extends ActiveSupport::Concern itself, not when an outer module of its name does" do
+      source = "module Shop\n  module Tagging\n    extend ActiveSupport::Concern\n    module Helpers\n      extend ActiveSupport::Concern\n" \
+               "      module Helpers\n        def helped; end\n      end\n    end\n  end\nend\n"
+
+      expect(described_class.names_in("/app/models/concerns/shop/tagging.rb", "/app/models/concerns", source))
+        .to eq(%w[Shop::Tagging Shop::Tagging::Helpers])
+    end
+
+    # Zeitwerk loads Pay::Refundable with pay.rb; Pay itself holds constants alone, no concern of its own.
+    it "reads a module holding only constant writes and modules as a namespace, a blockless Class.new error class included" do
+      pay = "module Pay\n  Error = Class.new(StandardError)\n  Refundable = Module.new do\n    extend ActiveSupport::Concern\n    def refund; end\n  end\nend\n"
+      ship = "module Ship\n  Error = Class.new(StandardError)\n  LIMIT = 3\n  module Trackable\n    extend ActiveSupport::Concern\n  end\nend\n"
+
+      expect(described_class.names_in("/app/models/concerns/pay.rb", "/app/models/concerns", pay)).to eq(%w[Pay::Refundable])
+      expect(described_class.names_in("/app/models/concerns/ship.rb", "/app/models/concerns", ship)).to eq(%w[Ship::Trackable])
+    end
+  end
+
   describe ".find_file" do
     let(:tmpdir) { Dir.mktmpdir }
 
@@ -178,7 +198,7 @@ RSpec.describe RailsAiContext::ConcernPaths do
     it "walks the enclosing namespaces outward" do
       dir = File.join(tmpdir, "app", "models", "concerns", "fasp", "provider")
       FileUtils.mkdir_p(dir)
-      File.write(File.join(dir, "debug_concern.rb"), "module DebugConcern\nend\n")
+      File.write(File.join(dir, "debug_concern.rb"), "module Fasp::Provider::DebugConcern\nend\n")
 
       expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
         .to eq(File.join(dir, "debug_concern.rb"))
@@ -196,6 +216,35 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "Role::Missing")).to be_nil
       expect(described_class.module_source(tmpdir, "Role::AssociationHelper")).to eq("module AssociationHelper\n    def helped; end\n  end")
       expect(described_class.module_source(tmpdir, "Role")).to start_with("class Role")
+    end
+
+    # Ruby runs a nested module's body for that module alone, so an includer of the outer one never runs it.
+    it "reads a module's own source without the modules it nests, in its own file and in its outer constant's" do
+      concerns = File.join(tmpdir, "app", "models", "concerns")
+      models = File.join(tmpdir, "app", "models")
+      FileUtils.mkdir_p(concerns)
+      File.write(File.join(concerns, "authable.rb"), <<~RUBY)
+        module Authable
+          extend ActiveSupport::Concern
+          included { devise :trackable }
+          module Locked
+            included { devise :lockable }
+          end
+          Built = Module.new do
+            included { devise :confirmable }
+          end
+        end
+      RUBY
+      File.write(File.join(models, "role.rb"), "class Role < ApplicationRecord\n  module Helper\n    def helped; end\n    module Deeper\n      def deep; end\n    end\n  end\nend\n")
+
+      own = described_class.module_source(tmpdir, "Authable")
+      outer = described_class.module_source(tmpdir, "Helper", within: "Role")
+
+      expect(own).to include("devise :trackable")
+      expect(own).not_to include("lockable")
+      expect(own).not_to include("confirmable")
+      expect(outer).to start_with("module Helper").and include("def helped").and end_with("end")
+      expect(outer).not_to include("deep")
     end
 
     # Rails autoloads every app/* directory, and an app's controllers can
@@ -216,16 +265,99 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "Auditable")).to eq(File.join(dir, "auditable.rb"))
     end
 
+    # A plugin's concerns/group.rb declaring Poll::Group is not where Group lives; Zeitwerk
+    # would raise on it, and a plugin that requires it defines Poll::Group.
+    it "skips a file that declares some other constant" do
+      plugin = File.join(tmpdir, "plugins", "poll", "app", "controllers", "concerns")
+      models = File.join(tmpdir, "app", "models")
+      FileUtils.mkdir_p([ plugin, models ])
+      File.write(File.join(tmpdir, "plugins", "poll", "plugin.rb"), "# name: poll\n")
+      File.write(File.join(plugin, "group.rb"), "module Poll::Group\n  extend ActiveSupport::Concern\nend\n")
+      File.write(File.join(models, "group.rb"), "class Group < ApplicationRecord\nend\n")
+
+      expect(described_class.find_file(tmpdir, "Group")).to eq(File.join(models, "group.rb"))
+    end
+
     # Ruby reaches the top level last, so the nested file is the one the
     # reference binds to when both spellings exist.
     it "prefers the innermost namespace over a top-level file of the same name" do
       nested = File.join(tmpdir, "app", "models", "concerns", "fasp", "provider")
       FileUtils.mkdir_p(nested)
-      File.write(File.join(nested, "debug_concern.rb"), "module DebugConcern\nend\n")
+      File.write(File.join(nested, "debug_concern.rb"), "module Fasp::Provider::DebugConcern\nend\n")
       File.write(File.join(tmpdir, "app", "models", "concerns", "debug_concern.rb"), "module DebugConcern\nend\n")
 
       expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
         .to eq(File.join(nested, "debug_concern.rb"))
+    end
+  end
+
+  describe ".find_file and a name each scope can hold" do
+    # Ruby tries Homonym::Tools before Tools, and homonym.rb declares it.
+    it "takes the nested module in its outer constant's file over a later candidate's own file" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app/controllers/concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "tools.rb"), "module Tools; end\n")
+        File.write(File.join(dir, "homonym.rb"), "module Homonym\n  module Tools; end\n  include Tools\nend\n")
+
+        expect(described_class.find_file(root, "Tools", within: "Homonym")).to eq(File.join(dir, "homonym.rb"))
+        expect(described_class.find_file(root, "Tools", within: "Homonym", outer: false)).to be_nil
+        expect(described_class.module_source(root, "Tools", within: "Homonym")).to eq("module Tools; end")
+        expect(described_class.find_file(root, "Tools")).to eq(File.join(dir, "tools.rb"))
+      end
+    end
+
+    # Ruby: `module Homonym; include Tools; module Tools; end; end` gives Homonym.ancestors [Homonym, Tools].
+    it "takes the later candidate when the outer constant's file declares the module below the line naming it" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app/controllers/concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "tools.rb"), "module Tools; end\n")
+        File.write(File.join(dir, "homonym.rb"), "module Homonym\n  include Tools\n  module Tools; end\nend\n")
+
+        expect(described_class.find_file(root, "Tools", within: "Homonym")).to eq(File.join(dir, "tools.rb"))
+        expect(described_class.included_sources(root, "Homonym").drop(1)).to eq([ "module Tools; end\n" ])
+      end
+    end
+
+    # Ruby runs an include in a method or a block when it is called, after the file has declared the module below it.
+    it "takes the module its outer constant's file declares below an include that runs later" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app/models/concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "attr.rb"), "module Attr\n  class_methods do\n    def attr_macro\n      include InstanceMethods\n    end\n  end\n  module InstanceMethods; end\nend\n")
+
+        expect(described_class.find_file(root, "InstanceMethods", within: "Attr")).to eq(File.join(dir, "attr.rb"))
+      end
+    end
+
+    # Ruby: Homonym::Kit's include, above Homonym::Tools, gives Kit the top-level Tools; Homonym's own, below it, Homonym::Tools.
+    it "measures the declaration against the line naming the module in the reference's own nesting" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app/controllers/concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "tools.rb"), "module Tools; end\n")
+        File.write(File.join(dir, "homonym.rb"), "module Homonym\n  module Kit\n    include Tools\n  end\n  module Tools; end\n  include Tools\nend\n")
+
+        expect(described_class.find_file(root, "Tools", within: "Homonym")).to eq(File.join(dir, "homonym.rb"))
+      end
+    end
+  end
+
+  # Zeitwerk takes any constant the file defines, an assignment as much as a module keyword.
+  describe ".find_file and a constant the file assigns" do
+    it "finds a file that assigns the constant inside its namespace or at the top level" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app", "models", "concerns")
+        FileUtils.mkdir_p(File.join(dir, "billing"))
+        File.write(File.join(dir, "billing", "rates.rb"), "module Billing\n  Rates = Struct.new(:amount)\nend\n")
+        File.write(File.join(dir, "zone.rb"), "Zone = Data.define(:name)\n")
+        File.write(File.join(dir, "tagging.rb"), "Tagging = Module.new do\n  def tags = []\nend\n")
+
+        expect(described_class.find_file(root, "Billing::Rates")).to eq(File.join(dir, "billing", "rates.rb"))
+        expect(described_class.find_file(root, "Zone")).to eq(File.join(dir, "zone.rb"))
+        expect(described_class.find_file(root, "Tagging")).to eq(File.join(dir, "tagging.rb"))
+      end
     end
   end
 
@@ -247,22 +379,41 @@ RSpec.describe RailsAiContext::ConcernPaths do
     end
   end
 
-  # The listing walk matched case exactly inside a run, while File.exist?
-  # outside one follows the filesystem: on a case-insensitive disk a tool call
-  # found a concern the context run missed.
-  describe ".find_file and letter case" do
-    it "answers inside a run what the filesystem answers outside one" do
+  # Zeitwerk camelizes each entry (Rails::Autoloaders::Inflector: `basename.camelize`) and compares
+  # it to the constant, so the entry's own spelling decides, on every filesystem.
+  describe ".find_file and an entry's spelling" do
+    it "finds Taxable.rb for Taxable, inside a run and outside one" do
       Dir.mktmpdir do |root|
         dir = File.join(root, "app", "models", "concerns")
         FileUtils.mkdir_p(dir)
         File.write(File.join(dir, "Taxable.rb"), "module Taxable; end\n")
-        on_disk = File.exist?(File.join(dir, "taxable.rb"))
 
-        outside = described_class.find_file(root, "Taxable")
-        inside = RailsAiContext::RunCache.around { described_class.find_file(root, "Taxable") }
+        expect(described_class.find_file(root, "Taxable")).to eq(File.join(dir, "Taxable.rb"))
+        expect(RailsAiContext::RunCache.around { described_class.find_file(root, "Taxable") }).to eq(File.join(dir, "Taxable.rb"))
+      end
+    end
 
-        expect(inside).to eq(outside)
-        expect(!outside.nil?).to eq(on_disk)
+    it "finds no file for a constant no entry camelizes to" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app", "models", "concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "foo_bar.rb"), "module FooBar; end\n")
+
+        RailsAiContext::RunCache.around do
+          expect(described_class.find_file(root, "Foobar")).to be_nil
+          expect(described_class.find_file(root, "FooBar")).to eq(File.join(dir, "foo_bar.rb"))
+        end
+      end
+    end
+
+    # The app loads only if its inflector (`inflector.inflect("html_parser" => "HTMLParser")`) says so.
+    it "finds an entry an unread inflector spells when the file declares the constant" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app", "models", "concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "html_parser.rb"), "module HTMLParser; end\n")
+
+        expect(described_class.find_file(root, "HTMLParser")).to eq(File.join(dir, "html_parser.rb"))
       end
     end
   end

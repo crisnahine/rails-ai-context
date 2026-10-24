@@ -119,6 +119,35 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
       expect(result[:recent].first[:actions]).to contain_exactly("change_table", "add_reference")
     end
 
+    # CommandRecorder records [:change_column_null, :remove_columns] for this change.
+    it "lists the calls the migration makes, not a name inside a longer one or a comment" do
+      result = actions_of("# we may add_index on email later\nchange_column_null :users, :email, false\nremove_columns :users, :a, :b, type: :string")
+
+      expect(result[:recent].first[:actions]).to eq(%w[remove_column change_column_null])
+      expect(result[:migration_stats][:total_add_index]).to eq(0)
+    end
+
+    # Migration forwards a bare call to its connection, so a call on the connection is the same schema call.
+    it "lists a call the migration makes on its connection" do
+      result = actions_of("connection.execute \"SELECT 1\"\nActiveRecord::Base.connection.add_index :users, :email\nt.remove_index :name")
+
+      expect(result[:recent].first[:actions]).to eq(%w[add_index execute])
+    end
+
+    it "lists a call made on a connection held in a local variable or a block parameter" do
+      result = actions_of("conn = connection\nconn.add_index :users, :email\nwith_connection { |c| c.execute \"SELECT 1\" }")
+
+      expect(result[:recent].first[:actions]).to eq(%w[add_index execute])
+    end
+
+    it "parses a change_table migration once" do
+      allow(Prism).to receive(:parse).and_call_original
+
+      actions_of("change_table :widgets do |t|\n  t.string :parsed_once\nend")
+
+      expect(Prism).to have_received(:parse).with(a_string_including("t.string :parsed_once"), anything).once
+    end
+
     it "does not read a create_table block's columns as added columns" do
       result = actions_of("create_table :widgets do |t|\n  t.string :a\nend")
 

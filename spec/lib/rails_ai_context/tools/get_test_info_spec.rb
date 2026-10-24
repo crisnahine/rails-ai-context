@@ -10,8 +10,8 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     {
       framework: "RSpec",
       factories: { location: "spec/factories", count: 5 },
-      factory_names: { "users.rb" => %w[user admin_user], "posts.rb" => %w[post published_post] },
-      factory_traits: { "users.rb" => %w[admin with_posts], "posts.rb" => %w[published] },
+      factory_names: { "spec/factories/users.rb" => %w[user admin_user], "spec/factories/posts.rb" => %w[post published_post] },
+      factory_traits: { "spec/factories/users.rb" => %w[admin with_posts], "spec/factories/posts.rb" => %w[published] },
       fixtures: nil,
       fixture_names: nil,
       system_tests: { location: "spec/system" },
@@ -48,7 +48,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     it "renders the file and its trait names, not a Ruby array" do
       text = described_class.call(detail: "standard").content.first[:text]
 
-      expect(text).to include("- **users.rb:** admin, with_posts")
+      expect(text).to include("- **spec/factories/users.rb:** admin, with_posts")
       expect(text).not_to include('["users.rb"')
     end
   end
@@ -217,6 +217,91 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       result = described_class.call(detail: "full")
       text = result.content.first[:text]
       expect(text).to include("Factories")
+    end
+
+    it "reads each factory file at its path under the suite root, for its attributes and traits" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "spec", "factories"))
+        File.write(File.join(root, "spec", "factories", "users.rb"), <<~RUBY)
+          FactoryBot.define do
+            factory :user do
+              name { "A" }
+              trait :admin do
+                admin { true }
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(root, "spec", "factories.rb"), "FactoryBot.define do\n  factory :account do\n    plan { \"free\" }\n  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        test_data[:factory_names] = { "spec/factories/users.rb" => %w[user], "spec/factories.rb" => %w[account] }
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- **spec/factories/users.rb** → `:user`\n  - `name`\n  - trait `:admin`")
+        expect(text).to include("- **spec/factories.rb** → `:account`\n  - `plan`")
+      end
+    end
+
+    # FactoryBot's DefinitionProxy: a block in either form, association, sequence and a bare
+    # name naming a factory or a global sequence declare attributes; transient ones are never
+    # assigned to the record; callbacks are not attributes; traits and child factories keep their own.
+    it "lists each factory's attributes as FactoryBot declares them, with traits and child factories nested" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "spec", "factories"))
+        File.write(File.join(root, "spec", "factories", "sequences.rb"), "FactoryBot.define do\n  sequence(:email) { |n| \"u\#{n}@example.com\" }\nend\n")
+        File.write(File.join(root, "spec", "factories", "articles.rb"), <<~RUBY)
+          FactoryBot.define do
+            factory :article do
+              title { "A" }
+              association :author, factory: :user
+              sequence(:slug) { |n| "a-\#{n}" }
+              user
+              email
+              archived
+              editor factory: :user
+              transient do
+                word_count { 3 }
+              end
+              body do
+                "x" * word_count
+              end
+              after(:create) { |article| article.touch }
+              trait :archived do
+                state { "live" }
+                notes do
+                  "n"
+                end
+              end
+              factory :featured_article do
+                rank { 1 }
+              end
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        test_data[:factory_names] = { "spec/factories/articles.rb" => %w[article featured_article], "spec/factories/users.rb" => %w[user] }
+        test_data[:factory_traits] = { "spec/factories/articles.rb" => %w[archived] }
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include(<<~TEXT.chomp)
+          - **spec/factories/articles.rb** → `:article`
+            - `title`
+            - `author`
+            - `slug`
+            - `user`
+            - `email`
+            - `editor`
+            - `word_count` (transient)
+            - `body`
+            - trait `:archived`
+              - `state`
+              - `notes`
+            - factory `:featured_article`
+              - `rank`
+        TEXT
+      end
     end
 
     it "shows test helper setup" do

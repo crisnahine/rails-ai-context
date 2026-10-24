@@ -30,7 +30,7 @@ module RailsAiContext
       def self.choose(root)
         search_path = RailsAiContext::DatabaseYml.schema_search_path(root)
         user_schema = RailsAiContext::DatabaseYml.user_schema(root)
-        version = PgNaming.rails_version(root)
+        version = RailsVersion.of(root)
         return from_tables({}, source: :none, path: nil) if RailsAiContext::AppKind.sequel_schema(root)
 
         candidates = SchemaDumpPath.candidates(root)
@@ -323,6 +323,8 @@ module RailsAiContext
           schema[:tables][current]&.dig(:columns)&.push(column_entry(event)) if current
         when :index
           schema[:tables][current]&.dig(:indexes)&.push(index_entry(event)) if current
+        when :timestamps
+          add_timestamps(schema[:tables][current], event, schema[:stamp]) if current
         when :unread_call
           SchemaConventions.note_unread_call(schema[:tables][current], event[:name]) if current
         when :add_index
@@ -368,7 +370,19 @@ module RailsAiContext
       end
 
       def index_entry(event)
-        { columns: event[:columns].map(&:to_s), options: event[:options] || {} }
+        { columns: event[:columns].map(&:to_s), options: event[:options] || {}, string_key: (true if event[:string_key]) }.compact
+      end
+
+      # TableDefinition#timestamps: two datetime columns, each indexed when index: says so. Schema[4.2]
+      # runs Compatibility::V4_2, which allows NULL.
+      def add_timestamps(table, event, version)
+        return unless table
+
+        options = event[:options] || {}
+        SchemaConventions.timestamps_columns(options, version: SchemaConventions.version_parts(version)).each do |stamp|
+          table[:columns] << column_entry(event.merge(name: stamp[:name], column_type: stamp[:type], options: options.except(:index).merge(null: stamp.fetch(:null, true))))
+          table[:indexes] << { columns: [ stamp[:name] ], options: options[:index].is_a?(Hash) ? options[:index] : {} } if options[:index]
+        end
       end
 
       # A reference declares the foreign key column, not a column of its own name.

@@ -97,4 +97,22 @@ RSpec.describe RailsAiContext::Introspectors::ActionMailboxIntrospector do
       FileUtils.rm_rf(dir)
     end
   end
+
+  # A computed acronym never reaches the static run; the file still declares the constant Zeitwerk loads.
+  it "names a mailbox and the route to it from the class its file declares when the acronym is computed" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+      FileUtils.mkdir_p(File.join(dir, "app", "mailboxes"))
+      File.write(File.join(dir, "config", "initializers", "inflections.rb"),
+                 "ActiveSupport::Inflector.inflections(:en) do |inflect|\n  %w[API SMS].each { |a| inflect.acronym a }\nend\n")
+      File.write(File.join(dir, "app", "mailboxes", "application_mailbox.rb"),
+                 "class ApplicationMailbox < ActionMailbox::Base\n  routing(/^sms@/i => :sms)\n  routing(/^gone@/i => :gone)\nend\n")
+      File.write(File.join(dir, "app", "mailboxes", "sms_mailbox.rb"), "class SMSMailbox < ApplicationMailbox\nend\n")
+
+      result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call[:action_mailbox]
+
+      expect(result[:routes].map { |r| r[:mailbox] }).to eq(%w[SMSMailbox GoneMailbox])
+      expect(result[:mailboxes].map { |m| m.slice(:name, :routed_from) }).to eq([ { name: "SMSMailbox", routed_from: [ "/^sms@/i" ] } ])
+    end
+  end
 end

@@ -129,7 +129,7 @@ module RailsAiContext
       # the `app/serializers` the classes above already came from.
       def other_serializer_dirs
         PathResolver.dirs_for(root, "app")
-          .flat_map { |tree| Dir.glob(File.join(tree, "**", "serializers")) }
+          .flat_map { |tree| PathResolver.glob(tree, "**/serializers") }
           .select { |path| File.directory?(path) }
           .map { |path| path.sub("#{root}/", "") }
           .reject { |relative| PathResolver.dirs_for(root, "app/serializers").include?(File.join(root, relative)) }
@@ -250,10 +250,10 @@ module RailsAiContext
       # A Grape app keeps its versions outside app/controllers (lib/api/v3, app/api/v1).
       def version_dirs
         dirs = RailsAiContext::PathResolver.controller_dirs(root)
-          .flat_map { |controllers_dir| Dir.glob(File.join(controllers_dir, "api/v*/")) }
-        dirs += Dir.glob(File.join(root, "{app,lib}/api/v*/"))
+          .flat_map { |controllers_dir| PathResolver.glob(controllers_dir, "api/v[0-9]*/") }
+        dirs += PathResolver.glob(root, "{app,lib}/api/v[0-9]*/")
         # A directory holding only a spec or assets versions no code.
-        dirs.select { |dir| Dir.glob(File.join(dir, "**", "*.rb")).any? }.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
+        dirs.select { |dir| Dir.glob("**/*.rb", base: dir).any? }.map { |path| path.chomp("/").sub("#{root}/", "") }.uniq.sort
       end
 
       # Where apps keep a spec: rswag's swagger/, a docs site, public/ for a served spec,
@@ -475,9 +475,9 @@ module RailsAiContext
         return nil unless Dir.exist?(graphql_dir)
 
         details = {}
-        details[:resolvers] = Dir.glob(File.join(graphql_dir, "**", "*resolver*")).map { |f| File.basename(f, ".rb").camelize }
-        details[:subscriptions] = Dir.glob(File.join(graphql_dir, "**", "subscriptions", "*.rb")).map { |f| File.basename(f, ".rb").camelize }
-        details[:dataloaders] = Dir.glob(File.join(graphql_dir, "**", "{loaders,dataloaders}", "*.rb")).map { |f| File.basename(f, ".rb").camelize }
+        details[:resolvers] = Dir.glob("**/*resolver*.rb", base: graphql_dir).map { |f| File.basename(f, ".rb").camelize }
+        details[:subscriptions] = Dir.glob("**/subscriptions/*.rb", base: graphql_dir).map { |f| File.basename(f, ".rb").camelize }
+        details[:dataloaders] = Dir.glob("**/{loaders,dataloaders}/*.rb", base: graphql_dir).map { |f| File.basename(f, ".rb").camelize }
         details.reject { |_, v| v.empty? }
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_graphql_details")

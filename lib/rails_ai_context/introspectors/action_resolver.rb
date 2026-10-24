@@ -67,16 +67,6 @@ module RailsAiContext
         Array(methods).select { |m| owner_name(m) == expected }
       end
 
-      # The class's own public instance methods - the source-tier reading of
-      # "actions". `skip_underscored` drops framework-shaped names.
-      def own_actions(methods, class_name:, skip_underscored: true)
-        names = own_methods(methods, class_name)
-          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
-          .map { |m| m[:name] }
-        names = names.reject { |name| name.start_with?("_") } if skip_underscored
-        names.sort
-      end
-
       # A method an action callback names is a filter, and a predicate or bang name returns
       # something other than a message; both tiers subtract them here so they agree.
       def deliverable_actions(actions, filters)

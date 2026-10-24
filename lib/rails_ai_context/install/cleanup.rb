@@ -2,6 +2,7 @@
 
 require "fileutils"
 require "set"
+require_relative "../safe_file"
 
 module RailsAiContext
   module Install
@@ -27,14 +28,14 @@ module RailsAiContext
       # @param keeping [Array<Symbol>] the tools still selected, whose files
       #   must survive even when a dropped tool names the same path
       # @param root [String, Pathname] project root
-      # @return [Hash] { removed: [paths], trimmed: [paths], kept: [paths], failed: [paths] }.
-      #   A directory carries a trailing slash. `trimmed` files lost their
-      #   managed block and kept the user's lines; `kept` files hold nothing
-      #   this gem generated. rm swallows its errors, so a path is only
-      #   reported removed once it is gone.
+      # @return [Hash] an #outcome, each bucket a list of paths; a directory
+      #   carries a trailing slash. `trimmed` files lost their managed block
+      #   and kept the user's lines; `kept` files hold nothing this gem
+      #   generated; `linked` ones hold the gem's files behind a link it does
+      #   not follow.
       def remove(tools:, keeping:, root:)
         kept = Array(keeping).flat_map { |key| AiTool.find(key)&.context_paths || [] }.to_set
-        outcome = { removed: [], trimmed: [], kept: [], failed: [] }
+        result = outcome
 
         Array(tools).each do |key|
           tool = AiTool.find(key) or next
@@ -42,15 +43,20 @@ module RailsAiContext
             next if kept.include?(relative)
 
             if File.directory?(File.join(root.to_s, relative))
-              remove_rule_files(tool, relative, root, outcome)
+              remove_rule_files(tool, relative, root, result)
             else
-              remove_generated(relative, root, outcome)
+              remove_generated(relative, root, result, kept)
             end
           end
         end
 
-        prune_emptied(outcome, root)
-        outcome
+        prune_emptied(result, root)
+        result
+      end
+
+      # An empty report of what a removal did.
+      def outcome
+        { removed: [], trimmed: [], kept: [], linked: [], failed: [] }
       end
 
       # What remove would take out for each of these tools: each rule file it
@@ -63,7 +69,7 @@ module RailsAiContext
         Array(tools).filter_map { |key| AiTool.find(key) }.to_h do |tool|
           paths = tool.context_paths.flat_map do |relative|
             full = File.join(root.to_s, relative)
-            next [] if File.symlink?(full)
+            next [] if File.symlink?(full) && (File.directory?(full) || !SafePath.inside?(full, root))
 
             if File.directory?(full)
               rule_file_names(tool, relative).map { |name| File.join(relative, name) }
@@ -100,10 +106,14 @@ module RailsAiContext
       private_class_method :prune_emptied
 
       # A symlink is somebody's own arrangement, and writing through one edits
-      # a file this run was not asked about.
+      # a file this run was not asked about, so a linked folder holding the
+      # gem's files is named as left.
       def remove_rule_files(tool, dir, root, outcome)
         full = File.join(root.to_s, dir)
-        return if File.symlink?(full)
+        if File.symlink?(full) || !SafePath.inside?(full, root)
+          outcome[:linked] << "#{dir}/" if rule_file_names(tool, dir).any? { |name| File.exist?(File.join(full, name)) }
+          return
+        end
 
         rule_file_names(tool, dir).each { |name| delete(File.join(dir, name), root, outcome) }
         return unless Dir.empty?(full)
@@ -123,34 +133,51 @@ module RailsAiContext
       private_class_method :rule_file_names
 
       # Bytes in, bytes out: the markers are ASCII, and the user's lines may not be valid UTF-8.
-      def remove_generated(relative, root, outcome)
+      # A link is trimmed through, as the writer writes through it, unless it
+      # leads to a file a kept tool owns; nothing is deleted through one.
+      def remove_generated(relative, root, outcome, kept)
         full = File.join(root.to_s, relative)
-        return unless File.file?(full) || File.symlink?(full)
-        return outcome[:kept] << relative if File.symlink?(full)
+        link = File.symlink?(full)
+        return unless File.file?(full) || link
+        return outcome[:kept] << relative if link && (!File.file?(full) || kept.include?(linked_path(full, root)))
 
         content = File.binread(full)
         rest = content.gsub(MANAGED_BLOCK, "")
         # The writer puts one blank line under a block it prepends to a file that was already there.
         rest = rest.sub(/\A\r?\n/, "") if content.start_with?(BEGIN_MARKER)
         if rest == content
-          content.match?(GENERATED_LINE) ? delete(relative, root, outcome) : outcome[:kept] << relative
-        elsif rest.strip.empty?
+          return outcome[:kept] << relative unless content.match?(GENERATED_LINE)
+
+          link ? outcome[:linked] << relative : delete(relative, root, outcome)
+        elsif rest.strip.empty? && !link
           delete(relative, root, outcome)
         else
-          File.binwrite(full, rest)
+          SafeFile.atomic_write(full, rest, root: root)
           outcome[:trimmed] << relative
         end
+      rescue SafeFile::LinkedOut
+        outcome[:linked] << relative
       rescue SystemCallError
         outcome[:failed] << relative
       end
       private_class_method :remove_generated
 
+      # The root-relative path a link leads to.
+      def linked_path(full, root)
+        File.realpath(full).delete_prefix(SafePath.dir_prefix(SafePath.canonical(root)))
+      end
+      private_class_method :linked_path
+
       def delete(relative, root, outcome)
         full = File.join(root.to_s, relative)
         return unless File.file?(full) && !File.symlink?(full)
 
-        FileUtils.rm_f(full)
-        (File.exist?(full) ? outcome[:failed] : outcome[:removed]) << relative
+        SafeFile.delete(full, root: root)
+        outcome[:removed] << relative
+      rescue SafeFile::LinkedOut
+        outcome[:linked] << relative
+      rescue SystemCallError
+        outcome[:failed] << relative
       end
       private_class_method :delete
     end

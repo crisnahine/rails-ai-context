@@ -116,9 +116,10 @@ module RailsAiContext
           content = serialize(fmt)
 
           if fmt == :json
-            write_plain(filepath, content, result)
+            write_plain(filepath, content, result, output_dir)
           else
-            SectionMarkerWriter.report(SectionMarkerWriter.write_with_markers(filepath, content), filepath, result)
+            outcome = SectionMarkerWriter.write_with_markers(filepath, content, root: output_dir)
+            SectionMarkerWriter.report(outcome, filepath, result)
           end
         end
 
@@ -135,13 +136,15 @@ module RailsAiContext
       end
 
       # JSON and other formats that don't support HTML comments
-      def write_plain(filepath, content, result)
+      def write_plain(filepath, content, result, root)
         if File.exist?(filepath) && same_payload?(File.read(filepath), content)
           result[:skipped] << filepath
         else
-          RailsAiContext::SafeFile.atomic_write(filepath, content)
+          RailsAiContext::SafeFile.atomic_write(filepath, content, root: root)
           result[:written] << filepath
         end
+      rescue RailsAiContext::SafeFile::LinkedOut
+        result[:not_applicable][filepath] = RailsAiContext::SafeFile::LINKED
       end
 
       # The JSON carries the run's own timestamp, so a run that found nothing

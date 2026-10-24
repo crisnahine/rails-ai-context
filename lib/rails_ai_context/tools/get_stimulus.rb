@@ -242,6 +242,11 @@ module RailsAiContext
         lines.join("\n")
       end
 
+      # Stimulus's own dasherize: a dash before every capital, so `apiURL` is `api-u-r-l`.
+      private_class_method def self.dasherize(name)
+        name.to_s.gsub(/[A-Z]/) { "-#{::Regexp.last_match(0).downcase}" }
+      end
+
       private_class_method def self.generate_html_attrs(ctrl)
         # Stimulus uses dashes in HTML, underscores only in filenames
         html_name = ctrl[:name].tr("_", "-")
@@ -253,15 +258,13 @@ module RailsAiContext
         end
 
         (ctrl[:values] || {}).each do |k, _v|
-          # Convert camelCase to kebab-case for HTML attribute
-          kebab = k.to_s.gsub(/([a-z])([A-Z])/, '\1-\2').downcase
-          attrs << "data-#{html_name}-#{kebab}-value=\"...\""
+          attrs << "data-#{html_name}-#{dasherize(k)}-value=\"...\""
         end
 
         # A class or an outlet the controller reads throws "Missing attribute"
         # without its attribute, so the markup carries one for each.
         (ctrl[:classes] || []).each do |name|
-          attrs << "data-#{html_name}-#{name.to_s.gsub(/([a-z\d])([A-Z])/, '\1-\2').downcase}-class=\"...\""
+          attrs << "data-#{html_name}-#{dasherize(name)}-class=\"...\""
         end
         (ctrl[:outlets] || []).each do |name|
           attrs << "data-#{html_name}-#{name}-outlet=\"...\""

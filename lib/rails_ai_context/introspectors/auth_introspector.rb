@@ -224,11 +224,12 @@ module RailsAiContext
       # itself; one under a condition (`if ENV[...]`) depends on the environment, so it is left out.
       def concern_devise_modules(model_name, mixins)
         Array(mixins).select { |mixin| mixin[:ancestor] }.flat_map do |mixin|
-          source = ConcernPaths.module_source(root, mixin[:name], prefer: "model", within: model_name)
-          next [] unless source&.include?("devise")
+          ConcernPaths.included_sources(root, mixin[:name], prefer: "model", within: model_name).flat_map do |source|
+            next [] unless source.include?("devise")
 
-          # Keyed by source: which file a name resolves to depends on the including model.
-          (@concern_devise ||= {})[source] ||= unconditional_devise_modules(source)
+            # Keyed by source: which file a name resolves to depends on the including model.
+            (@concern_devise ||= {})[source] ||= unconditional_devise_modules(source)
+          end
         end
       end
 

@@ -78,12 +78,38 @@ module RailsAiContext
       end
 
       # deferrable: false is the default the dump leaves out.
-      def unique_constraint_entry(name, columns, deferrable)
+      def unique_constraint_entry(name, columns, deferrable, nulls_not_distinct = nil)
         {
           name: name&.to_s,
           columns: Array(columns).map(&:to_s),
-          deferrable: (deferrable.to_s if deferrable)
+          deferrable: (deferrable.to_s if deferrable),
+          nulls_not_distinct: (true if nulls_not_distinct == true)
         }.compact
+      end
+
+      # Rails' own bookkeeping tables. ar_internal_metadata.key ends in "key": counted as a secret,
+      # it would refuse every statement whose text holds the word "key".
+      BOOKKEEPING_TABLES = %w[ar_internal_metadata schema_migrations].freeze
+
+      # Whether SchemaDumper#ignored? skips the table: a bookkeeping name, bare or with the booted
+      # app's table_name_prefix and suffix. Any other name, schema_migrations_archive too, is dumped.
+      def bookkeeping_table?(name)
+        return BOOKKEEPING_TABLES.include?(name) if RailsAiContext.static_tier? || !defined?(ActiveRecord::Base)
+
+        base = ActiveRecord::Base
+        [ base.schema_migrations_table_name, base.internal_metadata_table_name ].any? do |bare|
+          name == bare || name == "#{base.table_name_prefix}#{bare}#{base.table_name_suffix}"
+        end
+      end
+
+      # Rails' name for an unnamed check constraint (check_constraint_name, 7.0 to 8.1).
+      def check_constraint_name(table, expression)
+        "chk_rails_#{Digest::SHA256.hexdigest("#{table}_#{expression}_chk")[0, 10]}"
+      end
+
+      # Rails' name for an unnamed unique constraint (unique_constraint_name, 7.1 to 8.1).
+      def unique_constraint_name(table, columns)
+        "uniq_rails_#{Digest::SHA256.hexdigest("#{table}_#{Array(columns).join("_and_")}_unique")[0, 10]}"
       end
 
       # Rails' limit before it shortens an index name (max_index_name_size).
@@ -174,6 +200,11 @@ module RailsAiContext
       # A reference declares the foreign key column, not a column of its own name.
       def reference_column_name(name)
         "#{name}_id"
+      end
+
+      # [major, minor] of a `Migration[7.1]` or `Schema[7.1]` version, the shape the version: options here take.
+      def version_parts(text)
+        text.to_s.split(".").map(&:to_i) if text
       end
 
       # TableDefinition#timestamps and add_timestamps (7.0 and 8.1): NOT NULL

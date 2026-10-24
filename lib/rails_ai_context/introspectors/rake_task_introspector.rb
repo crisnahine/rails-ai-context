@@ -15,9 +15,9 @@ module RailsAiContext
       def call
         rakefile = RAKEFILES.map { |name| File.join(root, name) }.find { |path| File.file?(path) }
         sources = [ rakefile ].compact
-        sources += Dir.glob(File.join(root, "lib/tasks", "**/*.rake")).sort
+        sources += PathResolver.glob(root, "lib/tasks/**/*.rake").sort
         # Rake imports rakelib/*.rake, one level only.
-        sources += Dir.glob(File.join(root, "rakelib", "*.rake")).sort
+        sources += PathResolver.glob(root, "rakelib/*.rake").sort
 
         {
           tasks: merge_by_name(sources.flat_map { |path| parse_rake_file(path) }),
@@ -72,7 +72,7 @@ module RailsAiContext
         dir = File.join(root, "lib", "templates")
         return [] unless File.directory?(dir) && SafePath.contained?(File.realpath(dir), File.realpath(root))
 
-        Dir.glob(File.join(dir, "**", "*")).sort.filter_map do |path|
+        PathResolver.glob(dir, "**/*").sort.filter_map do |path|
           next unless File.file?(path) && SafePath.contained?(File.realpath(path), File.realpath(root))
 
           relative = path.delete_prefix("#{dir}/")

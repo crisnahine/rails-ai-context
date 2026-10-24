@@ -6,30 +6,40 @@ module RailsAiContext
       # Detects schema.rb DSL patterns via Prism AST: create_table, t.string, t.index,
       # add_foreign_key, create_enum, create_view, create_virtual_table, and a table the dumper skipped
       class SchemaDslListener < BaseListener
-        # Whether a `t` receiver is a table: `Tag.find_each { |t| t.update! }` binds
-        # `t` to a record. A receiverless block is a table helper's, a def's `t` a helper's argument.
+        # Whether a block parameter is the table a block yields: `Tag.find_each { |t| t.update! }` binds
+        # `t` to a record. A receiverless block's `t` is a table helper's, a def's `t` a helper's argument;
+        # any other name is a table only as a table block's own parameter (`create_table :a do |table|`).
         module TableBlock
           TABLE_BLOCKS = %i[create_table change_table create_join_table].to_set.freeze
+          Block = Struct.new(:location, :names, :table_call, :own_param)
 
           private
 
           # The dispatcher enters a block's call before anything inside it.
           def note_block(node)
-            params = node.block.is_a?(Prism::BlockNode) && node.block.parameters.is_a?(Prism::BlockParametersNode) &&
-                     node.block.parameters.parameters
-            return unless params
+            names = case (params = node.block.parameters if node.block.is_a?(Prism::BlockNode))
+            when Prism::BlockParametersNode then params.parameters&.requireds&.filter_map { |param| param.name if param.respond_to?(:name) }
+            when Prism::NumberedParametersNode then [ :_1 ]
+            when Prism::ItParametersNode then [ :it ]
+            end
+            return unless names
 
-            names = params.requireds.filter_map { |param| param.name if param.respond_to?(:name) }
-            table = node.receiver.nil? || TABLE_BLOCKS.include?(node.name)
-            (@blocks ||= []) << [ node.block.location, names, table ]
+            own_param = TABLE_BLOCKS.include?(node.name)
+            (@blocks ||= []) << Block.new(node.block.location, names, node.receiver.nil? || own_param, own_param)
           end
 
-          def table_param?(receiver)
-            offset = receiver.location.start_offset
-            _, _, table = Array(@blocks).reverse_each.find do |location, names, _|
-              names.include?(receiver.name) && offset.between?(location.start_offset, location.end_offset)
+          def table_receiver?(receiver)
+            case receiver
+            when Prism::CallNode then receiver.name == :t && receiver.receiver.nil?
+            when Prism::LocalVariableReadNode, Prism::ItLocalVariableReadNode
+              name = receiver.is_a?(Prism::ItLocalVariableReadNode) ? :it : receiver.name
+              offset = receiver.location.start_offset
+              block = Array(@blocks).reverse_each.find do |b|
+                b.names.include?(name) && offset.between?(b.location.start_offset, b.location.end_offset)
+              end
+              name == :t ? block.nil? || block.table_call : block&.own_param == true
+            else false
             end
-            table.nil? || table
           end
         end
 
@@ -85,9 +95,11 @@ module RailsAiContext
             extract_index(node)
           elsif check_constraint_call?(node)
             extract_check_constraint(node)
-          elsif node.name == :unique_constraint && receiver_is_t?(node.receiver)
+          elsif node.name == :unique_constraint && table_receiver?(node.receiver)
             extract_unique_constraint(node)
-          elsif receiver_is_t?(node.receiver) && !read_elsewhere?(node.name)
+          elsif node.name == :timestamps && table_receiver?(node.receiver)
+            @results << { type: :timestamps, options: extract_keyword_options(node), location: node.location.start_line }
+          elsif table_receiver?(node.receiver) && !read_elsewhere?(node.name)
             unread_call(node)
           end
         end
@@ -252,7 +264,7 @@ module RailsAiContext
         end
 
         def check_constraint_call?(node)
-          node.name == :check_constraint && receiver_is_t?(node.receiver)
+          node.name == :check_constraint && table_receiver?(node.receiver)
         end
 
         def extract_check_constraint(node)
@@ -279,22 +291,11 @@ module RailsAiContext
 
         def column_call?(node)
           return false unless node.name == :column || COLUMN_TYPES.include?(node.name.to_s)
-          receiver_is_t?(node.receiver)
+          table_receiver?(node.receiver)
         end
 
         def index_call?(node)
-          node.name == :index && receiver_is_t?(node.receiver)
-        end
-
-        def receiver_is_t?(receiver)
-          case receiver
-          when Prism::CallNode
-            receiver.name == :t && receiver.receiver.nil?
-          when Prism::LocalVariableReadNode
-            receiver.name == :t && table_param?(receiver)
-          else
-            false
-          end
+          node.name == :index && table_receiver?(node.receiver)
         end
 
         # `t.references :a, :b` defines each name; primary_key's second argument is its type.
@@ -303,12 +304,18 @@ module RailsAiContext
           braced, positional = (node.arguments&.arguments || []).reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
                                                                  .partition { |arg| arg.is_a?(Prism::HashNode) }
           # TableDefinition#column(name, type): a type with no method of its own, as MySQL dumps enum('a','b').
-          column_type = node.name == :column ? literal_string(positional[1]) : node.name.to_s
+          column_type = case node.name
+          when :column then literal_string(positional[1])
+          # TableDefinition#primary_key(name, type = :primary_key) makes a key column of that type.
+          when :primary_key then positional[1] ? literal_string(positional[1]) : "primary_key"
+          else node.name.to_s
+          end
           positional = positional.first(1) if node.name == :primary_key || node.name == :column
           names = positional.map { |arg| literal_string(arg) }
           return unread_call(node) if names.empty? || names.any?(&:nil?) || column_type.nil?
 
           options = braced.map { |hash| hash_node_to_hash(hash) }.reduce(extract_keyword_options(node), :merge)
+          options[:primary_key] = true if node.name == :primary_key
           virtual = node.name == :virtual
           options[:enum_type] = local_name(options[:enum_type]) if options[:enum_type].is_a?(String)
           # A generated column takes its own type from type: (each adapter's virtual, 7.0 to 8.1).

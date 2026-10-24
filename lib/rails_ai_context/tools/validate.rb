@@ -62,6 +62,8 @@ module RailsAiContext
         return text_response("Too many files (#{files.size}). Maximum is #{max_files} per call.") if files.size > max_files
         return text_response("Unknown level: '#{echo_input(level)}'. Valid values: #{VALID_LEVELS.join(', ')}") unless VALID_LEVELS.include?(level)
 
+        # Every check below keys on the path as written from the Rails root.
+        files = files.map { |file| file.is_a?(String) ? root_relative(file) : file }
         results = []
         passed = 0
         total = 0

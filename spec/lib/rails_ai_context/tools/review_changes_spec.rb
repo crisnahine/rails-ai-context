@@ -81,6 +81,25 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       end
     end
 
+    describe "the context a namespaced file gets" do
+      def context_for(file, type)
+        described_class.send(:gather_file_context, file, type, Rails.root.to_s, "HEAD").join("\n")
+      end
+
+      it "shows a namespaced controller's own routes, not the top-level one's" do
+        expect(context_for("app/controllers/posts_controller.rb", :controller)).to include("**Routes:**")
+        expect(context_for("app/controllers/admin/posts_controller.rb", :controller)).not_to include("**Routes:**")
+      end
+
+      it "names the model the file defines, with its namespace" do
+        allow(described_class).to receive(:cached_context)
+          .and_return({ models: { "Post" => { file: "app/models/post.rb" }, "Admin::Post" => { file: "app/models/admin/post.rb" } } })
+
+        expect(context_for("app/models/admin/post.rb", :model)).to include("**Model context:** Admin::Post")
+        expect(context_for("app/models/concerns/taggable.rb", :model)).not_to include("**Model context:**")
+      end
+    end
+
     # git reads an argument that starts with a dash as an option, and
     # `git diff --output=<path>` writes the diff to that path.
     it "refuses a ref git would read as an option, and writes nothing" do
@@ -163,6 +182,194 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         text = described_class.call(ref: "HEAD").content.first[:text]
 
         expect(text).not_to include("Removed validation")
+      end
+    end
+
+    describe "a review of changes in a real repository" do
+      def git(*args)
+        out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+                                      *args, chdir: @dir)
+        raise out unless status.success?
+
+        out
+      end
+
+      def write(path, body)
+        FileUtils.mkdir_p(File.dirname(File.join(@dir, path)))
+        File.write(File.join(@dir, path), body)
+      end
+
+      around do |example|
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          write("app/models/post.rb", "class Post < ApplicationRecord\n  validates :title, presence: true\nend\n")
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          example.run
+        end
+      end
+
+      before { allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@dir))) }
+
+      it "reviews a file's staged change beside its unstaged one, as git diff HEAD shows them" do
+        write("app/models/post.rb", "class Post < ApplicationRecord\nend\n")
+        git("add", "app/models/post.rb")
+        File.write(File.join(@dir, "app/models/post.rb"), "  # note\n", mode: "a")
+
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).to include("**Removed validation**: `app/models/post.rb` - `validates :title, presence: true`")
+        expect(text).to include("+1 / -1 lines")
+        expect(text).to include("-  validates :title, presence: true")
+      end
+
+      it "reports a removed validates_*_of line, and reads one rewritten as validates as kept" do
+        write("app/models/post.rb", "class Post < ApplicationRecord\n  validates_presence_of :title\n  validates_uniqueness_of :slug\nend\n")
+        git("commit", "-q", "-am", "macros")
+        write("app/models/post.rb", "class Post < ApplicationRecord\n  validates :slug, uniqueness: true\nend\n")
+        git("commit", "-q", "-am", "drop title")
+
+        warnings = described_class.call(ref: "HEAD~1").content.first[:text].lines.grep(/Removed validation/).map(&:strip)
+
+        expect(warnings).to eq([ "- **Removed validation**: `app/models/post.rb` - `validates_presence_of :title`" ])
+      end
+
+      it "reads a removed method named validate_something as no validation" do
+        write("app/models/post.rb", <<~RUBY)
+          class Post < ApplicationRecord
+            validate :check_owner
+            def validate_email(value)
+              result = validate_input value
+              validate_signature(result)
+            end
+          end
+        RUBY
+        git("commit", "-q", "-am", "methods")
+        write("app/models/post.rb", "class Post < ApplicationRecord\nend\n")
+        git("commit", "-q", "-am", "drop them")
+
+        warnings = described_class.call(ref: "HEAD~1").content.first[:text].lines.grep(/Removed validation/).map(&:strip)
+
+        expect(warnings).to eq([ "- **Removed validation**: `app/models/post.rb` - `validate :check_owner`" ])
+      end
+
+      it "counts a controller as tested only by a changed test of its own" do
+        { "app/controllers/posts_controller.rb" => "spec/requests/reposts_spec.rb",
+          "app/controllers/admin/tags_controller.rb" => "spec/requests/tags_spec.rb",
+          "app/controllers/admin/users_controller.rb" => "spec/requests/admin/users_spec.rb",
+          "app/controllers/orders_controller.rb" => "test/controllers/orders_controller_test.rb",
+          "app/controllers/users_controller.rb" => "spec/models/user_spec.rb" }.each do |controller, test|
+          write(controller, "class C < ApplicationController\nend\n")
+          write(test, "# test\n")
+        end
+        git("add", "-A")
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/No test changes/).map(&:strip)
+
+        expect(warnings).to contain_exactly(
+          "- **No test changes**: `app/controllers/posts_controller.rb` was modified but no corresponding test file was changed",
+          "- **No test changes**: `app/controllers/admin/tags_controller.rb` was modified but no corresponding test file was changed",
+          "- **No test changes**: `app/controllers/users_controller.rb` was modified but no corresponding test file was changed"
+        )
+      end
+
+      it "counts the routing and request specs rspec-rails generators write for a controller" do
+        { "app/controllers/posts_controller.rb" => "spec/routing/posts_routing_spec.rb",
+          "app/controllers/comments_controller.rb" => "spec/requests/comments_request_spec.rb",
+          "app/controllers/tags_controller.rb" => "spec/requests/tags_spec.rb" }.each do |controller, test|
+          write(controller, "class C < ApplicationController\nend\n")
+          write(test, "# test\n")
+        end
+        git("add", "-A")
+
+        expect(described_class.call(ref: "HEAD").content.first[:text]).not_to include("No test changes")
+      end
+
+      it "counts a test under a namespace folder only for the controller in that namespace" do
+        { "app/controllers/posts_controller.rb" => "spec/controllers/admin/posts_controller_spec.rb",
+          "app/controllers/tags_controller.rb" => "spec/requests/api/v1/tags_spec.rb" }.each do |controller, test|
+          write(controller, "class C < ApplicationController\nend\n")
+          write(test, "# test\n")
+        end
+        git("add", "-A")
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/No test changes/).map(&:strip)
+
+        expect(warnings).to contain_exactly(
+          "- **No test changes**: `app/controllers/posts_controller.rb` was modified but no corresponding test file was changed",
+          "- **No test changes**: `app/controllers/tags_controller.rb` was modified but no corresponding test file was changed"
+        )
+      end
+
+      it "counts a changed test filed elsewhere whose described class is the controller" do
+        write("app/controllers/tags_controller.rb", "class TagsController < ApplicationController\nend\n")
+        write("spec/features/tag_editing_spec.rb", "RSpec.describe TagsController, type: :controller do\nend\n")
+        write("app/controllers/posts_controller.rb", "class PostsController < ApplicationController\nend\n")
+        write("spec/features/post_editing_spec.rb", "RSpec.describe \"PostsController\" do\nend\n")
+        git("add", "-A")
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/No test changes/).map(&:strip)
+
+        expect(warnings).to eq([
+          "- **No test changes**: `app/controllers/posts_controller.rb` was modified but no corresponding test file was changed"
+        ])
+      end
+
+      it "counts only an index on the key's own table that leads with the key" do
+        write("db/migrate/20260101000000_add_user_to_posts.rb", <<~RUBY)
+          class AddUserToPosts < ActiveRecord::Migration[8.0]
+            def change
+              add_column :posts, :user_id, :integer
+              add_column :posts, :author_id, :integer
+              add_column :posts, :editor_id, :integer
+              add_index :orders, :user_id
+              add_index :posts, :title, where: "author_id IS NOT NULL"
+              add_index "posts", ["editor_id", "created_at"]
+            end
+          end
+        RUBY
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/index\*\*:/).map(&:strip)
+
+        expect(warnings).to eq([
+          "- **Missing index**: `db/migrate/20260101000000_add_user_to_posts.rb` adds `user_id` without an index",
+          "- **Missing index**: `db/migrate/20260101000000_add_user_to_posts.rb` adds `author_id` without an index"
+        ])
+      end
+
+      it "counts a polymorphic key indexed behind its type column, as `t.references polymorphic: true` builds it" do
+        write("db/migrate/20260101000000_add_commentable_to_comments.rb", <<~RUBY)
+          class AddCommentableToComments < ActiveRecord::Migration[8.0]
+            def change
+              add_column :comments, :commentable_type, :string
+              add_column :comments, :commentable_id, :integer
+              add_column :comments, :author_id, :integer
+              add_index :comments, [:commentable_type, :commentable_id]
+              add_index :comments, [:post_type, :author_id]
+            end
+          end
+        RUBY
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/index\*\*:/).map(&:strip)
+
+        expect(warnings).to eq([
+          "- **Missing index**: `db/migrate/20260101000000_add_commentable_to_comments.rb` adds `author_id` without an index"
+        ])
+      end
+
+      it "reads each foreign key's index from its own statement, as ActiveRecord builds them" do
+        write("db/migrate/20260101000000_add_user_to_posts.rb",
+              "class AddUserToPosts < ActiveRecord::Migration[8.0]\n  def change\n    add_column :posts, :user_id, :integer\n    add_index :posts, :title\n  end\nend\n")
+        write("db/migrate/20260101000001_add_refs_to_orders.rb",
+              "class AddRefsToOrders < ActiveRecord::Migration[8.0]\n  def change\n    add_reference :orders, :user\n    add_reference :orders, :coupon,\n                  index: false\n  end\nend\n")
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/index\*\*:/).map(&:strip)
+
+        expect(warnings).to eq([
+          "- **Missing index**: `db/migrate/20260101000000_add_user_to_posts.rb` adds `user_id` without an index",
+          "- **Disabled index**: `db/migrate/20260101000001_add_refs_to_orders.rb` adds reference `coupon` with `index: false`"
+        ])
       end
     end
 
@@ -378,7 +585,7 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         expect(text).not_to include("MIIEow", "\e[")
       end
 
-      it "shows no line of a hunk it cannot read, such as a merge conflict's" do
+      it "filters a merge conflict's secrets in the change git diff HEAD shows for it" do
         write("config/fixtures/notes.txt", "a\n#{%(API_TOKEN = "#{token}")}\nb\n")
         git("add", "-A")
         git("commit", "-q", "-m", "notes")
@@ -388,9 +595,12 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         git("checkout", "-q", "-")
         write("config/fixtures/notes.txt", "a\n#{%(API_TOKEN = "#{token}y")}\nb\n")
         git("commit", "-q", "-am", "main")
-        Open3.capture2e("git", "merge", "other", chdir: @dir)
+        Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "merge", "other", chdir: @dir)
 
-        expect(described_class.call(ref: "HEAD").content.first[:text]).not_to include(token, "<<<<<<<")
+        text = described_class.call(ref: "HEAD").content.first[:text]
+
+        expect(text).to include("+<<<<<<< HEAD")
+        expect(text).not_to include(token)
       end
 
       # A removed `-- comment` reads `--- comment` in the diff, the shape of the file header.

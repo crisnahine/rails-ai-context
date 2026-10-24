@@ -226,12 +226,13 @@ module RailsAiContext
             lines = [ "# Routes Summary (#{count_label})", "" ]
 
             # Group sibling routes with identical verb patterns (e.g., bonus/*)
+            signatures = app_routes.to_h do |ctrl, actions|
+              [ ctrl, [ ctrl.include?("/") ? ctrl.split("/").first : nil, actions.size, actions.map { |r| r[:verb] }.sort.join(",") ] ]
+            end
+            siblings = signatures.values.tally
             grouped = app_routes.keys.sort.group_by do |ctrl|
-              actions = app_routes[ctrl]
-              namespace = ctrl.include?("/") ? ctrl.split("/").first : nil
-              verbs_sig = actions.map { |r| r[:verb] }.sort.join(",")
-              count_sig = actions.size
-              namespace && app_routes.count { |k, v| k.start_with?("#{namespace}/") && v.size == count_sig && v.map { |r| r[:verb] }.sort.join(",") == verbs_sig } > 2 ? "#{namespace}/*|#{count_sig}|#{verbs_sig}" : ctrl
+              signature = signatures[ctrl]
+              signature.first && siblings[signature] > 2 ? signature : ctrl
             end
 
             grouped.each do |_key, ctrls|
@@ -288,7 +289,7 @@ module RailsAiContext
               if ctrl != current_ctrl
                 current_ctrl = ctrl
                 # Camelizing the route key knows none of the app's acronyms,
-                # so `api/v1/ai_matches` missed `Api::V1::AIMatchesController`
+                # so `api/v1/html_pages` missed `Api::V1::HTMLPagesController`
                 # and that group printed no filters while its siblings did.
                 by_key = RailsAiContext::Payload.controller_for_route_key(ctx, ctrl)
                 ctrl_class = by_key ? by_key.first : "#{ctrl.camelize}Controller"
@@ -305,7 +306,7 @@ module RailsAiContext
                 lines << "## #{ctrl}#{ctrl_summary}"
               end
 
-              params = r[:path].scan(/:(\w+)/).flatten
+              params = RouteCoverage.path_params(r[:path])
               params_part = params.any? ? " [#{params.join(', ')}]" : ""
               helper_part = if r[:name]
                 args = params.any? ? "(#{params.map { |p| p == 'id' ? '@record' : ":#{p}" }.join(', ')})" : ""
@@ -341,7 +342,7 @@ module RailsAiContext
               path += " (`#{r[:condition]}`)" if r[:condition]
               cells = [ r[:verb], path, "#{r[:_ctrl]}##{r[:action]}", r[:name] || "-" ]
               # A merged verb is `PATCH|PUT`, and a bare pipe splits the row.
-              lines << "| #{cells.map { |cell| cell.to_s.gsub("|", "\\|") }.join(' | ')} |"
+              lines << "| #{cells.map { |cell| table_cell(cell) }.join(' | ')} |"
             end
             lines.concat(mounted_apps_lines(mounted_apps, controller ? [] : routes[:engine_routes], routes[:grape_endpoints]))
             lines << "" << GEM_DRAWN_NOTE if from_source

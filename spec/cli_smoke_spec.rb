@@ -377,6 +377,80 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    it "reads -h after the gem's own --json as the help flag, with no app to boot" do
+      Dir.mktmpdir do |dir|
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "schema", "--json", "-h", chdir: dir)
+
+        expect(status.exitstatus).to eq(0), err
+        expect(out).to start_with("rails_get_schema - ")
+      end
+    end
+
+    it "reads -h and -j after a value flag as that flag's value" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "application.rb"), "module Shop\n  class Application < Rails::Application\n  end\nend\n")
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n  # run with -j and -h flags\nend\n")
+
+        %w[-h -j].each do |flag|
+          out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "search_code", "--no-boot", "--pattern", flag, chdir: dir)
+
+          expect(status.exitstatus).to eq(0), err
+          expect(out).to include("app/models/user.rb"), "#{flag}: #{out}#{err}"
+        end
+      end
+    end
+
+    it "answers a failed boot as an envelope when a -j is left for the tool to read" do
+      Dir.mktmpdir do |dir|
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "search_code", "--exact-match", "-j", "--pattern", "User", chdir: dir)
+
+        expect(status.exitstatus).to eq(1), err
+        expect(err).to include("No Rails app found")
+        expect(JSON.parse(out)).to include("error" => true, "output" => a_string_including("stderr says why")), out
+      end
+    end
+
+    it "answers in text when the -j it read was a flag's value" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "module Shop\n  class Application < Rails::Application\n  end\nend\n")
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "search_code", "--pattern", "-j", "--bogus", "1", "--no-boot", chdir: dir)
+
+        expect(status.exitstatus).to eq(1), err
+        expect(out).to eq("")
+        expect(err).to include("'--bogus'")
+      end
+    end
+
+    it "answers each refusal with --json as one envelope on stdout, at exit 1" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"), "module Shop\n  class Application < Rails::Application\n  end\nend\n")
+
+        {
+          %w[search_code --pattern User --limt 5] => "did you mean '--limit'?",
+          %w[search_code --pattern] => "'--pattern' takes a string value",
+          %w[search_code --pattern User stray] => "'stray' is not a flag",
+          %w[shema] => "Did you mean 'schema'?"
+        }.each do |words, message|
+          out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", *words, "--no-boot", "--json", chdir: dir)
+
+          expect(status.exitstatus).to eq(1), "#{words.join(' ')}: #{err}"
+          expect(JSON.parse(out)).to include("error" => true, "output" => a_string_including(message)), "#{words.join(' ')}: #{out}#{err}"
+        end
+      end
+
+      Dir.mktmpdir do |empty|
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "schema", "--no-boot", "--json", chdir: empty)
+
+        expect(status.exitstatus).to eq(1), err
+        expect(JSON.parse(out)).to include("tool" => "schema", "error" => true)
+        expect(err).to include("No Rails app found")
+      end
+    end
+
     it "gives a retired tool name the help of its config section" do
       Dir.mktmpdir do |dir|
         out = `cd #{dir} && ruby -I #{lib} #{exe} tool gems --help 2>&1`

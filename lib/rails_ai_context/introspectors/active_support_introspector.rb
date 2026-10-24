@@ -51,34 +51,36 @@ module RailsAiContext
         sources.each do |dir, paths|
           rel_dir = dir.sub("#{root}/", "")
 
-          modules = paths.filter_map do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            # The constant the file declares, as rails_get_concern names it: Edition::Featurable
-            # and Featurable are two modules the basename would print alike.
-            mod_name = ConcernPaths.name_for(path, dir, content)
-            next if RailsAiContext::ConcernMembership.excluded?(mod_name)
+          modules = paths.flat_map do |path|
+            file_content = RailsAiContext::SafeFile.read(path) or next []
+            # The constants the file declares, as rails_get_concern names them: Shop::Taggable
+            # and Taggable are two modules the basename would print alike.
+            ConcernPaths.names_in(path, dir, file_content).filter_map do |mod_name|
+              next if RailsAiContext::ConcernMembership.excluded?(mod_name)
 
-            ast = SourceIntrospector.walk(path, {
-              concern_macros: -> { Listeners::GenericMacroListener.new(:included, :class_methods) }
-            })
-            hits = ast[:concern_macros]
+              content = DeclaredConstant.own_module_source(file_content, mod_name)
+              ast = SourceIntrospector.walk_source(content, {
+                concern_macros: -> { Listeners::GenericMacroListener.new(:included, :class_methods) }
+              })
+              hits = ast[:concern_macros]
 
-            entry = { name: mod_name, file: path.sub("#{root}/", "") }
-            # An app/models/concerns directory holds classes too - every
-            # validator in some apps - and a class is not a concern, let
-            # alone a "plain module".
-            declarations = DeclaredConstant.declarations(content, path_name: mod_name)
-            declared = declarations.find { |d| d.name.split("::").last.casecmp?(mod_name.split("::").last) }
-            if declared
-              entry[:kind] = "class"
-              entry[:superclass] = declared.superclass
+              entry = { name: mod_name, file: path.sub("#{root}/", "") }
+              # An app/models/concerns directory holds classes too - every
+              # validator in some apps - and a class is not a concern, let
+              # alone a "plain module".
+              declarations = DeclaredConstant.declarations(content, path_name: mod_name)
+              declared = declarations.find { |d| d.name.split("::").last.casecmp?(mod_name.split("::").last) }
+              if declared
+                entry[:kind] = "class"
+                entry[:superclass] = declared.superclass
+              end
+              validator = SuperclassChain.validator_base(content, name: mod_name, lookup: lookup)
+              entry[:validator] = validator if validator
+              entry[:uses_active_support_concern] = true if content.include?("ActiveSupport::Concern")
+              entry[:included_blocks] = hits.count { |h| h[:macro] == :included }
+              entry[:class_methods_block] = hits.any? { |h| h[:macro] == :class_methods }
+              entry
             end
-            validator = SuperclassChain.validator_base(content, name: mod_name, lookup: lookup)
-            entry[:validator] = validator if validator
-            entry[:uses_active_support_concern] = true if content.include?("ActiveSupport::Concern")
-            entry[:included_blocks] = hits.count { |h| h[:macro] == :included }
-            entry[:class_methods_block] = hits.any? { |h| h[:macro] == :class_methods }
-            entry
           end
           result[rel_dir] = Array(result[rel_dir]) + modules if modules.any?
         end
@@ -209,7 +211,7 @@ module RailsAiContext
           result[:tags] = { unavailable: StaticTier.unavailable_reason }
         elsif (config_logger = app.config.log_tags).is_a?(Array) && config_logger.any?
           result[:configured] = true
-          result[:tags] = config_logger.map(&:to_s)
+          result[:tags] = Confidence.log_tags(config_logger)
         end
 
         # Initializer pattern: Rails.logger = ActiveSupport::TaggedLogging.new(…)

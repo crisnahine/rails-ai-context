@@ -30,14 +30,16 @@ module RailsAiContext
         routes = []
         paths.each do |path|
           relative = path.delete_prefix("#{root}/")
-          results = SourceIntrospector.walk(path, { mailbox: Listeners::MailboxRoutingListener })[:mailbox]
+          source = SafeFile.read(path)
+          results = SourceIntrospector.walk(path, { mailbox: Listeners::MailboxRoutingListener }, source: source)[:mailbox]
 
           results.select { |r| r[:type] == :routing }.each do |r|
-            routes << { pattern: r[:pattern], mailbox: "#{r[:action].camelize}Mailbox", file: relative }
+            routes << { pattern: r[:pattern], mailbox: r[:action], file: relative }
           end
           next if path == File.join(dir, BASE_FILE)
 
-          entry = { name: path.delete_prefix("#{dir}/").delete_suffix(".rb").camelize, file: relative }
+          path_name = path.delete_prefix("#{dir}/").delete_suffix(".rb").camelize
+          entry = { name: source ? DeclaredConstant.resolve(source, path_name) : path_name, file: relative }
           callbacks = results.select { |r| r[:type] == :callback }.map { |r| { type: r[:callback_type], method: r[:method] } }
           entry[:callbacks] = callbacks if callbacks.any?
           mailboxes << entry
@@ -45,6 +47,12 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, nil, label: "extract_mailboxes")
         end
 
+        # The router constantizes "#{action.camelize}Mailbox", which Zeitwerk loads from <action>_mailbox.rb.
+        by_path = mailboxes.to_h { |m| [ File.join(root, m[:file]), m[:name] ] }
+        routes.each do |r|
+          action = r[:mailbox]
+          r[:mailbox] = by_path[File.join(dir, "#{action.underscore}_mailbox.rb")] || "#{action.camelize}Mailbox"
+        end
         mailboxes.each do |m|
           m[:routed_from] = routes.select { |r| r[:mailbox] == m[:name] }.map { |r| r[:pattern] }
         end

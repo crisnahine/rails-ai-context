@@ -84,4 +84,42 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ClassDefinitionListener
       "Rooted" => [], "Top" => %w[Admin]
     )
   end
+
+  # Inside `module Shop`, the Shop of `class Shop::Draft` is ::Shop, so Module.nesting in Draft is [Shop::Draft, Shop].
+  it "nests a compact path whose first segment names an enclosing scope under that scope" do
+    results = classes("module Shop\n  class Shop::Draft\n    class Line < Base; end\n  end\nend\n")
+
+    expect(results.to_h { |r| [ r[:name], r[:nesting] ] }).to eq("Shop::Draft" => %w[Shop], "Line" => %w[Shop::Draft Shop])
+  end
+
+  # Ruby tries Shop::Shop before ::Shop: Module.nesting in Line is [Shop::Shop::Draft::Line, Shop::Shop::Draft, Shop].
+  it "nests a compact path under the nearest constant declared above it" do
+    results = classes("module Shop\n  module Shop; end\n  class Shop::Draft\n    class Line < Base; end\n  end\nend\n")
+
+    expect(results.to_h { |r| [ r[:name], r[:nesting] ] }).to eq("Shop::Draft" => %w[Shop], "Line" => %w[Shop::Shop::Draft Shop])
+  end
+
+  # A constant write declares the constant as a module open does: Module.nesting in Line is [Shop::Shop::Draft::Line, Shop::Shop::Draft, Shop].
+  it "reads a compact path's first segment against a constant written above it" do
+    results = classes("module Shop\n  Shop = Class.new\n  class Shop::Draft\n    class Line < Base; end\n  end\nend\n")
+
+    expect(results.to_h { |r| [ r[:name], r[:nesting] ] }).to eq("Shop::Draft" => %w[Shop], "Line" => %w[Shop::Shop::Draft Shop])
+  end
+
+  # Ruby: Module.nesting in Line is [A::Shop::Draft::Line, A::Shop::Draft, A::B, A] after `Shop ||=` or `Shop, Mall =` in A.
+  it "reads a compact path's first segment against a constant an `||=` or a multiple assignment wrote" do
+    [ "Shop ||= Module.new", "Shop, Mall = Module.new, Module.new" ].each do |write|
+      results = classes("module A\n  #{write}\n  module B\n    class Shop::Draft < Base\n      class Line < Base; end\n    end\n  end\nend\n")
+
+      expect(results.find { |r| r[:name] == "Line" }[:nesting]).to eq(%w[A::Shop::Draft A::B A])
+    end
+  end
+
+  # Ruby: Module.nesting in Line is [V1::Users::Line, V1::Users, V1], and [Bar::M::Y::Line, Bar::M::Y, Foo] where Foo < Bar.
+  it "reads a compact path's first segment against the constant an `||=` that assigns nothing finds" do
+    results = classes("module V1\n  V1 ||= Module.new\n  class V1::Users\n    class Line; end\n  end\nend\n" \
+                      "class Bar\n  M = Module.new\nend\nclass Foo < Bar\n  M ||= Module.new\n  class M::Y\n    class Line; end\n  end\nend\n")
+
+    expect(results.select { |r| r[:name] == "Line" }.map { |r| r[:nesting] }).to eq([ %w[V1::Users V1], %w[Bar::M::Y Foo] ])
+  end
 end

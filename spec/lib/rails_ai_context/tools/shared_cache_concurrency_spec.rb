@@ -52,6 +52,49 @@ RSpec.describe "BaseTool shared caches under concurrency" do
 
       expect(errors).to be_empty
     end
+
+    # The env section's source scan reads every file in app, config and lib; a cold one
+    # must not hold the mutex every other tool's cached_context waits on.
+    it "computes a value kept beside the context outside the mutex" do
+      started = Queue.new
+      release = Queue.new
+      allow(RailsAiContext::Introspectors::EnvReferences).to receive(:scan).and_wrap_original do |original, root, &block|
+        next original.call(root) unless block
+
+        started << true
+        release.pop
+        {}
+      end
+      base.send(:cached_context)
+
+      scan = Thread.new { RailsAiContext::Tools::GetEnv.call(detail: "summary") }
+      started.pop
+      free = base::SHARED_CACHE[:mutex].try_lock
+      base::SHARED_CACHE[:mutex].unlock if free
+      release << true
+      scan.join
+
+      expect(free).to eq(true)
+    end
+
+    it "drops a value kept beside the context when the cache resets, and keeps none computed across a reset" do
+      calls = 0
+      allow(RailsAiContext::Introspectors::EnvReferences).to receive(:scan).and_wrap_original do |original, root, &block|
+        next original.call(root) unless block
+
+        calls += 1
+        base.reset_cache! if calls == 1
+        {}
+      end
+
+      # The first call reads twice: the reset drops its first read, and its second finds no fingerprint to keep it under.
+      3.times { RailsAiContext::Tools::GetEnv.call(detail: "summary") }
+      expect(calls).to eq(3)
+
+      base.reset_cache!
+      RailsAiContext::Tools::GetEnv.call(detail: "summary")
+      expect(calls).to eq(4)
+    end
   end
 
   describe "the session record" do
@@ -288,7 +331,7 @@ RSpec.describe "BaseTool shared caches under concurrency" do
     # The controller memoizes its transport on the class, so building one here
     # leaves it set for whatever runs next - and the example that asserts the
     # controller builds one then sees it already built.
-    after { RailsAiContext::McpController.reset_transport! }
+    after { RailsAiContext::McpEdge.reset_engine_transport! }
 
     it "serves concurrent requests on both transports without corrupting either cache" do
       base.reset_cache!
@@ -302,7 +345,7 @@ RSpec.describe "BaseTool shared caches under concurrency" do
           if i.even?
             middleware.call(rack_request("mw-#{i}").env)
           else
-            RailsAiContext::McpController.mcp_transport
+            RailsAiContext::McpEdge.engine_transport
             base.with_session("sse-#{i}") { base.send(:cached_context) }
           end
         rescue => e

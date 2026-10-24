@@ -110,6 +110,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    # SchemaDumper#ignored? skips the two bookkeeping names, bare or with the
+    # table_name_prefix and suffix, and dumps every other table.
+    it "lists a table whose name only starts with schema_migrations and hides the prefixed bookkeeping table" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:schema_migrations_archive, force: true) { |t| t.string :version }
+      connection.create_table(:app_schema_migrations_v1, id: false, force: true) { |t| t.string :version }
+      allow(ActiveRecord::Base).to receive(:table_name_prefix).and_return("app_")
+      allow(ActiveRecord::Base).to receive(:table_name_suffix).and_return("_v1")
+
+      tables = described_class.new(app).call[:tables]
+      expect(tables).to have_key("schema_migrations_archive")
+      expect(tables.keys).not_to include("app_schema_migrations_v1", "schema_migrations")
+      rows = RailsAiContext::DatabaseFamily.of(connection).row_estimates(connection).map { |row| row[:table] }
+      expect(rows).to include("schema_migrations_archive")
+      expect(rows).not_to include("app_schema_migrations_v1")
+    ensure
+      connection&.drop_table(:schema_migrations_archive, if_exists: true)
+      connection&.drop_table(:app_schema_migrations_v1, if_exists: true)
+    end
+
     # MySQL keeps a boolean default as 1; schema.rb and the static tier write true.
     it "spells a boolean column's default true or false, as schema.rb does" do
       connection = ActiveRecord::Base.connection
@@ -314,6 +334,79 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         end
       end
 
+      # Loading this schema.rb, ActiveRecord gives heroes created_at and updated_at
+      # (datetime, NOT NULL) and names the powers index index_powers_on_hero_id.
+      it "reads a hand-written schema.rb's t.timestamps and unnamed index as Rails loads them" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[7.1].define(version: 1) do
+              create_table "heroes" do |t|
+                t.string "name"
+                t.timestamps
+              end
+              create_table "powers" do |t|
+                t.bigint "hero_id"
+                t.string "name"
+                t.index ["hero_id"]
+                t.index "lower(name)"
+                t.timestamps null: true, index: true
+              end
+            end
+          RUBY
+
+          tables = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]
+
+          expect(tables["heroes"][:columns].drop(1)).to eq([
+            { name: "name", type: "string" },
+            { name: "created_at", type: "datetime", null: false },
+            { name: "updated_at", type: "datetime", null: false }
+          ])
+          expect(tables["powers"][:columns].map { |c| c[:name] }).to eq(%w[id hero_id name created_at updated_at])
+          expect(tables["powers"][:columns].last).not_to have_key(:null)
+          expect(tables["powers"][:indexes].map { |i| i[:name] })
+            .to eq(%w[index_powers_on_hero_id index_powers_on_lower_name index_powers_on_created_at index_powers_on_updated_at])
+        end
+      end
+
+      # The booted tier and the structure.sql reader give an expression index
+      # its name, columns and uniqueness, and no more.
+      it "gives an expression index from schema.rb the shape the other sources give" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "users", force: :cascade do |t|
+                t.string "email"
+                t.index "lower((email)::text)", name: "index_users_on_lower_email", unique: true
+              end
+            end
+          RUBY
+
+          indexes = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["users"][:indexes]
+
+          expect(indexes).to eq([ { name: "index_users_on_lower_email", columns: [ "lower((email)::text)" ], unique: true } ])
+        end
+      end
+
+      # ActiveRecord::Schema[4.2] runs Compatibility::V4_2, whose timestamps allow NULL; 5.0 makes them NOT NULL.
+      it "reads t.timestamps in a Schema[4.2] file as nullable, as its compatibility layer loads them" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[4.2].define(version: 1) do
+              create_table "heroes" do |t|
+                t.timestamps
+              end
+            end
+          RUBY
+
+          columns = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["heroes"][:columns]
+
+          expect(columns.drop(1)).to eq([ { name: "created_at", type: "datetime" }, { name: "updated_at", type: "datetime" } ])
+        end
+      end
+
       # `declared_tables` names what db/schema.rb declares on both tiers, and
       # a structure.sql app has no such list: the booted tier answers nil.
       it "names what db/schema.rb declares on the static tier" do
@@ -326,6 +419,29 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
           expect(result[:declared_tables]).to eq([ "users" ])
           expect(result[:declared_in]).to eq("db/schema.rb")
+        end
+      end
+
+      # The table list leaves out Rails' bookkeeping tables, so the declared list must too, or the
+      # summary reports schema_migrations as declared and missing from the database.
+      it "leaves the bookkeeping tables out of what db/schema.rb declares" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "schema_migrations", id: false do |t|
+                t.string "version", null: false
+              end
+              create_table "users" do |t|
+                t.string "email"
+              end
+            end
+          RUBY
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_schema_parse)
+
+          expect(result[:tables].keys).to eq([ "users" ])
+          expect(result[:declared_tables]).to eq([ "users" ])
         end
       end
 
@@ -378,6 +494,21 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           .to eq([ { name: "tags", type: "string", null: true, default: '["a", "b c"]', array: true } ])
       end
 
+      # Live PostgreSQL 16 columns and Rails 8.1.4's dump of them: numeric(5,0) reads precision 5 and no scale, which the
+      # dumper casts as DecimalWithoutScale; an array's elements go through the element type.
+      it "reads decimal and array defaults as the dumper casts them" do
+        columns = [ [ "sd", :decimal, 5, nil, "2.5", false ], [ "se", :decimal, 6, 2, "2.0", false ], [ "a1", :integer, nil, nil, "{1,NULL}", true ],
+                    [ "a2", :float, nil, nil, "{1,2.5}", true ], [ "a3", :decimal, 5, nil, "{2.5}", true ] ].map do |name, type, precision, scale, default, array|
+          double(name: name, type: type, null: true, default: default, default_function: nil, limit: nil, precision: precision, scale: scale,
+                 comment: nil, collation: nil, sql_type: type.to_s, array?: array)
+        end
+        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: columns, native_database_types: {}, primary_key: "id"))
+
+        defaults = introspector.send(:extract_columns, "la").to_h { |c| [ c[:name], c[:default] ] }
+
+        expect(defaults).to eq("sd" => "2", "se" => "2.0", "a1" => "[1, nil]", "a2" => "[1.0, 2.5]", "a3" => '["2"]')
+      end
+
       # PostgreSQL's dumper writes a function default, and leaves out only a serial column's own sequence.
       it "shows a function default as schema.rb does, a sequence default unless the column is serial" do
         columns = [ [ "id", "nextval('things_id_seq'::regclass)", true ], [ "code", "nextval('codes_seq'::regclass)", false ],
@@ -385,11 +516,38 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           double(name: name, type: :integer, null: false, default: nil, default_function: function, limit: nil, precision: nil,
                  scale: nil, comment: nil, collation: nil, sql_type: "integer", array?: false, serial?: serial)
         end
-        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: columns, native_database_types: {}))
+        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: columns, native_database_types: {}, primary_key: "id"))
 
         defaults = introspector.send(:extract_columns, "things").to_h { |c| [ c[:name], c[:default] ] }
 
         expect(defaults).to eq("id" => nil, "code" => %q(-> { "nextval('codes_seq'::regclass)" }), "token" => %q(-> { "gen_random_uuid()" }))
+      end
+
+      # PostgreSQL's dumper names a serial column serial, a bigint one bigserial, and a bigserial key the default key.
+      it "names a PostgreSQL serial column as schema.rb does" do
+        columns = [ [ "id", :integer, 8, true ], [ "n", :integer, 4, true ], [ "s", :integer, 2, true ], [ "b", :integer, 8, true ],
+                    [ "plain", :integer, 8, false ] ].map do |name, type, limit, serial|
+          double(name: name, type: type, null: false, default: nil, default_function: (serial ? "nextval('things_#{name}_seq'::regclass)" : nil),
+                 limit: limit, precision: nil, scale: nil, comment: nil, collation: nil, sql_type: limit == 8 ? "bigint" : "integer",
+                 array?: false, serial?: serial, bigint?: limit == 8)
+        end
+        connection = double("postgresql", columns: columns, native_database_types: { integer: { limit: 4 } }, primary_key: "id")
+        allow(introspector).to receive(:connection).and_return(connection)
+
+        types = introspector.send(:extract_columns, "things").to_h { |c| [ c[:name], c.values_at(:type, :limit).compact ] }
+
+        expect(types).to eq("id" => [ "bigint" ], "n" => [ "serial" ], "s" => [ "serial", 2 ], "b" => [ "bigserial" ], "plain" => [ "bigint" ])
+      end
+
+      it "names a bigserial in a composite key bigserial, as schema.rb does" do
+        columns = %w[shop_id id].map do |name|
+          double(name: name, type: :integer, null: false, default: nil, default_function: (name == "id" ? "nextval('orders_id_seq'::regclass)" : nil),
+                 limit: 8, precision: nil, scale: nil, comment: nil, collation: nil, sql_type: "bigint", array?: false, serial?: name == "id", bigint?: true)
+        end
+        connection = double("postgresql", columns: columns, native_database_types: {}, primary_key: %w[shop_id id])
+        allow(introspector).to receive(:connection).and_return(connection)
+
+        expect(introspector.send(:extract_columns, "orders").map { |c| c[:type] }).to eq(%w[bigint bigserial])
       end
 
       it "reads a MySQL text column's size as schema.rb writes it" do
@@ -398,6 +556,18 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2"))
 
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
+      end
+
+      # Rails 8.0's PostgreSQL dumper writes nulls_not_distinct: true on a unique constraint (schema_dumper.rb:71).
+      it "keeps a PostgreSQL unique constraint's nulls_not_distinct as Rails 8.0 dumps it" do
+        constraints = [ double(name: "u_a", column: [ "a" ], deferrable: false, nulls_not_distinct: true),
+                        double(name: "u_b", column: [ "b" ], deferrable: false, nulls_not_distinct: false),
+                        double("Rails 7.1 constraint", name: "u_c", column: [ "c" ], deferrable: false) ]
+        connection = double("postgresql", unique_constraints: constraints, supports_unique_constraints?: true)
+        allow(introspector).to receive(:connection).and_return(connection)
+
+        expect(introspector.send(:unique_constraints, "things"))
+          .to eq([ { name: "u_a", columns: [ "a" ], nulls_not_distinct: true }, { name: "u_b", columns: [ "b" ] }, { name: "u_c", columns: [ "c" ] } ])
       end
 
       # Collations are matched by exact table name; user_roles and userxroles are different tables.
@@ -411,6 +581,24 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(introspector.send(:extract_columns, "user_roles").first).to include(collation: "utf8mb4_bin")
         expect(introspector.send(:extract_columns, "userxroles").first).not_to have_key(:collation)
+      end
+
+      # schema_precision: only a datetime's 6 goes unsaid, and only MySQL leaves out a time or timestamp's 0.
+      it "keeps a time column's precision as schema.rb writes it on each adapter" do
+        columns = ->(sql) { [ [ :datetime, 0, sql[0] ], [ :time, 0, sql[1] ], [ :timestamptz, 6, sql[2] ], [ :datetime, 6, sql[0] ] ] }
+        doubled = ->(rows) do
+          rows.each_with_index.map do |(type, precision, sql_type), i|
+            double(name: "c#{i}", type: type, null: true, default: nil, default_function: nil, limit: nil, precision: precision,
+                   scale: nil, comment: nil, collation: nil, sql_type: sql_type, array?: false)
+          end
+        end
+        pg = columns.([ "timestamp(0) without time zone", "time(0) without time zone", "timestamp(6) with time zone" ])
+        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: doubled.(pg), native_database_types: {}, adapter_name: "PostgreSQL"))
+        expect(introspector.send(:extract_columns, "stamps").map { |c| c[:precision] }).to eq([ 0, 0, 6, nil ])
+
+        my = [ [ :datetime, 0, "timestamp" ], [ :time, 0, "time" ], [ :datetime, 3, "timestamp(3)" ] ]
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: doubled.(my), native_database_types: {}, adapter_name: "Mysql2"))
+        expect(introspector.send(:extract_columns, "stamps").map { |c| c[:precision] }).to eq([ nil, nil, 3 ])
       end
 
       it "names a MySQL enum, set or timestamp column by the type schema.rb writes" do
@@ -748,11 +936,19 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             create_table "users" do |t|
               t.string "email"
             end
+
+            create_table "schema_migrations_archive" do |t|
+              t.string "version", null: false
+            end
           end
         RUBY
       end
 
       after { FileUtils.rm_rf(File.join(fixture_path, "db")) }
+
+      it "keeps a table whose name only starts with schema_migrations" do
+        expect(introspector.call[:tables]["schema_migrations_archive"][:columns].map { |c| c[:name] }).to eq(%w[id version])
+      end
 
       it "skips schema_migrations without corrupting subsequent tables" do
         result = introspector.call
@@ -1751,6 +1947,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
             t.decimal "total", precision: 10, scale: 2
             t.text "bio", size: :long
             t.unique_constraint ["name"], deferrable: :immediate, name: "uniq_name"
+            t.unique_constraint ["seats"], nulls_not_distinct: true, name: "uniq_seats"
           end
           create_table "users", force: :cascade do |t|
             t.jsonb "data"
@@ -1776,7 +1973,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       accounts = result[:tables]["accounts"]
 
       expect(accounts[:comment]).to eq("Tenant accounts")
-      expect(accounts[:unique_constraints]).to eq([ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" } ])
+      expect(accounts[:unique_constraints]).to eq([ { name: "uniq_name", columns: [ "name" ], deferrable: "immediate" },
+                                                     { name: "uniq_seats", columns: [ "seats" ], nulls_not_distinct: true } ])
     end
 
     it "keeps an index's method, included columns and order" do

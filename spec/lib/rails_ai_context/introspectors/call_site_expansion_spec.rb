@@ -15,6 +15,29 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
   end
 
   describe "binding a parameter to the call's literal" do
+    # Ruby lets the later of a `key:` pair and a `**hash` set the keyword.
+    describe "a named keyword when the call spreads a hash" do
+      let(:trackable) do
+        "def trackable(field, required: false)\n  validates field, presence: true if required\n" \
+          "  validates field, length: { maximum: 5 } unless required\nend\n"
+      end
+
+      it "is not decided from a spread hash, which may set it" do
+        %w[trackable\ :title,\ **STRICT trackable\ :title,\ required:\ false,\ **STRICT].each do |call|
+          data = expand(trackable, call)
+
+          expect(Array(data[:validations])).to eq([]), call
+          expect(data[:conditional].map { |c| c[:condition] }).to eq([ "required", "not required" ]), call
+        end
+      end
+
+      it "is the literal pair written after the spread" do
+        data = expand(trackable, "trackable :title, **STRICT, required: true")
+
+        expect(data[:validations].map { |v| v[:kind] }).to eq([ "presence" ])
+      end
+    end
+
     it "leaves a parameter the method reassigns unbound" do
       data = expand(<<~RUBY, "attachable :picture")
         def attachable(name)

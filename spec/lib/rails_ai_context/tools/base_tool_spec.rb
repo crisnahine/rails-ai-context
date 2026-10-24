@@ -90,6 +90,13 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(suggest("zzqqxx", %w[Listing Payment])).to eq([])
     end
 
+    it "suggests the name spelled nearest and the names a namespace holds together, a few at most" do
+      expect(suggest("Users", %w[User Users::Profile Order])).to eq(%w[User Users::Profile])
+
+      held = (1..40).map { |n| "Reports::Report#{n}" }
+      expect(suggest("Reports", held).size).to eq(5)
+    end
+
     it "answers the exact match rather than a suggestion" do
       expect(suggest("Listing", %w[Listing ListingItem])).to eq(%w[Listing])
     end

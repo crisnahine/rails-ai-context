@@ -361,6 +361,56 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
       end
     end
 
+    # Each STI class lists only its direct subclasses, so a grandchild hangs off its own parent.
+    context "with a three-level STI tree" do
+      def expect_every_level(models, base, child, grandchild, table)
+        allow(described_class).to receive(:cached_context).and_return({ models: models })
+
+        mermaid = described_class.call(format: "mermaid", show_sti: true).content.first[:text]
+        text = described_class.call(format: "text", show_sti: true).content.first[:text]
+
+        expect(mermaid).to include("\n  #{base} -.-|STI| #{child}\n", "\n  #{child} -.-|STI| #{grandchild}\n")
+        expect(mermaid).not_to include("\n  #{base} -.-|STI| #{grandchild}\n")
+        expect(mermaid).to include("**STI hierarchies:** 1")
+        expect(text).to include("- **#{base}** (table: #{table})\n  - #{child}\n    - #{grandchild}")
+      end
+
+      it "draws the grandchild under its parent on the booted tier" do
+        allow(Post).to receive_messages(inheritance_column: "title", table_exists?: false)
+        # Set here, not with stub_const, so the classes are sourced from this file rather than a gem's.
+        Object.const_set(:LivePost, Class.new(Post))
+        Object.const_set(:PinnedPost, Class.new(LivePost))
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(Rails.application).call
+
+        expect(models["LivePost"][:sti][:sti_children]).to eq(%w[PinnedPost])
+        expect_every_level(models, "Post", "LivePost", "PinnedPost", "posts")
+      ensure
+        %i[PinnedPost LivePost].each { |name| Object.send(:remove_const, name) if Object.const_defined?(name, false) }
+      end
+
+      it "draws the grandchild under its parent on the static tier" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[7.1].define(version: 1) do
+              create_table "vehicles" do |t|
+                t.string "type"
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "app", "models", "vehicle.rb"), "class Vehicle < ApplicationRecord\nend\n")
+          File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+          File.write(File.join(dir, "app", "models", "sports_car.rb"), "class SportsCar < Car\nend\n")
+
+          models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+          expect(models["Car"][:sti][:sti_children]).to eq(%w[SportsCar])
+          expect_every_level(models, "Vehicle", "Car", "SportsCar", "vehicles")
+        end
+      end
+    end
+
     context "combined features" do
       it "handles show_cycles and show_sti together" do
         response = described_class.call(format: "text", show_cycles: true, show_sti: true)
@@ -372,71 +422,71 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
     context "with through associations and app acronyms" do
       let(:models_data) do
         {
-          "Order" => {
-            table_name: "orders",
+          "Post" => {
+            table_name: "posts",
             associations: [
-              { type: "belongs_to", name: "primary_buyer", class_name: "User", foreign_key: "primary_buyer_id" },
-              { type: "has_many", name: "buyer_emails", through: "primary_buyer", options: { source: :emails } },
-              { type: "has_many", name: "watched_orders", foreign_key: "order_id" },
-              { type: "has_many", name: "watched_by", through: "watched_orders", options: { source: :user } }
+              { type: "belongs_to", name: "author", class_name: "User", foreign_key: "author_id" },
+              { type: "has_many", name: "author_emails", through: "author", options: { source: :emails } },
+              { type: "has_many", name: "bookmarks", foreign_key: "post_id" },
+              { type: "has_many", name: "bookmarked_by", through: "bookmarks", options: { source: :user } }
             ]
           },
           "User" => {
             table_name: "users",
             associations: [
               { type: "has_many", name: "emails", foreign_key: "user_id" },
-              { type: "has_many", name: "watched_orders", foreign_key: "user_id" }
+              { type: "has_many", name: "bookmarks", foreign_key: "user_id" }
             ]
           },
           "Email" => { table_name: "emails", associations: [ { type: "belongs_to", name: "user" } ] },
-          "WatchedOrder" => {
-            table_name: "watched_orders",
-            associations: [ { type: "belongs_to", name: "order" }, { type: "belongs_to", name: "user" } ]
+          "Author" => { table_name: "authors", associations: [] },
+          "Bookmark" => {
+            table_name: "bookmarks",
+            associations: [ { type: "belongs_to", name: "post" }, { type: "belongs_to", name: "user" } ]
           },
-          "AIMatchResult" => {
-            table_name: "ai_match_results",
-            associations: [ { type: "has_many", name: "ai_match_items", foreign_key: "ai_match_result_id" } ]
+          "APIClient" => {
+            table_name: "api_clients",
+            associations: [ { type: "has_many", name: "api_tokens", foreign_key: "api_client_id" } ]
           },
-          "AIMatchItem" => {
-            table_name: "ai_match_items",
-            associations: [ { type: "belongs_to", name: "ai_match_result" } ]
+          "APIToken" => {
+            table_name: "api_tokens",
+            associations: [ { type: "belongs_to", name: "api_client" } ]
           },
-          "SearchCriteria" => {
-            table_name: "search_criteria",
-            associations: [ { type: "has_many", name: "search_criteria_embeddings" } ]
+          "Preferences" => {
+            table_name: "preferences",
+            associations: [ { type: "has_many", name: "preferences_changes" } ]
           },
-          "SearchCriteriaEmbedding" => {
-            table_name: "search_criteria_embeddings",
-            associations: [ { type: "belongs_to", name: "search_criteria" } ]
+          "PreferencesChange" => {
+            table_name: "preferences_changes",
+            associations: [ { type: "belongs_to", name: "preferences" } ]
           }
         }
       end
 
       it "routes a through edge via the class the hop points at" do
         text = described_class.call(format: "mermaid").content.first[:text]
-        expect(text).to include("Order ==>|through| User")
+        expect(text).to include("Post ==>|through| User")
         expect(text).to include("User ==>|through| Email")
-        expect(text).not_to include("PrimaryBuyer")
-        expect(text).not_to include("BuyerEmail")
+        expect(text).not_to include("|through| Author")
       end
 
       it "reads a static through target off the source association" do
         text = described_class.call(format: "mermaid").content.first[:text]
-        expect(text).to include("WatchedOrder ==>|through| User")
-        expect(text).not_to include("WatchedBy")
+        expect(text).to include("Bookmark ==>|through| User")
+        expect(text).not_to include("BookmarkedBy")
       end
 
       it "names targets the way the app declares them" do
         text = described_class.call(format: "mermaid").content.first[:text]
-        expect(text).to include("AIMatchItem -->|belongs_to| AIMatchResult")
-        expect(text).to include("AIMatchResult -->|has_many| AIMatchItem")
-        expect(text).not_to include("AiMatch")
+        expect(text).to include("APIToken -->|belongs_to| APIClient")
+        expect(text).to include("APIClient -->|has_many| APIToken")
+        expect(text).not_to include("Api")
       end
 
       it "does not singularize a belongs_to name" do
         text = described_class.call(format: "mermaid").content.first[:text]
-        expect(text).to include("SearchCriteriaEmbedding -->|belongs_to| SearchCriteria")
-        expect(text).not_to include("SearchCriterium")
+        expect(text).to include("PreferencesChange -->|belongs_to| Preferences")
+        expect(text).not_to match(/\bPreference\b/)
       end
     end
 
@@ -554,6 +604,101 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
         # `Reader` node and on to a `ReaderEmail` neither of which is a class.
         expect(text).not_to match(/reader/i)
       end
+    end
+  end
+
+  describe "a focused graph reached through links that point into the model" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ models: {
+        "Shop" => { associations: [] },
+        "Order" => { associations: [ { macro: :belongs_to, name: :shop } ] },
+        "Item" => { associations: [ { macro: :belongs_to, name: :order } ] },
+        "Note" => { associations: [ { macro: :belongs_to, name: :item } ] }
+      } })
+    end
+
+    it "walks each incoming link one step, up to the depth asked for" do
+      text = described_class.call(model: "Shop", depth: 2, format: "text").content.first[:text]
+
+      expect(text.scan(/^## (\w+)$/).flatten).to contain_exactly("Shop", "Order", "Item")
+    end
+  end
+
+  # Post's `has_many :attachments, as: :record` makes Post a record of Attachment, never of AuditLog.
+  describe "two polymorphic belongs_to with the same name" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ models: {
+        "Post" => { associations: [
+          { macro: :has_many, name: :attachments, options: { as: :record } },
+          { macro: :belongs_to, name: :audit_log }
+        ] },
+        "Attachment" => { associations: [ { macro: :belongs_to, name: :record, polymorphic: true } ] },
+        "AuditLog" => { associations: [ { macro: :belongs_to, name: :record, polymorphic: true } ] }
+      } })
+    end
+
+    it "gives each one only the models whose has_many points at its own model, and draws no cycle" do
+      text = described_class.call(format: "text", show_cycles: true).content.first[:text]
+      sections = text.split("## ")
+
+      expect(sections.find { |s| s.start_with?("Attachment") }).to include("belongs_to → Record (polymorphic) [Post]")
+      expect(sections.find { |s| s.start_with?("AuditLog") }).to eq("AuditLog\n  belongs_to → Record (polymorphic)\n\n")
+      expect(text).to include("**Cycles:** 0")
+    end
+  end
+
+  # A computed association name names no model, so no polymorphic belongs_to gains Post.
+  describe "a polymorphic as: whose class the walk cannot name" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ models: {
+        "Post" => { associations: [ { macro: :has_many, name: "file_kind", computed_name: true, options: { as: :record } } ] },
+        "Attachment" => { associations: [ { macro: :belongs_to, name: :record, polymorphic: true } ] }
+      } })
+    end
+
+    it "adds the declaring model to no interface" do
+      text = described_class.call(format: "text").content.first[:text]
+
+      expect(text.split("## ").find { |s| s.start_with?("Attachment") }).to start_with("Attachment\n  belongs_to → Record (polymorphic)\n\n")
+    end
+  end
+
+  # An STI row is a row of every class in its family, so Post's images are Attachment records too.
+  describe "a polymorphic as: pointed at an STI subclass" do
+    def graph_text(models)
+      allow(described_class).to receive(:cached_context).and_return({ models: models })
+      described_class.call(format: "text").content.first[:text].split("## ")
+    end
+
+    let(:base) do
+      { associations: [ { macro: :belongs_to, name: :record, polymorphic: true } ],
+        sti: { sti_base: true, sti_children: [ "ImageAttachment" ] } }
+    end
+
+    it "lists the declaring model on the base that declares the belongs_to, as the static tier reads it" do
+      sections = graph_text(
+        "Post" => { associations: [ { macro: :has_many, name: :images, class_name: "ImageAttachment", options: { as: :record } } ] },
+        "Attachment" => base,
+        "ImageAttachment" => { associations: [], sti: { sti_base: false, sti_parent: "Attachment" } },
+        "VideoAttachment" => { associations: [ { macro: :belongs_to, name: :record, polymorphic: true } ],
+                               sti: { sti_base: false, sti_parent: "Attachment" } }
+      )
+
+      expect(sections.find { |s| s.start_with?("Attachment") }).to include("belongs_to → Record (polymorphic) [Post]")
+      expect(sections.find { |s| s.start_with?("VideoAttachment") }).to start_with("VideoAttachment\n  belongs_to → Record (polymorphic)\n\n")
+    end
+
+    it "lists it on every class of the family that carries the belongs_to, as the booted tier reads it" do
+      inherited = { associations: base[:associations], sti: { sti_base: false, sti_parent: "Attachment" } }
+      sections = graph_text(
+        "Post" => { associations: [ { macro: :has_many, name: :images, class_name: "ImageAttachment", options: { as: :record } } ] },
+        "Comment" => { associations: [ { macro: :has_many, name: :attachments, options: { as: :record } } ] },
+        "Attachment" => base,
+        "ImageAttachment" => inherited
+      )
+
+      expect(sections.find { |s| s.start_with?("Attachment") }).to include("belongs_to → Record (polymorphic) [Post, Comment]")
+      expect(sections.find { |s| s.start_with?("ImageAttachment") }).to include("belongs_to → Record (polymorphic) [Post, Comment]")
     end
   end
 
@@ -714,6 +859,17 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
 
       expect(text).to include("PolicyGroupDependency ==>|through| Contact")
       expect(text).not_to include("==>|through| Dependable")
+    end
+
+    it "points the through edge at a class_name over the source_type, as Rails reads it" do
+      models = described_class.cached_context[:models]
+      models["Lead"] = { table_name: "leads", associations: [] }
+      models["PolicyGroup"][:associations] << { type: "has_many", name: "leads", through: "policy_group_dependencies",
+                                               class_name: "Lead", source_type: "Contact" }
+
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("PolicyGroupDependency ==>|through| Lead")
     end
   end
 

@@ -83,6 +83,18 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
   end
   before { described_class.reset_cache! }
 
+  it "takes the method holding a match in a Ruby file that does not end in .rb" do
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "lib/tasks"))
+      File.write(File.join(root, "lib/tasks/posts.rake"), "namespace :posts do\n  def stale\n    Post.where(stale: true)\n  end\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+      text = described_class.call(file: "lib/tasks/posts.rake", near: "Post.where", context_lines: 0).content.first[:text]
+
+      expect(text).to include("(lines 2-4 of 5)").and include("**Context:** `def stale`")
+    end
+  end
+
   # A link that resolves nowhere was offered back as the file to try.
   describe "a file that is a link to nothing" do
     it "is not found, and suggests only files the tool can read" do
@@ -202,6 +214,48 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
         text = described_class.call(file: "app/models/gadget.rb", line: 200, context_lines: 2).content.first[:text]
 
         expect(text).to include("(lines 198-202 of 304)").and include("**Context:** `class Gadget > def export`")
+      end
+    end
+
+    # Prism gives ranked 2..4, a 29..29 and b 31..33; line 27 sits in no method.
+    describe "a match below a method that already ended" do
+      let(:source) do
+        [ "class Post < ApplicationRecord", "  def self.ranked", "    order(:rank)", "  end", "",
+          *(1..20).map { |i| "  scope :s#{i}, -> { where(n: #{i}) }" },
+          "", "  validates :title, presence: true", "", "  def a = 1", "", "  def b", "    2", "  end", "end" ].join("\n") + "\n"
+      end
+
+      around do |example|
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app/models"))
+          File.write(File.join(root, "app/models/post.rb"), source)
+          @root = root
+          example.run
+        end
+      end
+
+      before { allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root)) }
+
+      def text_for(**args)
+        described_class.call(file: "app/models/post.rb", **args).content.first[:text]
+      end
+
+      it "keeps the context window and names only the class" do
+        text = text_for(near: "validates :title")
+
+        expect(text).to include("(lines 22-32 of 34)")
+        expect(text).to include("**Context:** `class Post`\n")
+      end
+
+      it "shows an endless method as the one line it is" do
+        text = text_for(near: "def a")
+
+        expect(text).to include("**Context:** `class Post > def a`")
+        expect(text).not_to include("def b")
+      end
+
+      it "names only the class for a line between methods" do
+        expect(text_for(line: 27, context_lines: 1)).to include("(lines 26-28 of 34)").and include("**Context:** `class Post`\n")
       end
     end
 

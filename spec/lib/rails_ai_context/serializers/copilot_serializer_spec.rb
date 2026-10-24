@@ -53,7 +53,7 @@ RSpec.describe RailsAiContext::Serializers::CopilotSerializer do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "CLAUDE.md")
         RailsAiContext::Serializers::SectionMarkerWriter.write_with_markers(
-          path, described_class.new(serializer_context).call
+          path, described_class.new(serializer_context).call, root: dir
         )
 
         block = File.read(path).lines

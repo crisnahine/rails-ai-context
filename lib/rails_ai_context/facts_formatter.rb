@@ -12,7 +12,7 @@ module RailsAiContext
       # rake's ai:inspect prints a text summary.
       def render(context, full_json:)
         lines = []
-        lines << "# #{app_name(context)} - Schema Facts"
+        lines << "# #{context[:app_name] || "Rails App"} - Schema Facts"
         lines << "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
         lines << ""
         lines.concat(tables_section(context))
@@ -26,27 +26,17 @@ module RailsAiContext
 
       private
 
-      def app_name(context)
-        return context[:app_name] if context[:app_name]
-
-        if defined?(Rails) && Rails.respond_to?(:application) && Rails.application
-          Rails.application.class.module_parent_name
-        else
-          "Rails App"
-        end
-      end
-
       def tables_section(context)
         schema = Payload.section(context, :schema)
         return [] unless schema
 
-        tables = schema[:tables] || {}
+        tables = Payload.schema_tables(schema)
         lines = [ "## Tables (#{tables.size})" ]
-        tables.each do |name, meta|
+        tables.each do |db, name, meta|
           cols = meta[:columns]&.size || 0
           indexes = meta[:indexes]&.size || 0
           fks = meta[:foreign_keys]&.size || 0
-          lines << "- #{name} (#{count_phrase(cols, "col")}, " \
+          lines << "- #{name} (#{"#{db}; " if db}#{count_phrase(cols, "col")}, " \
             "#{count_phrase(indexes, "index", plural: "indexes")}, " \
             "#{count_phrase(fks, "FK", plural: "FKs")})"
         end

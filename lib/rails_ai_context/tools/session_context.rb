@@ -118,7 +118,8 @@ module RailsAiContext
           queries.sort_by { |q| q[:asked] }.each do |q|
             ago = time_ago(q[:last_timestamp] || q[:timestamp])
             params_str = q[:params].is_a?(Hash) ? q[:params].map { |k, v| "#{k}:#{v}" }.join(", ") : q[:params].to_s
-            params_display = params_str.empty? ? "-" : params_str.truncate(40)
+            # Escaped after truncating, so a cut never splits an escape.
+            params_display = params_str.empty? ? "-" : table_cell(params_str.truncate(40)).gsub(/\r\n|\r|\n/, " ")
             count = q[:call_count] || 1
             count_display = count > 1 ? " (#{count}x)" : ""
             lines << "| `#{q[:tool]}`#{count_display} | #{params_display} | #{ago} |"

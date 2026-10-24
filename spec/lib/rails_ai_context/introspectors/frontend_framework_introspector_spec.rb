@@ -227,7 +227,7 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
   describe "monorepo detection" do
     context "with package.json workspaces array" do
       let(:pkg_path) { File.join(Rails.root, "package.json") }
-      let(:original_content) { File.read(pkg_path) }
+      let!(:original_content) { File.read(pkg_path) }
 
       after { File.write(pkg_path, original_content) }
 
@@ -446,6 +446,15 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
         expect(result[:frameworks]).to include(vue: "3.4.0")
         expect(result[:typescript]).to include(enabled: true, strict: true)
         expect(result[:summary][:stack]).to include("Vue", "TypeScript")
+      end
+    end
+
+    it "keeps a version range as written in the stack summary" do
+      Dir.mktmpdir do |tmp|
+        File.write(File.join(tmp, "package.json"), JSON.generate("dependencies" => { "react" => "^18.2.0 || ^19.0.0" }))
+        result = described_class.new(RailsAiContext::StaticApp.new(File.realpath(tmp))).call
+
+        expect(result[:summary][:stack]).to start_with("React ^18.2.0 || ^19.0.0")
       end
     end
 

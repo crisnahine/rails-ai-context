@@ -156,6 +156,18 @@ module RailsAiContext
       template?(path) && !File.basename(path.to_s).start_with?("_")
     end
 
+    LAYOUTS = "layouts/"
+
+    # Whether a view's name under its views root is in layouts/, at any depth.
+    def in_layouts?(relative)
+      relative.to_s.start_with?(LAYOUTS)
+    end
+
+    # Every layout across the views roots, a subfolder's included, as [path, name it renders by].
+    def layouts(root)
+      each(root, "#{LAYOUTS}**/*").select { |path, _relative| layout?(path) }
+    end
+
     # path: relative to app/views, or spelled from the app root.
     # Tried under every views root, so an engine's or plugin's view resolves too. A
     # refusal other than "not here" is the answer wherever it comes from.
@@ -201,7 +213,7 @@ module RailsAiContext
     def logical_template(views, path)
       return nil unless path.match?(LOGICAL_PATH)
 
-      matches = Dir.glob(File.join(views, "#{path}.*"))
+      matches = PathResolver.glob(views, "#{path}.*")
         .select { |f| File.file?(f) }
         .map { |f| f.delete_prefix(views + File::SEPARATOR) }
         .reject { |f| SafePath.sensitive?(f) }

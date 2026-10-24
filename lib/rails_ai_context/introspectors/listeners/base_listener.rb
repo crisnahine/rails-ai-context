@@ -8,6 +8,9 @@ module RailsAiContext
       # Base class for Prism Dispatcher listeners.
       # Provides shared helpers for extracting values from AST nodes.
       class BaseListener
+        # Object's methods that run their block once, during the call, handing it the receiver.
+        RUN_ONCE = %i[tap then yield_self].freeze
+
         attr_reader :results
         # The walk's comments, for a listener that slices source: a fold onto
         # one line would otherwise comment out what follows.
@@ -201,8 +204,33 @@ module RailsAiContext
         # A call's default: for a value no literal carries: its source, and whether it is a proc.
         # key: reads create_table's default for its implicit key.
         def default_fields(node, key: false)
-          value = key ? key_default_node(node) : default_node(node)
-          { default_source: value && NodeSource.text(value), default_proc: proc_argument?(value) }
+          value_fields(key ? key_default_node(node) : default_node(node))
+        end
+
+        # change_column_default's new value, positional or to:, as default_fields gives a default:, and its from: for a revert;
+        # new_default is a positional value's literal.
+        def new_default_fields(node, positional)
+          positional = nil if positional.is_a?(Prism::KeywordHashNode)
+          options = extract_keyword_nodes(node)
+          from = value_fields(options[:from])
+          fields = value_fields(positional || options[:to])
+            .merge(from_source: from[:default_source], from_proc: from[:default_proc], from_literal: from[:default_literal])
+          positional ? fields.merge(new_default: extract_value(positional)) : fields
+        end
+
+        # A proc whose body is one string is SQL the dump writes back as `-> { "sql" }`: default_literal holds that string.
+        def value_fields(value)
+          literal = proc_literal(value)
+          fields = { default_source: literal ? "-> { #{literal.inspect} }" : value && NodeSource.text(value), default_proc: proc_argument?(value) }
+          literal ? fields.merge(default_literal: literal) : fields
+        end
+
+        def proc_literal(value)
+          return unless proc_argument?(value)
+
+          body = (value.is_a?(Prism::LambdaNode) ? value : value.block).body
+          statements = body.is_a?(Prism::StatementsNode) ? body.body : []
+          statements.first.unescaped if statements.size == 1 && statements.first.is_a?(Prism::StringNode)
         end
 
         # `-> {}`, `lambda {}`, `proc {}` or `Proc.new {}`.
@@ -307,8 +335,12 @@ module RailsAiContext
           constant = receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
           return RailsAiContext::Confidence::INFERRED unless constant && node.name == :name && node.arguments.nil? && node.block.nil?
 
-          name = constant_path_string(receiver)
-          name.split("::").last.match?(/\A[A-Z0-9_]+\z/) ? RailsAiContext::Confidence::INFERRED : name
+          value_constant?(receiver) ? RailsAiContext::Confidence::INFERRED : constant_path_string(receiver)
+        end
+
+        # An all-caps constant (`APP_SETTINGS`, `Config::APP`) is how Ruby code spells a value.
+        def value_constant?(node)
+          (node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)) && node.name.match?(/\A[A-Z0-9_]+\z/)
         end
 
         # `"a" "b"` and its line-continued form parse as one interpolated node
@@ -341,25 +373,64 @@ module RailsAiContext
               # `to: App`, or the path => App form, whose key is the path.
               next unless extract_key(assoc.key) == :to || assoc.key.is_a?(Prism::StringNode)
 
-              name = app_name(assoc.value)
+              name = rack_app_name(assoc.value)
               return name if name
             end
           end
           nil
         end
 
+        # A route to a value, or to a bare value constant the file does not assign, attaches no app; a path such as `Admin::UI` is one.
+        # shortcut: an unassigned `to: API` reads as no app and `to: Settings::HOME` as one, read the constant's file if either is wrong.
+        def rack_app_name(node)
+          value = written_value(node)
+          return if value.is_a?(Prism::ConstantReadNode) && value_constant?(value)
+
+          name = app_name(node)
+          name unless name == RailsAiContext::Confidence::INFERRED
+        end
+
+        def written_value(node)
+          name = constant_reference(node)
+          (name && @constants&.dig(name)) || node
+        end
+
+        # The full name of the constant the file declares that a reference reaches, as Ruby looks it up.
+        def constant_reference(node)
+          return unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
+
+          DeclaredConstant.lookup(node.slice, @nesting || [], @declared ||= {})
+        end
+
+        # A constant app reads as what it holds; a `.new` one as booted names it: an instance by its class (`AL.new` by the class
+        # AL holds), `Class.new` by the constant.
+        def app_value(node)
+          value = written_value(node)
+          receiver = value.receiver if value.is_a?(Prism::CallNode) && value.name == :new
+          return value unless receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+
+          held = written_value(receiver)
+          receiver = held if held.is_a?(Prism::ConstantReadNode) || held.is_a?(Prism::ConstantPathNode)
+          %w[Class Module].include?(constant_path_string(receiver)) ? node : receiver
+        end
+
         # A Rack app as a route names it: a constant, or a call on one with no
         # arguments (`ActionCable.server`). Anything else is not readable here.
         def app_name(node)
+          node = app_value(node)
           case node
-          when Prism::ConstantReadNode then node.name.to_s
+          when Prism::ConstantReadNode then (constant_reference(node) || node.name).to_s
           when Prism::ConstantPathNode then constant_path_string(node)
           when Prism::CallNode
             receiver = node.receiver
             constant = receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
             # `Flipper::UI.app(Flipper)` is named by what builds it, arguments off.
             # `PagesController.action(:show)` is a controller endpoint, not an app.
-            "#{constant_path_string(receiver)}.#{node.name}" if constant && node.block.nil? && node.name != :action
+            # `APPS[:x]` or `APPS.fetch(:x)` is an app the constant holds, which only a boot can name.
+            return unless constant && node.block.nil? && node.name != :action
+            return RailsAiContext::Confidence::INFERRED if CallSiteExpansion::HELD_READERS.include?(node.name)
+
+            "#{constant_path_string(receiver)}.#{node.name}"
           end
         end
 
@@ -378,11 +449,22 @@ module RailsAiContext
           node.is_a?(Prism::CallNode) && node.name == :__dir__ && node.receiver.nil? && node.arguments.nil?
         end
 
-        # A class or module's full name: `::A` is top level, `A` nests under the open `outer`.
-        def nested_name(constant_path, outer)
-          path = constant_path.slice
-          path.start_with?("::") || outer.nil? ? path.delete_prefix("::") : "#{outer}::#{path}"
+        # A first argument that is neither a literal nor the options: `scope PREFIX do`, `scope "/v#{n}" do`.
+        # Rails joins `scope nil` into no segment.
+        def positional_prefix?(node)
+          first = node.arguments&.arguments&.first
+          !first.nil? && !first.is_a?(Prism::KeywordHashNode) && !first.is_a?(Prism::HashNode) && !first.is_a?(Prism::NilNode)
         end
+
+        # The full name a class or module open or a constant write defines inside `nesting` (Module.nesting, innermost
+        # first), read against those walked so far; nil for an `||=` that defines nothing.
+        def declare_constant(node, nesting)
+          DeclaredConstant.declare_node(node, nesting, @declared ||= {})&.delete_prefix("::")
+        end
+
+        # The writes beside `on_constant_write_node_enter` that define a constant for a later declare_constant.
+        CONSTANT_WRITE_EVENTS = %i[on_constant_path_write_node_enter on_constant_or_write_node_enter on_constant_path_or_write_node_enter
+                                   on_constant_target_node_enter on_constant_path_target_node_enter].freeze
 
         def hash_node_to_hash(node, source: false)
           elements = node.respond_to?(:elements) ? node.elements : []

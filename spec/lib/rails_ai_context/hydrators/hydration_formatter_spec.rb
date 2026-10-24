@@ -46,15 +46,6 @@ RSpec.describe RailsAiContext::Hydrators::HydrationFormatter do
       expect(output).to include("`belongs_to` :user")
       expect(output).to include("presence(title)")
     end
-
-    it "includes warnings" do
-      result = RailsAiContext::HydrationResult.new(
-        hints: [ hint ],
-        warnings: [ "Model 'Foo' referenced but not found" ]
-      )
-      output = described_class.format(result)
-      expect(output).to include("Model 'Foo' referenced but not found")
-    end
   end
 
   describe ".format_hint" do

@@ -414,7 +414,7 @@ module RailsAiContext
     def check_views
       dirs = PathResolver.view_dirs(app.root.to_s)
       if dirs.any?
-        count = dirs.sum { |dir| Dir.glob(File.join(dir, "**/*")).count { |f| File.file?(f) } }
+        count = dirs.sum { |dir| PathResolver.glob(dir, "**/*").count { |path| File.file?(path) } }
         shown = dirs.map { |dir| typed_path(dir) }
         Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "file")} under #{shown.join(', ')}", fix: nil)
       else
@@ -446,7 +446,7 @@ module RailsAiContext
     # load. [every file, the engine's]
     def source_file_counts(kind)
       own = Introspectors::SourceScan.paths(app.root, kind: kind, skip_concerns: false).count
-      in_engine = PathResolver.enclosing_engine_roots(app.root.to_s).sum { |engine| Dir.glob(File.join(engine, kind, "**", "*.rb")).size }
+      in_engine = PathResolver.enclosing_engine_roots(app.root.to_s).sum { |engine| Dir.glob(File.join(kind, "**", "*.rb"), base: engine).size }
       [ own + in_engine, in_engine ]
     end
 
@@ -526,7 +526,7 @@ module RailsAiContext
       # is, and always true of one an older version of the gem wrote.
       run = context_file_run(output_dir)
       # Named from where doctor was typed, or in full for an output_dir outside the install's root.
-      inside = SafePath.contained?(SafePath.canonical(output_dir.to_s), SafePath.canonical(install_root))
+      inside = SafePath.inside?(output_dir.to_s, install_root)
       first = ->(files) { inside ? typed_path(File.join(output_dir, files.first)) : File.join(output_dir, files.first) }
       shown = ->(files) { "#{first.(files)}#{" and #{count_phrase(files.size - 1, "more context file")}" if files.size > 1}" }
       if run[:error]
@@ -563,7 +563,7 @@ module RailsAiContext
         previous = config.output_dir
         result = begin
           config.output_dir = scratch
-          RailsAiContext.generate_context(app)
+          RailsAiContext.generate_context(app, context: introspection)
         ensure
           config.output_dir = previous
         end
@@ -670,7 +670,7 @@ module RailsAiContext
     def only_our_initializer_newer?(dir, generated_at)
       return false unless dir == "config"
 
-      newer = Dir.glob(File.join(install_root, dir, Fingerprinter::WATCHED_EXTENSIONS))
+      newer = PathResolver.glob(File.join(install_root, dir), Fingerprinter::WATCHED_EXTENSIONS)
         .select { |path| File.mtime(path) > generated_at }
 
       newer.any? && newer.all? { |path| path.end_with?("initializers/rails_ai_context.rb") }
@@ -1673,21 +1673,16 @@ module RailsAiContext
 
     # ── Introspector health ───────────────────────────────────────────
 
+    # The one introspection the health check and the context files' dry run both read.
+    def introspection
+      @introspection ||= RailsAiContext.introspect(app)
+    end
+
     def check_introspector_health
       config = RailsAiContext.configuration
-      introspector = RailsAiContext::Introspector.new(app)
-      failures = []
-
-      # One run, as introspection has: the file lists and stats each introspector asks for are shared.
-      RunCache.around do
-        config.introspectors.each do |name|
-          result = introspector.send(:resolve_introspector, name).call
-          failures << [ name.to_s, result[:error].to_s ] if result.is_a?(Hash) && result[:error]
-        rescue StandardError, ScriptError => e
-          # ScriptError included: a syntax-broken app file must cost one
-          # introspector, not the diagnosis the user ran doctor for.
-          failures << [ name.to_s, "#{e.class}: #{e.message}" ]
-        end
+      names = config.introspectors.map(&:to_s)
+      failures = Array(introspection[:_warnings]).filter_map do |warning|
+        [ warning[:introspector], warning[:error].to_s ] if names.include?(warning[:introspector])
       end
 
       if failures.empty?
@@ -1735,7 +1730,7 @@ module RailsAiContext
       end
 
       i18n_dir = File.join(app.root, "config/locales")
-      locale_file_count = Dir.exist?(i18n_dir) ? Dir.glob(File.join(i18n_dir, "**/*.{yml,yaml}")).size : 0
+      locale_file_count = Dir.exist?(i18n_dir) ? Dir.glob("**/*.{yml,yaml}", base: i18n_dir).size : 0
       if locale_file_count > 1 && !config.introspectors.include?(:i18n)
         suggestions << "i18n (#{count_phrase(locale_file_count, "locale file")})"
       end
@@ -2072,7 +2067,7 @@ module RailsAiContext
       views_dir = File.join(app.root, "app/views")
       return nil unless Dir.exist?(views_dir)
 
-      templates = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB))
+      templates = PathResolver.glob(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)
       count = templates.size
       total_size = templates.sum { |f| File.size(f) rescue 0 }
       limit = config.max_view_total_size

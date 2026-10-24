@@ -983,8 +983,7 @@ module RailsAiContext
       def rails_version
         return @rails_version if defined?(@rails_version)
 
-        lock = GemLock.for(app.root)
-        @rails_version = lock.version("rails") || lock.version("railties")
+        @rails_version = GemLock.for(app.root).rails_version
       end
 
       # Rails adds `validates_presence_of name, message: :required` for a
@@ -1272,7 +1271,7 @@ module RailsAiContext
         return nil if type_column.empty?
         return nil if connected ? !model.columns_hash.key?(type_column) : lacks_column?(model.table_name, type_column)
 
-        children = DeclaredConstant.carried(model.descendants).map(&:name).sort
+        children = DeclaredConstant.carried(model.subclasses).map(&:name).sort
 
         parent = model.superclass
         # An abstract base (ApplicationRecord, or the one a second database connects through) holds no rows of its own.
@@ -1336,13 +1335,17 @@ module RailsAiContext
       # The options that decide the value a new record holds and the names of
       # the methods the enum defines.
       def extract_enum_options_from_ast(source_data)
+        keys = Listeners::EnumsListener::OPTIONS - %i[validate]
+        # Rails 7.0's enum takes no instance_methods: and lets it pass unread.
+        keys.delete(:instance_methods) if rails_version && Gem::Version.new(rails_version) < Gem::Version.new("7.1")
         Array(source_data[:enums]).each_with_object({}) do |enum, opts|
-          options = enum[:options] || {}
-          entry = %i[prefix suffix default].to_h { |key| [ key, options.fetch(key) { options[:"_#{key}"] } ] }
-          entry.reject! { |_, value| value.nil? || value == false }
+          # Scopes and value methods are on unless an option turns them off; the rest are off unless given.
+          entry = (enum[:options] || {}).slice(*keys).reject { |key, value| value.nil? || value == ENUM_ON_BY_DEFAULT.include?(key) }
           opts[enum[:name].to_s] = entry if entry.any?
         end
       end
+
+      ENUM_ON_BY_DEFAULT = %i[scopes instance_methods].freeze
 
       CONDITION_KEYS = %i[if unless].freeze
 
@@ -1830,9 +1833,10 @@ module RailsAiContext
       # Array. Anything else is text, because a payload has to serialize.
       SANITIZED_SCALARS = [ Array, Numeric, TrueClass, FalseClass, NilClass, Symbol, String ].freeze
 
+      # A Proc has no text, but the key stays, so a reader can tell the option is set.
       def sanitize_options(options)
-        options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
-               .transform_values { |value| sanitize_option_value(value) }
+        options.reject { |_k, v| v.is_a?(Regexp) }
+               .transform_values { |value| value.is_a?(Proc) ? "(proc)" : sanitize_option_value(value) }
       end
 
       def sanitize_option_value(value)
@@ -1938,8 +1942,8 @@ module RailsAiContext
       # associations, on that tier.
       MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
 
-      # The class's own declarations a method body can hold; MacrosListener skips method bodies itself.
-      METHOD_PLACED_KEYS = %i[validations associations scopes enums].freeze
+      # What else a class method body can declare; MacrosListener skips method bodies itself.
+      METHOD_PLACED_KEYS = %i[validations scopes enums].freeze
 
       # The merged keys, plus what a mixin's macro methods declare only under a
       # condition the call cannot decide.
@@ -1991,12 +1995,14 @@ module RailsAiContext
       def settle(walk, calls, expanded = nil)
         own, rank = walk.own, walk.rank
         collected = walk.collected.to_h do |key, entries|
-          [ key, entries.flat_map { |entry| place(entry, rank, calls) }.then { |found| key == :callbacks ? found : found.map { |entry| entry.except(*CHAIN_KEYS) }.uniq } ]
+          [ key, entries.flat_map { |entry| place(entry, rank, calls) }.then { |found| RANKED_KEYS.include?(key) ? found : found.map { |entry| entry.except(*CHAIN_KEYS) }.uniq } ]
         end
         own = without_expanded_calls(own, Array(collected.delete(:expanded)) + Array(expanded))
         bodies = method_bodies(own)
-        callbacks = Array(own[:callbacks]).flat_map { |cb| placed_in_method(cb, bodies, rank, calls) || [ cb.merge(rank: rank) ] }
-        own = own.merge(callbacks: callbacks + Array(collected.delete(:callbacks)))
+        # Callbacks and associations keep where they run, so the class and its bases settle together.
+        placed = ->(key) { Array(own[key]).flat_map { |entry| placed_in_method(entry, bodies, rank, calls) || [ entry.merge(rank: rank) ] } }
+        own = own.merge(callbacks: placed.call(:callbacks) + Array(collected.delete(:callbacks)),
+                        associations: reflection_order(placed.call(:associations) + Array(collected.delete(:associations)), rank))
         own = own.merge(METHOD_PLACED_KEYS.to_h { |key| [ key, Array(own[key]).select { |entry| (placed_in_method(entry, bodies, rank, calls) || [ entry ]).any? } ] })
         [ collected.empty? ? own : merge_inherited(own, collected), walk.unread, walk.hidden ]
       end
@@ -2033,8 +2039,8 @@ module RailsAiContext
       # The class's own concerns and its bases', walked to agreement: a method
       # one's `included` block calls runs in the class wherever the method is
       # defined, so a base's concern can release what the class's own walk
-      # held back (a WorkPackage::InexistentWorkPackage can inherit
-      # journals that way), and the class's concern what a base's did.
+      # held back (a Post::Draft can inherit its base's revisions that
+      # way), and the class's concern what a base's did.
       #
       # Each side is walked again only when the other has since learned a call
       # that releases something it held back.
@@ -2058,7 +2064,7 @@ module RailsAiContext
         data = merge_inherited(data, declared)
         settled = walked.map { |name, walk| walk ? [ name, walk.own, *settle(walk, calls, expanded[walk.rank]) ] : [ name, nil ] }
         data, *rest = merge_inherited_macros(data, unread, hidden, settled)
-        [ data.merge(callbacks: chain_order(on_known_chains(data[:callbacks], chains), commits_in_order)), *rest ]
+        [ data.merge(associations: reflected(data[:associations]), callbacks: chain_order(on_known_chains(data[:callbacks], chains), commits_in_order)), *rest ]
       end
 
       def on_known_chains(callbacks, chains)
@@ -2070,6 +2076,9 @@ module RailsAiContext
       end
 
       CHAIN_KEYS = %i[rank chain_at hook owner].freeze
+
+      # The keys whose entries keep CHAIN_KEYS until the class and its bases are merged.
+      RANKED_KEYS = %i[callbacks associations].freeze
 
       # What the class methods the app's base bodies give the class declare, at each call reaching them,
       # with the calls read that way (`:expanded`) by the rank they stand at.
@@ -2083,10 +2092,21 @@ module RailsAiContext
             calls.placed(entry, definition.key, [ entry[:location] ], site)
           end
           expansion.each do |key, entries|
-            found[key].concat(%i[callbacks expanded].include?(key) ? entries : entries.map { |entry| entry.except(*CHAIN_KEYS) }.uniq)
+            found[key].concat(RANKED_KEYS.include?(key) || key == :expanded ? entries : entries.map { |entry| entry.except(*CHAIN_KEYS) }.uniq)
           end
         end
         found.to_h
+      end
+
+      # Rails keeps one reflection per name, the last declared, in the order the class body runs.
+      def reflection_order(associations, rank)
+        sorted = associations.each_with_index.sort_by { |a, index| [ -(a[:rank] || rank).to_i, a[:chain_at] || [ a[:location].to_i, -1 ], index ] }
+        sorted.map(&:first).reverse.uniq { |a| a[:name].to_s }.reverse
+      end
+
+      # The class's associations and its bases', outermost base first, as the subclass copies its base's reflections.
+      def reflected(associations)
+        reflection_order(Array(associations), 0).map { |a| a.except(*CHAIN_KEYS) }
       end
 
       # Rails builds the chain from the outermost base in, each class in the
@@ -2244,7 +2264,6 @@ module RailsAiContext
 
       def merge_inherited(mine, inherited)
         merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
-        merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
         # Default scopes stack base first; a named scope the model redefines is its own.
         base_defaults, base_named = Array(inherited[:scopes]).partition { |s| s[:default] }
         own_defaults, own_named = Array(mine[:scopes]).partition { |s| s[:default] }

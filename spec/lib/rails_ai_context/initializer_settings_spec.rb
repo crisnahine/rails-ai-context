@@ -257,30 +257,23 @@ RSpec.describe RailsAiContext::InitializerSettings do
     end
   end
 
-  it "reads deep nesting with many reads in time that grows with them" do
+  it "reads deep nesting with many reads in time that grows with them", :cpu_timed do
     blocks = (1..200).map { |i| "config.sensitive_patterns.each { |p#{i}|" }.join("\n")
     write("config/initializers/rails_ai_context.rb", "RailsAiContext.configure do |config|\n#{blocks}\nzz = 1\n#{"zz\n" * 100_000}#{'}' * 200}\nend\n")
-    cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
-    started = Process.clock_gettime(cpu)
-    apply rescue RailsAiContext::ConfigurationError
-    expect(Process.clock_gettime(cpu) - started).to be < 5
+    expect(cpu_seconds { apply rescue RailsAiContext::ConfigurationError }).to be < 5
   end
 
-  it "reads a long run of calls on a pattern in time that grows with it" do
+  it "reads a long run of calls on a pattern in time that grows with it", :cpu_timed do
     write("config/initializers/rails_ai_context.rb", "RailsAiContext.configure do |config|\n  config.sensitive_patterns.each do |p|\n#{"    p#{'.to_s' * 900}\n" * 100}  end\nend\n")
-    cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
-    started = Process.clock_gettime(cpu)
-    apply rescue RailsAiContext::ConfigurationError
-    expect(Process.clock_gettime(cpu) - started).to be < 3
+    expect(cpu_seconds { apply rescue RailsAiContext::ConfigurationError }).to be < 3
   end
 
-  it "refuses a chain or a nesting too deep to read, quickly" do
+  it "refuses a chain or a nesting too deep to read, quickly", :cpu_timed do
     write("config/initializers/rails_ai_context.rb", "RailsAiContext.configure do |config|\n  config.sensitive_patterns#{'.clear.concat(%w[a])' * 8000}\nend\n")
-    cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
-    started = Process.clock_gettime(cpu)
-
-    expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /the static tier cannot read this file/)
-    expect(Process.clock_gettime(cpu) - started).to be < 5
+    seconds = cpu_seconds do
+      expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /the static tier cannot read this file/)
+    end
+    expect(seconds).to be < 5
   end
 
   it "passes over a file it cannot open, which no boot loads either" do

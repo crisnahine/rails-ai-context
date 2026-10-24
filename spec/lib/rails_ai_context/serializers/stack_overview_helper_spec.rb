@@ -462,11 +462,11 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         helper = test_class.new({})
         path = File.join(root, ".claude", "rules", "rails-context.md")
 
-        first = helper.write_rule_files([ rule_file(path, "content") ])
+        first = helper.write_rule_files([ rule_file(path, "content") ], root: root)
         expect(first).to eq(written: [ path ], skipped: [], not_applicable: {})
         expect(File.read(path)).to eq("content\n")
 
-        second = helper.write_rule_files([ rule_file(path, "content") ])
+        second = helper.write_rule_files([ rule_file(path, "content") ], root: root)
         expect(second).to eq(written: [], skipped: [ path ], not_applicable: {})
       end
     end
@@ -479,7 +479,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         bare = File.join(root, "bare.md")
         ended = File.join(root, "ended.md")
 
-        helper.write_rule_files([ rule_file(bare, "one\ntwo"), rule_file(ended, "one\ntwo\n") ])
+        helper.write_rule_files([ rule_file(bare, "one\ntwo"), rule_file(ended, "one\ntwo\n") ], root: root)
 
         expect(File.read(bare)).to eq("one\ntwo\n")
         expect(File.read(ended)).to eq("one\ntwo\n")
@@ -491,7 +491,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         helper = test_class.new({})
         path = File.join(root, ".claude", "rules", "rails-models.md")
 
-        result = helper.write_rule_files([ rule_file(path, nil, "no models") ])
+        result = helper.write_rule_files([ rule_file(path, nil, "no models") ], root: root)
 
         expect(result).to eq(written: [], skipped: [], not_applicable: { path => "no models" })
         expect(Dir.exist?(File.join(root, ".claude"))).to be false
@@ -503,7 +503,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         helper = test_class.new({})
         path = File.join(root, "rails-models.md")
 
-        result = helper.write_rule_files([ rule_file(path, nil) ])
+        result = helper.write_rule_files([ rule_file(path, nil) ], root: root)
 
         expect(result[:not_applicable]).to eq(path => "nothing to document")
       end
@@ -529,8 +529,9 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
 
         result = klass.new.write_rule_table(
           root,
-          "present.md" => { renderer: :render_present, reason: "nothing to document" },
-          "absent.md" => { renderer: :render_absent, reason: "no models" }
+          { "present.md" => { renderer: :render_present, reason: "nothing to document" },
+            "absent.md" => { renderer: :render_absent, reason: "no models" } },
+          root: root
         )
 
         expect(result[:written]).to eq([ File.join(root, "present.md") ])

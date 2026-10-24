@@ -261,7 +261,7 @@ module RailsAiContext
 
       # SQLite keeps no row estimate a query can read without ANALYZE; a table past the cap is a floor.
       def row_estimates(conn)
-        names = (conn.tables - Introspectors::SqliteVirtualTables.hidden(conn)).reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
+        names = conn.tables - Introspectors::SqliteVirtualTables.hidden(conn)
         names.map do |table|
           count = conn.select_value("SELECT COUNT(*) FROM (SELECT 1 FROM #{conn.quote_table_name(table)} LIMIT #{COUNT_CAP + 1})").to_i
           entry = { table: table, approximate_rows: [ count, COUNT_CAP ].min }

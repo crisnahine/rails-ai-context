@@ -320,6 +320,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
       expect(results.first[:owner].join("::")).to eq("Admin::SuspendService")
     end
 
+    # `class ::Order` inside `module Shop` is the top-level Order, so its methods are Order's, not Shop::Order's.
+    it "names a class opened from the root inside a module by its own name" do
+      source = <<~RUBY
+        module Shop
+          class ::Order
+            def total
+            end
+          end
+
+          ::Receipt = Struct.new(:order) do
+            def print
+            end
+          end
+
+          def self.open
+          end
+        end
+      RUBY
+      owners = parse_and_dispatch(source).to_h { |m| [ m[:name], m[:owner] ] }
+      expect(owners).to eq("total" => %w[Order], "print" => %w[Receipt], "open" => %w[Shop])
+    end
+
     it "is empty for a method defined at the top level" do
       results = parse_and_dispatch("def bare_helper\nend\n")
       expect(results.first[:owner]).to eq([])
@@ -567,6 +589,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     RUBY
     own = parse_and_dispatch(source).select { |m| m[:owner] == [ "PointHolder" ] }.map { |m| [ m[:name], m[:scope], m[:visibility] ] }
     expect(own).to eq([ [ "built", :instance, :public ], [ "real_m", :instance, :public ] ])
+  end
+
+  it "reads an `||=` builder block as the constant's body when it assigns, and as no body when it assigns nothing" do
+    source = <<~RUBY
+      class Holder < ApplicationRecord
+        Anon ||= Class.new(Base) do
+          def assigned; end
+        end
+        Anon ||= Class.new(Base) do
+          def unrun; end
+        end
+        def real_m; end
+      end
+    RUBY
+    expect(parse_and_dispatch(source).map { |m| [ m[:name], m[:owner] ] }).to eq([ [ "assigned", %w[Holder Anon] ], [ "real_m", %w[Holder] ] ])
   end
 
   it "reads a builder block assigned to a constant as that constant's body" do

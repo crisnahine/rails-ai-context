@@ -38,7 +38,6 @@ module RailsAiContext
       # keeps, with no query (Reflection#has_active_cached_counter?).
       COUNTER_READS = %i[size any? empty? none?].to_set.freeze
 
-      PRELOAD = /\.(?:includes|preload|eager_load)\(/
       STRICT_LOCALS = /\#\s+locals:\s+\((.*?)\)/m
       MAX_PARTIAL_DEPTH = 4
 
@@ -51,13 +50,15 @@ module RailsAiContext
       Type = Struct.new(:models, :collection, :chain, :loop, :parent, keyword_init: true)
       Env = Struct.new(:ivars, :locals, :flags, keyword_init: true)
 
-      def initialize(root, models)
+      def initialize(root, models, booted: false)
         @root = root.to_s
+        @booted = booted
         @models = models.is_a?(Hash) ? models.select { |_, d| d.is_a?(Hash) && !d[:error] } : {}
         @risks = []
         @counted = Set.new.compare_by_identity
         @counter_reads = Set.new.compare_by_identity
         @trees = {}
+        @snippets = {}
         @record_partials = {}
       end
 
@@ -108,8 +109,10 @@ module RailsAiContext
         only.any? ? only.include?(action) : !except.include?(action)
       end
 
+      # A filter body runs for many actions, so its parse is kept for the scan, out of the
+      # shared store: snippets would evict the files other introspectors reuse.
       def tree(code)
-        code ? AstCache.parse_string(code.to_s).value : nil
+        code ? (@snippets[code.to_s] ||= AstCache.parse_uncached(code.to_s).value) : nil
       end
 
       # Instance and local variable assignments, in source order, each typed
@@ -250,10 +253,7 @@ module RailsAiContext
       end
 
       def target_model(owner, assoc)
-        return nil if assoc[:polymorphic]
-
-        written = assoc[:class_name] || (%w[has_many has_and_belongs_to_many].include?(assoc[:type].to_s) ? assoc[:name].to_s.singularize.camelize : assoc[:name].to_s.camelize)
-        TableName.model_for(written.to_s, owner, @models)
+        AssociationClass.model(assoc, @models, owner: owner)
       end
 
       # The association a call on a record reads: its own name, or a delegated
@@ -424,13 +424,34 @@ module RailsAiContext
         }.compact
       end
 
+      # The chain arrives as text (a scope's body from the models data is one source of it),
+      # so it is parsed here, with `_` standing in for the receiver it was cut from.
       def classify(chain, association)
-        if chain.match?(/\.(?:includes|preload|eager_load)\(.*(?::#{Regexp.escape(association)}\b|\b#{Regexp.escape(association)}:)/m)
-          :low
-        elsif chain.match?(PRELOAD)
-          :medium
-        else
-          :high
+        names = preloaded(AstCache.parse_uncached("_#{chain}").value)
+        return :high unless names
+
+        names.include?(association) ? :low : :medium
+      end
+
+      # Top-level names only: `includes(comments: :user)` preloads the comments' users, not the post's.
+      # nil when the chain makes no preload call at all.
+      def preloaded(node, found = nil)
+        return found unless node.is_a?(Prism::Node)
+
+        if node.is_a?(Prism::CallNode) && %i[includes preload eager_load].include?(node.name)
+          found ||= []
+          Array(node.arguments&.arguments).each { |argument| preload_names(argument, found) }
+        end
+        node.compact_child_nodes.each { |child| found = preloaded(child, found) }
+        found
+      end
+
+      def preload_names(node, found)
+        case node
+        when Prism::SymbolNode, Prism::StringNode then found << node.unescaped
+        when Prism::ArrayNode then node.elements.each { |element| preload_names(element, found) }
+        when Prism::KeywordHashNode, Prism::HashNode
+          node.elements.each { |element| preload_names(element.key, found) if element.is_a?(Prism::AssocNode) }
         end
       end
 
@@ -480,7 +501,7 @@ module RailsAiContext
         type = first && type_of(first, env, context)
         return unless type && type.models.one?
 
-        partial = record_partial(type.models.first, context)
+        partial = record_partial(type.models.first, context) or return
         local = partial.split("/").last
         record = type.collection ? loop_record(type) : type
         render_partial(partial, local, record, literal_locals(args.last), env, context)
@@ -546,15 +567,9 @@ module RailsAiContext
         declared.scan(/(\w+):\s*(true|false|nil)\b/).to_h { |name, value| [ name, value == "true" ] }
       end
 
-      # The partial Rails renders for a model's records: its to_partial_path,
-      # prefixed with the controller's namespace when that file exists.
+      # The partial Rails renders for a model's records: its to_partial_path, prefixed with the controller's namespace.
       def record_partial(model, context)
-        path = RenderedRecord.partial_path(model.underscore, @root, @record_partials)
-        return nil unless path
-
-        namespace = File.dirname(context[:path].to_s)
-        namespaced = "#{namespace}/#{path}"
-        namespace != "." && partial_file(namespaced, context) ? namespaced : path
+        RenderedRecord.model_partial(model.underscore, context[:path].to_s, @root, @record_partials, booted: @booted)
       end
 
       # [file, name under its views root] for a partial name, read as Rails
@@ -565,7 +580,7 @@ module RailsAiContext
         candidates = name.include?("/") ? [ name ] : [ "#{context[:path]}/#{name}", "application/#{name}" ]
         candidates.each do |candidate|
           dir, base = File.split(candidate)
-          found = views.select { |_, relative| File.dirname(relative) == dir && File.basename(relative).start_with?("_#{base}.") }
+          found = Array(views_by_dir[dir]).select { |_, relative| File.basename(relative).start_with?("_#{base}.") }
           next if found.empty?
 
           return found.min_by { |file, _| format_of(file) == context[:format] ? 0 : 1 }
@@ -577,7 +592,7 @@ module RailsAiContext
       def templates(path, action, action_tree)
         names = [ "#{path}/#{action}" ]
         rendered_names(action_tree).each { |name| names << (name.include?("/") ? name : "#{path}/#{name}") }
-        views.select { |_, relative| names.include?(Payload.template_key(relative)) }
+        names.uniq.flat_map { |name| views_by_key.fetch(name, []) }.sort_by(&:last).map(&:first)
       end
 
       def rendered_names(node, found = [])
@@ -599,6 +614,15 @@ module RailsAiContext
         @views ||= ViewFile.each(@root, "**/*.{erb,jbuilder}")
       end
 
+      # Each view with its place in `views`, by the template name it answers.
+      def views_by_key
+        @views_by_key ||= views.each_with_index.group_by { |(_, relative), _| Payload.template_key(relative) }
+      end
+
+      def views_by_dir
+        @views_by_dir ||= views.group_by { |_, relative| File.dirname(relative) }
+      end
+
       def format_of(file)
         File.basename(file).split(".")[1]
       end
@@ -611,7 +635,7 @@ module RailsAiContext
             elsif file.end_with?(".jbuilder") then source
             else RailsAiContext::ErbSource.tag_bodies(source)
             end
-            ruby && AstCache.parse_string(ruby).value
+            ruby && AstCache.parse_uncached(ruby).value
           end
         end
       end

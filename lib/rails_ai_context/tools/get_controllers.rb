@@ -199,7 +199,7 @@ module RailsAiContext
         declared = Array(info[:respond_to_formats]).map(&:to_s)
         route_key = Payload.controller_route_key(ctx, name)
         templates = RailsAiContext::PathResolver.view_dirs(rails_app.root.to_s).flat_map do |dir|
-          Dir.glob(File.join(dir, route_key, "*")).filter_map do |path|
+          RailsAiContext::PathResolver.glob(dir, File.join(route_key, "*")).filter_map do |path|
             base = File.basename(path)
             parts = base.split(".")
             next if base.start_with?("_") || parts.size < 3 || !File.file?(path)
@@ -349,9 +349,9 @@ module RailsAiContext
           ivars = RailsAiContext::Introspectors::ActionResolver.assigned_ivars(source_with_lines[:code])
           lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
 
-          # Private methods called by this action - include their source inline
-          called_methods = detect_called_private_methods(source_with_lines[:code], source_path, source: source,
-            owner: controller_name)
+          # A snippet is parsed once here and kept out of the shared cache, which holds whole files.
+          tree = RailsAiContext::AstCache.parse_uncached(source_with_lines[:code])
+          called_methods = detect_called_private_methods(tree, source_path, source: source, owner: controller_name)
           if called_methods.any?
             lines << "" << "## Private Methods Called"
             called_methods.each do |pm|
@@ -361,7 +361,7 @@ module RailsAiContext
           end
 
           # Render map: redirects, renders, and side effects
-          render_map = extract_render_map(source_with_lines[:code])
+          render_map = extract_render_map(source_with_lines[:code], tree)
           if render_map[:redirects].any? || render_map[:renders].any?
             lines << "" << "## Render Map"
             render_map[:redirects].each { |r| lines << "- **Redirect:** #{redacted(r, carried)}" }
@@ -423,12 +423,12 @@ module RailsAiContext
       end
 
       # Detect private methods called within an action's source
-      private_class_method def self.detect_called_private_methods(action_code, source_path, source: nil, owner: nil)
+      private_class_method def self.detect_called_private_methods(tree, source_path, source: nil, owner: nil)
         return [] unless File.exist?(source_path)
         return [] if File.size(source_path) > RailsAiContext.configuration.max_file_size
 
-        # Find all method-like calls in the action (word followed by optional parens)
-        candidates = action_code.scan(/\b([a-z_]\w*[!?]?)(?:\s*[\(,]|\s*$)/).flatten.uniq
+        candidates = Introspectors::AstWalk.each(tree.value)
+          .filter_map { |node| node.name.to_s if node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)) }.uniq
 
         full_source = source || RailsAiContext::SafeFile.read(source_path) || ""
         private_methods = Introspectors::ActionResolver.private_methods_from_source(full_source, owner: owner)
@@ -493,10 +493,10 @@ module RailsAiContext
       end
 
       # Extract render map from action source: redirects, renders, and side effects
-      private_class_method def self.extract_render_map(code)
-        redirects, renders = render_and_redirect_calls(code)
+      private_class_method def self.extract_render_map(code, tree = RailsAiContext::AstCache.parse_uncached(code))
+        redirects, renders = render_and_redirect_calls(tree)
         side_effects = []
-        enqueues = Introspectors::SourceCalls.enqueue_calls(code, enqueue_helpers).group_by { |hit| hit[:line] }
+        enqueues = Introspectors::SourceCalls.enqueue_calls(code, enqueue_helpers, tree: tree).group_by { |hit| hit[:line] }
 
         code.each_line.with_index(1) do |line, number|
           stripped = line.strip
@@ -532,10 +532,10 @@ module RailsAiContext
       # Lines were matched one at a time and their ends trimmed, which cut the
       # brace closing a block in `render json: accounts.map { ... }` and the
       # parenthesis closing `t(".created")` in a redirect's notice.
-      private_class_method def self.render_and_redirect_calls(code)
+      private_class_method def self.render_and_redirect_calls(parsed)
         redirects = []
         renders = []
-        tree = RailsAiContext::AstCache.parse_string(code).value
+        tree = parsed.value
         action = tree.statements.body.first.then { |node| node.name if node.is_a?(Prism::DefNode) }
         visit = lambda do |node|
           if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.arguments

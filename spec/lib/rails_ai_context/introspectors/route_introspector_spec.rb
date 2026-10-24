@@ -7,6 +7,18 @@ require "fileutils"
 RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
 
+  # The booted answer for a route set drawn from source, the static answer for the same source in
+  # config/routes.rb (no routes.rb when source is nil), and the set itself.
+  def tiers(source)
+    set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source.to_s) } }
+    booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n") if source
+      [ booted, described_class.new(RailsAiContext::StaticApp.new(dir)).static_call, set ]
+    end
+  end
+
   describe "#call" do
     subject(:result) { introspector.call }
 
@@ -187,6 +199,31 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # `rails routes` prints a mounted app's inspect, which for a module is its name.
+    it "names a module mounted as a Rack app by the module, as the static tier does" do
+      stub_const("API", Module.new { def self.call(_env) = [ 200, {}, [ "ok" ] ] })
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  mount API => \"/api\"\nend\n")
+        set = ActionDispatch::Routing::RouteSet.new
+        set.draw { mount API => "/api" }
+
+        booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Pathname(dir))).call[:mounted_engines]
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines]
+
+        expect(booted).to eq([ { engine: "API", path: "/api" } ])
+        expect(static).to eq([ { engine: "API", path: "/api" } ])
+      end
+    end
+
+    # Booted Rails mounts the Builder the constant holds and names it by its class.
+    it "lists a mount of a Rack app a constant the file builds where booted Rails mounts one, named as booted names it" do
+      booted, static, = tiers("BUILT_APP = Rack::Builder.new { run ->(_env) { [ 200, {}, [ \"ok\" ] ] } }\nmount BUILT_APP, at: \"/b\"\n")
+
+      expect(booted.slice(:mounted_engines, :dynamic_routes)).to eq(mounted_engines: [ { engine: "Rack::Builder", path: "/b" } ])
+      expect(static.slice(:mounted_engines, :dynamic_routes)).to eq(mounted_engines: [ { engine: "Rack::Builder", path: "/b" } ])
+    end
+
     # Booted, the routes section reads the source for mount conditions and the
     # engines section reads it for its mount list: one run walks it once.
     it "walks the route files once for the routes and engines sections of one run" do
@@ -270,6 +307,19 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       it "attaches no condition when two mounts share the path" do
         routes_rb = <<~RUBY
           if ENV["LIVE"]
+            mount FlagsUI.app(:live) => "/live"
+          else
+            mount FlagsUI.app(:poll) => "/live"
+          end
+        RUBY
+        mounts = booted_mounts(routes_rb) { mount FlagsUI.app(:live) => "/live" }
+
+        expect(mounts).to eq([ { engine: "Rack::Builder", path: "/live" } ])
+      end
+
+      it "takes the condition of the mount of that app when two share the path" do
+        routes_rb = <<~RUBY
+          if ENV["LIVE"]
             mount MetricsInstanceApp.new => "/live"
           else
             mount FlagsUI.app(:poll) => "/live"
@@ -277,7 +327,7 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         RUBY
         mounts = booted_mounts(routes_rb) { mount MetricsInstanceApp.new => "/live" }
 
-        expect(mounts).to eq([ { engine: "MetricsInstanceApp", path: "/live" } ])
+        expect(mounts).to eq([ { engine: "MetricsInstanceApp", path: "/live", condition: 'if ENV["LIVE"]' } ])
       end
 
       it "keeps an exact match ahead of the path, conditional or not" do
@@ -405,37 +455,46 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
 
     it "lists what bin/rails routes prints beside each route, the same booted and static" do
-      source = routes_source
-      set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source) } }
-      booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+      booted, static = both_tiers(routes_source)
 
-      Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "config"))
-        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n")
-        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      expect(booted).to eq(
+        "status" => [ [ "/status", '{subdomain: "api"}' ] ],
+        "photos" => [ [ "/photos/:id", '{id: /[A-Z]\d{5}/}' ] ],
+        "items" => [ [ "/items", nil ], [ "/items/:id", '{id: /\d+/}' ] ],
+        "feed" => [ [ "/feed", '{protocol: "https", format: :json}' ] ],
+        "loose" => [ [ "/loose", nil ] ]
+      )
+      expect(static).to eq(booted)
+    end
 
-        expect(constraints_of(booted)).to eq(
-          "status" => [ [ "/status", '{subdomain: "api"}' ] ],
-          "photos" => [ [ "/photos/:id", '{id: /[A-Z]\d{5}/}' ] ],
-          "items" => [ [ "/items", nil ], [ "/items/:id", '{id: /\d+/}' ] ],
-          "feed" => [ [ "/feed", '{protocol: "https", format: :json}' ] ],
-          "loose" => [ [ "/loose", nil ] ]
-        )
-        expect(constraints_of(static)).to eq(constraints_of(booted))
+    def both_tiers(source)
+      tiers(source).first(2).map { |result| constraints_of(result) }
+    end
+
+    it "lists a resource's block routes before its own, in the order Rails matches them, on both tiers" do
+      booted, static = tiers("resources :heroes do\n  collection { get :search }\n  member { post :promote }\nend\n")
+      rows = ->(result) { result[:by_controller]["heroes"].map { |r| "#{r[:verb]} #{r[:path]}" } }
+
+      expect(rows.(booted)).to eq([
+        "GET /heroes/search", "POST /heroes/:id/promote", "GET /heroes", "POST /heroes", "GET /heroes/new",
+        "GET /heroes/:id/edit", "GET /heroes/:id", "PATCH /heroes/:id", "PUT /heroes/:id", "DELETE /heroes/:id"
+      ])
+      expect(rows.(static)).to eq(rows.(booted))
+    end
+
+    it "names the root route on both tiers when GET / also answers another verb, or any verb" do
+      [ "match \"/\", to: \"pages#home\", via: [:get, :post]\n", "root \"pages#home\", via: :all\n" ].each do |source|
+        booted, static = tiers(source)
+
+        expect([ booted[:root_route], static[:root_route] ]).to eq([ "pages#home", "pages#home" ]), source
       end
     end
 
-    # Rows sorted: the static tier lists a resource's block routes after its own, Rails before.
-    def both_tiers(source)
-      set = ActionDispatch::Routing::RouteSet.new.tap { |s| s.draw { instance_eval(source) } }
-      booted = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
-      Dir.mktmpdir do |dir|
-        FileUtils.mkdir_p(File.join(dir, "config"))
-        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n#{source}end\n")
-        [ booted, described_class.new(RailsAiContext::StaticApp.new(dir)).static_call ].map do |result|
-          constraints_of(result).transform_values(&:sort)
-        end
-      end
+    it "lists a glob segment among a route's params on both tiers, as Rails requires it" do
+      booted, static, set = tiers("get \"docs/*section\", to: \"pages#doc\", as: :doc\n")
+
+      expect(set.routes.first.required_parts).to eq([ :section ])
+      expect([ booted, static ].map { |r| r[:by_controller]["pages"].first[:params] }).to eq([ [ "section" ], [ "section" ] ])
     end
 
     it "gives a nested resource's parent param the parent's own param constraint, as Rails does" do
@@ -484,20 +543,587 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   end
 
   describe "#static_call" do
-    def multi_path_routes(actionpack)
+    def multi_path_routes(railties)
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get \"/a\", \"/b\", to: \"pages#show\"\nend\n")
-        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    actionpack (#{actionpack})\n") if actionpack
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    railties (#{railties})\n") if railties
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
         [ result[:by_controller].fetch("pages", []).map { |r| r[:path] }, result[:dynamic_routes] ]
       end
     end
 
-    it "draws every path of a multi-path route only when the lockfile pins actionpack below 8.1" do
+    it "answers an app with no config/routes.rb as no routes, as the booted tier does, not as an error" do
+      booted, static = tiers(nil)
+
+      expect(static).not_to have_key(:error)
+      expect(static.slice(*booted.keys)).to eq(booted)
+      expect(static[:note]).to start_with("No route file to parse")
+    end
+
+    it "draws every path of a multi-path route only when the lockfile pins Rails below 8.1" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
       expect(multi_path_routes("8.0.2")).to eq([ [ "/a", "/b" ], nil ])
       expect(multi_path_routes("8.1.0")).to eq([ [], 1 ])
       expect(multi_path_routes(nil)).to eq([ [], 1 ])
+    end
+
+    # Mapper#mount names a mount its `as:`, else an engine's railtie_name (the isolated namespace here, wiki_engine for
+    # one that isolates none) or a class's name underscored, so a later route asking for that name gets none. Before 8.1
+    # `as: nil` falls back to that name too; 8.1 leaves the mount unnamed. A gem engine's file is not here to say.
+    it "takes the name Rails gives a mount from the engine's file, the class and the Rails version, and none it cannot read" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      named = lambda do |railties|
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "lib", "blog"))
+          FileUtils.mkdir_p(File.join(dir, "lib", "wiki"))
+          File.write(File.join(dir, "lib", "blog", "engine.rb"), "module Blog\n  class Engine < ::Rails::Engine\n    isolate_namespace Blog\n  end\nend\n")
+          File.write(File.join(dir, "lib", "wiki", "engine.rb"), "module Wiki\n  class Engine < ::Rails::Engine\n  end\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+            Rails.application.routes.draw do
+              mount Blog::Engine => "/blog"
+              mount Wiki::Engine => "/wiki"
+              mount Forum::Engine => "/forum"
+              mount HealthCheck, at: "/hc", as: nil
+              get "blog", to: "pages#a"
+              get "blog_engine", to: "pages#b"
+              get "wiki_engine", to: "pages#c"
+              get "forum_engine", to: "pages#d"
+              get "health_check", to: "pages#e"
+            end
+          RUBY
+          File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    railties (#{railties})\n")
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["pages"].to_h { |r| [ r[:action], r[:name] ] }
+        end
+      end
+
+      expect(named.call("8.1.0")).to eq("a" => nil, "b" => "blog_engine", "c" => nil, "d" => "forum_engine", "e" => "health_check")
+      expect(named.call("8.0.2")).to eq("a" => nil, "b" => "blog_engine", "c" => nil, "d" => "forum_engine", "e" => nil)
+    end
+
+    # A live RouteSet attaches each app where it draws a route at that path: a resource block's own routes sit in its
+    # nested scope, a member's at the record, a collection's and a singular resource's at the resource.
+    it "lists a Rack app attached inside a resource at the path Rails attaches it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            resources :posts do
+              mount NestedApp, at: "hc"
+              member { mount MemberApp => "hc" }
+              collection { mount CollectionApp, at: "/hc" }
+              match "stats", to: StatsApp, via: :all
+            end
+            resource :profile do
+              mount ProfileApp, at: "hc"
+            end
+            namespace :admin do
+              resources :users, shallow: true do
+                resources :posts do
+                  mount ShallowApp, at: "hc"
+                end
+              end
+            end
+          end
+        RUBY
+
+        mounts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines].to_h { |m| [ m[:engine], m[:path] ] }
+
+        expect(mounts).to eq("NestedApp" => "/posts/:post_id/hc", "MemberApp" => "/posts/:id/hc", "CollectionApp" => "/posts/hc",
+                             "StatsApp" => "/posts/:post_id/stats", "ProfileApp" => "/profile/hc", "ShallowApp" => "/admin/posts/:post_id/hc")
+      end
+    end
+
+    # A live RouteSet attaches both apps at /posts/:post_id/hc, with RES = :posts, where the walk cannot read the
+    # resource; an app inside a block the walk does not draw in place may sit anywhere under the resource.
+    it "lists no path for a Rack app inside a resource the walk cannot place" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          RES = :posts
+          Rails.application.routes.draw do
+            resources RES do
+              mount UnreadApp, at: "hc"
+            end
+            resources :posts do
+              api_block do
+                mount BlockApp, at: "hc"
+              end
+            end
+          end
+        RUBY
+
+        mounts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines].to_h { |m| [ m[:engine], m[:path] ] }
+
+        expect(mounts).to eq("UnreadApp" => nil, "BlockApp" => nil)
+      end
+    end
+
+    def mounted_engines_of(routes, files = {})
+      Dir.mktmpdir do |dir|
+        { "config/routes.rb" => routes, **files }.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), source)
+        end
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines]
+      end
+    end
+
+    def static_mounts_of(routes, files = {})
+      mounted_engines_of(routes, files).map { |m| [ m[:engine], m[:path] ] }
+    end
+
+    # A live RouteSet (Rails 7.0.10 and 8.1.4) runs a concern's block at each site that applies it, so each app in it
+    # is attached once per site at that site's path. One never applied, or applied only in a file another `draw`
+    # reads, has no site this walk sees.
+    it "lists a Rack app inside a concern at each site that applies it" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          concern :checked do
+            mount TopApp, at: "hc"
+            get "hc2", to: RouteApp
+          end
+          concern :unused do
+            mount UnusedApp, at: "u"
+          end
+          concern :elsewhere do
+            mount DrawnApp => "/d"
+          end
+          concerns :checked
+          namespace :admin do
+            concerns :checked
+          end
+          resources :posts, only: [], concerns: :checked
+          resources :users, only: [] do
+            concerns :checked
+          end
+          draw :extra
+        end
+      RUBY
+
+      expect(static_mounts_of(routes, "config/routes/extra.rb" => "concerns :elsewhere\n")).to eq(
+        [ [ "UnusedApp", nil ], [ "DrawnApp", nil ],
+          [ "TopApp", "/hc" ], [ "RouteApp", "/hc2" ], [ "TopApp", "/admin/hc" ], [ "RouteApp", "/admin/hc2" ],
+          [ "TopApp", "/posts/:post_id/hc" ], [ "RouteApp", "/posts/:post_id/hc2" ],
+          [ "TopApp", "/users/:user_id/hc" ], [ "RouteApp", "/users/:user_id/hc2" ] ]
+      )
+    end
+
+    # Live, a routes-file method draws at each call, a literal list's block once per element and a block given to
+    # `resources :aa, :bb` once per name; a method called with arguments is read once where it is defined.
+    it "lists a Rack app in a method, a loop or a multi-name resource at each place Rails draws it" do
+      routes = <<~'RUBY'
+        Rails.application.routes.draw do
+          def health_routes
+            mount MethodApp, at: "hc"
+          end
+          def arg_routes(x)
+            mount ArgsApp, at: "args"
+          end
+          health_routes
+          namespace :admin do
+            health_routes
+          end
+          arg_routes(1)
+          %w[a b].each do |v|
+            mount LoopApp, at: v, as: "loop_#{v}"
+            get "g/#{v}", to: LoopRouteApp
+          end
+          %i[c d].each do |v|
+            namespace v do
+              mount ScopedLoopApp, at: "hc"
+            end
+          end
+          %w[e f].each do |v|
+            scope path: v, as: v do
+              mount PathLoopApp, at: "hc"
+            end
+          end
+          resources :aa, :bb, only: [] do
+            mount NamesApp, at: "x", as: "names"
+          end
+        end
+      RUBY
+
+      expect(static_mounts_of(routes)).to eq(
+        [ [ "ArgsApp", "/args" ], [ "MethodApp", "/hc" ], [ "MethodApp", "/admin/hc" ],
+          [ "LoopApp", "/a" ], [ "LoopRouteApp", "/g/a" ], [ "LoopApp", "/b" ], [ "LoopRouteApp", "/g/b" ],
+          [ "ScopedLoopApp", "/c/hc" ], [ "ScopedLoopApp", "/d/hc" ], [ "PathLoopApp", "/e/hc" ], [ "PathLoopApp", "/f/hc" ],
+          [ "NamesApp", "/aa/:aa_id/x" ], [ "NamesApp", "/bb/:bb_id/x" ] ]
+      )
+    end
+
+    # Live, the concern's block keeps the mapper its `tap` handed it, wherever it is applied.
+    it "reads a mapper block's parameter in a concern applied outside that block" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          tap { |r| r.concern(:checked) { r.mount TapApp, at: "hc" } }
+          concerns :checked
+        end
+      RUBY
+
+      expect(static_mounts_of(routes)).to eq([ [ "TapApp", "/hc" ] ])
+    end
+
+    # The concern's `recorder` is the local beside it, not the `tap` parameter of that name at the site: live draws nothing.
+    it "reads a replayed concern's locals in the scopes it was written in" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          recorder = Recorder.new
+          concern :checked do
+            recorder.mount KeptApp, at: "kept"
+          end
+          tap do |recorder|
+            concerns :checked
+          end
+        end
+      RUBY
+
+      expect(static_mounts_of(routes)).to eq([])
+    end
+
+    # Live, each pass names its mount (blog_a, blog_b, c_wiki, d_wiki), which names the engine's route proxy.
+    it "names an engine mounted in a loop by the name each pass gives it" do
+      routes = <<~'RUBY'
+        Blog::Engine.routes.draw do
+          get "p", to: "posts#index"
+        end
+        Wiki::Engine.routes.draw do
+          get "w", to: "pages#index"
+        end
+        Rails.application.routes.draw do
+          %w[a b].each do |v|
+            mount Blog::Engine, at: v, as: "blog_#{v}"
+          end
+          %w[c d].each do |v|
+            namespace v do
+              mount Wiki::Engine, at: "wiki"
+            end
+          end
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        engines = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:engine_routes]
+        expect(engines.map { |e| [ e[:engine], e[:mount], e[:also_mounted_at], e[:routes].map { |r| [ r[:path], r[:name] ] } ] }).to eq(
+          [ [ "Blog::Engine", "/a", [ "/b" ], [ [ "/a/p", "blog_a.p" ] ] ],
+            [ "Wiki::Engine", "/c/wiki", [ "/d/wiki" ], [ [ "/c/wiki/w", "c_wiki.w" ] ] ] ]
+        )
+      end
+    end
+
+    it "marks an app a concern attaches under a condition at the site or in its body" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          concern :checked do
+            mount TopApp, at: "hc"
+            mount InnerApp, at: "in" if ENV["IN"]
+          end
+          if ENV["SITE"]
+            namespace :admin do
+              concerns :checked
+            end
+          end
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines]).to eq(
+          [ { engine: "TopApp", path: "/admin/hc", condition: 'if ENV["SITE"]' },
+            { engine: "InnerApp", path: "/admin/in", condition: 'if ENV["SITE"] and if ENV["IN"]' } ]
+        )
+      end
+    end
+
+    # Live (Rails 7.0.10 and 8.1.4), the site applies the definition the arm that ran made: with A unset Sidekiq::Web at
+    # /b, with A=1 HealthCheck at /a; the same mount in both arms is at /a either way.
+    it "lists an app at the site once per arm that defines the concern or method, under that arm's condition" do
+      concern = <<~RUBY
+        Rails.application.routes.draw do
+          if ENV["A"]
+            concern :adm do
+              mount HealthCheck, at: "a"
+            end
+          else
+            concern :adm do
+              mount Sidekiq::Web, at: "b"
+            end
+          end
+          concerns :adm
+        end
+      RUBY
+      method = <<~RUBY
+        Rails.application.routes.draw do
+          if ENV["A"]
+            def admin
+              mount HealthCheck, at: "a"
+            end
+          else
+            def admin
+              mount Sidekiq::Web, at: "b"
+            end
+          end
+          admin
+        end
+      RUBY
+
+      both_arms = <<~RUBY
+        Rails.application.routes.draw do
+          if ENV["A"]
+            concern :adm do
+              mount HealthCheck, at: "a"
+            end
+          else
+            concern :adm do
+              mount HealthCheck, at: "a"
+            end
+          end
+          namespace :n do
+            concerns :adm
+          end
+        end
+      RUBY
+
+      expected = [ { engine: "HealthCheck", path: "/a", condition: 'if ENV["A"]' }, { engine: "Sidekiq::Web", path: "/b", condition: 'unless ENV["A"]' } ]
+      expect(mounted_engines_of(concern)).to eq(expected)
+      expect(mounted_engines_of(method)).to eq(expected)
+      expect(mounted_engines_of(both_arms)).to eq([ { engine: "HealthCheck", path: "/n/a" } ])
+    end
+
+    # Live, a replaced definition draws nothing (only /b); the walk reads it where it is written, as it does one never applied.
+    it "keeps an app in a concern a later definition replaces before any site applies it" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          concern :adm do
+            mount HealthCheck, at: "a"
+          end
+          concern :adm do
+            mount Sidekiq::Web, at: "b"
+          end
+          concerns :adm
+        end
+      RUBY
+
+      expect(static_mounts_of(routes)).to eq([ [ "HealthCheck", nil ], [ "Sidekiq::Web", "/b" ] ])
+    end
+
+    # Live, the app is drawn only when the site's branch ran and the definition's branch had run before it.
+    it "marks an app a replay draws with the site's condition, then its definition's, then its own" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          if ENV["A"]
+            if ENV["B"]
+              concern :adm do
+                mount HealthCheck, at: "a" unless ENV["E"]
+              end
+            end
+          end
+          unless ENV["C"]
+            concerns :adm if ENV["D"]
+          end
+          unless ENV["F"]
+            def admin
+              mount Sidekiq::Web, at: "b"
+            end
+            admin
+          end
+          if ENV["G"]
+            def other
+              mount OtherApp, at: "o"
+            end
+          end
+          other if ENV["G"]
+        end
+      RUBY
+
+      expect(mounted_engines_of(routes)).to eq(
+        [ { engine: "HealthCheck", path: "/a", condition: 'unless ENV["C"] and if ENV["D"] and if ENV["A"] and if ENV["B"] and unless ENV["E"]' },
+          { engine: "Sidekiq::Web", path: "/b", condition: 'unless ENV["F"]' },
+          { engine: "OtherApp", path: "/o", condition: 'if ENV["G"]' } ]
+      )
+    end
+
+    # Live, /a is drawn only with A=1, /b only with A unset and /x only with F unset (with F=1 the call raises NameError).
+    it "marks a route a replay draws with its definition's condition" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          if ENV["A"]
+            concern :adm do
+              get "a", to: "pages#a"
+            end
+          else
+            concern :adm do
+              get "b", to: "pages#b"
+            end
+          end
+          concerns :adm
+          unless ENV["F"]
+            def extra
+              get "x", to: "pages#x"
+            end
+          end
+          extra
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        pages = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["pages"]
+        expect(pages.map { |r| [ r[:path], r[:condition] ] }).to eq([ [ "/a", 'if ENV["A"]' ], [ "/b", 'unless ENV["A"]' ], [ "/x", 'unless ENV["F"]' ] ])
+      end
+    end
+
+    # Live (Rails 7.0.10 and 8.1.4), a route in either arm takes its name from those taken before the site: /a or /b
+    # n=x, /h n=h, /things n=things either way, and the second /pre is unnamed. /z is unnamed only on the run whose
+    # arm mounted the app it takes its name from (A=1), and the walk, which lists both arms, leaves it unnamed.
+    it "names each arm's routes of a replayed definition from the names taken before the site" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          get "pre", to: "pages#pre"
+          if ENV["A"]
+            concern :adm do
+              get "a", to: "pages#a", as: :x
+              mount HealthCheck, at: "hc", as: :z
+            end
+            def extra
+              get "h", to: "pages#h"
+              get "pre", to: "pages#pre2"
+              resources :things
+            end
+          else
+            concern :adm do
+              get "b", to: "pages#b", as: :x
+            end
+            def extra
+              get "h", to: "pages#h2"
+              resources :things, only: :index
+            end
+          end
+          concerns :adm
+          extra
+          get "z", to: "pages#z"
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        by_controller = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]
+        expect(by_controller["pages"].map { |r| [ r[:action], r[:name] ] }).to eq(
+          [ %w[pre pre], %w[a x], %w[b x], %w[h h], [ "pre2", nil ], %w[h2 h], [ "z", nil ] ]
+        )
+        expect(by_controller["things"].select { |r| r[:action] == "index" }.map { |r| r[:name] }).to eq(%w[things things])
+      end
+    end
+
+    # Live (Rails 7.0.10 and 8.1.4), a definition a later one under one if/unless replaces is in force only when that
+    # branch did not run: /a with A unset and /b with A=1; the first call is before the later def, so /x either way,
+    # then /s/x with A=1 and /s/y with A unset; /c only with B unset, as the later def under `if ENV["B"]` replaces it.
+    it "marks a definition a later one under one if/unless may replace with the opposite of that branch" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          concern :adm do
+            get "a", to: "pages#a"
+          end
+          if ENV["A"]
+            concern :adm do
+              get "b", to: "pages#b"
+            end
+          end
+          concerns :adm
+          def extra
+            get "x", to: "pages#x"
+          end
+          extra
+          unless ENV["A"]
+            def extra
+              get "y", to: "pages#y"
+            end
+          end
+          scope "s" do
+            extra
+          end
+          unless ENV["A"]
+            concern :other do
+              get "c", to: "pages#c"
+            end
+          end
+          if ENV["B"]
+            concern :other do
+              get "d", to: "pages#d"
+            end
+          end
+          concerns :other
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        pages = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["pages"]
+        expect(pages.map { |r| [ r[:path], r[:condition] ] }).to eq(
+          [ [ "/a", 'unless ENV["A"]' ], [ "/b", 'if ENV["A"]' ], [ "/x", nil ], [ "/s/x", 'if ENV["A"]' ], [ "/s/y", 'unless ENV["A"]' ],
+            [ "/c", 'unless ENV["A"] and unless ENV["B"]' ], [ "/d", 'if ENV["B"]' ] ]
+        )
+      end
+    end
+
+    # Live, /b with A=1 and /c with A unset: /a is never drawn, as each later branch replaces it on its run.
+    it "replaces a definition by a later one under a branch that states the same condition in another block" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          concern :adm do
+            get "a", to: "pages#a"
+          end
+          if ENV["A"]
+            concern :adm do
+              get "b", to: "pages#b"
+            end
+          end
+          unless ENV["A"]
+            concern :adm do
+              get "c", to: "pages#c"
+            end
+          end
+          concerns :adm
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        pages = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["pages"]
+        expect(pages.map { |r| [ r[:path], r[:condition] ] }).to eq([ [ "/b", 'if ENV["A"]' ], [ "/c", 'unless ENV["A"]' ] ])
+      end
+    end
+
+    # Ruby assigns a constant written in a concern's block once per application; applied once, it holds that value.
+    it "reads a constant a replayed concern assigns once as written once" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          concern :checked do
+            HELD = HeldApp
+            mount HELD, at: "held"
+            TARGET = "posts#index"
+            get "x", to: TARGET
+          end
+          concerns :checked
+        end
+      RUBY
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes)
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:mounted_engines]).to eq([ { engine: "HeldApp", path: "/held" } ])
+        expect(result[:by_controller]["posts"].map { |r| [ r[:path], r[:action] ] }).to eq([ [ "/x", "index" ] ])
+      end
     end
 
     it "marks a mount drawn only under a condition, and not one both arms draw" do
@@ -911,6 +1537,33 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    it "reads an in-repo engine's routes after another section walked the same route files in the run" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "engines", "shop", "lib", "shop"))
+        FileUtils.mkdir_p(File.join(dir, "engines", "shop", "config"))
+        FileUtils.mkdir_p(File.join(dir, "engines", "shop", "app", "controllers", "shop"))
+        File.write(File.join(dir, "engines", "shop", "shop.gemspec"), "")
+        File.write(File.join(dir, "engines", "shop", "lib", "shop", "engine.rb"),
+                   "module Shop\n  class Engine < ::Rails::Engine\n    isolate_namespace Shop\n  end\nend\n")
+        File.write(File.join(dir, "engines", "shop", "config", "routes.rb"),
+                   "Shop::Engine.routes.draw do\n  resources :orders, only: [:index, :show]\nend\n")
+        File.write(File.join(dir, "config", "routes.rb"),
+                   "Rails.application.routes.draw do\n  mount Shop::Engine, at: \"/shop\"\n  resources :posts, only: :index\nend\n")
+        app = RailsAiContext::StaticApp.new(dir)
+
+        groups = RailsAiContext::RunCache.around do
+          described_class.new(app).static_mounts
+          2.times.map { described_class.new(app).static_call[:engine_routes] }
+        end
+
+        groups.each do |engine_routes|
+          expect(engine_routes.map { |g| [ g[:engine], g[:routes].map { |r| [ r[:path], r[:name] ] }, g[:unavailable] ] })
+            .to eq([ [ "Shop::Engine", [ [ "/shop/orders", "shop.orders" ], [ "/shop/orders/:id", "shop.order" ] ], nil ] ])
+        end
+      end
+    end
+
     # Rails names an engine's route proxy after the mount's `as:`, else the
     # engine's engine_name; any other name raises NameError when called.
     it "names the route proxy the way Rails names the mount" do
@@ -1121,13 +1774,6 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
           [ "/api/lti/tools/:tool_id/grade", "lti_api#grade", "lti_grade" ]
         )
         expect(result[:dynamic_routes]).to eq(1)
-      end
-    end
-
-    it "reports a missing routes.rb honestly" do
-      Dir.mktmpdir do |dir|
-        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
-        expect(result[:error]).to include("config/routes.rb")
       end
     end
 

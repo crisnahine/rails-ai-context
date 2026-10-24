@@ -129,14 +129,6 @@ RSpec.describe RailsAiContext::PortablePath do
     end
   end
 
-  describe ".relativize_all" do
-    it "reports a path once even when several railties contributed it" do
-      paths = [ "/srv/blog/lib", "/srv/blog/lib", "/srv/blog/app/services" ]
-
-      expect(described_class.relativize_all(paths, "/srv/blog")).to eq([ "lib", "app/services" ])
-    end
-  end
-
   describe ".relativize_text" do
     it "strips the root where a path starts" do
       text = "cannot load /app/app/models/user.rb:3 (from '/app/lib/x.rb')"

@@ -246,6 +246,21 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
         expect(text).to include("Full guide content here")
         expect(File.size(cache_file)).to eq(body.bytesize)
       end
+
+      it "returns the fetched doc when tmp is a symlink out of the app, and names no path outside it" do
+        outside = Dir.mktmpdir
+        File.symlink(outside, root.join("tmp"))
+
+        text = described_class.call(query: "active record basics", fetch: true).content.first[:text]
+
+        expect(text).to include("Full guide content here")
+        expect(text).not_to include("fetch failed")
+        expect(text).not_to include(outside)
+        expect(text).not_to include(File.realpath(outside))
+        expect(text).not_to include(root.to_s)
+      ensure
+        FileUtils.rm_rf(outside) if outside
+      end
     end
 
     context "with fetch: true and network failure" do

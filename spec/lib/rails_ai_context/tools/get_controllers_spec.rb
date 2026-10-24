@@ -1076,6 +1076,92 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       end
     end
 
+    it "parses the action's source once, outside the shared parse cache" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def show
+              load_widget
+              SyncJob.perform_later(@widget)
+              redirect_to widgets_path
+            end
+
+            private
+
+            def load_widget
+              @widget = Widget.find(params[:id])
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => {
+            actions: %w[show], filters: [], parent_class: "ApplicationController",
+            file: "app/controllers/widgets_controller.rb"
+          } } }
+        )
+        snippet_parses = 0
+        allow(Prism).to receive(:parse).and_wrap_original do |original, source, *rest, **opts|
+          snippet_parses += 1 if source.start_with?("  def show")
+          original.call(source, *rest, **opts)
+        end
+        RailsAiContext::AstCache.clear
+
+        text = described_class.call(controller: "WidgetsController", action: "show").content.first[:text]
+
+        expect(text).to include("### load_widget", "redirect_to widgets_path", "SyncJob.perform_later")
+        expect(snippet_parses).to eq(1)
+        expect(RailsAiContext::AstCache::STORE.values.map { |r| r.source.source }).not_to include(a_string_starting_with("  def show"))
+      end
+    end
+
+    it "inlines a private method passed as an argument or with a call chained after it" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def index
+              @posts = paginate(scope)
+              @count = visible_posts.size
+              # archived_posts, once the archive ships
+            end
+
+            private
+
+            def scope
+              Post.where(published: true)
+            end
+
+            def paginate(rel)
+              rel.limit(20)
+            end
+
+            def visible_posts
+              Post.visible
+            end
+
+            def archived_posts
+              Post.archived
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "PostsController" => {
+            actions: %w[index], filters: [], parent_class: "ApplicationController",
+            file: "app/controllers/posts_controller.rb"
+          } } }
+        )
+
+        text = described_class.call(controller: "PostsController", action: "index").content.first[:text]
+        called = text[/## Private Methods Called.*/m].scan(/^### (\w+)/).flatten
+
+        expect(called).to contain_exactly("paginate", "scope", "visible_posts")
+        expect(text).to include("Post.where(published: true)", "Post.visible")
+      end
+    end
+
     # An inherited filter names where it was declared, not whichever class
     # happens to be the direct parent.
     it "names the grandparent an inherited filter was declared on" do

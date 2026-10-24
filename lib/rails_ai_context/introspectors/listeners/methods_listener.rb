@@ -8,6 +8,8 @@ module RailsAiContext
       # visibility modifier calls, including inline forms like
       # `private :method_name`.
       class MethodsListener < BaseListener
+        include OwnerScope
+
         # A constructor is not part of the callable interface every other
         # caller asks for, so it stays out unless one asks for it by name.
         def initialize(include_initialize: false)
@@ -15,13 +17,11 @@ module RailsAiContext
           @include_initialize = include_initialize
           @results = Results.new
           @frames = [ Frame.new(:body, :public, {}) ]
-          @owner_stack = []
           # Blocks that open a body of their own, keyed by their block node so
           # the block's own enter/leave can open and close the frame.
           @scoped_blocks = {}.compare_by_identity
           @open_blocks = []
           @def_depth = 0
-          @builders = []
           # Each entry's parameters as written, which an alias of it takes on.
           @param_slices = {}.compare_by_identity
         end
@@ -70,22 +70,22 @@ module RailsAiContext
 
         def on_class_node_enter(node)
           open_frame(:body)
-          @owner_stack.push(constant_path_string(node.constant_path))
+          super
         end
 
         def on_class_node_leave(node)
           @frames.pop
-          @owner_stack.pop
+          super
         end
 
         def on_module_node_enter(node)
           open_frame(:body)
-          @owner_stack.push(constant_path_string(node.constant_path))
+          super
         end
 
         def on_module_node_leave(node)
           @frames.pop
-          @owner_stack.pop
+          super
         end
 
         # A singleton class body starts public, and a `private` in it stays in it.
@@ -100,7 +100,7 @@ module RailsAiContext
         # Bare `private` affects every later def in this frame; `private :x`
         # and `private def x` mark the one name, retroactively for :x.
         def on_call_node_enter(node)
-          @scoped_blocks[node.block] = :extension if new_class_body?(node) && !@scoped_blocks.key?(node.block)
+          @scoped_blocks[node.block] = :extension if OwnerScope.builder?(node) && !@scoped_blocks.key?(node.block)
           return unless node.receiver.nil?
 
           case node.name
@@ -127,29 +127,19 @@ module RailsAiContext
           end
         end
 
-        # `Name = Struct.new do ... end` is Name's body.
-        def on_constant_write_node_enter(node)
-          open_builder(node, node.name.to_s)
-        end
-
-        def on_constant_write_node_leave(node)
-          close_builder(node)
-        end
-
-        def on_constant_path_write_node_enter(node)
-          open_builder(node, constant_path_string(node.target))
-        end
-
-        def on_constant_path_write_node_leave(node)
-          close_builder(node)
+        # `Name = Struct.new do ... end` is Name's body; an `||=` that assigns nothing leaves it no one's.
+        %i[on_constant_write_node_enter on_constant_path_write_node_enter on_constant_or_write_node_enter on_constant_path_or_write_node_enter].each do |event|
+          define_method(event) do |node|
+            super(node)
+            @scoped_blocks[node.value.block] = :body if OwnerScope.builder?(node.value)
+          end
         end
 
         # ponytail: a Module.new held in a local is read as the enclosing class's, which is where it is
         # nearly always included; follow the local to its `include` if another use turns up.
         def on_local_variable_write_node_enter(node)
           value = node.value
-          @scoped_blocks[value.block] = :body if value.is_a?(Prism::CallNode) && new_class_body?(value) && value.name == :new &&
-                                                 value.receiver.name == :Module
+          @scoped_blocks[value.block] = :body if OwnerScope.builder?(value) && value.receiver.name == :Module
         end
 
         def on_alias_method_node_enter(node)
@@ -200,33 +190,6 @@ module RailsAiContext
         end
 
         private
-
-        # These evaluate their block as a new class or module body.
-        CLASS_BUILDERS = { Struct: :new, Class: :new, Module: :new, Data: :define }.freeze
-
-        def new_class_body?(node)
-          receiver = node.receiver
-          return false unless node.block.is_a?(Prism::BlockNode)
-          return false unless receiver.is_a?(Prism::ConstantReadNode) || (receiver.is_a?(Prism::ConstantPathNode) && receiver.parent.nil?)
-
-          CLASS_BUILDERS[receiver.name] == node.name
-        end
-
-        def open_builder(node, name)
-          value = node.value
-          return unless value.is_a?(Prism::CallNode) && new_class_body?(value)
-
-          @scoped_blocks[value.block] = :body
-          @owner_stack.push(name)
-          @builders.push(node)
-        end
-
-        def close_builder(node)
-          return unless @builders.last.equal?(node)
-
-          @builders.pop
-          @owner_stack.pop
-        end
 
         # What an includer gains: a `class_methods` def, or a class method written in `included do`.
         def includer_gains?(scope)

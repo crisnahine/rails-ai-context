@@ -49,9 +49,12 @@ module RailsAiContext
           path = File.join(app_root.to_s, relative)
           next false unless File.file?(path)
 
-          File.delete(path)
+          SafeFile.delete(path, root: app_root)
           surface.say "  Removed #{Program.shown(surface, path, root)}", :ok
           true
+        rescue SafeFile::LinkedOut
+          surface.say "Left #{Program.shown(surface, path, root)} as it is - #{SafeFile::LINKED}", :warn
+          false
         rescue SystemCallError => e
           surface.say "Could not remove #{Program.shown(surface, path, root)}: #{e.message}", :warn
           false
@@ -66,9 +69,12 @@ module RailsAiContext
         rest = content.gsub(GITIGNORE_ENTRY, "")
         return false if rest == content
 
-        File.binwrite(path, rest)
+        SafeFile.atomic_write(path, rest, root: dir)
         surface.say "  Removed the rails-ai-context lines from #{Program.shown(surface, path, root)}", :ok
         true
+      rescue SafeFile::LinkedOut
+        surface.say "Left #{Program.shown(surface, path, root)} as it is - #{SafeFile::LINKED}", :warn
+        false
       rescue SystemCallError => e
         surface.say "Could not update #{Program.shown(surface, path, root)}: #{e.message}", :warn
         false

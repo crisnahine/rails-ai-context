@@ -25,6 +25,14 @@ module RailsAiContext
       "[UNAVAILABLE: #{reason.to_s.lines.first.to_s.strip}]"
     end
 
+    # A lambda in the config (a log tag, a cookie's same_site): its value exists only per request.
+    AT_REQUEST = unavailable("computed at request time").freeze
+
+    # config.log_tags as a reader prints them: a lambda's tag exists only per request.
+    def self.log_tags(tags)
+      Array(tags).map { |tag| tag.is_a?(Proc) ? AT_REQUEST : tag.to_s }
+    end
+
     # Determine confidence level for a Prism call node's arguments.
     # Returns VERIFIED if all arguments are static literals,
     # INFERRED if any argument is a dynamic expression.

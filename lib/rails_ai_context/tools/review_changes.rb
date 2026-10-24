@@ -40,7 +40,9 @@ module RailsAiContext
       # textconv, a submodule's own diff or a blank context line printed empty would each break the
       # line-by-line reading.
       DIFF = [ "git", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short" ].freeze
-      VALIDATION_LINE = /\bvalidates?[\s(]/
+      # A diff line opening with an ActiveModel or ActiveRecord validation macro; validate_x is none.
+      # A diff is not Ruby and one line of it does not parse, so a regex reads it.
+      VALIDATION_LINE = /\A(?:validates!?|validate|validates_(?:\w+_of|with|each|associated))[\s(]/
       # Each schema method a migration names a table with - ActiveRecord's
       # SchemaStatements and its adapters', through Rails 8.1 - and how many
       # of its leading arguments are tables: the first, a rename's two, and
@@ -218,12 +220,6 @@ module RailsAiContext
           status.success? && !prefix.strip.empty?
         end
 
-        # A filter names one file or a directory, never part of a name: `Gemfile` is not `Gemfile.lock`.
-        def path_matches?(path, filter)
-          wanted = filter.delete_prefix("./").chomp("/")
-          path == wanted || path.start_with?("#{wanted}/")
-        end
-
         # The Ruby folders count only Ruby files: the install writes app/models/AGENTS.md beside the models.
         def classify_file(path)
           case path
@@ -295,17 +291,14 @@ module RailsAiContext
           # Pull relevant context per file type
           case type
           when :model
-            model_name = File.basename(file, ".rb").camelize
-            begin
-              result = compose(GetModelDetails, model: model_name, detail: "standard")
-              lines << "" << "**Model context:** #{model_name}" unless empty?(result)
-            rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
+            model_name, = RailsAiContext::Payload.model_for_file(cached_context, file)
+            lines << "" << "**Model context:** #{model_name}" if model_name
 
           when :controller
-            ctrl_name = File.basename(file, ".rb").camelize
-            snake = ctrl_name.underscore.delete_suffix("_controller")
+            # The controller_path Rails routes to: admin/posts_controller.rb is admin/posts, not posts.
+            controller_path = file.delete_prefix("app/controllers/").delete_suffix("_controller.rb")
             begin
-              result = compose(GetRoutes, controller: snake, detail: "summary")
+              result = compose(GetRoutes, controller: controller_path, detail: "summary")
               lines << "" << "**Routes:**" << response_text(result) unless empty?(result)
             rescue => e; RailsAiContext.debug_fail(e, nil, label: "review_changes context lookup"); end
 
@@ -442,10 +435,9 @@ module RailsAiContext
         def get_file_diff(file, root, base, whole: false)
           diff = [ *DIFF, *(whole ? [ "--unified=#{2**31 - 1}" ] : []) ]
           if base == "HEAD"
-            output, status = Open3.capture2(*diff, "--relative", "--", file, chdir: root, err: File::NULL)
-            if !status.success? || output.scrub.strip.empty?
-              output, status = Open3.capture2(*diff, "--cached", "--relative", "--", file, chdir: root, err: File::NULL)
-            end
+            output, status = Open3.capture2(*diff, "--relative", "HEAD", "--", file, chdir: root, err: File::NULL)
+            # A repository with no commit yet has no HEAD; what is staged is all there is to show.
+            output, status = Open3.capture2(*diff, "--cached", "--relative", "--", file, chdir: root, err: File::NULL) unless status.success?
           else
             output, status = Open3.capture2(*diff, "--relative", base, "HEAD", "--", file, chdir: root, err: File::NULL)
           end
@@ -467,18 +459,27 @@ module RailsAiContext
             next unless File.exist?(full_path) && !RailsAiContext::PathResolver.linked_out?(full_path, root)
             source = RailsAiContext::SafeFile.read(full_path) or next
 
-            # New columns ending in _id without add_index
-            source.scan(/\badd_column\b\(?\s*[:"']\w+["']?\s*,\s*[:"'](\w+_id)\b/).flatten.each do |col|
-              unless source.include?("add_index") && source.include?(col)
-                warnings << "**Missing index**: `#{entry[:file]}` adds `#{col}` without an index"
-              end
+            calls = Introspectors::SourceIntrospector.walk_dispatch(RailsAiContext::AstCache.parse_string(source),
+                                                                     { migration: Introspectors::Listeners::MigrationDslListener })[:migration]
+            indexes = calls.select { |call| call[:action] == :add_index }
+
+            # A key column is indexed by an index on its own table that leads with it, or with
+            # its polymorphic [type, id] pair.
+            calls.each do |call|
+              next unless call[:action] == :add_column && call[:column].to_s.end_with?("_id")
+
+              own = indexes.select { |index| index[:table] == call[:table] }
+              pair = [ "#{call[:column].to_s.delete_suffix("_id")}_type", call[:column] ]
+              next if [ [ call[:column] ], pair ].any? { |key| Introspectors::SchemaConventions.leading_index?(own, key) }
+
+              warnings << "**Missing index**: `#{entry[:file]}` adds `#{call[:column]}` without an index"
             end
 
-            # add_reference without index: false check
-            source.scan(/\badd_(?:reference|belongs_to)\b\(?\s*[:"'](\w+)["']?\s*,\s*[:"'](\w+)/).each do |_table, ref_name|
-              if source.include?("index: false")
-                warnings << "**Disabled index**: `#{entry[:file]}` adds reference `#{ref_name}` with `index: false`"
-              end
+            # add_reference indexes by default; only its own statement can turn that off.
+            calls.each do |call|
+              next unless %i[add_reference add_belongs_to].include?(call[:action]) && call[:options][:index] == false
+
+              warnings << "**Disabled index**: `#{entry[:file]}` adds reference `#{call[:ref]}` with `index: false`"
             end
           end
 
@@ -492,16 +493,14 @@ module RailsAiContext
           end
 
           # Check for controller changes without test changes
+          suite = RailsAiContext::TestFramework::Suite.new(root, test_files.map { |t| t[:file] })
           controller_files.each do |entry|
-            basename = File.basename(entry[:file], ".rb")
-            next unless basename.end_with?("_controller")
-            test_name = basename.sub("_controller", "_controller_test")
-            spec_name = basename.sub("_controller", "_controller_spec")
-            request_name = basename.sub("_controller", "_spec")
-            ctrl_stem = basename.delete_suffix("_controller")
-            unless test_files.any? { |t| File.basename(t[:file], ".rb").then { |tb| tb == test_name || tb == spec_name || tb == request_name || tb.include?(ctrl_stem) } }
-              warnings << "**No test changes**: `#{entry[:file]}` was modified but no corresponding test file was changed"
-            end
+            stem = entry[:file][%r{\Aapp/controllers/(.+)_controller\.rb\z}, 1] or next
+            file = File.expand_path(entry[:file], root)
+            constant = RailsAiContext::TestFramework.declared_constant(file, "#{stem}_controller")
+            next if suite.tested?(:controller, stem, constant, file: file)
+
+            warnings << "**No test changes**: `#{entry[:file]}` was modified but no corresponding test file was changed"
           end
 
           warnings
@@ -517,7 +516,7 @@ module RailsAiContext
               next unless line.start_with?(sign) && !line.start_with?(sign * 3)
 
               code = line[1..].strip
-              code if code.match?(VALIDATION_LINE) && !code.start_with?("#")
+              code if code.match?(VALIDATION_LINE)
             end
           end
           kept = added.flat_map { |code| validated_names(code) }.to_set
@@ -527,9 +526,9 @@ module RailsAiContext
           end
         end
 
-        # The attributes `validates :a, :b, ...` names, or the method of `validate :check`.
+        # The attributes `validates :a, :b, ...` or `validates_presence_of :a` names, or the method of `validate :check`.
         def validated_names(code)
-          code[/\bvalidates?[\s(]+(.*)/, 1].to_s.scan(/\G\s*:(\w+[?!]?)\s*,?/).flatten
+          code[/#{VALIDATION_LINE}[\s(]*(.*)/, 1].to_s.scan(/\G\s*:(\w+[?!]?)\s*,?/).flatten
         end
       end
     end

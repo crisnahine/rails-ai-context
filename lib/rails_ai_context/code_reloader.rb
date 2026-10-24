@@ -173,7 +173,7 @@ module RailsAiContext
     end
 
     def code_files(root)
-      code_dirs(root).flat_map { |dir| Dir.glob(File.join(dir, "**", "*.rb")) }.uniq
+      code_dirs(root).flat_map { |dir| PathResolver.glob(dir, "**/*.rb") }.uniq
     end
 
     # The app's own autoload paths, not an engine's in a gem.

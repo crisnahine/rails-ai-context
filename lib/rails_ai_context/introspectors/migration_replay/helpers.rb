@@ -11,7 +11,7 @@ module RailsAiContext
         module_function
 
         SCHEMA_STATEMENTS = (Listeners::MigrationDslListener::ALL_ACTIONS.to_a +
-                             %i[remove_columns create_join_table add_timestamps]).to_set.freeze
+                             %i[remove_columns create_join_table drop_join_table add_timestamps]).to_set.freeze
 
         # A method name that says it changes the schema, one word at a time
         # (execute_drop, add_temp_column).
@@ -140,8 +140,8 @@ module RailsAiContext
             receiver = call.receiver
             next unless receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
 
-            file = File.join(root, "lib", "#{receiver.slice.delete_prefix('::').underscore}.rb")
-            next unless File.file?(file) && schema_class_method?(file, call.name)
+            file = PathResolver.constant_path(File.join(root, "lib"), receiver.slice)
+            next unless file && schema_class_method?(file, call.name)
 
             { kind: :not_replayed, location: call.location.start_line }
           end
@@ -172,16 +172,17 @@ module RailsAiContext
         # The module's instance methods, from the file under lib/ or app/*/
         # its name resolves to the way Zeitwerk would find it.
         def module_methods(name, root)
-          relative = "#{name.underscore}.rb"
-          file = ([ File.join(root, "lib", relative) ] + Dir.glob(File.join(root, "app", "*", relative))).find { |f| File.file?(f) }
+          dirs = [ File.join(root, "lib") ] + PathResolver.glob(File.join(root, "app"), "*").select { |dir| File.directory?(dir) }
+          file = PathResolver.constant_file(dirs, name)
           return {} unless file
 
           content = RailsAiContext::SafeFile.read(file, max_size: RailsAiContext.configuration.max_file_size)
           tree = content && AstCache.parse_string(content)&.value
           mod = tree && DeclaredConstant.module_node(tree, name)
-          return {} unless mod&.body.is_a?(Prism::StatementsNode)
+          body = mod && DeclaredConstant.body(mod)
+          return {} unless body.is_a?(Prism::StatementsNode)
 
-          mod.body.body.each_with_object({}) { |node, found| found[node.name] = node if node.is_a?(Prism::DefNode) && node.receiver.nil? }
+          body.body.each_with_object({}) { |node, found| found[node.name] = node if node.is_a?(Prism::DefNode) && node.receiver.nil? }
         rescue StandardError, ScriptError => e
           RailsAiContext.debug_fail(e, {}, label: "module_methods")
         end

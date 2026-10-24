@@ -47,9 +47,9 @@ module RailsAiContext
         horizon = Time.now - AstCache::RACY_WINDOW
 
         manifests = {}
-        WATCHED_FILES.each do |name|
-          path = File.join(@root, name)
-          manifests[path] = look_at(path, @manifests[path], horizon) if File.exist?(path)
+        Fingerprinter.manifests(@root).each do |name|
+          path = File.expand_path(name, @root)
+          manifests[path] = look_at(path, @manifests[path], horizon)
         rescue SystemCallError
           next
         end

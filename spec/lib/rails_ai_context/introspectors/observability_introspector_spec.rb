@@ -56,6 +56,21 @@ RSpec.describe RailsAiContext::Introspectors::ObservabilityIntrospector do
       expect(result[:log_tags]).to be_an(Array)
     end
 
+    context "with a lambda in config.log_tags" do
+      around do |example|
+        original = Rails.application.config.log_tags
+        Rails.application.config.log_tags = [ :request_id, ->(req) { req.subdomain } ]
+        example.run
+      ensure
+        Rails.application.config.log_tags = original
+      end
+
+      # Rails calls the Proc with each request; its inspect string carries a fresh address and an absolute path.
+      it "marks the lambda the same way on every run" do
+        expect(result[:log_tags]).to eq([ "request_id", "[UNAVAILABLE: computed at request time]" ])
+      end
+    end
+
     it "returns colorize_logging as boolean" do
       expect(result[:colorize_logging]).to eq(true).or(eq(false))
     end

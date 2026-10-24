@@ -33,6 +33,17 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
       it "detects turbo-refresh-method morph meta tag in layouts" do
         expect(result[:morph_meta]).to be true
       end
+
+      it "reads a layout in a subfolder of layouts, and the partial a layout renders its head from" do
+        %w[admin/application.html.erb _head.html.erb].each do |name|
+          Dir.mktmpdir do |dir|
+            FileUtils.mkdir_p(File.join(dir, "app/views/layouts/admin"))
+            File.write(File.join(dir, "app/views/layouts", name), %(<meta name="turbo-refresh-method" content="morph">\n))
+
+            expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:morph_meta]).to be(true), name
+          end
+        end
+      end
     end
 
     describe "permanent_elements" do
@@ -283,6 +294,19 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
 
     it "still splits two top-level arguments" do
       expect(streams_for("<%= turbo_stream_from \"posts\", :comments %>\n")).to eq([ "posts, comments" ])
+    end
+
+    it "reads a parenthesized call's arguments the way the bare call's are read" do
+      expect(streams_for("<%= turbo_stream_from(:notifications) %>\n<%= turbo_stream_from(current_user, :alerts) %>\n"))
+        .to eq([ "notifications", "current_user, alerts" ])
+    end
+
+    it "reads a parenthesis after a space as an argument, not the call's own" do
+      expect(streams_for("<%= turbo_stream_from (:posts), :comments %>\n")).to eq([ "posts, comments" ])
+    end
+
+    it "skips a helper whose name only ends in turbo_stream_from" do
+      expect(streams_for("<%= my_turbo_stream_from :posts %>\n<%= list.turbo_stream_from_cache %>\n")).to eq([])
     end
   end
 
@@ -559,6 +583,31 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
 
         expect(result[:turbo_frames].map { |f| f[:src] }).to eq([ "product_comments_path(@product)", "tab_path(@product, tab: \"a\")" ])
+        expect(result[:turbo_frames].map { |f| f[:id] }).to eq(%w[comments tabs])
+      end
+    end
+
+    it "reads a frame id after a space before the paren, and only from turbo_frame_tag itself" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/views/posts/index.html.erb"),
+                   %(<%= turbo_frame_tag (:comments) do %>\n<% end %>\n<%= my_turbo_frame_tag(:other) %>\n))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:turbo_frames].map { |f| f[:id] }).to eq([ "comments" ])
+      end
+    end
+
+    it "reads a parenthesized frame id, keeping a call argument whole" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/views/posts/index.html.erb"),
+                   %(<%= turbo_frame_tag(:comments) do %>\n<% end %>\n<%= turbo_frame_tag(dom_id(@post)) do %>\n<% end %>\n))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:turbo_frames].map { |f| f[:id] }).to eq([ "comments", "dom_id(@post)" ])
       end
     end
   end

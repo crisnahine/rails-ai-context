@@ -4,6 +4,7 @@
 # before Zeitwerk - so it requires its own stdlib. Set is not autoloaded on
 # Ruby 3.1, where `[...].to_set` raised NoMethodError.
 require "set"
+require_relative "safe_file"
 
 module RailsAiContext
   # One-time cleanup for files that were removed in a breaking release.
@@ -52,12 +53,13 @@ module RailsAiContext
       end
 
       if delete || input == "y" || input == "yes"
-        require "fileutils"
         present.each do |(rel, full)|
-          # rm_f swallows a permission error, so ask the filesystem rather
-          # than claiming the file went.
-          FileUtils.rm_f(full)
-          io.puts(File.exist?(full) ? "  Could not remove #{rel} - check its permissions" : "  Removed #{rel}")
+          SafeFile.delete(full, root: root)
+          io.puts "  Removed #{rel}"
+        rescue SafeFile::LinkedOut
+          io.puts "  Left #{rel} as it is - #{SafeFile::LINKED}"
+        rescue SystemCallError
+          io.puts "  Could not remove #{rel} - check its permissions"
         end
       else
         io.puts "  Kept. Delete manually when ready:"

@@ -18,6 +18,233 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     described_class.parse(sql)[:tables][table][:indexes]
   end
 
+  it "reads an unlogged table and its index, which Rails lists as a table" do
+    tables = described_class.parse(<<~SQL)[:tables]
+      CREATE UNLOGGED TABLE public.cache_entries (
+          id bigint NOT NULL,
+          key character varying NOT NULL,
+          value text
+      );
+
+      CREATE UNIQUE INDEX index_cache_entries_on_key ON public.cache_entries USING btree (key);
+    SQL
+
+    expect(tables["cache_entries"][:columns].map { |c| c[:name] }).to eq(%w[id key value])
+    expect(tables["cache_entries"][:indexes]).to eq([ { name: "index_cache_entries_on_key", columns: [ "key" ], unique: true } ])
+  end
+
+  it "skips the bookkeeping tables and keeps one whose name only starts like them" do
+    tables = described_class.parse(<<~SQL)[:tables]
+      CREATE TABLE public.schema_migrations (version character varying NOT NULL);
+      CREATE TABLE public.ar_internal_metadata (key character varying NOT NULL);
+      CREATE TABLE public.schema_migrations_archive (version character varying NOT NULL);
+    SQL
+
+    expect(tables.keys).to eq([ "schema_migrations_archive" ])
+  end
+
+  # Rails reads a MySQL double as limit 53 and a PostgreSQL real as limit 24, and dumps a limit
+  # that differs from the native float's (24 on MySQL, none on PostgreSQL).
+  def float_limits(sql, rails_version: nil)
+    described_class.parse(sql, rails_version: rails_version)[:tables]["items"][:columns].to_h { |c| [ c[:name], [ c[:type], c[:limit] ] ] }
+  end
+
+  it "gives a MySQL double limit 53 and a float none" do
+    expect(float_limits(<<~SQL)).to include("price" => [ "float", 53 ], "ratio" => [ "float", nil ], "name" => [ "string", 100 ])
+      CREATE TABLE `items` (
+        `id` bigint NOT NULL AUTO_INCREMENT,
+        `price` double NOT NULL,
+        `ratio` float DEFAULT NULL,
+        `name` varchar(100) DEFAULT NULL,
+        PRIMARY KEY (`id`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    SQL
+  end
+
+  # Booted Rails 7.0 and 8.1 on MySQL 8.4, and the schema.rb they dump: point matches the type map's /int/.
+  it "types a MySQL type it does not name the way Rails' MySQL type map reads it" do
+    sql = <<~SQL
+      CREATE TABLE `w` (
+        `id` bigint NOT NULL AUTO_INCREMENT,
+        `a` point DEFAULT NULL,
+        `b` multipoint DEFAULT NULL,
+        `c` geometry DEFAULT NULL,
+        `f` year DEFAULT NULL,
+        `g` bit(1) DEFAULT NULL,
+        `i` enum('a','print') DEFAULT NULL,
+        `j` set('x','point') DEFAULT NULL,
+        PRIMARY KEY (`id`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    SQL
+    columns = described_class.parse(sql)[:tables]["w"][:columns].to_h { |c| [ c[:name], c.slice(:type, :limit) ] }
+
+    expect(columns).to eq(
+      "id" => { type: "bigint" }, "a" => { type: "integer" }, "b" => { type: "integer" }, "c" => { type: nil },
+      "f" => { type: "integer" }, "g" => { type: "binary", limit: 1 }, "i" => { type: "enum('a','print')" },
+      "j" => { type: "set('x','point')" }
+    )
+  end
+
+  # MySQL makes a bare bit a bit(1); booted Rails reads it as binary, limit 1.
+  it "reads a bare MySQL bit as bit(1)" do
+    columns = described_class.parse("CREATE TABLE `w` (`b` bit, `c` bit(8));", dialect: :mysql)[:tables]["w"][:columns].to_h { |c| [ c[:name], c.slice(:type, :limit) ] }
+
+    expect(columns).to eq("b" => { type: "binary", limit: 1 }, "c" => { type: "binary", limit: 8 })
+  end
+
+  # mariadb-dump 11.4's lines; booted Rails 8.0 and 8.1 give these columns no type, since the MySQL type map has no uuid.
+  it "types a MariaDB uuid the way Rails' MySQL type map reads it" do
+    sql = <<~SQL
+      CREATE TABLE `u` (
+        `id` uuid NOT NULL,
+        `a` uuid DEFAULT NULL,
+        PRIMARY KEY (`id`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    SQL
+    columns = described_class.parse(sql, dialect: :mysql)[:tables]["u"][:columns].to_h { |c| [ c[:name], c[:type] ] }
+
+    expect(columns).to eq("id" => nil, "a" => nil)
+  end
+
+  it "gives a PostgreSQL real limit 24 and a double precision none" do
+    expect(float_limits(<<~SQL)).to include("score" => [ "float", 24 ], "total" => [ "float", nil ])
+      CREATE TABLE public.items (
+          id bigint NOT NULL,
+          score real,
+          total double precision
+      );
+    SQL
+  end
+
+  # PostgreSQL's array type delegates limit to its element (oid/array.rb), so a real[] reads as limit 24.
+  it "gives a PostgreSQL real array the element's limit 24" do
+    expect(float_limits(<<~SQL)).to include("scores" => [ "float", 24 ], "totals" => [ "float", nil ])
+      CREATE TABLE public.items (
+          id bigint NOT NULL,
+          scores real[],
+          totals double precision[]
+      );
+    SQL
+  end
+
+  it "gives a PostgreSQL real no limit before Rails 7.2.2, which first reads one" do
+    expect(float_limits(<<~SQL, rails_version: "7.2.1")).to include("score" => [ "float", nil ])
+      CREATE TABLE public.items (
+          id bigint NOT NULL,
+          score real
+      );
+    SQL
+  end
+
+  it "keeps a SQLite float's declared limit" do
+    expect(float_limits(<<~SQL)).to include("score" => [ "float", 24 ], "total" => [ "float", nil ])
+      CREATE TABLE IF NOT EXISTS "items" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "score" float(24), "total" float);
+    SQL
+  end
+
+  # PostgreSQL reads a column whose nextval default names <table>_<column>_seq as a serial, whoever owns
+  # the sequence, and the dump names it serial or bigserial; any other nextval stays the default.
+  it "names a PostgreSQL serial as the dump does, from pg_dump's integer and sequence default" do
+    long_table = "t" * 40
+    long_column = "c" * 30
+    tables = described_class.parse(<<~SQL)[:tables]
+      CREATE TABLE public.keyed (id integer NOT NULL);
+      CREATE TABLE public.small_keyed (id smallint NOT NULL);
+      CREATE TABLE public.big_keyed (id bigint NOT NULL);
+      CREATE TABLE public.counters (id bigint NOT NULL, s integer NOT NULL, ss smallint NOT NULL, b bigint NOT NULL);
+      CREATE TABLE public.shared (
+          id bigint DEFAULT nextval('public.shared_seq'::regclass) NOT NULL,
+          n integer DEFAULT nextval('public.shared_seq'::regclass)
+      );
+      CREATE TABLE public.odd (id bigint NOT NULL, n integer DEFAULT nextval('public.odd_n_seq'::regclass));
+      CREATE TABLE public.#{long_table} (#{long_column} integer NOT NULL);
+      ALTER TABLE ONLY public.keyed ALTER COLUMN id SET DEFAULT nextval('public.keyed_id_seq'::regclass);
+      ALTER TABLE ONLY public.small_keyed ALTER COLUMN id SET DEFAULT nextval('public.small_keyed_id_seq'::regclass);
+      ALTER TABLE ONLY public.big_keyed ALTER COLUMN id SET DEFAULT nextval('public.big_keyed_id_seq'::regclass);
+      ALTER TABLE ONLY public.counters ALTER COLUMN s SET DEFAULT nextval('public.counters_s_seq'::regclass);
+      ALTER TABLE ONLY public.counters ALTER COLUMN ss SET DEFAULT nextval('public.counters_ss_seq'::regclass);
+      ALTER TABLE ONLY public.counters ALTER COLUMN b SET DEFAULT nextval('public.counters_b_seq'::regclass);
+      ALTER TABLE ONLY public.#{long_table} ALTER COLUMN #{long_column} SET DEFAULT nextval('public.#{"t" * 29}_#{"c" * 29}_seq'::regclass);
+      ALTER TABLE ONLY public.keyed ADD CONSTRAINT keyed_pkey PRIMARY KEY (id);
+      ALTER TABLE ONLY public.small_keyed ADD CONSTRAINT small_keyed_pkey PRIMARY KEY (id);
+      ALTER TABLE ONLY public.big_keyed ADD CONSTRAINT big_keyed_pkey PRIMARY KEY (id);
+      ALTER TABLE ONLY public.counters ADD CONSTRAINT counters_pkey PRIMARY KEY (id);
+      ALTER TABLE ONLY public.shared ADD CONSTRAINT shared_pkey PRIMARY KEY (id);
+    SQL
+    shape = ->(name) { tables[name][:columns].to_h { |c| [ c[:name], c.slice(:type, :limit, :default).values ] } }
+    nextval = %q(-> { "nextval('shared_seq'::regclass)" })
+
+    expect([ shape.("keyed"), shape.("small_keyed"), shape.("big_keyed") ]).to eq(
+      [ { "id" => [ "serial" ] }, { "id" => [ "serial", 2 ] }, { "id" => [ "bigint" ] } ]
+    )
+    expect(shape.("counters")).to eq("id" => [ "bigint" ], "s" => [ "serial" ], "ss" => [ "serial", 2 ], "b" => [ "bigserial" ])
+    expect(shape.("shared")).to eq("id" => [ "bigint", nextval ], "n" => [ "integer", nextval ])
+    expect(shape.("odd")).to eq("id" => [ "bigint" ], "n" => [ "serial" ])
+    expect(shape.(long_table)).to eq(long_column => [ "serial" ])
+  end
+
+  # Only a single-column key is the default key (default_primary_key?); a composite key's columns dump as columns.
+  it "names a bigserial in a composite key as the dump does" do
+    tables = described_class.parse(<<~SQL)[:tables]
+      CREATE TABLE public.orders (shop_id bigint NOT NULL, id bigint NOT NULL);
+      CREATE TABLE public.lines (shop_id bigint NOT NULL, id bigserial NOT NULL, PRIMARY KEY (shop_id, id));
+      ALTER TABLE ONLY public.orders ALTER COLUMN id SET DEFAULT nextval('public.orders_id_seq'::regclass);
+      ALTER TABLE ONLY public.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (shop_id, id);
+    SQL
+
+    expect(%w[orders lines].map { |name| tables[name][:columns].map { |c| c[:type] } }).to eq([ %w[bigint bigserial] ] * 2)
+  end
+
+  # schema_precision: a datetime's 6 goes unsaid, any other given precision is written, 0 too.
+  it "keeps a PostgreSQL time type's precision as the dump writes it" do
+    tables = described_class.parse(<<~SQL)[:tables]
+      SET search_path = public;
+      CREATE TABLE public.stamps (
+          a timestamp(3) with time zone, b timestamp(6) with time zone, c timestamp(0) with time zone,
+          d timestamp(0) without time zone, e timestamp(6) without time zone, f time(0) without time zone
+      );
+    SQL
+
+    expect(tables["stamps"][:columns].map { |c| c.values_at(:type, :precision) }).to eq(
+      [ [ "timestamptz", 3 ], [ "timestamptz", 6 ], [ "timestamptz", 0 ], [ "datetime", 0 ], [ "datetime", nil ], [ "time", 0 ] ]
+    )
+  end
+
+  # The child's id takes the parent's sequence, which its own name does not make, so Rails reads an integer.
+  it "reads an INHERITS child's copy of a serial as an integer with the parent's sequence" do
+    tables = described_class.parse(<<~SQL)[:tables]
+      CREATE TABLE public.parents (id integer NOT NULL, name character varying);
+      CREATE TABLE public.children (extra integer)
+      INHERITS (public.parents);
+      ALTER TABLE ONLY public.children ALTER COLUMN id SET DEFAULT nextval('public.parents_id_seq'::regclass);
+      ALTER TABLE ONLY public.parents ALTER COLUMN id SET DEFAULT nextval('public.parents_id_seq'::regclass);
+      ALTER TABLE ONLY public.parents ADD CONSTRAINT parents_pkey PRIMARY KEY (id);
+    SQL
+
+    expect(tables["parents"][:columns].first.slice(:type, :default)).to eq(type: "serial")
+    expect(tables["children"][:columns].first.slice(:type, :default, :null)).to eq(
+      type: "integer", default: %q(-> { "nextval('parents_id_seq'::regclass)" }), null: false
+    )
+  end
+
+  # A bigserial that is the whole key reads as the default bigint key, and its child still copies the sequence.
+  it "gives an INHERITS child of a bigserial key the parent's sequence when no ALTER sets it" do
+    tables = described_class.parse(<<~SQL, dialect: :postgresql)[:tables]
+      CREATE TABLE parents (id bigserial PRIMARY KEY, name varchar);
+      CREATE TABLE children (extra integer) INHERITS (parents);
+    SQL
+
+    expect(tables["parents"][:columns].first).to eq(name: "id", type: "bigint", null: false, primary_key: true)
+    expect(tables["children"][:columns].first).to eq(name: "id", type: "bigint", null: false, default: %q(-> { "nextval('parents_id_seq'::regclass)" }))
+  end
+
+  # SQLite's type map takes an integer's limit from its parentheses alone, and only bigint is a bigint.
+  it "sizes a SQLite integer by its parentheses, not its name" do
+    expect(float_limits(<<~SQL)).to include("tiny" => [ "integer", 1 ], "small" => [ "integer", nil ], "eight" => [ "integer", nil ], "big" => [ "bigint", nil ])
+      CREATE TABLE IF NOT EXISTS "items" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "tiny" integer(1), "small" smallint, "eight" int8, "big" bigint);
+    SQL
+  end
+
   # A categories index: the key list was cut at the first ")" and split
   # into words, so the expression read as four columns and `name` was lost.
   it "keeps an expression key whole and the column after it" do
@@ -126,6 +353,40 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(lengths).to include(columns: %w[title body], length: { "title" => 10, "body" => 20 })
       expect(desc).to include(order: { "title" => "desc" }, using: "hash")
     end
+
+    # Booted MySQL 8.4 and MariaDB 11.4 on this table, and mysqldump's functional key.
+    it "reads a MySQL key written without quotes or a name as an index MySQL names, never a column" do
+      sql = <<~SQL
+        CREATE TABLE u2 (id bigint PRIMARY KEY, a int, b int, c int, t text, INDEX (a), UNIQUE (a,b), KEY kb (b),
+          INDEX ic USING BTREE (c), KEY (c DESC), FULLTEXT (t), FULLTEXT KEY ft2 (t), UNIQUE INDEX ub USING BTREE (b, c), INDEX ((a+1)));
+        CREATE TABLE `u4` (
+          `id` bigint NOT NULL,
+          `a` int DEFAULT NULL,
+          PRIMARY KEY (`id`),
+          KEY `functional_index` (((`a` + 1)))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      SQL
+      tables = described_class.parse(sql, dialect: :mysql)[:tables]
+      indexes = tables["u2"][:indexes].to_h { |i| [ i[:name], i.slice(:columns, :unique, :type, :order) ] }
+
+      expect(tables["u2"][:columns].map { |c| c[:name] }).to eq(%w[id a b c t])
+      expect(indexes).to eq(
+        "a" => { columns: %w[a], unique: false }, "a_2" => { columns: %w[a b], unique: true }, "kb" => { columns: %w[b], unique: false },
+        "ic" => { columns: %w[c], unique: false }, "c" => { columns: %w[c], unique: false, order: { "c" => "desc" } },
+        "t" => { columns: %w[t], unique: false, type: "fulltext" }, "ft2" => { columns: %w[t], unique: false, type: "fulltext" },
+        "ub" => { columns: %w[b c], unique: true }, "functional_index" => { columns: [ "(a+1)" ], unique: false }
+      )
+      expect(tables["u4"][:indexes].map { |i| i.slice(:name, :columns) }).to eq([ { name: "functional_index", columns: [ "(`a` + 1)" ] } ])
+    end
+
+    it "keeps a PostgreSQL or SQLite column named key or index a column" do
+      pg = described_class.parse("CREATE TABLE public.k (key character varying(20), index integer);", dialect: :postgresql)[:tables]["k"]
+      sqlite = described_class.parse('CREATE TABLE "k" (key varchar(20), index integer);', dialect: :sqlite)[:tables]["k"]
+
+      expect(pg[:columns].map { |c| c[:name] }).to eq(%w[key index])
+      expect(sqlite[:columns].map { |c| c[:name] }).to eq(%w[key index])
+      expect(pg[:indexes] + sqlite[:indexes]).to be_empty
+    end
   end
 
   # sqlite3's .schema closes a view with a /* name(columns) */ comment of its own.
@@ -158,6 +419,47 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
         { name: "uniq_code", columns: %w[code name], deferrable: "deferred" },
         { name: "uniq_slug", columns: %w[slug] }
       ])
+    end
+
+    # IndexDefinition gains nulls_not_distinct in Rails 7.1; 7.0's dump has no such option.
+    it "reads NULLS NOT DISTINCT on an index for Rails 7.1 on" do
+      sql = <<~SQL
+        CREATE TABLE public.a (id bigint NOT NULL, x integer);
+        CREATE UNIQUE INDEX ix_x ON public.a USING btree (x) NULLS NOT DISTINCT;
+      SQL
+      index = ->(version) { described_class.parse(sql, rails_version: version)[:tables]["a"][:indexes].first }
+
+      expect(index.("7.1.6")).to eq(name: "ix_x", columns: %w[x], unique: true, nulls_not_distinct: true)
+      expect(index.("7.0.10")).to eq(name: "ix_x", columns: %w[x], unique: true)
+    end
+
+    # pg_dump 16's lines; Rails 8.0 dumps nulls_not_distinct: true on each, 7.2 leaves it out.
+    it "reads NULLS NOT DISTINCT on a unique constraint for Rails 8.0 on" do
+      sql = <<~SQL
+        CREATE TABLE public.a (id bigint NOT NULL, x integer, y integer, z integer UNIQUE NULLS NOT DISTINCT);
+        ALTER TABLE ONLY public.a ADD CONSTRAINT ux UNIQUE NULLS NOT DISTINCT (x, y) DEFERRABLE;
+        ALTER TABLE ONLY public.a ADD CONSTRAINT uy UNIQUE NULLS DISTINCT (y);
+      SQL
+      uniques = ->(version) { described_class.parse(sql, rails_version: version)[:tables]["a"][:unique_constraints] }
+
+      expect(uniques.("8.0.5")).to eq([
+        { name: "a_z_key", columns: %w[z], nulls_not_distinct: true },
+        { name: "ux", columns: %w[x y], deferrable: "immediate", nulls_not_distinct: true },
+        { name: "uy", columns: %w[y] }
+      ])
+      expect(uniques.("7.2.4")).to eq([ { name: "a_z_key", columns: %w[z] }, { name: "ux", columns: %w[x y], deferrable: "immediate" }, { name: "uy", columns: %w[y] } ])
+    end
+
+    # Rails 7.0 has no unique_constraints, and its dump writes the index behind each (PostgreSQL 16 under 7.0.10).
+    it "reads each as the unique index behind it for Rails 7.0" do
+      sql = <<~SQL
+        CREATE TABLE public.accounts (id bigint PRIMARY KEY, code integer UNIQUE, name character varying);
+        ALTER TABLE ONLY public.accounts ADD CONSTRAINT uniq_name UNIQUE (name);
+      SQL
+
+      table = described_class.parse(sql, rails_version: "7.0.10")[:tables]["accounts"]
+      expect(table[:indexes]).to eq([ { name: "accounts_code_key", columns: %w[code], unique: true }, { name: "uniq_name", columns: %w[name], unique: true } ])
+      expect(table).not_to have_key(:unique_constraints)
     end
   end
   # The reader dropped every DEFAULT, so a structure.sql app showed no
@@ -203,6 +505,105 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     it "reads json and array literals the way Rails dumps them" do
       expect(pg.transform_values { |c| c[:default] }).to include(
         "data" => "{}", "list" => "[]", "tag_ids" => "[]", "names" => '["a", "b c"]', "nums" => "[1, 2]"
+      )
+    end
+
+    # pg_dump 16's lines; expected values are Rails 7.0.10 and 8.1.4's schema.rb for the same table. OID::Array casts
+    # each element through the column's type: NULL is nil (a decimal's dumps as ""), a float 1 is 1.0.
+    it "reads each array element through the column's type, as Rails dumps it" do
+      columns = columns_of(<<~'SQL', table: "o3")
+        CREATE TABLE public.o3 (
+            i integer[] DEFAULT '{1,NULL,3}'::integer[],
+            t text[] DEFAULT '{a,NULL,"NULL","b\\c","x\"y","p,q"," s "}'::text[],
+            f double precision[] DEFAULT '{1,2.5}'::double precision[],
+            n numeric[] DEFAULT '{1,2.5}'::numeric[],
+            d numeric(5,2)[] DEFAULT '{2.555,10}'::numeric[],
+            n0 numeric(5,0)[] DEFAULT '{1,2.5}'::numeric[],
+            nn numeric[] DEFAULT '{1,NULL}'::numeric[],
+            b boolean[] DEFAULT '{t,f,NULL}'::boolean[],
+            ti time without time zone[] DEFAULT '{12:00:00}'::time without time zone[],
+            nested integer[] DEFAULT '{{1,2},{3,4}}'::integer[],
+            qe text[] DEFAULT '{"",abc}'::text[],
+            nf double precision[] DEFAULT '{NULL,Infinity,NaN}'::double precision[]
+        );
+      SQL
+
+      expect(columns.transform_values { |c| c[:default] }).to eq(
+        "i" => "[1, nil, 3]", "t" => '["a", nil, "NULL", "b\\\\c", "x\\"y", "p,q", " s "]', "f" => "[1.0, 2.5]", "n" => '["1.0", "2.5"]',
+        "d" => '["2.56", "10.0"]', "n0" => '["1", "2"]', "nn" => '["1.0", ""]', "b" => "[true, false, nil]",
+        "ti" => '["2000-01-01 12:00:00"]', "nested" => "[[1, 2], [3, 4]]", "qe" => '["", "abc"]', "nf" => "[nil, Infinity, NaN]"
+      )
+    end
+
+    # pg_dump 16, mysqldump 8.4 and SQLite's lines for one table; Rails 7.0.10 and 8.1.4 dump the same defaults
+    # from each. Decimal casts to the scale, and a scale of 0 to the whole part (DecimalWithoutScale); MySQL rounded its own.
+    it "reads a decimal default as Rails casts it to the column's scale" do
+      pg = described_class.parse(<<~SQL)[:tables]["d1"][:columns]
+        CREATE TABLE public.d1 (
+            a numeric(5,0) DEFAULT 2.5,
+            b numeric(10,2) DEFAULT 2,
+            c numeric(10,2) DEFAULT 2.555,
+            d numeric(5,0) DEFAULT '-2.5'::numeric,
+            e numeric DEFAULT 3,
+            f numeric(10,2) DEFAULT 7.10
+        );
+      SQL
+      my = described_class.parse(<<~SQL, dialect: :mysql)[:tables]["d1"][:columns]
+        CREATE TABLE `d1` (
+          `a` decimal(5,0) DEFAULT '3',
+          `b` decimal(10,2) DEFAULT '2.00',
+          `e` decimal(10,3) DEFAULT '3.000'
+        ) ENGINE=InnoDB;
+      SQL
+      sqlite = described_class.parse("CREATE TABLE d1 (a decimal(5) DEFAULT 2.5, d decimal(5,0) DEFAULT '-2.5', e decimal DEFAULT 3);",
+                                     dialect: :sqlite)[:tables]["d1"][:columns]
+      defaults = ->(columns) { columns.to_h { |c| [ c[:name], c[:default] ] } }
+
+      expect(defaults.(pg)).to eq("a" => "2", "b" => "2.0", "c" => "2.56", "d" => "-2", "e" => "3.0", "f" => "7.1")
+      expect(defaults.(my)).to eq("a" => "3", "b" => "2.0", "e" => "3.0")
+      expect(defaults.(sqlite)).to eq("a" => "2", "d" => "-2", "e" => "3.0")
+    end
+
+    it "reads an ARRAY[...] default to its end, its commas and NULL inside the brackets" do
+      columns = columns_of(<<~SQL, table: "o3")
+        CREATE TABLE public.o3 (
+            v character varying[] DEFAULT ARRAY['a'::text, NULL::text] NOT NULL,
+            w integer
+        );
+      SQL
+
+      expect(columns["v"]).to include(null: false)
+      expect(columns.keys).to eq(%w[v w])
+    end
+
+    # pg_dump 16's lines; Rails 7.0.10 and 8.1.4 dump no default for an expression has_default_function? rejects.
+    it "reads an expression as a function default only where Rails' PostgreSQL adapter does" do
+      columns = columns_of(<<~SQL, table: "d1")
+        CREATE TABLE public.d1 (
+            arr_text text[] DEFAULT ARRAY['a'::text, 'b'::text],
+            arr_int integer[] DEFAULT ARRAY[1, 2],
+            arr_empty text[] DEFAULT ARRAY[]::text[],
+            concat text DEFAULT ('a'::text || 'b'::text),
+            sum integer DEFAULT (1 + 1),
+            ctime time without time zone DEFAULT CURRENT_TIME,
+            lts timestamp without time zone DEFAULT LOCALTIMESTAMP,
+            cuser text DEFAULT CURRENT_USER,
+            case_e integer DEFAULT
+        CASE
+            WHEN true THEN 1
+            ELSE 2
+        END,
+            ldate date DEFAULT CURRENT_DATE,
+            nowd date DEFAULT (now())::date,
+            nowi timestamp without time zone DEFAULT (now() + 'P1D'::interval),
+            cuser_t text DEFAULT (CURRENT_USER)::text
+        );
+      SQL
+
+      expect(columns.transform_values { |c| c[:default] }).to eq(
+        "arr_text" => nil, "arr_int" => nil, "arr_empty" => nil, "concat" => nil, "sum" => nil, "ctime" => nil, "lts" => nil,
+        "cuser" => nil, "case_e" => nil, "ldate" => '-> { "CURRENT_DATE" }', "nowd" => '-> { "(now())::date" }',
+        "nowi" => %q(-> { "(now() + 'P1D'::interval)" }), "cuser_t" => '-> { "(CURRENT_USER)::text" }'
       )
     end
 
@@ -587,6 +988,21 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     end
   end
 
+  # pg_dump 16 of CREATE TABLE q1 AS SELECT 1, 'x'::text AS "my col", 2 AS "a""b"; Rails 8.1.4 dumps all three columns.
+  it "reads a quoted column name that is no plain word" do
+    sql = <<~SQL
+      CREATE TABLE public.q1 (
+          "?column?" integer,
+          "my col" text,
+          "a""b" integer
+      );
+      ALTER TABLE ONLY public.q1 ALTER COLUMN "?column?" SET DEFAULT 5;
+    SQL
+
+    expect(described_class.parse(sql)[:tables]["q1"][:columns].map { |c| c.values_at(:name, :type, :default) })
+      .to eq([ [ "?column?", "integer", "5" ], [ "my col", "text", nil ], [ 'a"b', "integer", nil ] ])
+  end
+
   it "keeps a serial key without a default when pg_dump sets its nextval by ALTER" do
     sql = <<~SQL
       CREATE TABLE public.users (
@@ -594,6 +1010,7 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
           name character varying
       );
       ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
+      ALTER TABLE ONLY public.users ADD CONSTRAINT users_pkey PRIMARY KEY (id);
     SQL
 
     expect(described_class.parse(sql)[:tables]["users"][:columns]).to eq([
@@ -772,6 +1189,90 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
   # Rails writes SQLite's foreign key clause across lines, and Rails 7.x writes
   # no semicolon when ignore_tables makes it dump through sqlite_master.
   describe "SQLite dumps" do
+    # Booted Rails 8.0 on each declared type; schema.rb names a lowercase bigint one, and no type is nil.
+    it "types each column the way Rails' SQLite type map reads it" do
+      sql = <<~SQL
+        CREATE TABLE "w" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "a" REAL, "b" NUM, "c", "d" NOT NULL DEFAULT 1, "e" number, "f" clob, "g" point, "h" nvarchar(9), "i" jsonb, "j" bool, "k" bytea, "l" uuid, "m" smalldatetime, "n" BIGINT, "o" bigint(8), "p" double precision, "q");
+      SQL
+      columns = described_class.parse(sql)[:tables]["w"][:columns].to_h { |c| [ c[:name], c[:type] ] }
+
+      expect(columns).to eq(
+        "id" => "integer", "a" => nil, "b" => nil, "c" => nil, "d" => nil, "e" => "decimal", "f" => "text", "g" => "integer",
+        "h" => "string", "i" => "json", "j" => nil, "k" => nil, "l" => nil, "m" => "datetime", "n" => "integer", "o" => "bigint",
+        "p" => "float", "q" => nil
+      )
+    end
+
+    # Booted Rails 8.0 on this table: SQLite drops an expression's outer parentheses, and the adapter
+    # reads a literal or number as its value, a function as an expression, anything else as no default.
+    it "reads each default the way Rails' SQLite adapter does" do
+      sql = <<~SQL
+        CREATE TABLE "d" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "a" boolean DEFAULT 1, "b" boolean DEFAULT 0, "c" datetime DEFAULT (CURRENT_TIMESTAMP), "d" varchar DEFAULT (lower('X')), "e" integer DEFAULT ((1+2)), "f" text DEFAULT ('x'), "g" integer DEFAULT (-3), "h" text DEFAULT ('a' || 'b'), "i" boolean DEFAULT true, "j" text DEFAULT "dq", "k" real DEFAULT (2.5));
+      SQL
+      defaults = ->(version) { described_class.parse(sql, rails_version: version)[:tables]["d"][:columns].to_h { |c| [ c[:name], c[:default] ] } }
+
+      expect(defaults.("8.0.5")).to eq(
+        "id" => nil, "a" => "true", "b" => "false", "c" => '-> { "CURRENT_TIMESTAMP" }', "d" => %q(-> { "lower('X')" }), "e" => nil,
+        "f" => "x", "g" => "-3", "h" => %q(-> { "'a' || 'b'" }), "i" => nil, "j" => "dq", "k" => "2.5"
+      )
+      # Booted Rails 7.0 reads the quoted ends of a || concatenation as one literal.
+      expect(defaults.("7.0.10")["h"]).to eq("a' || 'b")
+    end
+
+    # Booted Rails on this table: 8.0 reads TRUE as no default, 8.1.0 to 8.1.3 read the uppercase words as text,
+    # and 8.1.4 reads either case as a boolean, which a string column casts to "t" or "f".
+    it "reads a TRUE or FALSE default the way the app's Rails reads it" do
+      sql = <<~SQL
+        CREATE TABLE "t" ("id" integer PRIMARY KEY NOT NULL, "a" boolean DEFAULT TRUE, "b" boolean DEFAULT FALSE, "c" boolean DEFAULT true, "d" boolean DEFAULT false, "e" varchar DEFAULT TRUE, "g" varchar DEFAULT false, "h" boolean DEFAULT (TRUE));
+      SQL
+      defaults = ->(version) { described_class.parse(sql, rails_version: version)[:tables]["t"][:columns].to_h { |c| [ c[:name], c[:default] ] }.except("id") }
+
+      expect(defaults.("8.0.5")).to eq("a" => nil, "b" => nil, "c" => nil, "d" => nil, "e" => nil, "g" => nil, "h" => nil)
+      expect(defaults.("8.1.3")).to eq("a" => "true", "b" => "false", "c" => nil, "d" => nil, "e" => "TRUE", "g" => nil, "h" => "true")
+      expect(defaults.("8.1.4")).to eq("a" => "true", "b" => "false", "c" => "true", "d" => "false", "e" => "t", "g" => "f", "h" => "true")
+    end
+
+    # Rails 8.1.3 and 8.1.4's schema.rb for this table, the column's type casting the word: 8.1.4 cannot dump an integer,
+    # a whole decimal or a datetime holding true, and dumps an integer holding false with no default.
+    it "reads a TRUE or FALSE default on a number or time column as the column's type casts it" do
+      sql = <<~SQL
+        CREATE TABLE "t" ("i" integer DEFAULT TRUE, "j" bigint DEFAULT FALSE, "f" float DEFAULT FALSE, "g" float DEFAULT true, "d" decimal(5) DEFAULT TRUE, "e" decimal(5,2) DEFAULT TRUE, "n" numeric DEFAULT FALSE, "w" datetime DEFAULT TRUE);
+      SQL
+      defaults = ->(version) { described_class.parse(sql, rails_version: version)[:tables]["t"][:columns].to_h { |c| [ c[:name], c[:default] ] } }
+
+      expect(defaults.("8.1.3")).to eq("i" => "0", "j" => "0", "f" => "0.0", "g" => nil, "d" => "0", "e" => "0.0", "n" => "0.0", "w" => nil)
+      expect(defaults.("8.1.4")).to eq("i" => nil, "j" => nil, "f" => "0.0", "g" => "1.0", "d" => nil, "e" => "1.0", "n" => "0.0", "w" => nil)
+    end
+
+    # Rails 7.0.10, 8.0.5 and 8.1.4 dump this table alike: the boolean type casts a quoted word, false only for its false words.
+    it "reads a quoted default on a boolean as Rails' boolean type casts it" do
+      sql = <<~SQL
+        CREATE TABLE "b" ("a" boolean DEFAULT 't', "b" boolean DEFAULT 'f', "c" boolean DEFAULT 'no', "d" boolean DEFAULT '', "e" boolean DEFAULT 2, "f" boolean DEFAULT 'off');
+      SQL
+      defaults = described_class.parse(sql, rails_version: "8.0.5")[:tables]["b"][:columns].to_h { |c| [ c[:name], c[:default] ] }
+
+      expect(defaults).to eq("a" => "true", "b" => "false", "c" => "true", "d" => nil, "e" => "true", "f" => "false")
+    end
+
+    # Only the MySQL adapter's columns know unsigned.
+    it "reads an UNSIGNED BIG INT as an integer with no unsigned mark" do
+      column = described_class.parse('CREATE TABLE "w" ("id" integer PRIMARY KEY, "ui" UNSIGNED BIG INT);')[:tables]["w"][:columns].last
+
+      expect(column).to eq(name: "ui", type: "integer", null: true)
+    end
+
+    # Booted Rails 8.0: PRAGMA table_info gives a key without NOT NULL notnull 0, so the column allows NULL.
+    it "reads a primary key declared without NOT NULL as allowing NULL" do
+      sql = <<~SQL
+        CREATE TABLE "w" ("id" integer PRIMARY KEY, "v" varchar);
+        CREATE TABLE "x" ("code" varchar PRIMARY KEY);
+        CREATE TABLE "z" ("id" integer NOT NULL PRIMARY KEY);
+      SQL
+      nulls = described_class.parse(sql)[:tables].transform_values { |t| t[:columns].first[:null] }
+
+      expect(nulls).to eq("w" => true, "x" => true, "z" => false)
+    end
+
     it "reads a table whose foreign key spans lines, and leaves out sqlite_sequence" do
       sql = <<~SQL
         CREATE TABLE "accounts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "name" varchar NOT NULL);

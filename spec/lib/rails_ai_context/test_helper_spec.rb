@@ -25,12 +25,27 @@ RSpec.describe RailsAiContext::TestHelper do
     it "raises ArgumentError for unknown tool name" do
       expect { execute_tool("nonexistent_tool") }.to raise_error(ArgumentError, /not found/)
     end
+
+    it "raises with the tool's error text when the tool returns an error" do
+      broken = Class.new(MCP::Tool) do
+        tool_name "rails_broken"
+        def self.call(**) = MCP::Tool::Response.new([ { type: "text", text: "boom: undefined method" } ], error: true)
+      end
+
+      expect { execute_tool(broken) }.to raise_error(/rails_broken.*boom: undefined method/m)
+    end
   end
 
   describe "#execute_tool_with_error" do
     it "returns the response even for error cases" do
       response = execute_tool_with_error("rails_query", sql: "DROP TABLE users")
       expect(response).to be_a(MCP::Tool::Response)
+      expect(response.error?).to be(true)
+    end
+
+    it "raises when the call succeeds" do
+      expect { execute_tool_with_error("rails_get_schema", detail: "summary") }
+        .to raise_error(/rails_get_schema.*error/)
     end
   end
 

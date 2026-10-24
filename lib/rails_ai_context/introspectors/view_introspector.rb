@@ -31,14 +31,14 @@ module RailsAiContext
       end
 
       def extract_layouts
-        view_files("layouts/*").filter_map do |path, _relative|
-          next unless File.file?(path) && RailsAiContext::ViewFile.layout?(path)
+        RailsAiContext::ViewFile.layouts(root).filter_map do |path, relative|
+          name = relative.delete_prefix(RailsAiContext::ViewFile::LAYOUTS)
           content = RailsAiContext::SafeFile.read(path)
           unless content
-            next { name: File.basename(path) }
+            next { name: name }
           end
           yields = layout_yields(path, content)
-          entry = { name: File.basename(path) }
+          entry = { name: name }
           entry[:yields] = yields unless yields.empty?
           entry
         end.uniq { |l| l[:name] }.sort_by { |l| l[:name] }
@@ -49,12 +49,8 @@ module RailsAiContext
       CONTENT_FOR = /\bcontent_for(\?)?\s*\(?\s*(?::(\w+)|["'](\w+)["'])\s*(?:(,)|\)?\s*(do\b|\{))?/
       # The unnamed `yield`, where the action's own template lands.
       MAIN_YIELD = "(main)"
-      # A HAML or Slim line's Ruby: after `=`, `-`, `!=`, `==`, `&=` or `~`, bare or after a tag.
-      HAML_RUBY = /\A\s*(?:[%.#][\w.#:-]*(?:\{[^}]*\}|\([^)]*\))*)?\s*(?:!=|==|&=|=|~|-)\s?(.*)/
-      SLIM_RUBY = /\A\s*(?:[\w.#:-]+(?:\{[^}]*\}|\([^)]*\)|\[[^\]]*\])*)?\s*(?:!=|==|&=|=|~|-)\s?(.*)/
-
       def layout_yields(path, content)
-        ruby = layout_ruby(path, ViewTemplateIntrospector.strip_markup_comments(content))
+        ruby = layout_ruby(path, content)
         found = []
         ruby.scan(Regexp.union(YIELD, CONTENT_FOR)) do
           m = Regexp.last_match
@@ -67,30 +63,18 @@ module RailsAiContext
         found.uniq
       end
 
-      HAML_ATTRIBUTES = /\{(?:[^{}]|\{[^{}]*\})*\}/
-      SLIM_ATTRIBUTE = /[\w-]+=(\([^)]*\)|[^\s"'][^\s]*)/
-
-      # Only the Ruby a layout runs: ERB tag bodies; HAML and Slim code after
-      # an operator, plus a HAML attribute hash or a Slim attribute value.
+      # Only the Ruby a layout runs: ERB tag bodies, or a HAML or Slim layout's Ruby.
       def layout_ruby(path, text)
         return RailsAiContext::ErbSource.tag_bodies(text) if path.end_with?(".erb")
 
-        slim = path.end_with?(".slim")
-        text.each_line.flat_map { |line|
-          attributes = if slim
-            line.scan(SLIM_ATTRIBUTE).flatten
-          else
-            line.match?(/\A\s*[%.#]/) ? line.scan(HAML_ATTRIBUTES) : []
-          end
-          attributes + [ line[slim ? SLIM_RUBY : HAML_RUBY, 1] ].compact
-        }.join("\n")
+        RailsAiContext::MarkupSource.pieces(text, path)&.map(&:first)&.join("\n") || text
       end
 
       def extract_templates
         templates = {}
         view_files.each do |path, relative|
           next unless RailsAiContext::ViewFile.template?(path)
-          next if relative.start_with?("layouts/")
+          next if RailsAiContext::ViewFile.in_layouts?(relative)
           next if File.basename(relative).start_with?("_")
 
           controller = File.dirname(relative)
@@ -110,7 +94,7 @@ module RailsAiContext
           dir = File.dirname(relative)
           name = File.basename(relative)
 
-          if dir == "shared" || dir == "application"
+          if dir == "shared"
             shared << name
           else
             per_controller[dir] ||= []

@@ -243,13 +243,13 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
 
       # The folder of a missing view was globbed as written, and each `{a,b}` doubled the work on every view file.
-      it "reads a missing view's folder as a name, never as a glob" do
+      it "reads a missing view's folder as a name, never as a glob", :cpu_timed do
         expect(described_class.call(path: "posts/nope.html.erb").content.first[:text]).to include("Files in posts/: posts/_form.html.erb")
         expect(described_class.call(path: "{posts,x}/nope.html.erb").content.first[:text]).not_to include("posts/_form")
 
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        expect(described_class.call(path: "#{'{a,b}' * 24}/x.erb").content.first[:text]).to start_with("View not found")
-        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 5
+        text = nil
+        expect(cpu_seconds { text = described_class.call(path: "#{'{a,b}' * 24}/x.erb").content.first[:text] }).to be < 5
+        expect(text).to start_with("View not found")
       end
     end
 
@@ -278,6 +278,247 @@ RSpec.describe RailsAiContext::Tools::GetView do
 
         expect(text).to match(/# Views \(\d+ templates?, \d+ partials?\)/)
         expect(text).not_to include("layout)")
+      end
+    end
+
+    # The disk listing tested the path on disk for a layouts folder, so an app
+    # checked out under one listed no templates at all.
+    context "with an app under a folder named layouts and no views section" do
+      around do |example|
+        Dir.mktmpdir("view-layouts-dir") do |dir|
+          root = File.join(dir, "layouts/shop")
+          { "layouts/application.html.erb" => "<%= yield %>\n",
+            "posts/index.html.erb" => "<h1>Posts</h1>\n",
+            "admin/layouts/index.html.erb" => "<h1>Layouts</h1>\n" }.each do |relative, body|
+            FileUtils.mkdir_p(File.dirname(File.join(root, "app/views", relative)))
+            File.write(File.join(root, "app/views", relative), body)
+          end
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "lists every template but the layouts" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("# Views (2 templates, 0 partials, 1 layout)")
+        expect(text).to include("- admin/layouts/index.html.erb").and include("- posts/index.html.erb")
+      end
+    end
+
+    context "with a layout in a subfolder of app/views/layouts" do
+      around do |example|
+        Dir.mktmpdir("view-nested-layout") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/layouts/admin"))
+          FileUtils.mkdir_p(File.join(root, "app/views/users"))
+          File.write(File.join(root, "app/views/layouts/application.html.erb"), "<%= yield %>\n")
+          File.write(File.join(root, "app/views/layouts/admin/application.html.erb"), "<aside><%= yield :sidebar %></aside>\n<%= yield %>\n")
+          File.write(File.join(root, "app/views/users/index.html.erb"), "<h1>Users</h1>\n")
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: { templates: { "users/index.html.erb" => { lines: 1 } }, partials: {} }
+        )
+      end
+
+      it "lists it by its path and counts it" do
+        layouts = described_class.call(controller: "layouts", detail: "summary").content.first[:text]
+        expect(layouts).to include("# Layouts (2 files)")
+        expect(layouts).to include("- layouts/admin/application.html.erb (2 lines)").and include("- layouts/application.html.erb (1 line)")
+
+        full = described_class.call(controller: "layouts", detail: "full").content.first[:text]
+        expect(full).to include("## layouts/admin/application.html.erb\n```erb\n<aside><%= yield :sidebar %></aside>")
+
+        expect(described_class.call(detail: "summary").content.first[:text]).to include("# Views (1 template, 0 partials, 2 layouts)")
+      end
+    end
+
+    # Rails hands a partial the keys of either render shape as its locals.
+    context "with a partial rendered with locals" do
+      around do |example|
+        Dir.mktmpdir("view-partial-locals") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+          File.write(File.join(root, "app/views/posts/index.html.erb"), %(<%= render "posts/form", post: @post, title: "x" %>\n))
+          File.write(File.join(root, "app/views/posts/edit.html.erb"), %(<%= render partial: "posts/form", locals: { post: @post, mode: :edit } %>\n))
+          File.write(File.join(root, "app/views/posts/_form.html.erb"), "<p><%= title %></p>\n")
+          FileUtils.mkdir_p(File.join(root, "app/views/users"))
+          File.write(File.join(root, "app/views/users/index.html.erb"), %(<%= render "users/form", user: @user, note: "a: b" %>\n))
+          File.write(File.join(root, "app/views/users/_form.html.erb"), "<p><%= note %></p>\n")
+          File.write(File.join(root, "app/views/posts/show.html.erb"), %(<%= render "posts/list", posts: @posts %>\n))
+          File.write(File.join(root, "app/views/posts/_list.html.erb"), %(<% posts.each do |i| %><%= render "item", item: i %><% end %>\n))
+          File.write(File.join(root, "app/views/posts/_item.html.erb"), "<p><%= item.title %></p>\n")
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        app = RailsAiContext::StaticApp.new(@root)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: RailsAiContext::Introspectors::ViewTemplateIntrospector.new(app).call
+        )
+      end
+
+      it "names the keys every render call of that partial passes" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("- posts/_form.html.erb (1 line) **locals:** mode, post, title")
+        expect(text).to include("- users/_form.html.erb (1 line) **locals:** note, user")
+      end
+
+      # A partial only another partial renders gets its locals from that call,
+      # its bare name looked up in the rendering partial's folder.
+      it "names the keys a partial passes when it renders one, reading each file once" do
+        reads = Hash.new(0)
+        allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |orig, path, **kwargs|
+          reads[path.to_s] += 1
+          orig.call(path, **kwargs)
+        end
+
+        text = described_class.call(controller: "posts").content.first[:text]
+
+        expect(reads.keys.grep(%r{posts/_list})).not_to be_empty
+        expect(reads.values).to all(eq(1))
+
+        expect(text).to include("- posts/_item.html.erb (1 line) **locals:** item")
+        expect(text).to include("- posts/_list.html.erb (1 line) **locals:** posts")
+      end
+    end
+
+    # RenderingHelper#render: after a positional name the hash that follows is
+    # the locals whole, so a `locals:` key there is one local named `locals`.
+    context "with render calls whose locals Rails reads by its own rules" do
+      around do |example|
+        Dir.mktmpdir("view-render-locals") do |root|
+          %w[posts shared].each { |d| FileUtils.mkdir_p(File.join(root, "app/views", d)) }
+          File.write(File.join(root, "app/views/posts/index.html.erb"), %(<%= render "posts/form",\n      post: @post,\n      title: "x" %>\n))
+          File.write(File.join(root, "app/views/posts/edit.html.erb"), %(<%= render "posts/form", post: @post, opts: { size: 1 } %>\n))
+          File.write(File.join(root, "app/views/posts/show.html.erb"), %(<%= render "shared/badge", locals: { user: current_user } %>\n))
+          File.write(File.join(root, "app/views/posts/_form.html.erb"), "<p><%= post.title %></p>\n")
+          File.write(File.join(root, "app/views/shared/_badge.html.erb"), "<p>badge</p>\n")
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        app = RailsAiContext::StaticApp.new(@root)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: RailsAiContext::Introspectors::ViewTemplateIntrospector.new(app).call
+        )
+      end
+
+      it "names a multi-line call's keys, a nested hash's owner only, and a positional locals: as one local" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("- posts/_form.html.erb (1 line) **locals:** opts, post, title")
+        expect(text).to include("- shared/_badge.html.erb (1 line) **locals:** locals")
+      end
+    end
+
+    # ObjectRenderer names the record after `as:` or the partial, and
+    # CollectionRenderer#retrieve_variable adds its _counter and _iteration.
+    # A bare name is looked up under the controller's prefixes: its own folder, then application.
+    context "with records rendered into a partial and a bare name found in application" do
+      around do |example|
+        Dir.mktmpdir("view-record-locals") do |root|
+          %w[posts application].each { |d| FileUtils.mkdir_p(File.join(root, "app/views", d)) }
+          File.write(File.join(root, "app/views/posts/index.html.erb"), <<~ERB)
+            <%= render partial: "posts/item", collection: @items %>
+            <%= render partial: "posts/row", collection: @rows, as: :entry %>
+            <%= render "flash", notice: @notice %>
+          ERB
+          File.write(File.join(root, "app/views/posts/show.html.erb"), %(<%= render partial: "posts/card", object: @post %>\n))
+          %w[posts/_item posts/_row posts/_card application/_flash].each do |name|
+            File.write(File.join(root, "app/views/#{name}.html.erb"), "<p>x</p>\n")
+          end
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        app = RailsAiContext::StaticApp.new(@root)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: RailsAiContext::Introspectors::ViewTemplateIntrospector.new(app).call
+        )
+      end
+
+      it "names the record local Rails gives the partial, and the locals of a bare name's application partial" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("- posts/_item.html.erb (1 line) **locals:** item, item_counter, item_iteration")
+        expect(text).to include("- posts/_row.html.erb (1 line) **locals:** entry, entry_counter, entry_iteration")
+        expect(text).to include("- posts/_card.html.erb (1 line) **locals:** card")
+        expect(text).to include("- application/_flash.html.erb (1 line) **locals:** notice")
+      end
+    end
+
+    # An agent edits the view from this text, so it is the file as written.
+    context "with a view read by path that holds an icon and repeated classes" do
+      let(:source) do
+        cls = "px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2"
+        %(<a class="#{cls}" href="/a"><svg viewBox="0 0 20 20"><path d="M10 0L0 10"/></svg>A</a>\n) +
+          %(<a class="#{cls}" href="/b">B</a>\n<a class="#{cls}" href="/c">C</a>\n)
+      end
+
+      around do |example|
+        Dir.mktmpdir("view-exact") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/orders"))
+          File.write(File.join(root, "app/views/orders/index.html.erb"), source)
+          FileUtils.mkdir_p(File.join(root, "app/views/layouts"))
+          File.write(File.join(root, "app/views/layouts/application.html.erb"), source)
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: { templates: { "orders/index.html.erb" => { lines: 3 } }, partials: {} }
+        )
+      end
+
+      it "returns the file's exact text" do
+        text = described_class.call(path: "orders/index.html.erb").content.first[:text]
+
+        expect(text).to eq("# orders/index.html.erb\n\n```erb\n#{source}\n```")
+      end
+
+      it "shows each layout exactly in the full layouts listing" do
+        text = described_class.call(controller: "layouts", detail: "full").content.first[:text]
+
+        expect(text).to include("## layouts/application.html.erb\n```erb\n#{source}\n```")
+      end
+
+      it "says above a controller's full listing that it shortened icons and repeated classes" do
+        text = described_class.call(controller: "orders", detail: "full").content.first[:text]
+
+        expect(text).to include("_Inline SVG icons and repeated class strings are shortened here; read a file by `path:` for its exact text._")
+        expect(text).to include("<!-- svg icon -->")
+      end
+
+      it "says nothing about shortening when the controller's views had nothing to shorten" do
+        File.write(File.join(@root, "app/views/orders/index.html.erb"), "<p>Orders</p>\n")
+
+        text = described_class.call(controller: "orders", detail: "full").content.first[:text]
+
+        expect(text).to include("<p>Orders</p>")
+        expect(text).not_to include("shortened")
       end
     end
 

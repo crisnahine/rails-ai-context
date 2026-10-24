@@ -14,12 +14,37 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       end
     end
 
-    it "answers one full of brace groups in the time any other takes" do
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      [ "{a,b}" * 24, "posts/#{'{a,b}' * 24}", "#{'{a,b}' * 24}/form" ].each do |name|
-        expect(described_class.call(partial: name).content.first[:text]).to include("not found."), name
+    it "answers one full of brace groups in the time any other takes", :cpu_timed do
+      names = [ "{a,b}" * 24, "posts/#{'{a,b}' * 24}", "#{'{a,b}' * 24}/form" ]
+      texts = nil
+      expect(cpu_seconds { texts = names.map { |name| described_class.call(partial: name).content.first[:text] } }).to be < 5
+      names.zip(texts).each { |name, text| expect(text).to include("not found."), name }
+    end
+  end
+
+  describe "an instance variable or a method named like a local" do
+    around do |example|
+      Dir.mktmpdir("ivar-local") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/views/shared"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/views/shared/_badge.html.erb"),
+                   "<%= user.name %>\n<% if @user.admin? %>Admin<% end %>\n<%= @user&.email %> <%= post.user.avatar %>\n" \
+                   "<%= user&.title %> <%= user&.to_s %>\n")
+        File.write(File.join(dir, "app/views/posts/index.html.erb"), %(<%= render "shared/badge", user: current_user %>\n))
+        example.run
       end
-      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 5
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    it "credits the local only with the calls made on the local itself, by . or &., less conversions" do
+      text = described_class.call(partial: "shared/badge").content.first[:text]
+
+      expect(text).to include("- **user** - calls: name, title\n")
     end
   end
 
@@ -54,6 +79,124 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     it "credits a namespaced view to the partial under its namespace" do
       expect(rendered_from("admin/posts/post")).to eq("## Rendered From (1)\n- `app/views/admin/posts/index.html.erb:1`")
       expect(rendered_from("posts/post")).to eq("## Rendered From (1)\n- `app/views/posts/show.html.erb:3`")
+    end
+
+    it "credits a form builder rendered bare to the form partial beside the view, as Rails looks a bare name up" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/edit.html.erb"), "<%= form_with model: @widget do |form| %>\n<%= render form %>\n<% end %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to eq("## Rendered From (1)\n- `app/views/admin/widgets/edit.html.erb:2`")
+    end
+
+    it "credits a form builder block parameter of any name to the form partial, as FormBuilder#to_partial_path names it" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/edit.html.erb"), "<%= form_with model: @widget do |f| %>\n<%= render f %>\n<% end %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to eq("## Rendered From (1)\n- `app/views/admin/widgets/edit.html.erb:2`")
+    end
+
+    it "credits a form builder a brace block names to the form partial" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/edit.html.erb"), %(<%= form_with(model: @widget, url: "/x") { |g| concat render(g) } %>\n))
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to eq("## Rendered From (1)\n- `app/views/admin/widgets/edit.html.erb:1`")
+    end
+
+    it "credits a builder's block that follows a brace block inside the helper's arguments to the form partial" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/edit.html.erb"),
+                 %(<%= form_with model: @widget, url: "/x" do |f| %><%= f.fields_for :parts, [Part.new].reject { |c| c.nil? } do |cf| %>\n<%= render cf %>\n) +
+                 %(<% end %><% end %>\n<%= form_with model: @widget, url: "/x", data: { ids: [1].map { |c| c } } do |g| %>\n<%= render g %>\n<% end %>\n))
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to eq("## Rendered From (2)\n- `app/views/admin/widgets/edit.html.erb:2`\n- `app/views/admin/widgets/edit.html.erb:5`")
+    end
+
+    it "credits a record's fields iterated or given a block to the record's partial, never the form partial" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/fields"))
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/models/field.rb"), "class Field < ApplicationRecord; end\n")
+      File.write(File.join(@root, "app/views/admin/fields/_field.html.erb"), "<%= field.id %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/show.html.erb"),
+                 "<% @widget.fields(:visible).each do |field| %>\n<%= render field %>\n<% end %>\n" \
+                 "<% @survey.fields :public do |field| %>\n<%= render field %>\n<% end %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to be_nil
+      expect(rendered_from("admin/fields/field")).to eq("## Rendered From (2)\n- `app/views/admin/widgets/show.html.erb:2`\n- `app/views/admin/widgets/show.html.erb:5`")
+    end
+
+    it "credits fields on a builder handed to a partial as a local to the form partial" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/edit.html.erb"),
+                 %(<%= form_with model: @widget, url: "/x" do |f| %><%= render "address_fields", f: f %><% end %>\n))
+      File.write(File.join(@root, "app/views/admin/widgets/_address_fields.html.erb"),
+                 "<%= f.fields :address do |address| %>\n<%= render address %>\n<% end %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to eq("## Rendered From (1)\n- `app/views/admin/widgets/_address_fields.html.erb:2`")
+    end
+
+    it "credits fields on a local the view assigns or a plain block binds to the record's partial" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/fields"))
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/models/field.rb"), "class Field < ApplicationRecord; end\n")
+      File.write(File.join(@root, "app/views/admin/fields/_field.html.erb"), "<%= field.id %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/show.html.erb"),
+                 "<% widget = Widget.new %><% widget.fields :visible do |field| %>\n<%= render field %>\n<% end %>\n" \
+                 "<% [Widget.new].each do |item| %><% item.fields(:x) { |field| %>\n<%= render field %>\n<% } %><% end %>\n")
+
+      expect(rendered_from("admin/widgets/form")).to be_nil
+      expect(rendered_from("admin/fields/field")).to eq("## Rendered From (2)\n- `app/views/admin/widgets/show.html.erb:2`\n- `app/views/admin/widgets/show.html.erb:5`")
+    end
+
+    it "credits fields on a builder handed in, or assigned one, to the form partial, whatever a script or another block binds" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/_form.html.erb"), "<%= form.text_field :name %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_inner6.html.erb"),
+                 %(<%= form.fields :extra do |ef| %>\n<%= render ef %>\n<% end %>\n<script>const form = document.querySelector("form");</script>\n))
+      File.write(File.join(@root, "app/views/admin/widgets/_inner7.html.erb"),
+                 "<% [1].each do |f| %><% end %>\n<%= f.fields :extra do |ef| %>\n<%= render ef %>\n<% end %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_slim.html.slim"), "button form=dom_id(@p)\n= form.fields :extra do |ef|\n  = render ef\n")
+      File.write(File.join(@root, "app/views/admin/widgets/q1.html.erb"),
+                 %(<%= form_with model: @widget, url: "/x" do |form| %><% f = form %><%= f.fields :extra do |ef| %>\n<%= render ef %>\n<% end %><% end %>\n))
+
+      expect(rendered_from("admin/widgets/form")).to eq(
+        "## Rendered From (4)\n- `app/views/admin/widgets/_inner6.html.erb:2`\n- `app/views/admin/widgets/_inner7.html.erb:3`\n" \
+        "- `app/views/admin/widgets/_slim.html.slim:3`\n- `app/views/admin/widgets/q1.html.erb:2`"
+      )
+    end
+
+    it "reads no form builder off a commented-out helper, as the view scan reads none" do
+      File.write(File.join(@root, "app/views/posts/list.html.erb"),
+                 "<%# form_with model: @post do |post| %>\n<% @posts.each do |post| %><%= render post %><% end %>\n")
+
+      expect(rendered_from("posts/post")).to include("`app/views/posts/list.html.erb:2`")
+    end
+
+    it "credits a record's default partial kept in another view root, as Rails looks it up in every root" do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      File.write(File.join(@root, "config/application.rb"), "config.paths[\"app/views\"] << \"enterprise/app/views\"\n")
+      FileUtils.mkdir_p(File.join(@root, "enterprise/app/views/admin/reports"))
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "enterprise/app/views/admin/reports/_report.html.erb"), "<%= report.id %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/show.html.erb"), "<%= render @reports %>\n")
+      allow(RailsAiContext::ViewFile).to receive(:each).and_call_original
+
+      expect(rendered_from("admin/reports/report")).to eq("## Rendered From (1)\n- `app/views/admin/widgets/show.html.erb:1`")
+      expect(RailsAiContext::ViewFile).to have_received(:each).with(@root, "**/_*").once
+    end
+
+    it "credits no partial named after a record ivar, as Rails never looks one up by the ivar's name" do
+      FileUtils.mkdir_p(File.join(@root, "app/views/admin/widgets"))
+      File.write(File.join(@root, "app/views/admin/widgets/show.html.erb"), "<%= render @warnings %>\n")
+      File.write(File.join(@root, "app/views/admin/widgets/_warnings.html.erb"), "x\n")
+
+      expect(rendered_from("admin/widgets/warnings")).to be_nil
     end
 
     it "follows a to_partial_path the model defines" do
@@ -402,6 +545,8 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
         FileUtils.mkdir_p(File.join(dir, "lib"))
         File.write(File.join(dir, "lib/canonical_url.rb"),
                    "module CanonicalURL\n  module Helpers\n    def canonical_link_tag(url = nil) = nil\n  end\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        File.write(File.join(dir, "config/initializers/inflections.rb"), "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym 'URL' }\n")
         RailsAiContext::PathResolver.clear_code_roots
         example.run
       end
@@ -409,6 +554,7 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
     before do
       allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
       allow(described_class).to receive(:cached_context).and_return({})
     end
 
@@ -489,6 +635,79 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
     end
   end
 
+  # RenderingHelper#render: after a positional name the hash that follows is
+  # the locals whole, so a `locals:` key there is one local named `locals`.
+  describe "render calls whose locals Rails reads by its own rules" do
+    around do |example|
+      Dir.mktmpdir("partial-render-locals") do |dir|
+        @root = dir
+        views = File.join(dir, "app/views")
+        %w[posts shared].each { |d| FileUtils.mkdir_p(File.join(views, d)) }
+        File.write(File.join(views, "posts/index.html.erb"), %(<%= render "posts/form",\n      post: @post,\n      title: "x" %>\n))
+        File.write(File.join(views, "posts/edit.html.erb"), %(<%= render "posts/form", post: @post, opts: { size: 1 } %>\n))
+        File.write(File.join(views, "posts/show.html.erb"), %(<%= render "shared/badge", locals: { user: current_user } %>\n))
+        File.write(File.join(views, "posts/_form.html.erb"), "<p><%= post.title %></p>\n")
+        File.write(File.join(views, "shared/_badge.html.erb"), "<p>badge</p>\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def site_locals(name)
+      described_class.call(partial: name).content.first[:text].scan(/^- `(app\/[^`]+)` - locals: (.*)$/).to_h
+    end
+
+    it "names a multi-line call's keys, a nested hash's owner only, and a positional locals: as one local" do
+      expect(site_locals("posts/form")).to eq(
+        "app/views/posts/edit.html.erb:1" => "post, opts",
+        "app/views/posts/index.html.erb:1" => "post, title"
+      )
+      expect(site_locals("shared/badge")).to eq("app/views/posts/show.html.erb:1" => "locals")
+    end
+  end
+
+  # ObjectRenderer names the record after `as:` or the partial, and
+  # CollectionRenderer#retrieve_variable adds its _counter and _iteration.
+  # A bare name is looked up under the controller's prefixes: its own folder, then application.
+  describe "records rendered into a partial and a bare name found in application" do
+    around do |example|
+      Dir.mktmpdir("partial-record-locals") do |dir|
+        @root = dir
+        views = File.join(dir, "app/views")
+        %w[posts application].each { |d| FileUtils.mkdir_p(File.join(views, d)) }
+        File.write(File.join(views, "posts/index.html.erb"), <<~ERB)
+          <%= render partial: "posts/item", collection: @items %>
+          <%= render partial: "posts/item", object: @item %>
+          <%= render "flash", notice: @notice %>
+        ERB
+        File.write(File.join(views, "posts/_item.html.erb"), "<p>x</p>\n")
+        File.write(File.join(views, "application/_flash.html.erb"), "<p>x</p>\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def site_locals(name)
+      described_class.call(partial: name).content.first[:text].scan(/^- `(app\/[^`]+)` - locals: (.*)$/).to_h
+    end
+
+    it "names the record local Rails gives the partial, and finds a bare name's application partial" do
+      expect(site_locals("posts/item")).to eq(
+        "app/views/posts/index.html.erb:1" => "item, item_counter, item_iteration",
+        "app/views/posts/index.html.erb:2" => "item"
+      )
+      expect(site_locals("application/flash")).to eq("app/views/posts/index.html.erb:3" => "notice")
+    end
+  end
+
   # The blog's html and json post partials each listed the other's callers
   # and locals.
   describe "partials that share a name across formats or directories" do
@@ -540,7 +759,40 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       sites, locals = sites_and_locals("posts/_post.json.jbuilder")
 
       expect(sites).to eq(%w[app/views/posts/index.json.jbuilder:1 app/views/posts/show.json.jbuilder:1])
-      expect(locals).to eq(%w[post])
+      # json.array! renders its collection through CollectionRenderer, which adds the counter and iteration.
+      expect(locals).to eq(%w[post post_counter post_iteration])
+    end
+
+    it "reads json.partial!'s locals from its parentheses when a modifier follows them" do
+      views = File.join(@root, "app/views")
+      File.write(File.join(views, "posts/_card.json.jbuilder"), "json.title card.title\n")
+      File.write(File.join(views, "posts/card.json.jbuilder"), %(json.partial!("posts/card", card: @post) if @post\n))
+
+      text = described_class.call(partial: "posts/_card.json.jbuilder").content.first[:text]
+
+      expect(text).to include("`app/views/posts/card.json.jbuilder:1` - locals: card")
+    end
+
+    # JbuilderTemplate#_render_partial_with_options:
+    # options[:locals] ||= options.except(:partial, :as, :collection, :cached)
+    it "reads json.partial!'s hash form keys beside partial: as its locals" do
+      views = File.join(@root, "app/views")
+      File.write(File.join(views, "posts/_card.json.jbuilder"), "json.title card.title\n")
+      File.write(File.join(views, "posts/card.json.jbuilder"), <<~JBUILDER)
+        json.partial! partial: "posts/card", card: @post, cached: true
+        json.partial!(partial: "posts/card", card: @post, extra: 1)
+        json.partial! partial: "posts/card", locals: { card: @post }, ignored: 1
+        json.data { json.partial! "posts/card", card: @post }
+        json.array! @posts, partial: "posts/card", as: :card, extra: 1
+      JBUILDER
+
+      text = described_class.call(partial: "posts/_card.json.jbuilder").content.first[:text]
+
+      expect(text).to include("`app/views/posts/card.json.jbuilder:1` - locals: card\n")
+      expect(text).to include("`app/views/posts/card.json.jbuilder:2` - locals: card, extra\n")
+      expect(text).to include("`app/views/posts/card.json.jbuilder:3` - locals: card\n")
+      expect(text).to include("`app/views/posts/card.json.jbuilder:4` - locals: card\n")
+      expect(text).to include("`app/views/posts/card.json.jbuilder:5` - locals: extra, card, card_counter, card_iteration\n")
     end
 
     # The blog's posts/form claimed the render of comments/form in posts/show.

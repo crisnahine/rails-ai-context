@@ -33,6 +33,11 @@ module RailsAiContext
         key == :sqlite
       end
 
+      # A family the adapter does not name reads with PostgreSQL's rules: a short pg_dump carries no marker of its own.
+      def postgres_rules?
+        !mysql? && !sqlite?
+      end
+
       def implicit_pk_type
         sqlite? ? "integer" : "bigint"
       end
@@ -159,14 +164,14 @@ module RailsAiContext
         end.to_h
       end
 
-      # @return [Array<Hash>, nil] { name:, bytes: } largest first; nil when the family has none
+      # @return [Array<Hash>, nil] { name:, bytes: } largest first, no Rails bookkeeping table; nil when the family has none
       def table_sizes(connection)
-        runtime.table_sizes(connection)
+        runtime.table_sizes(connection)&.reject { |r| Introspectors::SchemaConventions.bookkeeping_table?(r[:name]) }
       end
 
-      # @return [Array<Hash>, nil] { table:, approximate_rows: } most rows first
+      # @return [Array<Hash>, nil] { table:, approximate_rows: } most rows first, no Rails bookkeeping table
       def row_estimates(connection)
-        runtime.row_estimates(connection)
+        runtime.row_estimates(connection)&.reject { |r| Introspectors::SchemaConventions.bookkeeping_table?(r[:table]) }
       end
 
       # @return [Array<Hash>, nil] { table:, index:, scans: } least used first

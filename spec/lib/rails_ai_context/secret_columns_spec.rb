@@ -551,16 +551,14 @@ RSpec.describe RailsAiContext::SecretColumns do
     end
 
     # A regexp over the whole text is quadratic on a Ruby with no match cache (before 3.2).
-    it "reads those names in time that grows with the statement" do
-      clock = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+    it "reads those names in time that grows with the statement", :cpu_timed do
       texts = [ "'#{"a" * 40_000}'", "`" * 40_001, "[a " * 13_000, "\"a " * 13_000, "'#{"é " * 20_000}'", "." * 40_000, "a ." * 13_000,
                 "`a`." * 10_000, "\"\"." * 13_000, "`` a" * 10_000 + "`." ].map { |long| "SELECT #{long} FROM t WHERE t.id = 1" }
       allow(runtime).to receive(:schemas_named).and_return([])
 
-      started = Process.clock_gettime(clock)
-      texts.each { |text| RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: text) } }
+      seconds = cpu_seconds { texts.each { |text| RailsAiContext::RunCache.around { described_class.for(conn, context: {}, statement: text) } } }
 
-      expect(Process.clock_gettime(clock) - started).to be < 10
+      expect(seconds).to be < 10
     end
 
     it "lists the schemas, reads the columns, the views and the generated columns in one statement each, and the virtual and shadow tables in two" do
@@ -654,6 +652,12 @@ RSpec.describe RailsAiContext::SecretColumns do
     it "leaves bookkeeping tables out of a connection read" do
       allow(runtime).to receive(:relation_columns).and_return("users" => %w[id], "ar_internal_metadata" => %w[key])
       expect(described_class.for(conn, context: context).relation_secret?("ar_internal_metadata")).to be(false)
+    end
+
+    it "leaves bookkeeping tables out under the app's table name prefix" do
+      allow(ActiveRecord::Base).to receive(:table_name_prefix).and_return("app_")
+      allow(runtime).to receive(:relation_columns).and_return("users" => %w[id], "app_ar_internal_metadata" => %w[key])
+      expect(described_class.for(conn, context: context).relation_secret?("app_ar_internal_metadata")).to be(false)
     end
   end
 end

@@ -951,6 +951,31 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  # co.uk, com.au, co.nz and or.jp are public suffixes; dhl.de and box.io are names under a country code.
+  describe "a host under a two-label country suffix" do
+    it "is named by the label before the suffix, one row per service" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/services"))
+        File.write(File.join(dir, "app/services/pay.rb"), <<~RUBY)
+          class Pay
+            def a = HTTParty.get("https://api.payments.co.uk/payments")
+            def b = Faraday.get("https://api.billing.com.au/x")
+            def c = HTTParty.get("https://api.ledger.co.nz/x")
+            def d = HTTParty.get("https://api.stripe.com/v1")
+            def e = HTTParty.get("https://api.shop.or.jp/v1")
+            def f = HTTParty.get("https://api.dhl.de/v1")
+            def g = HTTParty.get("https://api.box.io/v1")
+          end
+        RUBY
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        names = described_class.send(:detect_external_services, dir, []).map { |s| s[:name] }
+
+        expect(names).to eq(%w[Payments Billing Ledger Stripe Shop Dhl Box])
+      end
+    end
+  end
+
   describe "an HTTP client named only in a trailing comment or a string" do
     it "is not a service the app calls" do
       Dir.mktmpdir do |dir|
@@ -1356,16 +1381,61 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       end
     end
 
-    it "reads a quoted value followed by a long run of spaces in time that grows with it" do
+    it "reads a quoted value followed by a long run of spaces in time that grows with it", :cpu_timed do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, ".env.example"), "APP_NAME=demo\nGREETING=\"hello\"#{' ' * 40_000}x\nPORT=3000\n")
-        cpu = Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
-        started = Process.clock_gettime(cpu)
-
-        names = described_class.send(:scan_env_example, dir).map { |var| var[:name] }
-        expect(Process.clock_gettime(cpu) - started).to be < 1
+        names = nil
+        expect(cpu_seconds { names = described_class.send(:scan_env_example, dir).map { |var| var[:name] } }).to be < 1
         expect(names).to include("APP_NAME", "PORT")
       end
+    end
+  end
+  describe "the source scan behind the env section" do
+    around do |example|
+      config = RailsAiContext.configuration
+      saved = [ RailsAiContext.tier, config.app_root ]
+      Dir.mktmpdir do |dir|
+        @root = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(@root, "app/services"))
+        FileUtils.mkdir_p(File.join(@root, "config"))
+        File.write(File.join(@root, "config/application.rb"), "module Shop; class Application < Rails::Application; end; end\n")
+        @pay = File.join(@root, "app/services/pay.rb")
+        File.write(@pay, "class Pay\n  def a = Faraday.get(\"https://api.billing.com/x\", key: ENV[\"BILLING_KEY\"])\nend\n")
+        RailsAiContext.tier = :static
+        config.app_root = @root
+        example.run
+      end
+    ensure
+      RailsAiContext.tier, config.app_root = saved
+      described_class.reset_cache!
+    end
+
+    before do
+      %i[scan_env_vars detect_external_services detect_encrypted_columns].each do |helper|
+        allow(described_class).to receive(helper).and_call_original
+      end
+      @reads = Hash.new(0)
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |original, path, *rest, **options|
+        @reads[path.to_s] += 1
+        original.call(path, *rest, **options)
+      end
+    end
+
+    it "reads each file once, and again only once the files move" do
+      described_class.cached_context
+      @reads.clear
+      first = described_class.call(detail: "standard").content.first[:text]
+      expect(first).to include("BILLING_KEY", "**Billing**")
+      expect(@reads[@pay]).to eq(1)
+
+      @reads.clear
+      expect(described_class.call(detail: "standard").content.first[:text]).to eq(first)
+      expect(@reads[@pay]).to eq(0)
+
+      File.write(@pay, "class Pay\n  def a = Faraday.get(\"https://api.ledger.com/x\", key: ENV[\"LEDGER_KEY\"])\nend\n")
+      File.utime(Time.now + 5, Time.now + 5, @pay)
+      described_class::SHARED_CACHE[:timestamp] -= RailsAiContext.configuration.cache_ttl + 1
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("LEDGER_KEY", "**Ledger**")
     end
   end
 end

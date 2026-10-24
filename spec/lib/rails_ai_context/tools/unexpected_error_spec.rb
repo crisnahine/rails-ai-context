@@ -85,16 +85,16 @@ RSpec.describe "a tool that raises unexpectedly" do
       expect(text).to include("Tool rails_get_routes failed: NoMethodError: #{crash}")
     end
 
+    # Diagnose reads only the nil receiver's name out of rails_get_edit_context's text.
     it "says what crashed where the answer shows no text of that section" do
-      allow(tools::ReviewChanges).to receive(:get_changed_files).and_return([ "app/models/post.rb" ])
-      crash_in(tools::GetModelDetails)
+      crash_in(tools::GetEditContext, :rails_app)
 
-      response = tools::ReviewChanges.call
+      response = tools::Diagnose.call(error: "NoMethodError: undefined method `title' for nil", file: "app/controllers/posts_controller.rb")
       text = response.content.first[:text]
 
       expect(response.error?).to be(true), text
-      expect(text).to start_with("# Review: HEAD")
-      expect(text.scan("Tool rails_get_model_details failed: NoMethodError: #{crash}").size).to eq(1)
+      expect(text).to start_with("# Error Diagnosis")
+      expect(text.scan("Tool rails_get_edit_context failed: NoMethodError: #{crash}").size).to eq(1)
     end
 
     it "marks the CLI run failed, which is exit 1" do

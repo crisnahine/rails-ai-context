@@ -21,6 +21,27 @@ RSpec.describe RailsAiContext::FactsFormatter do
     expect(text).to end_with("---\nRun `x` for the JSON.")
   end
 
+  it "lists a second database's tables beside the primary's, named by database" do
+    columns = { columns: [ { name: "id" }, { name: "name" } ] }
+    context = {
+      app_name: "Blog",
+      schema: {
+        tables: { "posts" => columns, "comments" => columns },
+        secondary_databases: { "animals" => { tables: { "dogs" => columns } } }
+      }
+    }
+
+    out = described_class.render(context, full_json: "")
+
+    expect(out).to include("## Tables (3)\n- posts (2 cols, 0 indexes, 0 FKs)\n- comments (2 cols, 0 indexes, 0 FKs)\n" \
+      "- dogs (animals; 2 cols, 0 indexes, 0 FKs)\n")
+  end
+
+  # A booted app whose Application class sits at the top level has no module name.
+  it "titles the facts Rails App when the context names no app" do
+    expect(described_class.render({ app_name: nil }, full_json: "")).to start_with("# Rails App - Schema Facts\n")
+  end
+
   it "names a command each surface has for the full JSON" do
     rake = File.read(File.expand_path("../../../lib/rails_ai_context/tasks/rails_ai_context.rake", __dir__))
     binary = File.read(File.expand_path("../../../exe/rails-ai-context", __dir__))

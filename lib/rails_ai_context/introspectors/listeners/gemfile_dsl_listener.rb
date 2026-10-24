@@ -69,11 +69,11 @@ module RailsAiContext
             end
           end
 
-          # Inherit groups from enclosing group blocks
-          groups = options.delete(:group)
-          groups = Array(groups) if groups
-          groups ||= @current_groups.flatten.uniq if @current_groups.any?
-          groups ||= []
+          # Bundler::Dsl#gem: `opts["group"] = opts.delete("groups") || opts["group"]`,
+          # then `groups.concat Array(opts.delete("group"))` onto the enclosing blocks' groups.
+          extra = options.delete(:groups) || options[:group]
+          options.delete(:group)
+          groups = (@current_groups.flatten + Array(extra).map { |group| group.to_s.to_sym }).uniq
 
           @results << {
             type:     :gem,

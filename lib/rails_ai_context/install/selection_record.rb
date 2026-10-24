@@ -273,7 +273,7 @@ module RailsAiContext
         return :absent unless File.exist?(path)
 
         content, status = edit_config_line(SafeFile.read_text(path), key, value)
-        replace_file(path, content) if %i[updated inserted].include?(status)
+        SafeFile.atomic_write(path, content, root: root) if %i[updated inserted].include?(status)
         status
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
@@ -330,7 +330,7 @@ module RailsAiContext
         extra.each { |key, value| wanted[key.to_s] = value }
 
         unless File.exist?(path)
-          replace_file(path, wanted.to_yaml)
+          SafeFile.atomic_write(path, wanted.to_yaml, root: root)
           return :created
         end
 
@@ -340,7 +340,7 @@ module RailsAiContext
         # the caller can say the old contents went.
         data = readable_yaml(path)
         unless data.is_a?(Hash)
-          replace_file(path, wanted.to_yaml)
+          SafeFile.atomic_write(path, wanted.to_yaml, root: root)
           return :replaced
         end
 
@@ -356,7 +356,7 @@ module RailsAiContext
         end.to_h
         return :unchanged if changed.empty?
 
-        replace_file(path, yaml_edited(SafeFile.read_text(path), data, changed))
+        SafeFile.atomic_write(path, yaml_edited(SafeFile.read_text(path), data, changed), root: root)
         :updated
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{YAML_FILE}: #{e.message}"
@@ -461,17 +461,6 @@ module RailsAiContext
         YAML.safe_load(text, permitted_classes: PERMITTED_YAML, aliases: true) == expected
       rescue StandardError
         false
-      end
-
-      # Through a temp file and a rename, so a reader racing the write sees
-      # the old file or the new one; through a link to the file it names, and
-      # keeping that file's mode, so the file stays what it was apart from its
-      # text.
-      private_class_method def self.replace_file(path, content)
-        path = File.realpath(path) if File.symlink?(path)
-        mode = File.stat(path).mode & 0o7777 if File.exist?(path)
-        SafeFile.atomic_write(path, content)
-        File.chmod(mode, path) if mode
       end
     end
   end

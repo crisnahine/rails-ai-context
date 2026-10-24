@@ -45,6 +45,21 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to end_with("  end\nend\n")
     end
 
+    it "rewrites no initializer that links out of the app, and names it" do
+      Dir.mktmpdir do |outside|
+        stale = "RailsAiContext.configure do |config|\n  config.ai_tools = %i[cursor]\nend\n"
+        File.write(File.join(outside, "rails_ai_context.rb"), stale)
+        File.symlink(File.join(outside, "rails_ai_context.rb"), initializer_path)
+
+        said = []
+        allow(generator).to receive(:say) { |text, *| said << text }
+        generator.create_initializer
+
+        expect(File.read(File.join(outside, "rails_ai_context.rb"))).to eq(stale)
+        expect(said).to include("Left config/initializers/rails_ai_context.rb as it is - it is a symlink or behind one, which this run does not follow")
+      end
+    end
+
     # This file lands in the app's repo and is read by whoever maintains it
     # next, so its own Rubocop sees it. The AI Tools section was written at one
     # indent and every section after it at another, and the guard wrap kept the
@@ -210,6 +225,31 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to include("    config.ai_tools = %i[claude copilot]")
       expect(content).to include("    config.tool_mode = :mcp   # MCP primary + CLI fallback")
       expect(content).not_to include("\n  config.tool_mode = :mcp   # MCP primary + CLI fallback")
+    end
+
+    it "keeps an ai_tools array spread over several lines and says it was not rewritten" do
+      selection = <<~RUBY
+            config.ai_tools = %i[
+              claude
+              cursor
+            ]
+      RUBY
+      File.write(initializer_path, <<~RUBY)
+        # frozen_string_literal: true
+
+        if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
+          RailsAiContext.configure do |config|
+        #{selection.chomp}
+          end
+        end
+      RUBY
+
+      expect { generator.create_initializer }.to output(/sets config\.ai_tools in a form this installer does not rewrite/).to_stdout
+
+      content = File.read(initializer_path)
+      expect(content).to include(selection)
+      expect(content).not_to include("config.ai_tools = %i[claude copilot]")
+      expect { RubyVM::InstructionSequence.compile(content) }.not_to raise_error
     end
   end
 

@@ -31,10 +31,75 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.declared_module_names(source)).to eq([ "Outer::Inner" ])
     end
 
+    it "answers a module assigned from Module.new the way it answers the module keyword" do
+      assigned = "APITrackable = Module.new do\n  def track; end\nend\n"
+      keyword = "module APITrackable\n  def track; end\nend\n"
+
+      expect(described_class.resolve(assigned, "ApiTrackable")).to eq("APITrackable")
+      expect(described_class.resolve(keyword, "ApiTrackable")).to eq("APITrackable")
+      expect(described_class.declared_module_names("module Shop\n  Trackable = Module.new do\n  end\nend\n")).to eq(%w[Shop Shop::Trackable])
+    end
+
     it "prefers a declared class over a declared module" do
       source = "module Wrapper\nend\nclass Widget\nend\n"
 
       expect(described_class.resolve(source, "Widget")).to eq("Widget")
+    end
+  end
+
+  # Ruby looks the first segment of `class Shop::Draft` up lexically: inside `module Shop` it is ::Shop, and
+  # inside `module Shop; module Admin` an `Admin::Draft` is Shop::Admin::Draft (Module.nesting [Shop::Admin::Draft, Shop::Admin, Shop]).
+  describe "a compact path whose first segment names an enclosing scope" do
+    it "declares the constant under that scope, with Ruby's nesting" do
+      tree = RailsAiContext::AstCache.parse_string("module Shop\n  class Shop::Draft; end\n  module Admin\n    class Admin::Draft; end\n    class Other::Draft; end\n  end\nend\n").value
+      expect(described_class.constants(tree).map { |name, _node, nesting| [ name, nesting ] }).to eq(
+        [ [ "Shop", %w[Shop] ], [ "Shop::Draft", %w[Shop::Draft Shop] ], [ "Shop::Admin", %w[Shop::Admin Shop] ],
+          [ "Shop::Admin::Draft", %w[Shop::Admin::Draft Shop::Admin Shop] ], [ "Shop::Admin::Other::Draft", %w[Shop::Admin::Other::Draft Shop::Admin Shop] ] ]
+      )
+    end
+
+    it "names the class it declares so" do
+      source = "module Shop\n  class Shop::Draft\n    def total; end\n  end\nend\n"
+      expect(described_class.declared_names(source)).to eq(%w[Shop::Draft])
+      expect(described_class.class_bodies(RailsAiContext::AstCache.parse_string(source).value, "Shop::Draft").map(&:slice)).to eq([ "def total; end" ])
+    end
+
+    # Ruby tries Shop::Shop before ::Shop, and takes the first already defined.
+    it "reads the first segment as the nearest constant declared above it" do
+      nearer = "module Shop\n  module Shop; end\n  class Shop::Draft; end\nend\n"
+      below = "module Shop\n  class Shop::Draft; end\n  module Shop; end\nend\n"
+      expect(described_class.declared_names(nearer)).to eq(%w[Shop::Shop::Draft])
+      expect(described_class.declared_names(below)).to eq(%w[Shop::Draft])
+    end
+
+    # Ruby: `Part ||= Class.new do ... end` with Part already set never runs the block, so ::Loose is never opened.
+    it "reads no class body inside an `||=` block that never runs" do
+      source = "class Gadget < Base\n  Part = Class.new(Base)\n  Part ||= Class.new(Base) do\n    class ::Loose < Base\n      def leak; end\n    end\n  end\nend\n"
+      expect(described_class.class_bodies(RailsAiContext::AstCache.parse_string(source).value, "Loose")).to eq([])
+    end
+
+    it "names a Class.new written to such a path the same way" do
+      source = "module Shop\n  Shop::Draft = Class.new(Base) do\n    def total; end\n  end\nend\n"
+      tree = RailsAiContext::AstCache.parse_string(source).value
+      expect(described_class.constants(tree, assignments: true).map { |name, *| name }).to eq(%w[Shop Shop::Draft])
+      expect(described_class.declarations(source, path_name: "Shop::Draft").map(&:name)).to eq(%w[Shop::Draft])
+      expect(described_class.class_bodies(tree, "Shop::Draft").map(&:slice)).to eq([ "def total; end" ])
+    end
+
+    # Ruby: `Shop ||= ...` and `Shop, Mall = ...` define A::Shop, so `class Shop::Draft` inside A::B is A::Shop::Draft.
+    it "reads the first segment against a constant an `||=` or a multiple assignment wrote" do
+      body = "  module B\n    class Shop::Draft < Base; end\n  end\nend\n"
+      expect(described_class.declared_names("module A\n  Shop ||= Module.new\n#{body}")).to eq(%w[A::Shop::Draft])
+      expect(described_class.declared_names("module A\n  Shop, Mall = Module.new, Module.new\n#{body}")).to eq(%w[A::Shop::Draft])
+      # `V1 ||=` inside module V1 finds ::V1 defined and assigns nothing.
+      expect(described_class.declared_names("module V1\n  V1 ||= Module.new\n  class V1::Users; end\nend\n")).to eq(%w[V1::Users])
+    end
+
+    # Ruby: Foo.const_defined?(:M, false) is false after `M ||=` in Foo < Bar, which finds Bar::M; `class M::Y` is Bar::M::Y.
+    it "reads an `||=` and a first segment against the constants of a superclass the file declares" do
+      source = "class Bar\n  M = Module.new\nend\nclass Foo < Bar\n  M ||= Module.new\n  class M::Y; end\nend\n"
+
+      expect(described_class.declared_names(source)).to eq(%w[Bar Foo Bar::M::Y])
     end
   end
 
@@ -55,6 +120,26 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     it "names constants the same way" do
       tree = RailsAiContext::AstCache.parse_string(source).value
       expect(described_class.constants(tree).map { |name, _node| name }).to eq(%w[A Foo Foo::Bar A::Baz])
+    end
+  end
+
+  # Expected values are Ruby's Module.nesting at the include in the whole file.
+  describe ".record_nesting over a walked slice" do
+    def slice_nesting(source, label)
+      tree = RailsAiContext::AstCache.parse_string(source).value
+      node = described_class.module_nodes(tree)[label]
+      walked = RailsAiContext::Introspectors::SourceIntrospector.walk_source(node.slice, { mixins: RailsAiContext::Introspectors::Listeners::MixinsListener })
+      walked[:mixins].map { |mixin| described_class.record_nesting(mixin, described_class.body_nesting(tree, label, node: node), node.constant_path.slice) }
+    end
+
+    it "reads a constant nested under a rooted class from the root" do
+      source = "module Shop\n  module Tagging\n    class ::Foo\n      module Foo::Bar\n        include M\n      end\n    end\n  end\nend\n"
+      expect(slice_nesting(source, "Shop::Tagging")).to eq([ %w[Foo::Bar Foo Shop::Tagging Shop] ])
+    end
+
+    it "names the slice's own module as the file declares it" do
+      source = "module Shop\n  module Shop::Tagging\n    include M\n    class Inner\n      include M\n    end\n  end\nend\n"
+      expect(slice_nesting(source, "Shop::Tagging")).to eq([ %w[Shop::Tagging Shop], %w[Shop::Tagging::Inner Shop::Tagging Shop] ])
     end
   end
 

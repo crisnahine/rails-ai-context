@@ -153,6 +153,14 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).to include("`DELETE` `/logout`")
     end
 
+    it "passes a glob segment to a route's helper, since Rails requires it" do
+      mock_context[:routes][:by_controller]["docs"] = [ { verb: "GET", path: "/docs/*section", action: "show", name: "doc" } ]
+
+      text = described_class.call(feature: "docs").content.first[:text]
+
+      expect(text).to include("`GET` `/docs/*section` → docs#show `doc_path(:section)`")
+    end
+
     it "returns clean no-match message when feature has no hits" do
       result = described_class.call(feature: "zzz_nonexistent")
       text = result.content.first[:text]
@@ -919,31 +927,66 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     end
   end
 
-  # An app that declares `inflect.acronym "AI"` has AIMatchListing, which
-  # classify spells AiMatchListing.
+  # An app that declares `inflect.acronym "API"` has APIClientToken, which
+  # classify spells ApiClientToken.
   describe "a related model whose name carries an app acronym" do
     before do
       described_class.reset_cache!
       allow(described_class).to receive(:cached_context).and_return(
         models: {
-          "Listing" => { table_name: "listings", validations: [], scopes: [],
-                         associations: [ { type: "has_many", name: "ai_match_listings" } ] },
-          "AIMatchListing" => { table_name: "ai_match_listings", associations: [], validations: [], scopes: [] }
+          "Account" => { table_name: "accounts", validations: [], scopes: [],
+                         associations: [ { type: "has_many", name: "api_client_tokens" } ] },
+          "APIClientToken" => { table_name: "api_client_tokens", associations: [], validations: [], scopes: [] }
         }
       )
     end
 
     it "names the model as the app spells it" do
-      text = described_class.call(feature: "Listing").content.first[:text]
+      text = described_class.call(feature: "Account").content.first[:text]
 
-      expect(text).to include("AIMatchListing")
-      expect(text).not_to include("AiMatchListing")
+      expect(text).to include("APIClientToken")
+      expect(text).not_to include("ApiClientToken")
     end
 
     it "finds the model when the feature is its class name" do
-      text = described_class.call(feature: "AIMatchListing").content.first[:text]
+      text = described_class.call(feature: "APIClientToken").content.first[:text]
 
-      expect(text).to include("### AIMatchListing")
+      expect(text).to include("### APIClientToken")
+    end
+  end
+
+  # Rails names a through association's class from its source, and
+  # singularizes the association name only for a collection.
+  describe "related models named the way Rails derives an association's class" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Post" => { table_name: "posts", validations: [], scopes: [],
+                      associations: [
+                        { type: "belongs_to", name: "preferences" },
+                        { type: "belongs_to", name: "author", class_name: "User" },
+                        { type: "belongs_to", name: "commentable", polymorphic: true },
+                        { type: "has_many", name: "subscriptions" },
+                        { type: "has_many", name: "followers", through: "subscriptions", options: { source: :user } },
+                        { type: "has_many", name: "author_emails", through: "author", options: { source: :emails } },
+                        { type: "has_many", name: "reader_emails", through: "reader" }
+                      ] },
+          "Subscription" => { table_name: "subscriptions", validations: [], scopes: [],
+                              associations: [ { type: "belongs_to", name: "user" } ] },
+          "User" => { table_name: "users", validations: [], scopes: [],
+                      associations: [ { type: "has_many", name: "emails" } ] },
+          "Email" => { table_name: "emails", associations: [], validations: [], scopes: [] },
+          "Preferences" => { table_name: "preferences", associations: [], validations: [], scopes: [] }
+        }
+      )
+    end
+
+    it "lists the classes the associations point at, and none they do not" do
+      text = described_class.call(feature: "Post").content.first[:text]
+      related = text[/## Related Models.*?\n\n/m].to_s.scan(/^- \*\*(\S+)\*\*/).flatten
+
+      expect(related).to contain_exactly("Preferences", "User", "Subscription", "Email")
     end
   end
 
@@ -954,6 +997,259 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         schema: { tables: {}, secondary_databases: { "analytics" => { tables: { "page_views" => { columns: [ { name: "path", type: "string" } ] } } } } }
       )
       expect(described_class.call(feature: "page_view").content.first[:text]).to include("**Columns:** path:string")
+    end
+  end
+
+  # The folders above the app hold any word: a home directory, the app's own name.
+  describe "environment dependencies under a folder that holds the feature word" do
+    it "matches each service and job by its path under its own directory" do
+      Dir.mktmpdir("rac_env") do |tmp|
+        root = File.join(tmp, "shop")
+        { "app/services/billing_service.rb" => "class BillingService\n  def key = ENV[\"STRIPE_SECRET_KEY\"]\nend\n",
+          "app/jobs/cleanup_job.rb" => "class CleanupJob\n  def bucket = ENV.fetch(\"S3_BUCKET\")\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, rel)))
+          File.write(File.join(root, rel), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        expect(described_class.call(feature: "shop").content.first[:text]).not_to include("## Environment Dependencies")
+        billing = described_class.call(feature: "billing").content.first[:text]
+        expect(billing).to include("## Environment Dependencies\n- `STRIPE_SECRET_KEY`\n\n")
+      end
+    end
+  end
+
+  # spec/models/postmark_event_spec.rb tests PostmarkEvent, and user_mailer_spec.rb a mailer.
+  describe "a test gap beside a test whose name only starts with the subject's" do
+    def gaps(tmp, feature, models)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: models.to_h { |name| [ name, { table_name: name.underscore.pluralize, associations: [], validations: [], scopes: [] } ] },
+        controllers: { controllers: { "PostsController" => { file: "app/controllers/posts_controller.rb", actions: [ "index" ] },
+                                      "Admin::BadgesController" => { file: "app/controllers/admin/badges_controller.rb", actions: [ "index" ] } } }
+      )
+      described_class.call(feature: feature).content.first[:text]
+    end
+
+    it "still reports the subject as untested, and counts the test files that are its own" do
+      Dir.mktmpdir("rac_gap_word") do |tmp|
+        { "app/jobs/post_job.rb" => "class PostJob\nend\n",
+          "spec/models/postmark_event_spec.rb" => "RSpec.describe PostmarkEvent do\nend\n",
+          "spec/models/user_mailer_spec.rb" => "RSpec.describe UserMailer do\nend\n",
+          "spec/requests/posts_controller_spec.rb" => "RSpec.describe PostsController do\nend\n",
+          "spec/requests/admin/badges_controller_spec.rb" => "RSpec.describe Admin::BadgesController do\nend\n",
+          "app/jobs/badge_job.rb" => "class BadgeJob\nend\n",
+          "spec/jobs/admin/badge_job_spec.rb" => "RSpec.describe Admin::BadgeJob do\nend\n",
+          "app/jobs/admin/badge_sync_job.rb" => "class Admin::BadgeSyncJob\nend\n",
+          "spec/jobs/admin/badge_sync_job_spec.rb" => "RSpec.describe Admin::BadgeSyncJob do\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+
+        post = gaps(tmp, "post", %w[Post PostmarkEvent])
+        expect(post).to include("- Model `Post` - no test file found\n")
+        expect(post).to include("- Job `post_job` - no test file found")
+        expect(post).not_to include("PostmarkEvent` - no test file found")
+        expect(post).not_to include("Controller `PostsController` - no test file found")
+
+        expect(gaps(tmp, "badge", [])).to include("- Job `badge_job` - no test file found")
+        expect(gaps(tmp, "badge", [])).not_to include("badge_sync_job` - no test file found")
+        expect(gaps(tmp, "user", %w[User])).to include("- Model `User` - no test file found")
+        expect(gaps(tmp, "badge", [])).not_to include("Controller `Admin::BadgesController` - no test file found")
+      end
+    end
+
+    it "counts a model spec or test named with the _model suffix test_info also looks up" do
+      Dir.mktmpdir("rac_gap_suffix") do |tmp|
+        { "spec/models/widget_model_spec.rb" => "RSpec.describe Widget do\nend\n",
+          "test/models/gadget_model_test.rb" => "class GadgetTest < ActiveSupport::TestCase\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+
+        expect(gaps(tmp, "widget", %w[Widget])).not_to include("Model `Widget` - no test file found")
+        expect(gaps(tmp, "gadget", %w[Gadget])).not_to include("Model `Gadget` - no test file found")
+      end
+    end
+
+    it "counts the test an in-repo engine keeps in its own spec folder" do
+      Dir.mktmpdir("rac_gap_engine") do |tmp|
+        { "engines/billing/app/controllers/invoices_controller.rb" => "class InvoicesController < ApplicationController\nend\n",
+          "engines/billing/spec/controllers/invoices_controller_spec.rb" => "RSpec.describe InvoicesController do\nend\n",
+          "spec/rails_helper.rb" => "" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "InvoicesController" => { file: "engines/billing/app/controllers/invoices_controller.rb", actions: [ "index" ] } } }
+        )
+
+        text = described_class.call(feature: "invoice").content.first[:text]
+        expect(text).to include("engines/billing/spec/controllers/invoices_controller_spec.rb")
+        expect(text).not_to include("Controller `InvoicesController` - no test file found")
+      end
+    end
+
+    describe "a test filed under the subject's name that describes another of the app's classes" do
+      around do |example|
+        Dir.mktmpdir("rac_gap_other") do |tmp|
+          @tmp = tmp
+          { "app/models/invoice.rb" => "class Invoice < ApplicationRecord\nend\n",
+            "engines/billing/app/models/billing/invoice.rb" => "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n",
+            "engines/billing/spec/models/invoice_spec.rb" => "RSpec.describe Billing::Invoice do\nend\n",
+            "app/models/receipt.rb" => "class Receipt < ApplicationRecord\nend\n",
+            "app/models/archive/receipt.rb" => "module Archive\n  class Receipt < ApplicationRecord\n  end\nend\n",
+            "spec/models/receipt_spec.rb" => "RSpec.describe Archive::Receipt do\nend\n",
+            "app/models/order.rb" => "class Order < ApplicationRecord\nend\n",
+            "app/presenters/order_presenter.rb" => "class OrderPresenter\nend\n",
+            "spec/models/order_spec.rb" => "RSpec.describe \"Order\" do\n  describe OrderPresenter do\n  end\nend\n",
+            "test/integration/widgets_test.rb" => "class WidgetsTest < ActionDispatch::IntegrationTest\nend\n",
+            "app/controllers/gadgets_controller.rb" => "class GadgetsController < ApplicationController\nend\n",
+            "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\nend\n",
+            "app/controllers/admin/orders_controller.rb" => "module Admin\n  class OrdersController < ApplicationController\n  end\nend\n",
+            "test/controllers/admin/orders_controller_test.rb" => "class OrdersControllerTest < ActionDispatch::IntegrationTest\nend\n",
+            "app/controllers/admin/gizmos_controller.rb" => "module Admin\n  class GizmosController < ApplicationController\n  end\nend\n",
+            "test/controllers/admin/gizmos_controller_test.rb" => "class OrdersControllerTest < ActionController::TestCase\nend\n",
+            "spec/requests/reports_controller_spec.rb" => "RSpec.describe Archive::Receipt do\nend\n",
+            "spec/controllers/gadgets_controller_spec.rb" => "RSpec.describe OrdersController do\nend\n" }.each do |rel, body|
+            FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+            File.write(File.join(tmp, rel), body)
+          end
+          example.run
+        end
+      end
+
+      def gaps(feature)
+        models = { "Invoice" => "app/models/invoice.rb", "Billing::Invoice" => "engines/billing/app/models/billing/invoice.rb",
+                   "Receipt" => "app/models/receipt.rb", "Archive::Receipt" => "app/models/archive/receipt.rb",
+                   "Order" => "app/models/order.rb" }
+        controllers = %w[WidgetsController ReportsController GadgetsController Admin::OrdersController Admin::GizmosController]
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          models: models.transform_values { |file| { file: file, table_name: "x", associations: [], validations: [], scopes: [] } },
+          controllers: { controllers: controllers.to_h { |name| [ name, { file: "app/controllers/#{name.underscore}.rb", actions: [ "index" ] } ] } }
+        )
+        described_class.call(feature: feature).content.first[:text]
+      end
+
+      it "leaves a top-level model untested by an engine's spec for the engine's own class" do
+        expect(gaps("invoice")).to include("- Model `Invoice` - no test file found")
+        expect(gaps("invoice")).not_to include("Model `Billing::Invoice` - no test file found")
+      end
+
+      it "leaves a model untested by its namesake spec describing a namespaced class" do
+        expect(gaps("receipt")).to include("- Model `Receipt` - no test file found")
+        expect(gaps("receipt")).not_to include("Model `Archive::Receipt` - no test file found")
+      end
+
+      it "counts a model spec whose top-level group names the model, whatever its nested groups describe" do
+        expect(gaps("order")).not_to include("Model `Order` - no test file found")
+      end
+
+      it "counts an integration test for the controller it is filed as" do
+        expect(gaps("widget")).not_to include("Controller `WidgetsController` - no test file found")
+      end
+
+      it "counts a request spec for the controller it is filed as, whatever it describes" do
+        expect(gaps("report")).not_to include("Controller `ReportsController` - no test file found")
+      end
+
+      it "counts an ActionDispatch::IntegrationTest under test/controllers for the controller it is filed as" do
+        expect(gaps("order")).not_to include("Controller `Admin::OrdersController` - no test file found")
+      end
+
+      it "leaves a controller untested by its controller spec describing another controller" do
+        expect(gaps("gadget")).to include("- Controller `GadgetsController` - no test file found")
+      end
+
+      it "leaves a controller untested by its ActionController::TestCase named for another controller" do
+        expect(gaps("gizmo")).to include("- Controller `Admin::GizmosController` - no test file found")
+      end
+    end
+
+    it "counts a test filed elsewhere whose described class is the subject's declared constant" do
+      Dir.mktmpdir("rac_gap_described") do |tmp|
+        { "app/jobs/scheduled/sweep_widgets.rb" => "module Jobs\n  class SweepWidgets < ::Jobs::Base\n  end\nend\n",
+          "spec/jobs/sweep_widgets_spec.rb" => "require \"rails_helper\"\n\nRSpec.describe Jobs::SweepWidgets do\nend\n",
+          "app/jobs/regular/rotate_widgets.rb" => "module Jobs\n  class RotateWidgets < ::Jobs::Base\n  end\nend\n",
+          "test/jobs/rotate_widgets_test.rb" => "module Jobs\n  class RotateWidgetsTest < ActiveSupport::TestCase\n  end\nend\n",
+          "app/jobs/regular/prune_widgets.rb" => "module Jobs\n  class PruneWidgets < ::Jobs::Base\n  end\nend\n",
+          "spec/jobs/prune_widgets_spec.rb" => "RSpec.describe \"Jobs::PruneWidgets\" do\nend\n",
+          "app/services/widget_tools/create_widget.rb" => "module WidgetTools\n  class CreateWidget < Base\n  end\nend\n",
+          "spec/requests/api/widget_tools/create_widget_spec.rb" => "RSpec.describe ::WidgetTools::CreateWidget, type: :request do\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+
+        text = gaps(tmp, "widget", [])
+        expect(text).not_to include("Job `scheduled/sweep_widgets` - no test file found")
+        expect(text).not_to include("Job `regular/rotate_widgets` - no test file found")
+        expect(text).not_to include("Service `widget_tools/create_widget` - no test file found")
+        expect(text).to include("- Job `regular/prune_widgets` - no test file found")
+      end
+    end
+
+    it "counts a nested example group whose first argument is the subject, as RSpec's described_class does" do
+      Dir.mktmpdir("rac_gap_nested") do |tmp|
+        { "app/jobs/badge_job.rb" => "class BadgeJob\nend\n",
+          "spec/jobs/badge_flows_spec.rb" => "RSpec.describe \"badge flows\" do\n  xcontext BadgeJob do\n  end\nend\n",
+          "spec/permissions/badges_access_spec.rb" =>
+            "RSpec.describe \"badge access\", type: :controller do\n  describe Admin::BadgeSerializer do\n" \
+            "    feature Admin::BadgesController do\n    end\n  end\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+
+        text = gaps(tmp, "badge", [])
+        expect(text).not_to include("Job `badge_job` - no test file found")
+        expect(text).not_to include("Controller `Admin::BadgesController` - no test file found")
+      end
+    end
+
+    it "counts a group describing the subject in a test whose name shares none of its words" do
+      Dir.mktmpdir("rac_gap_any_name") do |tmp|
+        { "app/jobs/regular/sweep_badges.rb" => "module Jobs\n  class SweepBadges < ::Jobs::Base\n  end\nend\n",
+          "spec/permissions/access_spec.rb" =>
+            "RSpec.describe \"access\" do\n  describe Admin::BadgesController do\n  end\n  context Jobs::SweepBadges do\n  end\nend\n",
+          "spec/permissions/other_spec.rb" => "RSpec.describe \"other\" do\n  # BadgesController\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+
+        text = gaps(tmp, "badge", [])
+        expect(text).not_to include("Controller `Admin::BadgesController` - no test file found")
+        expect(text).not_to include("Job `regular/sweep_badges` - no test file found")
+      end
+    end
+
+    it "resolves a described constant written inside a module the way Ruby looks it up there" do
+      Dir.mktmpdir("rac_gap_lexical") do |tmp|
+        { "app/controllers/admin/badges_controller.rb" => "module Admin\n  class BadgesController < ApplicationController\n  end\nend\n",
+          "app/controllers/admin/posts_controller.rb" => "module Admin\n  class PostsController < ApplicationController\n  end\nend\n",
+          "app/controllers/posts_controller.rb" => "class PostsController < ApplicationController\nend\n",
+          "spec/permissions/admin_access_spec.rb" => "module Admin\n  RSpec.describe BadgesController do\n  end\nend\n",
+          "spec/permissions/admin_posts_access_spec.rb" => "module Admin\n  RSpec.describe PostsController do\n  end\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(tmp, rel)))
+          File.write(File.join(tmp, rel), body)
+        end
+
+        expect(gaps(tmp, "badge", [])).not_to include("Controller `Admin::BadgesController` - no test file found")
+        expect(gaps(tmp, "post", [])).to include("- Controller `PostsController` - no test file found")
+
+        File.write(File.join(tmp, "spec/permissions/admin_access_spec.rb"), "module Admin\n  RSpec.describe ::BadgesController do\n  end\nend\n")
+        expect(gaps(tmp, "badge", [])).to include("- Controller `Admin::BadgesController` - no test file found")
+      end
+    end
+
+    it "does not count the model's spec as the controller's test" do
+      Dir.mktmpdir("rac_gap_model") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "spec", "models"))
+        File.write(File.join(tmp, "spec", "models", "post_spec.rb"), "RSpec.describe Post do\nend\n")
+
+        expect(gaps(tmp, "post", %w[Post])).to include("- Controller `PostsController` - no test file found")
+      end
     end
   end
 end

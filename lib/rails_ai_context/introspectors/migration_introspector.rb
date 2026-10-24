@@ -113,6 +113,12 @@ module RailsAiContext
       end
 
       def detect_migration_actions(content)
+        parsed = AstCache.parse_uncached(content)
+        called = AstWalk.each(parsed.value).filter_map do |node|
+          next unless node.is_a?(Prism::CallNode) && migration_receiver?(node.receiver)
+
+          node.name == :remove_columns ? "remove_column" : node.name.to_s
+        end.to_set
         %w[
           create_table drop_table rename_table
           add_column remove_column rename_column change_column
@@ -121,7 +127,14 @@ module RailsAiContext
           add_foreign_key remove_foreign_key
           add_timestamps create_join_table enable_extension execute
           add_check_constraint remove_check_constraint
-        ].select { |action| content.include?(action) } | change_table_actions(content)
+        ].select { |action| called.include?(action) } | change_table_actions(content, parsed)
+      end
+
+      # A migration forwards a bare call to its connection, so a call on self, a connection, or a local
+      # holding one (`conn = connection`, `with_connection { |c| ... }`) is the same one.
+      def migration_receiver?(receiver)
+        receiver.nil? || receiver.is_a?(Prism::SelfNode) || receiver.is_a?(Prism::LocalVariableReadNode) ||
+          (receiver.is_a?(Prism::CallNode) && %i[connection lease_connection].include?(receiver.name))
       end
 
       # What each table call in a change_table block does; a column type adds a column, any other call does nothing.
@@ -136,10 +149,10 @@ module RailsAiContext
       COLUMN_CALLS = (Listeners::SchemaDslListener::COLUMN_TYPES.map(&:to_sym) + [ :column ] - CHANGE_TABLE_CALLS.keys).freeze
 
       # A table call counts only inside a change_table block: the listener links each call to the block that encloses it.
-      def change_table_actions(content)
+      def change_table_actions(content, parsed)
         return [] unless content.include?("change_table")
 
-        hits = SourceIntrospector.walk_source(content, {
+        hits = SourceIntrospector.walk_dispatch(parsed, {
           change_table: -> { Listeners::GenericMacroListener.new(:change_table, *CHANGE_TABLE_CALLS.keys, *COLUMN_CALLS, any_receiver: true) }
         })[:change_table]
         blocks = hits.select { |hit| hit[:macro] == :change_table }.to_set { |hit| hit[:offset] }
