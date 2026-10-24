@@ -359,8 +359,10 @@ module RailsAiContext
       def self.splice_before_ruby_dirs!(paths)
         return if paths.empty?
 
-        index = $LOAD_PATH.index { |path| RUBY_OWN_DIRS.include?(path) } || $LOAD_PATH.size
-        $LOAD_PATH.insert(index, *paths)
+        # Ruby marks each entry it puts on the load path itself, the mark RubyGems inserts gem paths by;
+        # RbConfig's spelling misses those entries when Ruby runs through a link.
+        index = $LOAD_PATH.index { |path| path.instance_variable_defined?(:@gem_prelude_index) || RUBY_OWN_DIRS.include?(path) }
+        $LOAD_PATH.insert(index || $LOAD_PATH.size, *paths)
       end
       private_class_method :splice_before_ruby_dirs!
     end

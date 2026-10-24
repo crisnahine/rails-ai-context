@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A standalone run on a Windows Ruby reached through a link keeps this gem's
+  paths ahead of Ruby's own lib directories.** setup-ruby unpacks Ruby in one
+  folder and runs it through a link to it from the tool cache: there RbConfig
+  names Ruby's directories by the link's target while the load path names them
+  by the link. The paths put back after the app's boot were matched to
+  RbConfig's spelling, found none, and went last, behind Ruby's own copies, so a
+  gem with a default-gem twin (prism, json) could load half from each. Ruby's
+  own entries are now found by the mark Ruby gives them, the one RubyGems
+  inserts gem paths by.
 - **A route in a resource block whose path has a dynamic segment takes no name,
   and the resource's own route keeps its name.** A route like
   `delete "groups/:group_id" => "users#remove_group"` inside `resources :users`

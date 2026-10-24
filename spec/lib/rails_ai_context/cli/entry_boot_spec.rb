@@ -290,21 +290,38 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       expect($LOAD_PATH).to include("/fake/app-bundle/lib")
     end
 
+    # Found by what it is on disk: a Ruby run through a link spells it there
+    # by the link, and RbConfig by the link's target.
+    def ruby_lib_index
+      lib = File.realpath(RbConfig::CONFIG["rubylibdir"])
+      $LOAD_PATH.index { |path| (File.realpath(path) rescue nil) == lib }
+    end
+
+    def splice_prism_behind_app_bundle
+      pre_boot = $LOAD_PATH.dup.push("/fake/prism-9.9.9/lib")
+      $LOAD_PATH.unshift("/fake/app-bundle/lib")
+      described_class.send(:restore_standalone_environment!, pre_boot, {}, [])
+    end
+
     # The app's bundle still has to win for a gem both it and the binstub
     # carry, which is the pin a private API app's boot needs, and a gem with a
     # default-gem twin (prism) must not load half from Ruby's own copy.
     it "splices a restored path behind the app's bundle and ahead of Ruby's own lib dirs" do
-      expect($LOAD_PATH).to include(RbConfig::CONFIG["rubylibdir"]),
-        "Ruby's lib dir #{RbConfig::CONFIG['rubylibdir'].inspect} is not on the load path as RbConfig spells it: #{$LOAD_PATH.inspect}"
-      pre_boot = $LOAD_PATH.dup.push("/fake/prism-9.9.9/lib")
-      $LOAD_PATH.unshift("/fake/app-bundle/lib")
-
-      described_class.send(:restore_standalone_environment!, pre_boot, {}, [])
+      splice_prism_behind_app_bundle
 
       expect($LOAD_PATH.index("/fake/app-bundle/lib"))
         .to be < $LOAD_PATH.index("/fake/prism-9.9.9/lib")
-      expect($LOAD_PATH.index("/fake/prism-9.9.9/lib"))
-        .to be < $LOAD_PATH.index(RbConfig::CONFIG["rubylibdir"])
+      expect($LOAD_PATH.index("/fake/prism-9.9.9/lib")).to be < ruby_lib_index
+    end
+
+    # setup-ruby on Windows unpacks Ruby in one folder and runs it through a
+    # link to it from the tool cache.
+    it "finds Ruby's own lib dirs when RbConfig spells them another way than the load path" do
+      stub_const("#{described_class}::RUBY_OWN_DIRS", described_class::RUBY_OWN_DIRS.map { |dir| "/elsewhere#{dir}" })
+
+      splice_prism_behind_app_bundle
+
+      expect($LOAD_PATH.index("/fake/prism-9.9.9/lib")).to be < ruby_lib_index
     end
   end
 
