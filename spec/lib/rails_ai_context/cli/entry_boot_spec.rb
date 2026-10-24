@@ -294,6 +294,8 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     # carry, which is the pin a private API app's boot needs, and a gem with a
     # default-gem twin (prism) must not load half from Ruby's own copy.
     it "splices a restored path behind the app's bundle and ahead of Ruby's own lib dirs" do
+      expect($LOAD_PATH).to include(RbConfig::CONFIG["rubylibdir"]),
+        "Ruby's lib dir #{RbConfig::CONFIG['rubylibdir'].inspect} is not on the load path as RbConfig spells it: #{$LOAD_PATH.inspect}"
       pre_boot = $LOAD_PATH.dup.push("/fake/prism-9.9.9/lib")
       $LOAD_PATH.unshift("/fake/app-bundle/lib")
 

@@ -52,7 +52,8 @@ RSpec.describe RailsAiContext::PathResolver do
 
   describe ".glob" do
     it "matches the pattern below a directory whose own name holds glob syntax, sorted and spelled under it" do
-      dir = File.join(@root, "work [old] {x}*?")
+      # Windows refuses * and ? in a file name, so there the brackets and braces carry the glob syntax.
+      dir = File.join(@root, Gem.win_platform? ? "work [old] {x}" : "work [old] {x}*?")
       FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
       %w[app/models/user.rb app/models/admin/role.rb app/models/notes.txt].each { |rel| File.write(File.join(dir, rel), "") }
 

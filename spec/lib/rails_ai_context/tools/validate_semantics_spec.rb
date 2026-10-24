@@ -909,7 +909,15 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
 
   # Brakeman is not in the test bundle, so this runs the one on the machine in a child outside it.
   describe "the brakeman scan of one controller, run for real" do
-    let(:brakeman_on_machine) { Bundler.with_unbundled_env { system(RbConfig.ruby, "-e", 'require "brakeman"', err: File::NULL) } }
+    # The child reads this gem's own dependencies from the bundle, which CI keeps apart from the
+    # machine's gems; the trailing separator keeps RubyGems' default dirs, where brakeman is, behind it.
+    let(:child_env) do
+      { "GEM_PATH" => [ Bundler.bundle_path.to_s, Bundler.original_env["GEM_PATH"], "" ].compact.join(File::PATH_SEPARATOR) }
+    end
+    let(:brakeman_on_machine) do
+      env = child_env
+      Bundler.with_unbundled_env { system(env, RbConfig.ruby, "-e", 'require "brakeman"', err: File::NULL) }
+    end
 
     it "rates its SQL injection as a whole-app scan does" do
       skip "brakeman is not installed on this machine" unless brakeman_on_machine
@@ -934,7 +942,8 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
           'puts RailsAiContext::Tools::ValidateSemantics.check_brakeman_security([ "app/controllers/posts_controller.rb" ]).values.flatten'
         ].join("\n")
 
-        output, = Bundler.with_unbundled_env { Open3.capture2e(RbConfig.ruby, "-e", script) }
+        env = child_env
+        output, = Bundler.with_unbundled_env { Open3.capture2e(env, RbConfig.ruby, "-e", script) }
 
         whole_app = output[/^whole app: (\[\w+\])$/, 1]
         expect(whole_app).not_to be_nil, output
