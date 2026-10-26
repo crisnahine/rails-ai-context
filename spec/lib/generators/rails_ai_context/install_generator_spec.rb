@@ -344,7 +344,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       "CRLF line endings" => "RailsAiContext.configure do |config|\r\n  config.server_name = \"x\"\r\nend\r\n"
     }.each do |shape, source|
       it "puts the sections inside the configure block written with #{shape}" do
-        File.write(initializer_path, source)
+        # Byte for byte: Windows reads and writes text mode with CRLF line endings.
+        File.binwrite(initializer_path, source)
         said = []
         allow(generator).to receive(:say) { |text, *| said << text }
 
@@ -352,7 +353,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         expect(said.join).not_to include("up to date")
         generator.create_initializer
 
-        content = File.read(initializer_path)
+        content = File.read(initializer_path, mode: "rb:UTF-8")
         expect(content).to match(/= <<~T\r?\n[ \t]*end of line\n[ \t]*T\n/) if source.include?("<<~T")
         expect(content).not_to match(/^[ \t]*config\./) if source.include?("|c|")
         nodes = [ Prism.parse(content).value ]

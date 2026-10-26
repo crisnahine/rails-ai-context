@@ -366,6 +366,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     it "keeps a file whose path below the root holds the root's own spelling" do
       previous = RailsAiContext.configuration.excluded_paths
       skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+      skip "a Windows root begins with a drive, which no folder name can hold" if Gem.win_platform?
 
       # On Linux the root is spelled from /tmp, a folder name excluded_paths leaves out at any depth.
       RailsAiContext.configuration.excluded_paths = previous - %w[tmp]

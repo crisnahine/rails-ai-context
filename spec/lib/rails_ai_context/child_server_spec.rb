@@ -102,6 +102,8 @@ RSpec.describe RailsAiContext::ChildServer do
   end
 
   it "names the signal that stopped a child that said nothing" do
+    skip "Windows stops a process with no signal" if Gem.win_platform?
+
     child = described_class.new({}, [ RbConfig.ruby, "-e", "Process.kill('KILL', Process.pid)" ], chdir: Dir.pwd)
 
     expect { child.request("ping", {}) }.to raise_error(described_class::Gone, "it was stopped by signal KILL")
