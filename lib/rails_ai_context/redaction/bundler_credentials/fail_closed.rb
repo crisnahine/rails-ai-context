@@ -19,7 +19,8 @@ module RailsAiContext
         FILLER = /(?:is|equals|to|as|be)\b[ \t]++/i
         MARKUP = /(?:<\/?[A-Za-z](?>[^>]{0,256})>|[>\/\s"'\])*`+])*+/
         RUN = /(?:[^\s"'`(){}\[\],;&|<>\\]|\\.)++/
-        TOKEN = /[^\s"'`(){}\[\],;&|<>]++/
+        # Bounded, so a name repeated down a long word costs each name 256 bytes, not the rest of the word.
+        TOKEN = /(?>[^\s"'`(){}\[\],;&|<>]{1,256})/
         VALUE_SHAPE = /[0-9:@\/+=%#!~^$]/
         RUBY_CODE = /\A(?:[@$]{0,2}[A-Za-z_]\w*[?!]?(?:(?:\.|::|&\.)[A-Za-z_]\w*[?!]?)*|:[A-Za-z_]\w*)\z/
         MESSAGE_TAIL = /\b(?:abort|raise|fail|puts|print|warn|p|pp|log|logger\.\w+|say|echo|error|info|debug|message)\s*\(?\s*\z/
