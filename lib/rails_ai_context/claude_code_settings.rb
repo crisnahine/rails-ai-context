@@ -136,7 +136,8 @@ module RailsAiContext
     end
 
     def self.read_json(path)
-      data = JSON.parse(File.read(path, mode: "r:BOM|UTF-8"))
+      # json 3 refuses the comments json 2 passed over, so the same file would read differently by which json ran.
+      data = JSON.parse(File.read(path, mode: "r:BOM|UTF-8"), allow_comments: true, allow_trailing_comma: true)
       data.is_a?(Hash) ? data : nil
     rescue SystemCallError, IOError, JSON::ParserError, EncodingError
       nil
