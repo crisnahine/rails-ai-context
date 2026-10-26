@@ -260,7 +260,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
         expect(advise(index, column: column, rails: "7.0.10")).to include("already exists")
         expect(advise(index, column: column, rails: "7.1.6")).not_to include("already exists")
-        expect(advise(index, column: column)).not_to include("already exists")
+        expect(advise(index, column: column, rails: "8.1.3")).not_to include("already exists")
       end
 
       it "does not warn when the column only sits in a composite index" do
@@ -1484,7 +1484,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
 
       def change_body(adapter, column)
-        text = advised(adapter, column)
+        text = advised(adapter, column, rails_version: "7.1.6")
         [ text[/  def change\n(.*?)  end\n/m, 1].lines.map(&:strip), text[/^\*\*Reversible:\*\*.*$/] ]
       end
 

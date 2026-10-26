@@ -1010,7 +1010,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
 
     # Rails 7.1+ shortens a name past 62 bytes to idx_on_<cols>_<sha256 prefix>.
     it "shortens a name too long for the database the way Rails does" do
-      tables = replay([ <<~RUBY ])
+      tables = replay([ <<~RUBY ], rails: "7.1.0")
         create_table :project_custom_field_project_mappings do |t|
           t.bigint :custom_field_id
           t.bigint :project_id
