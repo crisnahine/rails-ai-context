@@ -964,6 +964,9 @@ RSpec.describe RailsAiContext::Doctor do
       before do
         allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
         write("config/application.rb", "")
+        # A session is looked for up to two folders above the app, here the temp root, which Linux lets a walk
+        # down list. As $HOME it is never walked down from, as on a machine whose apps sit two levels below it.
+        allow(Dir).to receive(:home).and_return(File.realpath(Dir.tmpdir))
       end
 
       it "passes Claude Code with no .mcp.json, and checks no other tool when none was chosen" do
