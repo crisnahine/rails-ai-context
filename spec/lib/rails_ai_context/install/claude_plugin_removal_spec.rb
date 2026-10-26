@@ -30,8 +30,8 @@ RSpec.describe RailsAiContext::Install::ClaudePluginRemoval do
     File.write(path, JSON.generate(data))
   end
 
-  # A folder above that held this app alone would be one more place a session serves it from.
-  before { app("other", git: false) }
+  # The apps sit in the home folder, where a session serves none of them, so only their own folders run the plugin.
+  before { allow(Dir).to receive(:home).and_return(@dir) }
 
   def installed(*ids) = write(registry, "version" => 2, "plugins" => ids.to_h { |name| [ name, [ { "scope" => "user" } ] ] })
 
@@ -67,6 +67,16 @@ RSpec.describe RailsAiContext::Install::ClaudePluginRemoval do
     write(File.join(config, ".claude.json"), "projects" => { File.join(root, "lib") => {} })
 
     expect(described_class.lines([ root ], cwd: root).first).to include("`claude plugin disable #{id} --scope local` turns it off for this app")
+  end
+
+  # A session started above several apps runs the plugin for each of them.
+  it "names the folder above several apps among the sessions that run the plugin" do
+    root = app("work/shop", git: false)
+    app("work/blog", git: false)
+    installed(id)
+    on(id)
+
+    expect(described_class.lines([ root ], cwd: root).first).to include("--scope local` run here and in #{File.join(@dir, "work")} turns it off for this app and sessions started there")
   end
 
   # A disable for one id leaves the other id's copy of the plugin running.

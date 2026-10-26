@@ -8,7 +8,6 @@ module RailsAiContext
     class CopilotSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
-      include ToolGuideHelper
       include CompactSerializerHelper
       include ContextModeDispatch
 
@@ -20,10 +19,6 @@ module RailsAiContext
 
       def context_title
         "Copilot Context"
-      end
-
-      def render_compact
-        render_compact_rules
       end
     end
 

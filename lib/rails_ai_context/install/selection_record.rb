@@ -5,19 +5,20 @@ require "date"
 require "fileutils"
 require_relative "../configuration"
 require_relative "../safe_file"
+require_relative "../unbooted_settings"
+require_relative "initializer_file"
 
 module RailsAiContext
   module Install
     # Which AI tools the user picked, written and read the same way whichever
     # entry point ran. Two records exist because they answer to two owners:
     # the YAML file is the installer's own, and the initializer line is Rails
-    # config a user hand-edits. The initializer therefore wins on read.
+    # config a user hand-edits. Reading is UnbootedSettings', which takes them
+    # in the boot's order, so the initializer wins.
     #
-    # Reading is a textual parse, never an eval or a boot, so the standalone
-    # CLI can answer the question with no Rails in the process. Writing is
-    # textual too, because both files are ones a user annotates: a write
-    # changes the value that moved and nothing around it, and a write that
-    # moves no value leaves the file alone.
+    # Writing is textual, because both files are ones a user annotates: a
+    # write changes the value that moved and nothing around it, and a write
+    # that moves no value leaves the file alone.
     module SelectionRecord
       YAML_FILE = ".rails-ai-context.yml"
       INITIALIZER = "config/initializers/rails_ai_context.rb"
@@ -27,31 +28,15 @@ module RailsAiContext
       # or a file one of them accepts voids every key for the other.
       PERMITTED_YAML = Configuration::PERMITTED_YAML_CLASSES
 
-      # Matches the line the installer writes, and nothing else. Anchored past
-      # any leading whitespace but not past a `#`, so the commented-out
-      # default in the generated initializer is not mistaken for a selection.
-      SELECTION_LINE = /^[ \t]*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/
-
-      MODE_LINE = /^[ \t]*config\.tool_mode\s*=\s*:(\w+)/
-
-      # Only an uncommented assignment: the generated initializer ships the
-      # key commented out, and a comment is not a choice.
-      CONTEXT_FILES_LINE = /^[ \t]*config\.context_files\s*=\s*(true|false)\b/
-
-      # Where a line goes when the initializer has none for its key yet: the
-      # head of the configure block, one step in from it. A file checked out
-      # on Windows ends its lines in CRLF.
-      CONFIGURE_BLOCK = /^([ \t]*)RailsAiContext\.configure do \|config\|(\r?\n)/
-
       # The three keys the record writes into the initializer, each as the
-      # assignment it rewrites. The value is captured apart from what stands
-      # before and after it, so a rewrite keeps the line's indentation and
-      # whatever follows the value. The line ends short of a CRLF's CR, which
-      # stays with the line ending.
+      # assignment it rewrites, from the key's name on. The value is captured
+      # apart from what stands before and after it, so a rewrite keeps the
+      # line's indentation and whatever follows the value. The line ends short
+      # of a CRLF's CR, which stays with the line ending.
       ASSIGNMENT = {
-        ai_tools: /^(?<lead>[ \t]*config\.ai_tools[ \t]*=[ \t]*)(?<value>%i\[[^\]\r\n]*\])(?<rest>[^\r\n]*)(?=\r?$)/,
-        tool_mode: /^(?<lead>[ \t]*config\.tool_mode[ \t]*=[ \t]*)(?<value>:\w+)(?<rest>[^\r\n]*)(?=\r?$)/,
-        context_files: /^(?<lead>[ \t]*config\.context_files[ \t]*=[ \t]*)(?<value>true|false)\b(?<rest>[^\r\n]*)(?=\r?$)/
+        ai_tools: /\A(?<lead>ai_tools[ \t]*=[ \t]*)(?<value>%i\[[^\]\r\n]*\])(?<rest>[^\r\n]*)/,
+        tool_mode: /\A(?<lead>tool_mode[ \t]*=[ \t]*)(?<value>:\w+)(?<rest>[^\r\n]*)/,
+        context_files: /\A(?<lead>context_files[ \t]*=[ \t]*)(?<value>true|false)\b(?<rest>[^\r\n]*)/
       }.freeze
 
       # The note the generator writes after a value. It describes the value,
@@ -65,40 +50,86 @@ module RailsAiContext
 
       module_function
 
-      # @return [Array<Symbol>, nil] the recorded tools, or nil if none.
+      # @return [Array<Symbol>, nil] the recorded tools this gem knows, or nil if none.
       def read(root:)
-        match = initializer_content(root)&.match(SELECTION_LINE)
-        (match && presence(normalize(match[1].split))) ||
-          presence(normalize(yaml_record(root)[YAML_KEY]))
+        tools = UnbootedSettings.read(root).ai_tools
+        tools && normalize(tools)
       end
 
-      # The recorded tool mode, initializer first, same precedence as the
-      # tools. The record writes the mode into its YAML (`extra_yaml`), so
-      # this is the reader that stopped `rails-ai-context init`'s recorded
-      # mode from being inert on in-app surfaces.
+      # Why the YAML record will not read, e.g. "cannot be read (invalid YAML
+      # at line 3)", the case in which a write leaves it as it is.
       #
+      # @return [String, nil] nil when it reads or is not there
+      def unreadable(root:)
+        path = File.join(root.to_s, YAML_FILE)
+        return nil unless File.exist?(path) || File.symlink?(path)
+        # A link to nothing, or to itself, is said by the link rule writes use.
+        return "cannot be read (#{SafeFile.write_refusal(path, root: root.to_s)})" unless File.exist?(path)
+
+        data, error = Configuration.read_yaml(path)
+        return nil if data.is_a?(Hash)
+
+        reason = case error
+        when nil then "it holds no `key: value` settings"
+        when Psych::SyntaxError then "invalid YAML at line #{error.line}"
+        # Ruby's own text repeats the absolute path.
+        when SystemCallError then SystemCallError.new(nil, error.errno).message.downcase
+        else error.message
+        end
+        "cannot be read (#{reason})"
+      end
+
+      # Why the YAML record cannot take the write this selection makes, nil
+      # when it can or the selection leaves it as it is.
+      #
+      # @return [String, nil] e.g. "cannot be written (its permissions do not allow it)"
+      def unwritable(tools, root:, extra_yaml: {})
+        changes = yaml_changes(tools, root: root, extra_yaml: extra_yaml)
+        return nil if changes.nil? || changes.empty?
+
+        refusal = SafeFile.write_refusal(File.join(root.to_s, YAML_FILE), root: root.to_s)
+        "cannot be written (#{refusal})" if refusal
+      end
+
+      # Why the initializer cannot take the write this selection makes to a
+      # line it holds, nil when it can or holds none that moves: its line wins
+      # over the YAML, so the selection would not be the one in force.
+      #
+      # @return [String, nil]
+      def initializer_unwritable(tools, root:, extra_yaml: {})
+        path = File.join(root.to_s, INITIALIZER)
+        return nil unless File.file?(path)
+
+        content = SafeFile.read_text(path)
+        values = { ai_tools: tools, tool_mode: extra_yaml["tool_mode"]&.to_sym, context_files: extra_yaml["context_files"] }
+        moved = values.any? { |key, value| !value.nil? && edit_config_line(content, key, value, insert: false).last == :updated }
+        refusal = moved && SafeFile.write_refusal(path, root: root.to_s)
+        "cannot be written (#{refusal}), and the selection it holds takes precedence" if refusal
+      rescue SystemCallError
+        nil
+      end
+
+      # The keys a write of this selection changes in the YAML record, every
+      # key when there is no record.
+      #
+      # @return [Hash, nil] nil when the record will not read
+      def yaml_changes(tools, root:, extra_yaml: {})
+        yaml_state(normalize(tools), root, extra_yaml).last
+      end
+
       # @return [Symbol, nil]
       def tool_mode(root:)
-        declared = initializer_content(root)&.slice(MODE_LINE, 1)
-        return declared.to_sym if declared
-
-        recorded = yaml_record(root)["tool_mode"]
-        recorded.to_sym if recorded.is_a?(String) || recorded.is_a?(Symbol)
+        UnbootedSettings.read(root).tool_mode
       end
 
-      # Whether this install writes context files, initializer first, the
-      # same precedence the tools and the mode keep.
+      # Whether this install writes context files.
       #
       # @return [Boolean, nil] nil when nothing recorded it
       def context_files(root:)
-        declared = initializer_content(root)&.slice(CONTEXT_FILES_LINE, 1)
-        return declared == "true" unless declared.nil?
-
-        recorded = yaml_record(root)["context_files"]
-        recorded.nil? ? nil : !!recorded
+        UnbootedSettings.read(root).context_files
       end
 
-      # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
+      # @return [Symbol] :updated, :inserted, :unchanged, :conflict, :absent or :unparsed
       def write_context_files(value, root:)
         write_config_line(root, :context_files, value ? true : false)
       end
@@ -106,7 +137,7 @@ module RailsAiContext
       # Only an uncommented line is rewritten - the generated initializer ships
       # a commented-out default that must stay a comment.
       #
-      # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
+      # @return [Symbol] :updated, :inserted, :unchanged, :conflict, :absent or :unparsed
       def write_tool_mode(mode, root:)
         write_config_line(root, :tool_mode, mode.to_sym)
       end
@@ -118,15 +149,20 @@ module RailsAiContext
       # @param initializer [Boolean] false leaves the user's Rails config
       #   untouched, for callers refreshing this gem's own YAML on a run the
       #   user did not ask to change their selection in.
-      # @return [Hash] { tools:, yaml: :created|:updated|:unchanged|:replaced|:failed,
-      #   initializer: :updated|:inserted|:unchanged|:conflict|:absent|:skipped }
+      # A record that will not read is the user's whole config, so nothing is
+      # written over it, and the initializer is left too: a selection read
+      # through the broken file would otherwise be written there as all five.
+      #
+      # @return [Hash] { tools:, yaml: :created|:updated|:unchanged|:failed,
+      #   initializer: :updated|:inserted|:unchanged|:conflict|:absent|:unparsed|:skipped }
       def write(tools, root:, extra_yaml: {}, initializer: true)
         tools = normalize(tools)
+        yaml = write_yaml(tools, root, extra_yaml)
 
         {
           tools: tools,
-          yaml: write_yaml(tools, root, extra_yaml),
-          initializer: initializer ? write_config_line(root, :ai_tools, tools) : :skipped
+          yaml: yaml,
+          initializer: initializer && yaml != :failed ? write_config_line(root, :ai_tools, tools) : :skipped
         }
       end
 
@@ -170,7 +206,7 @@ module RailsAiContext
       # Whether the app has settled its tool mode, in the record or in an
       # initializer line of any shape, so no entry asks again.
       def tool_mode_set?(root:)
-        !tool_mode(root: root).nil? || initializer_content(root).to_s.match?(/^[ \t]*config\.tool_mode\s*=/)
+        UnbootedSettings.read(root).assigned?(:tool_mode)
       end
 
       # The line the generator writes for a key, without its indentation.
@@ -184,33 +220,67 @@ module RailsAiContext
       # beside the selection line or at the head of the configure block, at
       # the indentation of what it sits beside.
       #
+      # A text that does not parse is left as it is, :unparsed.
+      #
       # @param insert [Boolean] false rewrites only; the generator adds a
       #   missing key with the section it belongs to
       # @return [Array(String, Symbol)] the text, and :updated, :inserted,
-      #   :unchanged, :conflict or :absent
+      #   :unchanged, :conflict, :absent or :unparsed
       def edit_config_line(content, key, value, insert: true)
-        if (line = content.match(ASSIGNMENT.fetch(key)))
-          return [ content, :unchanged ] if same_value?(key, line[:value], value)
+        # Ripper's columns and a `^` both start past a BOM, so the edit works on the text after it.
+        bom, rest = SafeFile.split_bom(content)
+        return edit_text(content, key, value, insert) if bom.empty?
 
-          rewritten = "#{line[:lead]}#{value_source(key, value)}#{note_after(key, value, line[:rest])}"
-          return [ "#{line.pre_match}#{rewritten}#{line.post_match}", :updated ]
+        text, status = edit_text(rest, key, value, insert)
+        [ %i[updated inserted].include?(status) ? bom + text : content, status ]
+      end
+
+      private_class_method def self.edit_text(content, key, value, insert)
+        lines = content.lines
+        writes = UnbootedSettings.writes(content) or return [ content, :unparsed ]
+        # A line that reaches the configuration as a whole may write this key too.
+        return [ content, :conflict ] if writes.any? { |_, written, _| written.nil? }
+
+        if (write = last_write(writes, key))
+          head, assignment = assignment_at(lines, write)
+          # A value computed at boot, or a write under a condition, is the user's to edit.
+          return [ content, :conflict ] if assignment.nil? || UnbootedSettings.unread?(write.last)
+          return [ content, :unchanged ] if same_value?(key, assignment[:value], value)
+
+          lines[write.first.first - 1] = "#{head}#{assignment[:lead]}#{value_source(key, value)}" \
+                                         "#{note_after(key, value, assignment[:rest])}#{assignment.post_match}"
+          return [ lines.join, :updated ]
         end
-
-        # Assigned in a shape this record does not rewrite. A second line
-        # beside it would lose at boot and win on read.
-        return [ content, :conflict ] if content.match?(/^[ \t]*config\.#{key}\s*=/)
         return [ content, :absent ] unless insert
 
         # An inserted line ends the way the file's lines do.
         newline = content.include?("\r\n") ? "\r\n" : "\n"
-        if key != :ai_tools && (beside = content.match(ASSIGNMENT[:ai_tools]))
-          indent = beside[:lead][/\A[ \t]*/]
-          [ "#{beside.pre_match}#{beside[0]}#{newline}#{indent}#{config_line(key, value)}#{beside.post_match}", :inserted ]
-        elsif (block = content.match(CONFIGURE_BLOCK))
-          [ "#{block.pre_match}#{block[0]}#{block[1]}  #{config_line(key, value)}#{block[2]}#{block.post_match}", :inserted ]
+        line = "#{config_line(key, value).delete_prefix('config.')}#{newline}"
+        head, beside = assignment_at(lines, last_write(writes, :ai_tools)) unless key == :ai_tools
+        if beside && head.match?(/\A[ \t]*\w+\.\z/) && beside[:rest].match?(/\A[ \t]*(?:#.*)?\z/)
+          lines.insert(last_write(writes, :ai_tools).first.first, "#{head}#{line}")
+          [ lines.join, :inserted ]
+        elsif (block = InitializerFile.configure_block(content)) && block.param && block.head_line < block.close_line
+          # The head of the configure block, one step in from the call, in the block's own param.
+          lines.insert(block.head_line, "#{lines[block.call_line - 1][/\A[ \t]*/]}  #{block.param}.#{line}")
+          [ lines.join, :inserted ]
         else
           [ content, :absent ]
         end
+      end
+
+      # The write of a key the boot keeps: the last one.
+      private_class_method def self.last_write(writes, key)
+        writes.select { |_, written, _| written == key }.max_by(&:first)
+      end
+
+      # The line up to a write's key, and its assignment from the key on (nil in a shape this does not rewrite).
+      private_class_method def self.assignment_at(lines, write)
+        return nil unless write
+
+        (number, column), key, = write
+        line = lines[number - 1]
+        [ line.byteslice(0, column), line.byteslice(column..).match(ASSIGNMENT.fetch(key)) ]
       end
 
       private_class_method def self.yaml_message(status, place = nil)
@@ -219,8 +289,7 @@ module RailsAiContext
         when :unchanged then [ :muted, "#{file} (unchanged)" ]
         when :created   then [ :ok, "Created #{file}" ]
         when :updated   then [ :ok, "Updated #{file}" ]
-        when :replaced  then [ :warn, "#{file} could not be read, so it was replaced" ]
-        when :failed    then [ :warn, "Could not write #{file} - your selection was not saved" ]
+        when :failed    then [ :warn, "Could not read or write #{file}, so it was left as it is - your selection was not saved" ]
         end
       end
 
@@ -231,6 +300,8 @@ module RailsAiContext
         when :conflict
           [ :warn, "#{file} sets config.ai_tools in a form this installer does not " \
                    "rewrite, and it takes precedence - edit it by hand to change your selection" ]
+        when :unparsed
+          [ :warn, "#{file} does not parse as Ruby, so it was left as it is - fix it and run this again to record your selection there" ]
         end
       end
 
@@ -241,31 +312,6 @@ module RailsAiContext
       # Everything below is how the record is stored, not what callers ask of
       # it. The seam is read / write / add / messages / config_line /
       # edit_config_line.
-      # @return [String, nil] the initializer's source, nil when it is missing
-      #   or unreadable.
-      private_class_method def self.initializer_content(root)
-        path = File.join(root.to_s, INITIALIZER)
-        return nil unless File.exist?(path)
-
-        File.read(path)
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not read #{INITIALIZER}: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      # @return [Hash] the parsed record, empty when it is missing, unreadable
-      #   or not a mapping (the config loader ignores such a file too).
-      private_class_method def self.yaml_record(root)
-        path = File.join(root.to_s, YAML_FILE)
-        return {} unless File.exist?(path)
-
-        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML, aliases: true)
-        data.is_a?(Hash) ? data : {}
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
-        {}
-      end
-
       # One key's line written into the initializer file, through the same
       # edit the generator makes in memory.
       private_class_method def self.write_config_line(root, key, value)
@@ -312,37 +358,35 @@ module RailsAiContext
         Array(tools).filter_map { |name| AiTool.find(name)&.key }
       end
 
-      private_class_method def self.presence(tools)
-        tools.empty? ? nil : tools
-      end
-
-      # @return [Hash, nil] the parsed record, or nil when it will not parse
-      private_class_method def self.readable_yaml(path)
-        YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML, aliases: true) || {}
-      rescue StandardError
-        nil
-      end
-
-      # @return [Symbol] :created, :updated, :unchanged, :replaced or :failed
+      # @return [Symbol] :created, :updated, :unchanged or :failed
       private_class_method def self.write_yaml(tools, root, extra = {})
         path = File.join(root.to_s, YAML_FILE)
-        wanted = { YAML_KEY => tools.map(&:to_s) }
-        extra.each { |key, value| wanted[key.to_s] = value }
+        data, changed = yaml_state(tools, root, extra)
+        return :failed if changed.nil?
+        return :unchanged if changed.empty?
 
-        unless File.exist?(path)
-          SafeFile.atomic_write(path, wanted.to_yaml, root: root)
+        unless data
+          SafeFile.atomic_write(path, changed.to_yaml, root: root)
           return :created
         end
 
-        # An unreadable record is replaced, not treated as a reason to give
-        # up: this gem owns the file, and refusing would leave the selection
-        # unrecordable for good after a single typo. Reported separately so
-        # the caller can say the old contents went.
-        data = readable_yaml(path)
-        unless data.is_a?(Hash)
-          SafeFile.atomic_write(path, wanted.to_yaml, root: root)
-          return :replaced
-        end
+        SafeFile.atomic_write(path, yaml_edited(SafeFile.read_text(path), data, changed), root: root)
+        :updated
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not write #{YAML_FILE}: #{e.message}"
+        :failed
+      end
+
+      # The record as it reads (nil when there is none) and the keys the
+      # selection changes in it (nil when it will not read).
+      private_class_method def self.yaml_state(tools, root, extra)
+        path = File.join(root.to_s, YAML_FILE)
+        wanted = { YAML_KEY => tools.map(&:to_s) }
+        extra.each { |key, value| wanted[key.to_s] = value }
+        return [ nil, wanted ] unless File.exist?(path)
+
+        data = Configuration.read_yaml(path).first
+        return [ nil, nil ] unless data.is_a?(Hash)
 
         changed = wanted.filter_map do |key, value|
           next if data.key?(key) && same_yaml_value?(data[key], value)
@@ -354,13 +398,7 @@ module RailsAiContext
           end
           [ key, value ]
         end.to_h
-        return :unchanged if changed.empty?
-
-        SafeFile.atomic_write(path, yaml_edited(SafeFile.read_text(path), data, changed), root: root)
-        :updated
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not write #{YAML_FILE}: #{e.message}"
-        :failed
+        [ data, changed ]
       end
 
       # A value as the config reads it: a symbol is its name, and the order of

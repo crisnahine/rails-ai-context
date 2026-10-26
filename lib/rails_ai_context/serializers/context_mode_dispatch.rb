@@ -6,13 +6,13 @@ module RailsAiContext
     # default and hand off to a full-mode serializer when configured.
     #
     # Including classes inherit Serializers::Base for #context, and supply
-    # #render_compact and #full_serializer_class.
+    # #render_compact_rules and #full_serializer_class.
     module ContextModeDispatch
       def call
         if RailsAiContext.configuration.context_mode == :full
           full_serializer_class.new(context).call
         else
-          render_compact
+          render_compact_rules
         end
       end
     end

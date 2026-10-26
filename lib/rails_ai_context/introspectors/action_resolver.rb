@@ -335,14 +335,30 @@ module RailsAiContext
 
       # A bare superclass resolves through Module.nesting: `module Settings; class ProfileController < BaseController`
       # means Settings::BaseController where the listing holds it.
-      def resolve_entry_name(entries, name, within)
-        rooted = name.to_s.start_with?("::")
-        name = name&.to_s&.delete_prefix("::")
-        return name if name.nil? || within.nil? || rooted || (name.include?("::") && entries.key?(name))
+      # A qualified name's later segment is read in the superclasses the listing gives the segment before it.
+      def resolve_entry_name(entries, name, within, depth: SuperclassChain::MAX_DEPTH)
+        return nil if name.nil?
+
+        written = name.to_s
+        name = written.delete_prefix("::")
+        return name if within.nil?
 
         info = entries[within]
         nesting = info[:parent_nesting] if info.is_a?(Hash)
-        SuperclassChain.resolve_in_scope(within, name, nesting: nesting) { |qualified| qualified if entries.key?(qualified) } || name
+        ancestors_of = depth.positive? && name.include?("::") ? ->(owner) { entry_superclasses(entries, owner, depth - 1) } : nil
+        SuperclassChain.resolve_in_scope(within, written, nesting: nesting, ancestors_of: ancestors_of) { |qualified| qualified if entries.key?(qualified) } || name
+      end
+
+      # The superclasses the listing holds for the entry `name`, nearest first.
+      def entry_superclasses(entries, name, depth)
+        found = []
+        while (info = entries[name]).is_a?(Hash) && info[:parent_class] && found.size < SuperclassChain::MAX_DEPTH
+          name = resolve_entry_name(entries, info[:parent_class], name, depth: depth)
+          break unless entries.key?(name) && !found.include?(name)
+
+          found << name
+        end
+        found
       end
 
       # `action_methods` subtracts inherited methods only as far as the

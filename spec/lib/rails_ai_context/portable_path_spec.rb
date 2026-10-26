@@ -26,6 +26,16 @@ RSpec.describe RailsAiContext::PortablePath do
       expect(described_class.relativize("/srv/blog-staging/app", "/srv/blog")).to eq("/srv/blog-staging/app")
     end
 
+    it "makes a file's real path app-relative under a root reached through a link" do
+      Dir.mktmpdir("portable-link") do |dir|
+        real = File.join(File.realpath(dir), "blog")
+        FileUtils.mkdir_p(File.join(real, "app"))
+        File.symlink(real, File.join(dir, "linked"))
+
+        expect(described_class.relativize(File.join(real, "app", "x.rb"), File.join(dir, "linked"))).to eq("app/x.rb")
+      end
+    end
+
     it "accepts a Pathname" do
       expect(described_class.relativize(Pathname.new("/srv/blog/lib"), Pathname.new("/srv/blog"))).to eq("lib")
     end
@@ -68,6 +78,25 @@ RSpec.describe RailsAiContext::PortablePath do
         expect(described_class.relativize_marked(File.join(link, "app/models/widget.rb"), root)).to eq("../../app/models/widget.rb")
         expect(described_class.resolve("../../app/models/widget.rb", root)).to eq(File.join(root, "../../app/models/widget.rb"))
         expect(described_class.relativize("/opt/shared/lib", root)).to eq("/opt/shared/lib")
+      end
+    end
+
+    it "follows a deploy link that moves to the next release in one long-running process" do
+      Dir.mktmpdir do |dir|
+        releases = %w[1 2].map { |release| File.join(File.realpath(dir), "releases", release) }
+        releases.each { |release| FileUtils.mkdir_p([ File.join(release, "app/models"), File.join(release, "test/dummy") ]) }
+        specs = releases.each_with_index.to_h { |release, i| [ "engine#{i}", double("Gem::Specification", full_gem_path: release, full_name: "engine-0.#{i}.0", default_gem?: false) ] }
+        allow(Gem).to receive(:loaded_specs).and_return(specs)
+        current = File.join(File.realpath(dir), "current")
+        root = File.join(current, "test/dummy")
+
+        answers = releases.map do |release|
+          FileUtils.rm_f(current)
+          File.symlink(release, current)
+          [ described_class.relativize(File.join(release, "test/dummy/app/x.rb"), root), described_class.relativize(File.join(release, "app/models/w.rb"), root) ]
+        end
+
+        expect(answers).to eq([ [ "app/x.rb", "../../app/models/w.rb" ] ] * 2)
       end
     end
   end

@@ -56,6 +56,12 @@ The one walk over a kind of app source, across every directory `PathResolver` re
 
 Distinct from the **eager load** of the booted tier (`EagerLoad`), which makes constants exist rather than reading files, and from a **targeted walk** - one named file handed to `SourceIntrospector` with the listeners that file needs.
 
+## Watched files
+
+What a running server checks before each call, so an edit drops the cached context: the files the snapshot stats and the fingerprint hashes. They are `Fingerprinter::WATCHED_DIRS` walked for `WATCHED_EXTNAMES`, plus what each introspector declares as **READS**: globs from the app root for the files it opens outside those walks. A file glob is matched as a file; a tree glob (`public/**/*{.json,.yaml}`) is walked like a watched dir, for its own extensions only. An introspector that opens a file no declaration covers answers from before the edit until a restart, which is the mistake this entry exists to name.
+
+Distinct from **excluded paths**: `excluded_paths` decides what a walk leaves out, and `ExcludedPaths.matcher` is its one reading (gitignore rules from the root, as search reads them).
+
 ## Declared constant
 
 What a source file calls its own class, as opposed to the **path name** - the constant its path camelizes to. The two differ wherever the app registers an inflection, because Zeitwerk resolves a path through the app's own inflector, and the static tier holds only the literal rules `AppInflections` reads from the app's initializers, never a rule the app computes or loads from elsewhere: `app/controllers/activitypub/` is `ActivityPub` in an app that registers that acronym, and `Oauth` is a constant nothing defines. `DeclaredConstant` reads the class the source declares, and since an inflection only ever changes case, the declaration that names a file is the one equal to the path name ignoring case. Anything else - a second class in the file, a nested error class, a tree Prism recovered from a syntax error - is not this file's class, and there the path name stays the answer: it is the only thing carrying the namespace when the source does not.
@@ -64,11 +70,17 @@ Distinct from the **Static tier** sense of "declared": that one is about declari
 
 The other half of the same problem is the reverse trip. Once a name is the declared one, no consumer can rebuild the path from it - and a pack or an in-repo engine breaks that derivation too, inflection or not. So controllers and models carry `file:` from whichever tier found them, and consumers read it through `Payload` (`controller_file`, `controller_route_key`, `controller_for_route_key`, `model_file`). The rule: a tool that needs a path for a name reads it, never underscores it.
 
+A third question is which constant a name written somewhere means: `include Publishable` inside `module Admin`, `mount UI`, `< BaseController`. Ruby's answer is one rule, and `DeclaredConstant.lookup` is the only place it lives: a name written from the root (`::Priced`) is the top level's alone; any other name is tried in each scope of Module.nesting outward, then in the innermost scope's ancestors as they stand at that line, then at the top level. `ConcernPaths.ancestors` is the one list of a scope's ancestors, built the way Ruby's include and prepend build it: what the scope prepends, itself, what it includes (each module bringing its own ancestors, a module the list holds already skipped), then its superclass's, with only the mixin lines above the reference counting. A path (`Billing::Base`) finds its head that way and reads the rest inside it and its ancestors, so a scope that holds `Billing` without `Base` ends the search, as Ruby raises NameError there. Each caller says only what "the app has this constant" means for it (a file the app keeps, a module the walked file declares above the line, a job it lists), never its own candidate order.
+
 ## Table name
 
 The table a model reads. Rails builds it as `table_name_prefix` + the demodulized class name, pluralized unless `pluralize_table_names` is off, + `table_name_suffix`, unless the class assigns one itself or is an STI child, which reads its parent's. The static tier answers the same order from source: an explicit `self.table_name =`, else the table of the model it inherits from, else the prefix and suffix the enclosing modules declare around the file's own basename. That basename is pluralized unless the class, then its superclass chain, then the app sets `pluralize_table_names = false`. A class on a parent the app does not define (`Tag < ActsAsTaggableOn::Tag`) reads the parent's table, which the static tier takes from the dumps: the one table the primary's schema holds among the parent's names and the class's own, else the one another database's dump holds. The app-wide affixes and pluralize setting come from `ActiveRecordSettings`, which reads config/application.rb, the environment file, the initializers and `on_load(:active_record)` blocks. Never the underscored constant as an answer - that turns `Admin::ActionLog` into `admin/action_logs` and `OAuthClientConfig` into `o_auth_client_configs`, neither of which is a table; a gem parent's underscored name is only a candidate the schema must hold.
 
-`TableName` reads the five declarations of one class body (`table_name`, `table_name_prefix`, `table_name_suffix`, `pluralize_table_names` and `primary_key`) and holds the two derivations; walking the namespace and the superclass chain belongs to the caller, because only it has the other files. A reader that starts from a model name instead of a file asks `TableName.for_model_name`, which takes the table the model tier already recorded before falling back to the convention. A module prefix declared outside the model directories is still invisible, an engine's in `lib/**/engine.rb` aside, so the answer stays [STATIC].
+`TableName` reads the five declarations of one class body (`table_name`, `table_name_prefix`, `table_name_suffix`, `pluralize_table_names` and `primary_key`), and `TableName.for_class` walks them once over every class and module the static tier read: the STI parent, the class's own setting, the prefix and suffix from the innermost enclosing scope that answers (a model class by its class attribute, a module by what it declares or `isolate_namespace` gives it) else the class's own, and each class attribute from the class, then its superclass chain, then the app. Its answer is the table and the key, or, where the source computes a setting the table depends on (`self.table_name = ENV.fetch(...)`, a computed prefix), no table and `set_by` naming that setting: no reader can name that table, so none guesses one. A reader that starts from a model name asks `Payload.model_table` (or `TableName.of_model` over a models hash), which answers what the model tier recorded and the convention only for a name no model carries; no consumer derives a table of its own. A module prefix declared outside the model directories is still invisible, an engine's in `lib/**/engine.rb` aside, so the answer stays [STATIC].
+
+## Model record
+
+What the models section holds for one model, on either tier. `ModelRecord.build` makes it from two halves: the walked source (`ModelRecord::Facts`, what `ClassDeclarations` read through the class's bases and concerns, plus the macro keys read off it), which answers every key both tiers read off the source, and a tier adapter for the keys whose source differs - `ModelRecord::Reflection` when the app booted, `ModelRecord::StaticCandidates` when it did not, as the declared tier picks (ADR 0002). Both adapters are the same struct of `TIER_KEYS`, so a key added to the record reaches both tiers. A key one tier cannot answer is nil in its adapter, and `build` drops nil values, so that tier's record leaves the key out; a reader treats a missing key as unknown. The static adapter also caps each record's confidence at the tier's.
 
 ## Static tier
 
@@ -84,6 +96,10 @@ An undeclared introspector fails the suite, and every files-only declaration is 
 
 The tier also caps what the records inside an answer may claim: no record can claim more than the tier carrying it, so an association or a scope the AST resolved with certainty reads `[STATIC]` inside a static entry rather than the `[VERIFIED]` the walk would give it on its own. One that the parser could not resolve keeps its lower `[INFERRED]`. A booted entry carries no tier mark, so its records keep theirs.
 
+## Unbooted settings
+
+An app's settings as its boot would apply them, read from its files without running any: what the static tier serves with, what a listing or a count says before anything boots, and what an install reads back as the recorded selection. The boot's order decides: `config/application.rb` and the environment's file, then `.rails-ai-context.yml`, then the initializers in path order. A setting that keeps a file or a tool back (`sensitive_patterns`, `excluded_paths`, `skip_tools`) is the union of the YAML and everything the code adds, whichever runs first, booted or not; every other setting is the last literal written, the YAML's value when no code writes one. What the reader cannot follow (a computed value, a write under a condition or in a block that runs later) is a refusal, per file, line and key: one on a setting that keeps something back stops the static tier, and any other leaves the YAML or the default answering that key. `UnbootedSettings` is the one reader; the selection half of it needs nothing but Ruby, because an install asks it before the app's bundle is set up.
+
 ## Concern
 
 Three senses inside the gem, and the payload one is wider than either everyday Rails reading.
@@ -92,7 +108,15 @@ Three senses inside the gem, and the payload one is wider than either everyday R
 
 **Concerns directory** - `app/*/concerns` as a place, glob-derived the way Rails autoloads it, never a hardcoded list. `ConcernPaths` is the one answer to "where does this app keep its concerns" for every surface that lists or counts them.
 
-**Mixin** - the static detection feeding the payload: any `include`, `prepend` or `extend` with a constant argument, as `MixinsListener` reports it. Named mixin because it captures more than concerns; its `ancestor` flag marks the subset that becomes one.
+**Mixin** - the static detection feeding the payload: any `include`, `prepend` or `extend` with a constant argument, as `MixinsListener` reports it. Named mixin because it captures more than concerns; its `ancestor` flag marks the subset that becomes one. An `include` in a Concern's `class_methods` block body lands on the class's singleton side, as one in `class << self` does, so it is no ancestor.
+
+## Class declarations
+
+What a class declares once Ruby has run its chain: each superclass's body before the class's, a concern's `included` block where the `include` stands and only the first time the chain adds that concern, and a macro inside a class method at each call of that method, with that call's arguments. `ClassDeclarations` is the one walk behind it. Models, controller filters and settings, jobs, column macros, rendered records and the Devise modules ask it for the keys they read, and it answers each key in run order, naming the base that declared an entry in `declared_in` and saying what it could not read and why.
+
+**Run order is not chain order.** The declarations come in the order the class runs them. Where a declaration puts its callback in a chain is that chain's rule, applied by its reader: `prepend: true` and `prepend_*` go to the head, ActiveModel prepends an `after_*` it defines, and a bare `set_callback` appends. `ActionFilters`, the model's callbacks and a job's callback chains place them so.
+
+**A concern a parent already included runs nothing again; a plain module's hook runs at every include.** Including an `ActiveSupport::Concern` again in a subclass adds no `included` block run, so what it declared stays the parent's, and a skip the chain made between the two still holds. A plain module's `def self.included(base)` runs each time a class includes it, so what it declares on `base` is declared again in the subclass. The walk follows the chain through a gem controller whose parent the app's initializers name, so this holds there too.
 
 ## Action
 
@@ -169,6 +193,10 @@ A gem the context calls out because it shapes how the app is built, counted only
 
 The introspection context hash, in the sense consumers read it. `Payload` is the reading side: a section guard and pinned list readers whose key pairs a spec checks against the producing introspector's own output, so a renamed key fails a test where it would otherwise empty a section everywhere without a word. Facts rendered from it live once (`SectionFacts`); membership judgments are applied at the introspector seam, and readers trust the payload and do not filter it again. The seam fills one section a preset leaves out: where the `multi_database` introspector did not run or failed, the context carries the app databases list under `multi_database`, so a database's adapter, its mark and the first database's own name do not depend on the preset. A list that cannot be read is a warning, as a failed section is.
 
+## Source slice
+
+App source text the payload holds as text: a view line, a broadcast's call, a scope body, a callback's block, a retry macro. It is filtered by `Redaction.source_slice` where an introspector records it, so every tool, resource and written file shows the same filtered text and none filters it again. A tool that reads a file itself (a view, a method body, a search row, a diff) redacts what it read; that is a read, not a source slice.
+
 ## Standalone
 
 Two senses on different axes. Qualify it; the bare word does not say which.
@@ -181,7 +209,7 @@ Two senses on different axes. Qualify it; the bare word does not say which.
 
 Two senses. Qualify it; the bare word does not say which.
 
-**Claude Code plugin** - `plugins/rails-ai-context` in this repository: the folder Claude Code installs to start the gem's MCP server and, at session start, give a Rails app the six rules. It writes nothing into the app and runs the gem installed for the `ruby` on `PATH`. ADR-0011 records why.
+**Claude Code plugin** - `plugins/rails-ai-context` in this repository: the folder Claude Code installs to start the gem's MCP server and, at session start, give a Rails app the six rules. It writes nothing into the app and runs the gem installed for the `ruby` on `PATH`. ADR-0011 records why. Where it cannot serve, its server still connects and gives the reason as its instructions, with no tools (a **refusal by handshake**, `CLI::Refusal`), since a server that fails to start is skipped in every folder for 15 minutes. In a **workspace** its server is the **router** (`WorkspaceServer`): one process that lists each tool once and hands each call to the serve of the app it names, started at that app's first call, and lists that app's own tools once it has said them (ADR-0012). Where an app's bundled copy serves, the plugin's process stays in front of it as a **proxy**, so a copy that stops still leaves a connected server. Both run their servers as a **child server** (`ChildServer`).
 
 **In-repo plugin** - a directory in the app (`plugins/*`, `gems/plugins/*`) that carries its own `app/` tree, read by `PathResolver` as one more code root beside packs and engines.
 
@@ -189,11 +217,15 @@ Two senses. Qualify it; the bare word does not say which.
 
 The directory a command reads as the app, decided once by `CLI::AppRoot` before anything reads the working directory, and then made the process's working directory. `--app-path` names it outright and is never walked. Otherwise it is the nearest directory at or above the working directory that passes the strict test, as `bin/rails` and Bundler find theirs: `config/application.rb`, `config/environment.rb`, or a `bin/rails` that boots an app or an engine. A working directory that passes only the loose test (source alone, any `app/**/*.rb`: a packwerk pack, an engine kept as code) is the root itself when no app holds it. The walk up never stops at a pack, `$HOME`, `node_modules`, `vendor/bundle` or a gem install.
 
+**Session target** - what a session started in a folder serves, `AppRoot.target`'s one answer for the plugin's server, its hook, `doctor` and `ClaudeCodeSettings`: one app, the apps of a **workspace**, or none with the reason. A root that passes the strict test by its `bin/rails` alone, with no app source, is the app that `bin/rails` names as `APP_PATH` when that lies below it (a monorepo's root), and otherwise none: an engine whose code is all in `lib/` serves nothing.
+
 Not the same as `Rails.root`, which only a booted app has, and not the **workspace** below, which is no app at all.
 
 ## Workspace
 
-A folder an editor or agent is opened at that is no app and has no app above it, but holds apps one or two levels down (`config/application.rb` only, so an engine or a pack is not one). `init` sets one up as a whole: the AI tools are chosen once, each app gets its own `.rails-ai-context.yml` and context files, since its server reads them from its own root, and the workspace's MCP configs get one server per app, since a client reads them from the folder it opened and from nowhere below. Every other command needs a single app, so it uses the only one or refuses with one `--app-path` command per app.
+A folder an editor or agent is opened at that is no app and has no app above it, but holds apps one or two levels down (`config/application.rb` only, so an engine or a pack is not one). `init` sets one up as a whole: the AI tools are chosen once, each app gets its own `.rails-ai-context.yml` and context files, since its server reads them from its own root, and the workspace's MCP configs get one server per app, since a client reads them from the folder it opened and from nowhere below. The **Claude Code plugin** serves a workspace itself, with no entries: one server, every tool taking an `app` argument (ADR-0012). Every other command needs a single app, so it uses the only one or refuses with one `--app-path` command per app.
+
+**App name** - the value of that `app` argument: the app's server name without its `rails-ai-context-` prefix (`shop`, or `admin-web` where two apps share a folder name), so two apps never share one.
 
 **Server name** - the key an entry has in a config. An app's own config calls its server `rails-ai-context`; a workspace's calls each one `rails-ai-context-<app folder>` (`Install::Workspace.server_names`), with the whole path where two apps share a folder name, and a hash where the name would be too long for the tools. `McpConfigGenerator::OWN_SERVER_NAME` matches every form, and `own_entry?` claims the ones that run the gem's server, so removal never leaves one behind and never takes an entry somebody else named that way. Not the **announced name**, which the running server gives the tool (`config.server_name`, or, in place of its default, `RAILS_AI_CONTEXT_SERVER_NAME` for one process): a workspace server announces its app first, because VS Code names tools after that and keeps 13 characters of it.
 
@@ -210,6 +242,12 @@ What an install writes, one of three. Qualify it; "mode" alone names only one of
 **MCP-only setup** - the MCP config and no context files (`context_files: false`). For a user who keeps their own `CLAUDE.md` and `AGENTS.md`.
 
 `tool_mode` is one axis (mcp or cli) and `context_files` the other, so the MCP-only setup is the mcp tool mode without context files, not a third tool mode. `Install::Program::Setup` holds the pair.
+
+**Managed block** - the part of a file the user also writes in (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`) that the gem owns: from its BEGIN marker to its END marker. A file with one BEGIN before one END has one; a file with neither has none; any other layout is unpaired, and every writer and remover leaves it as it is and names it, since nothing says where the block ends. `ManagedBlock` holds the rule.
+
+**Install order** - every install entry (`init`, `init` in a workspace, the generator, the first `rails ai:context`) runs the same steps in one order, `Install::Program.run`: every question first, then the removals the answers asked for, the record of the answers, the MCP configs, `.gitignore`, and the context files. An entry adds only what is its own (booting the app, writing the initializer, the pre-commit hook, whose question is asked with the others) at its place in that order, and its closing words.
+
+**Config verdict** - what an install does with one MCP config: write it, merge into it, keep it as it is, or refuse it with the reason and the edit by hand that lets the next run write it (`McpConfigGenerator#verdict`). The install carries it out and `doctor` reports it, so the two never disagree about a file.
 
 ## Unattended install
 
@@ -240,6 +278,14 @@ Not redaction itself: `Redaction` scrubs secret values out of text (logs, config
 ## SQL gate
 
 What decides whether `rails_query` runs a statement: the checks on its text, and on PostgreSQL the checks on its plan. It reads the statement once, with comments taken out, and answers either the text to run or a refusal with the reason, so nothing reaches the database that the gate did not read. On PostgreSQL a statement whose plan cannot be read does not run. `SqlGate`. The read-only transaction behind it is a second guard, and the gate's checks run before it on every database family (ADR-0008). A name the gate refuses belongs to one family and is refused there alone. The gate also tells which session settings a statement reads by name, for the settings note, which says the value shown is the one `rails_query` sets.
+
+## SQL scan
+
+How SQL text is read for its quoting, the way one **database family** reads it: where each string, quoted name and comment starts and ends, and which parts stand outside all of them and outside every parenthesis. MySQL reads a backslash as an escape in every string, PostgreSQL only in an `E'...'` string and also quotes with dollar tags, and SQLite quotes a name in brackets. `SqlScan`. The **SQL gate**, the structure.sql reader and the migration replay all read SQL text through it, so a `rails_query` statement, a dump and a replayed `execute` split and quote alike. Not a parser: it knows quotes, comments and brackets, not a statement's grammar.
+
+## Dumped column
+
+A column as schema.rb writes it for one **database family** and Rails version: its type name, the sizes the dumper keeps, and its default as the dump spells it. `DumpedColumn`. Three sources declare a column, and all three answer through it: a structure.sql column definition, a column a replayed migration declares, and a column the live connection reads. A source says what it saw (a type as SQL spells it, or as a migration or the connection names it; a default as sent, as a statement writes it, or as the database keeps it) and gets the same column back, so the static and booted tiers cannot disagree on one. Not the table around it: indexes, keys and INHERITS stay with each source.
 
 ## Served tool
 

@@ -21,6 +21,10 @@ module RailsAiContext
       root = root.to_s
       return path.delete_prefix("#{root}/") if !root.empty? && path.start_with?("#{root}/")
 
+      # A realpath'd file is under the root's real spelling when the root is reached through a link.
+      real_root = !root.empty? && current_real_root(root)
+      return path.delete_prefix("#{real_root}/") if real_root && real_root != root && path.start_with?("#{real_root}/")
+
       gem_roots.each do |gem_root|
         return path.delete_prefix(gem_root) if path.start_with?(gem_root)
       end
@@ -115,6 +119,7 @@ module RailsAiContext
       Pathname.new(real).relative_path_from(Pathname.new(real_root)).to_s
     end
 
+    # Keyed by the root's real path, so a deploy link moved to the next release is a new key.
     ENCLOSING = Concurrent::Map.new
     private_constant :ENCLOSING
 
@@ -122,8 +127,8 @@ module RailsAiContext
     def enclosing_gem(root)
       return nil if root.empty?
 
-      ENCLOSING.compute_if_absent(root) do
-        real_root = real_path(root)
+      real_root = current_real_root(root)
+      ENCLOSING.compute_if_absent(real_root) do
         dir = Gem.loaded_specs.each_value.filter_map { |spec|
           next if spec.default_gem?
 
@@ -132,6 +137,11 @@ module RailsAiContext
         }.max_by(&:length)
         [ real_root, dir ].freeze
       end
+    end
+
+    # Read again each run: a long-running server outlives the link the root is reached through.
+    def current_real_root(root)
+      RunCache.fetch([ :portable_real_root, root ]) { real_path(root).freeze }
     end
 
     def real_path(path)

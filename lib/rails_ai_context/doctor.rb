@@ -27,6 +27,7 @@ module RailsAiContext
       check_migrations
       check_context_freshness
       check_initializer_guard
+      check_settings_read
       check_mcp_json
       check_codex_env_staleness
       check_mcp_buildable
@@ -223,12 +224,7 @@ module RailsAiContext
     end
 
     def config_at(dir)
-      booted = RailsAiContext.configuration
-      RailsAiContext.configuration = Configuration.new
-      Configuration.load_from_yaml(File.join(dir, Configuration::CONFIG_FILENAME))
-      RailsAiContext.configuration
-    ensure
-      RailsAiContext.configuration = booted
+      UnbootedSettings.read(dir).config
     end
 
     # All configured AI tools; nil (unconfigured) means every tool in the table.
@@ -495,12 +491,13 @@ module RailsAiContext
     CONTEXT_PATHS = Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_paths ] }.freeze
 
     # Where each tool's MCP config lives, and how to name it in a report.
-    def self.mcp_config_checks
-      Install::AiTool.all.to_h { |tool|
-        path = tool.mcp_config[:path]
-        [ tool.key, { path: path, name: tool.name, label: "#{path} (#{tool.name})" } ]
-      }
-    end
+    MCP_CONFIG_CHECKS = Install::AiTool.all.to_h { |tool|
+      path = tool.mcp_config[:path]
+      [ tool.key, { path: path, name: tool.name, label: "#{path} (#{tool.name})", folder_variable: tool.mcp_config[:folder_variable] }.freeze ]
+    }.freeze
+    private_constant :MCP_CONFIG_CHECKS
+
+    def self.mcp_config_checks = MCP_CONFIG_CHECKS
 
     def check_context_freshness
       # An MCP-only install asked for no context files, so their absence is
@@ -699,10 +696,23 @@ module RailsAiContext
         fix: "Re-run `#{command(:install)}`, or add `&& RailsAiContext.respond_to?(:configure)` to the guard")
     end
 
+    # A line of the app's Ruby that no tier without a boot can follow, with what answers in its place.
+    def check_settings_read
+      notes = UnbootedSettings.read(app.root).notes
+      return nil if notes.empty?
+
+      Check.new(name: "Settings read without a boot", status: :warn, message: notes.join("; "),
+                fix: "Write the value as a literal, or set it in .rails-ai-context.yml, which every tier reads")
+    end
+
     # One MCP config's answer. A config with a `problem` is named beside it in
-    # the summary, and configs that share one are named together;
-    # `unparseable` is the config's path, when the install cannot merge into it.
-    ConfigVerdict = Data.define(:label, :status, :problem, :fix, :unparseable)
+    # the summary, and configs that share one are named together. `unmergeable`
+    # is unmergeable_fix's item for a config the install cannot merge into.
+    ConfigVerdict = Data.define(:label, :status, :problem, :fix, :unmergeable) do
+      def initialize(unmergeable: nil, **rest)
+        super(unmergeable: unmergeable, **rest)
+      end
+    end
 
     def check_mcp_json
       # CLI-only mode writes no MCP config, which leaves the plugin's server to Claude Code.
@@ -727,8 +737,12 @@ module RailsAiContext
         labels = group.map(&:label).join(", ")
         problem ? "#{labels}: #{problem}" : labels
       end
-      unparseable = failures.filter_map(&:unparseable)
-      fixes = ([ (unparseable_fix(unparseable) if unparseable.any?) ] + failures.reject(&:unparseable).map(&:fix)).compact.uniq
+      unmergeable, others = failures.partition(&:unmergeable)
+      fixes = if unmergeable.size > 1
+        [ unmergeable_fix(unmergeable.map(&:unmergeable)), *others.filter_map(&:fix) ].uniq
+      else
+        failures.filter_map(&:fix).uniq
+      end
       Check.new(name: "MCP configs", status: failures.any? { |verdict| verdict.status == :fail } ? :fail : :warn,
         message: "#{failures.size} of #{count_phrase(verdicts.size, "MCP config")} #{failures.size == 1 ? "needs" : "need"} " \
                  "attention: #{said.join('; ')}",
@@ -771,7 +785,7 @@ module RailsAiContext
       if broken.any?
         return ConfigVerdict.new(label: "#{broken.join(", ")} (Claude Code)", status: :fail,
                                  problem: "Claude Code will not start until #{broken.join(" and ")} #{broken.one? ? "is" : "are"} fixed",
-                                 fix: "Ask whoever manages your Claude Code settings to fix #{broken.one? ? "it" : "them"}", unparseable: nil)
+                                 fix: "Ask whoever manages your Claude Code settings to fix #{broken.one? ? "it" : "them"}")
       end
       return claude_managed_mcp_verdict(folder) if tool == :claude && claude_code.managed_mcp
 
@@ -793,61 +807,51 @@ module RailsAiContext
         return claude_plugin_missing(label, folder) if plugin
 
         turned_off = claude_plugin_turned_off(folder) if tool == :claude && claude_code.committed_in?(folder)
-        turned_off || ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix, unparseable: nil)
+        turned_off || ConfigVerdict.new(label: label, status: :warn, problem: nil, fix: install_fix)
       end
       return missing.call unless File.exist?(full_path)
 
       # Where the install would leave the file, or the gem's entry in it, as
       # it is, the edit by hand it names instead is the fix: sent to run the
       # install, the reader was told the same thing again.
+      verdict = install_verdict(tool, full_path)
       shape = nil
       by_hand = nil
       if cfg[:path].end_with?(".toml")
-        shape = toml_config_trouble(full_path)
-        if shape&.first == :fail
-          return ConfigVerdict.new(label: label, status: :fail, problem: shape[1], fix: shape[2], unparseable: nil)
+        hand = toml_by_hand(verdict, full_path)
+        unless verdict.readable
+          return ConfigVerdict.new(label: label, status: :fail, problem: verdict.reason,
+                                   fix: hand || "Run #{install_command(full_path)} to fix")
         end
-
-        by_hand = "#{shape[2]}: #{shape[1]}" if shape&.[](3)
+        if verdict.action == :refuse
+          shape = [ :warn, verdict.reason, hand ]
+          by_hand = "#{hand}: #{verdict.reason}"
+        end
       else
-        text, _, problem = McpConfigGenerator.json_text(full_path)
         # An empty file is one install fills.
-        if problem.nil? && text.strip.empty?
-          return missing.call
-        end
-        # The entry added by hand would sit in a file JSON still cannot read;
-        # saved as UTF-8, the next install merges into it. Where the committed settings turn the plugin on, it never does.
-        mended = if !committed then ", then run #{run_after(full_path)}"
-        elsif claude_code.plugin_on_in?(folder) then ", then remove the gem's server from it; the rails-ai-context plugin serves this app"
-        else ""
-        end
-        if problem
-          return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: "Save #{fix_path(full_path)} as UTF-8#{mended}", unparseable: nil)
-        end
+        return missing.call if verdict.action == :write
 
-        problem = json_config_problem(text, tool)
-        if problem && committed
-          # A file that parses holds no server of the gem's to remove; one that does not cannot say.
-          key = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:root_key]
-          edit = if problem == %("#{key}" is not an object) then %(Make "#{key}" in #{fix_path(full_path)} an object)
-          elsif problem == "it is JSON but not an object" then "Make #{fix_path(full_path)} a JSON object"
-          else "Make #{fix_path(full_path)} valid JSON holding an object#{mended}"
+        unless verdict.readable
+          # Saved or mended, the next install merges into it. Where the committed settings turn the plugin on, it never
+          # does, and a file that does not name the gem holds no server of it to remove.
+          after = if !committed then :run
+          elsif claude_code.plugin_on_in?(folder) && File.binread(full_path).include?(McpConfigGenerator::SERVER_NAME)
+            :remove
           end
-          return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: edit, unparseable: nil)
+          item = [ verdict, full_path, after ]
+          return ConfigVerdict.new(label: label, status: :fail, problem: verdict.reason, fix: unmergeable_fix([ item ]), unmergeable: item)
         end
-        return ConfigVerdict.new(label: label, status: :fail, problem: problem, fix: nil, unparseable: full_path) if problem
-
-        by_hand = json_by_hand(tool, full_path) if McpConfigGenerator.json_comments?(text)
+        by_hand = "#{verdict.by_hand(fix_path(full_path))}: #{verdict.reason}, so the install leaves it as it is" if verdict.action == :refuse
       end
 
-      entries = serving_entries(tool, full_path)
+      entries = serving_entries(verdict, tool, full_path)
       # Claude Code never starts a server its MCP policy blocks.
       blocked, entries = entries.partition { |entry| claude_code.server_block(entry[:name], entry[:argv].map(&:to_s), folder, url: remote_url(entry, folder)) } if tool == :claude
       return missing.call if entries.empty? && (plugin || optional || committed)
       return claude_server_blocked(label, blocked.first, folder) if entries.empty? && blocked&.any?
       if entries.empty?
         return ConfigVerdict.new(label: label, status: :warn, problem: shape&.[](1) || "holds no rails-ai-context server",
-                                 fix: shape&.[](2) || by_hand || install_fix, unparseable: nil)
+                                 fix: shape&.[](2) || by_hand || install_fix)
       end
 
       # An entry under the gem's name that runs something else (an HTTP one)
@@ -867,83 +871,57 @@ module RailsAiContext
       end
       return claude_config_dir_verdict(label) if status.nil? && unread
 
-      ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
+      ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix)
     rescue SystemCallError, IOError => e
-      ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix, unparseable: nil)
+      ConfigVerdict.new(label: label, status: :warn, problem: "cannot be read: #{e.message}", fix: install_fix)
     end
 
-    # Why the install would leave a JSON config as it is, in the words the
-    # install uses: its client cannot read it (Claude Code's JSON refuses
-    # the comments and trailing commas VS Code's JSONC takes), it does not
-    # parse (or holds comments), or it holds no object to merge into, at the
-    # top or under the tool's servers key.
-    def json_config_problem(text, tool)
-      config = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)
-      data = McpConfigGenerator.parse_json_text(text, config)
-      root_key = config[:root_key]
-      if !data.is_a?(Hash) then "it is JSON but not an object"
-      elsif !data[root_key].nil? && !data[root_key].is_a?(Hash) then %("#{root_key}" is not an object)
-      end
-    rescue JSON::ParserError, McpConfigGenerator::UnreadableError => e
-      McpConfigGenerator.parse_problem(e, text)
+    # What the install's write does with this config, as it would run for this app. In a workspace's config the
+    # app's entry keeps the name it has there, which only the write's own read of the file says.
+    def install_verdict(tool, path)
+      writer = ->(name) { McpConfigGenerator.new(tools: [ tool ], output_dir: mcp_config_folder(tool, path), servers: [ install_server(tool, path, name) ]) }
+      verdict = writer.(nil).verdict(tool, path)
+      return verdict unless workspace_config?(path)
+
+      name = serving_entries(verdict, tool, path).first&.dig(:name)
+      name ? writer.(name).verdict(tool, path) : verdict
     end
 
-    # What the install makes of a Codex config, read the way it reads one:
-    # [status, problem, fix, by hand], nil when it writes it. A server
-    # declared twice fails, since Codex refuses to read the file at all; an
-    # entry the install does not rewrite works, but stays as it is. By hand
-    # where the install leaves the file, or the gem's entry in it, as it is,
-    # so that the fix is the one any run of it waits on.
-    def toml_config_trouble(path)
-      return [ :fail, McpConfigGenerator::TOML_NOT_UTF8, "Save it as UTF-8" ] if SafeFile.read_text(path).encoding == Encoding::BINARY
-
-      servers, closed = McpConfigGenerator.toml_servers(path)
-      if closed && servers.any? { |server| server.sections.any? }
-        return [ :fail, "#{closed}, yet it holds one, which Codex refuses to read", "Delete one of them by hand", true ]
-      end
-
-      twice = servers.select(&:twice?)
-      if twice.any?
-        # Two tables and nothing else is what the install merges into one.
-        merged = twice.all?(&:rewritable?)
-        return [ :fail, "it declares #{twice.map(&:name).join(', ')} twice, which Codex refuses to read",
-                 merged ? "Run #{install_command(path)} to fix" : "Delete all but one by hand", !merged ]
-      end
-      return [ :warn, closed, "Write it as [mcp_servers.<name>] tables by hand", true ] if closed
-
-      held = servers.select { |server| !server.rewritable? && McpConfigGenerator.own_entry?(server.name, server.argv) }
-      return nil if held.empty?
-
-      [ :warn, McpConfigGenerator.unwritable_toml(held.map(&:name)),
-        "Write #{held.one? ? "it as a [mcp_servers.#{held.first.name}] table" : 'them as [mcp_servers.<name>] tables'} by hand, " \
-        "or delete #{held.one? ? 'it' : 'them'} and run #{install_command(path)}", true ]
-    end
-
-    # What the install says to add by hand to a JSON config whose comments
-    # it would drop writing it back, and so leaves as it is: the gem's entry
-    # for this app, exactly as it would write it.
-    def json_by_hand(tool, path)
-      config = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)
-      generator = McpConfigGenerator.new(tools: [ tool ], output_dir: mcp_config_folder(tool, path), servers: [ install_server(tool, path) ])
-      "Add #{JSON.generate(config[:root_key] => generator.json_entries(config))} to #{fix_path(path)} by hand: " \
-        "#{McpConfigGenerator::COMMENTS_PROBLEM}, so the install leaves it as it is"
+    # A Codex config's edit by hand, with the install run that then keeps the entry current, where one does.
+    def toml_by_hand(verdict, path)
+      hand = verdict.by_hand(fix_path(path), next_run: false)
+      hand && verdict.next_run ? "#{hand} and run #{install_command(path)}" : hand
     end
 
     # The server the install writes for this app into a config: the app's
     # own, in the form its bundle calls for, or in a workspace's config the
-    # app's entry there, under the name it has.
-    def install_server(tool, path)
+    # app's entry there, under `name` where it has one.
+    def install_server(tool, path, name = nil)
       standalone = InstallMode.standalone?(root: install_root)
       return McpConfigGenerator::Server.new(name: McpConfigGenerator::SERVER_NAME, standalone: standalone) unless workspace_config?(path)
 
       app = Install::Workspace.apps(mcp_config_folder(tool, path), [ install_root ]).first
-      app.server_name = serving_entries(tool, path).first&.dig(:name) || app.server_name
+      app.server_name = name if name
       app.server
     end
 
-    # The install run that follows a fix to the config itself.
-    def run_after(config_path)
-      workspace_config?(config_path) ? "`rails-ai-context init` in the folder that holds it" : install_job(:install)
+    # The edits configs the install cannot merge into need, in one sentence:
+    # files needing the same edit named together, then what follows it.
+    # `items` are [verdict, path, after], `after` :run, :remove or nil.
+    def unmergeable_fix(items)
+      items.group_by(&:last).map do |after, group|
+        edits = group.group_by { |verdict, _, _| verdict.by_hand("\0", next_run: false) }.values.map do |same|
+          same.first.first.by_hand(same.map { |_, path, _| fix_path(path) }.join(", "), next_run: false)
+        end
+        them = group.one? ? "it" : "them"
+        tail = case after
+        when :run
+          run = group.any? { |_, path, _| workspace_config?(path) } ? "`rails-ai-context init` in the folder that holds #{them}" : install_job(:install)
+          ", then run #{run}"
+        when :remove then ", then remove the gem's server from #{them}; the rails-ai-context plugin serves this app"
+        end
+        "#{edits.first}#{edits.drop(1).map { |edit| " and #{edit.sub(/\A\w/, &:downcase)}" }.join}#{tail}"
+      end.join("; ")
     end
 
     def mcp_config_path(tool)
@@ -1001,7 +979,7 @@ module RailsAiContext
     # Where the plugin is the app's choice and no .mcp.json entry serves the app: running here, only elsewhere,
     # or what stops it, most basic first. The install's own fix would add the second server the plugin replaces.
     def claude_plugin_missing(label, folder)
-      warning = ->(problem, fix) { ConfigVerdict.new(label: CLAUDE_PLUGIN_LABEL, status: :warn, problem: problem, fix: fix, unparseable: nil) }
+      warning = ->(problem, fix) { ConfigVerdict.new(label: CLAUDE_PLUGIN_LABEL, status: :warn, problem: problem, fix: fix) }
       return claude_plugin_verdict(CLAUDE_PLUGIN_LABEL) if claude_code.plugin_on_in?(folder)
       return claude_plugin_elsewhere(label, folder) if claude_code.plugin?
 
@@ -1038,20 +1016,20 @@ module RailsAiContext
       # The one that starts is judged as a .mcp.json entry is, and only whoever manages the file can edit it;
       # an HTTP entry is its endpoint's to judge.
       if (name, _, _, url = held.find { |_, why, _| why.nil? })
-        return ConfigVerdict.new(label: label, status: :pass, problem: nil, fix: nil, unparseable: nil) if url
+        return ConfigVerdict.new(label: label, status: :pass, problem: nil, fix: nil) if url
 
         server = servers[name]
         env = server.is_a?(Hash) && server["env"].is_a?(Hash) ? server["env"].transform_values(&:to_s) : {}
         entry = { name: name, argv: McpConfigGenerator.json_argv(server).map(&:to_s), env: env, own: true }
         status, problem, fix = entry_trouble(entry, :claude, managed, by_settings("fix `#{name}` in #{managed}", :managed).sub(/\A\w/, &:upcase), folder: folder)
-        return ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix, unparseable: nil)
+        return ConfigVerdict.new(label: label, status: status || :pass, problem: problem, fix: fix)
       end
 
       name, (rule, scope), command, url = held.first
       if name
         problem = "Claude Code does not start `#{name}`, its server for this app: #{rule == :off ? "/mcp turned it off" : "the MCP policy keeps it off"}"
         fix = rule == :off ? "Turn `#{name}` back on with /mcp in a session started #{started_in([ folder ])}" : policy_fix(rule, scope, name, command, folder, url: url)
-        return ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: fix, unparseable: nil)
+        return ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: fix)
       end
 
       # Beside another app's server, an entry naming no app would start there too, so this one names the app, under a free name.
@@ -1067,7 +1045,7 @@ module RailsAiContext
       entry = JSON.generate(name => { "command" => argv.first, "args" => argv.drop(1) })
       ConfigVerdict.new(label: label, status: :warn,
                         problem: "it names every MCP server Claude Code starts on this machine, and none of them serves this app",
-                        fix: "Have whoever manages your Claude Code settings add #{entry} to its mcpServers", unparseable: nil)
+                        fix: "Have whoever manages your Claude Code settings add #{entry} to its mcpServers")
     end
 
     # Empty or relative, CLAUDE_CONFIG_DIR has Claude Code read its settings and plugins under
@@ -1086,16 +1064,18 @@ module RailsAiContext
       else "set CLAUDE_CONFIG_DIR to the absolute path of the folder Claude Code keeps its settings in"
       end
       managed = source && ClaudeCodeSettings.managed_files(ClaudeCodeSettings::MANAGED_SETTINGS).include?(source)
-      ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: by_settings(fix, managed ? :managed : :user).sub(/\A\w/, &:upcase), unparseable: nil)
+      ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: by_settings(fix, managed ? :managed : :user).sub(/\A\w/, &:upcase))
     end
 
     # The committed settings turn the plugin on and winning ones turn it off for this user, where the
     # install writes no server, so its fix would change nothing.
     def claude_plugin_turned_off(folder)
       id = claude_code.committed_id(folder)
-      scope, value, path = claude_code.setting_for(id, folder)
-      # Claude Code runs a plugin only where the winning value is true.
-      return nil unless %i[local managed].include?(scope) && value != true
+      verdict = claude_code.serving(folder)
+      return nil unless verdict.cause == :turned_off
+
+      scope = verdict.scope
+      path = verdict.path
 
       # Not installed for that folder, the local install turns it on as well.
       fix = if scope == :managed then "Have whoever manages your Claude Code settings turn it on"
@@ -1105,7 +1085,7 @@ module RailsAiContext
       named = settings_named(scope, path)
       ConfigVerdict.new(label: CLAUDE_PLUGIN_LABEL, status: :warn,
                         problem: "the app's .claude/settings.json turns it on, and #{named} #{scope == :local ? "turns" : "turn"} it off for you",
-                        fix: fix, unparseable: nil)
+                        fix: fix)
     end
 
     # A server of the app's that Claude Code's MCP policy keeps from starting.
@@ -1114,7 +1094,7 @@ module RailsAiContext
       url = remote_url(entry, folder)
       rule, scope = claude_code.server_block(entry[:name], argv, folder, url: url)
       ConfigVerdict.new(label: label, status: :warn, problem: "Claude Code's MCP policy keeps `#{entry[:name]}` from starting",
-                        fix: policy_fix(rule, scope, entry[:name], argv, folder, url: url), unparseable: nil)
+                        fix: policy_fix(rule, scope, entry[:name], argv, folder, url: url))
     end
 
     # The url a remote entry connects at from that folder, nil for a stdio one.
@@ -1188,7 +1168,7 @@ module RailsAiContext
     # server of the gem's that a session also starts would list every tool again.
     def claude_plugin_verdict(label)
       problem, fix = duplicates_said
-      ConfigVerdict.new(label: label, status: problem ? :warn : :pass, problem: problem, fix: fix, unparseable: nil)
+      ConfigVerdict.new(label: label, status: problem ? :warn : :pass, problem: problem, fix: fix)
     end
 
     # [problem, fix] for the gem's servers beside the plugin's, nil where none: a committed plugin's .mcp.json
@@ -1251,7 +1231,7 @@ module RailsAiContext
       # Started there as told, the session would list every tool again.
       duplicate, removal = duplicates_said(disable: false)
       problem, fix = "#{problem}, where #{duplicate}", "#{removal}; then #{start}" if duplicate
-      ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: fix, unparseable: nil)
+      ConfigVerdict.new(label: label, status: :warn, problem: problem, fix: fix)
     end
 
     # What a session started in that folder needs to run the plugin: an install for its project, which
@@ -1295,29 +1275,28 @@ module RailsAiContext
 
     # The folder a config sits in, which its client starts the server from.
     def mcp_config_folder(tool, path)
-      path.delete_suffix(McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:path]).chomp("/")
+      path.delete_suffix(self.class.mcp_config_checks.fetch(tool)[:path]).chomp("/")
     end
 
     # The entries under the gem's names in a config that serve this app: the
     # app's own config's (at an engine's root, the engine's), or a
     # workspace's that point --app-path at the app.
     # Claude Code's own also counts a server the gem's under any other name, as the install and the duplicate check do.
-    def serving_entries(tool, path)
-      folder = mcp_config_folder(tool, path)
-      variable = McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:folder_variable]
+    def serving_entries(verdict, tool, path)
+      entries = Array(verdict.existing)
+      entries += hand_named_entries(path, mcp_config_folder(tool, path), entries.map { |entry| entry[:name] }) if tool == :claude
       target = SafePath.canonical(install_root)
-      entries = McpConfigGenerator.named_entries(path, tool)
-      entries += hand_named_entries(path, folder, entries.map { |entry| entry[:name] }) if tool == :claude
-      entries.select do |entry|
-        SafePath.canonical(McpConfigGenerator.entry_app_root(entry[:argv], variable, folder) || folder) == target
-      end
+      entries.select { |entry| SafePath.canonical(entry[:app]) == target }
     end
 
+    # Names the install never reads, so its verdict holds none of them.
     def hand_named_entries(path, folder, named)
       servers = ClaudeCodeSettings.read_json(path)&.dig("mcpServers")
       (claude_code.gem_server_names(path, folder) - named).map do |name|
         env = servers[name]["env"]
-        { name: name, argv: McpConfigGenerator.json_argv(servers[name]).map(&:to_s), env: env.is_a?(Hash) ? env.transform_values(&:to_s) : {}, own: true, hand: true }
+        argv = McpConfigGenerator.json_argv(servers[name]).map(&:to_s)
+        { name: name, argv: argv, env: env.is_a?(Hash) ? env.transform_values(&:to_s) : {}, own: true, hand: true,
+          app: McpConfigGenerator.entry_app_root(argv, self.class.mcp_config_checks.fetch(:claude)[:folder_variable], folder) || folder }
       end
     end
 
@@ -1448,7 +1427,7 @@ module RailsAiContext
     def entry_bundle(entry, tool, folder)
       named = entry[:env]["BUNDLE_GEMFILE"]
       dir = if named
-        gemfile = McpConfigGenerator.entry_path(named, McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:folder_variable], folder)
+        gemfile = McpConfigGenerator.entry_path(named, self.class.mcp_config_checks.fetch(tool)[:folder_variable], folder)
         return nil unless gemfile && File.basename(gemfile) == GemLock.gemfile_name(File.dirname(gemfile))
 
         File.dirname(gemfile)
@@ -1490,19 +1469,6 @@ module RailsAiContext
       Install::Program.relative_to(config_path, install_root).start_with?("../")
     end
 
-    # Install leaves a config it cannot parse, or merge into, as it is, so
-    # running it alone would change nothing there. A workspace's config above the app is
-    # written by `init` run in the workspace, never by this app's install.
-    def unparseable_fix(paths)
-      run = if paths.any? { |path| workspace_config?(path) }
-        "`rails-ai-context init` in the folder that holds #{paths.one? ? 'it' : 'them'}"
-      else
-        install_job(:install)
-      end
-      "Make #{paths.map { |path| fix_path(path) }.join(', ')} valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
-        "then run #{run}"
-    end
-
     def check_codex_env_staleness
       return nil if install_config.tool_mode == :cli
 
@@ -1516,7 +1482,8 @@ module RailsAiContext
       # Every server the gem wrote carries a snapshot: the app's own, and each
       # app's in a workspace. Read the way the generator reads the file, so a
       # section is the gem's by the same rule and any byte reads in any locale.
-      snapshots = McpConfigGenerator.named_entries(toml_path, :codex).select do |entry|
+      verdict = install_verdict(:codex, toml_path)
+      snapshots = Array(verdict.existing).select do |entry|
         entry[:own] && entry[:env].values_at("PATH", "GEM_HOME", "GEM_PATH").any?
       end
       return nil if snapshots.empty?
@@ -1524,8 +1491,7 @@ module RailsAiContext
       shown = typed_path(toml_path)
       # The install writes a fresh snapshot, unless it leaves the file, or
       # the gem's entry in it, as it is: then the edit by hand comes first.
-      _, why, edit, by_hand = toml_config_trouble(toml_path)
-      fix = by_hand ? "#{edit}: #{why}" : "Run #{install_command(toml_path)}"
+      fix = verdict.action == :refuse ? "#{toml_by_hand(verdict, toml_path)}: #{verdict.reason}" : "Run #{install_command(toml_path)}"
       unreached = snapshots.filter_map { |entry| unreached_command(entry, mcp_config_folder(:codex, toml_path)) }
       if unreached.any?
         said = unreached.group_by { |_, command, gone| [ command, gone ] }.map do |(command, gone), group|
@@ -1655,7 +1621,7 @@ module RailsAiContext
 
       mcp_tools_to_check.any? do |tool, _|
         path = McpConfigGenerator.serving_config(install_root, tool) or next false
-        serving_entries(tool, path).any? do |entry|
+        serving_entries(install_verdict(tool, path), tool, path).any? do |entry|
           entry[:own] && File.basename(McpConfigGenerator.unwrapped_argv(entry[:argv]).first.to_s) == "rails-ai-context"
         end
       rescue SystemCallError, IOError, JSON::ParserError
@@ -1957,8 +1923,7 @@ module RailsAiContext
       config/settings.local.yml config/settings/*.local.yml
     ].freeze
 
-    # A key that names a secret, and a URL that carries a password.
-    SECRET_KEY = /password|passwd|secret|token|private_key|api_key|access_key/i
+    # A URL that carries a password.
     URL_PASSWORD = %r{\A[a-z][\w+.-]*://[^:@/\s]*:[^@/\s]+@}i
     # What a key can hold that is no secret written in: ERB, an alias, a
     # block scalar, nothing, or a number or a switch.
@@ -1974,7 +1939,7 @@ module RailsAiContext
         next if key.nil? || value.empty? || value.match?(NOT_LITERAL) || value.include?("<%")
 
         unquoted = value.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
-        return "`#{key}` on line #{number}" if key.match?(SECRET_KEY) || unquoted.match?(URL_PASSWORD)
+        return "`#{key}` on line #{number}" if Redaction.secret_name?(key) || unquoted.match?(URL_PASSWORD)
       end
       nil
     end
@@ -1991,13 +1956,13 @@ module RailsAiContext
     # directories (node_modules, vendor, tmp) are not walked.
     def present_sensitive_files
       root = app.root.to_s
-      excluded = RailsAiContext.configuration.excluded_paths.to_set
+      excluded = ExcludedPaths.matcher(root, RailsAiContext.configuration.excluded_paths)
       found = []
       Find.find(root) do |path|
         relative = path.delete_prefix("#{root}/")
         next if path == root
         if File.directory?(path)
-          Find.prune if excluded.include?(relative) || excluded.include?(File.basename(path)) || File.symlink?(path)
+          Find.prune if excluded.call(relative, true) || File.symlink?(path)
           next
         end
         found << relative if SafePath.sensitive?(relative) || relative == ".codex/config.toml"

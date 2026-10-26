@@ -45,7 +45,7 @@ module RailsAiContext
             nesting = DeclaredConstant.record_nesting(mixin)
             next if owners.empty? && !mixin[:receiver]
 
-            name = resolve(root, mixin[:name], nesting, known)
+            name = resolve(root, mixin[:top_level] ? "::#{mixin[:name]}" : mixin[:name], nesting, known)
             next unless name
 
             if mixin[:receiver]
@@ -73,8 +73,7 @@ module RailsAiContext
 
       # [the constant `Widget.include(M)` names where it is written, its file or nil].
       def receiver_file(root, receiver, nesting)
-        DeclaredConstant.candidate_names(receiver, nesting).lazy.filter_map { |name| (path = ConcernPaths.find_file(root, name)) && [ name, path ] }.first ||
-          [ receiver.delete_prefix("::"), nil ]
+        ConcernPaths.reach(root, receiver, nesting) { |candidate| ConcernPaths.declared(root, candidate) } || [ receiver.delete_prefix("::"), nil ]
       end
 
       def kind_in_file(path, name)
@@ -85,11 +84,8 @@ module RailsAiContext
       # The name asked about the written one means, or nil when the nearest
       # candidate the app declares is some other module.
       def resolve(root, written, nesting, known)
-        DeclaredConstant.candidate_names(written, nesting).each do |candidate|
-          return known[candidate.downcase] if known.key?(candidate.downcase)
-          return nil if ConcernPaths.find_file(root, candidate)
-        end
-        nil
+        found = ConcernPaths.reach(root, written, nesting) { |candidate| known.key?(candidate.downcase) ? candidate : ConcernPaths.declared(root, candidate)&.first }
+        found && known[found.downcase]
       end
     end
   end

@@ -14,8 +14,9 @@ module RailsAiContext
     # where the eye cannot check - two labels for one mode, a menu that
     # showed file lists in two entries and bare names in the third.
     #
-    # Entries supply a surface - say(text, level) and ask(prompt) - and keep
-    # only their own voice (Thor colours, $stderr, puts) and their closing
+    # Entries supply a surface - say(text, level) and ask(prompt) - and run
+    # the install through run or run_workspace, adding only their own steps,
+    # their voice (Thor colours, $stderr, puts) and their closing
     # instructions, which genuinely differ per invocation form.
     module Program
       module_function
@@ -68,6 +69,176 @@ module RailsAiContext
         given.first && setup_for(given.first)
       end
 
+      # The flags' answers (nil where none gave one); `defaults` asks nothing, `place` names the root in the plugin's
+      # note, `env` is what the MCP configs record, and `refresh` marks a context run: own_config_tools, and a config error warns.
+      Answers = Struct.new(:tools, :setup, :prune, :defaults, :place, :env, :refresh, keyword_init: true)
+
+      # One install as it ran, for the entry's closing instructions; a folder of apps adds `apps` and `configured`.
+      Run = Struct.new(:tools, :setup, :previous, :removed_context, :held, :plugin_off, :apps, :configured, keyword_init: true)
+
+      # Raised before anything is written: an app's record will not read
+      # (found before anything is asked), or will not take the write that
+      # would save the answers.
+      RecordRefused = Class.new(StandardError)
+
+      # The install, in the one order every entry runs it: every question
+      # first, then the entry's :boot, the removals the answers asked for,
+      # the entry's :record, the MCP configs, .gitignore, and the entry's
+      # :hook and :context. The entry's block takes each of its steps with
+      # the run so far, and ignores the ones it has none for.
+      #
+      # @return [Run]
+      # @raise [RecordRefused] when the app's record will not read or be written
+      def run(answers, surface:, root:)
+        check_record!(surface, root)
+        previous = SelectionRecord.read(root: root)
+        tools = select_ai_tools(surface, current: previous, given: answers.tools)
+        setup = select_setup(surface, given: answers.setup, current: recorded_setup(root: root))
+        check_record_write!(surface, root, tools, setup)
+        dropped = ask_removed_tools(surface, previous: previous, selected: tools, prune: answers.prune)
+        unwired = setup.tool_mode == :cli ? ask_mcp_removal(surface, root: root, prune: answers.prune) : []
+        stale = !setup.context_files && ask_context_removal(surface, tools: tools, root: root, prune: answers.prune)
+        legacy = setup.context_files ? LegacyCleanup.ask(surface, tools, root: root, warn_only: answers.defaults, delete: answers.prune) : []
+        install = Run.new(tools: tools, setup: setup, previous: previous, removed_context: stale)
+
+        yield(:boot, install) if block_given?
+        remove_tools(surface, dropped, selected: tools, previous: previous, root: root)
+        remove_mcp_entries(surface, unwired, root: root)
+        remove_context_files(surface, tools, root: root) if stale
+        LegacyCleanup.remove(surface, legacy, root: root)
+        yield(:record, install) if block_given?
+        written = begin
+          configured = answers.refresh ? own_config_tools(tools, root: root) : tools
+          with_env(answers.env) do
+            write_mcp_configs(surface, tools: configured, tool_mode: setup.tool_mode, root: root,
+                                       standalone: RailsAiContext::InstallMode.standalone?(root: root), place: answers.place)
+          end
+        rescue StandardError => e
+          raise unless answers.refresh
+
+          surface.say "Could not create MCP config files: #{e.message}", :warn
+          {}
+        end
+        install.held = written[:held] || []
+        install.plugin_off = written[:plugin_off]
+        mark_gitignore(surface, root: root, context_files: setup.context_files)
+        yield(:hook, install) if block_given?
+        yield(:context, install) if block_given?
+        install
+      end
+
+      # A folder of apps' install (Workspace), in the same order: one answer
+      # for every app, each app recorded in its own folder (the block's
+      # :record, once per app), and the folder's MCP configs holding a
+      # server per app. `roots` are the app roots below `root`.
+      #
+      # @return [Run]
+      # @raise [ArgumentError] when nothing was asked, nothing chose a
+      #   setup, and the apps recorded different ones
+      def run_workspace(answers, surface:, root:, roots:)
+        apps = Workspace.apps(root, roots)
+        apps.each { |app| check_record!(surface.at(app.path), app.root) }
+        app_roots = apps.map(&:root)
+        previous = apps.flat_map { |app| SelectionRecord.read(root: app.root) || [] }.uniq
+        recorded = check_workspace_setup!(answers, apps)
+
+        tools = select_ai_tools(surface, current: previous, given: answers.tools)
+        setup = select_setup(surface, given: answers.setup, current: recorded.one? ? recorded.first : nil)
+        apps.each { |app| check_record_write!(surface.at(app.path), app.root, tools, setup) }
+        dropped = ask_removed_tools(surface, previous: previous, selected: tools, prune: answers.prune)
+        unwired = setup.tool_mode == :cli ? ask_mcp_removal(surface, root: root, prune: answers.prune) : []
+        stale = !setup.context_files &&
+                ask_context_removal(surface, tools: tools, root: root, app_roots: app_roots, prune: answers.prune)
+        # Without prune, each app's own context run asks about its legacy files.
+        legacy = apps.to_h do |app|
+          [ app, setup.context_files && answers.prune ? LegacyCleanup.ask(surface.at(app.path), tools, root: app.root, delete: true) : [] ]
+        end
+        install = Run.new(tools: tools, setup: setup, previous: previous, removed_context: stale, apps: apps)
+
+        remove_tools(surface, dropped, selected: tools, previous: previous, root: root, app_roots: app_roots)
+        remove_mcp_entries(surface, unwired, root: root)
+        remove_context_files(surface, tools, root: root, app_roots: app_roots) if stale
+        legacy.each { |app, present| LegacyCleanup.remove(surface, present, root: app.root) }
+        apps.each do |app|
+          yield(:record, install, app) if block_given?
+          mark_gitignore(surface.at(app.path), root: app.root, context_files: setup.context_files)
+        end
+
+        # JSON and TOML hold UTF-8 alone, so an app whose folder is named in
+        # another encoding cannot be named there: left out, the others' entries
+        # are still written, where its name failed the whole file.
+        install.configured, unnamed = apps.partition do |app|
+          [ app.server.app_path, app.server.gemfile ].compact.all? { |path| path.dup.force_encoding(Encoding::UTF_8).valid_encoding? }
+        end
+        unnamed.each do |app|
+          surface.say ""
+          surface.say "#{app.path}/ is left out of this folder's MCP configs: its folder name is not UTF-8, which " \
+                      "JSON and TOML require. Rename it, or run `rails-ai-context init` inside it for a config of its own.", :warn
+        end
+        surface.say ""
+        written = with_env(answers.env) do
+          write_mcp_configs(surface, tools: tools, tool_mode: setup.tool_mode, root: root,
+                                     servers: install.configured.map(&:server), place: answers.place, prune: answers.prune == true)
+        end
+        install.held = written[:held] || []
+        install.plugin_off = written[:plugin_off]
+        # The folder's own .gitignore, when it has one: its Codex config embeds this machine's PATH and GEM_HOME too.
+        mark_gitignore(surface, root: root, context_files: false)
+        yield(:context, install) if block_given?
+        install
+      end
+
+      # @raise [RecordRefused] naming the record from where the surface stands
+      def check_record!(surface, root)
+        refuse_record!(surface, SelectionRecord.unreadable(root: root))
+      end
+
+      # After the answers and before anything that writes: a record that
+      # cannot take the write the answers make. One they leave as it is,
+      # read-only on purpose say, takes no write.
+      #
+      # @raise [RecordRefused] naming the record from where the surface stands
+      def check_record_write!(surface, root, tools, setup)
+        # The keys every entry's :record writes beside the tools.
+        extra = { "tool_mode" => setup.tool_mode.to_s, "context_files" => setup.context_files }
+        refuse_record!(surface, SelectionRecord.unwritable(tools, root: root, extra_yaml: extra))
+        refuse_record!(surface, SelectionRecord.initializer_unwritable(tools, root: root, extra_yaml: extra), SelectionRecord::INITIALIZER)
+      end
+
+      def refuse_record!(surface, problem, file = SelectionRecord::YAML_FILE)
+        return unless problem
+
+        file = File.join(surface.place, file) if surface.place
+        raise RecordRefused, "#{file} #{problem}, so nothing was changed. Fix it, or move it aside, and run this again."
+      end
+
+      # The setups a folder's apps recorded, one each at most.
+      #
+      # @raise [ArgumentError] when nothing will be asked, no flag chose a
+      #   setup, and the apps recorded different ones: there is no default
+      #   to keep, and a guess would switch some of them
+      def check_workspace_setup!(answers, apps)
+        recorded = apps.filter_map { |app| recorded_setup(root: app.root) }.uniq
+        if recorded.size > 1 && answers.setup.nil? && answers.defaults
+          labels = recorded.map { |setup| SETUP_CHOICES[setup_number(setup) - 1].label }
+          raise ArgumentError, "the apps here recorded different setups (#{labels.join('; ')}). " \
+                               "Pass --mcp, --cli or --mcp-only to set them all to one."
+        end
+        recorded
+      end
+
+      # The process environment as `env` for the block: what the Codex
+      # config copies its PATH and gem variables from.
+      def with_env(env)
+        return yield unless env
+
+        now = ENV.to_h
+        ENV.replace(env)
+        yield
+      ensure
+        ENV.replace(now) if now
+      end
+
       # @param surface [#say, #ask] ask returns the user's line, nil on EOF
       # @param current [Array<Symbol>, nil] what an earlier run recorded,
       #   shown above the question so a re-run starts from it
@@ -116,7 +287,7 @@ module RailsAiContext
 
       def say_selected(surface, selected)
         names = AiTool.all.select { |t| selected.include?(t.key) }.map(&:name)
-        surface.say "Selected: #{names.join(', ')}", :ok
+        surface.say "Selected: #{names.empty? ? 'no AI tool' : names.join(', ')}", :ok
         selected
       end
 
@@ -246,7 +417,7 @@ module RailsAiContext
       # which only the gem's mounted endpoint answers: uninstall's case.
       #
       # @return [Boolean] whether anything was removed
-      def remove_tools(surface, keys, selected:, root:, app_roots: [ root ], previous: selected, http_entries: false)
+      def remove_tools(surface, keys, selected:, root:, app_roots: [ root ], previous: selected, http_entries: false, kept: [])
         keeping = (selected.map(&:to_sym) + (Array(previous).map(&:to_sym) - selected.map(&:to_sym) - keys.map(&:to_sym))).uniq
         keys.count do |key|
           tool = AiTool.find(key)
@@ -261,25 +432,19 @@ module RailsAiContext
           outcome[:trimmed].each { |path| surface.say "  Removed the generated section from #{path}", :ok }
           outcome[:kept].each { |path| surface.say "  Kept #{path} (nothing in it was generated by rails-ai-context)", :muted }
           outcome[:linked].each { |path| surface.say "Left #{path} as it is - #{SafeFile::LINKED}", :warn }
+          outcome[:unpaired].each { |path| surface.say "Could not remove the generated section from #{path} (#{ManagedBlock::UNPAIRED})", :warn }
           outcome[:failed].each { |path| surface.say "Could not remove #{path} - check its permissions", :warn }
           shared = say_shared(surface, tool, keeping, root, app_roots)
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entries
           left = []
+          held = kept.size
           cleaned = [ root, *app_roots ].map(&:to_s).uniq.sum(0) do |dir|
-            paths = RailsAiContext::McpConfigGenerator.remove(
-              tools: [ key ], output_dir: dir, http_entries: http_entries,
-              warn: lambda { |path, reason|
-                left << path
-                surface.say "Could not update #{shown(surface, path, root)}: #{reason}", :warn
-              }
-            )
-            say_mcp_removed(surface, paths, base: dir, root: root)
-            paths.size
+            remove_mcp_entries(surface, [ key ], root: root, dir: dir, http_entries: http_entries, left: left, kept: kept).size
           end
 
           gone = outcome[:removed].any? || outcome[:trimmed].any? || cleaned.positive?
-          done = gone && outcome[:failed].empty? && left.empty? && !shared
+          done = gone && outcome[:failed].empty? && outcome[:unpaired].empty? && left.empty? && kept.size == held && !shared
           surface.say "  #{tool.name} files removed", :ok if tool && done
           gone
         end.positive?
@@ -370,6 +535,7 @@ module RailsAiContext
           outcome[:removed].each { |path| surface.say "  Removed #{named.call(path)}", :ok }
           outcome[:trimmed].each { |path| surface.say "  Removed the generated section from #{named.call(path)}", :ok }
           outcome[:linked].each { |path| surface.say "Left #{named.call(path)} as it is - #{SafeFile::LINKED}", :warn }
+          outcome[:unpaired].each { |path| surface.say "Could not remove the generated section from #{named.call(path)} (#{ManagedBlock::UNPAIRED})", :warn }
           outcome[:failed].each { |path| surface.say "Could not remove #{named.call(path)}", :warn }
         rescue SafeFile::LinkedOut
           surface.say "Left #{named.call(JSON_CACHE)} as it is - #{SafeFile::LINKED}", :warn
@@ -378,23 +544,37 @@ module RailsAiContext
         end
       end
 
-      def remove_mcp_entries(surface, tools, root:)
-        return if tools.empty?
+      # Takes the entries the gem wrote from the tools' configs in `dir`, and names each one that runs the gem and
+      # stays, a user's. `left` collects the configs it could not update, `kept` each entry that stays.
+      def remove_mcp_entries(surface, tools, root:, dir: root, http_entries: false, left: [], kept: [])
+        return [] if tools.empty?
 
+        removed = {}
         paths = RailsAiContext::McpConfigGenerator.remove(
-          tools: tools, output_dir: root.to_s,
-          warn: ->(path, reason) { surface.say "Could not update #{shown(surface, path, root)}: #{reason}", :warn }
+          tools: tools, output_dir: dir.to_s, http_entries: http_entries,
+          warn: lambda { |path, reason|
+            left << path
+            surface.say "Could not update #{shown(surface, path, root)}: #{reason}", :warn
+          },
+          report: lambda { |path, gone, stay, starting|
+            removed[path] = gone
+            stay.each do |name, why|
+              kept << { file: shown(surface, path, root), name: name, starts: starting.include?(name) }
+              surface.say "Left `#{name}` in #{shown(surface, path, root)}: #{why}, so remove it by hand if it should go", :warn
+            end
+          }
         )
-        say_mcp_removed(surface, paths, base: root, root: root)
+        say_mcp_removed(surface, paths, removed, base: dir, root: root)
+        paths
       end
 
       # A config the removal emptied is deleted whole, and is named as gone:
       # "removed the entry" over a file that no longer exists read like a
       # bug. The tool's directory goes with it when nothing else is in it.
-      def say_mcp_removed(surface, paths, base:, root:)
+      def say_mcp_removed(surface, paths, removed, base:, root:)
         paths.each do |path|
           if File.exist?(path)
-            surface.say "  Removed rails-ai-context from #{shown(surface, path, root)}", :ok
+            surface.say "  Removed #{removed.fetch(path, [ "rails-ai-context" ]).join(", ")} from #{shown(surface, path, root)}", :ok
           else
             surface.say "  Removed #{shown(surface, path, root)} (rails-ai-context was its only server)", :ok
             prune_emptied(surface, File.dirname(path), base: base, root: root)
@@ -520,15 +700,9 @@ module RailsAiContext
         # A server the committed settings turn off starts in no one's session.
         committed_off = Array(RailsAiContext::ClaudeCodeSettings.read_json(File.join(root, ".claude", "settings.json"))&.dig("disabledMcpjsonServers"))
         held = (settings.gem_server_names(mcp_json, root) - committed_off).first
-        scope, on, path = settings.setting_for(id, root)
-        if on == false && %i[local managed].include?(scope)
-          off = scope == :local ? "your #{file.(relative_to(path, root))} turns" : "managed settings turn"
-          return "#{on_here}, and #{off} it off for you, so #{file.(".mcp.json")}'s `#{held}` serves you" if held
-          return "#{on_here}, and managed settings turn it off: ask whoever manages your Claude Code settings to turn it on" if scope == :managed
-
-          return "#{on_here}, and #{off} it off: `claude plugin enable #{id} --scope local` turns it back on"
-        end
-        return "#{on_here}, but it does not start for you here: doctor names why" unless plugin_serves?(root, settings)
+        verdict = settings.serving(root)
+        off = plugin_off_note(on_here, verdict, id, held && [ held ], root, file)
+        return off if off
 
         serves = "the rails-ai-context plugin serves this app#{" for sessions started in #{place}" if place}, as #{file.(".claude/settings.json")} says"
         return "#{serves}; doctor names anything missing" unless held
@@ -541,28 +715,58 @@ module RailsAiContext
         "#{said}, which your settings turn off, but teammates' sessions start it beside the plugin: remove it from #{file.(".mcp.json")}"
       end
 
-      # Whether the plugin the committed settings turn on starts for this user here, where Claude Code has run.
-      def plugin_serves?(root, settings)
-        return false if settings.managed_mcp
+      # What the user's own or managed settings make of the committed plugin, when it does not run for them;
+      # nil when it does.
+      def plugin_off_note(on_here, verdict, id, held, root, file)
+        return nil if verdict.runs?
+        return "#{on_here}, but it does not start for you here: doctor names why" unless verdict.cause == :turned_off
 
-        scope, on, = settings.setting_for(settings.committed_id(root), root)
-        return false if on == false && %i[local managed].include?(scope)
+        off = verdict.scope == :local ? "your #{file.(relative_to(verdict.path, root))} turns" : "managed settings turn"
+        if held&.any?
+          names = held.map { |name| "`#{name}`" }.join(", ")
+          return "#{on_here}, and #{off} it off for you, so #{file.(".mcp.json")}'s #{names} #{held.one? ? "serves" : "serve"} you"
+        end
+        return "#{on_here}, and managed settings turn it off: ask whoever manages your Claude Code settings to turn it on" if verdict.scope == :managed
 
-        settings.absent? || settings.plugin_on_in?(root)
+        "#{on_here}, and #{off} it off: `claude plugin enable #{id} --scope local` turns it back on"
       end
 
-      # Local settings win over the committed ones; the apps below read the folder's local file too only
-      # where it is their own session's, as a repository's main checkout is.
-      def several_apps_fix(id, root, servers)
-        settings = RailsAiContext::ClaudeCodeSettings.new(root)
-        scope, on, path = settings.setting_for(id, root)
-        return "`claude plugin disable #{id} --scope project` turns it off for this folder" unless scope == :local && on == true
+      # Above several apps the router serves each, and the per-app servers an earlier init wrote would list every tool
+      # twice; `prune` removes them.
+      def several_apps_plugin_note(surface, root, servers, file, prune:)
+        apps = servers.map { |server| File.expand_path(server.app_path.to_s, root) }
+        settings = RailsAiContext::ClaudeCodeSettings.new(apps.first, from: root)
+        verdict = settings.serving(root)
+        mcp_json = File.join(File.expand_path(root), ".mcp.json")
+        committed_off = Array(RailsAiContext::ClaudeCodeSettings.read_json(File.join(root, ".claude", "settings.json"))&.dig("disabledMcpjsonServers"))
+        held = apps.flat_map { |app| RailsAiContext::ClaudeCodeSettings.new(app, from: root).gem_server_names(mcp_json, root) }.uniq - committed_off
+        on_here = ".claude/settings.json turns the rails-ai-context plugin on"
+        off = plugin_off_note(on_here, verdict, settings.committed_id(root), held, root, file)
+        return [ off, true ] if off
 
-        dir = File.dirname(path, 2)
-        apps = Array(servers).map { |server| File.expand_path(server.app_path.to_s, root) }
-        return "your local settings turn it on for the apps below as well, so start Claude Code in one of them" if apps.all? { |app| settings.local_settings_dir(app) == dir }
+        serves = "#{on_here}, and serves each app here, by the app a call names"
+        # The removal names each entry it leaves, so the note names the rest only where it could not edit the file.
+        if prune
+          left = []
+          remove_mcp_entries(surface, %i[claude], root: root, left: left)
+          return [ serves, false ] if left.empty?
+        end
+        return [ serves, false ] if held.empty?
 
-        "`claude plugin disable #{id} --scope local` turns it off for this folder"
+        entries = RailsAiContext::ClaudeCodeSettings.read_json(mcp_json)&.dig("mcpServers")
+        config = RailsAiContext::McpConfigGenerator::TOOL_CONFIGS[:claude]
+        prunable = !prune && held.any? { |name| RailsAiContext::McpConfigGenerator.removable_json?(name, entries[name], config) } &&
+                   prunable_file?(mcp_json, root)
+        names = held.map { |name| "`#{name}`" }.join(", ")
+        [ "#{serves}, and #{file.(".mcp.json")} still holds #{names}, which #{held.one? ? "runs" : "run"} beside it: " \
+          "remove #{held.one? ? "it" : "them"} from #{file.(".mcp.json")}#{", or run init with --prune" if prunable}", false ]
+      end
+
+      # Whether --prune could write the file back: one with comments or linked out of the folder it leaves as it is.
+      def prunable_file?(path, root)
+        !RailsAiContext::McpConfigGenerator.json_comments?(File.read(path)) && RailsAiContext::SafeFile.write_refusal(path, root: root).nil?
+      rescue SystemCallError, IOError
+        false
       end
 
       # Whether a commit would leave the Codex config out, which it must: it
@@ -606,25 +810,29 @@ module RailsAiContext
       # same app (no config ping-pong). `servers:` replaces the app's own
       # entry with a workspace's, one per app.
       # `place` names the root for a run typed inside it, where the surface names files from the root itself.
-      def write_mcp_configs(surface, tools:, tool_mode:, root:, standalone: nil, servers: nil, place: nil)
-        # A committed plugin starts Claude Code's server for everyone who opens a folder holding one app,
-        # and one in .mcp.json too would list every tool twice; in a folder of several, it fails to start.
+      def write_mcp_configs(surface, tools:, tool_mode:, root:, standalone: nil, servers: nil, place: nil, prune: false)
+        # A committed plugin starts Claude Code's server for everyone who opens the folder, for its one app or for each
+        # of several, and one in .mcp.json too would list every tool twice.
         id = RailsAiContext::ClaudeCodeSettings.committed_id(root.to_s) if tool_mode != :cli && Array(tools).map(&:to_sym).include?(:claude)
-        held = id && (servers.nil? || servers.one?) ? %i[claude] : []
+        held = id ? %i[claude] : []
         plugin_off = false
-        if held.any?
+        if held.any? && servers && !servers.one?
+          tools = Array(tools).map(&:to_sym) - held
+          place ||= surface.place if surface.respond_to?(:place)
+          name = ->(file) { place ? File.join(place, file) : file }
+          note, plugin_off = several_apps_plugin_note(surface, root.to_s, servers, name, prune: prune)
+          file = place ? File.join(place, ".mcp.json") : shown(surface, File.join(root.to_s, ".mcp.json"), root)
+          surface.say "Claude Code: no server written into #{file == ".mcp.json" ? ".mcp.json here" : file}: #{note}", :muted
+        elsif held.any?
           tools = Array(tools).map(&:to_sym) - held
           app = servers ? File.expand_path(servers.first.app_path.to_s, root.to_s) : root.to_s
           settings = RailsAiContext::ClaudeCodeSettings.new(app, from: root.to_s)
           place ||= surface.place if surface.respond_to?(:place)
           note = committed_plugin_note(root.to_s, settings, app: app, place: place)
           note = note.gsub(/ here\b/, " in #{place}") if place
-          plugin_off = !plugin_serves?(root.to_s, settings)
+          plugin_off = !settings.serving(root.to_s).runs?
           file = place ? File.join(place, ".mcp.json") : shown(surface, File.join(root.to_s, ".mcp.json"), root)
           surface.say "Claude Code: no server written into #{file == ".mcp.json" ? ".mcp.json here" : file}: #{note}", :muted
-        elsif id
-          surface.say "Claude Code: .claude/settings.json turns on the rails-ai-context plugin, which serves one app, not a folder of them, " \
-                      "so it has nothing to serve here: #{several_apps_fix(id, root.to_s, servers)}", :warn
         end
         generator = RailsAiContext::McpConfigGenerator.new(
           tools: tools, output_dir: root.to_s, tool_mode: tool_mode, standalone: standalone, servers: servers

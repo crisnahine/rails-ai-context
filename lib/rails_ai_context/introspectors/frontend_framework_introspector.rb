@@ -201,11 +201,12 @@ module RailsAiContext
       end
 
       def component_files(dir, matcher)
-        FileWalk.each_file(dir, skip: scan_skip_dirs, root: root.to_s).select { |path| File.basename(path).match?(matcher) }
+        FileWalk.each_file(dir, skip: SCAN_SKIP_DIRS, root: root.to_s, exclude: excluded)
+                .select { |path| File.basename(path).match?(matcher) }
       end
 
-      def scan_skip_dirs
-        RailsAiContext.configuration.excluded_paths + SCAN_SKIP_DIRS
+      def excluded
+        @excluded ||= ExcludedPaths.matcher(root, RailsAiContext.configuration.excluded_paths)
       end
 
       def detect_mounting_strategy(all_deps)
@@ -317,6 +318,7 @@ module RailsAiContext
         "config/shakapacker.yml" => :read_yaml_source_path,
         "config/webpacker.yml" => :read_yaml_source_path
       }.freeze
+      READS = (MANIFESTS + CONFIG_ROOT_READERS.keys).freeze
 
       def detect_frontend_roots
         configured = RailsAiContext.configuration.respond_to?(:frontend_paths) &&
@@ -414,7 +416,7 @@ module RailsAiContext
       def parse_json(path)
         content = RailsAiContext::SafeFile.read(path)
         return nil unless content
-        JSON.parse(content)
+        RailsAiContext::PackageJson.json(content)
       rescue JSON::ParserError
         nil
       end

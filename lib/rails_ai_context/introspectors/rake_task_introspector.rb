@@ -11,6 +11,7 @@ module RailsAiContext
 
       # The names Rake looks for, Rakefile first so a case-insensitive disk prints it as written.
       RAKEFILES = %w[Rakefile rakefile Rakefile.rb rakefile.rb].freeze
+      READS = RAKEFILES
 
       def call
         rakefile = RAKEFILES.map { |name| File.join(root, name) }.find { |path| File.file?(path) }

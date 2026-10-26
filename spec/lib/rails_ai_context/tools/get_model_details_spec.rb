@@ -280,6 +280,16 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("posts")
     end
 
+    it "says on the static tier that associations a gem adds at boot are not listed, and not on the booted tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      static = described_class.call(model: "User").content.first[:text]
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false)
+      booted = described_class.call(model: "User").content.first[:text]
+
+      expect(static).to include("_Static tier: only the associations the source declares; a gem that adds associations at boot is not listed._")
+      expect(booted).not_to include("a gem that adds associations at boot")
+    end
+
     it "shows enums when present" do
       result = described_class.call(model: "User")
       text = result.content.first[:text]
@@ -1486,6 +1496,26 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include(
         "[UNAVAILABLE] 1 concern not read for scopes, callbacks and macros: Discard::Model"
       )
+    end
+  end
+
+  describe "the static note on associations a gem adds at boot" do
+    before { described_class.reset_cache! }
+
+    let(:note) { "gem that adds associations at boot is not listed" }
+
+    def text_for(static, **args)
+      allow(RailsAiContext).to receive(:static_tier?).and_return(static)
+      allow(described_class).to receive(:cached_context).and_return(models: { "Bare" => { table_name: "bares" }, "Linked" => { table_name: "links", associations: [ { type: "has_many", name: "x" } ] } })
+      described_class.call(**args).content.first[:text]
+    end
+
+    it "shows for a model with no declared associations and in both listings, on the static tier only" do
+      expect(text_for(true, model: "Bare")).to include("## Associations", "None declared in the source", note)
+      expect(text_for(true, detail: "standard")).to include(note)
+      expect(text_for(true, detail: "full")).to include(note)
+      %w[standard full].each { |detail| expect(text_for(false, detail: detail)).not_to include(note) }
+      expect(text_for(false, model: "Bare")).not_to include("None declared")
     end
   end
 

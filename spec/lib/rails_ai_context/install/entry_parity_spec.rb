@@ -18,7 +18,7 @@ RSpec.describe "Install entry parity" do
   def generator_read
     generator = RailsAiContext::Generators::InstallGenerator.new
     allow(Rails).to receive(:root).and_return(Pathname.new(root))
-    generator.send(:read_previous_ai_tools)
+    RailsAiContext::Install::SelectionRecord.read(root: generator.send(:install_root))
   end
 
   def cli_read

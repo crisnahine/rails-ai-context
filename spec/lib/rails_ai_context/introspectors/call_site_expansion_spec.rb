@@ -14,6 +14,15 @@ RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
     Array(data[:associations]).map { |a| [ a[:type], a[:name].to_s ] }
   end
 
+  # `@registry.delete(:key)` at the top of a body deletes from no parameter.
+  it "reads a body that starts by deleting a key from something other than a parameter" do
+    definition = Prism.parse("def self.setting(name, opts = {})\n  @registry.delete(:x)\n  has_many name\nend\n").value.statements.body.first
+    call = Prism.parse("setting :items").value.statements.body.first
+
+    expect(described_class.rewritten(definition, call)).to include("has_many :items")
+    expect(associations(expand(definition.slice, "setting :items"))).to eq([ %w[has_many items] ])
+  end
+
   describe "binding a parameter to the call's literal" do
     # Ruby lets the later of a `key:` pair and a `**hash` set the keyword.
     describe "a named keyword when the call spreads a hash" do

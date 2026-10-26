@@ -3,6 +3,25 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Tools::GetEditContext do
+  # A locale file gets only credential formats filtered, so the rules come from the file's name on
+  # disk, which SafePath resolves; a case-insensitive disk opens it under the caller's spelling too.
+  describe "a path typed in another spelling" do
+    it "redacts the file by the name SafePath resolves it to" do
+      Dir.mktmpdir do |root|
+        real = File.join(root, "config", "Locales", "app.yml")
+        FileUtils.mkdir_p(File.dirname(real))
+        File.write(real, "production:\n  password: hunter2hunter2\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(RailsAiContext::SafePath).to receive(:locate).with("config/locales/app.yml", under: root)
+          .and_return(RailsAiContext::SafePath::Resolution.new(realpath: real, relative: "config/Locales/app.yml", refusal: nil))
+
+        text = described_class.call(file: "config/locales/app.yml", line: 2).content.first[:text]
+
+        expect(text).to include("password: [FILTERED]")
+      end
+    end
+  end
+
   # Defence in depth: a secrets file nobody listed is still a file this tool
   # will read, so the text it returns carries no credential-shaped value.
   describe "a secret in a file no pattern names" do

@@ -20,6 +20,13 @@ RSpec.describe RailsAiContext::Introspectors::ModuleAliases do
     write("src/widget.ts", "")
   end
 
+  # tsc strips the BOM a Windows editor writes.
+  it "reads a tsconfig.json that starts with a byte order mark" do
+    path = write("tsconfig.json", %(\uFEFF{ "compilerOptions": { "strict": true } }))
+
+    expect(described_class.compiler_options(path).first).to include("strict" => true)
+  end
+
   it "matches a tsconfig pattern without a star exactly, never as a prefix" do
     write("tsconfig.json", %({ "compilerOptions": { "paths": { "~lib": ["./lib"] } } }))
 

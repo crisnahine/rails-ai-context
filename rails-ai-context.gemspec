@@ -73,6 +73,7 @@ Gem::Specification.new do |spec|
       docs/adr/0005-workspace-mcp-entries.md
       docs/adr/0006-strong-params-resolve-as-ruby-runs.md
       docs/adr/0007-every-install-question-has-a-flag.md
+      docs/adr/0014-security-lists-union-across-tiers.md
     ]
     listed.select do |f|
       linked.include?(f) ||

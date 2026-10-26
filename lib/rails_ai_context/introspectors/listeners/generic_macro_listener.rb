@@ -6,10 +6,12 @@ module RailsAiContext
       class GenericMacroListener < BaseListener
         include OwnerScope
 
-        # `any_receiver` also counts `base.macro`, the shape a mixin's `self.included(base)` hook writes.
-        def initialize(*target_methods, block_source: [], call_source: [], any_receiver: false)
+        # `any_receiver` counts a call on any receiver; `hook_receiver` only `base.macro` inside a
+        # module's `def self.included(base)`, which declares on the class mixing it in.
+        def initialize(*target_methods, block_source: [], call_source: [], any_receiver: false, hook_receiver: false)
           super()
           @any_receiver = any_receiver
+          @hook_receiver = hook_receiver
           @target_methods = target_methods.flatten.map(&:to_sym).to_set
           @enclosing = []
           @block_source = block_source.to_set
@@ -17,7 +19,7 @@ module RailsAiContext
         end
 
         def on_call_node_enter(node)
-          return unless @any_receiver || node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)
+          return unless @any_receiver || node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode) || receiver_counts?(node.receiver)
           return unless @target_methods.include?(node.name)
 
           @results << {
@@ -40,7 +42,8 @@ module RailsAiContext
             confidence:    confidence_for(node),
             owner:         @owner_stack.dup
           }
-          @results.last[:text] = one_line_source(node) if @call_source.include?(node.name)
+          # `base.after_perform :x` declares what `after_perform :x` in the class body does.
+          @results.last[:text] = one_line_source(node).then { |text| node.receiver ? text.sub(/\A\w+\s*&?\.\s*/, "") : text } if @call_source.include?(node.name)
           condition = macro_condition
           @results.last[:condition] = condition if condition
 
@@ -54,9 +57,24 @@ module RailsAiContext
           @enclosing.pop if @enclosing.last.equal?(node)
         end
 
+        def on_def_node_enter(node)
+          return unless @hook_receiver
+
+          param = node.parameters&.requireds&.first if node.receiver.is_a?(Prism::SelfNode) && ConcernMembership::MIXIN_HOOKS.include?(node.name.to_s)
+          (@hook_params ||= []).push(param.respond_to?(:name) ? param.name : nil)
+        end
+
+        def on_def_node_leave(_node)
+          @hook_params&.pop
+        end
+
         private
 
         def macro_condition; end
+
+        def receiver_counts?(receiver)
+          receiver.is_a?(Prism::LocalVariableReadNode) && !@hook_params.to_a.last.nil? && receiver.name == @hook_params.last
+        end
 
         # A def evaluates to its name, which is what `helper_method def foo` passes.
         def extract_symbol_args(node)

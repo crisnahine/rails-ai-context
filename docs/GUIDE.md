@@ -154,7 +154,7 @@ rails-ai-context uninstall               # standalone; then, once no app uses it
 `uninstall` takes out what the gem wrote and nothing you wrote:
 
 - Each AI tool's context files. A rules file you wrote stays, and in a root file such as `CLAUDE.md` only the block between the `rails-ai-context` markers goes, so your own lines stay. A file left empty is deleted, and so is a tool's dot-directory (`.cursor/`, `.claude/`) once nothing of yours is in it.
-- The `rails-ai-context` entry in every MCP config, an HTTP one under that name included. Other servers in the file stay; a config left with none is deleted.
+- The `rails-ai-context` entry in every MCP config, an HTTP one under that name included. Other servers in the file stay; a config left with none is deleted. An entry under the gem's name that starts its server some other way (through Docker, say) or holds a key you added is yours: it stays, and is named with its file.
 - `.rails-ai-context.yml`, `.ai-context.json` and `config/initializers/rails_ai_context.rb`, edited or not: they configure nothing once the gem is gone.
 - The lines the install added to `.gitignore`, with their comments.
 - The pre-commit hook, when it is the one the install wrote and covers only this app. A hook that covers other apps of the repository loses this one; a hook changed by hand is named and left for you.

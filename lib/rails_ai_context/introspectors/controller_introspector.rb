@@ -218,22 +218,16 @@ module RailsAiContext
         result
       end
 
-      # The strong params the controller has, its own and each ancestor's that no nearer class redefines.
+      # The controller's strong params and each ancestor's that no nearer owner redefines.
       def inherited_strong_params(links)
-        sources = links.map { |link, entry, source| entry ? controller_source(entry, link) : source }
-        facts = links.each_with_index.map do |(link, entry, _source), index|
-          next NO_STRONG_PARAMS unless sources[index]
-
-          actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(sources[index], class_name: link)
-          strong_params_facts(sources[index], actions)
-        end
-        concerns = links.each_with_index.map { |(link, _entry, _source), index| sources[index] ? concern_methods(sources[index], link) : Set.new }
+        owners = method_lookup(links)
+        facts = owners.map(&:last)
         nearer = Set.new
-        lineage_strong_params(facts, concerns).each_with_index.each_with_object({}) do |(strong, index), by_name|
+        lineage_strong_params(facts).each_with_index.each_with_object({}) do |(strong, index), by_name|
           facts[index][:order].each do |name|
             next unless strong.key?(name) && !nearer.include?(name)
 
-            by_name[name] ||= index.zero? ? strong[name] : strong[name].merge(from: links[index].first)
+            by_name[name] ||= owners[index].first == links.first&.first ? strong[name] : strong[name].merge(from: owners[index].first)
           end
           nearer.merge(facts[index][:defined])
         end.values
@@ -241,22 +235,23 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, Array(links.first&.dig(1, :strong_params)), label: "inherited_strong_params")
       end
 
-      # The instance methods of the concerns a class includes, which run before a parent class's of that name.
-      def concern_methods(source, within)
-        (@concern_methods ||= {})[[ source, within ]] ||= extract_concerns_from_source(source).each_with_object(Set.new) do |concern, names|
-          ConcernPaths.included_sources(app.root.to_s, concern.to_s, prefer: "controller", within: within).each do |found|
-            names.merge(strong_params_facts(found, [])[:defined])
-          end
+      # [owner, strong params facts] in method lookup order; a lineage class the ancestors miss is appended.
+      def method_lookup(links)
+        root = app.root.to_s
+        classes = links.to_h do |link, entry, source|
+          source = controller_source(entry, link) if entry
+          actions = entry ? Array(entry[:actions]) - Array(entry[:inherited_actions]) : ActionResolver.actions_from_source(source, class_name: link) if source
+          [ link, source ? strong_params_facts(source, actions) : NO_STRONG_PARAMS ]
         end
+        ordered = ConcernPaths.ancestors(root, "controller", nil, links.first.first).filter_map do |name|
+          facts = classes[name] || ((own = ConcernPaths.module_slice(root, name, prefer: "controller")&.first) && strong_params_facts(own, []))
+          [ name, facts ] if facts
+        end
+        ordered + (classes.keys - ordered.map(&:first)).map { |name| [ name, classes[name] ] }
       end
 
       def controller_source(entry, name)
-        entry[:file] && own_class_source(File.join(app.root.to_s, entry[:file]), name)
-      end
-
-      def own_class_source(path, name)
-        source = SafeFile.read(path)
-        source && DeclaredConstant.own_source(source, name)
+        entry[:file] && ActionFilters.own_class_source(File.join(app.root.to_s, entry[:file]), name)
       end
 
       # `clear_respond_to` empties the class attribute; each `respond_to` adds to it.
@@ -439,7 +434,7 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source, walked),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: class_name),
+          **ControllerSettings.from_source(source, root: app.root.to_s, within: class_name),
           file: relative_file
         }.compact
         details
@@ -476,7 +471,7 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source, walked),
           rate_limits: declared[:rate_limits].presence,
           turbo_stream_actions: extract_turbo_stream_actions(source),
-          **ControllerSettings.from_source(source, walked, root: app.root.to_s, within: ctrl.name),
+          **ControllerSettings.from_source(source, root: app.root.to_s, within: ctrl.name),
           file: relative_source_path(ctrl)
         }.compact
       end
@@ -814,13 +809,12 @@ module RailsAiContext
         end
       end
 
-      # A call runs the nearest class's method of that name; one no class here defines, or a concern a class
-      # includes does (a concern's, Pundit's), is taken at its *_params or permitted_* name.
-      def lineage_strong_params(facts, concerns = [])
+      # A call runs the nearest owner's method of that name; one no class or module here defines (a gem's,
+      # Pundit's) is taken at its *_params or permitted_* name.
+      def lineage_strong_params(facts)
         owner = {}
         facts.each_with_index do |fact, index|
           fact[:defined].each { |name| owner[name] = index unless owner.key?(name) }
-          Array(concerns[index]).each { |name| owner[name] = nil unless owner.key?(name) }
         end
         strong = facts.map { |fact| fact[:direct].dup }
         loop do
@@ -1069,7 +1063,7 @@ module RailsAiContext
 
       # A key's value always filters a nested hash or array, so one computed at run time is kept as written, on one line.
       def filter_source(node)
-        node.slice.gsub(/\s*\n\s*/, " ")
+        RailsAiContext::Redaction.source_slice(node.slice.gsub(/\s*\n\s*/, " "))
       end
 
       # params.expect(article: [ :title, :body ]) combines require + permit in
@@ -1234,7 +1228,7 @@ module RailsAiContext
       def class_body_walk(source)
         return nil if source.nil?
 
-        SourceIntrospector.walk_source(source, ControllerSettings::LISTENERS.merge(
+        SourceIntrospector.walk_source(source, ControllerSettings::LISTENERS.except(:settings_calls).merge(
           rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) },
           rescue_from: -> { Listeners::GenericMacroListener.new(:rescue_from) },
           respond_to: -> { Listeners::GenericMacroListener.new(:respond_to, :clear_respond_to) }
@@ -1336,7 +1330,7 @@ module RailsAiContext
         path = source_path(ctrl)
         return nil unless path && File.exist?(path) && !PathResolver.linked_out?(path, app.root)
 
-        own_class_source(path, ctrl.name)
+        ActionFilters.own_class_source(path, ctrl.name)
       end
 
       # Ruby knows where the class was defined; the underscored name only

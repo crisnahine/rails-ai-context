@@ -526,6 +526,34 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
   end
 
   describe ".for" do
+    it "replays a MySQL-family app's key removal in the order the established connection's server lists keys" do
+      kept = lambda do |server|
+        allow(RailsAiContext::DatabaseFamily).to receive(:established_mysql_server).and_return(server)
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "db", "migrate"))
+          FileUtils.mkdir_p(File.join(root, "config"))
+          File.write(File.join(root, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: trilogy\n  database: app\n")
+          File.write(File.join(root, "db", "migrate", "20240101000000_create_posts.rb"), <<~RUBY)
+            class CreatePosts < ActiveRecord::Migration[8.0]
+              def change
+                create_table :posts do |t|
+                  t.bigint :user_id
+                  t.bigint :editor_id
+                end
+                add_foreign_key :posts, :users, name: "fk_a"
+                add_foreign_key :posts, :users, column: :editor_id, name: "fkb"
+                remove_foreign_key :posts, :users
+              end
+            end
+          RUBY
+          described_class.for(root).tables["posts"][:foreign_keys].map { |fk| fk[:column] }
+        end
+      end
+
+      expect(kept.(:mariadb)).to eq(%w[editor_id])
+      expect(kept.(:mysql)).to eq(%w[user_id])
+    end
+
     it "chooses schema.rb, then structure.sql, then migration replay" do
       Dir.mktmpdir do |root|
         db = File.join(root, "db")

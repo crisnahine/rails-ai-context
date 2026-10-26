@@ -90,6 +90,16 @@ RSpec.describe RailsAiContext::Payload do
     end
   end
 
+  describe ".model_table" do
+    it "answers the model tier's table and key, no table where the source computes it, and the convention for no model" do
+      ctx = { models: { "Admin::Log" => { table_name: "admin_logs", primary_key: "uuid" }, "Archive" => { table_set_by: "Archive.table_name" } } }
+
+      expect(described_class.model_table(ctx, "Admin::Log").to_h).to eq(table: "admin_logs", set_by: nil, primary_key: "uuid")
+      expect(described_class.model_table(ctx, "Archive").to_h).to eq(table: nil, set_by: "Archive.table_name", primary_key: nil)
+      expect(described_class.model_table(ctx, "Admin::Widget").table).to eq("widgets")
+    end
+  end
+
   describe ".model_tables" do
     let(:orders) { ->(column) { { tables: { "orders" => { columns: [ { name: column } ] } } } } }
     let(:schema) { { tables: { "users" => { columns: [] } }, secondary_databases: { "shard_one" => orders.call("a"), "shard_two" => orders.call("b") } } }
@@ -99,7 +109,7 @@ RSpec.describe RailsAiContext::Payload do
       sharded = { table_name: "orders", database: { connects_to: "connects_to shards: {}" } }
       expect(described_class.model_tables(schema, written)).to eq([ [ "shard_two", { columns: [ { name: "b" } ] } ] ])
       expect(described_class.model_tables(schema, sharded).map(&:first)).to eq(%w[shard_one shard_two])
-      expect(described_class.model_table(schema, sharded)).to eq(columns: [ { name: "a" } ])
+      expect(described_class.model_schema_table(schema, sharded)).to eq(columns: [ { name: "a" } ])
       expect(described_class.model_tables(schema, { table_name: "users" })).to eq([ [ "primary", { columns: [] } ] ])
     end
   end
@@ -397,6 +407,11 @@ RSpec.describe RailsAiContext::Payload do
     it "falls back to the conventional path for a model that carried none" do
       expect(described_class.model_file({ models: { "Order" => {} } }, "Order")).to eq("app/models/order.rb")
     end
+
+    it "gives the path below the pack's models root as the stem a test mirrors" do
+      expect(described_class.model_stem(context, "Invoice")).to eq("invoice")
+      expect(described_class.model_stem({ models: { "Admin::Order" => {} } }, "Admin::Order")).to eq("admin/order")
+    end
   end
 
   describe ".section on an unavailable section" do
@@ -547,6 +562,24 @@ RSpec.describe RailsAiContext::Payload do
       schema = { adapter: "postgresql", adapter_source: "static_parse", tables: { "customers" => { columns: [] } } }
 
       expect(described_class.schema_table(schema, "app.customers")).to eq({ columns: [ { name: "email" } ] })
+    end
+  end
+
+  # A table is keyed by its real name; a lookup takes the name as written or a quoted spelling of it.
+  describe ".table_holders with an odd table name" do
+    let(:schema) { { adapter: "static_parse", tables: { 'q"t' => { columns: [] }, "my-table" => { columns: [] }, "x.y" => { columns: [] }, "plain" => { columns: [] } } } }
+
+    it "finds the table by its name, a quoted spelling of it, and a quoted part of a qualified one" do
+      { 'q"t' => 'q"t', '"q""t"' => 'q"t', "my-table" => "my-table", '"my-table"' => "my-table", "x.y" => "x.y", '"x.y"' => "x.y", '"plain"' => "plain" }.each do |asked, key|
+        expect(described_class.table_holders(schema, asked).map { |_, name, _| name }).to eq([ key ]), asked
+      end
+    end
+
+    it "does not take an unbalanced quote for a quoted name, so q\"t never finds the table q" do
+      schema[:tables]["q"] = { columns: [] }
+
+      expect(described_class.table_holders(schema, 'q"t').map { |_, name, _| name }).to eq([ 'q"t' ])
+      expect(described_class.table_holders(schema, 'q"u')).to eq([])
     end
   end
 end

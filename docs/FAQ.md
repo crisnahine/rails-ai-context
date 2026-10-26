@@ -59,7 +59,7 @@ Yes, freely. Both write the same context files and serve the same 35 tools; only
 
 ### My editor opens a folder that holds several apps. Does that work?
 
-Yes. Run `rails-ai-context init` in that folder. It asks once, gives each app its own `.rails-ai-context.yml` and context files, and writes one MCP server per app into the folder's configs, `rails-ai-context-<app folder>`, so your AI tool sees every app and each app's tools are named after it. Start the tool in that folder: the entries name each app relative to it. See [`init`](CLI.md#init-standalone-only).
+Yes. Run `rails-ai-context init` in that folder. It asks once, gives each app its own `.rails-ai-context.yml` and context files, and writes one MCP server per app into the folder's configs, `rails-ai-context-<app folder>`, so your AI tool sees every app and each app's tools are named after it. Start the tool in that folder: the entries name each app relative to it. See [`init`](CLI.md#init-standalone-only). The [Claude Code plugin](SETUP.md#as-a-plugin) needs no entries there: started in that folder, its one server serves every app, and each call names its app.
 
 ### Do I need to commit the generated files?
 

@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "set"
-require "strscan"
 require "timeout"
 
 module RailsAiContext
@@ -191,9 +190,6 @@ module RailsAiContext
       pg_sequence_last_value
     ].freeze
 
-    # Any character past ASCII is an identifier character to SQLite and MySQL, a no-break space included.
-    BARE_WORD = /(?:[\p{Word}$]|[^\x00-\x7F])+/
-    NUMBER = /\A(?:\d+(?:e\d+)?|0x\h+|0b[01]+)\z/i
     # Words a parenthesis can follow that name no table and no alias. MySQL, whose derived table
     # takes a bare alias and a column list, reserves each one, so none can stand for an alias there.
     NO_ALIAS = %w[
@@ -210,21 +206,6 @@ module RailsAiContext
     # A UNION names its columns after its first SELECT, so another table's rows leave under those names.
     # INTERSECT and EXCEPT return only rows of their first SELECT, so they stay.
     SET_UNION = /\bUNION\b/i
-
-    # A quoted span by the quote that opens it. A doubled quote stays inside the span.
-    PLAIN_SPAN = { "'" => /'(?:''|[^'])*'?/m, '"' => /"(?:""|[^"])*"?/m, "`" => /`(?:``|[^`])*`?/m }.freeze
-    # A backslash escapes the next character: every MySQL string, and a PostgreSQL E'...' one.
-    ESCAPED_SPAN = { "'" => /'(?:\\.|''|[^'\\])*'?/m, '"' => /"(?:\\.|""|[^"\\])*"?/m }.freeze
-    # The quote of an E'...' string: the E stands right before it, as a word of its own.
-    E_QUOTE = /(?<=(?<![\p{Word}$]|[^\x00-\x7F])[eE])'/
-    # SQLite reads [name] as an identifier.
-    BRACKETED = /\[[^\]\n]*\]/
-    # PostgreSQL spells a dollar quote's tag as a name, and reads any non-ASCII character as a letter in both:
-    # a dollar after one (`→$a$`) is part of that name, and `$→$` is a tag.
-    TAG_NAME = /(?:[A-Za-z_]|[^\x00-\x7F])(?:\w|[^\x00-\x7F])*/
-    DOLLAR_QUOTED = /(?<![\w$]|[^\x00-\x7F])\$((?:#{TAG_NAME})?)\$.*?\$\1\$/m
-    DOLLAR_TAG = /(?<![\w$]|[^\x00-\x7F])\$(?:#{TAG_NAME})?\$/
-    UNQUOTED = /[^'"`$\/\-#*\[]+/
 
     # A constant in a plan expression. PostgreSQL's deparser always doubles
     # quotes and never emits an E'' string, so this matches one exactly.
@@ -251,32 +232,6 @@ module RailsAiContext
     FALSE_SPELLING = /\A(?:f(?:a(?:l(?:se?)?)?)?|no?|off?|0)\z/i
     # The handler a sampling method names is never called by the statement, and the plan prints its arguments.
     SAMPLING_METHOD = /\bTABLESAMPLE\s+(?:\w+\s*\.\s*)?\w+(?=\s*\()/i
-
-    # A statement's text under a pointer. A lookbehind sees the text before the pointer, and where each dollar
-    # tag last stands is read in one pass: a search for its closer from every opener is quadratic.
-    class Scanner < StringScanner
-      def initialize(text)
-        super(text, fixed_anchor: true)
-      end
-
-      # The [name] at the pointer. A line with no closing bracket is read once, however many brackets open on it.
-      def bracketed
-        return nil if @unclosed_to && pos < @unclosed_to
-
-        span = scan(BRACKETED)
-        @unclosed_to = pos + check(/[^\]\n]*/).bytesize unless span
-        span
-      end
-
-      # Whether the dollar tag at the pointer stands again after itself, to close the quote it opens.
-      def closed?(tag)
-        @last ||= {}.tap do |last|
-          tags = StringScanner.new(string)
-          last["$#{tags[1]}"] = tags.pos - 1 while tags.skip_until(/\$(?=((?:#{TAG_NAME})?\$))/o)
-        end
-        @last.fetch(tag, -1) >= pos + tag.bytesize
-      end
-    end
 
     # budget: the seconds the reads the gate sends (the plan, the catalog lookups) share with the caller's other reads.
     # text_timeout: the seconds the checks on the statement's text have to themselves.
@@ -311,12 +266,12 @@ module RailsAiContext
 
     # The text with its comments out and every quoted span copied whole, as the family reads them.
     def self.comment_free(sql, family, backslash: family.backslash_escapes?)
-      scanner = Scanner.new(sql)
+      scanner = SqlScan::Scanner.new(sql)
       out = +""
       executable = false
 
       until scanner.eos?
-        if (span = quoted(scanner, family, backslash: backslash)&.last || scanner.scan(UNQUOTED))
+        if (span = SqlScan.quoted(scanner, family, backslash: backslash)&.last || scanner.scan(SqlScan::UNQUOTED))
           out << span
         elsif family.executable_comments? && scanner.scan(/\/\*!\d*/)
           # Its content stays for the checks to read: `SELECT /*!50000 LOAD_FILE(...) */`.
@@ -325,7 +280,7 @@ module RailsAiContext
         elsif executable && scanner.scan(/\*\//)
           executable = false
           out << " "
-        elsif comment(scanner, family)
+        elsif SqlScan.comment(scanner, family)
           out << " "
         else
           out << scanner.getch
@@ -339,67 +294,14 @@ module RailsAiContext
     # and every name a list of the session's settings shows in its rows or its filter.
     def self.settings_read(sql, family, rows)
       text = comment_free(sql, family)
-      code = mask_quoted(text, family) { true }
+      code = SqlScan.mask_quoted(text, family) { true }
       # On MySQL a double-quoted span other than a bare word is a string.
-      strings_blanked = mask_quoted(text, family) do |kind, span|
+      strings_blanked = SqlScan.mask_quoted(text, family) do |kind, span|
         kind == :string || (family.mysql? && span.start_with?('"') && !span.match?(BARE_QUOTED_WORD))
       end
       read = text.enum_for(:scan, SETTING_READ).filter_map { $~[1] if code[$~.begin(0)] == text[$~.begin(0)] }
       read += text.scan(/\w+/) + rows.flatten.map(&:to_s) if strings_blanked.match?(SETTINGS_LIST)
       read.map(&:downcase)
-    end
-
-    # Every quoted span the block picks blanked to spaces of the same length, so positions still line up.
-    def self.mask_quoted(text, family, backslash: family.backslash_escapes?)
-      scanner = Scanner.new(text)
-      out = +""
-
-      until scanner.eos?
-        kind, span = quoted(scanner, family, backslash: backslash)
-        out << (span.nil? ? scanner.scan(UNQUOTED) || scanner.getch : yield(kind, span) ? " " * span.length : span)
-      end
-
-      out
-    end
-
-    # The quoted span that opens where the scanner stands, as the family reads it: [:string or :quoted, the span], or nil.
-    # brackets: whether [name] quotes a name in this text. backslash: whether one escapes the next character of a string.
-    def self.quoted(scanner, family, brackets: family.sqlite?, backslash: family.backslash_escapes?)
-      case scanner.peek(1)
-      when "'" then [ :string, scanner.scan(backslash || scanner.check(E_QUOTE) ? ESCAPED_SPAN["'"] : PLAIN_SPAN["'"]) ]
-      when '"' then [ :quoted, scanner.scan(backslash ? ESCAPED_SPAN['"'] : PLAIN_SPAN['"']) ]
-      when "`" then [ :quoted, scanner.scan(PLAIN_SPAN["`"]) ]
-      when "[" then brackets && (span = scanner.bracketed) ? [ :quoted, span ] : nil
-      when "$"
-        tag = scanner.check(DOLLAR_TAG) if family.dollar_quoting?
-        [ :string, scanner.scan(DOLLAR_QUOTED) ] if tag && scanner.closed?(tag)
-      end
-    end
-
-    # Skips the comment that opens where the scanner stands, as the family reads it. One that never closes runs to the end.
-    # @return [Boolean] whether one opened there
-    def self.comment(scanner, family)
-      return !scanner.skip(family.line_comment).nil? unless scanner.skip(/\/\*/)
-
-      depth = 1
-      marks = family.nested_comments? ? /\/\*|\*\// : /\*\//
-      depth += scanner.matched == "/*" ? 1 : -1 while depth.positive? && scanner.skip_until(marks)
-      scanner.terminate if depth.positive?
-      true
-    end
-
-    # [kind, text] for each token of comment-free text: :word (bare, a keyword or a name), :quoted (a name in
-    # double quotes, backticks or brackets), :string, :number, or :punct, one character. brackets: whether [name] quotes a name.
-    def self.tokens(text, family, brackets: true, backslash: family.backslash_escapes?)
-      scanner = Scanner.new(text)
-      found = []
-      until scanner.eos?
-        next if scanner.skip(/\s+/) || scanner.skip(/[uU]&(?=["'])/)
-
-        found << (quoted(scanner, family, brackets: brackets, backslash: backslash) ||
-          scanner.scan(BARE_WORD)&.then { |span| [ span.match?(NUMBER) ? :number : :word, span ] } || [ :punct, scanner.getch ])
-      end
-      found
     end
 
     private
@@ -746,21 +648,21 @@ module RailsAiContext
     # only and positions still line up. only: the one kind to blank, :string or :quoted. With a block, the spans it picks.
     def mask_quoted(text, only = nil, &picks)
       picks ||= ->(kind, _span) { only.nil? || kind == only }
-      self.class.mask_quoted(text, @family, backslash: @backslash, &picks)
+      SqlScan.mask_quoted(text, @family, backslash: @backslash, &picks)
     end
 
     # A bracketed name is read on every family: an alias list is told by its shape, whatever quotes its names.
     def tokens(text)
-      self.class.tokens(text, @family, backslash: @backslash)
+      SqlScan.tokens(text, @family, backslash: @backslash)
     end
 
     # PostgreSQL's string literals emptied, with the E, B, X or U& that stands before one. A quoted name stays.
     def mask_sql_literals(text)
-      scanner = Scanner.new(text)
+      scanner = SqlScan::Scanner.new(text)
       out = +""
 
       until scanner.eos?
-        kind, span = self.class.quoted(scanner, @family)
+        kind, span = SqlScan.quoted(scanner, @family)
         if kind == :string
           out.chop! if out.end_with?("&")
           # Read as a byte: a character past ASCII ends in one from 0x80 up, and it is part of a name.
@@ -768,7 +670,7 @@ module RailsAiContext
           out.chop! if out.end_with?(*%w[e E b B x X u U]) && !(before && (before >= 0x80 || before.chr.match?(/[\w$]/)))
           out << "''"
         else
-          out << (span || scanner.scan(UNQUOTED) || scanner.getch)
+          out << (span || scanner.scan(SqlScan::UNQUOTED) || scanner.getch)
         end
       end
 

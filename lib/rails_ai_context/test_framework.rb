@@ -158,7 +158,7 @@ module RailsAiContext
     # rspec-core's example group methods, and the feature aliases rspec-rails and capybara add.
     GROUP_METHODS = %i[example_group describe context xdescribe xcontext fdescribe fcontext feature xfeature ffeature].to_set.freeze
 
-    # Per example group or test class (`described`, the outermost only in `top_level`), the names Ruby tries for the class it describes.
+    # Per example group or test class (`described`, the outermost only in `top_level`), [the name written for the class it describes, Module.nesting there].
     Subjects = Data.define(:described, :top_level, :classes)
 
     def test_subjects(source)
@@ -176,13 +176,13 @@ module RailsAiContext
           if node.is_a?(Prism::ClassNode)
             tested = scope.first[/\A(.*[^:])Test\z/, 1]
             group = !tested.nil?
-            names = [ tested ] if group
+            names = [ "::#{tested}", [] ] if group
           end
         elsif node.is_a?(Prism::CallNode) && GROUP_METHODS.include?(node.name) &&
               (node.receiver.nil? || node.receiver.slice.delete_prefix("::") == "RSpec")
           group = true
           subject = node.arguments&.arguments&.first
-          names = Introspectors::DeclaredConstant.candidate_names(subject.slice, scope) if constant?(subject)
+          names = [ subject.slice, scope ] if constant?(subject)
         end
         if names
           found.described << names
@@ -233,9 +233,11 @@ module RailsAiContext
       # @param key [String] a controller's route key, else the subject's path under its app folder
       # @param constant [String, nil] the subject's declared constant
       # @param file [String, nil] the subject's file, absolute or under the app root
-      def tested?(kind, key, constant = nil, file: nil)
+      # @param routes [Array<Hash>] the whole route table in draw order (`RouteCoverage.table`), for a request test filed under another name
+      def tested?(kind, key, constant = nil, file: nil, routes: [])
         file &&= File.expand_path(file, @app_root)
         return true if candidates(key).any? { |path| TestFramework.named_test?(path, kind, key) && filed_for?(path, kind, constant, file) }
+        return true if kind == :controller && requested?(key, routes)
         return false if constant.nil?
 
         # A group naming Shop::OrdersController holds the text OrdersController however it is nested.
@@ -244,6 +246,70 @@ module RailsAiContext
       end
 
       private
+
+      # Whether a request or integration test sends a request the controller's route answers: a
+      # literal path, a "POST /oauth/revoke" group name or a route helper. Rails sends a path to the
+      # first route in the table that matches it, so a route a catch-all or slug route comes after
+      # is the controller's, and the catch-all's own controller gets only what no route before it answers.
+      # shortcut: a constraint is not evaluated, so a constrained route and the ones behind it share the credit.
+      def requested?(key, table)
+        return false if table.empty?
+
+        sources.any? do |path, source|
+          next false unless CONTROLLER_TEST_DIRS.include?(TestFramework.suite_folders(path).last)
+
+          requests(path, source).any? { |request| answering_routes(request, table).any? { |route| route[:controller].to_s == key } }
+        end
+      end
+
+      def requests(path, source)
+        @requests ||= {}
+        @requests[path] ||= begin
+          parsed = AstCache.parse_uncached(source)
+          parsed ? Introspectors::SourceIntrospector.walk_dispatch(parsed, { requests: Introspectors::Listeners::RequestCallListener })[:requests] : []
+        end
+      end
+
+      # Every route that may answer the request: the matches in draw order up to the first one with no constraint or
+      # condition, which always answers it. A constrained match might not, so the routes behind it keep their credit.
+      def answering_routes(request, table)
+        sent = request[:path] || helper_path(request[:helper], table)
+        return [] unless sent
+
+        @patterns ||= {}.compare_by_identity
+        matches = table.select do |route|
+          route[:path] && verb_answers?(route[:verb], request[:verb]) &&
+            (@patterns[route] ||= route_pattern(route[:path])).match?(sent.gsub(/#\{[^}]*\}/, "1"))
+        end
+        firm = matches.index { |route| route[:constraints].nil? && route[:condition].nil? }
+        firm ? matches.first(firm + 1) : matches
+      end
+
+      # The path a named route's helper builds, a segment standing for each argument.
+      def helper_path(name, table)
+        route = table.find { |entry| entry[:name].to_s == name && entry[:path] }
+        route && route[:path].gsub(/\([^()]*\)/, "").gsub(/[:*]\w+/, "1")
+      end
+
+      # A HEAD request goes to the GET route, and a route with no verb or `via: :all` answers any.
+      def verb_answers?(route_verb, sent)
+        verbs = route_verb.to_s.split("|")
+        verbs.empty? || verbs.include?("ANY") || verbs.include?(sent) || (sent == "HEAD" && verbs.include?("GET"))
+      end
+
+      # "/posts/:id(.:format)" as a pattern a sent path matches, its query and trailing slash aside.
+      def route_pattern(path)
+        bare = path.to_s
+        bare = bare.gsub(/\([^()]*\)/, "") while bare.match?(/\([^()]*\)/)
+        pieces = bare.split(%r{(/)}).map do |piece|
+          case piece
+          when /\A:\w+\z/ then "[^/]+"
+          when /\A\*\w+\z/ then ".+"
+          else Regexp.escape(piece)
+          end
+        end
+        %r{\A#{pieces.join.chomp("/")}/?(?:[?#].*)?\z}
+      end
 
       def sources
         @sources ||= @paths.filter_map { |path| [ path, @source[path] ] if @source[path] }
@@ -261,18 +327,19 @@ module RailsAiContext
         return true if found.described.any? { |list| resolves_to?(list, constant) }
         return true if kind == :controller && TestFramework.integration_test?(found.classes, lookup)
 
-        found.top_level.none? { |list| list.any? { |name| PathResolver.file_for_constant(@root, name) } }
+        found.top_level.none? { |written, nesting| Introspectors::DeclaredConstant.lookup(written, nesting: nesting, exists: method(:filed?)) }
       end
 
       def lookup
         @lookup ||= TestFramework.test_class_lookup(@root)
       end
 
-      # Ruby takes the first of the names that exists, so one the app declares ahead of the subject shadows it.
-      def resolves_to?(names, constant)
-        index = names.index(constant) or return false
-        names.first(index).none? { |name| PathResolver.file_for_constant(@root, name) }
+      # A constant the app declares nearer where the subject is written shadows it.
+      def resolves_to?((written, nesting), constant)
+        Introspectors::DeclaredConstant.lookup(written, nesting: nesting, exists: ->(name) { name == constant || filed?(name) }) == constant
       end
+
+      def filed?(name) = !PathResolver.file_for_constant(@root, name).nil?
 
       def subjects(path)
         @subjects[path] ||= TestFramework.test_subjects(@source[path].to_s)
@@ -412,7 +479,7 @@ module RailsAiContext
       case kind
       when :model
         Array(context[:models]&.keys).first(MAX_LAYOUT_PROBES).map do |name|
-          Payload.model_file(context, name).sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
+          Payload.model_stem(context, name)
         end
       when :controller
         Array(context.dig(:controllers, :controllers)&.keys).first(MAX_LAYOUT_PROBES)

@@ -41,10 +41,15 @@ module RailsAiContext
 
       private
 
+      # A class reopened in a pack is listed once per file; the record by name is the last one.
+      def scanned_models = @scanned_models ||= model_classes.to_a
+
+      def model_records = @model_records ||= scanned_models.to_h
+
       # One walk per model and per controller answers every macro question below.
       def model_asts
         @model_asts ||= begin
-          model_classes.map do |model_name, record|
+          scanned_models.map do |model_name, record|
             [ model_name, SourceIntrospector.walk_source(record.source, {
               devise: -> { Listeners::GenericMacroListener.new(:devise) },
               macros: Listeners::MacrosListener,
@@ -212,7 +217,7 @@ module RailsAiContext
         model_asts.each do |model_name, ast|
           next if ast[:devise].empty?
 
-          result[model_name] = ast[:devise].flat_map { |h| h[:args].map(&:to_s) } | concern_devise_modules(model_name, ast[:mixins])
+          result[model_name] = ast[:devise].flat_map { |h| h[:args].map(&:to_s) } | concern_devise_modules(model_name, model_records[model_name])
         end
 
         result
@@ -220,31 +225,20 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "detect_devise_modules_per_model")
       end
 
-      # The modules an included concern's `devise` adds to a model that calls devise
-      # itself; one under a condition (`if ENV[...]`) depends on the environment, so it is left out.
-      def concern_devise_modules(model_name, mixins)
-        Array(mixins).select { |mixin| mixin[:ancestor] }.flat_map do |mixin|
-          ConcernPaths.included_sources(root, mixin[:name], prefer: "model", within: model_name).flat_map do |source|
-            next [] unless source.include?("devise")
+      DEVISE_LISTENERS = {
+        devise: -> { Listeners::ConditionalMacroListener.new(:devise) },
+        methods: Listeners::MethodsListener,
+        mixins: Listeners::MixinsListener
+      }.freeze
 
-            # Keyed by source: which file a name resolves to depends on the including model.
-            (@concern_devise ||= {})[source] ||= unconditional_devise_modules(source)
-          end
-        end
-      end
+      # The modules an included concern's `devise` adds to a model that calls devise itself, where
+      # Ruby runs it; one under a condition (`if ENV[...]`) depends on the environment, so it is left out.
+      def concern_devise_modules(model_name, record)
+        return [] unless record
 
-      def unconditional_devise_modules(source)
-        parsed = AstCache.parse_string(source)
-        SourceIntrospector.walk_source(source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })[:devise]
-          .reject { |hit| conditional_call?(parsed, hit[:offset]) }
-          .flat_map { |hit| hit[:args].map(&:to_s) }
-      end
-
-      CONDITIONAL_NODES = [ Prism::IfNode, Prism::UnlessNode, Prism::CaseNode, Prism::DefNode ].freeze
-
-      def conditional_call?(parsed, offset)
-        line = parsed.source.line(offset)
-        parsed.value.tunnel(line, parsed.source.column(offset)).any? { |node| CONDITIONAL_NODES.any? { |kind| node.is_a?(kind) } }
+        found = ClassDeclarations.for(model_name, lookup: ->(_name) { }, keys: %i[devise], listeners: DEVISE_LISTENERS, root: root.to_s,
+                                                  prefer: "model", source: record.source, file: record.path, cache: (@devise_walks ||= {}))
+        Array(found.declarations[:devise]).select { |hit| hit[:from_concern] && !hit[:condition] }.flat_map { |hit| hit[:args].map(&:to_s) }
       end
 
       def detect_token_auth

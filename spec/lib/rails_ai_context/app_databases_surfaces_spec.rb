@@ -437,7 +437,11 @@ RSpec.describe "a model whose table the schema dump does not declare, on the sta
                        "app/models/piece.rb" => "class Piece < BaseRecord\nend\n" }, [ "Piece" ])
     ].reduce(:merge)
 
-    answers.each { |name, text| expect([ name, text[/^\*\*Table:\*\* .*$/] ]).to match([ name, a_string_matching(/\A\*\*Table:\*\* `[a-z_]+`\z/) ]) }
+    # A table a computed setting shapes is named by that setting, never guessed; one read from the migrations is not judged.
+    set_by = { "SDG::Goal" => "SDG.table_name_prefix", "Widget" => "Widget.pluralize_table_names", "Gizmo" => "Gizmo.table_name",
+               "Thing" => "ActiveRecord::Base.table_name_prefix", "Gadget" => "BaseThing.table_name", "Piece" => "BaseRecord.table_name_prefix" }
+    expect(answers.transform_values { |text| text[/^\*\*Table:\*\* .*$/] })
+      .to eq(set_by.transform_values { |setting| "**Table:** set by `#{setting}`, which the static tier did not read" }.merge("Relic" => "**Table:** `relics`"))
 
     # The innermost module that declares the prefix decides it, and a literal table_name needs no prefix.
     judged = static_answers({ "app/models/outer.rb" => "module Outer\n  def self.table_name_prefix\n    ENV.fetch(\"P\", \"o_\")\n  end\nend\n",

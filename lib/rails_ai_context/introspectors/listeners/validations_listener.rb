@@ -36,6 +36,8 @@ module RailsAiContext
             extract_secure_password(node)
           elsif node.name == :devise
             extract_devise(node)
+          elsif node.name == :enum
+            extract_enum_validate(node)
           elsif node.name.start_with?("validates_")
             # A gem's macro (`validates_date`) is still a validation the model
             # declares, listed under its own name since its kind is the gem's.
@@ -53,9 +55,9 @@ module RailsAiContext
           computed = arguments.reject { |a| a.is_a?(Prism::KeywordHashNode) || literal_string(a) }
           # Rails takes a trailing hash expression after the attributes as the
           # options (`extract_options!`): computed options, not an attribute.
-          options_source = computed.pop.slice if attributes.any? && computed.any? && computed.last.equal?(arguments.last) &&
+          options_source = filtered(computed.pop.slice) if attributes.any? && computed.any? && computed.last.equal?(arguments.last) &&
                                                  !arguments.any?(Prism::KeywordHashNode) && !computed.last.is_a?(Prism::SplatNode)
-          computed = computed.map(&:slice)
+          computed = computed.map { |arg| filtered(arg.slice) }
           # `validates :x` with no rule at all declares nothing (Rails raises).
           return if node.name == :validates && options.empty? && computed.empty? && options_source.nil? && attributes.any?
 
@@ -126,10 +128,27 @@ module RailsAiContext
                 ])
         end
 
+        # Rails 7.1's `enum :state, {...}, validate: true` runs `validates_inclusion_of :state, in: keys`,
+        # with a hash's options merged in. Keyword values (`enum :state, a: 0, validate: true`) are all values.
+        def extract_enum_validate(node)
+          name, values, options = node.arguments&.arguments
+          return unless node.receiver.nil? && name.is_a?(Prism::SymbolNode) && options.is_a?(Prism::KeywordHashNode)
+
+          validate = options.elements.find { |e| e.is_a?(Prism::AssocNode) && extract_key(e.key) == :validate }&.value
+          return unless validate.is_a?(Prism::TrueNode) || validate.is_a?(Prism::HashNode)
+
+          keys = case values
+          when Prism::HashNode then values.elements.map { |e| extract_key(e.key).to_s if e.is_a?(Prism::AssocNode) }
+          when Prism::ArrayNode then values.elements.map { |e| literal_string(e) }
+          end
+          inclusion = keys&.all? ? { in: keys } : {}
+          added(node, "enum validate: true", [ [ :inclusion, name.unescaped, inclusion.merge(validate.is_a?(Prism::HashNode) ? extract_value(validate) : {}), nil, "7.1" ] ])
+        end
+
         def added(node, macro, validators)
-          validators.each do |kind, attribute, options, before_rails|
+          validators.each do |kind, attribute, options, before_rails, since_rails|
             @results << { kind: kind.to_s, attributes: [ attribute.to_s ], options: options, added_by: macro,
-                          before_rails: before_rails, location: node.location.start_line,
+                          before_rails: before_rails, since_rails: since_rails, location: node.location.start_line,
                           confidence: confidence_for(node), owner: @owner_stack.dup }.compact
           end
         end

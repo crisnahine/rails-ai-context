@@ -414,7 +414,7 @@ module RailsAiContext
           name = parsed[:method_name]
           return nil unless name && message.match?(/undefined method/) && message.match?(/ for /) && !message.match?(NIL_RECEIVER)
 
-          defined, suggestion = receiver_methods(receiver, name, class_receiver: message.match?(/for class |:Class\b/))
+          defined, suggestion = receiver_methods(receiver, name, class_receiver: message.match?(CLASS_RECEIVER))
           subject = receiver ? "`#{receiver}`" : "The receiver"
           likely = if defined
             "#{subject} defines `#{name}` in this process, so the object that raised was not the one you expect, " \
@@ -484,9 +484,10 @@ module RailsAiContext
           model_data = models[receiver]
           return nil unless model_data.is_a?(Hash) && !model_data[:error]
 
+          class_receiver = parsed[:message].to_s.match?(CLASS_RECEIVER)
           # Booted, the loaded class is the whole answer: it carries a
           # concern's methods and a gem's, which no payload list does.
-          live = live_method_defined?(receiver, method_name)
+          live = class_receiver ? live_class_method?(receiver, method_name) : live_method_defined?(receiver, method_name)
           return nil if live == true
 
           # Otherwise a negative claim cannot be read off a partial list: a
@@ -494,16 +495,20 @@ module RailsAiContext
           # same answer that printed its definition.
           return nil if live.nil? && source_methods_missing?(model_data)
 
-          known = known_model_methods(model_data)
+          known = known_model_methods(model_data, class_receiver: class_receiver)
           # "published?" / "save!" resolve through the bare attribute name, so
           # compare without the trailing punctuation too.
           base_name = method_name.to_s.sub(/[?!=]\z/, "")
           return nil if known.include?(base_name) || known.include?(method_name.to_s)
 
           suggestion = find_closest_match(base_name, known)
-          likely = "No association/column named `#{base_name}` on #{receiver}. " \
-                   "The model defines neither an association nor an attribute with that name, " \
-                   "so the method does not exist."
+          likely = if class_receiver
+            "No scope or class method named `#{base_name}` on #{receiver}, so `#{receiver}.#{base_name}` does not exist."
+          else
+            "No association/column named `#{base_name}` on #{receiver}. " \
+              "The model defines neither an association nor an attribute with that name, " \
+              "so the method does not exist."
+          end
           likely += " Did you mean `#{suggestion}`?" if suggestion
 
           {
@@ -515,6 +520,19 @@ module RailsAiContext
               "If the data lives on another model, add the association or a delegate"
             ]
           }
+        end
+
+        CLASS_RECEIVER = /for class |:Class\b/
+
+        def live_class_method?(receiver, method_name)
+          return nil if RailsAiContext.static_tier? || !defined?(ActiveRecord::Base)
+
+          klass = Introspectors::EagerLoad.constant(receiver)
+          return nil unless klass.is_a?(Class) && klass < ActiveRecord::Base
+
+          klass.respond_to?(method_name.to_s, true)
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, nil, label: "live_class_method?")
         end
 
         def extract_receiver_class(message)
@@ -547,13 +565,18 @@ module RailsAiContext
 
         # Everything legitimately callable on the model that introspection
         # knows about: associations, table columns, and declared methods.
-        def known_model_methods(model_data)
+        # A class answers its scopes and class methods; an instance, the rest.
+        def known_model_methods(model_data, class_receiver: false)
+          if class_receiver
+            names = Array(model_data[:class_methods]).map(&:to_s)
+            names += Array(model_data[:scopes]).filter_map { |s| s.is_a?(Hash) ? (s[:name] || s["name"])&.to_s : s.to_s }
+            return names.uniq
+          end
+
           names = Array(model_data[:associations]).filter_map { |a| (a[:name] || a["name"])&.to_s }
           names += Array(model_data[:instance_methods]).map(&:to_s)
           # Uncapped, and the half of the set a display cap must never decide.
           names += Array(model_data[:source_instance_methods]).map(&:to_s)
-          names += Array(model_data[:class_methods]).map(&:to_s)
-          names += Array(model_data[:scopes]).filter_map { |s| s.is_a?(Hash) ? (s[:name] || s["name"])&.to_s : s.to_s }
 
           table = model_data[:table_name].to_s
           columns = RailsAiContext::Payload.schema_table(cached_context[:schema], table)&.dig(:columns)

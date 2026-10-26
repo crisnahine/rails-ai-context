@@ -87,7 +87,8 @@ module RailsAiContext
       # Included modules give their public methods; an extended one gives
       # the actions its class macros build with define_method, and an unread
       # one only hides class methods.
-      def read_modules(source, owner, root, names, unread, depth, sources)
+      # `offset` is the lines of the owner's file above `source`.
+      def read_modules(source, owner, root, names, unread, depth, sources, offset = 0)
         mixins = ConcernMembership.owned_by(
           SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })[:mixins], owner
         )
@@ -95,7 +96,7 @@ module RailsAiContext
           mod = mixin[:name]
           next unless ConcernMembership.candidate?(mod)
 
-          mod_source = module_source(root, mod, owner)
+          mod_source, mod_offset = module_source(root, mod, owner, mixin[:location] + offset)
           unless mixin[:ancestor]
             names.merge(built_names(mod_source)) if mod_source
             next
@@ -105,16 +106,17 @@ module RailsAiContext
           sources << mod_source
           names.merge(public_names(mod_source, nil))
           names.merge(built_names(mod_source))
-          read_modules(mod_source, mod, root, names, unread, depth + 1, sources) if depth < MODULE_DEPTH
+          read_modules(mod_source, mod, root, names, unread, depth + 1, sources, mod_offset) if depth < MODULE_DEPTH
         end
       end
 
-      def module_source(root, mod, owner)
-        source = ConcernPaths.module_source(root.to_s, mod, within: owner)
-        return source if source
+      # [the module's own source, the lines of its file above it], or nil.
+      def module_source(root, mod, owner, line)
+        slice = ConcernPaths.module_slice(root.to_s, mod, within: owner, line: line)
+        return slice if slice
 
         path = SuperclassChain.resolve_in_scope(owner, mod) { |c| PathResolver.file_for_constant(root.to_s, c) }
-        path && SafeFile.read(path)
+        (source = path && SafeFile.read(path)) && [ source, 0 ]
       end
 
       # A route that names a method is dispatched to it, `merged?` included.

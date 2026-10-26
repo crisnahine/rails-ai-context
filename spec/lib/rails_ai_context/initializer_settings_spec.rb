@@ -223,6 +223,71 @@ RSpec.describe RailsAiContext::InitializerSettings do
     expect(config.skip_tools).to include("rails_query")
   end
 
+  it "reads no copy of this gem's own source, whatever its folder is called, with ripgrep or without" do
+    copies_skipped
+    FileUtils.rm_rf(Dir.glob(File.join(@root, "*")))
+    allow(RailsAiContext::Executable).to receive(:on_path?).with("rg").and_return(false)
+    copies_skipped
+  end
+
+  def copies_skipped
+    bad ="RailsAiContext::Configuration.new.tap { |c| c.sensitive_patterns += SECRET_FILES }\n"
+    write("rails-ai-context.gemspec", "Gem::Specification.new\n")
+    write("app/models/user.rb", "class User; end\n")
+    write("lib/generators/x.rb", bad)
+    expect { apply }.not_to raise_error
+
+    File.delete(File.join(@root, "rails-ai-context.gemspec"))
+    write("vendor/forked/rails-ai-context.gemspec", "Gem::Specification.new\n")
+    write("vendor/forked/lib/x.rb", bad)
+    File.delete(File.join(@root, "lib/generators/x.rb"))
+    expect { apply }.not_to raise_error
+
+    write("lib/settings.rb", bad)
+    expect { apply }.to raise_error(RailsAiContext::ConfigurationError, %r{lib/settings\.rb:1:})
+  end
+
+  it "reads an app's own config files whatever gemspec sits beside them, and counts no linked gemspec" do
+    [ false, true ].each do |rg|
+      allow(RailsAiContext::Executable).to receive(:on_path?).with("rg").and_return(rg)
+      FileUtils.rm_rf(Dir.glob(File.join(@root, "*")))
+      write("config/initializers/a.rb", "RailsAiContext.configure do |config|\n  config.sensitive_patterns << \"config/partner_keys.yml\"\n" \
+                                        "  config.skip_tools = ENV.fetch(\"X\").split\nend\n")
+      [ "config/initializers/rails-ai-context.gemspec", "rails-ai-context.gemspec" ].each do |gemspec|
+        write(gemspec, "")
+        fresh = RailsAiContext::Configuration.new
+        result = described_class.apply(@root, fresh)
+        expect(fresh.sensitive_patterns).to include("config/partner_keys.yml"), "#{gemspec}, rg #{rg}"
+        expect(result.map { |refusal| [ refusal.file, refusal.line ] }).to eq([ [ "config/initializers/a.rb", 3 ] ]), "#{gemspec}, rg #{rg}"
+        File.delete(File.join(@root, gemspec))
+      end
+
+      write("vendor/real/rails-ai-context.gemspec", "")
+      write("vendor/forked/lib/x.rb", "RailsAiContext::Configuration.new.tap { |c| c.sensitive_patterns += SECRET_FILES }\n")
+      File.symlink(File.join(@root, "vendor/real/rails-ai-context.gemspec"), File.join(@root, "vendor/forked/rails-ai-context.gemspec"))
+      expect(described_class.boot_files(@root)).to include("vendor/forked/lib/x.rb"), "rg #{rg}"
+    end
+  end
+
+  it "lists the same files whatever ripgrep config the user's environment names" do
+    skip "requires ripgrep" unless RailsAiContext::Executable.on_path?("rg")
+
+    write("app/a.rb", "RailsAiContext.log_warn('x')\n")
+    File.symlink(File.join(@root, "app"), File.join(@root, "linked_app"))
+    plain = described_class.boot_files(@root)
+    rc = File.join(@root, "..", "#{File.basename(@root)}.rgrc")
+    File.write(rc, "--follow\n--hidden\n")
+    begin
+      saved = ENV["RIPGREP_CONFIG_PATH"]
+      ENV["RIPGREP_CONFIG_PATH"] = rc
+      expect(described_class.boot_files(@root)).to eq(plain)
+      expect(plain).to eq([ "app/a.rb" ])
+    ensure
+      ENV["RIPGREP_CONFIG_PATH"] = saved
+      File.delete(rc)
+    end
+  end
+
   it "refuses in config/ what keeps a pattern or the list where it can be changed unseen" do
     {
       "config.sensitive_patterns.each { |p| p.to_s << '.rb' }" => "sensitive_patterns",
@@ -313,7 +378,8 @@ RSpec.describe RailsAiContext::InitializerSettings do
 
   it "refuses a file that names the gem when it does not parse or is too deep to read, and does not stop" do
     write("config/initializers/rails_ai_context.rb", "RailsAiContext.configure do |config|\n  config.sensitive_patterns << (\nend\n")
-    expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /rails_ai_context\.rb:\d+: the static tier cannot read this file/)
+    expect { apply }.to raise_error(RailsAiContext::ConfigurationError,
+                                    /\Aconfig\/initializers\/rails_ai_context\.rb:\d+: this file does not parse as Ruby \(.+\), so the static tier serves nothing until it is fixed\.\z/)
 
     write("config/initializers/rails_ai_context.rb", "RailsAiContext.configure { |c| c.sensitive_patterns << #{Array.new(6000, '"a"').join(' << ')} }\n")
     expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /rails_ai_context\.rb:1: the static tier cannot read this file/)
@@ -421,12 +487,53 @@ RSpec.describe RailsAiContext::InitializerSettings do
     expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /`RailsAiContext::Configuration`/)
   end
 
+  it "names the opener a missing end leaves open, without the literal-list advice" do
+    block = "expected a block beginning with `do` to end with `end`"
+    { "RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\n" => [ 1, block ],
+      "RailsAiContext.configure do |config|\n  if ENV[\"X\"]\n    config.ai_tools = %i[claude]\n  end\n\n" => [ 1, block ],
+      "Other.configure do |o|\n  o.x = 1\nend\nRailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\n" => [ 4, block ],
+      "RailsAiContext.configure do |config|\n  config.server_name = \"x\n" => [ 2, "unterminated string meets end of file" ],
+      "RailsAiContext.configure do |config|\n  config.server_name = <<~T\n  x\n" => [ 2, "unterminated heredoc; can't find string \"T\" anywhere before EOF" ]
+    }.each do |body, (line, said)|
+      write("config/initializers/rails_ai_context.rb", body)
+
+      expect { apply }.to raise_error(RailsAiContext::ConfigurationError) { |error|
+        expect(error.message).to eq("config/initializers/rails_ai_context.rb:#{line}: this file does not parse as Ruby " \
+                                    "(#{said}), so the static tier serves nothing until it is fixed.")
+      }
+    end
+  end
+
   it "refuses a file too large to read whole when it names the gem, and passes over one that does not" do
-    stub_const("#{described_class}::MAX_SOURCE", 100)
+    stub_const("RailsAiContext::UnbootedSettings::MAX_SOURCE", 100)
     write("config/initializers/big.rb", "# #{'x' * 200}\n")
     expect { apply }.not_to raise_error
 
     write("config/initializers/rails_ai_context.rb", "# #{'x' * 200}\nRailsAiContext.configure { |c| c.sensitive_patterns << 'x.yml' }\n")
     expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /rails_ai_context\.rb:1: the static tier cannot read this file/)
+  end
+
+  it "applies the literals of every key a refused line does not touch, and none when one reaches the whole configuration" do
+    write("config/initializers/rails_ai_context.rb",
+          "RailsAiContext.configure do |config|\n  config.skip_tools = %w[rails_get_gems]\n  config.sensitive_patterns += ENV.fetch(\"X\").split\nend\n")
+    refusals = described_class.apply(@root, config)
+
+    expect(refusals.map { |refusal| [ refusal.file, refusal.line, refusal.key ] }).to eq([ [ "config/initializers/rails_ai_context.rb", 3, :sensitive_patterns ] ])
+    expect(refusals.map(&:message)).to all(start_with("config/initializers/rails_ai_context.rb:3: the static tier cannot read"))
+    expect(refusals).to all(be_a(RailsAiContext::UnbootedSettings::Refusal).and(be_stops_static))
+    expect(config.skip_tools).to include("rails_get_gems")
+
+    config.skip_tools = []
+    write("config/initializers/rails_ai_context.rb",
+          "RailsAiContext.configure do |config|\n  config.skip_tools = %w[rails_get_gems]\n  config.instance_variable_set(:@skip_tools, [])\nend\n")
+    expect(described_class.apply(@root, config).map(&:key)).to eq([ nil ])
+    expect(config.skip_tools).not_to include("rails_get_gems")
+  end
+
+  it "refuses a top-level read of a configuration constant whose contents can still change" do
+    stub_const("RailsAiContext::Configuration::LOOSE_LIST", [ %w[a] ].freeze)
+    write("config/initializers/loose.rb", "RailsAiContext::Configuration::LOOSE_LIST.first << 'b'\n")
+
+    expect { apply }.to raise_error(RailsAiContext::ConfigurationError, %r{loose\.rb:1})
   end
 end

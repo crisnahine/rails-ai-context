@@ -2,7 +2,7 @@
 
 module RailsAiContext
   module Introspectors
-    # Extracts the autoloading configuration: Zeitwerk vs Classic, custom
+    # Extracts the autoloading configuration: Zeitwerk's loaders, custom
     # inflections, autoload/eager-load paths, collapsed dirs, and ignored
     # paths. Covers RAILS_NERVOUS_SYSTEM.md §3 (Autoloading - Zeitwerk).
     class AutoloadIntrospector < Base
@@ -16,8 +16,7 @@ module RailsAiContext
         main_roots = loader_roots(:main)
         once_roots = loader_roots(:once)
         {
-          mode: detect_mode,
-          zeitwerk_available: zeitwerk_available?,
+          mode: "zeitwerk",
           autoloaders: extract_autoloaders,
           # Rails' Engine#_all_autoload_paths, plus loader roots no config lists (engines, push_dir).
           autoload_paths: relativize(config_paths(:autoload_paths) + eager - once + app_first(main_roots.keys)),
@@ -39,24 +38,11 @@ module RailsAiContext
         Array(config.respond_to?(all) ? config.public_send(all) : config.public_send(name)).map(&:to_s)
       end
 
-      def zeitwerk_available?
-        defined?(Zeitwerk) && defined?(Rails) && Rails.respond_to?(:autoloaders) && Rails.autoloaders.respond_to?(:main)
-      end
-
-      def detect_mode
-        return "zeitwerk" if zeitwerk_available?
-        return "classic" if defined?(Rails) && app.config.respond_to?(:autoloader) && app.config.autoloader == :classic
-        "unknown"
-      end
-
       # Return per-autoloader metadata: name, collapsed dirs, ignored paths.
       # Rails exposes `Rails.autoloaders.main` and `.once` by default.
       def extract_autoloaders
-        return [] unless zeitwerk_available?
-
-        %i[main once].filter_map do |kind|
-          loader = Rails.autoloaders.public_send(kind) if Rails.autoloaders.respond_to?(kind)
-          next unless loader
+        %i[main once].map do |kind|
+          loader = Rails.autoloaders.public_send(kind)
 
           entry = { name: kind.to_s }
           entry[:tag] = loader.tag.to_s if loader.respond_to?(:tag)
@@ -92,10 +78,7 @@ module RailsAiContext
       end
 
       def loader_roots(kind)
-        return {} unless zeitwerk_available? && Rails.autoloaders.respond_to?(kind)
-
-        loader = Rails.autoloaders.public_send(kind)
-        loader ? root_dirs_with_namespaces(loader) : {}
+        root_dirs_with_namespaces(Rails.autoloaders.public_send(kind))
       end
 
       # { dir => namespace name }; Zeitwerk before 2.6 has no dirs(namespaces:), but its

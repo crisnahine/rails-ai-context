@@ -37,6 +37,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
       end
     end
 
+    # Ruby resolves `include ActiveStorage::SetBlob` at its line, before `include A` makes A::ActiveStorage reachable.
+    it "lists a gem module the class includes above a module nesting a homonym as unread" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/a.rb"), "module A\n  module ActiveStorage\n    module SetBlob; end\n  end\nend\n")
+        source = "class BlobsController < ApplicationController\n  include ActiveStorage::SetBlob\n  include A\nend\n"
+        File.write(File.join(dir, "app/controllers/blobs_controller.rb"), source)
+
+        _, unread = described_class.with_concerns(source, root: dir, within: "BlobsController")
+
+        expect(unread).to eq(%w[ActiveStorage::SetBlob])
+      end
+    end
+
     it "keeps a gem macro a class nested in the file defines a class method of the same name for" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
@@ -169,6 +183,18 @@ RSpec.describe RailsAiContext::Introspectors::ControllerFilters do
         filters, = described_class.with_concerns(source, root: dir, within: "LeafController")
 
         expect(filters.map { |f| [ f[:name], f[:only] ] }).to eq([ [ "guard", [ "show" ] ] ])
+      end
+    end
+
+    # Ruby: with `class AdminController < PanelController`, AdminController::Base is PanelController::Base.
+    it "finds a base named through a class whose superclass holds it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "panel_controller"))
+        File.write(File.join(dir, "app", "controllers", "panel_controller.rb"), "class PanelController < ActionController::Base\nend\n")
+        File.write(File.join(dir, "app", "controllers", "panel_controller", "base.rb"), "class PanelController\n  class Base < ActionController::Base\n  end\nend\n")
+        File.write(File.join(dir, "app", "controllers", "admin_controller.rb"), "class AdminController < PanelController\nend\n")
+
+        expect(described_class.send(:base_source, dir, "AdminController::Base", nil)&.first).to eq("PanelController::Base")
       end
     end
 

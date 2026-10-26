@@ -27,7 +27,7 @@ module RailsAiContext
       end
 
       def table
-        model_entry&.last&.dig(:table_name) || model.tableize.tr("/", "_")
+        model_entry ? Payload.model_table(@context, model).table : MODEL.tableize
       end
 
       # The word a feature search starts from: the model's own name.
@@ -96,7 +96,7 @@ module RailsAiContext
 
       private
 
-      # The most connected model whose file the walk read and the app owns:
+      # The most connected model whose file the walk read and the app owns, and whose table is known:
       # a gem's model is no file an example should send the reader to.
       def model_entry
         return @model_entry if defined?(@model_entry)
@@ -105,7 +105,8 @@ module RailsAiContext
         schema = Payload.section(@context, :schema)
         name = Payload.models_by_connection(models).find do |candidate|
           data = models[candidate]
-          data.is_a?(Hash) && !data[:error] && !data[:file].to_s.start_with?("gem:") && !Payload.missing_table?(schema, data)
+          data.is_a?(Hash) && !data[:error] && !data[:file].to_s.start_with?("gem:") && !Payload.missing_table?(schema, data) &&
+            Payload.model_table(@context, candidate).table
         end
         @model_entry = name && [ name.to_s, models[name] ]
       end

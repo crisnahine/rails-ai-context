@@ -270,7 +270,7 @@ module RailsAiContext
     # keeps what reflection read at boot, and its answers say so once app
     # code changed (BaseTool.stale_code_note).
     def self.instructions
-      intro = "Ground truth engine for Rails apps. Live Prism AST introspection."
+      intro = "Ground truth engine for Rails apps. Live Prism AST introspection.#{served_root_note}"
       text = if CodeReloader.reloadable? || RailsAiContext.static_tier?
         "#{intro} Answers follow edits to the app's files."
       else
@@ -281,6 +281,16 @@ module RailsAiContext
       note = UpdateCheck.agent_note
       note ? "#{text} #{note}" : text
     end
+
+    # The model builds paths from the folder the session started in, which may sit above or inside this root.
+    def self.served_root_note
+      root = CLI::Refusal.utf8(RailsAiContext.default_app.root)
+      " Serving the Rails app at #{root}; file paths in answers are relative to it. " \
+        "For another app, run `rails-ai-context --app-path <dir> tool <name>`."
+    rescue StandardError
+      ""
+    end
+    private_class_method :served_root_note
 
     # Anything that still escapes a tool (schema validation bugs, SDK-level
     # failures) is named on stderr instead of vanishing into a bare JSON-RPC

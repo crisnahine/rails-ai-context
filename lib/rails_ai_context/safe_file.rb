@@ -21,10 +21,17 @@ module RailsAiContext
     # Why a path a link stopped was left, in the words every report uses.
     LINKED = "it is a symlink or behind one, which this run does not follow"
 
+    # Why a write the file's permissions refused was left, in the same words.
+    UNWRITABLE = "it could not be written - check its permissions"
+    DENIED = [ Errno::EACCES, Errno::EPERM, Errno::EROFS ].freeze
+
     # Temp file then rename, so no reader sees half a file; a link is written through only to a file inside `root`.
     def self.atomic_write(path, content, root:)
       path = link_target(path, root) if File.symlink?(path)
       refuse_outside(path, root)
+      # A rename needs only a writable folder, and read-only is how a user keeps tools off a file.
+      raise Errno::EACCES, path.to_s if File.exist?(path) && !File.writable?(path)
+
       dir = File.dirname(path)
       FileUtils.mkdir_p(dir)
       mode = File.stat(path).mode & 0o7777 if File.exist?(path)
@@ -35,6 +42,16 @@ module RailsAiContext
     rescue StandardError
       FileUtils.rm_f(tmp) if tmp
       raise
+    end
+
+    # Why atomic_write would refuse `path`, in plain words; nil when it would write.
+    def self.write_refusal(path, root:)
+      path = link_target(path, root) if File.symlink?(path)
+      refuse_outside(path, root)
+      dir = File.dirname(path)
+      "its permissions do not allow it" if (File.exist?(path) && !File.writable?(path)) || (File.directory?(dir) && !File.writable?(dir))
+    rescue LinkedOut => e
+      "#{LINKED}: #{e.message[/#{Regexp.escape(LINKED)} \((.*)\)\z/o, 1]}"
     end
 
     # Delete a file, refused like a write when a linked directory carries it
@@ -62,7 +79,19 @@ module RailsAiContext
     rescue Errno::ENOENT
       raise LinkedOut, "Left #{path} as it is - #{LINKED} (it leads nowhere)"
     rescue SystemCallError => e
-      raise LinkedOut, "Left #{path} as it is - #{LINKED} (#{e.message})"
+      # Ruby's own text repeats the absolute path.
+      raise LinkedOut, "Left #{path} as it is - #{LINKED} (#{SystemCallError.new(nil, e.errno).message.downcase})"
+    end
+
+    BOM = "\xEF\xBB\xBF".b.freeze
+
+    # A text's byte order mark ("" when it has none) and the text after it,
+    # each in the text's encoding: the mark is the file's, and goes back at
+    # its head when the file is written.
+    def self.split_bom(text)
+      return [ "", text ] unless text.byteslice(0, BOM.bytesize).b == BOM
+
+      [ text.byteslice(0, BOM.bytesize), text.byteslice(BOM.bytesize..) ]
     end
 
     # A file the gem rewrites in part, as UTF-8 whatever the locale says. One

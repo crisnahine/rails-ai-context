@@ -34,8 +34,9 @@ lib/rails_ai_context/
 2. Subclass `Introspectors::Base` (it holds `app` and `root`) and implement `#call` → returns a Hash. Let it raise: the loop in `Introspector#call` records a failed section as `{ error: msg }` and warns
 3. Register it in `lib/rails_ai_context/introspector.rb` (the `INTROSPECTOR_MAP`)
 4. `extend StaticTier` and declare one: `static_tier :files_only` if `#call` runs unchanged with nothing booted, `:runtime_only` if it needs live reflection, or `:alternate_source` plus a `static_call` reading elsewhere. A mapped introspector that declares nothing fails the suite
-5. Add the key to the appropriate preset(s) in `Configuration::PRESETS` (`:full` is the default, `:standard` for core-only)
-6. Write specs in `spec/lib/rails_ai_context/introspectors/your_introspector_spec.rb`
+5. If it opens a file outside the fingerprint's watched folders and extensions, declare `READS = %w[...]` (globs from the app root), or an edit to that file is not seen until a restart (see **READS** in `CONTEXT.md`)
+6. Add the key to the appropriate preset(s) in `Configuration::PRESETS` (`:full` is the default, `:standard` for core-only)
+7. Write specs in `spec/lib/rails_ai_context/introspectors/your_introspector_spec.rb`
 
 ## Adding a New MCP Tool
 

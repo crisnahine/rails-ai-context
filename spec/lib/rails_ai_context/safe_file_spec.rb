@@ -81,6 +81,22 @@ RSpec.describe RailsAiContext::SafeFile do
       end
     end
 
+    # A rename needs only a writable folder, so a file the user made
+    # read-only to keep tools off it was replaced anyway.
+    it "refuses a file without write permission and leaves it as it was" do
+      skip "root writes any file" if Process.uid.zero?
+
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "CLAUDE.md")
+        File.write(path, "# locked by team\n")
+        File.chmod(0o444, path)
+
+        expect { described_class.atomic_write(path, "new", root: dir) }.to raise_error(Errno::EACCES, /CLAUDE\.md/)
+        expect(File.read(path)).to eq("# locked by team\n")
+        expect(Dir.children(dir)).to eq([ "CLAUDE.md" ])
+      end
+    end
+
     it "takes no write that names no root to keep it inside" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "doc.md")
@@ -140,7 +156,7 @@ RSpec.describe RailsAiContext::SafeFile do
 
         make_unreadable(locked)
         expect { described_class.atomic_write(link, "new\n", root: dir) }
-          .to raise_error(described_class::LinkedOut, /\ALeft #{Regexp.escape(link)} as it is - #{described_class::LINKED} \(Permission denied/)
+          .to raise_error(described_class::LinkedOut, "Left #{link} as it is - #{described_class::LINKED} (permission denied)")
       ensure
         File.chmod(0o755, locked)
       end
@@ -164,12 +180,12 @@ RSpec.describe RailsAiContext::SafeFile do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "notes.md")
         File.write(path, "x\n")
-        File.chmod(0o444, path)
+        File.chmod(0o640, path)
 
         described_class.atomic_write(path, "y\n", root: dir)
 
         expect(File.read(path)).to eq("y\n")
-        expect(File.stat(path).mode & 0o777).to eq(0o444)
+        expect(File.stat(path).mode & 0o777).to eq(0o640)
       end
     end
   end

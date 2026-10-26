@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "json"
+require "prism"
+
 module RailsAiContext
   module Tools
     class MigrationAdvisor < BaseTool
@@ -82,7 +85,10 @@ module RailsAiContext
         # "Admin::ActionLog" → the table its model recorded, not the
         # `admin/action_logs` an underscore would build.
         if table.match?(/\A[A-Z]/)
-          table = RailsAiContext::Introspectors::TableName.for_model_name(table, Payload.models(cached_context))
+          answer = Payload.model_table(cached_context, table)
+          return text_response("**Error:** the table of `#{table}` is set by `#{answer.set_by}`, which the static tier did not read; pass the table name.") unless answer.table
+
+          table = answer.table
         end
 
         return text_response("**Error:** `action` is required. Valid actions: #{VALID_ACTIONS.join(', ')}") if action.empty?
@@ -132,7 +138,7 @@ module RailsAiContext
         target = false if prior.any? { |line| line.start_with?("**Warning:** Another migration is already named") }
 
         generated = case action
-        when "add_column" then generate_add_column(table, column, type, options, table_exists, target)
+        when "add_column" then generate_add_column(table, column, type, options, table_exists, target, schema)
         when "remove_column" then generate_remove_column(table, column, type, schema, models, target)
         when "rename_column" then generate_rename_column(table, column, rename_to)
         when "add_index" then generate_add_index(table, column, options)
@@ -372,13 +378,19 @@ module RailsAiContext
           "#{"RAILS_ENV=#{target[:env]} " if target && target[:env]}bin/rails generate migration #{args}#{target && target[:flag]}"
         end
 
-        def generate_add_column(table, column, type, options, table_exists, target = nil)
+        # A replay that skipped helper calls does not know the table is missing.
+        def absent_table_warning(schema, table, consequence)
+          note = RailsAiContext::Payload.skipped_calls_note(schema, table)
+          note ? "**Warning:** Table `#{table}` is not in the schema the replay built. #{note}" : "**Warning:** Table `#{table}` not found in current schema. #{consequence}"
+        end
+
+        def generate_add_column(table, column, type, options, table_exists, target = nil, schema = nil)
           return [ "**Error:** column name is required for add_column" ] unless column
           type ||= "string"
 
           lines = []
           unless table_exists
-            lines << "**Warning:** Table `#{table}` not found in current schema. Migration will fail if table doesn't exist."
+            lines << absent_table_warning(schema, table, "Migration will fail if table doesn't exist.")
             lines << ""
           end
 
@@ -433,7 +445,7 @@ module RailsAiContext
 
           table_exists = !RailsAiContext::Payload.schema_table(schema, table).nil?
           unless table_exists
-            lines << "**Warning:** Table `#{table}` not found in current schema. This migration will fail."
+            lines << absent_table_warning(schema, table, "This migration will fail.")
             lines << ""
           end
 
@@ -447,18 +459,26 @@ module RailsAiContext
           # Check if column is referenced
           col_type = find_column_type(table, column, schema) || type || "string"
 
-          lines.push("**Run:** `#{generate_command("#{class_name} #{column}:#{col_type}", target)}`", "") unless target == false
-          lines << "**Warning:** `remove_column` is irreversible without specifying the column type."
+          lines.push("**Run:** `#{generate_command("#{class_name} #{column}#{":#{col_type}" if bare_type?(col_type)}", target)}`", "") unless target == false
+          taken, warnings, lost = taken_with(table, column)
+          lines << "**Note:** `remove_column` reverses only with the column's type and options, which the line below gives."
+          lines.concat(warnings)
           lines << ""
           lines << "```ruby"
           lines << "class #{class_name} < ActiveRecord::Migration[#{rails_version}]"
           lines << "  def change"
-          lines << "    remove_column :#{table}, :#{column}, :#{col_type}#{column_options(table, column)}"
+          lines.concat(taken.map { |line| "    #{line}" })
+          lines << "    remove_column :#{table}, :#{column}, #{type_ref(col_type)}#{column_options(table, column)}"
           lines << "  end"
           lines << "end"
           lines << "```"
           lines << ""
-          lines << "**Reversible:** Only if type is specified (included above)"
+          restored = "the rollback adds the column back with its type and options, then the checks, indexes and foreign keys the up removes, as the schema shows them"
+          lines << if lost.empty?
+            "**Reversible:** Yes: #{restored}"
+          else
+            "**Reversible:** Partly: #{restored}, but not #{lost.map { |fk| "the foreign key on #{Array(fk[:column]).map { |c| "`#{c}`" }.join(", ")} to `#{fk[:to_table]}`" }.join(" or ")}"
+          end
           lines << "**Data loss:** Yes - all data in this column will be permanently deleted"
 
           if column.end_with?("_id")
@@ -786,12 +806,15 @@ module RailsAiContext
           lines << ""
           lines << "```ruby"
           lines << "class Change#{column.camelize}TypeIn#{table.camelize} < ActiveRecord::Migration[#{rails_version}]"
+          up_cast = options.to_s.include?("using:") ? "" : using(table, column, original_type, type)
           lines << "  def up"
-          lines << "    change_column :#{table}, :#{column}, :#{type}#{opts}"
+          # PostgreSQL casts the default with the column, and refuses one it cannot cast; the down sets it back.
+          lines << "    change_column_default :#{table}, :#{column}, nil" if !up_cast.empty? && current_default?(table, column)
+          lines << "    change_column :#{table}, :#{column}, #{type_ref(type)}#{opts}#{up_cast}"
           lines << "  end"
           lines << ""
           lines << "  def down"
-          lines << "    change_column :#{table}, :#{column}, :#{original_type}#{column_options(table, column)}"
+          lines << "    change_column :#{table}, :#{column}, #{type_ref(original_type)}#{column_options(table, column)}#{using(table, column, type, original_type)}"
           lines << "  end"
           lines << "end"
           lines << "```"
@@ -1033,11 +1056,177 @@ module RailsAiContext
 
           # add_index collides only with the name it would give the index; a
           # composite index containing the column is no duplicate.
-          default_name = RailsAiContext::Introspectors::SchemaConventions.default_index_name(table, [ column ])
+          default_name = RailsAiContext::Introspectors::SchemaConventions.default_index_name(
+            table, [ column ], legacy: !RailsAiContext::Introspectors::RailsVersion.at_least?(resolved_rails_version, "7.1")
+          )
           (table_data[:indexes] || []).any? { |idx|
             cols = (idx[:columns] || [ idx[:column] ].compact).map(&:to_s)
             idx[:name].to_s == default_name || (idx[:name].nil? && cols == [ column.to_s ])
           }
+        end
+
+        # What dropping the column also drops, removed first so the rollback puts it back, and the warnings that go with it:
+        # PostgreSQL drops every index and check that involves the column; MySQL and SQLite take the column out of an index's
+        # keys, dropping it only when it was the last; MySQL drops a check that names no column with any; SQLite refuses a
+        # check, a where or an expression that names the column, and MySQL an expression index.
+        def taken_with(table, column)
+          table_data = RailsAiContext::Payload.schema_table(cached_context[:schema], table) or return [ [], [], [] ]
+          fam = family(table)
+          sql = RailsAiContext::Introspectors::MigrationReplay::Statements
+          names = ->(text, name = column) { sql.sql_names?(text, name, fam.mysql? ? :mysql : :postgresql) }
+          keys = Array(table_data[:columns]).map { |c| c[:name].to_s } - [ column ]
+          warnings = referencing_keys(table, column)
+
+          fks = Array(table_data[:foreign_keys]).select { |fk| Array(fk[:column]).map(&:to_s).include?(column) }
+          indexes = Array(table_data[:indexes]).flat_map do |idx|
+            cols = Array(idx[:columns]).map(&:to_s)
+            expression = cols.any? { |key| !bare_type?(key) && names.(key) }
+            whole = Array(idx[:include]).map(&:to_s).include?(column) || expression || names.(idx[:where])
+            next [] unless whole || cols.include?(column)
+
+            left = cols - [ column ]
+            shrink = !(whole || fam.postgres_rules? || left.empty?)
+            warnings << unique_shrink_warning(idx[:name], left, fam) if shrink && idx[:unique]
+            if expression && fam.mysql?
+              warnings << "**Warning:** MySQL refuses to drop a column an expression index uses, so this removes the index `#{idx[:name]}` first; only the rollback adds it back."
+            end
+            shrunk = idx.merge(columns: left).to_h { |key, value| [ key, value.is_a?(Hash) ? value.except(column) : value ] }
+            [ index_line("remove_index", table, idx), (index_line("add_index", table, shrunk) if shrink) ].compact
+          end
+          col = Array(table_data[:columns]).find { |c| c[:name].to_s == column }
+          checks = Array(table_data[:check_constraints]).select do |c|
+            next false if mariadb_json?(table_data.merge(check_constraints: [ c ]), col) # the json type brings its own back
+
+            names.(c[:expression]) || (fam.mysql? && keys.none? { |key| names.(c[:expression], key) })
+          end
+          checks.each do |c|
+            others = keys.select { |key| names.(c[:expression], key) }
+            next if fam.postgres_rules? || others.empty? || !names.(c[:expression])
+
+            warnings << "**Warning:** the check `#{c[:name]}` (`#{c[:expression]}`) also names #{others.map { |key| "`#{key}`" }.join(", ")}: " \
+                        "MySQL, MariaDB and SQLite refuse to drop `#{column}` while it holds, so this removes the check, and the rule is gone until the rollback."
+          end
+          lost = fks.select { |fk| rails_70_composite?(fk, fam) && fam.sqlite? }
+          warnings.concat(lost.map { |fk| sqlite_composite_warning(table, column, fk) })
+          fks.each { |fk| warnings << "**Note:** `#{foreign_key_line("remove_foreign_key", table, fk)}` is written #{ASSUMED_71}." if assumed_71?(fk, fam) }
+          lines = fks.flat_map { |fk| composite_key_lines(table, fk, fam) || [ foreign_key_line("remove_foreign_key", table, fk) ] } + indexes +
+                  checks.map { |c| "remove_check_constraint :#{table}, #{c[:expression].to_s.inspect}, name: #{c[:name].to_s.inspect}#{", validate: false" if c[:validate] == false}" }
+          [ lines, warnings, lost ]
+        end
+
+        def unique_shrink_warning(name, left, fam)
+          transaction = " MySQL and MariaDB do not run DDL in a transaction, so a failure leaves the steps above it done and the migration unrecorded." if fam.mysql?
+          "**Warning:** the index `#{name}` stays unique on #{left.map { |key| "`#{key}`" }.join(", ")} alone, so its `add_index` fails on rows that share " \
+            "#{left.size == 1 ? "a value" : "values"} there.#{transaction}"
+        end
+
+        # A key on another table that points at the column holds its drop back on PostgreSQL and MySQL.
+        def referencing_keys(table, column)
+          schema = Payload.section(cached_context, :schema)
+          tables = (schema&.dig(:tables) || {}).merge(RailsAiContext::Introspectors::SchemaIntrospector.qualified_tables)
+          tables.flat_map do |other, data|
+            Array(data[:foreign_keys]).select { |fk| fk[:to_table].to_s == table && Array(fk[:primary_key]).map(&:to_s).include?(column) }.map do |fk|
+              head = "**Warning:** a foreign key on `#{other}` references `#{table}.#{column}`, so the drop fails while it holds: "
+              fam = family(other)
+              next "#{head}Rails 7.0 has no call that drops a foreign key on several columns on SQLite, so `#{other}` has to be rebuilt without it first." if rails_70_composite?(fk, fam) && fam.sqlite?
+
+              call = rails_70_composite?(fk, fam) ? "execute #{composite_key_sql(other, fk, fam).first.inspect}" : foreign_key_line("remove_foreign_key", other, fk)
+              "#{head}run #{call.include?("`") ? "`` #{call} ``" : "`#{call}`"} first#{", #{ASSUMED_71}" if assumed_71?(fk, fam)}."
+            end
+          end
+        end
+
+        def index_line(call, table, idx)
+          cols = Array(idx[:columns]).map(&:to_s)
+          target = if cols.all? { |key| bare_type?(key) }
+            cols.size == 1 ? ":#{cols.first}" : "[#{cols.map { |key| ":#{key}" }.join(", ")}]"
+          else
+            cols.join(", ").inspect
+          end
+          options = [ "name: #{idx[:name].to_s.inspect}" ]
+          options << "unique: true" if idx[:unique]
+          options << "where: #{idx[:where].to_s.inspect}" if idx[:where]
+          %i[using type].each { |key| options << "#{key}: #{ruby_symbol(idx[key])}" if idx[key] }
+          options << "include: [#{idx[:include].map { |key| ruby_symbol(key) }.join(", ")}]" if idx[:include]
+          %i[order opclass length].each do |key|
+            value = idx[key]
+            next unless value.is_a?(Hash) && !value.empty?
+
+            options << "#{key}: { #{value.map { |k, v| "#{bare_type?(k) ? "#{k}:" : "#{k.to_s.inspect} =>"} #{v.is_a?(Integer) ? v : ruby_symbol(v)}" }.join(", ")} }"
+          end
+          options << "nulls_not_distinct: true" if idx[:nulls_not_distinct]
+          "#{call} #{RailsAiContext::Introspectors::SchemaConventions.source_symbol(table)}, #{target}, #{options.join(", ")}"
+        end
+
+        ACTION_SQL = { "cascade" => "CASCADE", "nullify" => "SET NULL", "restrict" => "RESTRICT" }.freeze
+
+        # Rails 7.0 compares a key's column as a string and interpolates it into the name, so a composite key goes through SQL.
+        def composite_key_lines(table, fk, fam)
+          return unless rails_70_composite?(fk, fam)
+          return [] if fam.sqlite?
+
+          drop, add = composite_key_sql(table, fk, fam)
+          [ "# Rails 7.0's foreign key methods take one column, so this key on several goes through SQL.",
+            "reversible do |dir|", "  dir.up { execute #{drop.inspect} }", "  dir.down { execute #{add.inspect} }", "end" ]
+        end
+
+        # The SQL runs on every Rails, so an unknown one gets it on PostgreSQL and MySQL; SQLite has no such answer and takes 7.1's call.
+        def rails_70_composite?(fk, fam)
+          version = fam.sqlite? ? resolved_rails_version : rails_version
+          Array(fk[:column]).size > 1 && !RailsAiContext::Introspectors::RailsVersion.at_least?(version, "7.1")
+        end
+
+        ASSUMED_71 = "assuming Rails 7.1+ as Gemfile.lock names no Rails version; on 7.0 this call raises"
+
+        def assumed_71?(fk, fam)
+          Array(fk[:column]).size > 1 && fam.sqlite? && resolved_rails_version.nil?
+        end
+
+        # Live on 7.0.10: remove_column drops only the half of the key on the column, and the rebuild keeps the rest.
+        def sqlite_composite_warning(table, column, fk)
+          rest = Array(fk[:column]).map(&:to_s).zip(Array(fk[:primary_key]).map(&:to_s)).reject { |from, _| from == column }
+          to = fk[:to_table]
+          parents = rest.map { |_, key| "`#{to}.#{key}`" }.join(", ")
+          one = rest.size == 1
+          "**Warning:** Rails 7.0 has no call that drops the foreign key on #{Array(fk[:column]).map { |c| "`#{c}`" }.join(", ")} to `#{to}` on SQLite, " \
+            "so this leaves it to `remove_column`, which rebuilds `#{table}` keeping the key on #{rest.map { |from, _| "`#{from}`" }.join(", ")} to #{parents}. " \
+            "SQLite refuses that rebuild (foreign key mismatch) unless #{parents} #{one ? "is" : "are"} unique on #{one ? "its" : "their"} own, " \
+            "and the rollback does not put the key back as one."
+        end
+
+        # The SQL that drops and adds a key, for a Rails whose foreign key methods take one column.
+        def composite_key_sql(table, fk, fam)
+          mark = fam.mysql? ? "`" : '"'
+          ident = ->(name) { "#{mark}#{name.to_s.gsub(mark, mark * 2)}#{mark}" }
+          # A table listed under its own name is one identifier, whatever dots and quotes it holds; any other key is schema.name.
+          listed = RailsAiContext::Payload.section(cached_context, :schema)&.dig(:tables) || {}
+          quote = ->(name) { listed.key?(name) ? ident.(name) : name.to_s.split(".", 2).map(&ident).join(".") }
+          list = ->(names) { Array(names).map(&ident).join(", ") }
+          name = ident.(RailsAiContext::Introspectors::SchemaConventions.real_foreign_key_name(table, fk))
+          add = "ALTER TABLE #{quote.(table)} ADD CONSTRAINT #{name} FOREIGN KEY (#{list.(fk[:column])}) REFERENCES #{quote.(fk[:to_table])} (#{list.(fk[:primary_key])})"
+          add += " ON DELETE #{ACTION_SQL[fk[:on_delete].to_s]}" if ACTION_SQL[fk[:on_delete].to_s]
+          add += " ON UPDATE #{ACTION_SQL[fk[:on_update].to_s]}" if ACTION_SQL[fk[:on_update].to_s]
+          if fam.postgres_rules?
+            add += { "immediate" => " DEFERRABLE", "deferred" => " DEFERRABLE INITIALLY DEFERRED" }[fk[:deferrable].to_s].to_s
+            add += " NOT VALID" if fk[:validate] == false
+          end
+          [ "ALTER TABLE #{quote.(table)} #{fam.mysql? ? "DROP FOREIGN KEY" : "DROP CONSTRAINT"} #{name}", add ]
+        end
+
+        def foreign_key_line(call, table, fk)
+          options = [ "column: #{ruby_symbol(fk[:column])}" ]
+          options << "primary_key: #{ruby_symbol(fk[:primary_key])}" if fk[:primary_key] && fk[:primary_key].to_s != "id"
+          %i[on_delete on_update deferrable].each { |key| options << "#{key}: #{ruby_symbol(fk[key])}" if fk[key] }
+          options << "validate: false" if fk[:validate] == false
+          options << "name: #{fk[:name].to_s.inspect}" if fk[:name] && fk[:name].to_s != RailsAiContext::Introspectors::SchemaConventions.foreign_key_name(table, fk[:column])
+          "#{call} #{RailsAiContext::Introspectors::SchemaConventions.source_symbol(table)}, #{ruby_symbol(fk[:to_table])}, #{options.join(", ")}"
+        end
+
+        # A composite key's columns as strings: SQLite's remove_foreign_key (7.1 to 8.0) compares the array's to_s.
+        def ruby_symbol(value)
+          return value.map(&:to_s).inspect if value.is_a?(Array)
+
+          bare_type?(value) ? ":#{value}" : value.to_s.inspect
         end
 
         # The options that rebuild the column as the schema holds it: change_column replaces the whole
@@ -1047,14 +1236,82 @@ module RailsAiContext
           return "" unless col
 
           options = %i[limit precision scale].filter_map { |key| "#{key}: #{col[key]}" if col[key].is_a?(Integer) }
+          options << "precision: nil" if col.key?(:precision) && col[:precision].nil?
           options << "array: true" if col[:array]
           options << "null: false" if col[:null] == false
-          default = col[:default].to_s
-          # The dump writes a boolean or number default as its literal, any other as a string (type_cast_for_schema).
-          literal = default.start_with?("-> {") ||
-                    (%w[boolean integer bigint float].include?(col[:type].to_s) && default.match?(/\A(?:true|false|-?\d+(?:\.\d+)?)\z/))
-          options << "default: #{literal ? default : default.inspect}" unless col[:default].nil?
+          options << "default: #{default_literal(col)}" unless col[:default].nil?
+          options << "enum_type: #{col[:enum_type].to_s.inspect}" if col[:enum_type]
+          options << "unsigned: true" if col[:unsigned]
+          options << "size: :#{col[:size]}" if %w[tiny medium long].include?(col[:size].to_s)
+          options << "collation: #{col[:collation].inspect}" if col[:collation].is_a?(String)
+          options << "comment: #{col[:comment].inspect}" if col[:comment].is_a?(String)
           options.map { |option| ", #{option}" }.join
+        end
+
+        # The dump writes a boolean or number default as its literal, an array's or a json column's as the Ruby array or
+        # hash, and any other as a string (type_cast_for_schema).
+        def default_literal(col)
+          default = col[:default].to_s
+          # The connection reads a json default as JSON text, where null is no Ruby literal.
+          return json_literal(default) || default.inspect if %w[json jsonb].include?(col[:type].to_s) && !ruby_literal?(default)
+
+          literal = default.start_with?("-> {") ||
+                    (%w[boolean integer bigint float].include?(col[:type].to_s) && default.match?(/\A(?:true|false|-?\d+(?:\.\d+)?)\z/)) ||
+                    ((col[:array] || %w[json jsonb].include?(col[:type].to_s)) && ruby_literal?(default))
+          literal ? default : default.inspect
+        end
+
+        def json_literal(text)
+          value = JSON.parse(text)
+          value.inspect if value.is_a?(Hash) || value.is_a?(Array)
+        rescue JSON::ParserError
+          nil
+        end
+
+        LITERAL_NODES = [ Prism::ArrayNode, Prism::HashNode, Prism::AssocNode, Prism::StringNode, Prism::SymbolNode, Prism::IntegerNode,
+                          Prism::FloatNode, Prism::TrueNode, Prism::FalseNode, Prism::NilNode ].freeze
+
+        # Whether text is one Ruby array or hash of plain values, which the migration can hold as written.
+        def ruby_literal?(text)
+          return false unless text.start_with?("[", "{")
+
+          result = RailsAiContext::AstCache.parse_string(text)
+          body = result.value.statements.body
+          return false unless result.errors.empty? && body.size == 1
+
+          plain = ->(node) { LITERAL_NODES.any? { |kind| node.is_a?(kind) } && node.compact_child_nodes.all?(&plain) }
+          plain.(body.first)
+        end
+
+        # A type a migration names by symbol, or one SQL spells (an enum's values, a size) as the string the dumper writes.
+        def type_ref(type)
+          bare_type?(type) ? ":#{type}" : type.to_s.inspect
+        end
+
+        def bare_type?(type)
+          type.to_s.match?(/\A[a-z_][a-z0-9_]*\z/)
+        end
+
+        # PostgreSQL types a change_column's using: casts to; it casts any type to text by itself.
+        PG_CASTS = {
+          "integer" => "integer", "bigint" => "bigint", "float" => "double precision", "decimal" => "numeric", "boolean" => "boolean",
+          "date" => "date", "datetime" => "timestamp", "timestamp" => "timestamp", "timestamptz" => "timestamptz", "time" => "time",
+          "json" => "json", "jsonb" => "jsonb", "uuid" => "uuid", "inet" => "inet"
+        }.freeze
+
+        def current_default?(table, column)
+          col = Array(RailsAiContext::Payload.schema_table(cached_context[:schema], table)&.dig(:columns)).find { |c| c[:name] == column }
+          !col.nil? && !col[:default].nil?
+        end
+
+        # PostgreSQL refuses to cast a column to most types without USING, a string to an integer among them.
+        def using(table, column, from, to)
+          cast = PG_CASTS[to.to_s]
+          col = Array(RailsAiContext::Payload.schema_table(cached_context[:schema], table)&.dig(:columns)).find { |c| c[:name] == column }
+          return "" unless cast && from.to_s != to.to_s && !col&.dig(:array) && family(table).postgresql?
+
+          name = RailsAiContext::Introspectors::PgNaming.quote_ident(column)
+          ", using: #{"#{name}::#{cast}".inspect}"
         end
 
         def find_column_type(table, column, schema)
@@ -1062,7 +1319,17 @@ module RailsAiContext
           return nil unless table_data
 
           col = (table_data[:columns] || []).find { |c| c[:name] == column }
+          return "json" if mariadb_json?(table_data, col)
+
           col[:type] if col
+        end
+
+        # MariaDB keeps a json column as a longtext the dump shows with a json_valid check named after the column.
+        def mariadb_json?(table_data, col)
+          !col.nil? && col[:type].to_s == "text" &&
+            Array(table_data[:check_constraints]).any? do |c|
+              c[:name].to_s == col[:name].to_s && c[:expression].to_s == "json_valid(`#{col[:name].to_s.gsub("`", "``")}`)"
+            end
         end
 
         # The superclass names the app's Rails, not the gem's. A standalone
@@ -1080,7 +1347,8 @@ module RailsAiContext
         def resolved_rails_version
           from_context = major_minor(cached_context[:rails_version])
           return from_context if from_context
-          return major_minor(Rails.version) if defined?(Rails) && Rails.respond_to?(:version)
+          # The static tier runs inside the gem's own bundle, whose Rails is not the app's.
+          return major_minor(Rails.version) if !RailsAiContext.static_tier? && defined?(Rails) && Rails.respond_to?(:version)
 
           nil
         rescue => e
@@ -1099,10 +1367,21 @@ module RailsAiContext
         # The family of the database that holds the table, since locking advice differs by family.
         # An undecided database is no family and gets advice that names no database.
         def family(table)
-          return RailsAiContext::DatabaseFamily.of(cached_context.dig(:schema, :adapter).to_s) if on_primary?(table)
+          return primary_family if on_primary?(table)
 
           held_in = Payload.schema_databases(Payload.section(cached_context, :schema), table)
           RailsAiContext::AppDatabases.for(rails_app.root)[held_in.first]&.family || RailsAiContext::DatabaseFamily.of(nil)
+        end
+
+        # The connection's family; the static tier's schema names none, so database.yml's for the primary.
+        def primary_family
+          adapter = cached_context.dig(:schema, :adapter).to_s
+          found = RailsAiContext::DatabaseFamily.of(adapter)
+          return found unless adapter == "static_parse"
+
+          RailsAiContext::AppDatabases.for(rails_app.root).primary&.family || found
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, found, label: "primary_family")
         end
 
         # A table no database holds yet goes to the primary. Another database can carry the name "primary".

@@ -130,14 +130,28 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       connection&.drop_table(:app_schema_migrations_v1, if_exists: true)
     end
 
+    # SQLite keeps text(70000) and blob(100) as declared, and its schema.rb writes the limit; only MySQL's dumper leaves a text's out.
+    it "keeps a SQLite text or blob column's limit, as schema.rb does" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:sized_blobs, force: true) do |t|
+        t.text :body, limit: 70_000
+        t.binary :raw, limit: 100
+      end
+      columns = introspector.send(:extract_columns, "sized_blobs").to_h { |c| [ c[:name], c[:limit] ] }
+      expect(columns.values_at("body", "raw")).to eq([ 70_000, 100 ])
+    ensure
+      connection&.drop_table(:sized_blobs, if_exists: true)
+    end
+
     # MySQL keeps a boolean default as 1; schema.rb and the static tier write true.
     it "spells a boolean column's default true or false, as schema.rb does" do
       connection = ActiveRecord::Base.connection
       connection.create_table(:boolean_defaults, force: true) { |t| t.boolean :flag, default: true }
       column = connection.columns(:boolean_defaults).find { |c| c.name == "flag" }
-      expect(introspector.send(:boolean_default, column)).to eq("true")
+      expect(introspector.send(:extract_columns, "boolean_defaults").find { |c| c[:name] == "flag" }[:default]).to eq("true")
       stored_as_zero = column.dup.tap { |c| c.instance_variable_set(:@default, "0") }
-      expect(introspector.send(:boolean_default, stored_as_zero)).to eq("false")
+      allow(connection).to receive(:columns).with("boolean_defaults").and_return([ stored_as_zero ])
+      expect(introspector.send(:extract_columns, "boolean_defaults").first[:default]).to eq("false")
     ensure
       connection&.drop_table(:boolean_defaults, if_exists: true)
     end
@@ -389,7 +403,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         end
       end
 
-      # ActiveRecord::Schema[4.2] runs Compatibility::V4_2, whose timestamps allow NULL; 5.0 makes them NOT NULL.
+      # ActiveRecord::Schema[4.2] runs Compatibility::V4_2, whose timestamps allow NULL and have no precision; 5.0 makes them NOT NULL.
       it "reads t.timestamps in a Schema[4.2] file as nullable, as its compatibility layer loads them" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "db"))
@@ -403,7 +417,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
           columns = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["heroes"][:columns]
 
-          expect(columns.drop(1)).to eq([ { name: "created_at", type: "datetime" }, { name: "updated_at", type: "datetime" } ])
+          expect(columns.drop(1)).to eq([ { name: "created_at", type: "datetime", precision: nil }, { name: "updated_at", type: "datetime", precision: nil } ])
         end
       end
 
@@ -488,7 +502,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         metadata = double(sql_type: "character varying[]")
         column = double(name: "tags", type: :string, null: true, default: '{a,"b c"}', limit: nil, precision: nil,
                         scale: nil, comment: nil, collation: nil, sql_type: "character varying[]", array?: true, sql_type_metadata: metadata)
-        allow(ActiveRecord::Base.connection).to receive(:columns).with("pa_v_things").and_return([ column ])
+        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: [ column ], native_database_types: {}, adapter_name: "PostgreSQL"))
 
         expect(introspector.send(:extract_columns, "pa_v_things"))
           .to eq([ { name: "tags", type: "string", null: true, default: '["a", "b c"]', array: true } ])
@@ -507,6 +521,17 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         defaults = introspector.send(:extract_columns, "la").to_h { |c| [ c[:name], c[:default] ] }
 
         expect(defaults).to eq("sd" => "2", "se" => "2.0", "a1" => "[1, nil]", "a2" => "[1.0, 2.5]", "a3" => '["2"]')
+      end
+
+      # PostgreSQL 17 and Rails 8.0: schema.rb writes an interval(3) with precision: 3, and cannot dump a type Rails does not know.
+      it "keeps an interval's precision, and reads a type the connection does not know as an empty name" do
+        columns = [ [ "d", :interval, "interval(3)", 3 ], [ "g", nil, "compo", nil ] ].map do |name, type, sql_type, precision|
+          double(name: name, type: type, null: true, default: nil, default_function: nil, limit: nil, precision: precision, scale: nil,
+                 comment: nil, collation: nil, sql_type: sql_type, array?: false)
+        end
+        allow(introspector).to receive(:connection).and_return(double("postgresql", columns: columns, native_database_types: {}, primary_key: "id"))
+
+        expect(introspector.send(:extract_columns, "t")).to eq([ { name: "d", type: "interval", null: true, precision: 3 }, { name: "g", type: "", null: true } ])
       end
 
       # PostgreSQL's dumper writes a function default, and leaves out only a serial column's own sequence.
@@ -556,6 +581,15 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2"))
 
         expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "body", type: "text", null: true, size: "medium" } ])
+      end
+
+      # MySQL 9.6's tinyblob reads limit 255, and Rails 8.0's dump writes it `t.binary "raw", size: :tiny`.
+      it "leaves out a MySQL blob's limit, which its size says" do
+        column = double(name: "raw", type: :binary, null: true, default: nil, default_function: nil, limit: 255, precision: nil,
+                        scale: nil, comment: nil, collation: nil, sql_type: "tinyblob", array?: false)
+        allow(introspector).to receive(:connection).and_return(double("mysql2", columns: [ column ], native_database_types: {}, adapter_name: "Mysql2"))
+
+        expect(introspector.send(:extract_columns, "pa_v_posts")).to eq([ { name: "raw", type: "binary", null: true, size: "tiny" } ])
       end
 
       # Rails 8.0's PostgreSQL dumper writes nulls_not_distinct: true on a unique constraint (schema_dumper.rb:71).
@@ -620,6 +654,33 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(introspector.send(:extract_indexes, "pa_v_people"))
           .to eq([ { name: "idx_lower_email", columns: [ "lower((email)::text)", "id" ], unique: true } ])
+      end
+
+      # PostgreSQL lists the index behind a unique or exclusion constraint among a table's indexes; the dumper writes the constraint alone
+      # (indexes_in_create, 7.1 to 8.1).
+      it "leaves out the index a unique or exclusion constraint owns" do
+        index = ->(name) { double(name: name, columns: [ "n" ], unique: false, where: nil, using: :btree, type: nil, orders: {}, opclasses: {}, lengths: {}) }
+        pg = double("postgresql", indexes: %w[uniq_n excl_n index_things_on_n].map { |name| index.(name) },
+                                  unique_constraints: [ double(name: "uniq_n") ], supports_unique_constraints?: true,
+                                  exclusion_constraints: [ double(name: "excl_n") ], supports_exclusion_constraints?: true)
+        allow(introspector).to receive(:connection).and_return(pg)
+
+        expect(introspector.send(:extract_indexes, "things").map { |idx| idx[:name] }).to eq(%w[index_things_on_n])
+
+        # Rails 7.0 has neither method.
+        old = double("postgresql", indexes: [ index.("uniq_n") ])
+        allow(introspector).to receive(:connection).and_return(old)
+
+        expect(introspector.send(:extract_indexes, "things").map { |idx| idx[:name] }).to eq(%w[uniq_n])
+      end
+
+      # CONTRIBUTING: an introspector lets a failure raise, so the loop in Introspector#call records it rather than the section going missing.
+      it "lets a failing exclusion constraint read raise" do
+        pg = double("postgresql", supports_exclusion_constraints?: true)
+        allow(pg).to receive(:exclusion_constraints).and_raise(ActiveRecord::StatementInvalid, "permission denied")
+        allow(introspector).to receive(:connection).and_return(pg)
+
+        expect { introspector.send(:table_exclusion_constraints, "things") }.to raise_error(ActiveRecord::StatementInvalid, /permission denied/)
       end
 
       it "extracts columns with normalized types" do
@@ -699,7 +760,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           { name: "index_products_on_store_id", columns: [ "store_id" ], unique: false }
         )
         expect(products[:foreign_keys]).to eq(
-          [ { from_table: "products", to_table: "stores", column: "store_id", primary_key: "id" } ]
+          [ { from_table: "products", to_table: "stores", column: "store_id", primary_key: "id", name: "fk_rails_123abc" } ]
         )
       end
     end
@@ -857,6 +918,47 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:check_constraints]).to include(a_hash_including(table: "orders", expression: "quantity > 0"))
         expect(result[:check_constraints]).to include(a_hash_including(table: "users", expression: "age >= 18"))
       end
+    end
+
+    # Rails 8.0's schema.rb on PostgreSQL 17 for a table with two exclusion constraints.
+    context "with exclusion constraints in schema.rb" do
+      before do
+        allow(introspector).to receive(:active_record_connected?).and_return(false)
+        FileUtils.mkdir_p(File.join(fixture_path, "db"))
+        File.write(File.join(fixture_path, "db", "schema.rb"), <<~SCHEMA)
+          ActiveRecord::Schema[8.0].define(version: 2026_01_01_000001) do
+            create_table "things", force: :cascade do |t|
+              t.integer "n"
+              t.tsrange "during"
+              t.integer "room"
+
+              t.exclusion_constraint "n WITH =", using: :gist, name: "excl_n"
+              t.exclusion_constraint "room WITH =, during WITH &&", where: "room > 0", using: :gist, deferrable: :deferred, name: "no_overlap"
+            end
+          end
+        SCHEMA
+      end
+
+      after { FileUtils.rm_rf(File.join(fixture_path, "db")) }
+
+      it "lists them on their table" do
+        expect(introspector.call[:tables]["things"][:exclusion_constraints]).to eq(
+          [ { name: "excl_n", expression: "n WITH =", using: "gist" },
+          { name: "no_overlap", expression: "room WITH =, during WITH &&", using: "gist", where: "room > 0", deferrable: "deferred" } ]
+        )
+      end
+    end
+
+    # Rails 8.0 on PostgreSQL 17 reads each as an ExclusionConstraintDefinition; it leaves out an excl_rails_ name it made up.
+    it "reads the connection's exclusion constraints as schema.rb writes them" do
+      constraints = [ double(name: "no_overlap", expression: "room WITH =", options: { using: :gist, where: "room > 0", deferrable: :deferred }, export_name_on_schema_dump?: true),
+                      double(name: "excl_rails_1", expression: "n WITH =", options: { using: :gist }, export_name_on_schema_dump?: false) ]
+      connection = double("postgresql", supports_exclusion_constraints?: true, adapter_name: "PostgreSQL")
+      allow(connection).to receive(:exclusion_constraints).with("things").and_return(constraints)
+      allow(introspector).to receive(:connection).and_return(connection)
+      expect(introspector.send(:table_exclusion_constraints, "things")).to eq(
+        [ { name: "no_overlap", expression: "room WITH =", using: "gist", where: "room > 0", deferrable: "deferred" }, { expression: "n WITH =", using: "gist" } ]
+      )
     end
 
     context "with enum types in schema.rb" do
@@ -1070,6 +1172,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         RUBY
 
         expect(introspector.call[:note]).to include("1 migration helper call not replayed")
+        expect(introspector.call[:skipped_calls]).to eq([ "db/migrate/20250101000006_use_helper.rb:4" ])
       ensure
         FileUtils.rm_rf(File.join(fixture_path, "lib", "acme"))
       end
@@ -1185,7 +1288,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         allow(RailsAiContext::Introspectors::PgPartitions).to receive(:names).and_return([ "pa_p_events_2026" ])
         allow(connection).to receive(:foreign_keys).and_call_original
         allow(connection).to receive(:foreign_keys).with("pa_p_refs").and_return(
-          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil, deferrable: nil, validate?: true) }
+          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil, deferrable: nil, validate?: true,
+                                                                   name: "fk_rails_0123456789") }
         )
 
         keys = introspector.call[:tables]["pa_p_refs"][:foreign_keys]
@@ -1521,6 +1625,102 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:secondary_databases].keys).to eq([ "queue" ])
         expect(result[:secondary_databases]["queue"][:tables].keys).to eq([ "jobs" ])
         expect(result[:secondary_databases]["queue"][:note]).to include("db/queue_migrate")
+        expect([ result, result[:secondary_databases]["queue"] ].map { |db| db.keys & %i[enum_types check_constraints generated_columns] }).to eq([ [], [] ])
+      end
+    end
+
+    it "says it assumed MySQL's key order where MariaDB would remove another key, and only then" do
+      migration = lambda do |user_key, editor_key|
+        "class CreatePosts < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users\n    create_table :posts do |t|\n      " \
+          "t.bigint :user_id\n      t.bigint :editor_id\n    end\n    add_foreign_key :posts, :users, name: \"#{user_key}\"\n    " \
+          "add_foreign_key :posts, :users, column: :editor_id, name: \"#{editor_key}\"\n    remove_foreign_key :posts, :users\n  end\nend\n"
+      end
+      note = lambda do |user_key, editor_key, adapter: "mysql2", server: nil|
+        allow(RailsAiContext::DatabaseFamily).to receive(:established_mysql_server).and_return(server)
+        Dir.mktmpdir do |dir|
+          write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: #{adapter}\n  database: app\n",
+                         "db/migrate/20240101000000_create_posts.rb" => migration.(user_key, editor_key))
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:note]
+        end
+      end
+      assumed = "1 table whose remove_foreign_key with no column took the key MySQL lists first (assuming MySQL; MariaDB lists another first)"
+
+      expect(note.("fk_a", "fkb")).to include(assumed)
+      expect(note.("fk1", "fk_a")).not_to include("assuming MySQL")
+      expect(note.("fk_a", "fkb", server: :mariadb)).not_to include("assuming MySQL")
+      expect(note.("fk_a", "fkb", server: :mysql)).not_to include("assuming MySQL")
+      expect(note.("fk_a", "fkb", adapter: "postgresql")).not_to include("assuming MySQL")
+    end
+
+    it "says it assumed MySQL's key order for a secondary database's replay, as for the primary's" do
+      migration = "class CreateJobs < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users\n    create_table :jobs do |t|\n      " \
+                  "t.bigint :user_id\n      t.bigint :editor_id\n    end\n    add_foreign_key :jobs, :users, name: \"fk_a\"\n    " \
+                  "add_foreign_key :jobs, :users, column: :editor_id, name: \"fkb\"\n    remove_foreign_key :jobs, :users\n  end\nend\n"
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  primary:\n    adapter: mysql2\n    database: app\n" \
+                                                "  queue:\n    adapter: mysql2\n    database: queue\n    migrations_paths: db/queue_migrate\n",
+                       "db/migrate/20240101000000_create_users.rb" => "class CreateUsers < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users\n  end\nend\n",
+                       "db/queue_migrate/20240101000000_create_jobs.rb" => migration)
+
+        note = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"][:note]
+
+        expect(note).to include("1 table whose remove_foreign_key with no column took the key MySQL lists first (assuming MySQL; MariaDB lists another first)")
+      end
+    end
+
+    # validate_foreign_key exists on PostgreSQL alone; MySQL, MariaDB and SQLite raise NoMethodError (activerecord 7.0.10 to 8.1.4, live).
+    it "does not say it assumed MySQL's key order for a validate_foreign_key" do
+      migration = "class CreatePosts < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users\n    create_table :posts do |t|\n      " \
+                  "t.bigint :user_id\n      t.bigint :editor_id\n    end\n    add_foreign_key :posts, :users, name: \"fk_a\"\n    " \
+                  "add_foreign_key :posts, :users, column: :editor_id, name: \"fkb\"\n    validate_foreign_key :posts, :users\n  end\nend\n"
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: mysql2\n  database: app\n",
+                       "db/migrate/20240101000000_create_posts.rb" => migration)
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:note]).not_to include("assuming MySQL")
+      end
+    end
+
+    it "lists the enum types and check constraints a PostgreSQL app's migrations make when it has no dump" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  database: app\n",
+                       "db/migrate/20240101000000_create_moods.rb" => "class CreateMoods < ActiveRecord::Migration[8.0]\n  def change\n    " \
+                                                                       "create_enum :mood, %w[happy meh]\n    create_table :people do |t|\n      " \
+                                                                       "t.enum :mood, enum_type: :mood\n      " \
+                                                                       "t.check_constraint \"mood IS NOT NULL\", name: \"has_mood\"\n    end\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:enum_types]).to eq([ { name: "mood", values: %w[happy meh] } ])
+        expect(result[:tables]["people"][:columns].last).to include(type: "enum", enum_type: "mood")
+        expect(result[:check_constraints]).to eq([ { table: "people", name: "has_mood", expression: "mood IS NOT NULL" } ])
+      end
+    end
+
+    it "lists the enum types, checks and generated columns a secondary database's migrations make when it has no dump" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, "config/database.yml" => <<~YAML,
+                    #{RailsAiContext.environment_name}:
+                      primary:
+                        adapter: postgresql
+                        database: app
+                      queue:
+                        adapter: postgresql
+                        database: queue
+                        migrations_paths: db/queue_migrate
+                  YAML
+                       "db/migrate/20240101000000_create_posts.rb" => create_posts,
+                       "db/queue_migrate/20240101000000_create_jobs.rb" => "class CreateJobs < ActiveRecord::Migration[8.0]\n  def change\n    " \
+                                                                            "create_enum :state, %w[new done]\n    create_table :jobs do |t|\n      " \
+                                                                            "t.enum :state, enum_type: :state\n      t.integer :n\n      " \
+                                                                            "t.virtual :twice, type: :integer, as: \"n * 2\", stored: true\n      " \
+                                                                            "t.check_constraint \"n > 0\", name: \"n_pos\"\n    end\n  end\nend\n")
+
+        queue = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:secondary_databases]["queue"]
+
+        expect(queue[:enum_types]).to eq([ { name: "state", values: %w[new done] } ])
+        expect(queue[:check_constraints]).to eq([ { table: "jobs", name: "n_pos", expression: "n > 0" } ])
+        expect(queue[:generated_columns].map { |c| c.slice(:table, :column) }).to eq([ { table: "jobs", column: "twice" } ])
       end
     end
 
@@ -1994,6 +2194,53 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(result[:extensions]).to eq([ "citext" ])
     end
 
+    it "keeps a foreign key's name where it is not Rails' default, and a check's validate: false in both of Rails' dump forms" do
+      default = RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("users", "owner_id")
+      expect(default).to eq("fk_rails_#{Digest::SHA256.hexdigest("users_owner_id_fk")[0, 10]}")
+      tables = static_tables(<<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 1) do
+          create_table "owners", force: :cascade do |t|
+          end
+          create_table "users", force: :cascade do |t|
+            t.bigint "owner_id"
+            t.bigint "boss_id"
+            t.integer "qty"
+            t.check_constraint "qty > 0", name: "k_pos", validate: false
+            t.check_constraint "qty < 9", name: "k_small"
+          end
+          add_foreign_key "users", "owners", name: "#{default}"
+          add_foreign_key "users", "owners", column: "boss_id", name: "fk_boss"
+          add_check_constraint "users", "qty <> 5", name: "k_five", validate: false
+        end
+      RUBY
+      expect(tables["users"][:foreign_keys].map { |fk| fk[:name] }).to eq([ nil, "fk_boss" ])
+      expect(tables["users"][:check_constraints]).to eq([ { name: "k_pos", expression: "qty > 0", validate: false }, { name: "k_small", expression: "qty < 9" },
+                                                         { name: "k_five", expression: "qty <> 5", validate: false } ])
+    end
+
+    it "reads a foreign key's name and a check's validate: false off the connection" do
+      connection = ActiveRecord::Base.connection
+      connection.create_table(:pa_n_items, force: true) { |t| t.integer :qty }
+      allow(connection).to receive(:foreign_keys).and_call_original
+      allow(connection).to receive(:foreign_keys).with("pa_n_items").and_return(
+        [ "fk_custom", RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("pa_n_items", "owner_id") ].map do |name|
+          double(from_table: "pa_n_items", to_table: "owners", column: "owner_id", primary_key: "id", on_delete: nil, on_update: nil, deferrable: nil, validate?: true, name: name)
+        end
+      )
+      allow(connection).to receive(:check_constraints).and_call_original
+      allow(connection).to receive(:check_constraints).with("pa_n_items").and_return(
+        [ ActiveRecord::ConnectionAdapters::CheckConstraintDefinition.new("pa_n_items", "qty > 0", name: "k_late", validate: false) ]
+      )
+      allow(connection).to receive(:supports_check_constraints?).and_return(true)
+
+      table = introspector.call[:tables]["pa_n_items"]
+
+      expect(table[:foreign_keys].map { |fk| fk[:name] }).to eq([ "fk_custom", nil ])
+      expect(table[:check_constraints]).to eq([ { name: "k_late", expression: "qty > 0", validate: false } ])
+    ensure
+      connection.drop_table(:pa_n_items, if_exists: true)
+    end
+
     # The booted tier reads the connection and the static tier reads what Rails
     # dumps from that same connection, so a table must come out the same.
     it "gives the booted answer the static tier reads from the dump of the same table" do
@@ -2320,6 +2567,102 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       RUBY
 
       expect(tables["docs_fts"]).to include(kind: "virtual_table", module: "fts5", columns: [ { name: "title" }, { name: "body" } ])
+    end
+
+    it "lists a virtual table's columns from a dump whatever way they are quoted" do
+      arguments = [ %q("ti""tle"), %q("my, body"), "plain", "body2 UNINDEXED", "`bt`", "[br ack]", %q('sq''x'), %q("q" UNINDEXED), %q(tokenize="porter unicode61") ]
+      expected = [ "ti\"tle", "my, body", "plain", "body2", "bt", "br ack", "sq'x", "q" ]
+
+      sql = static_of("structure.sql", %(CREATE TABLE "docs" ("id" integer);\nCREATE VIRTUAL TABLE docs_fts USING fts5(#{arguments.join(", ")});\n))[:tables]
+      rb = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_virtual_table "docs_fts", "fts5", #{arguments.inspect}
+        end
+      RUBY
+
+      expect(sql["docs_fts"][:columns].map { |c| c[:name] }).to eq(expected)
+      expect(rb["docs_fts"][:columns].map { |c| c[:name] }).to eq(expected)
+    end
+
+    it "keeps precision: nil on a datetime schema.rb writes it for, and a precision it gives" do
+      tables = static_of("schema.rb", <<~RUBY)[:tables]
+        ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+          create_table "docs", force: :cascade do |t|
+            t.datetime "bare"
+            t.datetime "none", precision: nil
+            t.datetime "fine", precision: 3
+            t.time "clock", precision: nil
+            t.timestamps precision: nil
+          end
+        end
+      RUBY
+
+      precisions = tables["docs"][:columns].to_h { |c| [ c[:name], c.key?(:precision) ? c[:precision] : :default ] }
+      expect(precisions).to eq("id" => :default, "bare" => :default, "none" => nil, "fine" => 3, "clock" => :default, "created_at" => nil, "updated_at" => nil)
+    end
+
+    # ActiveRecord::Schema[x.y].define runs Compatibility::V<x_y> like a migration (activerecord 7.0.10 to 8.1.4, live).
+    it "reads a datetime a schema.rb of Rails 6.1 or older writes with no precision as nil, and timestamps of 5.2 or older" do
+      schema = lambda do |stamp|
+        static_of("schema.rb", "ActiveRecord::Schema[#{stamp}].define(version: 1) do\n  create_table \"docs\", force: :cascade do |t|\n    " \
+                               "t.datetime \"at\"\n    t.datetime \"fine\", precision: 6\n    t.timestamps\n  end\nend\n")[:tables]["docs"][:columns]
+          .to_h { |c| [ c[:name], c.key?(:precision) ? c[:precision] : :default ] }.slice("at", "fine", "created_at")
+      end
+
+      expect(schema.("5.2")).to eq("at" => nil, "fine" => :default, "created_at" => nil)
+      expect(schema.("6.1")).to eq("at" => nil, "fine" => :default, "created_at" => :default)
+      expect(schema.("7.0")).to eq("at" => :default, "fine" => :default, "created_at" => :default)
+    end
+
+    it "keys a table with an odd name by that name on structure.sql, schema.rb and the replay alike" do
+      sql = %(CREATE TABLE public."my-table" (id bigint NOT NULL);\nCREATE TABLE public."my table" (id bigint NOT NULL);\nCREATE TABLE public."q""t" (id bigint NOT NULL);\n)
+      rb = %(ActiveRecord::Schema[7.0].define(version: 1) do\n  create_table "my-table" do |t|\n  end\n  create_table "my table" do |t|\n  end\n  create_table "q\\"t" do |t|\n  end\nend\n)
+      replay = %(class M < ActiveRecord::Migration[7.0]\n  def change\n    create_table "my-table"\n    create_table "my table"\n    create_table 'q"t'\n  end\nend\n)
+      keys = lambda do |files|
+        Dir.mktmpdir do |dir|
+          files.merge("config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  database: app\n").each do |path, body|
+            FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+            File.write(File.join(dir, path), body)
+          end
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables].keys.sort
+        end
+      end
+      expected = [ "my table", "my-table", 'q"t' ]
+
+      expect(keys.("db/structure.sql" => sql)).to eq(expected)
+      expect(keys.("db/schema.rb" => rb)).to eq(expected)
+      expect(keys.("db/migrate/20240101000000_m.rb" => replay)).to eq(expected)
+    end
+
+    it "marks a static read of an app that sets SchemaDumper.fk_ignore_pattern, which only a boot can apply" do
+      sql = "CREATE TABLE public.users (id bigint NOT NULL);\n"
+      read = lambda do |files|
+        Dir.mktmpdir do |dir|
+          { "db/structure.sql" => sql, "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  database: app\n" }.merge(files).each do |path, body|
+            FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+            File.write(File.join(dir, path), body)
+          end
+          described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        end
+      end
+
+      expect(read.("config/initializers/d.rb" => "ActiveRecord::SchemaDumper.fk_ignore_pattern = /\\Atmp_/\n")).to include(fk_ignore_pattern_unread: true)
+      expect(read.({})).not_to have_key(:fk_ignore_pattern_unread)
+    end
+
+    # Live on PostgreSQL 16: the dumper leaves a name of fk_rails_ and ten hex digits out, whatever column it hashed.
+    it "leaves out a structure.sql foreign key name the dumper hides, though it no longer hashes to the column" do
+      sql = <<~SQL
+        CREATE TABLE public.users (id bigint NOT NULL);
+        CREATE TABLE public.posts (id bigint NOT NULL, writer_id bigint, editor_id bigint);
+        ALTER TABLE ONLY public.posts ADD CONSTRAINT fk_rails_f868b47f6a FOREIGN KEY (writer_id) REFERENCES public.users(id);
+        ALTER TABLE ONLY public.posts ADD CONSTRAINT my_editor_fk FOREIGN KEY (editor_id) REFERENCES public.users(id);
+      SQL
+
+      keys = static_of("structure.sql", sql)[:tables]["posts"][:foreign_keys].to_h { |fk| [ fk[:column], fk[:name] ] }
+
+      expect(keys).to eq("writer_id" => nil, "editor_id" => "my_editor_fk")
+      expect(static_of("structure.sql", sql)[:tables]["posts"][:foreign_keys].first).to include(actual_name: "fk_rails_f868b47f6a")
     end
 
     it "lists a table the dumper could not describe, with its reason" do
@@ -2875,6 +3218,44 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       expect(rb["bare"]).to eq(kind: "view", columns: [], indexes: [], foreign_keys: [])
       expect(rb["loose"][:columns]).to eq([])
       expect(sql.keys).to eq(%w[docs plain])
+    end
+
+    # SQLite's PRAGMA table_info lists these columns: a quoted name may hold a quote, a space or a comma, and may be
+    # written in double quotes, backticks, single quotes or brackets; UNINDEXED follows a bare or quoted name.
+    it "lists a SQLite virtual table's columns whatever way they are quoted" do
+      connection = ActiveRecord::Base.connection
+      connection.execute(%q(CREATE VIRTUAL TABLE fts_quoted USING fts5("ti""tle", "my, body", plain, body2 UNINDEXED, `bt`, [br ack], 'sq''x', "q" UNINDEXED, tokenize="porter unicode61")))
+      listed = connection.select_rows("PRAGMA table_info(fts_quoted)").map { |row| row[1] }
+
+      tables = introspector.send(:add_live_relations, {})
+
+      expect(tables["fts_quoted"][:columns].map { |c| c[:name] }).to eq(listed)
+      expect(listed).to eq([ "ti\"tle", "my, body", "plain", "body2", "bt", "br ack", "sq'x", "q" ])
+    ensure
+      connection.execute("DROP TABLE IF EXISTS fts_quoted")
+    end
+
+    # SQLite reads a bare datetime with no precision and datetime(6) with 6; schema.rb writes the first as precision: nil.
+    it "reads a booted datetime with no precision as precision: nil and one with 6 as the default" do
+      connection = ActiveRecord::Base.connection
+      connection.execute("CREATE TABLE prec_probe (a datetime, b datetime(6), c datetime(3), d time)")
+      allow(introspector).to receive(:connection).and_return(connection)
+
+      precisions = introspector.send(:extract_columns, "prec_probe").to_h { |c| [ c[:name], c.key?(:precision) ? c[:precision] : :default ] }
+
+      expect(precisions).to eq("a" => nil, "b" => :default, "c" => 3, "d" => :default)
+    ensure
+      connection.execute("DROP TABLE IF EXISTS prec_probe")
+    end
+
+    # Live on PostgreSQL 16 with activerecord 7.0.10 and 8.1.4: select_value of current_schemas(false) is the array's text,
+    # {"my \"s","a,b","back\\slash",public}, while the unnested rows are the names.
+    it "reads the search path of a connection whose schema names hold a comma, a quote and a backslash" do
+      connection = double("pg")
+      allow(connection).to receive(:select_values).with(/unnest\(current_schemas\(false\)\)/).and_return([ 'my "s', "a,b", "back\\slash", "public" ])
+      allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
+
+      expect(introspector.send(:live_search_path)).to eq([ 'my "s', "a,b", "back\\slash", "public" ])
     end
 
     it "tells PostgreSQL's materialized views apart and leaves out an extension's views" do
@@ -3517,15 +3898,15 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
   describe "the booted connection's search path and out-of-path tables" do
     it "reads the search path by SQL, which every Rails version runs" do
       connection = double("pg")
-      allow(connection).to receive(:select_value).with("SELECT current_schemas(false)").and_return("{app,public}")
+      allow(connection).to receive(:select_values).with(/unnest\(current_schemas\(false\)\)/).and_return(%w[app public])
       allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
 
       expect(introspector.send(:live_search_path)).to eq(%w[app public])
     end
 
-    it "takes a decoded array and leaves public alone out" do
+    it "leaves public alone out" do
       connection = double("pg")
-      allow(connection).to receive(:select_value).with("SELECT current_schemas(false)").and_return(%w[public])
+      allow(connection).to receive(:select_values).with(/unnest\(current_schemas\(false\)\)/).and_return(%w[public])
       allow(introspector).to receive_messages(connection: connection, adapter_name: "PostgreSQL")
 
       expect(introspector.send(:live_search_path)).to be_nil

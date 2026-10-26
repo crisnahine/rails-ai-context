@@ -18,6 +18,79 @@ RSpec.describe RailsAiContext::PathResolver do
     paths.each { |p| FileUtils.mkdir_p(File.join(@root, p)) }
   end
 
+  describe ".declared_roots" do
+    def declare(*lines)
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      body = lines.map { |line| "    #{line}\n" }.join
+      File.write(File.join(@root, "config/application.rb"), "module Shop\n  class Application < Rails::Application\n#{body}  end\nend\n")
+    end
+
+    it "drops a root that is bundled gems, node_modules, tmp or log, or sits under bundled code, and keeps one holding a bundle" do
+      mkdirs("vendor/bundle/ruby/3.3.0/gems/x/lib", "node_modules/p", "tmp/cache", "log", "lib_static", "app/models")
+      declare('config.autoload_paths << Rails.root.join("vendor")', 'config.autoload_paths << "#{root}/tmp"',
+              'config.autoload_paths << "#{root}/log"', 'config.eager_load_paths << "#{root}/node_modules/p"',
+              'config.autoload_paths << "#{root}/vendor/bundle/ruby"', 'config.autoload_paths << "#{root}/lib_static"')
+      RailsAiContext.configuration.excluded_paths = [ "generated" ]
+
+      # vendor is not excluded here, so it is watched, its bundle pruned (PathResolver.pruned?).
+      expect(described_class.declared_roots(@root)).to eq([ File.join(@root, "vendor"), File.join(@root, "lib_static") ])
+      expect(described_class.pruned?(@root, File.join(@root, "vendor/bundle"), dir: true)).to be(true)
+      expect(RailsAiContext::Fingerprinter.watched_dirs(@root).map { |dir| dir.delete_prefix("#{@root}/") }).to contain_exactly("app", "config", "vendor", "lib_static")
+    ensure
+      RailsAiContext.configuration.excluded_paths = RailsAiContext::Configuration.new.excluded_paths
+    end
+
+    it "looks in a root that is excluded or sits under vendor, tmp or log, and watches none of them" do
+      mkdirs("vendor/engines/billing/lib", "tmp/cache", "log/archive", "generated/code", "lib_static", "app/models")
+      declare('config.autoload_paths << Rails.root.join("vendor/engines/billing/lib")', 'config.autoload_paths << "#{root}/tmp/cache"',
+              'config.autoload_paths << "#{root}/log/archive"', 'config.autoload_paths << "#{root}/generated/code"',
+              'config.autoload_paths << "#{root}/lib_static"')
+      RailsAiContext.configuration.excluded_paths = [ "generated" ]
+      unwatched = %w[vendor/engines/billing/lib tmp/cache log/archive generated/code].map { |dir| File.join(@root, dir) }
+
+      expect(described_class.declared_roots(@root)).to eq(unwatched + [ File.join(@root, "lib_static") ])
+      expect(described_class.unwatched_roots(@root)).to eq(unwatched)
+      expect(RailsAiContext::Fingerprinter.watched_dirs(@root).map { |dir| dir.delete_prefix("#{@root}/") }).to contain_exactly("app", "config", "lib_static")
+    ensure
+      RailsAiContext.configuration.excluded_paths = RailsAiContext::Configuration.new.excluded_paths
+    end
+
+    it "watches a path gem's lib unless it is excluded or sits under vendor, tmp or log, as for a declared root" do
+      mkdirs("app/models", "vendor/engines/billing/lib", "gems/shared/lib")
+      File.write(File.join(@root, "vendor/engines/billing/billing.gemspec"), "Gem::Specification.new { |s| s.name = 'billing' }\n")
+      File.write(File.join(@root, "gems/shared/shared.gemspec"), "Gem::Specification.new { |s| s.name = 'shared' }\n")
+      File.write(File.join(@root, "Gemfile.lock"), "PATH\n  remote: vendor/engines/billing\n  specs:\n    billing (0.1)\n\nPATH\n  remote: gems/shared\n  specs:\n    shared (0.1)\n\n")
+      root = File.realpath(@root)
+
+      expect(described_class.path_gem_libs(root)).to eq([ File.join(root, "gems/shared/lib"), File.join(root, "vendor/engines/billing/lib") ])
+      expect(described_class.unwatched_roots(root)).to eq([ File.join(root, "vendor/engines/billing/lib") ])
+      expect(RailsAiContext::Fingerprinter.watched_dirs(root)).to include(File.join(root, "gems/shared/lib"))
+      expect(RailsAiContext::Fingerprinter.watched_dirs(root)).not_to include(File.join(root, "vendor/engines/billing/lib"))
+    end
+
+    it "reads the excluded paths each time they change, with no reset between" do
+      mkdirs("generated/code", "lib_static")
+      declare('config.autoload_paths << "#{root}/generated/code"', 'config.autoload_paths << "#{root}/lib_static"')
+      RailsAiContext.configuration.excluded_paths = [ "generated" ]
+      described_class.declared_roots(@root)
+
+      RailsAiContext.configuration.excluded_paths = []
+      expect(described_class.declared_roots(@root)).to eq([ File.join(@root, "generated/code"), File.join(@root, "lib_static") ])
+      expect(RailsAiContext::Fingerprinter.watched_dirs(@root)).to include(File.join(@root, "generated/code"))
+    ensure
+      RailsAiContext.configuration.excluded_paths = RailsAiContext::Configuration.new.excluded_paths
+    end
+
+    it "takes a root declared before its folder exists once the folder is made, still inside the app" do
+      mkdirs("app/models")
+      declare('config.autoload_paths << "#{root}/lib_more"', 'config.autoload_paths << "#{root}/../outside"')
+      expect(described_class.declared_roots(@root)).to eq([])
+
+      mkdirs("lib_more")
+      expect(described_class.declared_roots(@root)).to eq([ File.join(@root, "lib_more") ])
+    end
+  end
+
   describe ".test_root" do
     it "is the engine's root for a test/dummy with no suite of its own, else the app's" do
       dummy = File.join(@root, "test", "dummy")
@@ -534,6 +607,35 @@ RSpec.describe RailsAiContext::PathResolver do
       File.binwrite(File.join(@root, "config/initializers/broken.rb"), "push_dir(\xFF\xFE \n".b)
 
       expect(described_class.file_for_constant(@root, "Components::Base")).to be_nil
+    end
+
+    it "resolves a namespaced name only to a file that declares it" do
+      FileUtils.mkdir_p(File.join(@root, "app/models/billing"))
+      File.write(File.join(@root, "app/models/billing/invoice.rb"), "class Invoice\nend\n")
+      File.write(File.join(@root, "app/models/billing/refund.rb"), "module Billing\n  class Refund\n  end\nend\n")
+
+      expect(described_class.file_for_constant(@root, "Billing::Invoice")).to be_nil
+      expect(described_class.file_for_constant(@root, "Billing::Refund")).to eq(File.join(@root, "app/models/billing/refund.rb"))
+    end
+
+    it "expands a literal Dir glob in an autoload path to the folders it matches" do
+      FileUtils.mkdir_p(File.join(@root, "config"))
+      FileUtils.mkdir_p(File.join(@root, "app/models/billing"))
+      File.write(File.join(@root, "app/models/billing/invoice.rb"), "class Invoice\nend\n")
+      File.write(File.join(@root, "app/models/billing/readme.md"), "x")
+      application = ->(line) { "module Shop\n  class Application < Rails::Application\n    #{line}\n  end\nend\n" }
+      invoice = File.join(@root, "app/models/billing/invoice.rb")
+
+      [ 'config.autoload_paths += Dir["#{config.root}/app/models/**/"]', "config.autoload_paths += Dir.glob(Rails.root.join('app', 'models', '{**}'))",
+        'config.autoload_paths += Dir["app/models/*/"]' ].each do |line|
+        File.write(File.join(@root, "config/application.rb"), application.call(line))
+        described_class.clear_code_roots
+        expect(described_class.file_for_constant(@root, "Invoice")).to eq(invoice), line
+        expect(described_class.autoload_roots(@root).map { |dir| dir.delete_prefix("#{@root}/") }).to include("app/models/billing"), line
+      end
+      File.write(File.join(@root, "config/application.rb"), application.call("config.autoload_paths += Dir[ENV['ROOTS']]"))
+      described_class.clear_code_roots
+      expect(described_class.file_for_constant(@root, "Invoice")).to be_nil
     end
   end
 end

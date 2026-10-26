@@ -121,9 +121,9 @@ module RailsAiContext
 
                 lines << "- **#{set}:**"
                 entries.each do |entry_name, attrs|
-                  attr_str = attrs.map { |k, v| "#{k}: #{erb_shown(v)}" }.join(", ")
+                  attr_str = attrs.map { |k, v| "#{k}: #{RailsAiContext::ConfigYaml.shown(v)}" }.join(", ")
                   label = if RailsAiContext::ConfigYaml.marked?(entry_name.to_s)
-                    "`#{erb_shown(entry_name)}` _(label set by ERB)_"
+                    "`#{RailsAiContext::ConfigYaml.shown(entry_name)}` _(label set by ERB)_"
                   else
                     "`#{entry_name}`"
                   end
@@ -190,10 +190,6 @@ module RailsAiContext
         RailsAiContext::PathResolver.test_root(rails_app.root.to_s)
       end
 
-      private_class_method def self.erb_shown(text)
-        RailsAiContext::ConfigYaml.shown(text)
-      end
-
       private_class_method def self.shown(rel)
         RailsAiContext::PathResolver.suite_relative(rails_app.root.to_s, rel)
       end
@@ -219,8 +215,7 @@ module RailsAiContext
         when :model
           # The spec mirrors the model's own path, which a pack or an engine
           # moves out from under app/models.
-          RailsAiContext::Payload.model_file(cached_context, name)
-            .sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
+          RailsAiContext::Payload.model_stem(cached_context, name)
         else
           name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
         end
@@ -663,7 +658,7 @@ module RailsAiContext
 
         parsed_fixtures.each do |file, entries|
           entries.each do |entry_name, attrs|
-            entry_name = erb_shown(entry_name)
+            entry_name = RailsAiContext::ConfigYaml.shown(entry_name)
             attrs.each do |key, value|
               # An id ERB computes names no row we can see.
               next if RailsAiContext::ConfigYaml.marked?(value)

@@ -865,6 +865,106 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
   end
 
+  describe "a second controller declared in the same file" do
+    it "takes the skip its body declares off that controller alone" do
+      Dir.mktmpdir("action-filters-sibling") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/billing"))
+        File.write(File.join(dir, "app/controllers/billing/base_controller.rb"), <<~RUBY)
+          module Billing
+            class BaseController < ActionController::API
+              before_action :auth_token
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/billing/things_controller.rb"), <<~RUBY)
+          module Billing
+            class ThingsController < BaseController
+              def index; end
+            end
+
+            class OtherThingsController < ThingsController
+              skip_before_action :auth_token
+              def show; end
+            end
+          end
+        RUBY
+
+        payload = RailsAiContext::Introspectors::ControllerIntrospector
+          .new(RailsAiContext::StaticApp.new(dir)).static_call
+        ctx = { controllers: payload }
+
+        expect(described_class.for(ctx, "Billing::ThingsController", "index", root: dir)[:skipped]).to eq([])
+        whole_file = File.read(File.join(dir, "app/controllers/billing/things_controller.rb"))
+        expect(described_class.for(ctx, "Billing::ThingsController", "index", source: whole_file, root: dir)[:skipped]).to eq([])
+        expect(described_class.for(ctx, "Billing::OtherThingsController", "show", root: dir)[:skipped]).to eq(%w[auth_token])
+      end
+    end
+
+    # Inside `module Shop`, `< BaseController` is Shop::BaseController, so `guard` runs its class method, not the top-level base's.
+    it "runs a class method of the parent named from the module the class is written in" do
+      Dir.mktmpdir("action-filters-nested-parent") do |dir|
+        {
+          "app/controllers/base_controller.rb" => "class BaseController < ActionController::Base\n  def self.guard = before_action(:top_auth)\nend\n",
+          "app/controllers/shop/base_controller.rb" => "module Shop\n  class BaseController < ActionController::Base\n    def self.guard = before_action(:shop_auth)\n  end\nend\n",
+          "app/controllers/shop/orders_controller.rb" => "module Shop\n  class OrdersController < BaseController\n    guard\n    def index; end\n  end\nend\n"
+        }.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, relative)))
+          File.write(File.join(dir, relative), body)
+        end
+
+        payload = RailsAiContext::Introspectors::ControllerIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        index = described_class.for({ controllers: payload }, "Shop::OrdersController", "index", root: dir)
+
+        expect(index[:chain].map { |f| f[:name] }).to eq(%w[shop_auth])
+      end
+    end
+
+    # Ruby reads `include Guard` through the class's ancestors before the top level, and the parent's include puts Social there.
+    it "reads an include through the modules the parent mixes in, before the top level" do
+      Dir.mktmpdir("action-filters-inherited-scope") do |dir|
+        {
+          "app/controllers/application_controller.rb" => "class ApplicationController < ActionController::Base\n  include Social\nend\n",
+          "app/controllers/concerns/social.rb" => "module Social\n  extend ActiveSupport::Concern\n\n  module Guard\n    extend ActiveSupport::Concern\n    included do\n      before_action :inner_guard\n    end\n  end\nend\n",
+          "app/controllers/concerns/guard.rb" => "module Guard\n  extend ActiveSupport::Concern\n  included do\n    before_action :top_guard\n  end\nend\n",
+          "app/controllers/posts_controller.rb" => "class PostsController < ApplicationController\n  include Guard\n  def index; end\nend\n"
+        }.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, relative)))
+          File.write(File.join(dir, relative), body)
+        end
+
+        payload = RailsAiContext::Introspectors::ControllerIntrospector
+          .new(RailsAiContext::StaticApp.new(dir)).static_call
+        index = described_class.for({ controllers: payload }, "PostsController", "index", root: dir)
+
+        expect(index[:own].map { |f| f[:name] }).to eq(%w[inner_guard])
+      end
+    end
+
+    it "reads a parent the listing leaves out from its own class body alone" do
+      Dir.mktmpdir("action-filters-base-sibling") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        File.write(File.join(dir, "app/controllers/application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :auth_token
+          end
+
+          class PublicController < ApplicationController
+            skip_before_action :auth_token
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/posts_controller.rb"), "class PostsController < ApplicationController\n  def index; end\nend\n")
+
+        payload = RailsAiContext::Introspectors::ControllerIntrospector
+          .new(RailsAiContext::StaticApp.new(dir)).static_call
+        ctx = { controllers: payload.merge(controllers: payload[:controllers].except("ApplicationController", "PublicController")) }
+
+        index = described_class.for(ctx, "PostsController", "index", root: dir)
+        expect(index[:skipped]).to eq([])
+        expect(index[:inherited].map { |f| f[:name] }).to include("auth_token")
+      end
+    end
+  end
+
   # Every other example that reaches this module hands it a payload written
   # by hand, so a rename of a key the booted walk writes would pass. Real
   # constants, because `#call` rejects a class whose `name` is not the

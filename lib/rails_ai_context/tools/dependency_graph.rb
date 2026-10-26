@@ -216,7 +216,8 @@ module RailsAiContext
             visited.add(current)
 
             edges = graph[current] || []
-            subgraph[current] = edges
+            # A polymorphic name or a class no model defines is reached, but is no model.
+            subgraph[current] = edges if graph.key?(current)
 
             edges.each do |edge|
               queue << [ edge[:target], d + 1 ] unless visited.include?(edge[:target])

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../managed_block"
+
 module RailsAiContext
   module Serializers
     # Shared writer that wraps content in `<!-- BEGIN/END rails-ai-context -->`
@@ -11,8 +13,8 @@ module RailsAiContext
     # marker contract everywhere - a user can hand-write content above or below
     # the gem-managed block and it'll persist across `rails ai:context` runs.
     module SectionMarkerWriter
-      BEGIN_MARKER = "<!-- BEGIN rails-ai-context -->"
-      END_MARKER   = "<!-- END rails-ai-context -->"
+      BEGIN_MARKER = RailsAiContext::ManagedBlock::BEGIN_MARKER
+      END_MARKER   = RailsAiContext::ManagedBlock::END_MARKER
 
       # Both markers are non-blank lines of the managed block, so the compact budget counts them.
       MARKER_LINES = 2
@@ -21,11 +23,7 @@ module RailsAiContext
       # nothing new still put a diff in a repo that commits its context files.
       GENERATED_LINE = /^> Generated: .*\n/
 
-      BLOCK = /#{Regexp.escape(BEGIN_MARKER)}.*?#{Regexp.escape(END_MARKER)}(?:\r?\n)?/m
-
-      # Why a run left a file alone: with a marker lost, or a second block
-      # pasted in, nothing says where the gem's block ends.
-      UNPAIRED = "unpaired rails-ai-context marker, left as it is"
+      UNPAIRED = RailsAiContext::ManagedBlock::UNPAIRED
 
       # Inside a file somebody else wrote, the note claims the block rather
       # than the whole file, as Install::Cleanup::GENERATED_NOTE does.
@@ -48,7 +46,7 @@ module RailsAiContext
       end
 
       def generated_whole?(text)
-        markers(text) == :none && text.match?(Install::Cleanup::GENERATED_LINE)
+        ManagedBlock.state(text) == :none && text.match?(Install::Cleanup::GENERATED_LINE)
       end
 
       # A file the gem owns whole, rewritten only when it says something else.
@@ -65,53 +63,27 @@ module RailsAiContext
         atomic_write(filepath, content, root)
       end
 
-      # Write `content` to `filepath` wrapped in markers. If the file already
-      # exists with markers, replace only the marker block (preserving user
-      # content outside). If the file exists WITHOUT markers, prepend the
-      # marker block so AI tools read our context first while keeping the
-      # user's prior content intact below. A file whose markers do not pair
-      # up is not written: replacing a guess at the block could take the
-      # user's text, and prepending a new one duplicated the old for good.
+      # Write `content` to `filepath` as its managed block (ManagedBlock.replace):
+      # the old block replaced, or a first one prepended so AI tools read the
+      # context first, the user's text kept around it. A file whose markers
+      # do not pair up is not written.
       #
       # Returns :written if the file changed (created or block updated),
       # :skipped if the file already had the exact same marker block,
       # :unpaired if its markers do not pair up, :linked_out if it is a link
-      # out of `root`.
+      # out of `root`, :unwritable if its permissions refuse the write.
       def write_with_markers(filepath, content, root:)
-        marked_content = "#{BEGIN_MARKER}\n#{content}\n#{END_MARKER}\n"
+        return atomic_write(filepath, ManagedBlock.replace("", content), root) unless File.exist?(filepath)
 
-        if File.exist?(filepath)
-          # Read as UTF-8 whatever the locale: a C locale tagged it US-ASCII,
-          # and the first non-ASCII character stopped the rewrite. A file that
-          # is no UTF-8 keeps its bytes, and the block joins them as bytes.
-          existing = RailsAiContext::SafeFile.read_text(filepath)
-          marked_content = in_line_endings_of(existing, marked_content)
-          marked_content = marked_content.b if existing.encoding == Encoding::BINARY
+        # Read as UTF-8 whatever the locale: a C locale tagged it US-ASCII,
+        # and the first non-ASCII character stopped the rewrite. A file that
+        # is no UTF-8 keeps its bytes, and the block joins them as bytes.
+        existing = RailsAiContext::SafeFile.read_text(filepath)
+        new_content = ManagedBlock.replace(existing, content)
+        return :unpaired unless new_content
+        return :skipped if same_but_for_timestamp?(existing, new_content)
 
-          new_content = case markers(existing)
-          # A block, so a backslash in the content is not read as a backreference.
-          when :pair then existing.sub(BLOCK) { marked_content }
-          when :none then "#{marked_content}#{crlf?(existing) ? "\r\n" : "\n"}#{existing}"
-          else return :unpaired
-          end
-
-          return :skipped if same_but_for_timestamp?(existing, new_content)
-
-          atomic_write(filepath, new_content, root)
-        else
-          atomic_write(filepath, marked_content, root)
-        end
-      end
-
-      # :pair for one BEGIN marker before one END marker, :none for neither,
-      # :unpaired for anything else: a lone marker, two blocks, END first.
-      def markers(text)
-        begins = text.scan(BEGIN_MARKER).size
-        ends = text.scan(END_MARKER).size
-        return :none if begins.zero? && ends.zero?
-        return :pair if begins == 1 && ends == 1 && text.index(BEGIN_MARKER) < text.index(END_MARKER)
-
-        :unpaired
+        atomic_write(filepath, new_content, root)
       end
 
       # Files a write's outcome under the bucket a context run reports it in.
@@ -121,6 +93,7 @@ module RailsAiContext
         when :skipped then result[:skipped] << filepath
         when :unpaired then result[:not_applicable][filepath] = UNPAIRED
         when :linked_out then result[:not_applicable][filepath] = RailsAiContext::SafeFile::LINKED
+        when :unwritable then result[:not_applicable][filepath] = RailsAiContext::SafeFile::UNWRITABLE
         end
         result
       end
@@ -129,11 +102,7 @@ module RailsAiContext
       # on Windows ends its lines in CRLF, and a block in LF beside them
       # mixed the two and left a blank line under END on every run.
       def in_line_endings_of(existing, text)
-        crlf?(existing) ? text.gsub(/\r?\n/, "\r\n") : text
-      end
-
-      def crlf?(text)
-        text.include?("\r\n")
+        existing.include?("\r\n") ? text.gsub(/\r?\n/, "\r\n") : text
       end
 
       def same_but_for_timestamp?(existing, candidate)
@@ -146,6 +115,8 @@ module RailsAiContext
         :written
       rescue RailsAiContext::SafeFile::LinkedOut
         :linked_out
+      rescue *RailsAiContext::SafeFile::DENIED
+        :unwritable
       end
     end
   end

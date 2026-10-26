@@ -70,13 +70,7 @@ module RailsAiContext
       # A filter this body declares is its own, whatever an ancestor declares
       # as well. The runtime tier's list also carries names it only inherits,
       # and those are the ones that move: they carry no `declared` mark.
-      # An ActiveSupport::Concern an ancestor already includes does not run again, so its filters stay the ancestor's.
-      inherited_here = lambda do |f|
-        next false unless declared_on.key?(entry_key(f))
-
-        !f[:declared] || (f[:from_concern] && declared_on[entry_key(f)][:from_concern] == f[:from_concern] &&
-                          runs_once?(f[:from_concern], root, controller_name))
-      end
+      inherited_here = ->(f) { declared_on.key?(entry_key(f)) && !f[:declared] }
       own = mark_conditional_skips(applicable.reject(&inherited_here), conditions, action)
       # The runtime tier's list is the whole chain: once the body, every ancestor and every module
       # they mix in were read, a name none of them declares was installed from outside it (a gem's on_load).
@@ -266,7 +260,7 @@ module RailsAiContext
         depth += 1
         info = controllers[name]
         path = info.is_a?(Hash) ? nil : base_controller_path(name, root)
-        source = path && SafeFile.read(path)
+        source = path && own_class_source(path, name)
         if source
           info ||= { filters: base_filters(source, name, root), file: PortablePath.relativize(path, (root || default_root).to_s),
                      parent_class: Introspectors::DeclaredConstant.parent_declaration(source, name.to_s)&.superclass }
@@ -417,7 +411,7 @@ module RailsAiContext
     # introspector carried - never a path derived from the class name. A file
     # SafePath refuses (too large, unreadable, gone) skips nothing.
     def skip_source_records(ctx, controller_name, action, root: nil, source: nil)
-      source ||= carried_source(ctx, controller_name, root)
+      source = source ? Introspectors::DeclaredConstant.own_source(source, controller_name) : carried_source(ctx, controller_name, root)
       return [] unless source
 
       skip_records(source).select { |skip| applies?(skip, action) }
@@ -434,7 +428,16 @@ module RailsAiContext
     # so a gem-owned parent, or one an inflection renames, still ends the walk.
     def base_controller_source(name, root)
       path = base_controller_path(name, root)
-      path && SafeFile.read(path)
+      path && own_class_source(path, name)
+    end
+
+    # A file can declare more than one controller, and a skip in one body is no other's.
+    # Every controller under a base asks for it, so a run reads it once.
+    def own_class_source(path, name)
+      RunCache.fetch([ :own_class_source, path.to_s, name.to_s ]) do
+        source = SafeFile.read(path)
+        source && Introspectors::DeclaredConstant.own_source(source, name)
+      end
     end
 
     def base_controller_path(name, root)
@@ -467,19 +470,6 @@ module RailsAiContext
       RailsAiContext.debug_fail(e, nil, label: "ActionFilters gem_controller_base")
     end
 
-    # ActiveSupport::Concern skips a re-include; a plain module's `self.included` runs on each.
-    # A module whose file is not found is taken for a concern.
-    def runs_once?(name, root, within)
-      root ||= default_root
-      source = root && ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within.to_s)
-      return true unless source
-
-      RunCache.fetch([ :concern_module, source ]) do
-        Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins]
-          .any? { |mixin| mixin[:macro] == :extend && mixin[:name] == "ActiveSupport::Concern" }
-      end
-    end
-
     # The last value the initializers set; :computed when it is not a string literal.
     def configured_base(root, setting)
       PathResolver.initializer_paths(root).filter_map do |path|
@@ -509,7 +499,7 @@ module RailsAiContext
       root ||= default_root
       return nil unless root
 
-      SafeFile.read(File.join(root.to_s, file))
+      own_class_source(File.join(root.to_s, file), controller_name)
     end
 
     # The reader the listing uses, so a skip carries the same only:/except:/if:/unless: and the
@@ -526,7 +516,7 @@ module RailsAiContext
                          :skip_records, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :runs_once?, :run_sequence,
+                         :unplaced_conditional_skips, :evidence_skips, :configured_base, :run_sequence,
                          :base_controller_path, :number_blocks, :unnumbered
   end
 end

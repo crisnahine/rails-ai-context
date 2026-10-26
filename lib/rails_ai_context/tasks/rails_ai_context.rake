@@ -89,21 +89,13 @@ module RailsAiContext::RakeTasks
     )
   end unless method_defined?(:install_surface, false)
 
-  def prompt_ai_tools
-    RailsAiContext::Install::Program.select_ai_tools(install_surface)
-  end unless method_defined?(:prompt_ai_tools, false)
-
-  def prompt_setup
-    RailsAiContext::Install::Program.select_setup(install_surface)
-  end unless method_defined?(:prompt_setup, false)
-
   def say_conflict(key, status)
     _level, text = RailsAiContext::Install::SelectionRecord.conflict_message(key, status)
     puts "⚠️  #{text}" if text
   end unless method_defined?(:say_conflict, false)
 
   # Each returns the line's write status (:updated, :inserted, :unchanged,
-  # :conflict, :absent), so the run can name the initializer when it moved.
+  # :conflict, :absent, :unparsed), so the run can name the initializer when it moved.
   def save_tool_mode_to_initializer(mode)
     status = RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
     say_conflict(:tool_mode, status)
@@ -144,15 +136,18 @@ module RailsAiContext::RakeTasks
   # user's Rails config: rewriting it unasked would renormalize their line and
   # drop any key this version does not recognise. `initializer_moved:` says the
   # run already rewrote the initializer's mode or context_files line, so the
-  # file is named once, whichever of its lines moved.
-  def save_selection(ai_tools, tool_mode, record_initializer: false, initializer_moved: false)
+  # file is named once, whichever of its lines moved. `initializer_unparsed:`
+  # says one of those lines found the file would not parse, which is said once too.
+  def save_selection(ai_tools, tool_mode, record_initializer: false, initializer_moved: false, initializer_unparsed: false)
     result = RailsAiContext::Install::SelectionRecord.write(
       ai_tools, root: Rails.root,
       extra_yaml: { "tool_mode" => tool_mode.to_s,
                     "context_files" => RailsAiContext.configuration.context_files },
       initializer: record_initializer
     )
-    if initializer_moved && %i[unchanged absent skipped].include?(result[:initializer])
+    if initializer_unparsed
+      result = result.merge(initializer: :unparsed)
+    elsif initializer_moved && %i[unchanged absent skipped].include?(result[:initializer])
       result = result.merge(initializer: :updated)
     end
 
@@ -164,17 +159,11 @@ module RailsAiContext::RakeTasks
   end unless method_defined?(:save_selection, false)
 
 
-  # Where the selection a user would edit lives: the initializer's line when it
-  # has one, since that wins on read, else the YAML record. Naming the
-  # initializer always sent an app that has none to a file that is not there.
+  # Where the selection a user would edit lives: the code's last write of it,
+  # since that wins on read, else the YAML record.
   def ai_tools_record_hint
-    record = RailsAiContext::Install::SelectionRecord
-    initializer = Rails.root.join(record::INITIALIZER)
-    if File.exist?(initializer) && File.read(initializer).match?(/^[ \t]*config\.ai_tools\s*=/)
-      "#{record::INITIALIZER} (config.ai_tools)"
-    else
-      "#{record::YAML_FILE} (ai_tools)"
-    end
+    file = RailsAiContext::UnbootedSettings.read(Rails.root).written_in(:ai_tools)
+    file ? "#{file} (config.ai_tools)" : "#{RailsAiContext::Install::SelectionRecord::YAML_FILE} (ai_tools)"
   end unless method_defined?(:ai_tools_record_hint, false)
 
   def read_previous_ai_tools_from_config
@@ -278,63 +267,77 @@ module RailsAiContext::RakeTasks
         next
       end
 
-      ai_tools = RailsAiContext.configuration.ai_tools
-      previous_tools = read_previous_ai_tools_from_config
+      config = RailsAiContext.configuration
+      ai_tools = config.ai_tools
+      setup_known = tool_mode_configured?
 
-      # First time - no tools configured, ask the user. The record is written
-      # once below, so the selection reaches both files together.
-      prompted = ai_tools.nil?
-      if prompted
-        ai_tools = prompt_ai_tools
-        RailsAiContext.configuration.ai_tools = ai_tools
-      end
-
-      # Prompt for tool_mode if not yet configured in initializer
-      initializer_moved = false
-      unless tool_mode_configured?
-        setup = prompt_setup
-        RailsAiContext.configuration.tool_mode = setup.tool_mode
-        RailsAiContext.configuration.context_files = setup.context_files
-        statuses = [ save_tool_mode_to_initializer(setup.tool_mode),
-                     save_context_files_to_initializer(setup.context_files) ]
-        initializer_moved = statuses.any? { |status| %i[updated inserted].include?(status) }
-
-        unless setup.context_files
-          # Recorded like any other answer, or an app with no initializer
-          # line to hold it was asked again on every run.
-          save_selection(ai_tools, setup.tool_mode, record_initializer: prompted, initializer_moved: initializer_moved)
-          puts "MCP-only install: no context files written."
-          ensure_mcp_configs(ai_tools)
-          next
+      if ai_tools.nil? || !setup_known
+        # The first run asks what to write, and runs the install in its one order.
+        # The selection is recorded once, so it reaches both files together.
+        # A record that will not read stops the run below, and reading it here would warn about it a second time.
+        unless RailsAiContext::Install::SelectionRecord.unreadable(root: Rails.root)
+          RailsAiContext::UnbootedSettings.read(Rails.root).notes.each { |note| puts "⚠️  #{note}" }
         end
-      end
-
-      # Cleanup removed tools (only when re-running with different selections)
-      cleanup_removed_ai_tools(previous_tools, ai_tools) if previous_tools&.any? && ai_tools
-
-      # One-time v5.0.0 legacy cleanup prompt for removed UI pattern files
-      RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Rails.root)
-
-      # Record the selection (the YAML enables standalone mode). The initializer
-      # is only touched on the run that actually asked the user.
-      save_selection(ai_tools || RailsAiContext.configuration.ai_tools,
-                     RailsAiContext.configuration.tool_mode,
-                     record_initializer: prompted, initializer_moved: initializer_moved)
-
-      # Auto-create/update per-tool MCP config files when tool_mode is :mcp
-      ensure_mcp_configs(ai_tools) if RailsAiContext.configuration.tool_mode == :mcp
-
-      # Add .ai-context.json to .gitignore
-      add_ai_context_to_gitignore
-
-      puts "🔍 Introspecting #{Rails.application.class.module_parent_name}..."
-
-      if ai_tools.nil? || ai_tools.empty?
-        puts "📝 Writing context files for all AI tools..."
+        program = RailsAiContext::Install::Program
+        known = program::Setup.new(config.tool_mode, config.context_files) if setup_known
+        answers = program::Answers.new(tools: ai_tools, setup: known, prune: false, defaults: false, refresh: true)
+        install = begin
+          program.run(answers, surface: install_surface, root: Rails.root) do |step, run|
+            case step
+            when :record
+              config.ai_tools = run.tools
+              config.tool_mode = run.setup.tool_mode
+              config.context_files = run.setup.context_files
+              statuses = []
+              unless setup_known
+                statuses = [ save_tool_mode_to_initializer(run.setup.tool_mode),
+                             save_context_files_to_initializer(run.setup.context_files) ]
+              end
+              moved = statuses.any? { |status| %i[updated inserted].include?(status) }
+              save_selection(run.tools, run.setup.tool_mode, record_initializer: ai_tools.nil?, initializer_moved: moved,
+                                                             initializer_unparsed: statuses.include?(:unparsed))
+            when :context
+              if run.setup.context_files
+                puts "🔍 Introspecting #{Rails.application.class.module_parent_name}..."
+                if run.tools.empty?
+                  puts "📝 No AI tool is selected, so no context file is written."
+                else
+                  puts "📝 Writing context files for: #{run.tools.map(&:to_s).join(', ')}..."
+                end
+                print_result(RailsAiContext.generate_context)
+              else
+                puts "MCP-only install: no context files written."
+              end
+            end
+          end
+        rescue program::RecordRefused => e
+          $stderr.puts "Error: #{e.message}"
+          exit 1
+        end
+        ai_tools = install.tools
+        next unless install.setup.context_files
       else
-        puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
+        previous_tools = read_previous_ai_tools_from_config
+        cleanup_removed_ai_tools(previous_tools, ai_tools) if previous_tools&.any?
+
+        # One-time v5.0.0 legacy cleanup prompt for removed UI pattern files
+        RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Rails.root)
+
+        # The YAML alone: a run that asked nothing leaves the user's initializer as it is.
+        save_selection(ai_tools, config.tool_mode)
+
+        ensure_mcp_configs(ai_tools) if config.tool_mode == :mcp
+
+        add_ai_context_to_gitignore
+
+        puts "🔍 Introspecting #{Rails.application.class.module_parent_name}..."
+        if ai_tools.empty?
+          puts "📝 No AI tool is selected, so no context file is written."
+        else
+          puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
+        end
+        print_result(RailsAiContext.generate_context)
       end
-      print_result(RailsAiContext.generate_context)
 
       puts ""
       mcp = RailsAiContext.configuration.tool_mode == :mcp

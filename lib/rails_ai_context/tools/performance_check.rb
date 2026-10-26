@@ -79,6 +79,11 @@ module RailsAiContext
             lines << ""
           end
 
+          if data[:assumed_key_order]
+            lines << "**Assumed:** #{data[:assumed_key_order]}; a foreign key finding on it may name the other key"
+            lines << ""
+          end
+
           if RailsAiContext::DetailLevel.summary?(detail)
             kept.each do |name, items|
               label = CATEGORIES[name][1]

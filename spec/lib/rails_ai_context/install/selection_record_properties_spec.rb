@@ -51,6 +51,12 @@ RSpec.describe "SelectionRecord properties" do
     end
   end
 
+  # A record that will not read is left as it is, so no write lands in it.
+  def readable?(root)
+    path = File.join(root, ".rails-ai-context.yml")
+    !File.exist?(path) || RailsAiContext::Configuration.read_yaml(path).first.is_a?(Hash)
+  end
+
   def each_project
     INITIALIZERS.each do |init_name, initializer|
       YAMLS.each do |yaml_name, yaml|
@@ -63,10 +69,14 @@ RSpec.describe "SelectionRecord properties" do
     failures = []
 
     each_project do |state, root|
+      next unless readable?(root)
+
       SELECTIONS.each do |selection|
-        SR.write(selection, root: root)
+        result = SR.write(selection, root: root)
         got = SR.read(root: root)
-        failures << "#{state}: wrote #{selection.inspect}, read #{got.inspect}" if got != selection
+        # A line in a form the record does not rewrite runs after the file, so the boot keeps it.
+        expected = result[:initializer] == :conflict ? RailsAiContext::UnbootedSettings.read(root).ai_tools || selection : selection
+        failures << "#{state}: wrote #{selection.inspect}, read #{got.inspect}" if got != expected
       end
     end
 
@@ -80,15 +90,17 @@ RSpec.describe "SelectionRecord properties" do
     failures = []
 
     each_project do |state, root|
+      next unless readable?(root)
+
       SR.write([ :codex ], root: root)
 
       initializer_path = File.join(root, "config", "initializers", "rails_ai_context.rb")
       next unless File.exist?(initializer_path)
 
-      content = File.read(initializer_path)
-      next unless content.match?(SR::SELECTION_LINE)
+      line = File.read(initializer_path).match(/^[ \t]*config\.ai_tools[ \t]*=[ \t]*(?<value>%i\[[^\]\r\n]*\])/)
+      next unless line
 
-      from_initializer = content.match(SR::SELECTION_LINE)[1].split.map(&:to_sym)
+      from_initializer = line[:value][/\[(.*)\]/, 1].split.map(&:to_sym)
       failures << "#{state}: initializer says #{from_initializer.inspect}" if from_initializer != [ :codex ]
     end
 
@@ -127,15 +139,16 @@ RSpec.describe "SelectionRecord properties" do
     expect(unknown).to be_empty, "#{unknown.size} state(s) reported an unknown tool:\n#{unknown.join("\n")}"
   end
 
-  it "reports nothing recorded as nil, never as an empty list" do
-    empties = []
+  # As at boot, a record that names no known tool is a selection of none.
+  it "reports nothing recorded as nil, and a record of no known tool as an empty list" do
+    wrong = []
 
     each_project do |state, root|
       got = SR.read(root: root)
-      empties << state if got == []
+      wrong << "#{state}: #{got.inspect}" if state.end_with?("/unknown_tool") ? got.nil? : got == []
     end
 
-    expect(empties).to be_empty, "#{empties.size} state(s) returned []:\n#{empties.join("\n")}"
+    expect(wrong).to be_empty, "#{wrong.size} state(s) read wrong:\n#{wrong.join("\n")}"
   end
 
   it "keeps the rest of an initializer it edits" do
@@ -170,7 +183,7 @@ RSpec.describe "SelectionRecord properties" do
       SR.write([ :codex ], root: root)
       second = SR.write([ :codex ], root: root)
 
-      noisy << "#{state}: #{second[:yaml]}" unless second[:yaml] == :unchanged
+      noisy << "#{state}: #{second[:yaml]}" unless second[:yaml] == (readable?(root) ? :unchanged : :failed)
     end
 
     expect(noisy).to be_empty,
@@ -201,7 +214,7 @@ RSpec.describe "SelectionRecord properties" do
 
     each_project do |state, root|
       path = File.join(root, ".rails-ai-context.yml")
-      next unless File.exist?(path) && SR.send(:readable_yaml, path).is_a?(Hash)
+      next unless File.exist?(path) && readable?(root)
 
       File.write(path, "#{File.read(path)}# team: keep the log tail short\n")
       SELECTIONS.each { |selection| SR.write(selection, root: root, extra_yaml: { "tool_mode" => "cli" }) }

@@ -292,12 +292,14 @@ RSpec.describe RailsAiContext::UpdateCheck do
           nil
         end
         Process.wait(pid)
+        @child = "the child #{$?.inspect} wrote #{out.inspect}"
         out
       end
 
       it "prints one line on a terminal, from the standalone binary only" do
         skip "no PTY on Windows" if Gem.win_platform?
-        expect(run_on_terminal).to include("rails-ai-context 999.0.0 is out")
+        # A run that once wrote nothing under a loaded suite says how the child ended.
+        expect(run_on_terminal).to include("rails-ai-context 999.0.0 is out"), -> { @child }
         expect(run_on_terminal("BUNDLE_BIN_PATH" => "/the/bundle/exe/bundle")).not_to include("is out")
       end
 

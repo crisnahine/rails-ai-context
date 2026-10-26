@@ -20,6 +20,29 @@ RSpec.describe RailsAiContext::ConcernMacros do
     [ { name: name, kind: :include, ancestor: true } ]
   end
 
+  describe "a run's base mixins" do
+    let(:base_mixin) { Struct.new(:name, :path) }
+
+    def run(path, cache:, known: nil)
+      described_class::Run.new(tmpdir, [], %i[callbacks], cache, {}, nil, [ base_mixin.new("Auditable", path) ], known: known)
+    end
+
+    it "keeps the call sites to the ones the run was given" do
+      [ nil, {} ].each do |cache|
+        each_run = run(File.join(tmpdir, "auditable.rb"), cache: cache)
+        each_run.send(:named, "Foo", nil, nil, [])
+        expect(each_run.send(:call_sites)).to eq({})
+      end
+    end
+
+    it "resolves a name by the run's own base mixins when two runs share a cache" do
+      cache = {}
+      first = run(File.join(tmpdir, "one.rb"), cache: cache, known: {}).send(:named, "Auditable", nil, nil, [])
+      second = run(File.join(tmpdir, "two.rb"), cache: cache, known: {}).send(:named, "Auditable", nil, nil, [])
+      expect([ first&.last, second&.last ]).to eq([ File.join(tmpdir, "one.rb"), File.join(tmpdir, "two.rb") ])
+    end
+  end
+
   it "keeps one cache's concern walks apart for two listener maps" do
     File.write(File.join(concern_dir, "localized.rb"), "module Localized\n  extend ActiveSupport::Concern\n  included do\n    around_action :set_locale\n    layout \"admin\"\n  end\nend\n")
     cache = {}
@@ -163,6 +186,17 @@ RSpec.describe RailsAiContext::ConcernMacros do
     collected, = *described_class.collect(tmpdir, mixin("Shop"), keys: %i[associations])
 
     expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :tagging_marks, "Foo::Tagging::Marks" ] ])
+  end
+
+  # Ruby: Shop::Tools.ancestors is [Shop::Tools, A, X], since `include X` ran before `include A` made A::X reachable.
+  it "resolves a module nested in its outer's file at its own include line, not where its body ends" do
+    File.write(File.join(concern_dir, "x.rb"), "module X\n  has_many :tops\nend\n")
+    File.write(File.join(concern_dir, "a.rb"), "module A\n  module X\n    has_many :inners\n  end\nend\n")
+    File.write(File.join(concern_dir, "shop.rb"), "module Shop\n  module Tools\n    include X\n    include A\n  end\nend\n")
+
+    collected, = *described_class.collect(tmpdir, mixin("Shop::Tools"), keys: %i[associations])
+
+    expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :tops, "X" ] ])
   end
 
   # Ruby: the block runs with the new module as self, so its `included` belongs to Billing::Helper alone.
@@ -347,6 +381,20 @@ RSpec.describe RailsAiContext::ConcernMacros do
       collected, = *described_class.collect(tmpdir, mixin("Holder::Sub"), keys: %i[associations], extra: extra)
 
       expect(collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to contain_exactly([ :top_tracks, "Trackable" ], [ :holder_tracks, "Holder::Trackable" ])
+    end
+
+    # A base module from outside the app's directories is still the constant a concern's include names.
+    it "reads a concern's include of a base module the app keeps no file for as that base module" do
+      vendor = File.join(tmpdir, "vendor", "stamp.rb")
+      FileUtils.mkdir_p(File.dirname(vendor))
+      File.write(vendor, "module Stamp\n  extend ActiveSupport::Concern\n  included do\n    has_many :stamps\n  end\nend\n")
+      File.write(File.join(concern_dir, "sub.rb"), "module Sub\n  extend ActiveSupport::Concern\n  include Stamp\nend\n")
+      extra = [ RailsAiContext::BaseMixins::Mixin.new("Stamp", vendor, :include) ]
+
+      found = described_class.collect(tmpdir, mixin("Sub"), keys: %i[associations], extra: extra)
+
+      expect(found.collected[:associations].map { |a| [ a[:name], a[:from_concern] ] }).to eq([ [ :stamps, "Stamp" ] ])
+      expect(found.unread).to eq([])
     end
   end
 
@@ -1048,7 +1096,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
     it "is walked once for classes that call none of the methods it asked about, and again for one that does" do
       cache = {}
       runs = 0
-      allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args| runs += 1; original.call(*args) }
+      allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args, **options| runs += 1; original.call(*args, **options) }
 
       first = collect_for([ "validates" ], cache).collected
       second = collect_for([ "scope" ], cache).collected
@@ -1080,7 +1128,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
       RUBY
       cache = {}
       runs = 0
-      allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args| runs += 1; original.call(*args) }
+      allow(described_class::Run).to receive(:new).and_wrap_original { |original, *args, **options| runs += 1; original.call(*args, **options) }
 
       collect_for({ "has_many" => [ nil ] }, cache)
       collect_for({ "has_many" => [ nil ] }, cache)
@@ -1325,9 +1373,9 @@ RSpec.describe RailsAiContext::ConcernMacros do
     end
   end
 
-  it "exposes collect, and the body lookup, call expansion, include order and line moves its classes share" do
+  it "exposes collect, and the body lookup, call expansion and line moves its classes share" do
     expect(described_class.moved({ location: 2, proc_lines: [ 3 ] }) { |line| line + 10 }).to eq(location: 12, proc_lines: [ 13 ])
-    expect(described_class.singleton_methods(false)).to contain_exactly(:collect, :enclosing, :expand_calls, :at_includes, :in_include_order, :moved)
+    expect(described_class.singleton_methods(false)).to contain_exactly(:collect, :enclosing, :expand_calls, :moved)
   end
 
   it "does not reach outside the owner kind's concerns directory" do

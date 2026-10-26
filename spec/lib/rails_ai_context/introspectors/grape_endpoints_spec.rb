@@ -71,6 +71,14 @@ RSpec.describe RailsAiContext::Introspectors::GrapeEndpoints do
     )
   end
 
+  it "mounts the top-level API a name written from the root names, however near a namespaced one is" do
+    write("app/api/users.rb", "class Users < ::Grape::API\n  get(:top) { {} }\nend\n")
+    write("app/api/v1/users.rb", "module V1\n  class Users < Grape::API\n    get(:inner) { {} }\n  end\nend\n")
+    write("app/api/v1/root.rb", "module V1\n  class Root < Grape::API\n    mount ::Users\n  end\nend\n")
+
+    expect(endpoints([ { engine: "V1::Root", path: "/" } ])).to eq("V1::Root" => [ "`GET` `/top`" ])
+  end
+
   it "answers nothing for a mount that is not a Grape API, an empty or unparsable file, and no api dir" do
     expect(described_class.call(@root, [ { engine: "Sidekiq::Web", path: "/sidekiq" } ])).to eq({})
 

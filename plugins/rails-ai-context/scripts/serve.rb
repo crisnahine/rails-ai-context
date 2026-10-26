@@ -8,6 +8,9 @@
 # Where the gem cannot serve, a server that answers the handshake with no tools and the reason:
 # Claude Code skips a plugin server that failed to start, in every folder, for some minutes after.
 def refuse(reason)
+  # A C locale tags the folder's name and each line binary or US-ASCII, which json refuses to write or parse.
+  utf8 = lambda { |text| text.dup.force_encoding(Encoding::UTF_8).scrub }
+  reason = utf8.call(reason)
   $stderr.puts reason
   # RubyGems would activate the newest json installed, which a Ruby too old for the gem may not parse.
   begin
@@ -20,7 +23,7 @@ def refuse(reason)
   $stdout.sync = true
   $stdin.each_line do |line|
     request = begin
-      JSON.parse(line)
+      JSON.parse(utf8.call(line))
     rescue JSON::ParserError
       nil
     end
@@ -96,6 +99,22 @@ if spec && !requirement.satisfied_by?(spec.version)
   refuse_old(spec.version, ruby, requirement)
 end
 
+# A gem with the refusal answers by handshake whatever stops its serve, and serves a folder of apps itself.
+if RailsAiContextPlugin.routes?
+  ENV["RAILS_AI_CONTEXT_PLUGIN"] = "1"
+  ARGV.replace([ "serve" ])
+  begin
+    load bin
+  rescue SystemExit => e
+    raise if e.success?
+
+    refuse "rails-ai-context serve stopped under #{ruby} (exit #{e.status}); the lines before this one say why."
+  rescue ScriptError, StandardError => e
+    refuse "rails-ai-context cannot start under #{ruby}: #{e.message.split("\n").map(&:strip).reject(&:empty?).join(" ")}"
+  end
+  exit
+end
+
 # The binary's own advice where it finds no single app is --app-path, which this entry cannot pass.
 require "rails_ai_context/cli/app_root"
 found = RailsAiContext::CLI::AppRoot.resolve(cwd: Dir.pwd)
@@ -103,7 +122,8 @@ if found.root.nil? && found.below.size > 1
   apps = found.below.map { |path| RailsAiContext::CLI::AppRoot.display(path, Dir.pwd) }
   # Project scope is read from the folder a session starts in alone, so the apps keep the plugin.
   refuse "#{Dir.pwd} holds #{found.below.size} Rails apps (#{apps.join(", ")}), and the plugin serves one: " \
-         "start Claude Code in one of them. For one session over all of them, use the workspace setup " \
+         "start Claude Code in one of them. Until then, each app's tools run as " \
+         "`rails-ai-context --app-path <app> tool <name>`, with <app> one of: #{apps.join(", ")}. For one session over all of them, use the workspace setup " \
          "`rails-ai-context init` writes, and turn the plugin off for this folder alone with " \
          "`claude plugin disable rails-ai-context@rails-ai-context --scope project` run here, or with `--scope local` where " \
          "a --scope local install turns it on. On macOS and Linux, a local setting at the root of a git repository " \

@@ -117,7 +117,7 @@ module RailsAiContext
         when Prism::SymbolNode then ":#{node.value}"
         when Prism::StringNode then "'#{node.unescaped}'"
         when Prism::SplatNode then "*#{format_policy_arg(node.expression)}"
-        else NodeSource.text(node) rescue ""
+        else RailsAiContext::Redaction.source_slice(NodeSource.text(node)) rescue ""
         end
       end
 

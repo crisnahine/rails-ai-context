@@ -1,0 +1,375 @@
+@ Justfile J1-colon-eq-bare
+export BUNDLE_GEMS__EXAMPLE__COM := usr7k:Pw9T4il
+@ Justfile J2-colon-eq-sq
+BUNDLE_GEMS__EXAMPLE__COM := 'usr7k:Pw9T4il'
+@ Makefile J3-colon-eq-dq
+BUNDLE_GEMS__EXAMPLE__COM := "usr7k:Pw9T4il"
+@ Makefile J4-colon-eq-bare
+BUNDLE_GEMS__EXAMPLE__COM := usr7k:Pw9T4il
+@ Makefile J5-qeq
+BUNDLE_GEMS__EXAMPLE__COM ?= usr7k:Pw9T4il
+@ Makefile J6-pluseq
+BUNDLE_GEMS__EXAMPLE__COM += usr7k:Pw9T4il
+@ Makefile J7-dbl-colon
+BUNDLE_GEMS__EXAMPLE__COM ::= usr7k:Pw9T4il
+@ Makefile J8-define
+define CRED
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+endef
+@ config/boot.rb N1-eq-next-line-sq
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] =
+  'usr7k:Pw9T4il'
+@ config/boot.rb N2-eq-next-line-blank-between
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] =
+
+  "usr7k:Pw9T4il"
+@ config/boot.rb N3-hash-rocket-next-line-sq
+{ "BUNDLE_GEMS__EXAMPLE__COM" =>
+    'usr7k:Pw9T4il' }
+@ config/boot.rb N4-colon-next-line
+{ BUNDLE_GEMS__EXAMPLE__COM:
+    "usr7k:Pw9T4il" }
+@ config/boot.rb N5-or-or-next-line
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] ||=
+  "usr7k:Pw9T4il"
+@ config/boot.rb N6-comment-between
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = # corp
+  "usr7k:Pw9T4il"
+@ config/boot.rb N7-paren-split
+ENV.store(
+  "BUNDLE_GEMS__EXAMPLE__COM",
+  "usr7k:Pw9T4il"
+)
+@ config/boot.rb N8-fetch-split
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV.fetch(
+  "X",
+  "usr7k:Pw9T4il"
+)
+@ config/boot.rb N9-array-split
+%w[a b].each { |h| ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:" \
+  "Pw9T4il" }
+@ config/boot.rb N10-system-split
+system(
+  "bundle config set gems.example.com",
+  "usr7k:Pw9T4il"
+)
+@ config/boot.rb N11-sh-list
+system("bundle", "config", "set",
+       "gems.example.com", "usr7k:Pw9T4il")
+@ config/boot.rb N12-bundle-config-heredoc
+system(<<~SH)
+  bundle config set gems.example.com usr7k:Pw9T4il
+SH
+@ config/boot.rb N13-bundle-config-heredoc-lit
+sh <<~'SH'
+  bundle config set gems.example.com usr7k:Pw9T4il
+SH
+@ config/boot.rb N14-bundle-config-heredoc-dash
+sh <<-"SH"
+  BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install
+  SH
+@ deploy.sh N15-shell-heredoc-ssh
+ssh host bash -s <<'REMOTE'
+bundle config set gems.example.com usr7k:Pw9T4il
+REMOTE
+@ deploy.sh N16-shell-heredoc-two
+cat <<A <<B
+x
+A
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+B
+@ deploy.sh N17-config-flag-first
+bundle config --local --parseable gems.example.com usr7k:Pw9T4il
+@ deploy.sh N18-config-key-next-line
+bundle config set \
+  gems.example.com \
+  usr7k:Pw9T4il
+@ deploy.sh N19-config-ruby-opts
+bundle config set --global gems.example.com usr7k:Pw9T4il;bundle install
+@ deploy.sh N20-config-bundle-exec
+bundle exec bundle config set gems.example.com usr7k:Pw9T4il
+@ deploy.sh N21-bin-bundle
+bin/bundle config set gems.example.com usr7k:Pw9T4il
+@ deploy.sh N22-bundler-binary-path
+/usr/local/bin/bundle config set gems.example.com usr7k:Pw9T4il
+@ deploy.sh N23-ruby-m-bundle
+ruby -S bundle config set gems.example.com usr7k:Pw9T4il
+@ deploy.sh N24-bundler-cmd
+bundler config set gems.example.com usr7k:Pw9T4il
+@ deploy.sh N25-gem-exec
+gem exec bundle config gems.example.com usr7k:Pw9T4il
+@ deploy.sh N26-config-unset-ok
+bundle config unset gems.example.com
+@ deploy.sh N27-apostrophe-earlier
+echo "it's set" && export BUNDLE_GEMS__EXAMPLE__COM='usr7k:Pw9T4il'
+@ deploy.sh N28-apostrophe-earlier-dq
+echo don't; export BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il"
+@ deploy.sh N29-comment-apostrophe
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il # don't commit
+@ deploy.sh N30-nested-sq-in-dq-cmdsub
+export BUNDLE_GEMS__EXAMPLE__COM="$(printf '%s' "$U"):Pw9T4il"
+@ deploy.sh N31-nested-lit-after
+export BUNDLE_GEMS__EXAMPLE__COM="$(echo "$U"):Pw9T4il" && echo done
+@ deploy.sh N32-cmdsub-then-lit
+export BUNDLE_GEMS__EXAMPLE__COM=$(cat u):Pw9T4il
+@ deploy.sh N33-cmdsub-lit-both
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:$(cat p):Pw9T4il"
+@ deploy.sh N34-var-then-lit
+export BUNDLE_GEMS__EXAMPLE__COM="${U}:Pw9T4il"
+@ deploy.sh N35-var-default-colon
+export BUNDLE_GEMS__EXAMPLE__COM="${U:-usr7k}:${P:-Pw9T4il}"
+@ deploy.sh N36-var-braces-nested
+export BUNDLE_GEMS__EXAMPLE__COM="${U:-${X}}:Pw9T4il"
+@ deploy.sh N37-var-default-cmdsub
+export BUNDLE_GEMS__EXAMPLE__COM="${U:-$(echo usr7k)}:Pw9T4il"
+@ deploy.sh N38-arith
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:$((1+1))Pw9T4il"
+@ deploy.sh N39-ref-start-dollar-digit
+export BUNDLE_GEMS__EXAMPLE__COM="$1:Pw9T4il"
+@ deploy.sh N40-ref-special
+export BUNDLE_GEMS__EXAMPLE__COM="$@:Pw9T4il"
+@ deploy.sh N41-tilde
+export BUNDLE_GEMS__EXAMPLE__COM=~/usr7k:Pw9T4il
+@ deploy.sh N42-glob
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il*
+@ deploy.sh N43-bang
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9!T4il"
+@ deploy.sh N44-hash-in-secret
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9#T4il
+@ deploy.sh N45-hash-in-secret-dq
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9 #T4il"
+@ deploy.sh N46-semicolon-secret-dq
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9;T4il"
+@ deploy.sh N47-amp-secret-bare
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9\&T4il
+@ deploy.sh N48-paren-secret-bare
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9\)T4il
+@ deploy.sh N49-space-esc-bare
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9\ T4il
+@ deploy.sh N50-quote-esc-bare
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9\"T4il
+@ deploy.sh N51-sq-quote-trick
+export BUNDLE_GEMS__EXAMPLE__COM='usr7k:Pw9'\''T4il'
+@ deploy.sh N52-adjacent-parts
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k"':'Pw9T4il
+@ deploy.sh N53-adjacent-parts-var
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k"':'"${P}"
+@ deploy.sh N54-adjacent-var-lit
+export BUNDLE_GEMS__EXAMPLE__COM="${U}"':'"Pw9T4il"
+@ deploy.sh N55-double-semicolon
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il;;
+@ deploy.sh N56-after-redirect
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il 2>&1
+@ deploy.sh N57-in-for
+for h in a b; do BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle; done
+@ deploy.sh N58-in-eval
+eval "export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il"
+@ deploy.sh N59-in-eval-sq
+eval 'export BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il"'
+@ deploy.sh N60-in-eval-esc
+eval "export BUNDLE_GEMS__EXAMPLE__COM=\"usr7k:Pw9T4il\" && bundle"
+@ deploy.sh N61-in-bash-c
+bash -c 'BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il" bundle install'
+@ deploy.sh N62-in-bash-c-nested
+bash -c "bash -c 'export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il'"
+@ deploy.sh N63-base64-ok
+export BUNDLE_GEMS__EXAMPLE__COM=$(echo dXNyN2s6UHc5VDRpbA== | base64 -d)
+@ deploy.sh N64-url-basic-auth-curl
+curl -u usr7k:Pw9T4il https://gems.example.com/
+@ deploy.sh N65-gem-source-add
+gem sources --add https://usr7k:Pw9T4il@gems.example.com/
+@ deploy.sh N66-bundle-add-source
+bundle config set --local mirror.https://rubygems.org https://usr7k:Pw9T4il@gems.example.com
+@ deploy.sh N67-git-clone
+git clone https://usr7k:Pw9T4il@github.com/org/repo.git
+@ deploy.sh N68-bundle-config-url-key-port
+bundle config set https://gems.example.com:8443/ usr7k:Pw9T4il
+@ deploy.sh N69-bundle-config-github-com
+bundle config set --global github.com usr7k:Pw9T4il
+@ deploy.sh N70-bundle-config-github-com-x
+bundle config github.com usr7k:x-oauth-basic
+@ deploy.sh N71-bundle-config-bundle-github__com
+bundle config set BUNDLE_GITHUB__COM usr7k:Pw9T4il
+@ deploy.sh N72-env-GITHUB__COM
+BUNDLE_GITHUB__COM=usr7k:Pw9T4il bundle install
+@ deploy.sh N73-env-github-pass-only
+BUNDLE_GITHUB__COM=Pw9T4il:x-oauth-basic bundle install
+@ deploy.sh N74-env-rubygems-pkg-gitlab
+BUNDLE_RUBYGEMS__PKG__GITHUB__COM=usr7k:Pw9T4il
+@ deploy.sh N75-env-upper-host-underscore
+BUNDLE_GEMS__MY_CORP__COM=usr7k:Pw9T4il
+@ deploy.sh N76-env-numeric-host
+BUNDLE_GEMS__10__0__0__5=usr7k:Pw9T4il
+@ deploy.sh N77-env-host-localhost
+BUNDLE_LOCALHOST=usr7k:Pw9T4il
+@ deploy.sh N78-env-host-localhost-port
+BUNDLE_LOCALHOST__3000=usr7k:Pw9T4il
+@ deploy.sh N79-env-single-label
+BUNDLE_GEMS=usr7k:Pw9T4il
+@ deploy.sh N80-env-mirror
+BUNDLE_MIRROR__HTTPS://RUBYGEMS.ORG/=https://usr7k:Pw9T4il@gems.example.com
+@ deploy.sh N81-env-mirror-ok
+BUNDLE_MIRROR__HTTPS___RUBYGEMS__ORG_=https://usr7k:Pw9T4il@gems.example.com
+@ deploy.sh N82-gh-actions-bundle-config
+- run: bundle config set --local gems.example.com ${{ secrets.USER }}:Pw9T4il
+@ x.yml N83-yaml-key-with-colon-value
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il:extra
+@ x.yml N84-yaml-value-with-hash
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9#T4il
+@ x.yml N85-yaml-value-with-space-hash
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9 #T4il
+@ x.yml N86-yaml-dq-then-comment
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il" # x
+@ x.yml N87-yaml-dq-uni
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9Til"
+@ x.yml N88-yaml-sq-dbl
+BUNDLE_GEMS__EXAMPLE__COM: 'usr7k:Pw9''T4il'
+@ x.yml N89-yaml-key-no-space
+BUNDLE_GEMS__EXAMPLE__COM:usr7k:Pw9T4il
+@ x.yml N90-yaml-multi-doc
+---
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+---
+@ x.yml N91-yaml-block-keep
+BUNDLE_GEMS__EXAMPLE__COM: |+
+  usr7k:Pw9T4il
+
+other: 1
+@ x.yml N92-yaml-block-indent-indicator
+BUNDLE_GEMS__EXAMPLE__COM: |2
+    usr7k:Pw9T4il
+@ x.yml N93-yaml-block-two-lines
+BUNDLE_GEMS__EXAMPLE__COM: |
+  usr7k:
+  Pw9T4il
+@ x.yml N94-yaml-folded-in-list
+- BUNDLE_GEMS__EXAMPLE__COM: >
+    usr7k:Pw9T4il
+@ x.yml N95-yaml-list-of-pairs
+- BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+- BUNDLE_JOBS=4
+@ x.yml N96-yaml-list-dq
+- "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il"
+@ x.yml N97-yaml-list-sq-space
+- 'BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9 T4il'
+@ x.yml N98-yaml-name-value-map
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  value: "usr7k:Pw9T4il"
+  other: x
+@ x.yml N99-yaml-name-value-map-sq
+- name: 'BUNDLE_GEMS__EXAMPLE__COM'
+  value: 'usr7k:Pw9T4il'
+@ x.yml N100-yaml-key-name-value-flow
+- { name: BUNDLE_GEMS__EXAMPLE__COM, value: "usr7k:Pw9T4il" }
+@ x.yml N101-yaml-key-name-value-flow-rev
+- { value: "usr7k:Pw9T4il", name: BUNDLE_GEMS__EXAMPLE__COM }
+@ x.yml N102-yaml-name-value-sep-lines-gap
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  # comment
+  value: "usr7k:Pw9T4il"
+@ x.yml N103-yaml-name-key-other
+- key: BUNDLE_GEMS__EXAMPLE__COM
+  val: "usr7k:Pw9T4il"
+@ x.yml N104-yaml-name-then-default
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  default: "usr7k:Pw9T4il"
+@ x.yml N105-yaml-name-then-secret
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  secret: "usr7k:Pw9T4il"
+@ x.yml N106-yaml-name-value-nested-deeper
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  spec:
+    value: "usr7k:Pw9T4il"
+@ x.yml N107-yaml-key-then-nested-map
+BUNDLE_GEMS__EXAMPLE__COM:
+  default: "usr7k:Pw9T4il"
+@ x.yml N108-yaml-key-then-dash
+BUNDLE_GEMS__EXAMPLE__COM:
+  - "usr7k:Pw9T4il"
+@ x.yml N109-yaml-envs-array
+env: [BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il]
+@ x.yml N110-yaml-envs-array-spaces
+env: [ "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il" , "X=1" ]
+@ x.json N111-json-pretty-colon-newline
+{
+  "BUNDLE_GEMS__EXAMPLE__COM":
+    "usr7k:Pw9T4il"
+}
+@ x.json N112-json-string-array-env
+{ "env": ["BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il"] }
+@ x.json N113-json-cmd-array
+{ "command": ["bundle", "config", "set", "gems.example.com", "usr7k:Pw9T4il"] }
+@ x.json N114-json-cmd-array-multi
+{ "command": [
+  "bundle", "config", "set",
+  "gems.example.com",
+  "usr7k:Pw9T4il"
+] }
+@ x.json N115-json-escaped-cmd
+{ "run": "bundle config set gems.example.com \"usr7k:Pw9T4il\"" }
+@ x.json N116-json-escaped-env
+{ "run": "BUNDLE_GEMS__EXAMPLE__COM=\"usr7k:Pw9T4il\" bundle install" }
+@ x.json N117-json-double-escaped
+{ "run": "sh -c \"BUNDLE_GEMS__EXAMPLE__COM=\\\"usr7k:Pw9T4il\\\" bundle\"" }
+@ x.json N118-json-name-value-obj
+{ "name": "BUNDLE_GEMS__EXAMPLE__COM", "value": "usr7k:Pw9T4il", "type": "plain" }
+@ x.json N119-json-key-value-obj
+{ "key": "BUNDLE_GEMS__EXAMPLE__COM", "value": "usr7k:Pw9T4il" }
+@ x.json N120-json-Name-Value
+{ "Name": "BUNDLE_GEMS__EXAMPLE__COM", "Value": "usr7k:Pw9T4il" }
+@ x.json N121-json-Key-Value-array
+{ "Parameters": [ { "ParameterKey": "BUNDLE_GEMS__EXAMPLE__COM", "ParameterValue": "usr7k:Pw9T4il" } ] }
+@ x.json N122-json-nested-env-object-multiline-value
+{
+  "env": {
+    "BUNDLE_GEMS__EXAMPLE__COM": {
+      "value": "usr7k:Pw9T4il",
+      "generator": "secret"
+    }
+  }
+}
+@ x.json N123-json-env-with-required
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": { "required": true, "value": "usr7k:Pw9T4il" } } }
+@ x.json N124-json-env-description-value
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": { "description": "d", "value": "usr7k:Pw9T4il" } } }
+@ x.json N125-json-unicode-key
+{ "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" , "é": "é" }
+@ x.json N126-json-escaped-name
+{ "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" }
+@ x.json N127-json-esc-key-underscore
+{ "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" }
+@ x.json N128-json-sp-after
+{ "BUNDLE_GEMS__EXAMPLE__COM" : "usr7k:Pw9T4il" }
+@ x.json N129-json-line-comment
+{ "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" } // x
+@ x.json N130-json-trailing-comma
+{ "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il", }
+@ x.ini N131-ini
+BUNDLE_GEMS__EXAMPLE__COM = usr7k:Pw9T4il
+@ x.ini N132-ini-section
+[bundle]
+gems.example.com = usr7k:Pw9T4il
+@ x.properties N133-properties
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ x.properties N134-properties-colon
+BUNDLE_GEMS__EXAMPLE__COM:usr7k:Pw9T4il
+@ x.properties N135-properties-space
+BUNDLE_GEMS__EXAMPLE__COM usr7k:Pw9T4il
+@ x.xml N136-xml
+<env name="BUNDLE_GEMS__EXAMPLE__COM">usr7k:Pw9T4il</env>
+@ x.xml N137-xml-attr
+<env name="BUNDLE_GEMS__EXAMPLE__COM" value="usr7k:Pw9T4il"/>
+@ x.xml N138-xml-property
+<property><name>BUNDLE_GEMS__EXAMPLE__COM</name><value>usr7k:Pw9T4il</value></property>
+@ x.erb N139-erb
+BUNDLE_GEMS__EXAMPLE__COM: <%= "usr7k:Pw9T4il" %>
+@ x.erb N140-erb-fallback
+BUNDLE_GEMS__EXAMPLE__COM: <%= ENV["C"] || "usr7k:Pw9T4il" %>
+@ x.yml.erb N141-erb-yaml
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:<%= ENV["P"] %>
+@ x.yml.erb N142-erb-yaml-user-pass-lit
+BUNDLE_GEMS__EXAMPLE__COM: <%= ENV["U"] %>:Pw9T4il
+@ x.tt N143-liquid
+BUNDLE_GEMS__EXAMPLE__COM: {{ cred | default: "usr7k:Pw9T4il" }}
+@ x.sh N144-long
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4ilxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

@@ -5,6 +5,7 @@ require "fileutils"
 require "tmpdir"
 require "open3"
 require "shellwords"
+require "rbconfig"
 require "rails/generators"
 require "generators/rails_ai_context/install/install_generator"
 
@@ -180,7 +181,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content.scan("if defined?(RailsAiContext)").size).to eq(1)
       expect(content).to include("    config.ai_tools = %i[claude copilot]")
       expect(content).to include("    # ── Introspection")
-      expect(content).to include("    # config.tool_mode = :mcp")
+      expect(content).to include("    config.tool_mode = :mcp   # MCP primary + CLI fallback")
       expect(content).not_to include("\n  config.ai_tools = %i[claude copilot]")
       expect(content).to match(
         /if defined\?\(RailsAiContext\) && RailsAiContext\.respond_to\?\(:configure\)\n  RailsAiContext.configure do \|config\|.*# ── Introspection.*\n  end\nend\n/m
@@ -225,6 +226,194 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to include("    config.ai_tools = %i[claude copilot]")
       expect(content).to include("    config.tool_mode = :mcp   # MCP primary + CLI fallback")
       expect(content).not_to include("\n  config.tool_mode = :mcp   # MCP primary + CLI fallback")
+    end
+
+    # The insert point was the file's last `end`, so code after the configure
+    # block took every section; the next run uncommented `config.` lines
+    # there, where `config` is undefined, and the app stopped booting. An
+    # early `return unless defined?(RailsAiContext)` is a guard too, and was
+    # wrapped in a second one.
+    context "with code after the configure block and a hand-written guard" do
+      let(:hand_written) do
+        <<~RUBY
+          return unless defined?(RailsAiContext)
+          RailsAiContext.configure do |config|
+            config.ai_tools = %i[claude]
+            config.server_name = "team-server" # keep
+          end
+          Rails.application.config.after_initialize do
+            puts "hi" if ENV["HI"]
+          end
+        RUBY
+      end
+
+      # Loads the file the way a boot does, with a configure that takes any
+      # setting and an after_initialize that runs its block at once.
+      def boot(path)
+        script = <<~'RUBY'
+          settings = Class.new { def method_missing(*) = nil; def respond_to_missing?(*) = true }.new
+          RailsAiContext = Module.new
+          RailsAiContext.define_singleton_method(:configure) { |&block| block.call(settings) }
+          config = Object.new
+          config.define_singleton_method(:after_initialize) { |&block| block.call }
+          Rails = Module.new
+          Rails.define_singleton_method(:application) { Struct.new(:config).new(config) }
+          load ARGV[0]
+          print "booted"
+        RUBY
+        Open3.capture3(RbConfig.ruby, "-e", script, path)
+      end
+
+      it "puts the sections inside the configure block, adds no guard, and the file still boots after a second run" do
+        File.write(initializer_path, hand_written)
+
+        2.times do
+          described_class.new([], { defaults: true }, destination_root: tmpdir).tap do |run|
+            run.instance_variable_set(:@selected_formats, %i[claude codex])
+            run.instance_variable_set(:@tool_mode, :mcp)
+          end.create_initializer
+        end
+
+        content = File.read(initializer_path)
+        configure_block, after = content.split(/^end\n/, 2)
+        expect(configure_block).to include("# ── Introspection", "config.ai_tools = %i[claude codex]", "config.tool_mode = :mcp")
+        expect(after).to eq("Rails.application.config.after_initialize do\n  puts \"hi\" if ENV[\"HI\"]\nend\n")
+        expect(content).not_to include(RailsAiContext::Install::InitializerFile::GUARD_LINE)
+        out, err, = boot(initializer_path)
+        expect(out).to eq("booted"), err
+      end
+
+      # Moved inside the guard, a BOM is part of the constant's name, which
+      # parses and fails only at boot.
+      unguarded = {
+        "the do form with commented defaults" => "RailsAiContext.configure do |c|\n  # c.ai_tools = %i[cursor]\n  # c.tool_mode = :cli\nend\n",
+        "a one-line brace block" => "RailsAiContext.configure { |c| c.server_name = \"x\" }\n",
+        "the selection on the first line" => "RailsAiContext.configure { |c| c.ai_tools = %i[cursor] }\n"
+      }
+      unguarded.each do |shape, source|
+        it "keeps a BOM in front of an unguarded initializer written with #{shape}, and the file boots" do
+          File.write(initializer_path, "﻿#{source}")
+          allow(generator).to receive(:say)
+
+          2.times do
+            generator.create_initializer
+            content = File.binread(initializer_path)
+
+            expect(content).to start_with("\xEF\xBB\xBFif defined?(RailsAiContext)".b)
+            expect(content.byteslice(3..)).not_to include("\xEF\xBB\xBF".b)
+            out, err, = boot(initializer_path)
+            expect(out).to eq("booted"), err
+          end
+        end
+      end
+
+      unguarded.merge("a fresh app" => nil).each do |shape, source|
+        it "writes on the first run what a second run with the same answers would, for #{shape}" do
+          File.write(initializer_path, source) if source
+          answers = lambda do
+            described_class.new([], {}, destination_root: tmpdir).tap do |run|
+              run.instance_variable_set(:@selected_formats, %i[claude cursor])
+              run.instance_variable_set(:@tool_mode, :mcp)
+              run.instance_variable_set(:@context_files, true)
+            end
+          end
+          answers.call.tap { |run| allow(run).to receive(:say) }.create_initializer
+          first = File.binread(initializer_path)
+          said = []
+          answers.call.tap { |run| allow(run).to receive(:say) { |text, *| said << text } }.create_initializer
+
+          expect(said).to eq([ "config/initializers/rails_ai_context.rb is up to date - no changes needed" ])
+          expect(File.binread(initializer_path)).to eq(first)
+          expect(first.lines.grep(/[ \t]\r?\n?\z/)).to be_empty
+          expect(first).to match(/(^ *|\| )c(onfig)?\.ai_tools = %i\[claude cursor\]/)
+          expect(first).to match(/^ *c(onfig)?\.tool_mode = :mcp/)
+          expect(first).to match(/^ *c(onfig)?\.context_files = true/)
+        end
+      end
+    end
+
+    # The block is found by parsing, so its spelling does not decide where the sections go.
+    {
+      "another block parameter" => "RailsAiContext.configure do |c|\n  c.server_name = \"x\"\nend\n",
+      "a comment after the block parameter" => "RailsAiContext.configure do |config| # settings\n  config.server_name = \"x\"\nend\n",
+      "the brace form" => "RailsAiContext.configure { |config|\n  config.server_name = \"x\"\n}\n",
+      "a heredoc line starting with end" =>
+        "RailsAiContext.configure do |config|\n  config.server_name = <<~T\nend of line\n  T\nend\nputs 1\n",
+      "another configure call above it" =>
+        "Other.configure do |o|\n  o.x = 1\nend\nRailsAiContext.configure do |config|\n  config.server_name = \"x\"\nend\n",
+      "CRLF line endings" => "RailsAiContext.configure do |config|\r\n  config.server_name = \"x\"\r\nend\r\n"
+    }.each do |shape, source|
+      it "puts the sections inside the configure block written with #{shape}" do
+        File.write(initializer_path, source)
+        said = []
+        allow(generator).to receive(:say) { |text, *| said << text }
+
+        generator.create_initializer
+        expect(said.join).not_to include("up to date")
+        generator.create_initializer
+
+        content = File.read(initializer_path)
+        expect(content).to match(/= <<~T\r?\n[ \t]*end of line\n[ \t]*T\n/) if source.include?("<<~T")
+        expect(content).not_to match(/^[ \t]*config\./) if source.include?("|c|")
+        nodes = [ Prism.parse(content).value ]
+        nodes.concat(nodes.shift.compact_child_nodes) until nodes.first.is_a?(Prism::CallNode) && nodes.first.name == :configure &&
+                                                                nodes.first.receiver&.slice == "RailsAiContext"
+        expect(nodes.first.block.slice).to include("# ── Introspection", "# ── Security")
+        expect(content.scan("\r\n").size).to eq(content.scan("\n").size) if source.include?("\r\n")
+        expect(Prism.parse(content)).to be_success
+      end
+    end
+
+    it "rewrites the selection lines in the block's own param on a re-run, and leaves another library's block" do
+      other = "Other.configure do |c|\n  c.ai_tools = %i[cursor]\n  # c.tool_mode = :cli\nend\n"
+      File.write(initializer_path, "#{other}RailsAiContext.configure do |c|\n  c.ai_tools = %i[cursor]\n  # c.tool_mode = :cli\nend\n")
+      allow(generator).to receive(:say)
+
+      generator.create_initializer
+
+      content = File.read(initializer_path)
+      expect(content).to include(other.gsub(/^/, "  "))
+      expect(content).to include("    c.ai_tools = %i[claude copilot]\n", "    c.tool_mode = :mcp   # MCP primary + CLI fallback\n")
+      expect(RailsAiContext::Install::SelectionRecord.read(root: tmpdir)).to eq(%i[claude copilot])
+    end
+
+    it "leaves an initializer that does not parse as it is, and says so" do
+      body = "RailsAiContext.configure do |config|\n  config.ai_tools = %i[cursor]\n"
+      File.write(initializer_path, body)
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+
+      generator.create_initializer
+
+      expect(File.read(initializer_path)).to eq(body)
+      expect(said).to eq([ "config/initializers/rails_ai_context.rb does not parse as Ruby, so it was left as it is - " \
+                           "fix it and run this again to record your selection there" ])
+    end
+
+    it "says it found no configure block instead of calling the file up to date" do
+      File.write(initializer_path, "# configured elsewhere\n")
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+
+      generator.create_initializer
+
+      expect(said.join("\n")).to include("No RailsAiContext.configure block in config/initializers/rails_ai_context.rb")
+      expect(said.join).not_to include("up to date")
+    end
+
+    it "leaves a read-only initializer as it is and says so" do
+      skip "root writes any file" if Process.uid.zero?
+
+      stale = "RailsAiContext.configure do |config|\n  config.ai_tools = %i[cursor]\nend\n"
+      File.write(initializer_path, stale)
+      File.chmod(0o444, initializer_path)
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+
+      generator.create_initializer
+
+      expect(File.read(initializer_path)).to eq(stale)
+      expect(said).to include("Could not write config/initializers/rails_ai_context.rb - check its permissions")
     end
 
     it "keeps an ai_tools array spread over several lines and says it was not rewritten" do
@@ -292,12 +481,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
 
     it "writes the MCP configs, the record and the .gitignore lines at the engine's root" do
-      allow(generator).to receive(:say)
-      generator.instance_variable_set(:@context_files, true)
-
-      generator.create_mcp_config
-      generator.create_yaml_config
-      generator.add_to_gitignore
+      install(described_class.new([], { tools: "claude", mcp: true }, destination_root: tmpdir))
 
       expect(File.exist?(File.join(tmpdir, ".mcp.json"))).to be(true)
       expect(File.exist?(File.join(tmpdir, ".rails-ai-context.yml"))).to be(true)
@@ -332,6 +516,46 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     def commit_all(repo)
       git("-C", repo, "add", "-A")
       git("-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "apps")
+    end
+
+    # A hook manager's link not set up yet: the write followed it out of the
+    # repository, and chmod changed the link, so git ignored the hook it
+    # reported as installed.
+    it "leaves a pre-commit hook that is a link leading nowhere, and names it" do
+      Dir.mktmpdir do |elsewhere|
+        target = File.join(elsewhere, "hook")
+        File.symlink(target, hook_path)
+        allow(generator).to receive(:say)
+
+        generator.install_validation_hook
+
+        expect(File.exist?(target)).to be(false)
+        expect(generator).to have_received(:say).with(a_string_including("Skipped pre-commit hook", hook_path, "symlink"), :yellow)
+        expect(generator).not_to have_received(:say).with(a_string_including("Installed"), anything)
+      end
+    end
+
+    it "names a read-only earlier hook it would rewrite, and goes on" do
+      File.binwrite(hook_path, RailsAiContext::Install::ValidationHook.earlier_script([ "." ], standalone: false))
+      File.chmod(0o444, hook_path)
+      skip "this user writes read-only files" if File.writable?(hook_path)
+      allow(generator).to receive(:say)
+
+      expect { generator.install_validation_hook }.not_to raise_error
+
+      expect(generator).to have_received(:say).with("Could not write #{hook_path} - check its permissions", :red)
+      expect(generator).not_to have_received(:say).with(a_string_including("Updated the pre-commit"), anything)
+    ensure
+      File.chmod(0o644, hook_path)
+    end
+
+    it "names the hook in general when reading an earlier one is what was denied" do
+      allow(generator).to receive(:say)
+      allow(generator).to receive(:plan_validation_hook).and_raise(Errno::EACCES)
+
+      expect { generator.install_validation_hook }.not_to raise_error
+
+      expect(generator).to have_received(:say).with("Could not write the pre-commit hook - check its permissions", :red)
     end
 
     it "offers nothing outside a git repository" do
@@ -856,25 +1080,62 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
   end
 
-  describe "#select_ai_tools" do
-    it "falls back to all tools instead of raising when stdin hits EOF (ask returns nil)" do
+  describe "#install" do
+    it "takes every tool and the MCP setup instead of raising when stdin hits EOF (ask returns nil)" do
+      generator = described_class.new([], {}, destination_root: tmpdir)
       allow(generator).to receive(:ask).and_return(nil)
 
-      expect { generator.select_ai_tools }.not_to raise_error
+      expect { install(generator) }.not_to raise_error
       expect(generator.instance_variable_get(:@selected_formats))
         .to match_array(RailsAiContext::Install::AiTool.all.map(&:key))
+      expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
     end
 
     # A re-run asked the question with no hint of the answer it gave before.
     it "shows the selection a re-run starts from" do
       File.write(File.join(tmpdir, ".rails-ai-context.yml"), "ai_tools:\n- claude\n- cursor\n")
+      generator = described_class.new([], {}, destination_root: tmpdir)
       said = []
       allow(generator).to receive(:say) { |text, *| said << text }
       allow(generator).to receive(:ask).and_return("1,2")
 
-      generator.select_ai_tools
+      install(generator)
 
       expect(said).to include("Currently selected: 1,2 (Claude Code, Cursor)")
+    end
+
+    # Each of the generator's own steps comes at its place in Program's order.
+    it "writes the initializer and the record, then the MCP configs, then offers the hook, then writes the context" do
+      generator = described_class.new([], { tools: "claude", mcp: true }, destination_root: tmpdir)
+      calls = []
+      %i[create_initializer create_yaml_config install_validation_hook generate_context_files].each do |step|
+        allow(generator).to receive(step) { calls << step }
+      end
+      allow(RailsAiContext::Install::Program).to receive(:write_mcp_configs).and_wrap_original do |original, *args, **kwargs|
+        calls << :mcp_configs
+        original.call(*args, **kwargs)
+      end
+
+      silence_output { generator.install }
+
+      expect(calls).to eq(%i[create_initializer create_yaml_config mcp_configs install_validation_hook generate_context_files])
+    end
+
+    # An unattended install answers every question up front, so none may come after a write.
+    it "asks the hook question before it writes anything, and installs the hook at its step" do
+      system("git", "init", "-q", tmpdir, out: File::NULL, err: File::NULL)
+      generator = described_class.new([], { tools: "claude", mcp: true }, destination_root: tmpdir)
+      written_when_asked = nil
+      allow(generator).to receive(:ask) do |question, *|
+        written_when_asked = Dir.children(tmpdir) - %w[.git config] if question.include?("pre-commit hook")
+        "y"
+      end
+      allow(generator).to receive(:generate_context_files)
+
+      silence_output { generator.install }
+
+      expect(written_when_asked).to eq([])
+      expect(File.read(File.join(tmpdir, ".git/hooks/pre-commit"))).to include("rails-ai-context")
     end
   end
 
@@ -882,10 +1143,10 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
   # offered the tools they had just picked, and asked them to gitignore a
   # file the step before had already ignored.
   describe "#show_instructions" do
-    def summary
+    def summary(installer = generator)
       said = []
-      allow(generator).to receive(:say) { |text = "", *| said << text }
-      generator.show_instructions
+      allow(installer).to receive(:say) { |text = "", *| said << text }
+      installer.show_instructions
       said.join("\n")
     end
 
@@ -930,25 +1191,25 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     it "names the plugin for Claude Code, and no MCP configs to commit, where the committed plugin held its server" do
       FileUtils.mkdir_p(File.join(tmpdir, ".claude"))
       File.write(File.join(tmpdir, ".claude", "settings.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
-      generator.instance_variable_set(:@selected_formats, %i[claude])
-      generator.instance_variable_set(:@context_files, false)
-      allow(generator).to receive(:say)
-      generator.create_mcp_config
+      mcp_only = described_class.new([], { tools: "claude", mcp_only: true }, destination_root: tmpdir)
+      install(mcp_only)
 
       expect(File.exist?(File.join(tmpdir, ".mcp.json"))).to be(false)
       # Claude Code has run here and never installed the plugin, so the next step says what is missing.
-      expect(summary).to include("Claude Code      -> the rails-ai-context plugin (off here: see below)\n",
-                                 "Claude Code: the app's .claude/settings.json turns the rails-ai-context plugin on, but it does not start for you here")
-      expect(summary).not_to include("-> MCP config only", "Commit the")
+      expect(summary(mcp_only)).to include("Claude Code      -> the rails-ai-context plugin (off here: see below)\n",
+                                           "Claude Code: the app's .claude/settings.json turns the rails-ai-context plugin on, " \
+                                           "but it does not start for you here")
+      expect(summary(mcp_only)).not_to include("-> MCP config only", "Commit the")
 
-      generator.instance_variable_set(:@context_files, true)
-      expect(summary).to include("Claude Code      -> the rails-ai-context plugin (off here: see below); CLAUDE.md + .claude/rules/",
-                                 "Commit the context files so your team benefits!")
+      mcp_only.instance_variable_set(:@context_files, true)
+      expect(summary(mcp_only)).to include("Claude Code      -> the rails-ai-context plugin (off here: see below); CLAUDE.md + .claude/rules/",
+                                           "Commit the context files so your team benefits!")
 
       allow(ENV).to receive(:[]).and_call_original
       allow(ENV).to receive(:[]).with("CLAUDE_CONFIG_DIR").and_return(File.join(Dir.tmpdir, "rails-ai-context-never-ran"))
-      generator.create_mcp_config
-      expect(summary).to include("Claude Code      -> the rails-ai-context plugin; CLAUDE.md + .claude/rules/")
+      install(mcp_only)
+      mcp_only.instance_variable_set(:@context_files, true)
+      expect(summary(mcp_only)).to include("Claude Code      -> the rails-ai-context plugin; CLAUDE.md + .claude/rules/")
     end
 
     it "offers no regeneration when the install writes no context files" do
@@ -956,15 +1217,6 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
       expect(summary).not_to include("rails ai:context ")
       expect(summary).not_to include("Regenerate context files")
-    end
-  end
-
-  describe "#select_setup" do
-    it "defaults to :mcp instead of raising when stdin hits EOF (ask returns nil)" do
-      allow(generator).to receive(:ask).and_return(nil)
-
-      expect { generator.select_setup }.not_to raise_error
-      expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
     end
   end
 
@@ -1000,28 +1252,28 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
   end
 
-  describe "#add_to_gitignore" do
+  describe "the .gitignore" do
     let(:gitignore_path) { File.join(tmpdir, ".gitignore") }
 
-    it "does not create .gitignore when the project doesn't have one" do
-      generator.add_to_gitignore
+    it "is not created when the project doesn't have one" do
+      install
       expect(File.exist?(gitignore_path)).to be(false)
     end
 
-    it "appends both .ai-context.json and .codex/config.toml when .gitignore exists" do
+    it "gets both .ai-context.json and .codex/config.toml when it exists" do
       File.write(gitignore_path, "*.log\n")
 
-      generator.add_to_gitignore
+      install
 
       content = File.read(gitignore_path)
       expect(content).to include(".ai-context.json")
       expect(content).to include(".codex/config.toml")
     end
 
-    it "does not duplicate entries that are already present" do
+    it "does not get entries that are already present twice" do
       File.write(gitignore_path, "*.log\n.ai-context.json\n.codex/config.toml\n")
 
-      expect { generator.add_to_gitignore }.to output("").to_stdout
+      install
 
       content = File.read(gitignore_path)
       expect(content.scan(".ai-context.json").size).to eq(1)
@@ -1032,44 +1284,37 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
   # MCP-only: the server and the CLI still answer, and the gem writes to none
   # of the files a user keeps by hand.
   describe "--mcp-only" do
-    subject(:generator) do
-      described_class.new([], { mcp_only: true }, destination_root: tmpdir).tap do |instance|
-        instance.instance_variable_set(:@selected_formats, %i[claude])
-      end
-    end
+    subject(:generator) { described_class.new([], { mcp_only: true, tools: "claude" }, destination_root: tmpdir) }
 
     it "records the mode without asking" do
-      generator.select_setup
+      expect(generator).not_to receive(:ask)
+      install(generator)
 
       expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
       expect(generator.instance_variable_get(:@context_files)).to be(false)
     end
 
     it "writes config.context_files = false into a fresh initializer" do
-      generator.select_setup
-      generator.create_initializer
+      install(generator)
 
       expect(File.read(initializer_path)).to include("config.context_files = false")
     end
 
     it "records the choice in the YAML too" do
-      generator.select_setup
-      silence_output { generator.create_yaml_config }
+      install(generator)
 
       expect(File.read(File.join(tmpdir, ".rails-ai-context.yml"))).to include("context_files: false")
     end
 
     it "writes no context files and says so" do
-      generator.select_setup
-
       expect(RailsAiContext).not_to receive(:generate_context)
-      expect { generator.generate_context_files }.to output(/MCP-only install/).to_stdout
+      allow(generator).to receive(:install_validation_hook)
+      expect { generator.install }.to output(/MCP-only install/).to_stdout
     end
 
     it "leaves the JSON cache out of .gitignore" do
       File.write(File.join(tmpdir, ".gitignore"), "*.log\n")
-      generator.select_setup
-      silence_output { generator.add_to_gitignore }
+      install(generator)
 
       expect(File.read(File.join(tmpdir, ".gitignore"))).not_to include(".ai-context.json")
     end
@@ -1083,10 +1328,10 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
 
     it "takes --tools without asking" do
-      generator = generator_with(tools: "cursor,claude")
+      generator = generator_with(tools: "cursor,claude", mcp: true)
       expect(generator).not_to receive(:ask)
 
-      silence_output { generator.select_ai_tools }
+      install(generator)
 
       expect(generator.instance_variable_get(:@selected_formats)).to eq(%i[claude cursor])
     end
@@ -1094,7 +1339,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     it "stops on a --tools value that names no tool, before anything is written" do
       generator = generator_with(tools: "vim")
 
-      expect { silence_output { generator.select_ai_tools } }.to raise_error(SystemExit) { |e| expect(e.status).to eq(1) }
+      expect { install(generator) }.to raise_error(SystemExit) { |e| expect(e.status).to eq(1) }
       expect(Dir.children(tmpdir)).to eq([ "config" ])
     end
 
@@ -1106,17 +1351,33 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(Dir.children(tmpdir)).to eq([ "config" ])
     end
 
+    it "stops before it asks or writes anything when the app's record will not read, and names it" do
+      File.write(File.join(tmpdir, ".rails-ai-context.yml"), "ai_tools: [claude\n")
+      generator = generator_with(tools: "claude", mcp: true)
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+      expect(generator).not_to receive(:ask)
+
+      expect { install(generator) }.to raise_error(SystemExit) { |e| expect(e.status).to eq(1) }
+      expect(said).to eq([ "Error: .rails-ai-context.yml cannot be read (invalid YAML at line 1), so nothing was changed. " \
+                           "Fix it, or move it aside, and run this again." ])
+      expect(Dir.children(tmpdir).sort).to eq(%w[.rails-ai-context.yml config])
+      expect(Dir.children(File.join(tmpdir, "config", "initializers"))).to eq([])
+      expect(File.read(File.join(tmpdir, ".rails-ai-context.yml"))).to eq("ai_tools: [claude\n")
+    end
+
     it "stops on --cli with --mcp-only" do
       generator = generator_with(tools: "claude", cli: true, mcp_only: true)
 
-      expect { silence_output { generator.select_ai_tools } }.to raise_error(SystemExit)
+      expect { install(generator) }.to raise_error(SystemExit)
+      expect(Dir.children(tmpdir)).to eq([ "config" ])
     end
 
     it "takes --cli as context files only, without asking" do
-      generator = generator_with(cli: true)
+      generator = generator_with(cli: true, tools: "claude")
       expect(generator).not_to receive(:ask)
 
-      silence_output { generator.select_setup }
+      install(generator)
 
       expect(generator.instance_variable_get(:@tool_mode)).to eq(:cli)
       expect(generator.instance_variable_get(:@context_files)).to be(true)
@@ -1126,13 +1387,10 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       File.write(File.join(tmpdir, ".rails-ai-context.yml"), "ai_tools:\n- claude\n- cursor\n")
       FileUtils.mkdir_p(File.join(tmpdir, ".cursor/rules"))
       File.write(File.join(tmpdir, ".cursor/rules/rails-project.mdc"), "x")
-      generator = generator_with(tools: "claude", prune: true)
+      generator = generator_with(tools: "claude", prune: true, mcp: true)
       expect(generator).not_to receive(:ask)
 
-      silence_output do
-        generator.select_ai_tools
-        generator.cleanup_removed_tools
-      end
+      install(generator)
 
       expect(File.exist?(File.join(tmpdir, ".cursor/rules/rails-project.mdc"))).to be(false)
     end
@@ -1142,11 +1400,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       generator = generator_with(tools: "claude", mcp_only: true, prune: true)
       expect(generator).not_to receive(:ask)
 
-      silence_output do
-        generator.select_ai_tools
-        generator.select_setup
-        generator.create_mcp_config
-      end
+      install(generator)
 
       expect(File.exist?(File.join(tmpdir, "CLAUDE.md"))).to be(false)
       expect(File.read(File.join(tmpdir, ".mcp.json"))).to include("rails-ai-context")
@@ -1161,6 +1415,25 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
       expect(File.read(File.join(tmpdir, ".git/hooks/pre-commit"))).to include("rails-ai-context apps: .")
     end
+  end
+
+  # The whole install, with the context files and the hook, which other examples cover, left out.
+  it "says which line of the app's settings it could not follow, and what answers instead" do
+    File.write(initializer_path, "RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\n  tools = config.ai_tools\n  tools << :copilot\nend\n")
+    installer = described_class.new([], { tools: "claude", mcp: true }, destination_root: tmpdir)
+    said = []
+    allow(installer).to receive(:say) { |text = "", *| said << text }
+    allow(installer).to receive(:generate_context_files)
+    allow(installer).to receive(:install_validation_hook)
+    installer.install
+
+    expect(said).to include("config/initializers/rails_ai_context.rb:3: `ai_tools` is changed in place or written by its name, so the YAML or the default answers here")
+  end
+
+  def install(installer = described_class.new([], { tools: "claude,copilot", mcp: true }, destination_root: tmpdir))
+    allow(installer).to receive(:generate_context_files)
+    allow(installer).to receive(:install_validation_hook)
+    silence_output { installer.install }
   end
 
   def silence_output

@@ -442,8 +442,8 @@ module RailsAiContext
         renderers.each do |name, meta|
           next unless Array(meta[:partials]).any? { |ref| reaches.(name, ref) }
 
-          reader.render_calls(sources[name].to_s).each do |_at, args|
-            locals.merge(reader.render_locals(args)) if reaches.(name, reader.rendered_name(args))
+          reader.render_calls(sources[name].to_s, path: name).each do |_at, args, block|
+            locals.merge(reader.render_locals(args)) if reaches.(name, reader.rendered_name(args, block: block))
           end
         end
 

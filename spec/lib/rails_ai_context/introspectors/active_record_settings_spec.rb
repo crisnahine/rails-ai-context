@@ -14,6 +14,25 @@ RSpec.describe RailsAiContext::Introspectors::ActiveRecordSettings do
     end
   end
 
+  describe ".fk_ignore_pattern?" do
+    def set?(files)
+      Dir.mktmpdir do |dir|
+        files.each do |path, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), body)
+        end
+        return described_class.fk_ignore_pattern?(dir)
+      end
+    end
+
+    it "is true where an initializer assigns ActiveRecord::SchemaDumper.fk_ignore_pattern, and only then" do
+      expect(set?("config/initializers/d.rb" => "ActiveRecord::SchemaDumper.fk_ignore_pattern = /\\Atmp_/\n")).to be(true)
+      expect(set?("config/application.rb" => "class Application < Rails::Application\n  ActiveRecord::SchemaDumper.fk_ignore_pattern = /x/\nend\n")).to be(true)
+      expect(set?("config/initializers/d.rb" => "# ActiveRecord::SchemaDumper.fk_ignore_pattern = /x/\nActiveRecord::SchemaDumper.ignore_tables = [\"x\"]\n")).to be(false)
+      expect(set?({})).to be(false)
+    end
+  end
+
   # Rails copies config.active_record.schema_format onto ActiveRecord in an after_initialize hook.
   it "lets config.active_record.schema_format win over a later ActiveRecord.schema_format" do
     result = settings("config/application.rb" => "class Application < Rails::Application\n  config.active_record.schema_format = :sql\nend\n",

@@ -46,6 +46,57 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  # The kept index a server holds across calls for a reader below the tools: one value per fingerprint, never a wait.
+  describe ".kept_beside_context" do
+    let(:cache) { described_class::SHARED_CACHE }
+    let(:reads) { [] }
+
+    before do
+      described_class.reset_cache!
+      cache[:fingerprint] = "mark-1"
+    end
+
+    after { described_class.reset_cache! }
+
+    def kept
+      described_class.kept_beside_context(:index) { reads << :read; { "Shop" => [ +"app/models/shop.rb" ] } }
+    end
+
+    it "reads once per fingerprint, and hands every call the one frozen value" do
+      first = kept
+      second = kept
+
+      expect(reads.size).to eq(1)
+      expect(second).to equal(first)
+      expect([ first.frozen?, first["Shop"].frozen?, first["Shop"].first.frozen? ]).to eq([ true, true, true ])
+
+      cache[:fingerprint] = "mark-2"
+      expect(kept).not_to equal(first)
+      expect(reads.size).to eq(2)
+    end
+
+    it "reads anew and keeps nothing with no context held or the cache busy" do
+      cache.delete(:fingerprint)
+      2.times { kept }
+      expect(reads.size).to eq(2)
+
+      cache[:fingerprint] = "mark-1"
+      release = Queue.new
+      holder = Thread.new { cache[:mutex].synchronize { release.pop } }
+      sleep 0.01 until cache[:mutex].locked?
+      2.times { kept }
+      release << :done
+      holder.join
+      expect([ reads.size, cache[:kept] ]).to eq([ 4, nil ])
+    end
+
+    it "is what RunCache.kept keeps across runs on a server" do
+      2.times { RailsAiContext::RunCache.around { RailsAiContext::RunCache.kept(:index) { reads << :read; [] } } }
+
+      expect(reads.size).to eq(1)
+    end
+  end
+
   describe ".abstract?" do
     it "is abstract (excluded from registry)" do
       expect(described_class).to be_abstract

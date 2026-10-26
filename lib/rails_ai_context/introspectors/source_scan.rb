@@ -75,6 +75,8 @@ module RailsAiContext
           next [] if name.start_with?(".")
 
           path = File.join(dir, name)
+          next [] if PathResolver.hidden?(path)
+
           stat = File.lstat(path)
           if stat.symlink?
             real = File.realpath(path)
@@ -112,6 +114,20 @@ module RailsAiContext
           found = paths(root, kind: "app/models", skip_concerns: false).to_a
           found + extra_model_candidates(root.to_s, found, base_model)
         end.each(&block)
+      end
+
+      # The model files under sensitive_patterns: their names and nothing else, so a class that inherits from one is still known to be a model.
+      def hidden_model_paths(root)
+        RunCache.fetch([ :source_scan_hidden_models, root.to_s ]) do
+          [].tap do |found|
+            PathResolver.unscoped { scan(root, "app/models", true) { |record| found << record if SafePath.sensitive?(record.file.to_s) } }
+          end
+        end
+      end
+
+      # The model classes' names as their files spell them.
+      def model_names(root)
+        model_paths(root).to_set(&:path_name)
       end
 
       CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*([\w:]+)/
@@ -172,7 +188,7 @@ module RailsAiContext
             next unless seen.add?(record.path)
             next if ignored.any? { |ignored_dir| SafePath.contained?(record.path, ignored_dir) }
 
-            source = SafeFile.read(record.path).to_s
+            source = AstCache.source(record.path).to_s
             record = record.with(path_name: concerns_name(record.path_name, source))
             declared << record.path_name
             pairs = class_declarations(source)

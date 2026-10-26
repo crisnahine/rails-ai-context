@@ -58,12 +58,12 @@ module RailsAiContext
       end
 
       def dollar_quoting?
-        postgresql?
+        postgres_rules?
       end
 
       # A block comment inside a block comment needs a closer of its own.
       def nested_comments?
-        postgresql?
+        postgres_rules?
       end
 
       # `/*! ... */` holds text the database runs.
@@ -211,11 +211,26 @@ module RailsAiContext
 
     module_function
 
-    # @param source [#adapter_name, #adapter, String, Symbol, nil]
+    # @param source [Family, #adapter_name, #adapter, String, Symbol, nil]
     # @return [Family] never raises; no family carries the raw name
     def of(source)
+      return source if source.is_a?(Family)
+
       raw = raw_name(source)
       NAMES.fetch(raw.downcase.delete_suffix(DEFAULT_SUFFIX)) { Family.new(:unknown, raw.empty? ? "unknown" : raw) }
+    end
+
+    # :mariadb or :mysql, the server behind the app's MySQL-family connection once one is established; nil before that
+    # and in the static tier, where no file the gem reads names the server (mysql2 and trilogy connect to both).
+    def established_mysql_server
+      return unless defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
+
+      conn = ActiveRecord::Base.connection
+      return unless of(conn).mysql? && conn.respond_to?(:mariadb?)
+
+      conn.mariadb? ? :mariadb : :mysql
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, nil, label: "established_mysql_server")
     end
 
     def raw_name(source)

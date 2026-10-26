@@ -32,6 +32,7 @@ module RailsAiContext
       return nil if dirs.empty?
 
       options = debounce ? { wait_for_delay: debounce } : {}
+      options[:ignore] = ignored(dirs)
       # shortcut: Listen takes directories only and inotify would recurse the whole root (node_modules too), so an edit to a file at the root the fingerprint reads (Gemfile, Dockerfile) or in a frontend root waits for the next change in a watched directory; watch the root once Listen can watch single files.
       @listener = Listen.to(*dirs, **options) do |modified, added, removed|
         changed = modified + added + removed
@@ -45,6 +46,18 @@ module RailsAiContext
 
     def stop
       @listener&.stop
+    end
+
+    # Listen matches an ignore pattern against a path relative to each watched folder, so a pruned folder is ignored by
+    # its spelling below the one holding it.
+    # The same spelling below another watched folder is ignored there too, which is harmless: it ends in node_modules or
+    # vendor/bundle, so it is pruned there as well, or sits outside every autoload root, where no look reads Ruby.
+    # shortcut: a folder pruned after start is watched until a restart; read pruned_dirs again on a new folder if that bites.
+    def ignored(dirs)
+      Fingerprinter.pruned_dirs(@app.root.to_s).flat_map do |pruned|
+        dirs.select { |dir| SafePath.contained?(pruned, dir) && pruned != dir }
+            .map { |dir| %r{\A#{Regexp.escape(pruned.delete_prefix("#{dir}/"))}(?:/|\z)} }
+      end.uniq
     end
 
     # The part both reactions share: nothing happened unless the fingerprint

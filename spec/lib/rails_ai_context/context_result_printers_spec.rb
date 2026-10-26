@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "open3"
+require "tmpdir"
 require "rails/generators"
 require "generators/rails_ai_context/install/install_generator"
 require "rake"
@@ -20,15 +21,16 @@ RSpec.describe "not-applicable context files on every surface" do
   end
 
   it "never asks about legacy files under --defaults" do
-    generator = RailsAiContext::Generators::InstallGenerator.new([], { defaults: true })
-    generator.instance_variable_set(:@selected_formats, [ :claude ])
-    allow(RailsAiContext).to receive(:generate_context).and_return(written: [], skipped: [], not_applicable: {})
-    allow(generator).to receive(:say)
+    Dir.mktmpdir do |dir|
+      allow(Rails).to receive(:root).and_return(Pathname.new(dir))
+      generator = RailsAiContext::Generators::InstallGenerator.new([], { defaults: true, tools: "claude" }, destination_root: dir)
+      %i[say create_initializer create_yaml_config install_validation_hook generate_context_files].each { |step| allow(generator).to receive(step) }
 
-    expect(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
-      .with([ :claude ], root: anything, warn_only: true, delete: false)
+      expect(RailsAiContext::LegacyCleanup).to receive(:ask)
+        .with(anything, [ :claude ], root: anything, warn_only: true, delete: false).and_return([])
 
-    generator.send(:generate_context_files)
+      generator.install
+    end
   end
 
   # The configuration was loaded at boot, before the installer's questions,

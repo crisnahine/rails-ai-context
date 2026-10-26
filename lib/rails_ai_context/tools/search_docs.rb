@@ -232,8 +232,8 @@ module RailsAiContext
             body = response.body.byteslice(0, max_fetch_bytes).force_encoding(Encoding::UTF_8).scrub("?")
             begin
               RailsAiContext::SafeFile.atomic_write(cache_file, body, root: rails_app.root.to_s)
-            rescue RailsAiContext::SafeFile::LinkedOut
-              # tmp linked out of the app (a shared deploy tmp): serve the doc uncached.
+            rescue RailsAiContext::SafeFile::LinkedOut, *RailsAiContext::SafeFile::DENIED
+              # tmp linked out of the app, or a cache file the user made read-only: serve the doc uncached.
             end
             body
           else

@@ -72,6 +72,11 @@ module RailsAiContext
         end
       end
 
+      # Every table the dump holds outside the search path, by qualified name.
+      def self.qualified_tables(database: nil)
+        new(RailsAiContext.default_app).send(:dump_lookup, database)&.qualified || {}
+      end
+
       def self.qualified_table_note(name)
         new(RailsAiContext.default_app).qualified_table_note(name)
       end
@@ -180,7 +185,8 @@ module RailsAiContext
           primary_key: SchemaConventions.primary_key_value(connection.primary_key(table)),
           comment: table_comment(table),
           unique_constraints: unique_constraints(table),
-          check_constraints: table_check_constraints(table)
+          check_constraints: table_check_constraints(table),
+          exclusion_constraints: table_exclusion_constraints(table)
         }.compact
         SchemaConventions.mark_primary_key(entry)
         entry
@@ -191,8 +197,8 @@ module RailsAiContext
       def live_search_path
         return unless postgres?
 
-        found = connection.select_value("SELECT current_schemas(false)")
-        found = found.to_s.delete_prefix("{").delete_suffix("}").split(",").map { |schema| schema.delete('"') } unless found.is_a?(Array)
+        # Unnested, as the adapter hands the array back as its text, where a name holds a comma, a quote or a backslash.
+        found = connection.select_values("SELECT s FROM unnest(current_schemas(false)) WITH ORDINALITY AS t(s, i) ORDER BY i")
         found unless found == PgNaming::DEFAULT_SEARCH_PATH
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "search_path")
@@ -225,7 +231,7 @@ module RailsAiContext
                                                       columns: extract_columns(view), indexes: indexes)
         end
         sqlite_virtual_tables.each do |name, (mod, arguments)|
-          tables[name] ||= SchemaConventions.virtual_table_entry(mod, arguments.to_s.split(", "))
+          tables[name] ||= SchemaConventions.virtual_table_entry(mod, SqlScan.new(arguments.to_s, family: :sqlite).split(","))
         end
         tables
       end
@@ -275,14 +281,26 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "unique_constraints")
       end
 
+      # PostgreSQL's, from the connection (7.1 to 8.1); Rails leaves out an excl_rails_ name it made up.
+      def table_exclusion_constraints(table)
+        return unless connection.respond_to?(:exclusion_constraints) && connection.supports_exclusion_constraints?
+
+        found = connection.exclusion_constraints(table).map do |constraint|
+          name = constraint.name if !constraint.respond_to?(:export_name_on_schema_dump?) || constraint.export_name_on_schema_dump?
+          SchemaConventions.exclusion_constraint_entry(name, constraint.expression, **constraint.options.slice(:using, :where, :deferrable))
+        end
+        found if found.any?
+      end
+
       # The connection's, named as the dump names them: Rails leaves out a chk_rails_ name it made up.
       def table_check_constraints(table)
         found = if connection.supports_check_constraints?
           connection.check_constraints(table).map do |constraint|
-            { name: (constraint.name if constraint.export_name_on_schema_dump?), expression: constraint.expression }.compact
+            { name: (constraint.name if constraint.export_name_on_schema_dump?), expression: constraint.expression,
+              validate: (false unless constraint.validate?) }.compact
           end
         else
-          schema_reader.check_constraints.select { |c| c[:table] == table }.map { |c| c.slice(:name, :expression) }
+          schema_reader.check_constraints.select { |c| c[:table] == table }.map { |c| c.slice(:name, :expression, :validate) }
         end
         found if found.any?
       rescue => e
@@ -296,19 +314,14 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, nil, label: "extensions")
       end
 
-      # What schema.rb writes for a column beyond its type: the connection's
-      # limit, precision and collation, less the defaults the dumper leaves out.
+      # The sizes the connection reads for a column, less a limit that is its type's native one, which the dumper leaves out;
+      # MySQL's tiny, medium or long text or blob writes its size: in place of it.
       def column_detail(table, col, bigint)
         native_limit = (connection.native_database_types[col.type] || {})[:limit]
-        limit = col.limit unless bigint || col.limit == native_limit || col.sql_type.to_s.match?(/\A(?:tiny|medium|long)?(?:text|blob)\b/i)
-        precision = if %i[datetime time timestamptz].include?(col.type)
-          StructureSqlReader.dumped_precision(col.type.to_s, col.precision, RailsAiContext::DatabaseFamily.of(connection).key)[:precision]
-        else
-          col.precision
-        end
+        limit = col.limit unless bigint || col.limit == native_limit || (mysql? && SchemaConventions.mysql_text_size(col.sql_type))
         {
           limit: limit,
-          precision: precision,
+          precision: col.precision,
           scale: col.scale,
           unsigned: (true if col.respond_to?(:unsigned?) && col.unsigned?),
           size: (SchemaConventions.mysql_text_size(col.sql_type) if mysql?),
@@ -334,56 +347,29 @@ module RailsAiContext
           # schema.rb's dumper names a bigint `bigint`, not integer with limit 8;
           # the static tier reads that name, so the booted one says it too.
           bigint = col.respond_to?(:bigint?) && col.bigint?
-          type = bigint ? "bigint" : dumped_type(col)
-          if col.respond_to?(:serial?) && col.serial?
-            key ||= Array(connection.primary_key(table))
-            type = StructureSqlReader.serial_name(type, key == [ col.name ])
-          end
-          # A precision with no scale is DecimalWithoutScale to the dumper.
-          scale = col.scale || (0 if col.precision) if col.type == :decimal
-          entry = {
-            name: col.name,
-            type: type,
-            null: col.null,
-            default: col.type == :decimal ? StructureSqlReader.dumped_decimal(col.default, scale) : col.default,
-            **column_detail(table, col, bigint),
-            comment: col.comment
-          }
+          serial = col.respond_to?(:serial?) && col.serial?
+          virtual = col.respond_to?(:virtual?) && col.virtual?
+          declared = { name: col.name, type: bigint ? "bigint" : dumped_type(col), null: col.null, default: col.default, comment: col.comment,
+                       array: (true if col.respond_to?(:array?) && col.array?), enum_type: (col.sql_type.to_s if col.type == :enum),
+                       **column_detail(table, col, bigint) }
           # A generated column's expression, else a function default as the dump writes it (PostgreSQL's leaves out a serial's sequence).
-          if col.respond_to?(:virtual?) && col.virtual?
-            entry[:generated] = (col.default_function || declared_generated(table, col.name)).to_s
-            entry[:stored] = stored_generated?(col)
-          elsif col.default.nil? && col.default_function && !(col.respond_to?(:serial?) && col.serial?)
-            entry[:default] = "-> { #{col.default_function.inspect} }"
+          if virtual
+            declared.merge!(generated: (col.default_function || declared_generated(table, col.name)).to_s, stored: stored_generated?(col))
+          elsif col.default.nil? && col.default_function && !serial
+            declared[:default_function] = col.default_function
           end
-          entry[:enum_type] = col.sql_type.to_s if col.type == :enum
-          entry[:default] = boolean_default(col) if col.type == :boolean
-          # PostgreSQL gives an array's default as its literal ({}), which the
-          # static tier reads the way Rails dumps it ([]).
-          if col.respond_to?(:array?) && col.array?
-            entry[:array] = true
-            entry[:default] = SchemaConventions.format_default(StructureSqlReader.array_default(col.default, col.type.to_s, scale)) if col.default.is_a?(String)
+          declared = declared.compact.merge(col.type == :datetime && col.precision.nil? ? { precision: nil } : {})
+          entry = DumpedColumn.call(declared, family: RailsAiContext::DatabaseFamily.of(connection), rails_version: rails_version)
+          # A type the connection does not know (schema.rb cannot dump it) reads as no name.
+          entry[:type] ||= ""
+          if serial
+            key ||= Array(connection.primary_key(table))
+            entry[:type] = DumpedColumn.serial_name(entry[:type], key == [ col.name ])
           end
           # Supplement with schema.rb default when live DB returns nil
-          if entry[:default].nil? && schema_defaults[col.name]
-            entry[:default] = schema_defaults[col.name]
-          end
-          entry.compact
+          entry[:default] = schema_defaults[col.name] if entry[:default].nil? && schema_defaults[col.name]
+          DumpedColumn.without_nils(entry)
         end
-      end
-
-      # MySQL keeps a boolean's default as 1 or 0, which schema.rb, the static
-      # tier and PostgreSQL all spell true or false: Active Model's boolean
-      # type reads it, as the column's own cast type does on every adapter.
-      def boolean_default(col)
-        # Rails 8.1's SQLite adapter already hands back true or false.
-        return col.default.to_s if col.default == true || col.default == false
-        return col.default unless col.default.is_a?(String)
-
-        value = ActiveModel::Type::Boolean.new.cast(col.default)
-        value.nil? ? col.default : value.to_s
-      rescue StandardError => e
-        RailsAiContext.debug_fail(e, col.default, label: "boolean_default")
       end
 
       # MySQL's dumper writes an enum or set column by its full SQL type, and a timestamp as one.
@@ -395,9 +381,10 @@ module RailsAiContext
       end
 
       def extract_indexes(table)
-        connection.indexes(table).map do |idx|
+        owned = constraint_index_names(table)
+        connection.indexes(table).reject { |idx| owned.include?(idx.name) }.map do |idx|
           # An expression index's columns come as one String; split into keys as the dump readers do.
-          columns = idx.columns.is_a?(String) ? StructureSqlReader.index_keys(idx.columns) : idx.columns
+          columns = idx.columns.is_a?(String) ? StructureSqlReader.index_keys(idx.columns, RailsAiContext::DatabaseFamily.of(connection)) : idx.columns
           detail = SchemaConventions.index_detail(
             columns, using: idx.using, type: idx.type, order: idx.orders, opclass: idx.opclasses, length: idx.lengths,
             include: (idx.include if idx.respond_to?(:include)),
@@ -407,11 +394,20 @@ module RailsAiContext
         end
       end
 
+      # The unique and exclusion constraints own an index of their name; the dumper writes the constraint and not the index.
+      def constraint_index_names(table)
+        names = []
+        names.concat(connection.unique_constraints(table).map(&:name)) if connection.respond_to?(:unique_constraints) && connection.supports_unique_constraints?
+        names.concat(connection.exclusion_constraints(table).map(&:name)) if connection.respond_to?(:exclusion_constraints) && connection.supports_exclusion_constraints?
+        names
+      end
+
       def extract_foreign_keys(table)
         # PostgreSQL clones a key that references a partitioned table once per partition.
         connection.foreign_keys(table).reject { |fk| @partitions.to_a.include?(fk.to_table) }.map do |fk|
           SchemaConventions.foreign_key_entry(fk.from_table, fk.to_table, fk.column, fk.primary_key, on_delete: fk.on_delete, on_update: fk.on_update,
-                                                                                                    deferrable: fk.deferrable, validate: fk.validate?)
+                                                                                                    deferrable: fk.deferrable, validate: fk.validate?, name: fk.name,
+                                                                                                    ignore: ActiveRecord::SchemaDumper.fk_ignore_pattern)
         end
       rescue => e
         # Some adapters don't support foreign_keys.
@@ -551,6 +547,8 @@ module RailsAiContext
         result = static_schema_sources
         return result unless result.is_a?(Hash) && result[:tables].is_a?(Hash)
 
+        # The static tiers hide a key's name by Rails' default pattern; the app's own is applied only when it boots.
+        result = result.merge(fk_ignore_pattern_unread: true) if ActiveRecordSettings.fk_ignore_pattern?(app.root)
         result.merge(declaration_keys)
       end
 
@@ -684,8 +682,9 @@ module RailsAiContext
           next if dumps.key?(name) || dirs.empty? || dirs == [ migrations_dir ]
 
           pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, database: name)
-          tables = MigrationReplay.tables(dirs, pk_type: pk_type, root: app.root.to_s,
-                                                adapter: SchemaConventions.database_adapter_for(app.root.to_s, name))
+          replayed = MigrationReplay.replayed(dirs, pk_type: pk_type, root: app.root.to_s,
+                                              adapter: SchemaConventions.database_adapter_for(app.root.to_s, name))
+          tables = replayed.tables
           next if tables.empty?
 
           tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
@@ -697,8 +696,9 @@ module RailsAiContext
           else "no #{dump ? relative_dump_path(dump) : "#{name}_schema.rb"}"
           end
           dumps[name] = {
-            adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables),
-            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, #{said})"
+            adapter: "static_parse", tables: tables, total_tables: SchemaConventions.table_count(tables), **replayed_lists(replayed),
+            note: "Reconstructed from the migrations in #{dirs.map { |dir| relative_dump_path(dir) }.join(', ')} (#{connection_state}, #{said})" \
+                  "#{assumed_order(replayed.counts)}"
           }.merge(database_files(dump, dirs))
         end
         dumps
@@ -727,6 +727,8 @@ module RailsAiContext
         entry[:default] = column[:default] unless column[:default].nil?
         entry[:array] = true if options[:array] == true
         %i[limit precision scale].each { |key| entry[key] = options[key] if options[key].is_a?(Integer) }
+        entry[:precision] = nil if column[:type].to_s == "datetime" && options.key?(:precision) && options[:precision].nil?
+        entry.delete(:precision) if column[:type].to_s == "datetime" && entry[:precision] == 6
         entry[:unsigned] = true if options[:unsigned] == true
         entry[:size] = options[:size].to_s if options[:size].is_a?(Symbol)
         entry[:collation] = options[:collation] if options[:collation].is_a?(String)
@@ -768,9 +770,10 @@ module RailsAiContext
       DumpLookup = Struct.new(:listed, :qualified, :names, :missing, :placed) do
         def table(name)
           shown = names.relation(name)
-          return [ name, qualified[shown] ] if shown.include?(".")
+          parts = SqlScan.qualified_parts(shown)
+          return [ name, qualified[parts.join(".")] ] if parts.size > 1
 
-          [ shown, listed[shown] ] if placed
+          [ parts.first, listed[parts.first] ] if placed
         end
       end
 
@@ -805,7 +808,7 @@ module RailsAiContext
 
         schema.check_constraints.each do |constraint|
           table = every[constraint[:table]] or next
-          (table[:check_constraints] ||= []) << constraint.slice(:name, :expression)
+          (table[:check_constraints] ||= []) << constraint.slice(:name, :expression, :validate)
         end
         views = schema.views.to_h { |name, view| [ name, view.merge(indexes: Array(view[:indexes]).filter_map { |i| static_index(i, name) }) ] }
         SchemaConventions.add_relations(tables, views: views, virtual_tables: schema.virtual_tables, not_dumped: schema.not_dumped)
@@ -839,6 +842,14 @@ module RailsAiContext
         [ result, DumpLookup.new(tables, qualified, schema.names, missing, placed) ]
       end
 
+      def exclusion_constraints_of(declared)
+        found = Array(declared[:exclusion_constraints]).map do |constraint|
+          options = constraint[:options] || {}
+          SchemaConventions.exclusion_constraint_entry(options[:name], constraint[:expression], **options.slice(:using, :where, :deferrable))
+        end
+        found if found.any?
+      end
+
       def static_tables(declared_tables)
         declared_tables.each_with_object({}) do |(table_name, declared), tables|
           next if SchemaConventions.bookkeeping_table?(table_name)
@@ -854,6 +865,7 @@ module RailsAiContext
             foreign_keys: [],
             comment: (comment if comment.is_a?(String)),
             unique_constraints: (unique if unique.any?),
+            exclusion_constraints: exclusion_constraints_of(declared),
             unread_calls: declared[:unread_calls]
           }.compact
           key = declared.dig(:options, :primary_key)
@@ -923,7 +935,14 @@ module RailsAiContext
         note += ", #{CountPhrase.call(counts.unnamed_columns, "added column")} left unnamed" if counts.unnamed_columns.positive?
         note += ", #{CountPhrase.call(counts.helper_calls, "migration helper call")} not replayed" if counts.helper_calls.positive?
         note += ", #{CountPhrase.call(counts.failed_files, "migration file")} it could not read" if counts.failed_files.positive?
-        note
+        note + assumed_order(counts)
+      end
+
+      # A MySQL-family server the connection has not named lists keys by name upper-cased (MySQL) or by byte (MariaDB).
+      def assumed_order(counts)
+        return "" unless counts.mysql_order_assumed.positive?
+
+        ", #{SchemaConventions.mysql_order_assumed_phrase(counts.mysql_order_assumed)}"
       end
 
       # Reconstruct schema by replaying migrations in order.
@@ -933,7 +952,8 @@ module RailsAiContext
       def parse_migrations
         pk_type = SchemaConventions.implicit_pk_type(app.root.to_s)
         replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s,
-                                            adapter: SchemaConventions.database_adapter_for(app.root.to_s, nil))
+                                            adapter: SchemaConventions.database_adapter_for(app.root.to_s, nil),
+                                            server: RailsAiContext::DatabaseFamily.established_mysql_server)
         tables = replayed.tables
         tables.each_value { |table| SchemaConventions.mark_primary_key(table) }
 
@@ -941,8 +961,19 @@ module RailsAiContext
           adapter: "static_parse",
           tables: tables,
           total_tables: SchemaConventions.table_count(tables),
+          **replayed_lists(replayed),
+          skipped_calls: (replayed.counts.skipped if replayed.counts.skipped.any?),
           note: replay_note(tables, replayed.counts)
-        }
+        }.compact
+      end
+
+      # The enum types, checks and generated columns replayed migrations leave, each only when there is one.
+      def replayed_lists(replayed)
+        {
+          enum_types: replayed.enum_types,
+          check_constraints: SchemaConventions.check_constraints_of(replayed.tables),
+          generated_columns: SchemaConventions.generated_columns_of(replayed.tables)
+        }.select { |_, found| found.any? }
       end
     end
   end

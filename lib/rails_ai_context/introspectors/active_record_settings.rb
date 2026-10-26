@@ -23,6 +23,26 @@ module RailsAiContext
         read_once(root).last
       end
 
+      # True when an initializer or config file sets ActiveRecord::SchemaDumper.fk_ignore_pattern, a value only the running app applies.
+      def fk_ignore_pattern?(root)
+        return false unless root
+
+        root = File.expand_path(root.to_s)
+        RunCache.fetch([ :fk_ignore_pattern, root ]) do
+          config_files(root).any? do |file|
+            walked = SourceIntrospector.walk(file, { dumper: -> { Listeners::ConfigAssignmentListener.new("ActiveRecord::SchemaDumper") } })
+            Array(walked[:dumper]).any? { |entry| entry[:path] == [ :fk_ignore_pattern ] }
+          end
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, false, label: "fk_ignore_pattern")
+        end
+      end
+
+      def config_files(root)
+        files = [ File.join(root, "config", "application.rb"), File.join(root, "config", "environments", "#{RailsAiContext.environment_name}.rb") ]
+        files.select { |path| File.file?(path) } + PathResolver.initializer_paths(root)
+      end
+
       def read_once(root)
         return [ {}, [] ] unless root
 
@@ -33,8 +53,7 @@ module RailsAiContext
       # Files in Rails' load order, the last assignment of each kind winning. A Base
       # attribute set directly beats config, which the base's load hook copies first.
       def read(root)
-        files = [ File.join(root, "config", "application.rb"), File.join(root, "config", "environments", "#{RailsAiContext.environment_name}.rb") ]
-        files = files.select { |path| File.file?(path) } + PathResolver.initializer_paths(root)
+        files = config_files(root)
         listeners = { config: -> { Listeners::ConfigAssignmentListener.new }, base: -> { Listeners::ConfigAssignmentListener.new(BASE_ROOTS) } }
         configured, configured_unread, direct, direct_unread = {}, Set.new, {}, Set.new
         files.each do |file|

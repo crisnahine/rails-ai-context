@@ -230,29 +230,29 @@ jobs:
       - name: PostgreSQL
         env:
           RAC_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb spec/lib/rails_ai_context/tools/migration_advisor_rollback_spec.rb
 
       - name: MySQL (mysql2)
         env:
           RAC_TEST_MYSQL_URL: mysql2://root:rac@127.0.0.1:3306/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb spec/lib/rails_ai_context/tools/migration_advisor_rollback_spec.rb
 
       - name: MySQL (Trilogy)
         if: matrix.rails != '7.0'
         env:
           RAC_TEST_MYSQL_URL: trilogy://root:rac@127.0.0.1:3306/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb spec/lib/rails_ai_context/tools/migration_advisor_rollback_spec.rb
 
       - name: MariaDB (mysql2)
         env:
           RAC_TEST_MARIADB_URL: mysql2://root:rac@127.0.0.1:3307/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb spec/lib/rails_ai_context/tools/migration_advisor_rollback_spec.rb
 
       - name: MariaDB (Trilogy)
         if: matrix.rails != '7.0'
         env:
           RAC_TEST_MARIADB_URL: trilogy://root:rac@127.0.0.1:3307/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_mysql_spec.rb spec/lib/rails_ai_context/app_databases_servers_spec.rb spec/lib/rails_ai_context/tools/migration_advisor_rollback_spec.rb
 
   # The plan checks read the plan PostgreSQL prints, and its shape changes between major versions.
   postgresql_versions:
@@ -297,7 +297,7 @@ jobs:
       - name: PostgreSQL
         env:
           RAC_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/rac
-        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb
+        run: bundle exec rspec spec/lib/rails_ai_context/database_family/database_servers_spec.rb spec/lib/rails_ai_context/tools/query_postgresql_spec.rb spec/lib/rails_ai_context/tools/migration_advisor_rollback_spec.rb
 
   lint:
     runs-on: ubuntu-latest

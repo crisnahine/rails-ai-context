@@ -144,7 +144,7 @@ module RailsAiContext
       return true if LOCKFILES.keys.any? { |file| outside_file(dir, file) }
 
       content, = SafePath.read("package.json", under: dir)
-      data = content && JSON.parse(content)
+      data = content && json(content)
       data.is_a?(Hash) && data.key?("workspaces")
     rescue JSON::ParserError
       false
@@ -179,11 +179,16 @@ module RailsAiContext
     end
     private_class_method :stamp
 
+    # A JSON config as npm and tsc read it: past a byte order mark, which Windows editors write.
+    def json(text)
+      JSON.parse(text.delete_prefix("\uFEFF"))
+    end
+
     def parse(path)
       content = SafeFile.read(path)
       return {} unless content
 
-      data = JSON.parse(content)
+      data = json(content)
       return {} unless data.is_a?(Hash)
 
       deps = data["dependencies"]

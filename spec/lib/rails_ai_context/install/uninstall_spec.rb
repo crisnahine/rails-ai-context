@@ -139,6 +139,41 @@ RSpec.describe RailsAiContext::Install::Uninstall do
 
       expect(JSON.parse(File.read(File.join(@root, ".mcp.json")))["mcpServers"].keys).to eq(%w[mine])
     end
+
+    it "loses a Codex HTTP entry under the gem's name too, and keeps the user's" do
+      app
+      write(".codex/config.toml", %([mcp_servers.rails-ai-context]\nurl = "http://localhost:6029/mcp"\n\n) +
+                                  %([mcp_servers.other]\ncommand = "other"\n))
+
+      expect(uninstall).to be(true)
+
+      expect(File.read(File.join(@root, ".codex/config.toml"))).to eq(%([mcp_servers.other]\ncommand = "other"\n))
+    end
+    # SETUP.md tells users to write the Docker entry under the gem's name; what a user wrote stays, and is named.
+    it "keeps an entry a user wrote under the gem's name, and names it with its file" do
+      app
+      docker = { "command" => "docker", "args" => %w[compose run --rm web bundle exec rails-ai-context serve] }
+      write(".mcp.json", JSON.generate("mcpServers" => {
+        "rails-ai-context" => docker,
+        "rails-ai-context-x" => { "command" => "docker", "args" => %w[exec -i web rails-ai-context serve] },
+        "rails-ai-context-y" => { "command" => "rails-ai-context", "args" => %w[serve --app-path y] },
+        "rails-ai-context-z" => { "command" => "rails-ai-context", "args" => %w[serve --app-path z], "env" => { "RAILS_ENV" => "test" } }
+      }))
+
+      kept = []
+      uninstall(kept: kept)
+
+      expect(kept).to eq([ { file: ".mcp.json", name: "rails-ai-context", starts: true }, { file: ".mcp.json", name: "rails-ai-context-x", starts: true },
+                           { file: ".mcp.json", name: "rails-ai-context-z", starts: true } ])
+      expect(JSON.parse(File.read(File.join(@root, ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context rails-ai-context-x rails-ai-context-z])
+      expect(said).to include([ :ok, "  Removed rails-ai-context-y from .mcp.json" ],
+                              [ :warn, "Left `rails-ai-context` in .mcp.json: its command is not one rails-ai-context writes, " \
+                                       "so remove it by hand if it should go" ],
+                              [ :warn, "Left `rails-ai-context-x` in .mcp.json: its command is not one rails-ai-context writes, " \
+                                       "so remove it by hand if it should go" ],
+                              [ :warn, "Left `rails-ai-context-z` in .mcp.json: it holds env.RAILS_ENV, which rails-ai-context never " \
+                                       "writes, so remove it by hand if it should go" ])
+    end
   end
 
   describe "the pre-commit hook" do

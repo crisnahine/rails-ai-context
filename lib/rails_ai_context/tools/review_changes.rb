@@ -36,10 +36,12 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: true)
 
       MAX_DIFF_LINES_PER_FILE = 30
+      # A path with a byte outside ASCII comes back as written, not quoted and escaped.
+      GIT = [ "git", "-c", "core.quotePath=false" ].freeze
       # A diff as git prints it with no config of the user's in the way: colour, an external diff,
       # textconv, a submodule's own diff or a blank context line printed empty would each break the
       # line-by-line reading.
-      DIFF = [ "git", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short" ].freeze
+      DIFF = [ *GIT, "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short" ].freeze
       # A diff line opening with an ActiveModel or ActiveRecord validation macro; validate_x is none.
       # A diff is not Ruby and one line of it does not parse, so a regex reads it.
       VALIDATION_LINE = /\A(?:validates!?|validate|validates_(?:\w+_of|with|each|associated))[\s(]/
@@ -71,7 +73,7 @@ module RailsAiContext
         # Verify git is available. Child stderr goes to File::NULL so git's own
         # "fatal: not a git repository" noise never reaches the server terminal;
         # the friendly message below is the only thing the caller sees.
-        _, status = Open3.capture2("git", "rev-parse", "--git-dir", chdir: root, err: File::NULL)
+        _, status = Open3.capture2(*GIT, "rev-parse", "--git-dir", chdir: root, err: File::NULL)
         unless status.success?
           return text_response("Not a git repository. `rails_review_changes` requires a git repository.\n\n**To initialize:** `git init && git add -A && git commit -m 'Initial commit'`")
         end
@@ -170,7 +172,7 @@ module RailsAiContext
         def resolve_commit(ref, root)
           return nil if ref.match?(/[\0\r\n]/)
 
-          output, status = Open3.capture2("git", "rev-parse", "--verify", "--quiet", "#{ref}^{commit}", chdir: root, err: File::NULL)
+          output, status = Open3.capture2(*GIT, "rev-parse", "--verify", "--quiet", "#{ref}^{commit}", chdir: root, err: File::NULL)
           sha = output.strip
           sha if status.success? && sha.match?(/\A\h{40,64}\z/)
         rescue SystemCallError
@@ -182,7 +184,7 @@ module RailsAiContext
 
         # @return [String, nil] the full SHA of the commit `commit` and HEAD last shared
         def merge_base(commit, root)
-          output, status = Open3.capture2("git", "merge-base", commit, "HEAD", chdir: root, err: File::NULL)
+          output, status = Open3.capture2(*GIT, "merge-base", commit, "HEAD", chdir: root, err: File::NULL)
           sha = output.strip
           sha if status.success? && sha.match?(/\A\h{40,64}\z/)
         end
@@ -196,13 +198,13 @@ module RailsAiContext
         #   commit the committed ones are taken from
         def get_changed_files(base, root)
           if base == "HEAD"
-            staged, _ = Open3.capture2("git", "diff", "--cached", "--name-only", "--relative", chdir: root, err: File::NULL)
-            unstaged, _ = Open3.capture2("git", "diff", "--name-only", "--relative", chdir: root, err: File::NULL)
-            untracked, _ = Open3.capture2("git", "ls-files", "--others", "--exclude-standard", chdir: root, err: File::NULL)
-            (staged.lines + unstaged.lines + untracked.lines).map(&:strip).reject(&:empty?).uniq
+            staged, _ = Open3.capture2(*GIT, "diff", "--cached", "--name-only", "-z", "--relative", chdir: root, err: File::NULL)
+            unstaged, _ = Open3.capture2(*GIT, "diff", "--name-only", "-z", "--relative", chdir: root, err: File::NULL)
+            untracked, _ = Open3.capture2(*GIT, "ls-files", "-z", "--others", "--exclude-standard", chdir: root, err: File::NULL)
+            [ staged, unstaged, untracked ].flat_map { |names| names.split("\0") }.reject(&:empty?).uniq
           else
-            output, _ = Open3.capture2("git", "diff", "--name-only", "--relative", base, "HEAD", chdir: root, err: File::NULL)
-            output.lines.map(&:strip).reject(&:empty?).uniq
+            output, _ = Open3.capture2(*GIT, "diff", "--name-only", "-z", "--relative", base, "HEAD", chdir: root, err: File::NULL)
+            output.split("\0").reject(&:empty?).uniq
           end
         end
 
@@ -210,13 +212,13 @@ module RailsAiContext
         def get_commit_log(ref, root)
           return nil if ref == "HEAD"
           within = subfolder_app?(root) ? [ "--", "." ] : []
-          output, status = Open3.capture2("git", "log", "--oneline", "-10", "#{ref}..HEAD", *within, chdir: root, err: File::NULL)
+          output, status = Open3.capture2(*GIT, "log", "--oneline", "-10", "#{ref}..HEAD", *within, chdir: root, err: File::NULL)
           return nil unless status.success? && !output.strip.empty?
           output.strip
         end
 
         def subfolder_app?(root)
-          prefix, status = Open3.capture2("git", "rev-parse", "--show-prefix", chdir: root, err: File::NULL)
+          prefix, status = Open3.capture2(*GIT, "rev-parse", "--show-prefix", chdir: root, err: File::NULL)
           status.success? && !prefix.strip.empty?
         end
 

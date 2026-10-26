@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module RailsAiContext
   module Tools
     class GenerateTest < BaseTool
@@ -158,12 +160,6 @@ module RailsAiContext
           set.to_s.tr("/", "_")
         end
 
-        # The model's file, minus the models root and the extension.
-        def model_path_stem(name)
-          RailsAiContext::Payload.model_file(cached_context, name)
-            .sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
-        end
-
         # The example name ships inside a file the user pastes, so it names a
         # block as a block instead of printing this gem's own marker.
         def callback_example_subject(target)
@@ -177,7 +173,7 @@ module RailsAiContext
         def generate_rspec_model(name, data, tests_data)
           # The spec mirrors the model's own path, and underscoring the name
           # does not reproduce it: OAuthClientConfig is oauth_client_config.rb.
-          file_path, existing = test_path("spec", :model, model_path_stem(name), "spec/models", "_spec.rb")
+          file_path, existing = test_path("spec", :model, RailsAiContext::Payload.model_stem(cached_context, name), "spec/models", "_spec.rb")
           factory = find_factory_name(name, tests_data)
           shoulda = shoulda?
           lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
@@ -187,7 +183,7 @@ module RailsAiContext
           if factory
             style = rspec_style
             if style[:let]
-              lines << "  let(:#{record_name(name)}) { #{factory_bot(style[:factory])}(:#{factory}) }"
+              lines << "  let(:#{model_let_name(record_name(name))}) { #{factory_bot(style[:factory])}(:#{factory}) }"
             end
           end
 
@@ -232,8 +228,13 @@ module RailsAiContext
           if validations.any?
             lines << ""
             lines << "  describe \"validations\" do"
+            opened = lines.size
             seen = Set.new
             validations.each do |v|
+              # Rails writes "must exist" for a required belongs_to, which
+              # validate_presence_of never accepts; belong_to checks it.
+              next if shoulda && v[:implicit]
+
               v[:attributes].each do |attr|
                 key = "#{v[:kind]}:#{attr}"
                 next if seen.include?(key)
@@ -267,19 +268,35 @@ module RailsAiContext
                 when "inclusion"
                   vals = inclusion_list(v)
                   allow_nil = v.dig(:options, :allow_nil) ? ".allow_nil" : ""
-                  if vals
+                  # The matcher raises without in_array, and an enum raises on the value outside it.
+                  if vals && !enum_attribute?(data, attr)
                     lines << "    it { is_expected.to validate_inclusion_of(:#{attr}).in_array(#{vals})#{allow_nil} }"
                   else
-                    lines << "    it { is_expected.to validate_inclusion_of(:#{attr})#{allow_nil} }"
+                    lines.push("    it \"validates inclusion of #{attr}\" do", "      skip \"TODO: set #{attr} to a value outside the inclusion list\"", "    end")
                   end
+                when "acceptance"
+                  lines << "    it { is_expected.to validate_acceptance_of(:#{attr}) }"
+                when "confirmation"
+                  lines << "    it { is_expected.to validate_confirmation_of(:#{attr}) }"
+                when "format"
+                  lines.push("    it \"validates format of #{attr}\" do", "      skip \"TODO: set #{attr} to a value the format rejects and one it accepts\"", "    end")
+                when "absence"
+                  lines << "    it { is_expected.to validate_absence_of(:#{attr}) }"
                 else
-                  lines << "    it \"validates #{v[:kind]} of #{attr}\" do"
-                  lines << "      # TODO: implement #{v[:kind]} validation test"
-                  lines << "    end"
+                  lines.push("    it \"validates #{v[:kind]} of #{attr}\" do", "      skip #{"TODO: #{rule_assertion_hint(v, attr)}".inspect}", "    end")
                 end
                 if (context = validation_context(v)) && lines[start].start_with?("    it { ")
                   lines[start] = lines[start].delete_suffix(" }") + ".on(:#{context}) }"
                 end
+              end
+            end
+            # The uniqueness matcher saves a copy of its subject, and described_class.new leaves every attribute nil.
+            dropped = []
+            if lines[opened..].any? { |line| line.include?("validate_uniqueness_of(") }
+              if factory
+                lines.insert(opened, "    subject { #{factory_bot(:build)}(:#{factory}) }", "")
+              elsif (record = placeholder_record(name, [], dropped))
+                lines.insert(opened, *unknown_enum_todos(dropped, name, "    "), "    subject { described_class.new(#{record}) }", "")
               end
             end
             lines << "  end"
@@ -342,13 +359,14 @@ module RailsAiContext
         end
 
         def generate_minitest_model(name, data, tests_data)
-          file_path, existing = test_path("test", :model, model_path_stem(name), "test/models", "_test.rb")
+          file_path, existing = test_path("test", :model, RailsAiContext::Payload.model_stem(cached_context, name), "test/models", "_test.rb")
           factory = find_factory_name(name, tests_data)
-          table = data[:table_name] || model_path_stem(name).split("/").last.pluralize
+          table = RailsAiContext::Payload.model_table(cached_context, name).table
           lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines << "class #{name}Test < ActiveSupport::TestCase"
 
           setup_var = record_name(name)
+          setup_var += "_record" if TEST_CASE_IVARS.include?(setup_var)
           fixture_set, fixture_key = model_fixture(name, table, tests_data)
           # Determine data setup: factory > fixture > inline
           lines << "  setup do"
@@ -357,7 +375,7 @@ module RailsAiContext
           elsif fixture_key
             lines << "    @#{setup_var} = #{fixture_accessor(fixture_set)}(:#{fixture_key})"
           else
-            lines << "    # TODO: no #{table} fixture found; build a valid record here"
+            lines << "    # TODO: no #{table || name} fixture found; build a valid record here"
             lines << "    @#{setup_var} = #{name}.new"
           end
           lines << "  end"
@@ -378,7 +396,7 @@ module RailsAiContext
                   next
                 end
                 if macro_validation?(v)
-                  lines << "    skip \"implement #{v[:kind]} validation test\""
+                  lines << "    skip #{"TODO: #{rule_assertion_hint(v, attr)}".inspect}"
                   lines << "  end"
                   lines << ""
                   next
@@ -387,9 +405,24 @@ module RailsAiContext
                 when "presence"
                   lines << "    @#{setup_var}.#{attr} = nil"
                 when "inclusion"
+                  # The made-up value casts to true on a boolean and raises on an enum.
+                  if enum_attribute?(data, attr) || !%w[string text].include?(schema_column_type(table, attr.to_s).presence || "string")
+                    lines.push("    skip \"TODO: set #{attr} to a value outside the inclusion list\"", "  end", "")
+                    next
+                  end
                   lines << "    @#{setup_var}.#{attr} = \"__invalid_value__\""
                 when "uniqueness"
-                  lines << "    duplicate = @#{setup_var}.dup"
+                  dropped = []
+                  if factory || fixture_key
+                    lines << "    duplicate = @#{setup_var}.dup"
+                  elsif (record = placeholder_record(name, [], dropped))
+                    lines.push(*unknown_enum_todos(dropped, name, "    "), "    # TODO: adjust these attributes if validations reject the placeholder values",
+                               "    duplicate = #{name}.create!(#{record}).dup")
+                  else
+                    lines << "    skip #{"TODO: #{unbuildable_reason(name) || "no #{name} can be made up from placeholders"}".inspect}"
+                    lines.push("  end", "")
+                    next
+                  end
                   lines << "    assert_not duplicate.valid?"
                   lines << "  end"
                   lines << ""
@@ -404,6 +437,10 @@ module RailsAiContext
                   end
                   lines << "    @#{setup_var}.#{attr} = #{value}"
                 when "format"
+                  if format_accepts?(v[:options] || {}, "invalid-format")
+                    lines.push("    skip \"TODO: set #{attr} to a value the format rejects\"", "  end", "")
+                    next
+                  end
                   lines << "    @#{setup_var}.#{attr} = \"invalid-format\""
                 when "absence"
                   lines << "    @#{setup_var}.#{attr} = \"present\""
@@ -422,7 +459,7 @@ module RailsAiContext
                   end
                 else
                   # With no value known to break it, the assert would run on a valid record.
-                  lines.push("    skip \"implement #{v[:kind]} validation test\"", "  end", "")
+                  lines.push("    skip #{"TODO: #{rule_assertion_hint(v, attr)}".inspect}", "  end", "")
                   next
                 end
                 lines << "    assert_not @#{setup_var}.valid?#{"(:#{validation_context(v)})" if validation_context(v)}"
@@ -566,7 +603,7 @@ module RailsAiContext
           model_key = fuzzy_find_key(models.keys, snake.singularize.camelize) || resource_model(models.keys, ctrl_class, singular.camelize)
           model_data = model_key ? models[model_key] : nil
           model_data = {} unless model_data.is_a?(Hash)
-          table = model_data[:table_name] || singular.pluralize
+          table = RailsAiContext::Payload.model_table(cached_context, model_key || singular.camelize).table
 
           info = ((cached_context[:controllers] || {})[:controllers] || {})[ctrl_class] || {}
           strong_params = Array(info[:strong_params])
@@ -591,7 +628,8 @@ module RailsAiContext
           validation_uniques = Array(model_data[:validations])
             .select { |v| v[:kind] == "uniqueness" }
             .flat_map { |v| Array(v[:attributes]).map(&:to_s) }
-          unique_attrs = (validation_uniques + unique_index_columns(table)).uniq & (no_strong_params ? columns : attrs)
+          table_uniques = (validation_uniques + unique_index_columns(table)).uniq & columns
+          unique_attrs = table_uniques & (no_strong_params ? columns : attrs)
           fixture = model_key ? model_fixture(model_key, table, tests_data) : fixture_key_for(table, tests_data)&.then { |key| [ table, key ] }
 
           {
@@ -607,6 +645,8 @@ module RailsAiContext
             api: info[:api_controller] == true,
             json_api: info[:api_controller] == true || info[:respond_to_formats] == [ "json" ],
             unique_attrs: unique_attrs,
+            table_uniques: table_uniques,
+            dropped: [],
             no_strong_params: no_strong_params
           }
         end
@@ -668,7 +708,12 @@ module RailsAiContext
           style = RailsAiContext::TestFramework.test_style(RailsAiContext::PathResolver.test_root(rails_app.root.to_s), dir)
           res = res.merge(test_case: style[:test_case] == true)
           res[:factory] = find_factory_name(res[:model], tests_data) if style[:factories] && res[:model]
-          res[:parents] = route_parents(routes, res, tests_data, ref: "@") if res[:factory]
+          # With neither a factory nor a fixture, the parents and the record are made up from placeholders.
+          placeholders = !res[:factory] && !res[:fixture_key]
+          res[:parents] = route_parents(routes, res, tests_data, ref: "@", placeholders: placeholders) if res[:factory] || placeholders
+          res[:unbuildable] = unbuildable_reason(res[:model]) if placeholders
+          res[:placeholder_subject] = placeholders && !placeholder_subject_literal(res).nil?
+          res[:lazy_subject] = res[:placeholder_subject]
 
           lines = [ *existing_test_lines(existing), "# #{existing || file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines.concat(unimplemented_lines(ctrl_class, res))
@@ -677,6 +722,7 @@ module RailsAiContext
           doorkeeper = doorkeeper_controller?(ctrl_class)
           lines.concat(minitest_auth_lines(ctrl_class, tests_data, doorkeeper, res[:test_case]))
 
+          todo_at = lines.size
           setup = minitest_setup_lines(res, tests_data, doorkeeper)
           user_key = res[:sign_in] && fixture_key_for("users", tests_data)
           setup.unshift("#{res[:sign_in]} users(:#{user_key})") if user_key
@@ -688,16 +734,20 @@ module RailsAiContext
             setup.each { |l| lines << "    #{l}" }
             lines << "  end"
           end
+          made_up = minitest_made_up_lines(res)
+          lines << "" if made_up.any?
+          made_up.each { |l| lines << (l.empty? ? l : "  #{l}") }
 
           name_by_path = route_names_by_path(routes)
           dedupe_routes(routes).each do |route|
             lines << "" unless lines.last == ""
             lines.concat(minitest_route_test(route, name_by_path, res, tests_data))
           end
+          lines.insert(todo_at, *unknown_enum_todos(res[:dropped], res[:model]))
 
           if routes.empty?
             lines << "  test \"#{ctrl_class} responds\" do"
-            lines << "    skip \"TODO: #{no_routes_reason(ctrl_class, res, "tests")}\""
+            lines << "    skip #{"TODO: #{no_routes_reason(ctrl_class, res, "tests")}".inspect}"
             lines << "  end"
           end
 
@@ -828,18 +878,37 @@ module RailsAiContext
             lines << "@user = users(:#{user_key})"
             lines << "sign_in @user"
           end
+          (res[:parents] || {}).each_value { |parent| lines << "#{parent[:ref]} = #{route_parent_build(parent)}" if parent[:factory] }
           if res[:model] && res[:factory]
-            (res[:parents] || {}).each_value { |parent| lines << "#{parent[:ref]} = #{factory_bot(:create)}(:#{parent[:factory]})" }
-            lines << "@#{res[:name]} = #{factory_create(res)}"
+            lines << "#{minitest_ivar(res[:name])} = #{factory_create(res)}"
           elsif res[:model] && res[:fixture_key]
-            lines << "@#{res[:name]} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})"
+            lines << "#{minitest_ivar(res[:name])} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})"
           end
           lines
         end
 
+        # The test case's record: a fixture or factory ivar, or the method that makes a record up from placeholders.
+        def minitest_subject(res)
+          res[:placeholder_subject] ? minitest_made_up(res[:name]) : minitest_ivar(res[:name])
+        end
+
+        # A record made up from placeholders is built by the first test that asks, so one the model rejects
+        # fails only the tests that need it.
+        def minitest_made_up(name)
+          "#{name}_record"
+        end
+
+        def minitest_made_up_lines(res)
+          made = (res[:parents] || {}).values.select { |parent| parent[:record] }.map { |parent| [ parent[:ref], route_parent_build(parent) ] }
+          made << [ minitest_subject(res), "#{res[:model]}.create!(#{placeholder_subject_literal(res)})" ] if res[:placeholder_subject]
+          made.flat_map do |ref, build|
+            [ "", "def #{ref}", "  @#{ref} ||= #{build}", "end" ]
+          end.then { |lines| lines.any? ? [ "# TODO: adjust these attributes if validations reject the placeholder values", *lines.drop(1) ] : lines }
+        end
+
         def minitest_route_test(route, name_by_path, res, tests_data)
           action = (route[:action] || "index").to_s
-          subject = res[:model] && (res[:factory] || res[:fixture_key]) ? "@#{res[:name]}" : nil
+          subject = res[:model] && (res[:factory] || res[:fixture_key] || res[:placeholder_subject]) ? minitest_subject(res) : nil
 
           return minitest_generic_test(route, name_by_path, res, tests_data, subject) unless res[:model]
 
@@ -869,7 +938,7 @@ module RailsAiContext
         end
 
         def minitest_member_get_test(route, name_by_path, res, tests_data, label, subject)
-          return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
+          return minitest_skip_test(label, res[:unbuildable] || "requires a fixture for #{table_label(res)}") unless subject
 
           minitest_get_test(route, name_by_path, res, tests_data, label, subject)
         end
@@ -878,11 +947,17 @@ module RailsAiContext
           label = "should create #{res[:name]}"
           resolved = request_target(route, name_by_path, subject, res, tests_data)
           return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
-          if res[:attrs].empty?
+          if res[:attrs].empty? || (!subject && unbuildable_params(res))
             return minitest_skip_test(label, no_params_reason(res, "POST #{route[:path]}"))
           end
 
-          params = request_params_literal(res, subject ? :fixture : :placeholder)
+          # A record made up from placeholders is built by the first test that asks; create must not be that test.
+          copy = subject && !res[:placeholder_subject]
+          if copy && (stuck = unfreshable_uniques_reason(res, res[:unique_attrs]))
+            return minitest_skip_test(label, stuck)
+          end
+
+          params = request_params_literal(res, copy ? :fixture : :placeholder)
           minitest_request_test(label, "post", resolved, res,
             response_assertions(route, res, :minitest),
             params_literal: params,
@@ -892,7 +967,7 @@ module RailsAiContext
 
         def minitest_update_test(route, name_by_path, res, tests_data, subject)
           label = "should update #{res[:name]}"
-          return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
+          return minitest_skip_test(label, res[:unbuildable] || "requires a fixture for #{table_label(res)}") unless subject
 
           resolved = request_target(route, name_by_path, subject, res, tests_data)
           return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
@@ -909,27 +984,29 @@ module RailsAiContext
 
         def minitest_destroy_test(route, name_by_path, res, tests_data, subject)
           label = "should destroy #{res[:name]}"
-          return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
+          return minitest_skip_test(label, res[:unbuildable] || "requires a fixture for #{table_label(res)}") unless subject
 
-          resolved = request_target(route, name_by_path, res[:name], res, tests_data)
+          # The test case's own record method for a made-up record is named name_record, so the local cannot be.
+          local = SPEC_METHOD_NAMES.include?(res[:name]) ? "#{res[:name]}_copy" : res[:name]
+          resolved = request_target(route, name_by_path, local, res, tests_data)
           return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
 
+          if !res[:factory] && (stuck = unfreshable_uniques_reason(res, res[:table_uniques]))
+            return minitest_skip_test(label, stuck)
+          end
+
           setup_lines = if res[:factory]
-            [ "#{res[:name]} = #{factory_create(res)}" ]
+            [ "#{local} = #{factory_create(res)}" ]
           else
             [
-              "# Destroy a fresh record: deleting a fixture row can violate foreign keys other fixtures hold on it.",
-              "#{res[:name]} = #{res[:model]}.create!(#{subject}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
+              *("# Destroy a fresh record: deleting a fixture row can violate foreign keys other fixtures hold on it." if res[:fixture_key]),
+              "#{local} = #{res[:model]}.create!(#{subject}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res, subject)})"
             ]
           end
-          # String uniques are already randomized by destroy_attr_overrides;
-          # only non-string uniques still need a hand-picked fresh value.
-          unhandled_uniques = res[:unique_attrs].reject { |a| %w[string text].include?(schema_column_type(res[:table], a)) }
           minitest_request_test(label, "delete", resolved, res,
             response_assertions(route, res, :minitest),
             difference: "\"#{res[:model]}.count\", -1",
-            setup_lines: setup_lines,
-            todos: unhandled_uniques.any? ? [ "confirm the fresh record satisfies uniqueness validations" ] : [])
+            setup_lines: setup_lines)
         end
 
         def minitest_generic_test(route, name_by_path, res, tests_data, subject)
@@ -989,7 +1066,7 @@ module RailsAiContext
             expr = path_param_expr(param, subject, tests_data, factories: factories, res: res) or return nil
             [ param, expr ]
           end
-          { url: ":#{route[:action] || "index"}", prelude: [], path_params: path_params }
+          { url: ":#{route[:action] || "index"}", prelude: singular_record_prelude(route, path_params_of(route), subject, res), path_params: path_params }
         end
 
         def rspec_target(route, name_by_path, subject, res, tests_data)
@@ -1094,7 +1171,7 @@ module RailsAiContext
         end
 
         def minitest_skip_test(label, reason)
-          [ "  test \"#{label}\" do", "    skip \"TODO: #{reason}\"", "  end" ]
+          [ "  test \"#{label}\" do", "    skip #{"TODO: #{reason}".inspect}", "  end" ]
         end
 
         # A route answering several verbs ("GET|POST", or "ANY" for `via: :all`)
@@ -1107,6 +1184,8 @@ module RailsAiContext
         end
 
         def unresolved_reason(route, res = {})
+          stuck = path_params_of(route).filter_map { |param| (res[:parent_reasons] || {})[param] }.first
+          return stuck if stuck
           if res[:test_case] || res[:controller_spec]
             return "pass #{path_params_of(route).map { |param| ":#{param}" }.join(", ")} for #{route[:verb]} #{route[:path]}"
           end
@@ -1119,7 +1198,8 @@ module RailsAiContext
         def generate_rspec_request(ctrl_class, snake, routes, tests_data, res)
           file_path, existing = test_path("spec", :controller, snake, "spec/requests", "_spec.rb")
           factory = find_factory_name(snake.singularize.camelize, tests_data)
-          res = res.merge(factory: factory, parents: factory ? route_parents(routes, res, tests_data, ref: "") : {})
+          res = res.merge(factory: factory, lazy_subject: true)
+          res[:parents] = route_parents(routes, res, tests_data, ref: "", placeholders: !factory)
           # Among the app's controller specs a new one is a controller spec
           # too, naming the action; elsewhere it is a request spec.
           res[:controller_spec] = file_path.end_with?("_controller_spec.rb")
@@ -1139,6 +1219,8 @@ module RailsAiContext
             lines.push(*todo, "")
           end
 
+          res[:unbuildable] = unbuildable_reason(res[:model]) unless factory
+          todo_at = lines.size
           subject_expr = rspec_subject_lines(lines, res, factory)
           attrs_available = rspec_attributes_lines(lines, res, factory)
 
@@ -1147,10 +1229,11 @@ module RailsAiContext
             lines << "" unless lines.last == ""
             lines.concat(rspec_route_test(route, name_by_path, res, tests_data, subject_expr, attrs_available))
           end
+          lines.insert(todo_at, *unknown_enum_todos(res[:dropped], res[:model]))
 
           if routes.empty?
             lines << "  it \"has tests\" do"
-            lines << "    skip \"TODO: #{no_routes_reason(ctrl_class, res, "request specs")}\""
+            lines << "    skip #{"TODO: #{no_routes_reason(ctrl_class, res, "request specs")}".inspect}"
             lines << "  end"
           end
 
@@ -1207,12 +1290,40 @@ module RailsAiContext
 
         # Emits the subject let and returns the expression tests use to
         # reference a persisted record (nil when one cannot be built).
-        # Names a request or controller spec already gives meaning to: `let(:post)`
-        # shadows the `post` the spec sends.
-        SPEC_METHOD_NAMES = %w[get post put patch delete head request response params session cookies flash controller].freeze
+        # Methods an example calls, or rspec-rails, actionpack and Capybara call on it: a let or local of the same
+        # name replaces the method, and a model called Change, Page or Response is such a name.
+        SPEC_METHOD_NAMES = %w[
+          get post put patch delete head request response params session cookies flash controller app record
+          aggregate_failures assert assert_redirected_to assert_response assertion_delegator be before_setup change
+          create_session driven_by enqueued_jobs eq expect generate_response_message have_current_path have_http_status
+          integration_session method_missing page performed_jobs queue_adapter_changed_jobs redirect_to setup_fixtures visit
+          skip pending include send is_expected create build build_stubbed attributes_for create_list build_list sign_in sign_out
+          assert_difference assert_equal assert_kind_of assert_match assert_operator assert_respond_to assert_current_path assert_not match_array
+        ].freeze
+
+        # A model spec sends no request, so only the names its own examples and factory calls use are taken.
+        MODEL_SPEC_CALLS = %w[skip pending expect is_expected eq be change create build build_stubbed attributes_for include send assert_not assert_respond_to
+                              assert_kind_of match_array].freeze
+
+        def model_let_name(name)
+          MODEL_SPEC_CALLS.include?(name.to_s) ? "#{name}_record" : name.to_s
+        end
 
         def rspec_let_name(name)
           SPEC_METHOD_NAMES.include?(name.to_s) ? "#{name}_record" : name.to_s
+        end
+
+        # Instance variables Minitest, ActiveSupport::TestCase, ActionDispatch::IntegrationTest and
+        # ActionController::TestCase keep for themselves.
+        TEST_CASE_IVARS = %w[
+          after_run app assertions code connection_subscriber controller cookie_jar cookies diff encoders failures
+          fixture_cache_key fixture_connection_pools html_document integration_session mailer mime name object
+          old_perform_deliveries options parallel_executor parallelize_with passed request request_count response
+          root_session routes run_cleanup_hooks saved_pool_configs simple_stubs store tagged_logger time uses_transaction view_context_class
+        ].freeze
+
+        def minitest_ivar(name)
+          TEST_CASE_IVARS.include?(name.to_s) ? "@#{name}_record" : "@#{name}"
         end
 
         def rspec_subject_lines(lines, res, factory)
@@ -1222,28 +1333,291 @@ module RailsAiContext
             lines << "  let(:#{subject}) { #{factory_create(res)} }"
             return subject
           end
-          return nil unless res[:model] && res[:record_attrs].any?
+          placeholder = placeholder_subject_literal(res)
+          lines << "  # TODO: adjust these attributes if validations reject the placeholder values" if placeholder || res[:parents].values.any? { |parent| parent[:record] }
+          res[:parents].each_value { |parent| lines << "  let(:#{parent[:ref]}) { #{route_parent_build(parent)} }" }
+          return nil unless placeholder
 
-          placeholder = placeholder_attrs_literal(res, res[:record_attrs])
           if res[:non_column_attrs].any?
             lines << "  # TODO: #{res[:non_column_attrs].join(', ')} are permitted params but not columns of " \
-              "#{res[:table]}; set them the way the model expects"
+              "#{table_label(res)}; set them the way the model expects"
           end
-          lines << "  # TODO: adjust these attributes if validations reject the placeholder values"
           lines << "  let(:#{subject}) { #{res[:model]}.create!(#{placeholder}) }"
           subject
         end
 
+        # One TODO for each enum a made-up record, its parents or its owners left out.
+        def unknown_enum_todos(dropped, model, indent = "  ")
+          Array(dropped).uniq.sort.map do |key, attr|
+            "#{indent}# TODO: #{key == model ? attr : "#{key}##{attr}"} is an enum whose values the source computes; set one it maps"
+          end
+        end
+
+        def route_parent_build(parent)
+          parent[:factory] ? "#{factory_bot(:create)}(:#{parent[:factory]})" : "#{parent[:model]}.create!(#{parent[:record]})"
+        end
+
+        # The record's attributes made up from placeholders, with every parent it requires whether or not the
+        # controller permits its key; nil when no record can be made up.
+        def placeholder_subject_literal(res)
+          return nil unless res[:model] && res[:record_attrs].any? && !res[:unbuildable]
+
+          passwords = password_pairs(res[:model])
+          required = required_parents(res[:model]).keys + required_roles(res[:model]).values.flat_map { |id, type, _| [ id, type ] }
+          attrs = (res[:record_attrs] | required | validated_attrs(res[:model])).sort - password_columns(res[:model])
+          pairs = value_pairs(res, made_up(res, attrs), :placeholder)
+          "{ #{(pairs + passwords).join(', ')} }"
+        end
+
         def rspec_attributes_lines(lines, res, factory)
           if factory
-            lines << "  let(:valid_attributes) { #{factory_bot(:attributes_for)}(:#{factory}) }"
+            lines << "  let(:valid_attributes) { #{factory_bot(:attributes_for)}(:#{factory})#{required_parent_ids(res)} }"
             true
-          elsif res[:attrs].any?
+          elsif res[:attrs].any? && !unbuildable_params(res)
             lines << "  let(:valid_attributes) { #{placeholder_attrs_literal(res)} }"
             true
           else
             false
           end
+        end
+
+        # attributes_for leaves out every association, so a record whose
+        # required parent the controller may permit by id is never saved without it.
+        def required_parent_ids(res)
+          pairs = required_parents(res[:model]).filter_map do |key, parent|
+            next unless res[:no_strong_params] || res[:attrs].include?(key)
+
+            factory = find_factory_name(parent, cached_context[:tests] || {})
+            factory && "#{key}: #{factory_bot(:create)}(:#{factory}).id"
+          end
+          pairs.any? ? ".merge(#{pairs.join(', ')})" : ""
+        end
+
+        # foreign key => parent class, for each non-polymorphic belongs_to the model cannot be saved without.
+        def required_parents(model_name)
+          model = model_name && (cached_context[:models] || {})[model_name]
+          return {} unless model.is_a?(Hash)
+
+          required = Array(model[:validations]).select { |v| v[:implicit] && !v[:implicit_if] }.flat_map { |v| v[:attributes] }.map(&:to_s)
+          Array(model[:associations]).each_with_object({}) do |a, parents|
+            next unless a[:type].to_s == "belongs_to" && !a[:polymorphic] && required.include?(a[:name].to_s)
+
+            parents[(a[:foreign_key].presence || "#{a[:name]}_id").to_s] = a[:class_name].presence || a[:name].to_s.camelize
+          end
+        end
+
+        # The id of a parent created from placeholders of its own; nil for an unknown model or one already being built.
+        def placeholder_parent(res, attr)
+          parent = required_parents(res[:model])[attr] or return nil
+          key = fuzzy_find_key((cached_context[:models] || {}).keys, parent) or return nil
+          record = placeholder_record(key, Array(res[:seen]) + [ res[:model] ], res[:dropped]) or return nil
+          "#{key}.create!(#{record}).id"
+        end
+
+        # role => [id key, type key, the model a has_many or has_one names it on with `as:`] for each required
+        # polymorphic belongs_to; the first by name when several fill the role, an STI base before its subclasses.
+        # Every placeholder asks, so the run keeps the answer.
+        def required_roles(model_name)
+          RailsAiContext::RunCache.fetch([ :required_roles, model_name ]) { scan_required_roles(model_name) }
+        end
+
+        def scan_required_roles(model_name)
+          model = model_name && (cached_context[:models] || {})[model_name]
+          return {} unless model.is_a?(Hash)
+
+          required = Array(model[:validations]).select { |v| v[:implicit] && !v[:implicit_if] }.flat_map { |v| v[:attributes] }.map(&:to_s)
+          models = cached_context[:models] || {}
+          Array(model[:associations]).each_with_object({}) do |a, roles|
+            next unless a[:type].to_s == "belongs_to" && a[:polymorphic] && required.include?(a[:name].to_s)
+
+            role = a[:name].to_s
+            owners = models.keys.sort.select do |key|
+              models[key].is_a?(Hash) && Array(models[key][:associations]).any? { |o| %w[has_many has_one].include?(o[:type].to_s) && o[:as].to_s == role }
+            end
+            owner = owners.find { |key| !owners.include?(sti_parent(key)) }
+            roles[role] = [ (a[:foreign_key].presence || "#{role}_id").to_s, (a[:foreign_type].presence || "#{role}_type").to_s, owner ]
+          end
+        end
+
+        def sti_parent(key)
+          model = (cached_context[:models] || {})[key]
+          model.is_a?(Hash) ? (model[:sti] || {})[:sti_parent] : nil
+        end
+
+        # The class Rails stores as a polymorphic type: the top of the STI chain the app's models show.
+        def sti_base(key, seen = [])
+          parent = sti_parent(key)
+          parent && (cached_context[:models] || {}).key?(parent) && !seen.include?(parent) ? sti_base(parent, seen + [ key ]) : key
+        end
+
+        # Why no record can be made up: a required polymorphic role no model fills, on the model or on a parent or
+        # owner it cannot be saved without.
+        def unbuildable_reason(model_name, seen = [])
+          return nil if seen.include?(model_name)
+
+          roles = required_roles(model_name)
+          role, = roles.find { |_, (_, _, owner)| owner.nil? }
+          return "#{model_name} belongs_to :#{role}, polymorphic: true, and no model declares has_many or has_one ..., as: :#{role}" if role
+
+          own = model_block(model_name) || attr_blocks(model_name).values.first
+          return own if own
+
+          models = cached_context[:models] || {}
+          upstream = required_parents(model_name).values.filter_map { |parent| fuzzy_find_key(models.keys, parent) } + roles.values.filter_map(&:last)
+          upstream.each do |key|
+            reason = unbuildable_reason(key, seen + [ model_name ]) and return reason
+          end
+          nil
+        end
+
+        # A reason that holds for every attribute: a table whose columns are unknown, or a validation written as code.
+        def model_block(model_name)
+          model = (cached_context[:models] || {})[model_name]
+          return nil unless model.is_a?(Hash)
+
+          if RailsAiContext::Payload.model_table(cached_context, model_name).then { |answer| answer.table.nil? && answer.set_by }
+            return "#{model_name} has a table name the source computes, so its columns are unknown here; supply the attributes it needs"
+          end
+
+          custom = Array(model[:custom_validates]).map(&:to_s)
+          custom << "block" if Array(model[:custom_validate_blocks]).any?
+          return "#{model_name} runs the custom validation #{custom.join(', ')}; supply a record that passes it" if custom.any?
+
+          unread_rule(model_name)
+        end
+
+        RULE_OPTIONS = {
+          "presence" => [], "absence" => [], "uniqueness" => %i[scope case_sensitive], "inclusion" => %i[in within], "exclusion" => %i[in within],
+          "length" => %i[minimum maximum is in within too_short too_long wrong_length],
+          "numericality" => %i[greater_than greater_than_or_equal_to less_than less_than_or_equal_to equal_to only_integer in other_than not_a_number not_an_integer],
+          "acceptance" => %i[accept], "confirmation" => %i[case_sensitive], "format" => %i[with without multiline]
+        }.freeze
+        COMMON_RULE_OPTIONS = %i[message on if unless strict allow_nil allow_blank].freeze
+        PROC_SOURCE = /\A\(proc\)\z|\A\s*(?:->|lambda\b|proc\b|Proc\.new)/
+
+        # The first create-time rule of the model the gem does not read completely: a kind it does not know, a validator
+        # class, an option it does not honor, a lambda or proc anywhere in the rule, a list it cannot read.
+        def unread_rule(model_name)
+          model = (cached_context[:models] || {})[model_name]
+          Array(model[:validations]).each do |v|
+            next if v[:implicit] || !runs_on_create?(v)
+
+            reason = unread_reason(model_name, model, v) and return reason
+          end
+          nil
+        end
+
+        def runs_on_create?(rule)
+          on = rule.dig(:options, :on)
+          on.nil? || Array(on).map(&:to_s).include?("create")
+        end
+
+        def unread_reason(model_name, model, rule)
+          kind = rule[:kind].to_s
+          options = rule[:options] || {}
+          attrs = Array(rule[:attributes]).map(&:to_s)
+          return "#{model_name} runs validates_with #{rule[:validator]}".strip + "; supply a record that passes it" if kind == "validates_with"
+          return "#{model_name} validates #{kind} of #{attrs.join(', ')}, which the gem cannot evaluate; supply a record that passes it" unless RULE_OPTIONS.key?(kind)
+
+          proc_key, = options.find { |_, value| Array(value).any? { |item| item.is_a?(Proc) || item.to_s.match?(PROC_SOURCE) } }
+          return "#{model_name} validates #{kind} of #{attrs.join(', ')} with a lambda or proc in the #{proc_key} option; supply a record that passes it" if proc_key
+
+          other = (options.keys.map(&:to_sym) - COMMON_RULE_OPTIONS - RULE_OPTIONS[kind]).first
+          return "#{model_name} validates #{kind} of #{attrs.join(', ')} with the option #{other}, which the gem does not honor; supply a value that passes it" if other
+
+          list = options[:in] || options[:within]
+          return nil unless %w[inclusion exclusion].include?(kind) && !readable_list?(list)
+          return nil if kind == "inclusion" && (options[:allow_nil] || options[:allow_blank] || attrs.any? { |attr| (model[:enums] || {}).key?(attr) || (model[:enums] || {}).key?(attr.to_sym) })
+
+          "#{model_name} validates #{kind} of #{attrs.join(', ')} against a list the gem cannot read; supply a value that passes it"
+        end
+
+        def readable_list?(list)
+          list.is_a?(Array) || list.is_a?(Range) || !range_of(list).nil?
+        end
+
+        # A Range of numbers from a Range, or from the "1..5" the model payload carries.
+        def range_of(value)
+          return value if value.is_a?(Range)
+
+          found = value.to_s.match(/\A\(?\s*(-?\d+(?:\.\d+)?)\s*(\.\.\.?)\s*(-?\d+(?:\.\d+)?)\s*\)?\z/) or return nil
+          to_number = ->(text) { text.include?(".") ? text.to_f : text.to_i }
+          Range.new(to_number.(found[1]), to_number.(found[3]), found[2] == "...")
+        end
+
+        # attribute => reason, for each attribute some validation of the model allows no value the gem can make up.
+        def attr_blocks(model_name)
+          RailsAiContext::RunCache.fetch([ :attr_blocks, model_name ]) do
+            attrs = validated_attrs(model_name, all: true)
+            attrs.to_h { |attr| [ attr, validity(model_name, attr) ] }.select { |_, found| found&.first == :stuck }.transform_values(&:last)
+          end
+        end
+
+        # The id and type keys of the roles, the keys of the parents and the attributes the record cannot be given.
+        def unbuildable_keys(model_name)
+          models = cached_context[:models] || {}
+          roles = required_roles(model_name).values
+          parents = required_parents(model_name).select { |_, parent| (key = fuzzy_find_key(models.keys, parent)) && unbuildable_reason(key, [ model_name ]) }.keys
+          stuck = roles.select { |(_, _, owner)| owner.nil? || unbuildable_reason(owner, [ model_name ]) }
+          stuck.flat_map { |id, type, _| [ id, type ] } + parents + attr_blocks(model_name).keys
+        end
+
+        # The reason params cannot be made up: they send a key the record cannot be given, or the model cannot be
+        # saved from any. A controller that sets the owner itself permits neither.
+        def unbuildable_params(res)
+          res[:unbuildable] if res[:model] && (model_block(res[:model]) || (res[:attrs] & unbuildable_keys(res[:model])).any?)
+        end
+
+        # The owner's id for a role's id key, its class name for the type key.
+        def placeholder_role(res, attr)
+          _, (id_key, type_key, owner) = required_roles(res[:model]).find { |_, (id, type, found)| found && [ id, type ].include?(attr) }
+          return nil unless owner
+          return sti_base(owner).inspect if attr == type_key
+
+          record = attr == id_key && placeholder_record(owner, Array(res[:seen]) + [ res[:model] ], res[:dropped])
+          record && "#{owner}.create!(#{record}).id"
+        end
+
+        PLACEHOLDER_PASSWORD = "\"password123\""
+
+        # The attributes literal a `key` record saves with when made up from nothing; nil for one already being built.
+        # An STI subclass names itself in the type column, which the base class leaves to Rails.
+        def placeholder_record(key, seen = [], dropped = nil)
+          return nil if seen.include?(key) || unbuildable_reason(key)
+
+          model = (cached_context[:models] || {})[key]
+          model = {} unless model.is_a?(Hash)
+          table = RailsAiContext::Payload.model_table(cached_context, key).table
+          columns = schema_content_columns(table)
+          type_column = ((model[:sti] || {})[:type_column] || "type").to_s
+          typed = columns.include?(type_column) && (model[:sti] || {})[:sti_parent]
+          columns -= [ type_column, *password_columns(key) ]
+          uniques = Array(model[:validations]).select { |v| v[:kind] == "uniqueness" }.flat_map { |v| Array(v[:attributes]).map(&:to_s) }
+          record = { model: key, table: table, unique_attrs: (uniques + unique_index_columns(table)).uniq & columns, seen: seen, dropped: dropped }
+          pairs = value_pairs(record, made_up(record, columns).sort, :placeholder)
+          pairs << "#{type_column}: #{key.inspect}" if typed
+          pairs.concat(password_pairs(key))
+          "{ #{pairs.join(', ')} }"
+        end
+
+        # The password and its confirmation a made-up record is saved with.
+        def password_pairs(model_name)
+          password_attributes(model_name).flat_map { |name| [ "#{name}: #{PLACEHOLDER_PASSWORD}", "#{name}_confirmation: #{PLACEHOLDER_PASSWORD}" ] }
+        end
+
+        # The columns that hold a password's digest, which a made-up record leaves to the password.
+        def password_columns(model_name)
+          password_attributes(model_name).empty? ? [] : [ "encrypted_password", *password_attributes(model_name).map { |name| "#{name}_digest" } ]
+        end
+
+        # The password attributes has_secure_password or Devise's database authentication validates on create.
+        def password_attributes(model_name)
+          model = (cached_context[:models] || {})[model_name]
+          model = {} unless model.is_a?(Hash)
+          names = Array(model[:secure_passwords]).map { |pw| (pw[:attribute] || "password").to_s }
+          names << "password" if names.empty? && model[:has_secure_password]
+          names << "password" if Array(model[:concerns]).include?("Devise::Models::DatabaseAuthenticatable")
+          names.uniq
         end
 
         def rspec_route_test(route, name_by_path, res, tests_data, subject_expr, attrs_available)
@@ -1254,10 +1628,10 @@ module RailsAiContext
             when "index", "new"
               rspec_get_body(route, name_by_path, res, tests_data, nil, "returns success")
             when "show", "edit"
-              if subject_expr
+              if subject_expr || recordless?(route, res)
                 rspec_get_body(route, name_by_path, res, tests_data, subject_expr, "returns success")
               else
-                rspec_skip_body("returns success", "requires a persisted #{res[:name]} record")
+                rspec_skip_body("returns success", no_record_reason(res))
               end
             when "create"
               rspec_create_body(route, name_by_path, res, tests_data, attrs_available)
@@ -1294,16 +1668,29 @@ module RailsAiContext
           out
         end
 
-        # No permitted attributes to send. A controller that declares no
-        # strong params takes none, so the skip says that instead of asking
-        # for a params hash the action never reads.
+        # No permitted attributes to send. A controller with no *_params
+        # method may still permit inline in the action, or read none at all.
+        def no_record_reason(res)
+          return res[:unbuildable] if res[:unbuildable]
+          return "requires a persisted #{res[:name]} record, and #{res[:controller]} has no model of its own to build one from" unless res[:model]
+
+          "requires a persisted #{res[:name]} record"
+        end
+
+        # A page of a controller with no model and no :id (a singular dashboard) needs no record.
+        def recordless?(route, res)
+          !res[:model] && !path_params_of(route).include?("id")
+        end
+
         def no_params_reason(res, request = nil)
+          return unbuildable_params(res) if unbuildable_params(res)
+
           unless res[:no_strong_params]
             return "no permitted attributes detected; fill in valid params#{" for #{request}" if request}"
           end
 
-          "#{res[:controller]} declares no strong params, so the action reads no #{res[:param_key]} params; " \
-            "set up what it does read before #{request || "the request"}"
+          "#{res[:controller]} has no *_params method; send the #{res[:param_key]} params the action permits, if any, " \
+            "before #{request || "the request"}"
         end
 
         def rspec_create_body(route, name_by_path, res, tests_data, attrs_available)
@@ -1326,7 +1713,7 @@ module RailsAiContext
 
         def rspec_update_body(route, name_by_path, res, tests_data, subject_expr, attrs_available)
           label = "updates the #{res[:name]}"
-          return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr
+          return rspec_skip_body(label, no_record_reason(res)) unless subject_expr
           return rspec_skip_body(label, no_params_reason(res)) unless attrs_available
 
           resolved = rspec_target(route, name_by_path, subject_expr, res, tests_data)
@@ -1343,14 +1730,17 @@ module RailsAiContext
 
         def rspec_destroy_body(route, name_by_path, res, tests_data, subject_expr)
           label = "destroys the #{res[:name]}"
-          return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr && res[:model]
+          return rspec_skip_body(label, no_record_reason(res)) unless subject_expr && res[:model]
 
           resolved = rspec_target(route, name_by_path, "record", res, tests_data)
           return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
+          if (stuck = unfreshable_uniques_reason(res, res[:table_uniques]))
+            return rspec_skip_body(label, stuck)
+          end
 
           json = res[:json_api] ? ", as: :json" : ""
           out = [ "  it \"#{label}\" do" ]
-          out << "    record = #{res[:model]}.create!(#{subject_expr}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
+          out << "    record = #{res[:model]}.create!(#{subject_expr}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res, subject_expr)})"
           resolved[:prelude].each { |l| out << "    #{l}" }
           out << "    expect {"
           out << "      #{rspec_request("delete", resolved, nil, json)}"
@@ -1361,7 +1751,7 @@ module RailsAiContext
         end
 
         def rspec_skip_body(label, reason)
-          [ "  it \"#{label}\" do", "    skip \"TODO: #{reason}\"", "  end" ]
+          [ "  it \"#{label}\" do", "    skip #{"TODO: #{reason}".inspect}", "  end" ]
         end
 
         # ── Route and params helpers ─────────────────────────────────────
@@ -1403,15 +1793,22 @@ module RailsAiContext
           helper = route[:name] || name_by_path[route[:path]]
           if helper
             url = args.empty? ? "#{helper}_url" : "#{helper}_url(#{args.join(', ')})"
-            { url: url, prelude: [] }
+            { url: url, prelude: singular_record_prelude(route, params, subject_expr, res) }
           else
             # A record's id is its key; a column value is already the segment.
-            prelude = params.each_with_index.map { |p, i| "#{p} = #{args[i]}#{".id" if p == "id" || p.end_with?("_id")}" }
-            path = route[:path] || "/#{res[:table]}"
+            prelude = singular_record_prelude(route, params, subject_expr, res) + params.each_with_index.map { |p, i| "#{p} = #{args[i]}#{".id" if p == "id" || p.end_with?("_id")}" }
+            path = route[:path] || "/#{res[:table] || res[:name].pluralize}"
             path = path.gsub(/\([^()]*\)/, "") while path.match?(/\([^()]*\)/)
             quoted = path.gsub(RouteCoverage::PATH_PARAM, "\#{\\1}")
             { url: "\"#{quoted}\"", prelude: prelude }
           end
+        end
+
+        # A singular resource has no :id, so nothing in its request builds the record its action reads: a let
+        # or a made-up record's method is called first.
+        def singular_record_prelude(route, params, subject_expr, res)
+          member = %w[show edit update].include?(route[:action].to_s)
+          member && res[:lazy_subject] && subject_expr && !params.include?("id") ? [ subject_expr ] : []
         end
 
         # Dynamic path segments come from the subject record (:id) or a parent
@@ -1451,22 +1848,57 @@ module RailsAiContext
           owner && "#{owner[:ref]}.#{param}"
         end
 
+        # A table the source computes is unknown here; the model names it instead, as the model test's TODO does.
+        def table_label(res)
+          res[:table] || res[:model] || res[:name].camelize
+        end
+
         def parent_table(parent)
-          model = (cached_context[:models] || {})[parent.camelize]
-          (model.is_a?(Hash) && model[:table_name]) || parent.pluralize
+          RailsAiContext::Payload.model_table(cached_context, parent.camelize).table
         end
 
         # Each parent is built once so every request names the same one. `ref` is an ivar in
         # minitest, a let in RSpec.
-        def route_parents(routes, res, tests_data, ref:)
+        # With `placeholders`, a parent no factory builds is created from placeholders of its own.
+        def route_parents(routes, res, tests_data, ref:, placeholders: false)
           params = Array(routes).flat_map { |route| path_params_of(route) }.uniq.select { |param| param.end_with?("_id") }
           params.filter_map do |param|
             parent = param.delete_suffix("_id")
-            factory = find_factory_name(parent.camelize, tests_data) or next
+            factory = find_factory_name(parent.camelize, tests_data)
+            fixture = !factory && !ref.empty? && fixture_key_for(parent.pluralize, tests_data)
+            model = !factory && !fixture && placeholders && fuzzy_find_key((cached_context[:models] || {}).keys, parent.camelize)
+            record = model && placeholder_record(model, [ res[:model] ], res[:dropped])
+            (res[:parent_reasons] ||= {})[param] = unbuildable_reason(model) if model && !record && unbuildable_reason(model)
+            next unless factory || fixture || record
+
             name = parent.tr("/", "_")
-            [ param, { name: parent, ref: ref.empty? ? rspec_let_name(name) : "#{ref}#{name}", factory: factory,
-                       assoc: owned_parent(parent, res) } ]
+            [ param, { name: parent, ref: parent_ref(name, ref, factory, fixture),
+                       factory: factory, fixture: fixture.presence, model: model, record: record, assoc: owned_parent(parent, res) } ]
           end.to_h
+        end
+
+        # A fixture is read as it is; a factory's record is an ivar of the minitest setup, a made-up one a method.
+        def parent_ref(name, ref, factory, fixture)
+          return "#{name.pluralize}(:#{fixture})" if fixture
+          return rspec_let_name(name) if ref.empty?
+
+          factory ? minitest_ivar(name) : minitest_made_up(name)
+        end
+
+        # The route parent's id for the key of the association the record is found through, its class for a
+        # polymorphic one's type key.
+        def route_parent_value(res, attr)
+          model = res[:model] && (cached_context[:models] || {})[res[:model]]
+          return nil unless model.is_a?(Hash)
+
+          (res[:parents] || {}).each_value do |parent|
+            assoc = Array(model[:associations]).find { |a| a[:type].to_s == "belongs_to" && a[:name].to_s == parent[:assoc].to_s } or next
+            return "#{parent[:ref]}.id" if attr == (assoc[:foreign_key].presence || "#{assoc[:name]}_id").to_s
+
+            owner = parent[:model] || fuzzy_find_key((cached_context[:models] || {}).keys, parent[:name].camelize)
+            return sti_base(owner).inspect if assoc[:polymorphic] && owner && attr == (assoc[:foreign_type].presence || "#{assoc[:name]}_type").to_s
+          end
+          nil
         end
 
         # The record's factory call, attached to each route parent it is found
@@ -1492,46 +1924,306 @@ module RailsAiContext
         # Build the params hash literal for create/update, copying attribute
         # values from the fixture record the way Rails scaffold tests do.
         def request_params_literal(res, value_source)
-          pairs = res[:attrs].map do |attr|
-            "#{attr}: #{attr_value_expr(res, attr, value_source)}"
-          end
-          "{ #{res[:param_key]}: { #{pairs.join(', ')} } }"
+          attrs = value_source == :placeholder || res[:placeholder_subject] ? made_up(res, res[:attrs]) : res[:attrs]
+          "{ #{res[:param_key]}: { #{value_pairs(res, attrs, value_source).join(', ')} } }"
         end
 
         def attr_value_expr(res, attr, value_source)
-          if res[:unique_attrs].include?(attr) && %w[string text].include?(schema_column_type(res[:table], attr))
-            # Unique values must differ from every fixture row.
-            "\"#{attr}-\#{SecureRandom.hex(4)}\""
+          if password_param?(res, attr)
+            PLACEHOLDER_PASSWORD
+          elsif value_source == :fixture && res[:unique_attrs].include?(attr) && (fresh = fresh_unique_value(res, minitest_subject(res), attr))
+            # Unique values must differ from every fixture row; a prefix on the
+            # fixture's own value keeps a format validation passing.
+            fresh
+          elsif res[:unique_attrs].include?(attr) && %w[string text].include?(schema_column_type(res[:table], attr))
+            # An email column made up from nothing is an address, so an email format passes.
+            "\"#{attr}-\#{SecureRandom.hex(4)}#{"@example.com" if attr.end_with?("email")}\""
           elsif value_source == :fixture
-            "@#{res[:name]}.#{attr}"
+            "#{minitest_subject(res)}.#{attr}"
           else
-            PLACEHOLDER_VALUES.fetch(schema_column_type(res[:table], attr).to_s, "nil")
+            route_parent_value(res, attr) || placeholder_parent(res, attr) || placeholder_role(res, attr) || valid_value(res, attr) ||
+              listed_value(res, attr) || placeholder_for_type(res, attr)
           end
+        end
+
+        # What the model's validations say, or what the confirmation rule it is the field of says.
+        def valid_value(res, attr)
+          found = res[:model] && validity(res[:model], attr)
+          return found.last if found&.first == :value
+
+          base = confirmed_attr(res, attr) and (value = attr_value_expr(res, base, :placeholder)) && !value.include?("SecureRandom") ? value : nil
+        end
+
+        # The type's placeholder; nil for an attribute that is no column, which is left out rather than written as nil.
+        def placeholder_for_type(res, attr)
+          type = schema_column_type(res[:table], attr).to_s
+          type.empty? && res[:table] ? nil : PLACEHOLDER_VALUES.fetch(type, "nil")
+        end
+
+        # attribute: value pairs for the attributes that have a value.
+        def value_pairs(res, attrs, value_source)
+          attrs.filter_map do |attr|
+            value = attr_value_expr(res, attr, value_source)
+            "#{attr}: #{value}" if value
+          end
+        end
+
+        # A fixture holds a password's digest only, so the password a request sends is made up.
+        def password_param?(res, attr)
+          names = password_attributes(res[:model])
+          names.include?(attr) || names.map { |name| "#{name}_confirmation" }.include?(attr)
+        end
+
+        VALUE_RULES = %w[presence uniqueness inclusion exclusion length numericality acceptance confirmation format absence].freeze
+        FORMAT_SAMPLES = [ "a@example.com", "1", "123", "https://example.com", "a1", "abc" ].freeze
+
+        # The attributes the model's validations name, apart from a required belongs_to and a password.
+        def validated_attrs(model_name, all: false)
+          model = (cached_context[:models] || {})[model_name]
+          return [] unless model.is_a?(Hash)
+
+          names = Array(model[:validations]).reject { |v| v[:implicit] || (!all && !%w[presence length numericality acceptance format absence].include?(v[:kind].to_s)) }
+                                            .flat_map { |v| Array(v[:attributes]).map(&:to_s) }.uniq
+          names - password_attributes(model_name).flat_map { |name| [ name, "#{name}_confirmation" ] } - belongs_names(model_name)
+        end
+
+        def belongs_names(model_name)
+          model = (cached_context[:models] || {})[model_name]
+          Array(model.is_a?(Hash) ? model[:associations] : nil).select { |a| a[:type].to_s == "belongs_to" }.map { |a| a[:name].to_s }
+        end
+
+        # How the model's validations say an attribute is made up: [:value, literal], [:omit] to leave it out,
+        # [:stuck, reason] when no value the gem can make up passes them, nil when they leave it free.
+        def validity(model_name, attr)
+          RailsAiContext::RunCache.fetch([ :validity, model_name, attr ]) { scan_validity(model_name, attr) }
+        end
+
+        def scan_validity(model_name, attr)
+          model = (cached_context[:models] || {})[model_name]
+          rules = Array(model.is_a?(Hash) ? model[:validations] : nil).select do |v|
+            !v[:implicit] && Array(v[:attributes]).map(&:to_s).include?(attr) && v.dig(:options, :on).to_s != "update"
+          end
+          return nil if rules.empty? || (password_attributes(model_name) + belongs_names(model_name)).include?(attr)
+
+          kinds = rules.map { |v| v[:kind].to_s }
+          table = RailsAiContext::Payload.model_table(cached_context, model_name).table
+          type = schema_column_type(table, attr)
+          unknown = (kinds - VALUE_RULES).first
+          return [ :stuck, "#{model_name} validates #{unknown} of #{attr}, which the gem cannot evaluate; supply a record that passes it" ] if unknown
+          return [ :omit ] if kinds.include?("absence")
+          return [ :value, acceptance_value(rules, type) ] if kinds.include?("acceptance")
+
+          if type.empty?
+            return nil if (kinds - %w[confirmation uniqueness inclusion exclusion]).empty?
+
+            return [ :stuck, "#{model_name} validates #{(kinds - %w[uniqueness]).first} of #{attr}, which is not a column; supply it (an attachment, for one)" ]
+          end
+
+          options = ->(kind) { rules.select { |v| v[:kind].to_s == kind }.map { |v| v[:options] || {} } }
+          inclusion = options.("inclusion").find { |o| !readable_list?(o[:in] || o[:within]) && !(model[:enums] || {}).key?(attr) }
+          return [ :omit ] if inclusion
+
+          if %w[string text].include?(type)
+            string_validity(model_name, attr, type, options.("length"), options.("format"), options.("numericality"), table)
+          elsif kinds.include?("numericality")
+            numeric_validity(model_name, attr, type, options.("numericality"))
+          end
+        end
+
+        def acceptance_value(rules, type)
+          accepted = rules.filter_map { |v| v.dig(:options, :accept) }.first
+          return Array(accepted).first.inspect if accepted && !(type == "boolean" && Array(accepted).include?(true))
+
+          type == "boolean" ? "true" : '"1"'
+        end
+
+        # [minimum, maximum] a length rule allows; `in` and `within` give a range.
+        def length_bounds(lengths)
+          bounds = lengths.map do |o|
+            range = range_of(o[:in] || o[:within])
+            [ o[:minimum] || o[:is] || range&.begin, o[:maximum] || o[:is] || (range && (range.exclude_end? ? range.end - 1 : range.end)) ]
+          end
+          [ bounds.filter_map(&:first).select { |n| n.is_a?(Integer) }.max, bounds.filter_map(&:last).select { |n| n.is_a?(Integer) }.min ]
+        end
+
+        def string_validity(model_name, attr, type, lengths, formats, numerics, table)
+          min, max = length_bounds(lengths)
+          fits = ->(text) { (min.nil? || text.length >= min) && (max.nil? || text.length <= max) }
+          unique = unique_columns(model_name, table).include?(attr)
+          return nil if lengths.empty? && formats.empty? && numerics.empty?
+
+          base = type == "text" ? "MyText" : "MyString"
+          matchers = formats.map { |o| format_matcher(attr, o) }
+          numeric = numerics.any? ? numeric_bounds(numerics) : nil
+          samples =
+            if unique then [ "#{attr}-0a1b2c3d#{'@example.com' if attr.end_with?('email')}" ]
+            elsif numeric then numeric_strings(numerics, numeric, min)
+            elsif formats.empty? then [ (base + "x" * [ (min || 0) - base.length, 0 ].max)[0, max || 1_000] ]
+            else [ base, *FORMAT_SAMPLES ]
+            end
+          found = samples.find do |text|
+            fits.(text) && matchers.all? { |match| match&.call(text) } && (numeric.nil? || (Float(text, exception: false) && numeric[:ok].(Float(text))))
+          end
+          return unique ? nil : [ :value, found.inspect ] if found
+
+          return [ :omit ] if !unique && numerics.empty? && formats.any? && formats.all? { |o| o[:allow_blank] || o[:allow_nil] }
+
+          pattern = formats.map { |o| o[:with] || o[:without] }.compact.join(", ")
+          return [ :stuck, "#{model_name} validates format of #{attr}#{" (#{pattern})" unless pattern.empty?}; supply a value it accepts" ] if formats.any?
+
+          [ :stuck, "#{model_name} validates numericality and length of #{attr} together, and no value the gem can make up meets both; supply a value it accepts" ]
+        end
+
+        # A callable that tells whether a text passes one format rule, nil where the pattern cannot be read.
+        def format_matcher(attr, options)
+          source = (options[:with] || options[:without]).to_s
+          pattern = if source == "URI::MailTo::EMAIL_REGEXP" then URI::MailTo::EMAIL_REGEXP
+          elsif source.start_with?("/") && (body = source[%r{\A/(.*)/([imx]*)\z}m, 1])
+            Regexp.new(body, source[%r{/([imx]*)\z}, 1].to_s.each_char.sum { |flag| { "i" => 1, "x" => 2, "m" => 4 }[flag] })
+          elsif source.empty? && attr.end_with?("email") then URI::MailTo::EMAIL_REGEXP
+          end
+          return nil unless pattern
+
+          options[:without] ? ->(text) { !pattern.match?(text) } : ->(text) { pattern.match?(text) }
+        rescue RegexpError
+          nil
+        end
+
+        # The bounds a numericality rule sets and a test of a number against them, nil where a bound is no number.
+        def numeric_bounds(rules)
+          integer = rules.any? { |o| o[:only_integer] }
+          pairs = rules.flat_map do |o|
+            range = range_of(o[:in])
+            ranged = range ? [ [ :greater_than_or_equal_to, range.begin ], [ range.exclude_end? ? :less_than : :less_than_or_equal_to, range.end ] ] : []
+            o.slice(:greater_than, :greater_than_or_equal_to, :less_than, :less_than_or_equal_to, :equal_to, :other_than).to_a + ranged
+          end
+          return nil unless pairs.all? { |_, v| v.is_a?(Numeric) }
+
+          ok = lambda do |n|
+            (!integer || n == n.to_i) && pairs.all? do |key, v|
+              { greater_than: n > v, greater_than_or_equal_to: n >= v, less_than: n < v, less_than_or_equal_to: n <= v, equal_to: n == v, other_than: n != v }[key]
+            end
+          end
+          { integer: integer, pairs: pairs, ok: ok }
+        end
+
+        # Numbers inside the bounds, each as a string at least `min` long (zeros after it, then before it).
+        def numeric_strings(rules, numeric, min)
+          candidates = [ 1, *numeric[:pairs].flat_map { |key, v| %i[greater_than less_than].include?(key) ? [ key == :greater_than ? v + 1 : v - 1 ] : [ v, v + 1 ] } ]
+          candidates.map { |n| n.to_i }.uniq.flat_map do |n|
+            text = n.to_s
+            short = min && text.length < min ? min - text.length : 0
+            short.positive? ? [ text + "0" * short, "0" * short + text ] : [ text ]
+          end
+        end
+
+        def numeric_validity(model_name, attr, type, rules)
+          numeric = numeric_bounds(rules)
+          integer = %w[integer bigint].include?(type) || rules.any? { |o| o[:only_integer] }
+          return [ :stuck, "#{model_name} validates numericality of #{attr} against a bound the gem cannot read; supply a value it accepts" ] unless numeric
+          return nil if numeric[:pairs].empty? && !integer
+
+          default = { "float" => 1.5, "decimal" => 9.99 }.fetch(type, 1)
+          candidates = [ default, *numeric[:pairs].flat_map { |key, v| %i[greater_than less_than].include?(key) ? [ key == :greater_than ? v + 1 : v - 1 ] : [ v ] } ]
+          candidates = candidates.map { |n| integer ? n.to_i : n }.uniq
+          found = candidates.find { |n| numeric[:ok].(n) }
+          return nil if found == default
+          return [ :stuck, "#{model_name} validates numericality of #{attr} within bounds the gem cannot satisfy; supply a value it accepts" ] unless found
+
+          [ :value, type == "decimal" ? found.to_s.inspect : found.to_s ]
+        end
+
+        def unique_columns(model_name, table)
+          model = (cached_context[:models] || {})[model_name]
+          uniques = Array(model.is_a?(Hash) ? model[:validations] : nil).select { |v| v[:kind] == "uniqueness" }.flat_map { |v| Array(v[:attributes]).map(&:to_s) }
+          (uniques + unique_index_columns(table)).uniq
+        end
+
+        # The attribute a confirmation rule checks this field against, when the field is `<attribute>_confirmation`.
+        def confirmed_attr(res, attr)
+          base = attr.delete_suffix("_confirmation")
+          base if base != attr && Array((cached_context[:models] || {})[res[:model]]&.dig(:validations)).any? { |v| v[:kind] == "confirmation" && Array(v[:attributes]).map(&:to_s).include?(base) }
+        end
+
+        LITERAL_LISTED = [ String, Symbol, Integer, Float, TrueClass, FalseClass ].freeze
+
+        # An enum's first key, or the first value an inclusion validation lists or its range starts at: a placeholder like
+        # "MyString" is neither. A list the source computes (a lambda, a constant) keeps the type's placeholder.
+        def listed_value(res, attr)
+          model = res[:model] && (cached_context[:models] || {})[res[:model]]
+          return nil unless model.is_a?(Hash)
+
+          enum = (model[:enums] || {}).then { |enums| enums[attr] || enums[attr.to_sym] }
+          list = enum.is_a?(Hash) ? enum.keys.map(&:to_s) : (enum if enum.is_a?(Array))
+          list ||= Array(model[:validations]).find { |v| v[:kind] == "inclusion" && Array(v[:attributes]).map(&:to_s).include?(attr) }&.dig(:options, :in)
+          first =
+            case list
+            when Array then list.first
+            when Range then list.begin
+            when String then list[/\A\(?\s*(-?\d+)\s*\.\.\.?\s*-?\d+\s*\)?\z/, 1]&.to_i
+            end
+          return nil unless LITERAL_LISTED.any? { |type| first.is_a?(type) }
+
+          # A string column holds the symbol as its string.
+          first.is_a?(Symbol) && %w[string text].include?(schema_column_type(res[:table], attr)) ? first.to_s.inspect : first.inspect
+        end
+
+        # The attributes a placeholder can stand for: an enum whose mapping the source computes has no value
+        # Rails accepts here, so the column keeps its default.
+        def made_up(res, attrs)
+          attrs.reject do |attr|
+            (res[:model] && validity(res[:model], attr) == [ :omit ]) ||
+            unknown_enum?(res, attr).tap { |unknown| res[:dropped] << [ res[:model], attr ] if unknown && res[:dropped] }
+          end
+        end
+
+        def unknown_enum?(res, attr)
+          model = res[:model] && (cached_context[:models] || {})[res[:model]]
+          return false unless model.is_a?(Hash)
+
+          enum = (model[:enums] || {}).then { |enums| enums[attr] || enums[attr.to_sym] }
+          !enum.nil? && !enum.is_a?(Hash) && !enum.is_a?(Array) && listed_value(res, attr).nil?
         end
 
         def params_todos(res, params_literal)
           todos = []
           todos << "replace nil attribute values with valid data" if params_literal.include?(": nil")
-          non_string_uniques = res[:unique_attrs].reject { |a| %w[string text].include?(schema_column_type(res[:table], a)) }
-          todos << "ensure #{non_string_uniques.join(', ')} differ from existing fixture values (uniqueness validation)" if non_string_uniques.any?
           todos
         end
 
         def placeholder_attrs_literal(res, attrs = res[:attrs])
-          pairs = attrs.map do |attr|
-            "#{attr}: #{attr_value_expr(res, attr, :placeholder)}"
-          end
-          "{ #{pairs.join(', ')} }"
+          "{ #{value_pairs(res, made_up(res, attrs), :placeholder).join(', ')} }"
         end
 
-        # Extra create! arguments that keep a copied record from tripping
-        # uniqueness validations.
-        def destroy_attr_overrides(res)
-          overrides = res[:unique_attrs].filter_map do |attr|
-            next unless %w[string text].include?(schema_column_type(res[:table], attr))
-            "\"#{attr}\" => \"#{attr}-\#{SecureRandom.hex(4)}\""
+        # Extra create! arguments that keep a copied record from tripping a uniqueness validation or index,
+        # whether or not the controller permits the column.
+        def destroy_attr_overrides(res, subject)
+          overrides = res[:table_uniques].filter_map do |attr|
+            fresh = fresh_unique_value(res, subject, attr) and "\"#{attr}\" => #{fresh}"
           end
           overrides.any? ? ".merge(#{overrides.join(', ')})" : ""
+        end
+
+        FRESH_BY_ONE_TYPES = %w[integer bigint float decimal date datetime time timestamp].freeze
+
+        # A value that differs from the record's own: a prefix for text, one more for a number, a date or a time.
+        # nil for a type with no such value.
+        def fresh_unique_value(res, record, attr)
+          type = schema_column_type(res[:table], attr)
+          if %w[string text].include?(type)
+            "\"\#{SecureRandom.hex(4)}\#{#{record}.#{attr}}\""
+          elsif FRESH_BY_ONE_TYPES.include?(type)
+            "#{record}.#{attr} + 1"
+          end
+        end
+
+        # Why a record cannot be copied: it holds a unique column no other value can be made for.
+        def unfreshable_uniques_reason(res, attrs)
+          stuck = attrs.reject { |attr| fresh_unique_value(res, "record", attr) }
+          return nil if stuck.empty?
+
+          "#{stuck.join(', ')} #{stuck.one? ? 'is a' : 'are'} unique #{stuck.map { |attr| schema_column_type(res[:table], attr) }.uniq.join('/')} " \
+            "column#{'s' unless stuck.one?}; no fresh value can be made up for #{stuck.one? ? 'it' : 'them'}"
         end
 
         def schema_content_columns(table)
@@ -1595,7 +2287,7 @@ module RailsAiContext
         end
 
         def generate_service_test(class_name, file, framework)
-          entry = service_entry_point(file)
+          entry = service_entry_point(file, class_name)
           rspec = framework.to_s.include?("rspec")
           path, existing = conventional_test_path(rspec, "services", class_name)
           header = [ *existing_test_lines(existing), "# #{existing || path}", "", "```ruby", "# frozen_string_literal: true", "" ]
@@ -1603,11 +2295,16 @@ module RailsAiContext
           if rspec
             lines = header + [ "require \"rails_helper\"", "" ]
             lines << "RSpec.describe #{class_name} do"
-            lines << "  describe \".#{entry[:method]}\" do"
+            lines << "  describe \"#{entry[:describe]}\" do"
             lines << "    it \"performs the expected action\" do"
-            lines << "      # TODO: set up input and verify output"
-            lines << "      result = described_class.#{entry[:call]}"
-            lines << "      expect(result).to #{entry[:expectation]}"
+            if entry[:skip]
+              lines << "      skip #{"TODO: #{entry[:skip]}".inspect}"
+              lines << "      # result = described_class.#{entry[:call]}" if entry[:call]
+            else
+              lines << "      # TODO: set up input and verify output"
+              lines << "      result = described_class.#{entry[:call]}"
+              lines << "      expect(result).to #{entry[:expectation]}"
+            end
             lines << "    end"
             lines << "  end"
             lines << "end"
@@ -1689,6 +2386,12 @@ module RailsAiContext
           res = resource_info(ctrl_class, snake, tests_data)
           res[:factory] = find_factory_name(res[:model], tests_data) if rspec && res[:model]
           res[:login] = login_filters(ctrl_class, pages)
+          if rspec
+            # The visit and the path assertion name one parent, so each is a let.
+            res[:parents] = route_parents(pages, res, tests_data, ref: "", placeholders: true)
+            res[:lazy_subject] = true
+            res[:unbuildable] = unbuildable_reason(res[:model]) if res[:model] && !res[:factory]
+          end
 
           lines = [ *existing_test_lines(existing), "# #{existing || path}", "", "```ruby", "# frozen_string_literal: true", "" ]
           todo = if res[:login].any?
@@ -1703,7 +2406,8 @@ module RailsAiContext
             label = show ? "showing a #{res[:name]}" : "visiting the index"
             lines << "" unless lines.last == ""
             if resolved.nil?
-              lines.concat(rspec ? rspec_skip_body(label, unresolved_reason(route, res)) : minitest_skip_test(label, unresolved_reason(route, res)))
+              reason = rspec && show && res[:model] && !res[:parent_reasons]&.any? ? no_record_reason(res) : unresolved_reason(route, res)
+              lines.concat(rspec ? rspec_skip_body(label, reason) : minitest_skip_test(label, reason))
               next
             end
 
@@ -1732,21 +2436,31 @@ module RailsAiContext
         def system_subject_lines(lines, res, rspec, snake, todo)
           if rspec
             lines.push("require \"rails_helper\"", "", "RSpec.describe \"#{snake.camelize}\", type: :system do", *todo)
+            literal = !res[:factory] && res[:model] && placeholder_subject_literal(res)
+            made_up = res[:parents].values.any? { |parent| parent[:record] } || literal
+            lines << "  # TODO: adjust these attributes if validations reject the placeholder values" if made_up
+            res[:parents].each_value { |parent| lines << "  let(:#{parent[:ref]}) { #{route_parent_build(parent)} }" }
             return nil unless res[:model]
 
+            subject = rspec_let_name(res[:name])
             if res[:factory]
-              lines << "  let(:#{rspec_let_name(res[:name])}) { #{factory_bot(:create)}(:#{res[:factory]}) }"
-              return rspec_let_name(res[:name])
+              lines << "  let(:#{subject}) { #{factory_create(res)} }"
+              return subject
             end
-            lines << "  # TODO: build a #{res[:model]} from this app's own test data for the show page"
-            return nil
+            unless literal
+              lines << "  # TODO: build a #{res[:model]} from this app's own test data for the show page"
+              return nil
+            end
+
+            lines << "  let(:#{subject}) { #{res[:model]}.create!(#{literal}) }"
+            return subject
           end
 
           lines.push("require \"application_system_test_case\"", "", "class #{snake.camelize.delete("::")}Test < ApplicationSystemTestCase", *todo)
           return nil unless res[:model] && res[:fixture_key]
 
-          lines.push("  setup do", "    @#{res[:name]} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})", "  end")
-          "@#{res[:name]}"
+          lines.push("  setup do", "    #{minitest_ivar(res[:name])} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})", "  end")
+          minitest_ivar(res[:name])
         end
 
         # ── Helpers ──────────────────────────────────────────────────────
@@ -1755,16 +2469,64 @@ module RailsAiContext
         # and its inputs are the filters the class declares. A subclass of the
         # app's own base interaction is one just the same, so the superclass
         # chain decides this rather than the one `class` line.
-        def service_entry_point(file)
+        def service_entry_point(file, class_name)
           source = read_app_file(file)
           lookup = Introspectors::SuperclassChain.lookup_for(rails_app.root.to_s)
           filters = source && Introspectors::Interaction.interface(source, lookup: lookup)
-          return { method: "call", call: "call", expectation: "be_truthy" } unless filters
+          return plain_service_entry_point(source, class_name) unless filters
 
           # Nested filters are keys of the filter that declares them, not
           # keyword arguments: active_interaction drops them without a word.
           args = filters.map { |filter| "#{filter.name}: nil" }.join(", ")
-          { method: "run", call: args.empty? ? "run" : "run(#{args})", expectation: "be_valid" }
+          { describe: ".run", call: args.empty? ? "run" : "run(#{args})", expectation: "be_valid" }
+        end
+
+        # `.call` where the class defines one, `new(...).call` for an instance
+        # call, a skip where either needs arguments no test data can supply.
+        # shortcut: reads only the class's own defs, so a call inherited from a base service is a skip.
+        def plain_service_entry_point(source, class_name)
+          defs = own_defs(source, class_name)
+          class_call = defs.find { |node, on_class| node.name == :call && on_class }&.first
+          instance_call = defs.find { |node, on_class| node.name == :call && !on_class }&.first
+          initialize = defs.find { |node, on_class| node.name == :initialize && !on_class }&.first
+
+          if class_call
+            args = required_args(class_call)
+            call = args.empty? ? "call" : "call(#{args.join(', ')})"
+            return { describe: ".call", call: call, expectation: "be_truthy", skip: ("build what #{class_name}.call takes, then call it" if args.any?) }
+          end
+          return { describe: "#call", skip: "#{class_name} defines no call; test the method it exposes" } unless instance_call
+
+          new_args = initialize ? required_args(initialize) : []
+          call_args = required_args(instance_call)
+          call = "#{new_args.empty? ? "new" : "new(#{new_args.join(', ')})"}.#{call_args.empty? ? "call" : "call(#{call_args.join(', ')})"}"
+          skip = if new_args.any? then "build what #{class_name}.new takes, then call it"
+          elsif call_args.any? then "build what #{class_name}#call takes, then call it"
+          end
+          { describe: "#call", call: call, expectation: "be_truthy", skip: skip }
+        end
+
+        # Each def in the class's own bodies with whether it defines a class method;
+        # a class or module it nests is a scope of its own.
+        def own_defs(source, class_name)
+          tree = source && RailsAiContext::AstCache.parse_string(source)&.value or return []
+          found = []
+          walk = lambda do |node, on_class|
+            case node
+            when Prism::DefNode then found << [ node, on_class || node.receiver.is_a?(Prism::SelfNode) ]
+            when Prism::ClassNode, Prism::ModuleNode then nil
+            when Prism::SingletonClassNode then walk.call(node.body, true)
+            when Prism::Node then node.compact_child_nodes.each { |child| walk.call(child, on_class) }
+            end
+          end
+          Introspectors::DeclaredConstant.class_bodies(tree, class_name).each { |body| walk.call(body, false) }
+          found
+        end
+
+        def required_args(def_node)
+          params = def_node.parameters or return []
+          params.requireds.grep(Prism::RequiredParameterNode).map { |param| param.name.to_s } +
+            params.keywords.grep(Prism::RequiredKeywordParameterNode).map { |param| "#{param.name}: #{param.name}" }
         end
 
         def read_app_file(file)
@@ -1854,6 +2616,12 @@ module RailsAiContext
 
         # A gem macro (`validates_date`) or `validates_with` is listed under the macro's name, not
         # a kind `validators_on` reports, so no assertion can be written against it.
+        # What a test of a rule with no matcher must assert.
+        def rule_assertion_hint(validation, attr)
+          options = (validation[:options] || {}).except(:message, :on, :if, :unless).map { |key, value| "#{key}: #{value}" }.join(", ")
+          "assert that a record breaking #{validation[:kind]} on #{attr}#{" (#{options})" unless options.empty?} is invalid and one meeting it is valid"
+        end
+
         def macro_validation?(validation)
           validation[:kind].to_s.start_with?("validates_")
         end
@@ -1872,7 +2640,7 @@ module RailsAiContext
         end
 
         def conditional_validation_skip(condition, indent)
-          "#{indent}skip \"TODO: this validation runs only #{condition.tr('"', "'")}\""
+          "#{indent}skip #{"TODO: this validation runs only #{condition}".inspect}"
         end
 
         # A FactoryBot method as the suite can call it: bare where rails_helper,
@@ -1908,7 +2676,7 @@ module RailsAiContext
           if macro_validation?(validation)
             return [
               "    it \"validates #{validation[:kind]} of #{attr}\" do",
-              "      # TODO: implement #{validation[:kind]} validation test",
+              "      skip #{"TODO: #{rule_assertion_hint(validation, attr)}".inspect}",
               "    end"
             ]
           end
@@ -1921,17 +2689,39 @@ module RailsAiContext
           ]
         end
 
+        def enum_attribute?(data, attr)
+          enums = data[:enums] || {}
+          enums.key?(attr.to_s) || enums.key?(attr.to_sym)
+        end
+
+        # Whether a value passes the format, as far as the source shows: a
+        # `without:` rule or a literal pattern the value matches. A constant
+        # pattern cannot be read, and an invalid value is the likely answer.
+        def format_accepts?(options, value)
+          return true if options[:without]
+
+          pattern = options[:with]
+          return pattern.match?(value) if pattern.is_a?(Regexp)
+
+          literal = pattern.to_s.match(%r{\A/(.*)/([mix]*)\z}m)
+          return false unless literal && !literal[1].include?("\#{")
+
+          flags = (literal[2].include?("i") ? Regexp::IGNORECASE : 0) | (literal[2].include?("x") ? Regexp::EXTENDED : 0) |
+                  (literal[2].include?("m") ? Regexp::MULTILINE : 0)
+          Regexp.new(literal[1], flags).match?(value)
+        rescue RegexpError
+          false
+        end
+
         # The value an app wrote: an Array literal stays one, and a constant
-        # stays code rather than becoming a quoted string.
+        # stays code. Anything else (`roles.keys`) is code in_array cannot take.
         def inclusion_list(validation)
           value = validation.dig(:options, :in)
           return nil if value.nil?
           return value.inspect if value.is_a?(Array)
 
           text = value.to_s
-          return text if text.match?(/\A[A-Z][\w:]*\z/) || text.start_with?("[", "%w", "%i")
-
-          text.inspect
+          text if text.match?(/\A[A-Z][\w:]*\z/) || text.start_with?("[", "%w", "%i")
         end
       end
     end

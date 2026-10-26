@@ -36,6 +36,12 @@ module RailsAiContext
     # The install Claude Code's registry records, at its scope and project.
     Install = Data.define(:scope, :path)
 
+    # Whether the plugin the committed settings turn on runs in a session started in a folder. cause is nil where it
+    # runs, else :managed_mcp, :turned_off (scope and path name the winning file) or :not_running (doctor names why).
+    PluginServing = Data.define(:runs, :cause, :scope, :path, :duplicates) do
+      def runs? = runs
+    end
+
     # The folder of settings.json and plugins/, nil where a relative CLAUDE_CONFIG_DIR leaves it unknown.
     def self.user_config_dir
       value, = config_dir_setting
@@ -171,11 +177,6 @@ module RailsAiContext
     # Whether a session started in that folder runs the plugin for this app.
     def plugin_on_in?(folder)
       !plugin_id_in(folder).nil?
-    end
-
-    # The plugin's id in a session started in that folder, nil where it does not run there.
-    def plugin_id_in(folder)
-      plugin_ids_in(folder).last
     end
 
     # Every id the plugin runs under in a session started in that folder:
@@ -326,6 +327,20 @@ module RailsAiContext
       scoped_settings(folder).any? { |scope, data| scope == :managed && hash_or_empty(data["enabledPlugins"]).key?(id) }
     end
 
+    # The one answer init and doctor render. Only a winning true turns a plugin on: a local or managed false, a
+    # version list or any other value turns the committed one off.
+    def serving(folder)
+      return PluginServing.new(runs: false, cause: :managed_mcp, scope: nil, path: nil, duplicates: duplicates) if managed_mcp
+
+      scope, value, path = setting_for(committed_id(folder), folder)
+      if %i[local managed].include?(scope) && value != true
+        return PluginServing.new(runs: false, cause: :turned_off, scope: scope, path: path, duplicates: duplicates)
+      end
+
+      runs = absent? || plugin_on_in?(folder)
+      PluginServing.new(runs: runs, cause: (:not_running unless runs), scope: nil, path: nil, duplicates: duplicates)
+    end
+
     # Whether the project settings a session started in that folder reads,
     # the committed .claude/settings.json, enable the plugin.
     def committed_in?(folder)
@@ -335,18 +350,6 @@ module RailsAiContext
     # The id those committed settings enable the plugin under.
     def committed_id(folder)
       scoped_settings(folder).filter_map { |scope, data| turned_on(data).first if scope == :project }.first
-    end
-
-    # The scope of the last settings file a session started in that folder
-    # merges that sets the id, which is the one whose value holds.
-    def setting_scope(id, folder)
-      setting_for(id, folder)&.first
-    end
-
-    # That last file as [scope, value, path].
-    def setting_for(id, folder)
-      scope, data, path = scoped_settings(folder).reverse.find { |_, file| hash_or_empty(file["enabledPlugins"]).key?(id) }
-      [ scope, data["enabledPlugins"][id], path ] if scope
     end
 
     # The gem requirement of the plugin copy that runs for this app, every
@@ -473,6 +476,23 @@ module RailsAiContext
     end
 
     private
+
+    # The plugin's id in a session started in that folder, nil where it does not run there.
+    def plugin_id_in(folder)
+      plugin_ids_in(folder).last
+    end
+
+    # The scope of the last settings file a session started in that folder
+    # merges that sets the id, which is the one whose value holds.
+    def setting_scope(id, folder)
+      setting_for(id, folder)&.first
+    end
+
+    # That last file as [scope, value, path].
+    def setting_for(id, folder)
+      scope, data, path = scoped_settings(folder).reverse.find { |_, file| hash_or_empty(file["enabledPlugins"]).key?(id) }
+      [ scope, data["enabledPlugins"][id], path ] if scope
+    end
 
     # The folders a session serving this app could start in: the app, the two above it (as deep as a walk
     # down reaches), the one the command was typed in, and the projects Claude Code keeps.
@@ -770,9 +790,9 @@ module RailsAiContext
     # Whether the plugin, started in that folder, serves this app, and the server would read it.
     def serves_from?(folder)
       @serves.fetch(folder) do
-        served = CLI::AppRoot.resolve(cwd: File.expand_path(folder)).root
-        @serves[folder] = !served.nil? && CLI::EntryBoot.app_present?(served, allow_source_only: true) &&
-                          SafePath.canonical(served).b == SafePath.canonical(@root).b
+        target = CLI::AppRoot.target(File.expand_path(folder))
+        served = target.kind == :app ? [ target.root ] : target.apps.map(&:root)
+        @serves[folder] = served.any? { |root| SafePath.canonical(root).b == SafePath.canonical(@root).b }
       end
     rescue SystemCallError, ArgumentError
       @serves[folder] = false
@@ -977,12 +997,10 @@ module RailsAiContext
     end
 
     # Wider than McpConfigGenerator.own_entry?, which judges entries the gem
-    # wrote: a server added by hand may run the binary from any path, put
-    # `serve` after other flags, or run the rake task.
+    # wrote: a server added by hand runs the gem's server however it is spelled.
     def own?(name, entry)
       argv = McpConfigGenerator.unwrapped_argv(McpConfigGenerator.json_argv(entry))
-      at = argv.index { |arg| File.basename(arg.tr("\\", "/"), ".*") == "rails-ai-context" }
-      McpConfigGenerator.own_entry?(name, argv) || (!at.nil? && argv.drop(at + 1).include?("serve")) || argv.include?("ai:serve")
+      McpConfigGenerator.own_entry?(name, argv) || McpConfigGenerator.runs_gem?(argv)
     end
 
     def real(folder)

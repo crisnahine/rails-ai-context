@@ -69,55 +69,37 @@ module RailsAiContext
 
       BARE_GUARD_PATTERN = RailsAiContext::Install::InitializerFile::BARE_GUARD
 
-      # The first step, so a bad flag stops the install before anything is
-      # asked or written.
-      def select_ai_tools
+      # The install in Program's order, this generator's own steps called at
+      # their place: the initializer and the record, the pre-commit hook and
+      # the context files. The flags are read first, so a bad one stops the
+      # install before anything is asked or written.
+      def install
         given = given_answers
-        @previous_formats = read_previous_ai_tools
-        @selected_formats = RailsAiContext::Install::Program.select_ai_tools(
-          program_surface, current: @previous_formats, given: given[:tools]
-        )
-      end
-
-      def cleanup_removed_tools
-        return unless @previous_formats&.any?
-
-        RailsAiContext::Install::Program.cleanup_removed_tools(
-          program_surface,
-          previous: @previous_formats, selected: @selected_formats, root: install_root, prune: options[:prune]
-        )
-      end
-
-      def select_setup
-        program = RailsAiContext::Install::Program
-        setup = program.select_setup(program_surface, given: given_answers[:setup],
-                                                      current: program.recorded_setup(root: install_root))
-        @tool_mode = setup.tool_mode
-        @context_files = setup.context_files
-      end
-
-      # The install mode is read from the install root's bundle: left to
-      # itself the generator reads Rails.root's, which is an engine's dummy
-      # app.
-      def create_mcp_config
-        written = RailsAiContext::Install::Program.write_mcp_configs(
-          program_surface,
-          tools: @selected_formats, tool_mode: @tool_mode, root: install_root,
-          standalone: RailsAiContext::InstallMode.standalone?(root: install_root)
-        )
-        @held = written[:held]
-        @plugin_off = written[:plugin_off]
-        program = RailsAiContext::Install::Program
-        unless context_files?
-          @removed_context_files = program.ask_context_removal(program_surface, tools: @selected_formats, root: install_root,
-                                                                               prune: options[:prune])
-          program.remove_context_files(program_surface, @selected_formats, root: install_root) if @removed_context_files
+        answers = RailsAiContext::Install::Program::Answers.new(tools: given[:tools], setup: given[:setup], prune: options[:prune],
+                                                                defaults: options[:defaults])
+        # A record that will not read stops the run below, and reading it here would warn about it a second time.
+        unless RailsAiContext::Install::SelectionRecord.unreadable(root: install_root)
+          RailsAiContext::UnbootedSettings.read(install_root).notes.each { |note| say note, :yellow }
         end
-        return unless @tool_mode == :cli
-
-        program.remove_mcp_entries(program_surface,
-                                   program.ask_mcp_removal(program_surface, root: install_root, prune: options[:prune]),
-                                   root: install_root)
+        run = RailsAiContext::Install::Program.run(answers, surface: program_surface, root: install_root) do |step, so_far|
+          @selected_formats = so_far.tools
+          @tool_mode = so_far.setup.tool_mode
+          @context_files = so_far.setup.context_files
+          case step
+          when :boot then @hook_plan = plan_validation_hook
+          when :record
+            create_initializer
+            create_yaml_config
+          when :hook then install_validation_hook(@hook_plan)
+          when :context then generate_context_files
+          end
+        end
+        @held = run.held
+        @plugin_off = run.plugin_off
+        @removed_context_files = run.removed_context
+      rescue RailsAiContext::Install::Program::RecordRefused => e
+        say "Error: #{e.message}", :red
+        exit 1
       end
 
       # The :standard preset's comment, its introspectors named from the
@@ -299,6 +281,7 @@ module RailsAiContext
         SECTION
       }.freeze
 
+      no_tasks do
       def create_initializer
         initializer_path = "config/initializers/rails_ai_context.rb"
         full_path = install_root.join(initializer_path)
@@ -311,7 +294,6 @@ module RailsAiContext
         end
       end
 
-      no_tasks do
       # Where every file of this install goes. An engine's bin/rails boots its
       # dummy app, so there Rails.root is test/dummy, while the generator was
       # run from the engine's root: the folder an editor is opened at, the
@@ -357,13 +339,6 @@ module RailsAiContext
           say "No #{relative} in an engine: Rails would run it in every app that mounts the engine. " \
               "The settings go in .rails-ai-context.yml", :yellow
         end
-      end
-
-      # The files v5.0.0 stopped writing, offered for deletion once.
-      def prompt_legacy_files
-        RailsAiContext::LegacyCleanup.prompt_legacy_files(
-          @selected_formats, root: install_root, warn_only: options[:defaults], delete: options[:prune]
-        )
       end
 
       # The answers given as flags, read once.
@@ -441,47 +416,58 @@ module RailsAiContext
 
       def update_existing_initializer(full_path)
         existing = File.read(full_path)
+        # Wrapped in the guard, a BOM would move into the constant's name and fail the boot.
+        bom, existing = RailsAiContext::SafeFile.split_bom(existing)
+        if RailsAiContext::UnbootedSettings.writes(existing).nil?
+          _level, text = RailsAiContext::Install::SelectionRecord.messages({ initializer: :unparsed }).first
+          return say text, :red
+        end
         changes = []
 
-        # 1. Update ai_tools selection if user picked new tools
+        # The sections go in first, so a selection line they bring commented out is made live in this run.
+        missing = CONFIG_SECTIONS.reject { |name, _| existing.include?("── #{name}") }
+        unplaced = missing.keys
+        missing.each do |name, section_content|
+          block = configure_block(existing) or break
+
+          insert_point = configure_block_end_index(existing, block)
+          # A blank line above the section unless one is there, or the block
+          # is empty, and none below it: the line before `end` stays code.
+          above = existing[0...insert_point].sub(/[ \t]+\z/, "")
+          gap = above.end_with?("\n\n") || (block.empty && above.end_with?("\n")) ? "" : "\n"
+          section = reindent_section_content(section_content, existing)
+          section = section.gsub(/(?<=# )config\./, "#{block_parameter(block)}.")
+          existing = "#{above}#{gap}#{section}#{existing[insert_point..]}"
+          changes << "section: #{name}"
+          unplaced.delete(name)
+        end
+
         existing, changed = update_config_line(existing, :ai_tools, @selected_formats)
         changes << "ai_tools" if changed
-
-        # 2. Update tool_mode if user picked a new mode
         existing, changed = update_config_line(existing, :tool_mode, tool_mode)
         changes << "tool_mode" if changed
-
-        # 3. Record whether this install writes context files at all
         existing, changed = update_config_line(existing, :context_files, context_files?)
         changes << "context_files" if changed
 
-        # 4. Add any missing config sections
-        CONFIG_SECTIONS.each do |name, section_content|
-          marker = "── #{name}"
-          next if existing.include?(marker)
-
-          insert_point = configure_block_end_index(existing)
-          if insert_point
-            # A blank line above the section unless one is there, or the block
-            # is empty, and none below it: the line before `end` stays code.
-            above = existing[0...insert_point]
-            gap = above.end_with?("\n\n") || above.match?(/do \|config\|\n\z/) ? "" : "\n"
-            existing = existing.insert(insert_point, "#{gap}#{reindent_section_content(section_content, existing)}")
-            changes << "section: #{name}"
-          end
-        end
-
         existing, changed = ensure_initializer_guard(existing)
         changes << "guard" if changed
+        # What this adds is written in LF; a file checked out in CRLF keeps one ending throughout.
+        existing = existing.gsub(/\r?\n/, "\r\n") if existing.include?("\r\n")
 
+        if unplaced.any?
+          say "No RailsAiContext.configure block in #{full_path.relative_path_from(install_root)} to add " \
+              "#{unplaced.join(', ')} to - left them out", :yellow
+        end
         if changes.any?
-          RailsAiContext::SafeFile.atomic_write(full_path.to_s, existing, root: install_root.to_s)
+          RailsAiContext::SafeFile.atomic_write(full_path.to_s, bom + existing, root: install_root.to_s)
           say "Updated #{full_path.relative_path_from(install_root)}: #{changes.join(', ')}", :green
-        else
+        elsif unplaced.empty?
           say "#{full_path.relative_path_from(install_root)} is up to date - no changes needed", :green
         end
       rescue RailsAiContext::SafeFile::LinkedOut
         say "Left #{full_path.relative_path_from(install_root)} as it is - #{RailsAiContext::SafeFile::LINKED}", :yellow
+      rescue *RailsAiContext::SafeFile::DENIED
+        say "Could not write #{full_path.relative_path_from(install_root)} - check its permissions", :red
       end
 
       # A key's line, rewritten where it stands. An assignment in the shape
@@ -500,23 +486,30 @@ module RailsAiContext
         end
         return [ edited, status == :updated ] unless status == :absent
 
-        pattern = /^([ \t]*)#?[ \t]*config\.#{key}[ \t]*=.*$/
-        updated = content.sub(pattern) { "#{Regexp.last_match(1)}#{record.config_line(key, value)}" }
-        [ updated, updated != content ]
+        block = configure_block(content) or return [ content, false ]
+        param = block_parameter(block)
+        region = (content.byteslice(0, content.lines.first(block.call_line - 1).sum(&:bytesize)).length...
+                  content.byteslice(0, block.close_offset(content)).length)
+        updated = content[region].sub(/^([ \t]*)#[ \t]*#{param}\.#{key}[ \t]*=.*$/) do
+          "#{Regexp.last_match(1)}#{param}.#{record.config_line(key, value).delete_prefix('config.')}"
+        end
+        [ "#{content[0...region.begin]}#{updated}#{content[region.end..]}", content[region] != updated ]
       end
 
-      def configure_block_end_index(content)
-        end_positions = []
-        content.to_enum(:scan, /^[ \t]*end\b/).each do
-          end_positions << Regexp.last_match.begin(0)
-        end
-        return nil if end_positions.empty?
+      def configure_block(content)
+        RailsAiContext::Install::InitializerFile.configure_block(content)
+      end
 
-        if guarded_initializer?(content) && end_positions.size >= 2
-          end_positions[-2]
-        else
-          end_positions[-1]
-        end
+      # Where the block closes: the start of its closing line when `end` or
+      # `}` begins that line, else right before it. A character index.
+      def configure_block_end_index(content, block)
+        index = content.byteslice(0, block.close_offset(content)).length
+        line_start = (content.rindex("\n", index - 1) || -1) + 1
+        content[line_start...index].strip.empty? ? line_start : index
+      end
+
+      def block_parameter(block)
+        block.param || "config"
       end
 
       def ensure_initializer_guard(content)
@@ -551,14 +544,14 @@ module RailsAiContext
       end
 
       def configure_body_indent(content)
-        match = content.match(/^([ \t]*)RailsAiContext\.configure do \|config\|$/)
-        return "  " unless match
+        block = configure_block(content) or return "  "
 
-        "#{match[1]}  "
+        "#{content.lines[block.call_line - 1][/\A[ \t]*/]}  "
       end
 
       def guarded_initializer?(content)
-        RailsAiContext::Install::InitializerFile.guarded?(content)
+        file = RailsAiContext::Install::InitializerFile
+        file.guarded?(content) || file.any_guard_before_configure?(content)
       end
 
       def indent_content(content)
@@ -586,10 +579,6 @@ module RailsAiContext
 
       def context_files?
         @context_files.nil? ? true : @context_files
-      end
-
-      def read_previous_ai_tools
-        RailsAiContext::Install::SelectionRecord.read(root: install_root)
       end
 
       # Git's own answer, not a `.git` directory in the install root: a submodule
@@ -646,8 +635,6 @@ module RailsAiContext
             "as it is - make sure it passes deleted files over, as the current hook does"
         end
       end
-      end # no_tasks
-
       def create_yaml_config
         # `initializer: false` because this generator writes that file itself,
         # a few steps earlier and better: it replaces the commented-out
@@ -664,28 +651,37 @@ module RailsAiContext
         end
       end
 
-      def add_to_gitignore
-        RailsAiContext::Install::Program.mark_gitignore(program_surface, root: install_root,
-                                                        context_files: context_files?)
+      # Writes what plan_validation_hook settled; planned now when not given.
+      def install_validation_hook(plan = :unplanned)
+        # Planned in the body: a denied read there is rescued below, as a default argument's would not be.
+        plan = plan_validation_hook if plan == :unplanned
+        return unless plan
+
+        kind, text, colour, hook_path, hooks, script = plan
+        write_validation_hook(hook_path, hooks, script) if kind == :write
+        say text, colour
+      rescue *RailsAiContext::SafeFile::DENIED
+        say "Could not write #{hook_path || 'the pre-commit hook'} - check its permissions", :red
       end
 
-      def install_validation_hook
+      # The pre-commit hook's question, asked with the install's others before
+      # anything is written, and what its step then does: nil for nothing,
+      # [:say, text, colour] or [:write, text, colour, path, hooks dir, script].
+      def plan_validation_hook
         repo = git_repository or return
         # No hook at an engine's root, whose rake tasks are app:ai:* and run
         # in the dummy app. The hook ran `rails 'ai:tool[validate]'` when this
         # was written; it now runs the gem's CLI, which reads an engine from
         # source, but has not been offered at an engine's root yet.
         if engine_root
-          say "  Skipped pre-commit hook (not offered at an engine's root, whose tasks run in the dummy app as app:ai:*)", :yellow
-          return
+          return [ :say, "  Skipped pre-commit hook (not offered at an engine's root, whose tasks run in the dummy app as app:ai:*)", :yellow ]
         end
 
         # A core.hooksPath outside the repository is shared by every
         # repository that uses it, so this app's hook does not belong there.
         unless RailsAiContext::SafePath.inside?(repo[:hooks], repo[:toplevel]) || RailsAiContext::SafePath.inside?(repo[:hooks], repo[:common_dir])
-          say "  Skipped pre-commit hook (core.hooksPath points outside this repository, at #{repo[:hooks]}, " \
-              "where every repository using it would run it - add it there by hand)", :yellow
-          return
+          return [ :say, "  Skipped pre-commit hook (core.hooksPath points outside this repository, at #{repo[:hooks]}, " \
+              "where every repository using it would run it - add it there by hand)", :yellow ]
         end
 
         app = repo[:prefix].empty? ? "." : repo[:prefix]
@@ -693,20 +689,24 @@ module RailsAiContext
         # under a dotfiles repository at $HOME - is not that repository's to
         # validate.
         unless app == "." || app_tracked?
-          say "  Skipped pre-commit hook (#{install_root} is not tracked in the git repository at #{repo[:toplevel]} - " \
-              "commit it there, then run this again)", :yellow
-          return
+          return [ :say, "  Skipped pre-commit hook (#{install_root} is not tracked in the git repository at #{repo[:toplevel]} - " \
+              "commit it there, then run this again)", :yellow ]
         end
 
         hook_path = repo[:hooks].join("pre-commit")
         hook = RailsAiContext::Install::ValidationHook
         apps = [ app ]
         standalone = RailsAiContext::InstallMode.standalone?
+        # A hook manager's link (lefthook, husky) is its own arrangement, and a
+        # write through one lands where it leads, wherever that is.
+        if File.symlink?(hook_path)
+          return [ :say, "  Skipped pre-commit hook (#{hook_path} is a symlink - add it by hand where it leads)", :yellow ]
+        end
+
         if File.exist?(hook_path)
           content = File.binread(hook_path)
           unless content.include?("rails-ai-context")
-            say "  Skipped pre-commit hook (existing hook found - add manually)", :yellow
-            return
+            return [ :say, "  Skipped pre-commit hook (existing hook found - add manually)", :yellow ]
           end
 
           coverage = hook.coverage(content)
@@ -714,8 +714,7 @@ module RailsAiContext
             listed = hook.listed(content)
             return if listed&.include?(app)
 
-            say "  Skipped pre-commit hook (#{hand_changed_hook(hook_path, content, listed, app)})", :yellow
-            return
+            return [ :say, "  Skipped pre-commit hook (#{hand_changed_hook(hook_path, content, listed, app)})", :yellow ]
           end
 
           # An earlier version's hook, unchanged: rewritten in the current form,
@@ -724,9 +723,8 @@ module RailsAiContext
           # app alone takes this install's form; one for several keeps its own.
           if coverage.legacy && coverage.apps.include?(app)
             form = coverage.apps.one? ? standalone : coverage.standalone
-            write_validation_hook(hook_path, repo[:hooks], hook.script(coverage.apps, standalone: form))
-            say "  Updated the pre-commit validation hook from an earlier version", :green
-            return
+            return [ :write, "  Updated the pre-commit validation hook from an earlier version", :green, hook_path, repo[:hooks],
+                     hook.script(coverage.apps, standalone: form) ]
           end
           return if coverage.apps.include?(app)
 
@@ -747,8 +745,8 @@ module RailsAiContext
         answer = options[:hook] ? "y" : ask_safe(question).strip.downcase
         return unless answer == "y"
 
-        write_validation_hook(hook_path, repo[:hooks], hook.script(apps, standalone: standalone))
-        say(apps.one? ? "  Installed pre-commit validation hook" : "  Added #{app} to the pre-commit validation hook", :green)
+        done = apps.one? ? "  Installed pre-commit validation hook" : "  Added #{app} to the pre-commit validation hook"
+        [ :write, done, :green, hook_path, repo[:hooks], hook.script(apps, standalone: standalone) ]
       end
 
       def generate_context_files
@@ -760,10 +758,7 @@ module RailsAiContext
 
         say ""
         say "Generating AI context files...", :yellow
-        if engine_root
-          prompt_legacy_files
-          return generate_engine_context
-        end
+        return generate_engine_context if engine_root
 
         unless Rails.application
           say "  Skipped (Rails app not fully loaded). Run `rails ai:context` after install.", :yellow
@@ -771,8 +766,6 @@ module RailsAiContext
         end
 
         require "rails_ai_context"
-
-        prompt_legacy_files
 
         # The configuration was loaded at boot, before the questions above:
         # without the answers the files came out in the mode the app had
@@ -792,6 +785,7 @@ module RailsAiContext
           say "  ❌ #{@selected_formats.join(', ')}: #{e.message}", :red
         end
       end
+      end # no_tasks
 
       def show_instructions
         say ""

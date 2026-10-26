@@ -364,7 +364,7 @@ module RailsAiContext
         lines << "**Schedule:** #{scheduled.map { |task| schedule_text(task) }.join('; ')}" if scheduled.any?
 
         # Side effects
-        side_effects = extract_side_effects(source)
+        side_effects = side_effects_of(source)
         if side_effects.any?
           lines << "" << "## Side Effects"
           side_effects.each { |s| lines << "- #{s}" }
@@ -400,7 +400,7 @@ module RailsAiContext
           {
             file: relative,
             class_name: class_name,
-            line_count: source&.lines&.size,
+            line_count: source && (Introspectors::DeclaredConstant.own_line_count(source, class_name) || source.lines.size),
             queue: job[:queue].presence || (source && extract_queue(source)),
             # No ActiveJob or Sidekiq ancestry found, and the bracket says so.
             unknown_base: job[:unknown_base],
@@ -458,7 +458,7 @@ module RailsAiContext
               broadcasts = extract_broadcasts(source)
               lines << "- **Broadcasts:** #{broadcasts.join(', ')}" if broadcasts.any?
 
-              side_effects = extract_side_effects(source)
+              side_effects = side_effects_of(source)
               lines << "- **Side effects:** #{side_effects.join(', ')}" if side_effects.any?
             end
             lines << ""
@@ -569,22 +569,6 @@ module RailsAiContext
         broadcasts.to_a.sort
       end
 
-      private_class_method def self.extract_side_effects(source)
-        effects = Set.new
-
-        effects << "database write" if source.match?(/\.(save[!]?|update[!]?|create[!]?|destroy[!]?|delete)\b/)
-        effects << "email delivery" if source.match?(/\.deliver_later|\.deliver_now/)
-        effects << "job enqueue" if Introspectors::SourceCalls.enqueue_calls(source, enqueue_helpers).any?
-        effects << "Turbo broadcast" if source.match?(/broadcast_|Turbo::StreamsChannel/)
-        effects << "HTTP request" if source.match?(/Faraday|Net::HTTP|HTTParty|RestClient/)
-        effects << "cache write" if source.match?(/Rails\.cache\.write|Rails\.cache\.fetch/)
-        effects << "file I/O" if source.match?(/File\.write|File\.open/)
-        effects << "logging" if source.match?(/Rails\.logger|logger\./)
-        effects << "notification" if source.match?(/ActiveSupport::Notifications\.instrument/)
-
-        effects.to_a.sort
-      end
-
       private_class_method def self.recurring_lines(schedules)
         return [] if schedules.empty?
 
@@ -602,15 +586,15 @@ module RailsAiContext
 
       # Read off call nodes, so a call inside a comment does not count. The app's own enqueue
       # helper (`Jobs.enqueue(:process_post)`) counts, and a bare constant resolves as Ruby would.
-      private_class_method def self.enqueues?(source, class_name, helpers, known)
+      private_class_method def self.enqueues?(source, class_name, helpers, known, root)
         names = Introspectors::SourceCalls::ENQUEUE_CALLS + %w[perform_all_later new] + helpers.map { |helper| helper[:method].to_s }
         calls = Introspectors::SourceIntrospector.walk_source(source, {
           calls: -> { Introspectors::Listeners::MethodCallListener.new(names: names) }
         })[:calls]
         return false if calls.empty?
 
-        nesting = module_nesting(source)
-        resolve = ->(call, written) { resolve_constant(written.to_s, nesting.call(call[:line]), known) }
+        scope = module_nesting(source)
+        resolve = ->(call, written) { resolve_constant(written.to_s, scope.call(call[:line]), known, root) }
         all_later = calls.any? { |call| call[:name] == "perform_all_later" }
 
         calls.any? do |call|
@@ -652,17 +636,13 @@ module RailsAiContext
         end
       end
 
-      # A constant as Ruby resolves it lexically: each namespace on the
-      # nesting that holds a job of that name, innermost first, else the name
-      # as written (the top level).
-      private_class_method def self.resolve_constant(written, nesting, known)
-        return written.delete_prefix("::") if written.start_with?("::")
-
-        nesting.each do |namespace|
-          candidate = "#{namespace}::#{written}"
-          return candidate if known.include?(candidate)
-        end
-        written
+      # A constant as Ruby resolves it: each namespace on the nesting that holds
+      # a job of that name, innermost first, then the enclosing class's
+      # ancestors, else the name as written (the top level).
+      private_class_method def self.resolve_constant(written, nesting, known, root)
+        exists = ->(candidate) { known.include?(candidate) }
+        ancestors = nesting.empty? ? [] : ConcernPaths.ancestors(root, nil, nil, nesting.first) - nesting
+        Introspectors::DeclaredConstant.lookup(written, nesting: nesting, ancestors: ancestors, exists: exists) || written.delete_prefix("::")
       end
 
       private_class_method def self.find_enqueuers(class_name, real_root, own_file = nil, helpers = [], known = [])
@@ -674,7 +654,7 @@ module RailsAiContext
         ruby_files(real_root).each do |real|
             source = safe_read(real)
             next unless source && spellings.any? { |spelling| source.include?(spelling) }
-            next unless enqueues?(source, class_name, helpers, known)
+            next unless enqueues?(source, class_name, helpers, known, real_root)
 
             relative = real.sub("#{real_root}/", "")
             # Skip the job's own file, matched by constant too: a path spelled through an acronym

@@ -77,6 +77,7 @@ module RailsAiContext
           when :render     then extract_render(node)
           when :validates  then extract_validates(node) if @uncertain_blocks.zero?
           when :permit     then extract_permit(node)
+          when :expect     then extract_expect(node)
           # An encrypted attribute (Lockbox's has_encrypted keeps `<name>_ciphertext`)
           # and a store key are attributes with no column of their own name.
           when :attribute, :attr_accessor, :attr_reader, :attr_writer, :has_encrypted, :encrypts, :attr_encrypted
@@ -137,21 +138,22 @@ module RailsAiContext
           @method_context_stack.last
         end
 
+        # A positional name is a partial or, in a Ruby file, a template; a leading options hash
+        # renders what RenderCalls.options_partials says Rails renders.
         def extract_render(node)
-          args = node.arguments&.arguments || []
-          args.each do |arg|
-            case arg
-            when Prism::StringNode
-              @render_calls << { name: arg.unescaped, line: node.location.start_line, explicit_partial: false }
-            when Prism::KeywordHashNode
-              arg.elements.each do |elem|
-                next unless elem.is_a?(Prism::AssocNode)
-                key = elem.key
-                val = elem.value
-                if key.is_a?(Prism::SymbolNode) && key.unescaped == "partial" && val.is_a?(Prism::StringNode)
-                  @render_calls << { name: val.unescaped, line: node.location.start_line, explicit_partial: true }
-                end
-              end
+          first = node.arguments&.arguments&.first
+          line = node.location.start_line
+          case first
+          when Prism::StringNode
+            @render_calls << { name: first.unescaped, line: line, explicit_partial: false }
+          when Prism::KeywordHashNode, Prism::HashNode
+            named = first.elements.each_with_object({}) do |elem, found|
+              next unless elem.is_a?(Prism::AssocNode) && elem.key.is_a?(Prism::SymbolNode)
+
+              found[elem.key.unescaped] = (elem.value.unescaped if elem.value.is_a?(Prism::StringNode))
+            end
+            Introspectors::RenderCalls.options_partials(named, block: !node.block.nil?).each do |name|
+              @render_calls << { name: name, line: line, explicit_partial: true }
             end
           end
         end
@@ -222,15 +224,30 @@ module RailsAiContext
             when Prism::SymbolNode then params << arg.unescaped
             end
           end
-          # Extract model key from params.require(:model).permit(...)
+          # The model key from params.require(:model).permit(...) or params.fetch(:model, {}).permit(...)
           require_key = nil
           receiver = node.receiver
-          if receiver.is_a?(Prism::CallNode) && receiver.name == :require
+          if receiver.is_a?(Prism::CallNode) && (receiver.name == :require || (receiver.name == :fetch && params_call?(receiver.receiver)))
             req_args = receiver.arguments&.arguments || []
             first = req_args.first
             require_key = first.unescaped if first.is_a?(Prism::SymbolNode)
           end
           @permit_calls << { params: params, require_key: require_key, line: node.location.start_line } if params.any?
+        end
+
+        def params_call?(node) = node.is_a?(Prism::CallNode) && node.name == :params && node.receiver.nil?
+
+        # `params.expect(post: [ :title ])` requires post and permits its keys.
+        def extract_expect(node)
+          return unless node.receiver.is_a?(Prism::CallNode) && node.receiver.name == :params && node.receiver.receiver.nil?
+
+          hash = (node.arguments&.arguments || []).find { |arg| arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode) }
+          hash&.elements&.each do |pair|
+            next unless pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) && pair.value.is_a?(Prism::ArrayNode)
+
+            params = pair.value.elements.grep(Prism::SymbolNode).map(&:unescaped)
+            @permit_calls << { params: params, require_key: pair.key.unescaped, line: node.location.start_line } if params.any?
+          end
         end
 
         def extract_callback(node)
@@ -255,11 +272,10 @@ module RailsAiContext
         visitor = parse_and_visit(file, content)
 
         if file.end_with?(".html.erb", ".erb")
+          warnings.concat(check_partial_existence(file, visitor ? visitor.render_calls : text_render_calls(content)))
           if visitor
-            warnings.concat(check_partial_existence_ast(file, visitor))
             warnings.concat(check_route_helpers_ast(file, visitor, context))
           else
-            warnings.concat(check_partial_existence_regex(file, content))
             warnings.concat(check_route_helpers_regex(file, content, context))
           end
           warnings.concat(check_stimulus_controllers(content, context))
@@ -272,7 +288,7 @@ module RailsAiContext
           methods, reaches_base = model_method_names(model, content)
           if visitor
             warnings.concat(check_route_helpers_ast(file, visitor, context))
-            warnings.concat(check_partial_existence_ast(file, visitor, qualified_only: true))
+            warnings.concat(check_partial_existence(file, visitor.render_calls, qualified_only: true))
             warnings.concat(check_column_references_ast(file, visitor, context, methods))
             warnings.concat(check_strong_params_ast(file, visitor, context))
             warnings.concat(check_callback_existence_ast(visitor, model, methods, reaches_base))
@@ -316,53 +332,57 @@ module RailsAiContext
 
       # qualified_only: a Ruby file has no view directory to resolve bare
       # partial names against, so only "dir/name" references are checkable.
-      private_class_method def self.check_partial_existence_ast(file, visitor, qualified_only: false)
-        warnings = []
-        visitor.render_calls.each do |rc|
+      # A name resolves the way get_view and the view introspector resolve it.
+      private_class_method def self.check_partial_existence(file, render_calls, qualified_only: false)
+        return [] if render_calls.empty?
+
+        partials = Introspectors::RenderCalls.partials_on_disk(rails_app.root.to_s)
+        folder = File.dirname(file.sub(%r{^app/views/}, ""))
+        render_calls.filter_map do |rc|
           ref = rc[:name]
-          next if ref.include?("@") || ref.include?("#") || ref.include?("{")
+          next unless ref.match?(Introspectors::RenderCalls::PARTIAL_NAME) && !ref.include?("..")
           next if qualified_only && !ref.include?("/")
-          possible = resolve_partial_paths(file, ref)
+
+          key = qualified_only ? ref : Introspectors::RenderCalls.partial_key(ref, folder, partials, prefixes: view_prefixes(folder, ref, partials))
+          next if partials.include?(key)
           # In a Ruby file, bare `render "dir/name"` renders the TEMPLATE
           # (only `partial:` has partial semantics there), so accept either.
           template_semantics = qualified_only && !rc[:explicit_partial]
-          possible += resolve_template_paths(ref) if template_semantics
-          unless possible.any? { |p| File.exist?(File.join(rails_app.root, "app", "views", p)) }
-            label = template_semantics ? "template/partial not found" : "partial not found"
-            warnings << "render \"#{ref}\" - #{label} (checked: #{possible.first(2).join(', ')})"
-          end
+          next if template_semantics && template_exists?(ref)
+
+          label = template_semantics ? "template/partial not found" : "partial not found"
+          "render \"#{ref}\" - #{label} (checked: #{File.join(File.dirname(key), "_#{File.basename(key)}").delete_prefix("./")})"
         end
-        warnings
       end
 
-      private_class_method def self.resolve_template_paths(ref)
-        %w[.html.erb .erb .turbo_stream.erb .json.jbuilder].map { |ext| "#{ref}#{ext}" }
+      # The folders a bare partial name is looked up in for a view in `folder`: its controller's, then each
+      # parent controller's. A layout has no controller of its own, so the controllers that hold the name stand in.
+      # Nil where no controller is known (a mailer or component folder).
+      private_class_method def self.view_prefixes(folder, ref, partials)
+        return partials.filter_map { |partial| File.dirname(partial) if File.basename(partial) == ref && !partial.start_with?("layouts/") } if folder.split("/").first == "layouts"
+
+        context = cached_context
+        controllers = RailsAiContext::Payload.controllers(context)
+        name, = RailsAiContext::Payload.controller_for_route_key(context, folder)
+        return unless name
+
+        chain = []
+        while name && controllers.key?(name) && chain.size < Introspectors::SuperclassChain::MAX_DEPTH
+          chain << RailsAiContext::Payload.controller_route_key(context, name)
+          name = Introspectors::ActionResolver.resolve_entry_name(controllers, controllers[name][:parent_class], name)
+        end
+        chain
       end
 
-      # Regex fallback for non-Prism environments
-      private_class_method def self.check_partial_existence_regex(file, content)
-        warnings = []
-        content.scan(/render\s+(?:partial:\s*)?["']([^"']+)["']/).flatten.uniq.each do |ref|
-          next if ref.include?("@") || ref.include?("#") || ref.include?("{")
-          possible = resolve_partial_paths(file, ref)
-          unless possible.any? { |p| File.exist?(File.join(rails_app.root, "app", "views", p)) }
-            warnings << "render \"#{ref}\" - partial not found (checked: #{possible.first(2).join(', ')})"
-          end
-        end
-        warnings
+      private_class_method def self.template_exists?(ref)
+        RailsAiContext::ViewFile.each(rails_app.root.to_s, "#{ref}.*").any? { |path, _| RailsAiContext::ViewFile.template?(path) }
       end
 
-      private_class_method def self.resolve_partial_paths(file, ref)
-        paths = []
-        if ref.include?("/")
-          dir, base = File.dirname(ref), File.basename(ref)
-          %w[.html.erb .erb .turbo_stream.erb .json.jbuilder].each { |ext| paths << "#{dir}/_#{base}#{ext}" }
-        else
-          view_dir = file.sub(%r{^app/views/}, "").then { |f| File.dirname(f) }
-          %w[.html.erb .erb .turbo_stream.erb .json.jbuilder].each { |ext| paths << "#{view_dir}/_#{ref}#{ext}" }
-          %w[.html.erb .erb].each { |ext| paths << "shared/_#{ref}#{ext}"; paths << "application/_#{ref}#{ext}" }
+      # The partials a template's render calls name, read from its text where its compiled Ruby does not parse.
+      private_class_method def self.text_render_calls(content)
+        Introspectors::RenderCalls.render_calls(content).flat_map do |_, args, block|
+          Introspectors::RenderCalls.partial_names(args, block: block).map { |name| { name: name, explicit_partial: true } }
         end
-        paths
       end
 
       # ── CHECK 2: Route helpers (AST) ─────────────────────────────────
@@ -578,7 +598,7 @@ module RailsAiContext
         return nil unless model_data
 
         table_name = model_data[:table_name]
-        table_data = RailsAiContext::Payload.model_table(schema, model_data)
+        table_data = RailsAiContext::Payload.model_schema_table(schema, model_data)
         return nil unless table_data && columns_known?(table_data)
 
         table_columns = Set.new
@@ -605,14 +625,13 @@ module RailsAiContext
         return warnings if schema.nil? || models.empty?
 
         visitor.permit_calls.each do |pc|
-          # Infer model: prefer require_key (:post → Post), fall back to controller filename
-          guess = pc[:require_key] ? pc[:require_key].to_s.classify : File.basename(file, ".rb").sub(/_controller$/, "").classify
-          model_name = Introspectors::TableName.model_for(guess, nil, models)
+          # Only the required key names a model: a bare `params.permit(:page)` reads query-string filters.
+          model_name = Introspectors::TableName.model_for(pc[:require_key].to_s.classify, nil, models)
           model_data = model_name && models[model_name]
           next unless model_data
 
           table_name = model_data[:table_name]
-          table_data = RailsAiContext::Payload.model_table(schema, model_data)
+          table_data = RailsAiContext::Payload.model_schema_table(schema, model_data)
           next unless table_data && columns_known?(table_data)
 
           valid = Set.new
@@ -785,7 +804,7 @@ module RailsAiContext
         return warnings unless model_data
 
         table_name = model_data[:table_name]
-        table_data = RailsAiContext::Payload.model_table(schema, model_data)
+        table_data = RailsAiContext::Payload.model_schema_table(schema, model_data)
         # A static table whose block called what no reader interprets has columns and indexes unknown.
         return warnings if table_data.nil? || table_data[:unread_calls] || !indexable?(table_data)
 
@@ -818,7 +837,7 @@ module RailsAiContext
             next if Introspectors::SchemaConventions.leading_index?(Array(table_data[:indexes]) + [ primary_key ], col)
 
             warnings << "#{Introspectors::SchemaConventions.key_text(col)} in #{table_name} - foreign key without an index leading with its columns (slow queries). " \
-                        "Fix: `add_index :#{table_name}, [#{col.map { |c| ":#{c}" }.join(", ")}]`"
+                        "Fix: `add_index #{Introspectors::SchemaConventions.source_symbol(table_name)}, [#{col.map { |c| Introspectors::SchemaConventions.source_symbol(c) }.join(", ")}]`"
           elsif !indexed.include?(col)
             warnings << "#{col} in #{table_name} - foreign key without index (slow queries). Fix: `rails g migration AddIndexTo#{table_name.camelize} #{col}:index`"
           end

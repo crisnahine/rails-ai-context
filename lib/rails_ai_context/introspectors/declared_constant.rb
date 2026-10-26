@@ -180,6 +180,13 @@ module RailsAiContext
         blank_beside(source, classes, name.to_s, nested: true)
       end
 
+      # The lines the class's own declaration spans, those of a nested class included; nil when the source declares none of that name.
+      def own_line_count(source, name)
+        tree = source && AstCache.parse_string(source)&.value or return
+        spans = constants(tree).filter_map { |found, node| node.location if found == name.to_s && node.is_a?(Prism::ClassNode) }
+        spans.sum { |at| at.end_line - at.start_line + 1 } if spans.any?
+      end
+
       # As `own_source`, for a module: every other class and module blanked, the ones it nests too,
       # as a nested module's body runs for that module alone. Unchanged when the file declares none of that name.
       def own_module_source(source, name)
@@ -383,25 +390,75 @@ module RailsAiContext
       def assigned?(node, nesting, declared)
         return true unless node.is_a?(Prism::ConstantOrWriteNode) || node.is_a?(Prism::ConstantPathOrWriteNode)
 
-        lookup(written(node), nesting, declared).nil?
+        lookup_declared(written(node), nesting, declared).nil?
       end
 
       # `declared` maps each name to the superclass its class names, when this file declares that superclass too.
       def declare(written, nesting, declared, superclass: nil)
         full = full_name(written, nesting, declared)
         name = written.start_with?("::") ? "::#{full}" : full
-        inherited = superclass && superclass_name(superclass) && lookup(superclass.slice, nesting, declared)
+        inherited = superclass && superclass_name(superclass) && lookup_declared(superclass.slice, nesting, declared)
         declared[name] = inherited || declared[name]
         name
       end
 
-      # The declared constant a reference reaches where Module.nesting is `nesting`, as Ruby looks it up, or nil: a bare
-      # name through the nesting, the innermost scope's superclasses and the top level; a path through its head.
-      def lookup(reference, nesting, declared)
+      # The constant Ruby picks for a name written where Module.nesting is `nesting` (innermost first), or nil:
+      # `::X` is the top level's alone; any other name each scope of the nesting outward, then the innermost scope's
+      # `ancestors`, then the top level. Each later segment of a path is read inside the constant before it and its
+      # `ancestors_of`; a scope holding the head and not the path ends the search. `exists` answers whether the app
+      # has a constant; `later_ancestors` is called only when the search reaches them.
+      def lookup(written, nesting:, ancestors: [], exists:, ancestors_of: nil, later_ancestors: nil)
+        search(written, nesting, ancestors, exists, ancestors_of, later_ancestors)&.first
+      end
+
+      # What `exists` answered for the constant `lookup` picks, or nil: a caller whose `exists` finds a
+      # module by what its file declares gets that module, which can differ from the spelling tried.
+      def reach(written, nesting:, ancestors: [], exists:, ancestors_of: nil, later_ancestors: nil)
+        search(written, nesting, ancestors, exists, ancestors_of, later_ancestors)&.last
+      end
+
+      # [the constant, what exists answered for it], [nil] when a scope ends the search without the path, nil to go on.
+      def search(written, nesting, ancestors, exists, ancestors_of, later_ancestors)
+        path = written.to_s.delete_prefix("::")
+        segments = path.split("::")
+        rooted = written.to_s.start_with?("::")
+        scopes = rooted ? [] : [ *nesting, *ancestors ]
+        scopes.each { |scope| (hit = lookup_under("#{scope}::", path, segments, exists, ancestors_of)) and return hit }
+        unless rooted || later_ancestors.nil?
+          (Array(later_ancestors.call) - scopes).each { |scope| (hit = lookup_under("#{scope}::", path, segments, exists, ancestors_of)) and return hit }
+        end
+        lookup_under("", path, segments, exists, ancestors_of)
+      end
+
+      # [the constant, what exists answered for it] when the scope `prefix` names ends the search, [nil] when it holds the head and not the path, nil to go on.
+      def lookup_under(prefix, path, segments, exists, ancestors_of)
+        whole = "#{prefix}#{path}"
+        answer = exists.call(whole)
+        return [ whole, answer ] if answer
+
+        # A namespace no file declares exists when a constant under it does, as Zeitwerk defines it from the folder.
+        held = (1...segments.size).find { |count| exists.call("#{prefix}#{segments.first(count).join("::")}") } or return nil
+        scope = "#{prefix}#{segments.first(held).join("::")}"
+        segments.drop(held).each do |segment|
+          scope = [ scope, *Array(ancestors_of&.call(scope)) ].map { |owner| "#{owner}::#{segment}" }.find { |name| answer = exists.call(name) } or return [ nil ]
+        end
+        [ scope, answer ]
+      end
+
+      # The constant this file declares that a reference reaches where Module.nesting is `nesting`, or nil: a bare
+      # name through `lookup`, the innermost scope's superclasses as its ancestors; a path through its head.
+      def lookup_declared(reference, nesting, declared)
         name = reference.to_s
-        path = resolved_path(name, nesting, declared)
-        forms = path ? inherited_forms(path, declared) : lookup_names(name, nesting, declared)
-        forms.lazy.filter_map { |form| key(form, declared) }.first&.delete_prefix("::")
+        if (path = resolved_path(name, nesting, declared))
+          inherited_forms(path, declared).lazy.filter_map { |form| key(form, declared) }.first&.delete_prefix("::")
+        else
+          lookup_bare(name, nesting, declared)
+        end
+      end
+
+      def lookup_bare(name, nesting, declared)
+        found = lookup(name, nesting: nesting, ancestors: ancestors_in(nesting, declared), exists: ->(candidate) { key(candidate, declared) })
+        found && key(found, declared).delete_prefix("::")
       end
 
       # The form of `name`, with or without a leading `::`, that `declared` holds; nil when it holds none.
@@ -424,21 +481,11 @@ module RailsAiContext
         first, *middle, last = written.delete_prefix("::").split("::")
         return nil if last.nil?
 
-        head = rooted ? first : lookup_names(first, nesting, declared).lazy.filter_map { |name| key(name, declared) }.first or return nil
+        head = rooted ? first : lookup_bare(first, nesting, declared) or return nil
         scope = middle.reduce(head) do |outer, segment|
           inherited_forms("#{outer}::#{segment}", declared).find { |form| key(form, declared) } || "#{outer}::#{segment}"
         end
         "#{scope}::#{last}"
-      end
-
-      # As candidate_names, with the innermost scope's superclasses before the top level, as Ruby looks a constant up.
-      # shortcut: only a superclass this file declares is searched, never one in another file nor an included module;
-      # widen it when an app's `||=` or compact path depends on one.
-      def lookup_names(reference, nesting, declared)
-        names = candidate_names(reference, nesting)
-        return names if reference.to_s.start_with?("::") || nesting.empty?
-
-        names[0...-1] + superclasses(nesting.first, declared).map { |scope| "#{scope}::#{reference}" } + names.last(1)
       end
 
       # A path and the same name under each superclass of its owner: `A::M` is found in A's ancestors too.
@@ -447,20 +494,17 @@ module RailsAiContext
         [ full ] + superclasses(owner, declared).map { |scope| "#{scope}::#{short}" }
       end
 
+      # The innermost scope's superclasses `declared` records, which Ruby reads after the nesting.
+      def ancestors_in(nesting, declared)
+        nesting.empty? ? [] : superclasses(nesting.first, declared)
+      end
+
       def superclasses(name, declared)
         chain = []
         while (name = [ name, "::#{name}", name.delete_prefix("::") ].lazy.filter_map { |form| declared[form] }.first) && !chain.include?(name)
           chain << name
         end
         chain
-      end
-
-      # The names Ruby tries for a reference, nearest first: each scope of `within` (a nesting, or a name read per segment), then the top level.
-      def candidate_names(reference, within)
-        name = reference.to_s
-        return [ name.delete_prefix("::") ] if name.start_with?("::")
-
-        (within.is_a?(Array) ? within : nesting(within.to_s.split("::"))).map { |scope| "#{scope}::#{name}" } + [ name ]
       end
 
       # Module.nesting inside a module per segment of `owners`, innermost first: ["A::B", "C"] nests A::B::C then A::B, never A.
@@ -510,8 +554,8 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :contains?, :blank_beside, :path_written, :new_of?, :path_names?, :names_segment?, :only_own_class, :superclass_name, :declarations_in,
-                           :key, :resolved_path, :lookup_names, :inherited_forms, :superclasses
+      private_class_method :search, :lookup_under, :superclasses, :contains?, :blank_beside, :path_written, :new_of?, :path_names?, :names_segment?, :only_own_class, :superclass_name, :declarations_in,
+                           :key, :resolved_path, :lookup_bare, :inherited_forms
     end
   end
 end

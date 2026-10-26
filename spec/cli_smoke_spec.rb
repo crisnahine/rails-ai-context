@@ -497,6 +497,100 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         end
       end
 
+      it "offers no help for a section an initializer's literal turns off" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, [])
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                     "RailsAiContext.configure do |config|\n  config.skip_tools = %w[rails_get_env]\nend\n")
+          out = `cd #{dir} && ruby -I #{lib} #{exe} tool env --help 2>&1`
+
+          expect($?.exitstatus).to eq(1), out
+          expect(out).to include("rails_get_env is turned off in this app: skip_tools lists it")
+        end
+      end
+
+      it "prints the help and says the section may be off when an initializer's skip_tools cannot be read" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, [])
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                     "RailsAiContext.configure do |config|\n  config.skip_tools = ENV.fetch(\"SKIP\").split\nend\n")
+          out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "env", "--help", chdir: dir, stdin_data: "")
+
+          expect(status.exitstatus).to eq(0), err
+          expect(out).to start_with("rails_get_env - runs the `env` section")
+          expect(err).to include("config/initializers/rails_ai_context.rb:2: skip_tools cannot be read there without booting the app, " \
+                                 "so rails_get_env may be turned off in this app.")
+        end
+      end
+
+      describe "where another list stops the static tier first" do
+        it "still says the section may be off when skip_tools cannot be read further down" do
+          Dir.mktmpdir do |dir|
+            app_with(dir, [])
+            FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+            File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                       "RailsAiContext.configure do |config|\n  config.excluded_paths = ENV.fetch(\"SKIP\").split\n" \
+                       "  config.skip_tools = ENV.fetch(\"SKIP\").split\nend\n")
+            _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "env", "--help", chdir: dir, stdin_data: "")
+
+            expect(status.exitstatus).to eq(0), err
+            expect(err).to include("config/initializers/rails_ai_context.rb:3: skip_tools cannot be read there without booting the app, " \
+                                   "so rails_get_env may be turned off in this app.")
+          end
+        end
+      end
+
+      it "says which line it could not follow and what answers instead, though the help still prints" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, [])
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\n  tools = config.ai_tools\n  tools << :copilot\nend\n")
+          out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "env", "--help", chdir: dir, stdin_data: "")
+
+          expect(status.exitstatus).to eq(0), err
+          expect(out).to start_with("rails_get_env - runs the `env` section")
+          expect(err).to include("[rails-ai-context] config/initializers/rails_ai_context.rb:3: `ai_tools` is changed in place or written by its name, so the YAML or the default answers here")
+        end
+      end
+
+      it "names what it cannot read when a line reaches the whole configuration" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, [])
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                     "RailsAiContext.configure do |config|\n  Settings.apply(config)\nend\n")
+          out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "env", "--help", chdir: dir, stdin_data: "")
+
+          expect(status.exitstatus).to eq(0), err
+          expect(out).to start_with("rails_get_env - runs the `env` section")
+          expect(err).to include("config/initializers/rails_ai_context.rb:2: the static tier cannot read what this line does to `config` " \
+                                 "without booting the app, so skip_tools is unknown and rails_get_env may be turned off in this app.")
+          expect(err).not_to include("cannot be read there")
+        end
+      end
+
+      it "names only the file when the refusal that stops the static tier has no line" do
+        Dir.mktmpdir do |dir|
+          app_with(dir, [])
+          patch = File.join(dir, "no_line.rb")
+          File.write(patch, <<~RUBY)
+            require "rails_ai_context/unbooted_settings"
+            RailsAiContext::UnbootedSettings::Result.prepend(Module.new do
+              def refusals
+                [ RailsAiContext::UnbootedSettings::Refusal.new("config/initializers/rails_ai_context.rb", nil, nil, "the static tier cannot read it", true) ]
+              end
+            end)
+          RUBY
+          out, err, status = Open3.capture3("ruby", "-I", lib, "-r", patch, exe, "tool", "env", "--help", chdir: dir, stdin_data: "")
+
+          expect(status.exitstatus).to eq(0), err
+          expect(out).to start_with("rails_get_env - runs the `env` section")
+          expect(err).to include("[rails-ai-context] config/initializers/rails_ai_context.rb: the static tier cannot read it without booting the app")
+        end
+      end
+
       it "prints the help when --app-path is left without a value before --help" do
         Dir.mktmpdir do |dir|
           out = `cd #{dir} && ruby -I #{lib} #{exe} tool config --app-path --help 2>&1`
@@ -630,6 +724,89 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # No app is there, so no rake task can run: the help names the binary alone.
+    it "prints only the binary's form in tool help and the list outside any app" do
+      Dir.mktmpdir do |dir|
+        help, help_err, = Open3.capture3("ruby", "-I", lib, exe, "tool", "schema", "--help", chdir: dir)
+        listed, list_err, = Open3.capture3("ruby", "-I", lib, exe, "tool", "--list", chdir: dir)
+
+        expect(help).to include("rails-ai-context tool schema"), help_err
+        expect(help).not_to include("ai:tool")
+        expect(listed).to include("rails-ai-context tool NAME"), list_err
+        expect(listed).not_to include("ai:tool")
+      end
+    end
+
+    it "counts the tools an initializer's skip_tools leaves on, as the listing does" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                   "RailsAiContext.configure do |config|\n  config.skip_tools = %w[rails_security_scan rails_query]\nend\n")
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--mcp-only", "--tools", "claude", "--defaults", "--no-boot",
+                                           chdir: dir, stdin_data: "")
+        listed, list_err, = Open3.capture3("ruby", "-I", lib, exe, "tool", "--list", "--no-boot", chdir: dir)
+
+        expect(status.exitstatus).to eq(0), err
+        count = RailsAiContext::Server.builtin_tools.size - 2
+        expect(err).to include("Run any of the #{count} tools")
+        expect(listed).not_to include("security_scan"), list_err
+      end
+    end
+
+    it "gives no tool count when an initializer's skip_tools cannot be read without a boot" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                   "RailsAiContext.configure do |config|\n  config.skip_tools = ENV.fetch(\"SKIP\", \"\").split(\",\")\nend\n")
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--mcp-only", "--tools", "claude", "--defaults", "--no-boot",
+                                           chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("tool NAME  # Run any of the tools this app's skip_tools leaves on")
+        expect(err).not_to match(/Run any of the \d+ tools/)
+      end
+    end
+
+    [ [ "an MCP-only run", %w[--mcp-only --tools claude --defaults --no-boot] ],
+      [ "a run that writes context files, which enters the static tier first", %w[--tools cursor --cli --defaults --no-boot] ] ].each do |run, flags|
+      it "says which line it could not follow and what answers instead, once, in #{run}" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\n  tools = config.ai_tools\n  tools << :copilot\nend\n")
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", *flags, chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(0), err
+        # The run adds its own lines to the initializer, so the note names the line the file has when it prints, once.
+        lines = File.readlines(File.join(dir, "config", "initializers", "rails_ai_context.rb"))
+        line = lines.index { |text| text.include?("tools = config.ai_tools") } + 1
+        expect(err.scan(/rails_ai_context\.rb:\d+: `ai_tools` is changed in place/).size).to eq(1)
+        expect(err).to include("config/initializers/rails_ai_context.rb:#{line}: `ai_tools` is changed in place or written by its name, so the YAML or the default answers here")
+      end
+    end
+    end
+
+    it "lists nothing and says why when the static tier refuses the app's settings" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                   "RailsAiContext.configure do |config|\n  config.skip_tools = ENV.fetch(\"SKIP\", \"\").split(\",\")\nend\n")
+
+        out, err, status = Open3.capture3("ruby", "-I", lib, exe, "tool", "--list", "--no-boot", chdir: dir)
+
+        expect(status.exitstatus).to eq(1)
+        expect(out).to eq("")
+        expect(err).to include("config/initializers/rails_ai_context.rb:2:", "the static tier cannot read")
+        expect(err).not_to include("Run inside a Rails app")
+      end
+    end
+
     it "names the app above a wrong --app-path" do
       Dir.mktmpdir do |dir|
         rails_app(dir)
@@ -709,6 +886,23 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # A session started at a monorepo's root reads the root's .mcp.json, and the app its bin/rails boots answers it.
+    it "sets up the app a monorepo root's bin/rails boots the same way, from the root" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "apps", "web"))
+        FileUtils.mkdir_p(File.join(dir, "bin"))
+        File.write(File.join(dir, "bin", "rails"), %(APP_PATH = File.expand_path("../apps/web/config/application", __dir__)\nrequire "rails/commands"\n))
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(servers(dir)).to eq("rails-ai-context-web" => config_entry(*%w[rails-ai-context serve --app-path apps/web],
+                                                                         env: { "RAILS_AI_CONTEXT_SERVER_NAME" => "web-rails-ai-context" }))
+        expect(File.exist?(File.join(dir, "apps", "web", ".rails-ai-context.yml"))).to be(true)
+        expect(File.exist?(File.join(dir, "apps", "web", ".mcp.json"))).to be(false)
+      end
+    end
+
     # A session started here runs the plugin, which serves the one app below.
     it "writes no Claude Code server where the folder's committed settings turn the plugin on and it holds one app" do
       Dir.mktmpdir do |dir|
@@ -729,10 +923,12 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(err).to include("Claude Code      -> the rails-ai-context plugin (off here: see below)")
         expect(err).not_to include("MCP servers, one per app")
 
+        # The plugin serves each app of a folder of several too.
         rails_app(File.join(dir, "b"))
         _out, err, = init(dir, "1\n3\n")
-        expect(servers(dir).keys).to eq(%w[rails-ai-context-a rails-ai-context-b])
-        expect(err).to include("it has nothing to serve here: `claude plugin disable rails-ai-context@rails-ai-context --scope project` turns it off for this folder")
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+        expect(err).to include("Claude Code: no server written into .mcp.json here: .claude/settings.json turns the rails-ai-context plugin on, " \
+                               "but it does not start for you here: doctor names why")
       end
     end
 
@@ -870,6 +1066,18 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    it "names each app's record and .gitignore alike, from the folder as --app-path typed it" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "work", "a"))
+        File.write(File.join(dir, "work", "a", ".gitignore"), "/tmp\n")
+
+        _out, err, status = init(dir, "1\n3\n", "--app-path", "./work")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("Created ./work/a/.rails-ai-context.yml\n", "Updated ./work/a/.gitignore\n")
+      end
+    end
+
     # Each app's files come from a child run at the app, which named them
     # from there: its rm line for legacy files, pasted where init ran,
     # removed nothing.
@@ -915,6 +1123,22 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(status.exitstatus).to eq(1)
         expect(err).to include("#{File.join(File.realpath(dir), 'work')} is no Rails app, and holds 2 below it")
         expect(err).to include("rails-ai-context --app-path work/a tool schema --no-boot\n")
+      end
+    end
+
+    it "stops before it writes anything when one app's record will not read, and names it" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        File.write(File.join(dir, "b", ".rails-ai-context.yml"), "ai_tools: [claude\n")
+
+        _out, err, status = init(dir, "1\n3\n")
+
+        expect(status.exitstatus).to eq(1), err
+        expect(err).to include("Error: b/.rails-ai-context.yml cannot be read (invalid YAML at line")
+        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
+        expect(File.exist?(File.join(dir, "a", ".rails-ai-context.yml"))).to be(false)
+        expect(File.read(File.join(dir, "b", ".rails-ai-context.yml"))).to eq("ai_tools: [claude\n")
       end
     end
 
@@ -1467,6 +1691,82 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    it "stops before it asks or writes anything when the app's record will not read, and names it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        File.write(File.join(dir, ".rails-ai-context.yml"), "- claude\n")
+        File.write(File.join(dir, ".gitignore"), "*.log\n")
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--no-boot", chdir: dir, stdin_data: "1\n1\n")
+
+        expect(status.exitstatus).to eq(1), err
+        expect(err.lines.last).to eq("Error: .rails-ai-context.yml cannot be read (it holds no `key: value` settings), so nothing was changed. " \
+                          "Fix it, or move it aside, and run this again.\n")
+        expect(Dir.children(dir).sort).to eq(%w[.gitignore .rails-ai-context.yml app])
+        expect(File.read(File.join(dir, ".gitignore"))).to eq("*.log\n")
+      end
+    end
+
+    it "goes through over a read-only record the answers leave as it is" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        path = File.join(dir, ".rails-ai-context.yml")
+        record = "ai_tools:\n- cursor\ntool_mode: mcp\ncontext_files: true\n"
+        File.write(path, record)
+        File.chmod(0o444, path)
+        skip "this user writes read-only files" if File.writable?(path)
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--no-boot", "--tools", "cursor", "--mcp", chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(File.read(path)).to eq(record)
+        expect(File.exist?(File.join(dir, ".cursor", "mcp.json"))).to be(true)
+      ensure
+        File.chmod(0o644, path) if path
+      end
+    end
+
+    it "says an initializer that does not parse is not Ruby, naming the opener's line, and writes nothing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        initializer = File.join(dir, "config", "initializers", "rails_ai_context.rb")
+        body = "RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\n"
+        File.write(initializer, body)
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--no-boot", "--tools", "codex", "--mcp", chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(1), err
+        expect(err.lines.last).to eq("Error: config/initializers/rails_ai_context.rb:1: this file does not parse as Ruby " \
+                                     "(expected a block beginning with `do` to end with `end`), so the static tier serves nothing until it is fixed.\n")
+        expect(File.read(initializer)).to eq(body)
+        expect(Dir.children(dir).sort).to eq(%w[app config])
+      end
+    end
+
+    it "stops before it writes anything for a new selection when the record is read-only" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+        path = File.join(dir, ".rails-ai-context.yml")
+        File.write(path, "ai_tools:\n- cursor\ntool_mode: mcp\ncontext_files: true\n")
+        File.chmod(0o444, path)
+        skip "this user writes read-only files" if File.writable?(path)
+
+        _out, err, status = Open3.capture3("ruby", "-I", lib, exe, "init", "--no-boot", "--tools", "claude", "--mcp", chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(1), err
+        expect(err.lines.last).to eq("Error: .rails-ai-context.yml cannot be written (its permissions do not allow it), so nothing was changed. " \
+                                     "Fix it, or move it aside, and run this again.\n")
+        expect(Dir.children(dir).sort).to eq(%w[.rails-ai-context.yml app])
+      ensure
+        File.chmod(0o644, path) if path
+      end
+    end
+
     # init wrote its config files and then died in a Ruby backtrace when
     # generating context hit a path it could not write.
     it "answers an unexpected init failure in one line on stderr" do
@@ -1520,7 +1820,83 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     expect(help).to include("--environment")
   end
 
-  # The port the HTTP server announces, read off stderr before it binds.
+  describe "serve as one app's server under the plugin's router" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    # Every boot ends at once as a failure, a timeout that names the limit it was given unless `error` says otherwise.
+    def failed_boots(dir, error = 'BootTimeoutError.new("App boot timed out after #{timeout}s")')
+      File.join(dir, "failed.rb").tap do |patch|
+        File.write(patch, <<~RUBY)
+          module RailsAiContext
+            module BootManager
+              singleton_class.prepend(Module.new do
+                def boot!(app_root:, timeout:)
+                  Result.new(status: :failed, error: #{error})
+                end
+              end)
+            end
+          end
+        RUBY
+      end
+    end
+
+    def apps_folder(dir)
+      File.join(dir, "apps").tap do |folder|
+        %w[alpha beta].each do |app|
+          FileUtils.mkdir_p(folder)
+          FileUtils.cp_r(File.expand_path("fixtures/static_app", __dir__), File.join(folder, app))
+          File.write(File.join(folder, app, "config", "environment.rb"), "")
+        end
+      end
+    end
+
+    # What the router's server for the folder says on stderr once alpha's boot has failed.
+    def routed_stderr(env, folder)
+      routed = +""
+      Open3.popen3(env.merge("RAILS_AI_CONTEXT_PLUGIN" => "1"), "ruby", "-I", lib, exe, "serve", chdir: folder) do |stdin, out, err, wait|
+        errors = Thread.new { routed << err.read }
+        [ { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rails_get_schema", arguments: { app: "alpha" } } } ]
+          .each { |message| stdin.puts JSON.generate(message) }
+        stdin.flush
+        Timeout.timeout(90) { nil until JSON.parse(out.gets)["id"] == 2 }
+        stdin.close
+        wait.join
+        errors.join
+      end
+      routed
+    end
+
+    # No client waits on its handshake: the router has answered the client's.
+    it "boots the app under the typed limit and names no client limit" do
+      Dir.mktmpdir do |dir|
+        env = { "RUBYOPT" => "-r#{failed_boots(dir)}", "RAILS_AI_CONTEXT_BOOT_TIMEOUT" => nil, "RAILS_AI_CONTEXT_PLUGIN" => nil }
+        folder = apps_folder(dir)
+
+        _out, typed, = Open3.capture3(env, "ruby", "-I", lib, exe, "serve", chdir: File.join(folder, "alpha"), stdin_data: "")
+        expect(typed).to include("current: 20), and MCP_TIMEOUT")
+
+        routed = routed_stderr(env, folder)
+        expect(routed).to include("App boot timed out after 60s").and include("current: 60).")
+        expect(routed).not_to include("MCP_TIMEOUT")
+      end
+    end
+
+    # The router starts each child with the Ruby on Claude Code's PATH, so that is where the right Ruby must be active.
+    it "tells the client, not the typist, where the pinned Ruby must be active" do
+      Dir.mktmpdir do |dir|
+        env = { "RUBYOPT" => "-r#{failed_boots(dir, 'LoadError.new("cannot load such file -- shop_native_ext")')}", "RAILS_AI_CONTEXT_PLUGIN" => nil }
+        folder = apps_folder(dir)
+        File.write(File.join(folder, "alpha", ".ruby-version"), "1.9.3\n")
+
+        routed = routed_stderr(env, folder)
+        expect(routed).to include("pins Ruby 1.9.3 (.ruby-version)").and include("Start the client where that Ruby is active")
+      end
+    end
+  end
+
   describe "serve port" do
     let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
     let(:lib) { File.expand_path("../lib", __dir__) }
@@ -1723,21 +2099,6 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
-    it "keeps the recorded tools and setup under --defaults on a re-run" do
-      Dir.mktmpdir do |dir|
-        rails_app(dir)
-        run_cli(dir, "init", "--no-boot", "--tools", "cursor", "--cli")
-
-        _out, err, status = run_cli(dir, "init", "--no-boot", "--defaults")
-
-        expect(status.exitstatus).to eq(0), err
-        record = File.read(File.join(dir, ".rails-ai-context.yml"))
-        expect(record).to include("- cursor\n", "tool_mode: cli")
-        expect(record).not_to include("- claude")
-        expect(File.exist?(File.join(dir, ".cursor/mcp.json"))).to be(false)
-      end
-    end
-
     it "takes every default under --defaults" do
       Dir.mktmpdir do |dir|
         rails_app(dir)
@@ -1747,69 +2108,6 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(status.exitstatus).to eq(0), err
         expect(File.read(File.join(dir, ".rails-ai-context.yml"))).to include("- codex\n", "tool_mode: mcp")
         expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true)
-      end
-    end
-
-    it "keeps a dropped tool's files under --defaults, and removes them under --prune" do
-      Dir.mktmpdir do |dir|
-        rails_app(dir)
-        run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor")
-
-        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--defaults")
-        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(true), err
-
-        run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--defaults")
-        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--prune")
-        expect(status.exitstatus).to eq(0), err
-        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(false)
-        expect(File.exist?(File.join(dir, ".cursor"))).to be(false)
-        expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true)
-      end
-    end
-
-    it "takes the gem out of the MCP configs on a switch to CLI mode under --prune" do
-      Dir.mktmpdir do |dir|
-        rails_app(dir)
-        run_cli(dir, "init", "--no-boot", "--tools", "claude")
-
-        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--cli", "--prune")
-
-        expect(status.exitstatus).to eq(0), err
-        expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
-      end
-    end
-
-    it "takes the generated context files out on a switch to MCP only under --prune, and keeps them under --defaults" do
-      Dir.mktmpdir do |dir|
-        rails_app(dir)
-        run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor")
-
-        _out, err, = run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--mcp-only", "--defaults")
-        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(true), err
-        expect(err).to include("would go stale")
-
-        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude,cursor", "--mcp-only", "--prune")
-        expect(status.exitstatus).to eq(0), err
-        %w[.cursorrules .cursor/rules CLAUDE.md .claude .ai-context.json].each do |path|
-          expect(File.exist?(File.join(dir, path))).to be(false), path
-        end
-        expect(File.read(File.join(dir, ".mcp.json"))).to include("rails-ai-context")
-        expect(File.read(File.join(dir, ".cursor/mcp.json"))).to include("rails-ai-context")
-        expect(err).not_to include("Left alone on purpose")
-      end
-    end
-
-    it "takes a folder of apps' generated context files out on a switch to MCP only under --prune" do
-      Dir.mktmpdir do |dir|
-        rails_app(File.join(dir, "a"))
-        rails_app(File.join(dir, "b"))
-        run_cli(dir, "init", "--no-boot", "--tools", "claude")
-
-        _out, err, status = run_cli(dir, "init", "--no-boot", "--tools", "claude", "--mcp-only", "--prune")
-
-        expect(status.exitstatus).to eq(0), err
-        expect(File.exist?(File.join(dir, "a", "CLAUDE.md"))).to be(false)
-        expect(File.exist?(File.join(dir, "b", ".claude"))).to be(false)
       end
     end
 
@@ -1842,6 +2140,26 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         _out, err, status = run_cli(dir, "init", "--no-boot", "--cli", "--defaults")
         expect(status.exitstatus).to eq(0), err
+      end
+    end
+
+    # The command's own handler answers it, so DEBUG shows where it came from.
+    it "lets an ArgumentError from writing an app's record through to the command's handler, not the setup refusal" do
+      Dir.mktmpdir do |dir|
+        rails_app(File.join(dir, "a"))
+        rails_app(File.join(dir, "b"))
+        script = <<~RUBY
+          require "rails_ai_context/install/selection_record"
+          RailsAiContext::Install::SelectionRecord.singleton_class.prepend(Module.new { def write(*) = raise(ArgumentError, "planted") })
+          ARGV.replace(%w[init --no-boot --defaults --tools claude --mcp-only])
+          load #{exe.dump}
+        RUBY
+
+        _out, err, status = Open3.capture3({ "DEBUG" => "1" }, "ruby", "-I", lib, "-e", script, chdir: dir, stdin_data: "")
+
+        expect(status.exitstatus).to eq(1)
+        expect(err).to include("Error: planted\n")
+        expect(err).to match(/^    -e:2:in /)
       end
     end
 
@@ -1989,9 +2307,10 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = run_cli(shop, "uninstall")
 
         expect(status.exitstatus).to eq(0), err
-        # Outside a repository, mid's local settings reach only sessions started in mid itself.
+        # Outside a repository, mid's local settings reach only sessions started in mid itself, and the folder holding
+        # mid/shop and other serves each of them.
         expect(err).to include("take it out before the gem: `claude plugin disable rails-ai-context@rails-ai-context --scope local` run here " \
-                               "and in #{File.join(dir, "mid")} turns it off for this app and sessions started there, or " \
+                               "and in #{File.join(dir, "mid")} and in #{dir} turns it off for this app and sessions started there, or " \
                                "`claude plugin uninstall rails-ai-context@rails-ai-context --scope user` takes it out everywhere.")
       end
     ensure
@@ -2061,8 +2380,30 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         _out, err, status = run_cli(dir, "uninstall")
 
         expect(status.exitstatus).to eq(0), err
-        expect(err).to include("Nothing of rails-ai-context's was found")
+        expect(err).to include("Nothing rails-ai-context wrote was found in this app")
         expect(err).not_to include("is uninstalled")
+      end
+    end
+
+    # An entry a user wrote stays, and while it starts the gem's server a restart does not stop it.
+    it "says the entries it left are the user's, and which still start the server" do
+      Dir.mktmpdir do |dir|
+        rails_app(dir)
+        File.write(File.join(dir, ".mcp.json"), JSON.generate("mcpServers" => {
+                                                               "rails-ai-context-x" => { "command" => "docker", "args" => %w[exec -i web rails-ai-context serve] }
+                                                             }))
+
+        _out, err, status = run_cli(dir, "uninstall")
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("Nothing rails-ai-context wrote was found in this app; the MCP entries left above are yours.")
+        expect(err).to include("`rails-ai-context-x` in .mcp.json still starts the rails-ai-context MCP server: remove it, then restart your AI tool.")
+
+        File.write(File.join(dir, ".rails-ai-context.yml"), "ai_tools:\n- claude\n")
+        _out, err, = run_cli(dir, "uninstall")
+        expect(err).to include("rails-ai-context is uninstalled from this app; the MCP entries left above are yours.")
+        expect(err).to include("still starts the rails-ai-context MCP server")
+        expect(err).not_to include("so it stops starting")
       end
     end
 

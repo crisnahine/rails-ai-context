@@ -77,7 +77,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
       expect(File.read(path)).to eq("# My own instructions\n")
-      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], linked: [], failed: [])
+      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], linked: [], unpaired: [], failed: [])
     end
 
     # A blank line under a block in the middle of a file is the user's own:
@@ -135,12 +135,25 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       expect(File.exist?(path)).to be(true)
     end
 
-    it "takes out every block when a file holds more than one" do
-      path = touch("CLAUDE.md", "#{MARKED}\n#{MARKED}")
+    # The writer leaves such a file alone, since nothing says where the
+    # gem's block ends; the removal took everything from the first BEGIN to
+    # the only END, the user's lines between them with it.
+    {
+      "two BEGIN markers and one END" => "# Team\nOur rules\n<!-- BEGIN rails-ai-context -->\ngenerated\n" \
+                                         "## My team rules\nNever push to main\n<!-- BEGIN rails-ai-context -->\nstale\n" \
+                                         "<!-- END rails-ai-context -->\n",
+      "END before BEGIN" => "<!-- END rails-ai-context -->\nmine\n<!-- BEGIN rails-ai-context -->\n",
+      "two blocks" => "#{MARKED}\nmine\n#{MARKED}"
+    }.each do |shape, text|
+      it "leaves a file with #{shape} as it is, and names it unpaired" do
+        path = touch("CLAUDE.md", text)
 
-      described_class.remove(tools: [ :claude ], keeping: [], root: root)
+        result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
-      expect(File.exist?(path)).to be(false)
+        expect(File.binread(path)).to eq(text)
+        expect(result).to include(unpaired: [ "CLAUDE.md" ], removed: [], trimmed: [])
+        expect(described_class.generated(tools: [ :claude ], root: root)).to eq(claude: [ "CLAUDE.md" ])
+      end
     end
 
     it "leaves no blank line where a block the writer prepended used to be" do
@@ -168,7 +181,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       result = described_class.remove(tools: [ :claude ], keeping: [ :codex ], root: root)
 
       expect(File.read(target)).to eq("mine\n#{MARKED}")
-      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], linked: [], failed: [])
+      expect(result).to eq(removed: [], trimmed: [], kept: [ "CLAUDE.md" ], linked: [], unpaired: [], failed: [])
     end
 
     it "trims the block through a root file's symlink to a file inside the app, as the writer wrote it" do
@@ -179,7 +192,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
 
       expect(File.read(target)).to eq("mine\n")
       expect(File.symlink?(File.join(root, "CLAUDE.md"))).to be(true)
-      expect(result).to eq(removed: [], trimmed: [ "CLAUDE.md" ], kept: [], linked: [], failed: [])
+      expect(result).to eq(removed: [], trimmed: [ "CLAUDE.md" ], kept: [], linked: [], unpaired: [], failed: [])
     end
 
     it "names a root file's symlink out of the app that holds the block as left, and edits nothing" do
@@ -191,7 +204,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
         result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
         expect(File.read(target)).to eq("mine\n#{MARKED}")
-        expect(result).to eq(removed: [], trimmed: [], kept: [], linked: [ "CLAUDE.md" ], failed: [])
+        expect(result).to eq(removed: [], trimmed: [], kept: [], linked: [ "CLAUDE.md" ], unpaired: [], failed: [])
       end
     end
 
@@ -203,7 +216,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
       result = described_class.remove(tools: [ :claude ], keeping: [], root: root)
 
       expect(File.exist?(File.join(real, "rails-schema.md"))).to be(true)
-      expect(result).to include(linked: [ ".claude/rules/" ], failed: [])
+      expect(result).to include(linked: [ ".claude/rules/" ], unpaired: [], failed: [])
     end
 
     it "removes what the real writers produce" do
@@ -260,7 +273,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
 
     it "says nothing about a file that was never there" do
       expect(described_class.remove(tools: [ :claude ], keeping: [], root: root))
-        .to eq(removed: [], trimmed: [], kept: [], linked: [], failed: [])
+        .to eq(removed: [], trimmed: [], kept: [], linked: [], unpaired: [], failed: [])
     end
 
     it "leaves files belonging to a tool it was not asked about" do

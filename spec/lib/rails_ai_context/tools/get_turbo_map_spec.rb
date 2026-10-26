@@ -471,6 +471,17 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       text[/### Stream: `#{Regexp.escape(stream)}`\n(.*?)(?=\n\n|\z)/m, 1]
     end
 
+    it "opens a code block for a subscription only when it has a line to show" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).not_to include("```erb")
+      turbo[:stream_subscriptions].first[:snippet] = "<%= turbo_stream_from current_user, :notifications %>"
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("  ```erb\n  <%= turbo_stream_from current_user, :notifications %>\n  ```")
+      expect(text.scan(/^\s*```/).size).to be_even
+    end
+
     it "wires a model's record and names to the view's record of the same model" do
       text = described_class.call(detail: "full").content.first[:text]
 

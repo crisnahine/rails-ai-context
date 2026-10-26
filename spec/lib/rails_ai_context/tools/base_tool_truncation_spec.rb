@@ -44,11 +44,37 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(text).to start_with("y" * 100 + "\n\n---\n")
     end
 
-    it "includes hint to use detail:summary" do
-      long_text = "x" * 200
-      result = described_class.text_response(long_text)
-      text = result.content.first[:text]
+    it "points a tool that takes detail at detail:summary" do
+      text = RailsAiContext::Tools::GetSchema.text_response("x" * 200).content.first[:text]
+
       expect(text).to include('detail:"summary"')
+    end
+
+    it "points a tool without detail at its own params, never at one it refuses" do
+      text = RailsAiContext::Tools::ReadLogs.text_response("x" * 200).content.first[:text]
+
+      expect(text).not_to include("detail")
+      expect(text).not_to include("table:")
+      expect(text).to include("`lines`", "`search`")
+    end
+
+    it "closes a code fence the cut left open, so the footer reads as prose" do
+      long_text = "Recent lines:\n```\n#{(1..20).map { |i| "log line #{i}" }.join("\n")}\n```\n"
+      text = RailsAiContext::Tools::ReadLogs.text_response(long_text).content.first[:text]
+      body, footer = text.split("\n\n---\n", 2)
+
+      expect(body.lines.count { |line| line.start_with?("```") }).to be_even
+      expect(footer).to start_with("_Response truncated")
+    end
+
+    it "closes an indented fence a list item opened, at the same indent" do
+      long_text = "- subscription\n  ```erb\n#{(1..20).map { |i| "  <%= turbo_stream_from :line_#{i} %>" }.join("\n")}\n  ```\n"
+      text = RailsAiContext::Tools::ReadLogs.text_response(long_text).content.first[:text]
+      body, footer = text.split("\n\n---\n", 2)
+
+      expect(body.lines.last).to eq("  ```")
+      expect(body.lines.count { |line| line.lstrip.start_with?("```") }).to be_even
+      expect(footer).to start_with("_Response truncated")
     end
   end
 

@@ -57,6 +57,17 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     })
   end
 
+  it "names the setting a model's computed table comes from, never a misspelling" do
+    allow(described_class).to receive(:cached_context).and_return({
+      schema: { adapter: "static_parse", tables: tables, total_tables: 3 },
+      models: { "Archive" => { table_set_by: "Archive.table_name" } }
+    })
+
+    text = described_class.call(table: "Archive").content.first[:text]
+
+    expect(text).to eq("The table of `Archive` is set by `Archive.table_name`, which the static tier did not read; pass the table name.")
+  end
+
   describe "the summary Adapter line" do
     it "names the candidates and why it cannot choose" do
       allow(described_class).to receive(:cached_context).and_return({
@@ -83,6 +94,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
               { name: "seats", type: "integer", unsigned: true },
               { name: "total", type: "decimal", precision: 10, scale: 2 },
               { name: "seen_at", type: "datetime", precision: 3 },
+              { name: "stamped_at", type: "datetime", precision: nil },
               { name: "bio", type: "text", size: "medium" }
             ],
             indexes: [], foreign_keys: [],
@@ -109,6 +121,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).to include("| seats | integer, unsigned | yes |")
       expect(text).to include("| total | decimal(10,2) | yes |")
       expect(text).to include("| seen_at | datetime(3) | yes |")
+      expect(text).to include("| stamped_at | datetime, precision: nil | yes |")
       expect(text).to include("| bio | text, size: medium | yes |")
     end
 
@@ -184,13 +197,17 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
         schema: { adapter: "postgresql", total_tables: 1,
                   enum_types: [ { name: "mood", values: %w[happy sad] }, { name: "unused", values: %w[x] } ],
                   tables: { "users" => {
-                    indexes: [], foreign_keys: [],
+                    indexes: [],
+                    foreign_keys: [ { from_table: "users", to_table: "accounts", column: "account_id", primary_key: "id", name: "my_users_account_fk", validate: false },
+                                    { from_table: "users", to_table: "accounts", column: "boss_id", primary_key: "id", on_delete: "cascade", name: "my_users_boss_fk" } ],
                     columns: [
                       { name: "age", type: "integer" },
                       { name: "mood", type: "enum", enum_type: "mood" },
                       { name: "age_next", type: "integer", generated: "age + 1", stored: true }
                     ],
-                    check_constraints: [ { name: "age_nonneg", expression: "age >= 0" }, { expression: "age < 200" } ]
+                    check_constraints: [ { name: "age_nonneg", expression: "age >= 0" }, { expression: "age < 200" },
+                                         { name: "age_known", expression: "age IS NOT NULL", validate: false } ],
+                    exclusion_constraints: [ { name: "one_age", expression: "age WITH =", using: "gist", where: "age > 0", deferrable: "deferred" } ]
                   } } },
         models: {}
       })
@@ -199,7 +216,10 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     it "lists each for the table" do
       text = described_class.call(table: "users").content.first[:text]
 
-      expect(text).to include("### Check constraints\n- `age_nonneg`: age >= 0\n- age < 200")
+      expect(text).to include("### Check constraints\n- `age_nonneg`: age >= 0\n- age < 200\n- `age_known`: age IS NOT NULL (validate: false)")
+      expect(text).to include("- `account_id` → `accounts.id` (name: my_users_account_fk, validate: false)")
+      expect(text).to include("- `boss_id` → `accounts.id` (name: my_users_boss_fk, on_delete: cascade)")
+      expect(text).to include("### Exclusion constraints\n- `one_age`: EXCLUDE USING gist (age WITH =) WHERE (age > 0) (deferrable: deferred)")
       expect(text).to include("### Enum types\n- `mood`: happy, sad")
       expect(text).not_to include("unused")
       expect(text).to include("### Generated columns\n- `age_next`: age + 1 (stored)")
@@ -731,6 +751,100 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "an app that sets SchemaDumper.fk_ignore_pattern, read without booting" do
+    def text(unread)
+      schema = { adapter: "static_parse", total_tables: 1, note: "Parsed from db/structure.sql (no DB connection)",
+                 tables: { "kids" => { columns: [ { name: "pa", type: "bigint" } ], indexes: [], foreign_keys: [ { from_table: "kids", to_table: "parents", column: "pa", primary_key: "id" } ] } } }
+      schema[:fk_ignore_pattern_unread] = true if unread
+      allow(described_class).to receive(:cached_context).and_return({ schema: schema, models: {} })
+      [ described_class.call(table: "kids"), described_class.call(detail: "summary") ].map { |response| response.content.first[:text] }
+    end
+
+    it "says a booted read may show other key names, beside the foreign keys and in the header" do
+      text(true).each { |answer| expect(answer).to include("This app sets SchemaDumper.fk_ignore_pattern", "may hide a name listed here or list one hidden here") }
+      text(false).each { |answer| expect(answer).not_to include("fk_ignore_pattern") }
+    end
+
+    it "says it in the JSON answers too, for a table with foreign keys and for the whole schema" do
+      text(true)
+      one = JSON.parse(described_class.call(table: "kids", format: "json").content.first[:text])
+      all = JSON.parse(described_class.call(detail: "summary", format: "json").content.first[:text])
+
+      expect(one["fk_ignore_pattern_note"]).to include("SchemaDumper.fk_ignore_pattern")
+      expect(all["fk_ignore_pattern_note"]).to include("SchemaDumper.fk_ignore_pattern")
+      text(false)
+      expect(JSON.parse(described_class.call(table: "kids", format: "json").content.first[:text])).not_to have_key("fk_ignore_pattern_note")
+    end
+  end
+
+  describe "a table whose quoted name holds a hyphen, a space or a quote" do
+    let(:sql) do
+      <<~SQL
+        CREATE TABLE public."my-table" (id bigint NOT NULL, note text);
+        CREATE TABLE public."my table" (id bigint NOT NULL);
+        CREATE TABLE public."q""t" (id bigint NOT NULL, tag text);
+        CREATE TABLE public."x.y" (id bigint NOT NULL);
+      SQL
+    end
+
+    def ask(name, **params)
+      dump = RailsAiContext::Introspectors::StructureSqlReader.parse(sql)
+      models = { "QT" => { table_name: 'q"t', associations: [], validations: [] } }
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "static_parse", tables: dump[:tables], total_tables: dump[:tables].size }, models: models })
+      described_class.call(table: name, **params).content.first[:text]
+    end
+
+    it "answers the table by the name it was written with, and never says it is absent" do
+      [ "my-table", "my table", 'q"t', "x.y" ].each do |name|
+        expect(ask(name)).to start_with("## Table: #{name}").and(satisfy { |text| !text.include?("not found") })
+      end
+      expect(ask('q"t')).to include("| tag | text |")
+    end
+
+    it "answers a quoted spelling of the name with the table's real name" do
+      { '"q""t"' => 'q"t', '"my-table"' => "my-table", '"x.y"' => "x.y", '"my table"' => "my table" }.each do |spelling, name|
+        expect(ask(spelling)).to start_with("## Table: #{name}\n")
+      end
+    end
+
+    it "links the table to its model by the real name, and lists a dotted table with the others" do
+      expect(ask('q"t')).to include("**Models:** QT")
+      summary = ask(nil, detail: "standard")
+      expect(summary).to include("### x.y").and include('### q"t → **QT**')
+      expect(summary).not_to include("q\"\"t")
+    end
+  end
+
+  # A replay that skipped helper calls cannot say a table is absent: a table those calls create would be missing from it.
+  describe "a table asked for from a replay that skipped migration helper calls" do
+    def ask(skipped)
+      schema = { adapter: "static_parse", tables: { "posts" => { columns: [ { name: "id", type: "bigint" } ], indexes: [], foreign_keys: [] } }, total_tables: 1,
+                 note: "Reconstructed from 2 migration files, 3 migration helper calls not replayed" }
+      schema[:skipped_calls] = skipped if skipped
+      allow(described_class).to receive(:cached_context).and_return({ schema: schema, models: {} })
+      described_class.call(table: "users").content.first[:text]
+    end
+
+    it "names the calls and says a table they create would be missing" do
+      text = ask(%w[db/migrate/1000016_aggregated_migrations.rb:7 db/migrate/1000016_aggregated_migrations.rb:9 db/migrate/2_b.rb:3])
+
+      expect(text).to start_with("Table 'users' is not in the schema the replay built.")
+      expect(text).not_to include("not found.")
+      expect(text).to include("3 migration helper calls were not replayed (db/migrate/1000016_aggregated_migrations.rb:7, " \
+                              "db/migrate/1000016_aggregated_migrations.rb:9, db/migrate/2_b.rb:3), so a table they create is missing from this schema and " \
+                              "'users' may exist")
+    end
+
+    it "lists the first five and counts the rest, and says nothing where nothing was skipped" do
+      text = ask((1..8).map { |line| "db/migrate/1_a.rb:#{line}" })
+
+      expect(text).to include("(db/migrate/1_a.rb:1, db/migrate/1_a.rb:2, db/migrate/1_a.rb:3, db/migrate/1_a.rb:4, db/migrate/1_a.rb:5, and 3 more)")
+      expect(ask(nil)).not_to include("not replayed (")
+      expect(ask([])).not_to include("may exist")
+      expect(ask(nil)).to start_with("Table 'users' not found.")
+    end
+  end
+
   # Rails builds no model for a has_and_belongs_to_many join table, so one is
   # not a table whose model went missing, and the reader was being pointed at
   # a table the app uses on every request.
@@ -890,6 +1004,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       })
 
       expect(warning_line).not_to include("shop_products_taxons")
+    end
+
+    # The other side's table is computed (self.table_name = ...), so the join table's name is not known: the list says whose.
+    it "says which model's habtm join table it could not name, and nothing where every join table is named" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 5 },
+        models: {
+          "Post" => { table_name: "posts", associations: [ { name: "tags", type: "has_and_belongs_to_many", options: {} } ] },
+          "Tag" => { table_name: nil, table_set_by: "table_name_prefix", associations: [] }
+        }
+      })
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("`Post` has a has_and_belongs_to_many whose other table is computed, so a join table in this list may be its")
+      expect(JSON.parse(described_class.call(format: "json").content.first[:text])["habtm_join_tables_unnamed"]).to eq(%w[Post])
+      expect(text).to include("posts_tags")
+
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 5 },
+        models: { "Post" => { table_name: "posts", associations: [ { name: "tags", type: "has_and_belongs_to_many", options: { join_table: "posts_tags" } } ] } }
+      })
+      expect(described_class.call.content.first[:text]).not_to include("whose other table is computed")
+
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 5 },
+        models: { "Post" => { table_name: nil, table_set_by: "table_name_prefix", associations: [ { name: "tags", type: "has_and_belongs_to_many", options: {} } ] } }
+      })
+      expect(JSON.parse(described_class.call(format: "json").content.first[:text])["habtm_join_tables_unnamed"]).to eq(%w[Post])
     end
 
     it "leaves out a custom join table the booted record carries" do

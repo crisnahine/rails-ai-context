@@ -262,16 +262,20 @@ module RailsAiContext
         *.{json,yaml,yml} {openapi,swagger,doc,docs,public,app,config}/**/*
       ].freeze
       OPENAPI_EXTENSIONS = %w[.json .yaml .yml].freeze
+      READS = OPENAPI_GLOBS.map { |glob| glob.end_with?("/**/*") ? "#{glob}{#{OPENAPI_EXTENSIONS.join(",")}}" : glob }.freeze
       OPENAPI_YAML_KEY = /^["']?(?:openapi|swagger)["']?[ \t]*:[ \t]*["']?\d/
-      # Locale files are most of the YAML under config/ and app/, and none is a spec.
-      OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|packs|assets|vite|locales)/}
+      # Locale files are most of the YAML under config/ and app/, and none is a spec; nor is a
+      # build's output or an upload, each anchored where it is written so an API namespace of that name stays.
+      OPENAPI_SKIP = %r{(?:\A|/)(?:node_modules|locales)/|\Apublic/(?:packs(?:-test)?|assets|vite(?:-dev|-test)?|system|uploads)/|\Aapp/assets/builds/}
+      READS_SKIP = OPENAPI_SKIP
 
       # A file is a spec by its top-level `openapi` or `swagger` version, never by where it is.
       # Braces expand to one glob each, so the extension is checked after a single walk per tree.
       def detect_openapi_specs
+        built = Fingerprinter.build_dirs(root)
         OPENAPI_GLOBS.flat_map { |pattern| Dir.glob(pattern, base: root.to_s) }
           .uniq.select { |relative| relative.end_with?(*OPENAPI_EXTENSIONS) }
-          .reject { |relative| relative.match?(OPENAPI_SKIP) }
+          .reject { |relative| relative.match?(OPENAPI_SKIP) || Fingerprinter.under_any?(relative, built) }
           .select { |relative| openapi_document?(relative) }
           .sort
       rescue => e
@@ -456,7 +460,7 @@ module RailsAiContext
       end
 
       def one_line_source(node)
-        node ? NodeSource.text(node).gsub(/\s+/, " ").strip : nil
+        node ? RailsAiContext::Redaction.source_slice(NodeSource.text(node).gsub(/\s+/, " ").strip) : nil
       end
 
       def detect_api_client_generation
@@ -475,9 +479,10 @@ module RailsAiContext
         return nil unless Dir.exist?(graphql_dir)
 
         details = {}
-        details[:resolvers] = Dir.glob("**/*resolver*.rb", base: graphql_dir).map { |f| File.basename(f, ".rb").camelize }
-        details[:subscriptions] = Dir.glob("**/subscriptions/*.rb", base: graphql_dir).map { |f| File.basename(f, ".rb").camelize }
-        details[:dataloaders] = Dir.glob("**/{loaders,dataloaders}/*.rb", base: graphql_dir).map { |f| File.basename(f, ".rb").camelize }
+        names = ->(pattern) { PathResolver.glob(graphql_dir, pattern).map { |f| File.basename(f, ".rb").camelize } }
+        details[:resolvers] = names.call("**/*resolver*.rb")
+        details[:subscriptions] = names.call("**/subscriptions/*.rb")
+        details[:dataloaders] = names.call("**/{loaders,dataloaders}/*.rb")
         details.reject { |_, v| v.empty? }
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_graphql_details")

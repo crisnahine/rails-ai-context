@@ -247,6 +247,19 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
         expect(File.size(cache_file)).to eq(body.bytesize)
       end
 
+      it "returns the fetched doc when the stale cache file is read-only, and leaves the file" do
+        FileUtils.mkdir_p(cache_file.dirname)
+        File.write(cache_file, "old")
+        File.utime(Time.now - 90_000, Time.now - 90_000, cache_file)
+        File.chmod(0o444, cache_file)
+
+        text = described_class.call(query: "active record basics", fetch: true).content.first[:text]
+
+        expect(text).to include("Full guide content here")
+        expect(text).not_to include("fetch failed")
+        expect(File.read(cache_file)).to eq("old")
+      end
+
       it "returns the fetched doc when tmp is a symlink out of the app, and names no path outside it" do
         outside = Dir.mktmpdir
         File.symlink(outside, root.join("tmp"))

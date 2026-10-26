@@ -25,13 +25,15 @@ module RailsAiContext
         includers = nil
         declarations.each_with_object(Set.new) do |(call, owner), found|
           table = join_table(call, root)
-          if table.nil?
+          if table.nil? || interpolated?(call)
             owners = if owner[:module]
               (includers ||= Includers.of(root, sources, module_owners(declarations), macros: %i[include prepend]))[owner[:module]] || []
             else
               [ owner[:class] ]
             end
-            owners.each { |name| found << derive(call, name, models) }
+            # An interpolated name was resolved for each owner by the model tier, through its superclass chain.
+            recorded = owners.filter_map { |name| recorded_join_table(models, name, call) } if table
+            table ? found.merge(recorded.presence || [ table ]) : owners.each { |name| found << derive(call, name, models) }
             found.delete(nil)
           else
             found << table
@@ -90,6 +92,15 @@ module RailsAiContext
         end
       end
 
+      def interpolated?(call)
+        option_node(call, :join_table).is_a?(Prism::InterpolatedStringNode)
+      end
+
+      def recorded_join_table(models, owner, call)
+        name = call.arguments&.arguments&.first&.then { |node| node.unescaped if node.respond_to?(:unescaped) }
+        Array(models.dig(owner, :associations)).find { |assoc| assoc.is_a?(Hash) && assoc[:name].to_s == name }&.dig(:join_table)
+      end
+
       def derive(call, owner, models)
         name = call.arguments&.arguments&.first
         return nil unless name.is_a?(Prism::SymbolNode) || name.is_a?(Prism::StringNode)
@@ -98,7 +109,8 @@ module RailsAiContext
         class_option = option_node(call, :class_name)
         written = class_option.respond_to?(:unescaped) ? class_option.unescaped : name.to_s.camelize.singularize
         other = TableName.resolve_class(written, owner) { |candidate| candidate if models.key?(candidate) }
-        join_table_name(TableName.for_model_name(owner, models), TableName.for_model_name(other, models))
+        tables = [ owner, other ].map { |name| TableName.of_model(name, models).table }
+        join_table_name(*tables) if tables.all?
       end
 
       def option_node(call, key)

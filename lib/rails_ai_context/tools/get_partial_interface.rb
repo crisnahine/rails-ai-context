@@ -277,7 +277,7 @@ module RailsAiContext
 
       # The names a strict locals comment declares; nil without one, [] for
       # `()`, which allows no locals at all.
-      private_class_method def self.extract_magic_comment_locals(source)
+      def self.extract_magic_comment_locals(source)
         list = source[STRICT_LOCALS, 1]
         return nil unless list
 
@@ -589,7 +589,7 @@ module RailsAiContext
           # one call whose arguments the line alone does not hold.
           covered = 0
           spans = []
-          reader.render_calls(content).each do |at, args|
+          reader.render_calls(content, path: file).each do |at, args|
             spans << [ at, at + args.length ]
             # A render inside another's arguments is already part of that call's site.
             next if at < covered

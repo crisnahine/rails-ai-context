@@ -26,7 +26,7 @@ module RailsAiContext
       ].freeze
       JOB_MACROS = (%i[
         queue_as queue_with_priority enqueue_after_transaction_commit= limits_concurrency include
-        sidekiq_throttle step
+        sidekiq_throttle step queue_name_prefix=
       ] + RetryPolicy::MACROS + JOB_CALLBACKS).freeze
 
       # @return [Hash] async workers, mailers, and channels
@@ -82,7 +82,7 @@ module RailsAiContext
           next if job.name.nil? || job.name == "ApplicationJob" || DeclaredConstant.renamed?(job) ||
                   job.name.start_with?("ActionMailer", "ActiveStorage::", "ActionMailbox::", "Turbo::", "Sentry::")
           next unless app_defined?(job)
-          if SuperclassChain.abstract_base?(job.name, inherited: DeclaredConstant.carried(job.descendants).any?)
+          if SuperclassChain.abstract_base?(job.name, inherited: DeclaredConstant.carried(job.descendants).any?) || abstract_job?(job.name)
             reflected_bases << { name: job.name, file: source_file_for(job), active_job: true }
             next
           end
@@ -128,7 +128,7 @@ module RailsAiContext
                          .sort_by { |m| m[:offset] }.map { |m| written(candidate.source, m) }
         heirs = job_candidates.keys.select { |other| other != name && chain_of(other).include?(name) }
         { name: name, file: candidate.file, active_job: (true if active_job?(name)), queue: inherited_queue(name),
-          options: inherited_options(name).presence, retries: RetryPolicy.entries(macros).presence,
+          options: inherited_options(name).presence, retries: retries(name).presence,
           declares: declares.presence, inherited_by: heirs.sort.presence }.compact
       end
 
@@ -153,7 +153,48 @@ module RailsAiContext
       end
 
       def inherited_queue(name)
-        chain_of(name).each_with_index.lazy.filter_map { |link, depth| queue_as(job_candidates[link].ast, own: depth.zero?) }.first
+        chain_of(name).each_with_index.lazy.filter_map { |link, depth| queue_as(job_candidates[link].ast, own: depth.zero?, prefix: class_prefix(name, depth)) }.first
+      end
+
+      # What the job's chain and its concerns declare, in the order Ruby runs it.
+      def declared(name)
+        @declared ||= {}
+        @declared[name] ||= begin
+          candidate = job_candidates[name]
+          root = app.root.to_s
+          lookup = ->(constant) { (key = candidate_names[constant]) && File.join(root, job_candidates[key].file) }
+          # Each class on the chain is a candidate whose walk is already done.
+          read = ->(_path, _source, constant) { (key = candidate_names[constant]) && job_candidates[key].ast }
+          # The chain kind detection reads, so a job's kind and its chain never disagree.
+          bases = chain_of(name).drop(1).map { |base| [ job_candidates[base].declared, File.join(root, job_candidates[base].file) ] }
+          ClassDeclarations.for(candidate.declared, lookup: lookup, keys: %i[macros], listeners: CHAIN_LISTENERS, root: root, read: read,
+                                                    source: candidate.source, file: File.join(root, candidate.file), cache: (@chain_walks ||= {}), bases: bases)
+        end
+      end
+
+      # ActiveJob appends each class's handlers after its superclass's; Sidekiq's retry setting and
+      # backoff are the nearest class's, so only the last of each is listed.
+      def retries(name)
+        macros = Array(declared(name).declarations[:macros]).select { |m| RetryPolicy::MACROS.include?(m[:macro]) }
+        setting = ->(m) { m[:macro] == :sidekiq_options ? (:sidekiq_retry if (m[:option_nodes] || {})[:retry]) : (m[:macro] if RetryPolicy::BLOCK_MACROS.include?(m[:macro])) }
+        last = macros.each_with_index.to_h { |m, index| [ setting.call(m), index ] }
+        RetryPolicy.entries(macros.each_with_index.select { |m, index| (key = setting.call(m)).nil? || last[key] == index }.map(&:first))
+      end
+
+      # The `self.queue_name_prefix =` in effect where the class at `depth` of the chain first calls queue_as,
+      # or at the end of the chain without one: `queue_as` reads the prefix when it runs. Nil when no class sets one.
+      def class_prefix(name, depth = nil)
+        found = declared(name)
+        target = depth && found.chain[depth]&.name
+        prefix = nil
+        Array(found.declarations[:macros]).each do |m|
+          return prefix if target && m[:macro] == :queue_as && (m[:declared_in] || found.chain.first.name) == target
+          next unless m[:macro] == :queue_name_prefix=
+
+          value = Array(m[:values]).first
+          prefix = { text: value.to_s } if value.nil? || value.is_a?(String) || value.is_a?(Symbol)
+        end
+        prefix
       end
 
       def labelled(label, source)
@@ -192,10 +233,11 @@ module RailsAiContext
 
       # This class and its ancestors among the candidates, nearest first.
       def chain_of(name)
-        chain = []
-        while name && job_candidates.key?(name) && !chain.include?(name)
-          chain << name
-          name = superclass_of(name)
+        return [] unless job_candidates.key?(name)
+
+        chain = [ name ]
+        while (parent = superclass_of(chain.last)) && !chain.include?(parent)
+          chain << parent
         end
         chain
       end
@@ -205,16 +247,20 @@ module RailsAiContext
       PROC_LITERAL = /\A(?:->|(?:lambda|proc|Proc\.new)(?![\w.]))/
 
       QUEUE_AS_LISTENERS = {
-        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as, :queue_with_priority, *RetryPolicy::BLOCK_MACROS ]) },
+        macros: -> { Listeners::GenericMacroListener.new(*JOB_MACROS, block_source: [ :queue_as, :queue_with_priority, *RetryPolicy::BLOCK_MACROS ],
+                                                                     call_source: JOB_CALLBACKS, hook_receiver: true) },
         procs:  Listeners::ProcLiteralListener,
         queue_assignments: Listeners::QueueAssignmentListener
       }.freeze
 
+      # The chain walk reads each class's macros and follows its concerns.
+      CHAIN_LISTENERS = { macros: QUEUE_AS_LISTENERS[:macros], methods: Listeners::MethodsListener, mixins: Listeners::MixinsListener }.freeze
+
       # A literal queue by name; one picked at enqueue time by the source that
       # picks it, the way other computed values read.
-      def queue_as(ast, own: true)
+      def queue_as(ast, own: true, prefix: nil)
         hit = ast[:macros].find { |m| m[:macro] == :queue_as } or return assigned_queue(ast, own)
-        return queue_name_from_part(hit[:args].first.to_s) if hit[:args].any?
+        return queue_name_from_part(hit[:args].first.to_s, prefix) if hit[:args].any?
         return labelled(COMPUTED_QUEUE, hit[:block]) if hit[:block]
 
         source = hit[:values].first.to_s.gsub(/\s+/, " ").strip
@@ -234,13 +280,14 @@ module RailsAiContext
         hit[:queue] || "`#{hit[:source]}` (computed)"
       end
 
-      # ActiveJob's queue_name_from_part, with the queue settings the app's config assigns.
-      # A setting the static tier cannot evaluate reads as its source, with a note why.
-      def queue_name_from_part(part)
+      # ActiveJob's queue_name_from_part, with the queue settings the app's config assigns and a
+      # prefix the class sets itself over the config's. A setting the static tier cannot evaluate
+      # reads as its source, with a note why.
+      def queue_name_from_part(part, class_prefix = nil)
         settings = active_job_queue_settings
         name = part || settings.dig(:default_queue_name, :text) || "default"
         used = [ (settings[:default_queue_name] unless part) ]
-        prefix = settings[:queue_name_prefix]
+        prefix = class_prefix || settings[:queue_name_prefix]
         if prefix && !prefix[:text].empty?
           delimiter = settings[:queue_name_delimiter]
           name = [ prefix[:text], name ].join(delimiter ? delimiter[:text] : "_")
@@ -307,9 +354,73 @@ module RailsAiContext
 
       # Named and subclassed like a base, and a job by its own chain: a subclassed class
       # that reaches neither ActiveJob nor a Sidekiq mixin is no job and no job base.
+      # A class that leaves the work to its subclasses is a base too, whatever it is called.
       def base?(name)
-        SuperclassChain.abstract_base?(name, inherited: inherited_names.include?(name)) &&
-          (worker?(name) || active_job?(name) || que_job?(name))
+        (worker?(name) || active_job?(name) || que_job?(name)) &&
+          (SuperclassChain.abstract_base?(name, inherited: inherited_names.include?(name)) || abstract_job?(name))
+      end
+
+      # Marked abstract, or the entry it actually runs only raises: `perform`, and `execute` too when `perform` delegates
+      # to it or is missing. NotImplementedError makes a raise abstract alone, any other raise does once a subclass exists.
+      def abstract_job?(name)
+        (@abstract_jobs ||= {}).fetch(name) do
+          candidate = job_candidates[name]
+          @abstract_jobs[name] = !candidate.nil? && (marked_abstract?(candidate.source) || runs_abstract_entry?(name))
+        end
+      end
+
+      def runs_abstract_entry?(name)
+        subclassed = inherited_names.include?(name)
+        perform = nearest_entry(name, "perform")
+        return only_raises?(perform, subclassed) if perform && !calls_execute?(perform)
+
+        execute = nearest_entry(name, "execute")
+        return only_raises?(execute, subclassed) if execute && (perform.nil? || calls_execute?(perform))
+
+        perform.nil? ? false : only_raises?(perform, subclassed)
+      end
+
+      # [the statements of the nearest instance method of that name up the chain], nil when none defines it.
+      def nearest_entry(name, entry)
+        chain_of(name).each do |link|
+          candidate = job_candidates[link]
+          found = ActionResolver.own_methods(candidate.ast[:methods], candidate.declared).find { |m| m[:name] == entry && m[:scope] == :instance }
+          return entry_statements(candidate.source, found) if found
+        end
+        nil
+      end
+
+      def entry_statements(source, method)
+        return [] unless method[:offset] && method[:end_offset]
+
+        node = AstCache.parse_string(source.byteslice(method[:offset]...method[:end_offset]))&.value&.then { |tree| tree.statements.body.first }
+        node.is_a?(Prism::DefNode) && node.body.is_a?(Prism::StatementsNode) ? node.body.body : []
+      end
+
+      def only_raises?(statements, subclassed)
+        raised = statements.one? && statements.first
+        return false unless raised.is_a?(Prism::CallNode) && raised.receiver.nil? && %i[raise fail].include?(raised.name)
+
+        subclassed || raised.arguments&.arguments&.first&.slice.to_s.start_with?("NotImplementedError")
+      end
+
+      # `super` hands the work to the parent's perform, which is what calls execute.
+      def calls_execute?(statements)
+        statements.any? do |statement|
+          AstWalk.each(statement).any? do |node|
+            node.is_a?(Prism::SuperNode) || node.is_a?(Prism::ForwardingSuperNode) || (node.is_a?(Prism::CallNode) && node.receiver.nil? && node.name == :execute)
+          end
+        end
+      end
+
+      # `self.abstract_class = true` (as ActiveRecord spells it) or `abstract!`.
+      def marked_abstract?(source)
+        tree = AstCache.parse_string(source)&.value or return false
+        AstWalk.each(tree).any? do |node|
+          next false unless node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode))
+
+          node.name == :abstract! || (node.name == :abstract_class= && node.arguments&.arguments&.first.is_a?(Prism::TrueNode))
+        end
       end
 
       def reflected_bases
@@ -428,12 +539,12 @@ module RailsAiContext
           unknown_base = !active && !que
           next if unknown_base && !performs?(ActionResolver.own_methods(ast[:methods], candidate.declared))
 
-          queue = inherited_queue(name) || (queue_name_from_part(nil) if active)
+          queue = inherited_queue(name) || (queue_name_from_part(nil, class_prefix(name)) if active)
 
           perform_method = ActionResolver.entry_point(ast[:methods], names: que ? ActionResolver::QUE_ENTRY_POINTS : ActionResolver::ENTRY_POINTS)
           perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
-          retries = RetryPolicy.entries(ast[:macros])
+          retries = retries(name)
 
           job = { name: name, file: candidate.file }
           job[:active_job] = true if active
@@ -452,8 +563,6 @@ module RailsAiContext
 
       # What decides when a job runs, as its class (or the nearest base setting it) writes it.
       def run_settings(name)
-        candidate = job_candidates[name]
-        macros = candidate_body(name)
         settings = {}
         priority = nearest_macro(name, :queue_with_priority)
         if priority
@@ -467,9 +576,17 @@ module RailsAiContext
         settings[:enqueue_after_transaction_commit] = commit[:values].first.then { |v| v.is_a?(Symbol) ? ":#{v}" : v.to_s } if commit
         concurrency = nearest_macro(name, :limits_concurrency)
         settings[:concurrency] = written(job_candidates[concurrency[:owner]].source, concurrency) if concurrency
-        callbacks = macros.select { |m| JOB_CALLBACKS.include?(m[:macro]) }.sort_by { |m| m[:offset] }
-        settings[:callbacks] = callbacks.map { |m| written(candidate.source, m) } if callbacks.any?
+        found = declared(name)
+        callbacks = Array(found.declarations[:macros]).select { |m| JOB_CALLBACKS.include?(m[:macro]) }
+        settings[:callbacks] = callback_chains(callbacks).map { |m| squeezed(m[:text]) } if callbacks.any?
         settings.merge(continuation(name))
+      end
+
+      # Each chain (enqueue, perform, discard) as ActiveJob keeps it: appended in turn, `prepend: true` at the head.
+      def callback_chains(callbacks)
+        callbacks.group_by { |m| m[:macro].to_s.split("_").last }.values.flat_map do |chain|
+          chain.each_with_object([]) { |m, list| (m[:option_nodes] || {})[:prepend].is_a?(Prism::TrueNode) ? list.unshift(m) : list.push(m) }
+        end
       end
 
       CONTINUABLE = "ActiveJob::Continuable"
@@ -521,13 +638,13 @@ module RailsAiContext
           entry = ActionResolver.entry_point(ast[:methods])
           # Everything a listing prints about a worker rides the record: the
           # tool holds the name and no source.
-          retries = RetryPolicy.entries(ast[:macros])
+          retries = retries(name)
           calls = SourceCalls.calls_from(ast[:calls], own: name)
 
           {
             name: name,
             file: candidate.file,
-            line_count: candidate.source.lines.size,
+            line_count: DeclaredConstant.own_line_count(candidate.source, candidate.declared) || candidate.source.lines.size,
             options: inherited_options(name),
             inherited_from: option_sources(name).presence,
             throttle: throttle && throttle_summary(throttle),
@@ -585,6 +702,7 @@ module RailsAiContext
           nesting: declaration.nesting,
           ast: SourceIntrospector.walk_source(source, QUEUE_AS_LISTENERS.merge(
             methods: Listeners::MethodsListener,
+            mixins:  Listeners::MixinsListener,
             calls:   SourceCalls.listener
           ))
         )
@@ -610,7 +728,9 @@ module RailsAiContext
       def superclass_of(name)
         candidate = job_candidates[name] or return nil
 
-        SuperclassChain.resolve_in_scope(candidate.declared, candidate.superclass, nesting: candidate.nesting) do |qualified|
+        source_of = ->(constant) { (key = candidate_names[constant]) && job_candidates[key].source }
+        SuperclassChain.resolve_in_scope(candidate.declared, candidate.superclass, nesting: candidate.nesting,
+                                                                                   ancestors_of: SuperclassChain.ancestors_of(source_of)) do |qualified|
           candidate_names[qualified]
         end
       end
@@ -663,7 +783,7 @@ module RailsAiContext
 
         nodes.filter_map { |key, node|
           next unless node.respond_to?(:slice)
-          "#{key} #{NodeSource.text(node).gsub(/\s+/, " ")}"
+          "#{key} #{RailsAiContext::Redaction.source_slice(NodeSource.text(node).gsub(/\s+/, " "))}"
         }.join(", ").presence
       end
 
@@ -1127,8 +1247,10 @@ module RailsAiContext
                 .sort_by(&:start_offset).reverse_each do |loc|
           text = text.byteslice(0, loc.start_offset - from) + text.byteslice((loc.end_offset - from)..).to_s
         end
-        text.gsub(/\s+/, " ").gsub(/\(\s+/, "(").sub(/,?\s*\)\z/, ")").strip
+        squeezed(text)
       end
+
+      def squeezed(text) = text.gsub(/\s+/, " ").gsub(/\(\s+/, "(").sub(/,?\s*\)\z/, ")").strip
 
       # A declaration is a call in the class body; the same name inside a
       # method - `default[:from]` in a `class << self` reader - is a use.

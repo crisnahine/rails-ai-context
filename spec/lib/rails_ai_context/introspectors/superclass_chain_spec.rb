@@ -160,13 +160,50 @@ RSpec.describe RailsAiContext::Introspectors::SuperclassChain do
       expect(resolved).to eq(2)
     end
 
+    it "reads a name written from the root at the top level alone" do
+      resolved = described_class.resolve_in_scope("Fasp::BackfillWorker", "::BaseWorker", nesting: %w[Fasp]) do |name|
+        name if known.include?(name)
+      end
+
+      expect(resolved).to eq("BaseWorker")
+    end
+
     it "answers nothing for no superclass" do
       expect(described_class.resolve_in_scope("Fasp::BackfillWorker", nil) { |n| n }).to be_nil
+    end
+
+    # Ruby raises NameError for `Panel::Missing` when Panel holds no Missing; the head alone is no superclass.
+    it "answers nothing when a path's head resolves and the rest does not" do
+      expect(described_class.resolve_in_scope("Gadget", "Panel::Missing") { |name| name if name == "Panel" }).to be_nil
     end
   end
 
   # Three callers answered "is this an abstract base" three ways, and
   # disagreed about ApplicationJobBase.
+  describe ".superclasses" do
+    # Ruby reads `Admin::Base` inside Admin's superclass Panel when Admin holds no Base.
+    it "names each superclass as Ruby resolves it, a qualified one through its head's superclasses" do
+      sources = {
+        "Panel" => "class Panel\nend\n",
+        "Panel::Base" => "class Panel\n  class Base < Root\n  end\nend\n",
+        "Admin" => "class Admin < Panel\nend\n",
+        "Root" => "class Root\nend\n"
+      }
+      ruby = Module.new.module_eval(<<~RUBY, __FILE__, __LINE__ + 1)
+        class Root; end
+        class Panel; class Base < Root; end; end
+        class Admin < Panel; end
+        class Gadget < Admin::Base; end
+        [ Gadget.superclass, Gadget.superclass.superclass ].map { |klass| klass.name.split("::").drop(1).join("::") }
+      RUBY
+
+      found = described_class.superclasses("Gadget", "class Gadget < Admin::Base\nend\n", sources.method(:[]))
+
+      expect(ruby).to eq(%w[Panel::Base Root])
+      expect(found).to eq(ruby)
+    end
+  end
+
   describe ".abstract_base?" do
     it "calls a Base-named class with a subclass a base" do
       expect(described_class.abstract_base?("Trackers::Base", inherited: true)).to be(true)

@@ -15,6 +15,10 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
     File.write(File.join(root, "config", "initializers", "rails_ai_context.rb"), body)
   end
 
+  def configure(body)
+    "RailsAiContext.configure do |config|\n#{body}\nend\n"
+  end
+
   def write_yaml(body)
     File.write(File.join(root, ".rails-ai-context.yml"), body)
   end
@@ -43,7 +47,7 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
     # Rails config is the file a user hand-edits, so it outranks the record
     # the installer keeps for itself.
     it "lets a hand-edited initializer win over the YAML record" do
-      write_initializer("config.ai_tools = %i[copilot]\n")
+      write_initializer(configure("config.ai_tools = %i[copilot]"))
       write_yaml("ai_tools:\n  - claude\n  - cursor\n")
 
       expect(described_class.read(root: root)).to eq([ :copilot ])
@@ -63,11 +67,12 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(described_class.read(root: root)).to eq([ :opencode ])
     end
 
-    it "falls through to YAML when the initializer names no tool" do
-      write_initializer("config.ai_tools = %i[]\n")
+    # The initializer runs after the file loads, so its empty list is the selection the boot keeps.
+    it "reads no tool, not the YAML's, when the initializer names none" do
+      write_initializer(configure("config.ai_tools = %i[]"))
       write_yaml("ai_tools:\n  - opencode\n")
 
-      expect(described_class.read(root: root)).to eq([ :opencode ])
+      expect(described_class.read(root: root)).to eq([])
     end
 
     it "ignores a commented-out selection line" do
@@ -92,7 +97,7 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
     end
 
     it "drops a name that is not a known AI tool" do
-      write_initializer("config.ai_tools = %i[claude emacs]\n")
+      write_initializer(configure("config.ai_tools = %i[claude emacs]"))
 
       expect(described_class.read(root: root)).to eq([ :claude ])
     end
@@ -136,6 +141,105 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(content).to include("config.ai_tools = %i[cursor codex]")
       expect(content).to include("config.preset = :full")
       expect(described_class.read(root: root)).to eq(%i[cursor codex])
+    end
+
+    # The record and the initializer must agree after a re-run whatever the
+    # block calls its param, and another library's block is never this gem's.
+    {
+      "a block whose param is c" => [
+        "RailsAiContext.configure do |c|\n  c.ai_tools = %i[claude]\n  c.preset = :full\nend\n",
+        "RailsAiContext.configure do |c|\n  c.ai_tools = %i[codex]\n  c.tool_mode = :cli    # CLI only (no MCP server needed)\n  c.preset = :full\nend\n"
+      ],
+      "a block whose param is config, guarded" => [
+        "if defined?(RailsAiContext)\n  RailsAiContext.configure do |config|\n    config.ai_tools = %i[claude]\n  end\nend\n",
+        "if defined?(RailsAiContext)\n  RailsAiContext.configure do |config|\n    config.ai_tools = %i[codex]\n    config.tool_mode = :cli    # CLI only (no MCP server needed)\n  end\nend\n"
+      ],
+      "a brace block" => [
+        "RailsAiContext.configure { |c|\n  c.ai_tools = %i[claude]\n}\n",
+        "RailsAiContext.configure { |c|\n  c.ai_tools = %i[codex]\n  c.tool_mode = :cli    # CLI only (no MCP server needed)\n}\n"
+      ],
+      "a brace block on one line" => [
+        "RailsAiContext.configure { |c| c.ai_tools = %i[claude] }\n",
+        "RailsAiContext.configure { |c| c.ai_tools = %i[codex] }\n"
+      ],
+      "a brace block closed on the selection line" => [
+        "RailsAiContext.configure { |c|\n  c.ai_tools = %i[claude] }\n",
+        "RailsAiContext.configure { |c|\n  c.tool_mode = :cli    # CLI only (no MCP server needed)\n  c.ai_tools = %i[codex] }\n"
+      ],
+      "a block that writes the selection twice" => [
+        "RailsAiContext.configure do |c|\n  c.ai_tools = %i[cursor]\n  c.ai_tools = %i[claude]\nend\n",
+        "RailsAiContext.configure do |c|\n  c.ai_tools = %i[cursor]\n  c.ai_tools = %i[codex]\n  c.tool_mode = :cli    # CLI only (no MCP server needed)\nend\n"
+      ],
+      "a block with comments" => [
+        "RailsAiContext.configure do |c|\n  # c.ai_tools = %i[cursor]\n  c.ai_tools = %i[claude] # picked by hand\n  # c.tool_mode = :mcp\nend\n",
+        "RailsAiContext.configure do |c|\n  # c.ai_tools = %i[cursor]\n  c.ai_tools = %i[codex] # picked by hand\n  c.tool_mode = :cli    # CLI only (no MCP server needed)\n  # c.tool_mode = :mcp\nend\n"
+      ],
+      "another library's configure block beside the gem's" => [
+        "Other.configure do |config|\n  config.ai_tools = %i[claude]\nend\nRailsAiContext.configure do |c|\n  c.preset = :full\nend\n",
+        "Other.configure do |config|\n  config.ai_tools = %i[claude]\nend\nRailsAiContext.configure do |c|\n  c.ai_tools = %i[codex]\n  c.tool_mode = :cli    # CLI only (no MCP server needed)\n  c.preset = :full\nend\n"
+      ]
+    }.each do |shape, (before, after)|
+      it "rewrites the selection lines in #{shape}, and the record reads back what it wrote" do
+        write_initializer(before)
+
+        described_class.write([ :codex ], root: root, extra_yaml: { "tool_mode" => "cli" })
+        described_class.write_tool_mode(:cli, root: root)
+
+        expect(File.read(File.join(root, "config", "initializers", "rails_ai_context.rb"))).to eq(after)
+        expect(described_class.read(root: root)).to eq([ :codex ])
+        expect(described_class.tool_mode(root: root)).to eq(:cli)
+      end
+    end
+
+    # Where nothing can be read, a line put at the head of the block would sit
+    # beside the old one, which wins at boot.
+    it "leaves an initializer that does not parse as it is, and says so" do
+      body = "RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\n"
+      write_initializer(body)
+      path = File.join(root, described_class::INITIALIZER)
+
+      result = described_class.write(%i[codex], root: root)
+
+      expect(result).to include(initializer: :unparsed)
+      expect(described_class.write_tool_mode(:cli, root: root)).to eq(:unparsed)
+      expect(described_class.write_context_files(false, root: root)).to eq(:unparsed)
+      expect(File.read(path)).to eq(body)
+      expect(described_class.messages(result).last)
+        .to eq([ :warn, "config/initializers/rails_ai_context.rb does not parse as Ruby, so it was left as it is - " \
+                        "fix it and run this again to record your selection there" ])
+    end
+
+    # Ripper's columns and a `^` both start past a BOM on the first line.
+    {
+      "a one-line brace block" => [ "RailsAiContext.configure { |c| c.ai_tools = %i[claude] }\n",
+                                    "RailsAiContext.configure { |c| c.ai_tools = %i[codex] }\n", :updated ],
+      "a block that holds no selection yet" => [ "RailsAiContext.configure do |c|\n  c.preset = :full\nend\n",
+                                                 "RailsAiContext.configure do |c|\n  c.ai_tools = %i[codex]\n  c.preset = :full\nend\n", :inserted ]
+    }.each do |shape, (before, after, status)|
+      it "writes the selection into #{shape} after a BOM, and keeps the BOM" do
+        write_initializer("﻿#{before}")
+
+        expect(described_class.write(%i[codex], root: root)).to include(initializer: status)
+        expect(File.read(File.join(root, described_class::INITIALIZER))).to eq("﻿#{after}")
+      end
+    end
+
+    # The configure block is found by parsing, as the generator finds it.
+    {
+      "a note after the block's param" => [ "RailsAiContext.configure do |config| # ours\n  config.preset = :full\nend\n",
+                                            "RailsAiContext.configure do |config| # ours\n  config.ai_tools = %i[codex]\n" \
+                                            "  config.preset = :full\nend\n", :inserted ],
+      "a heredoc that quotes a configure block" => [
+        "NOTE = <<~TEXT\n  RailsAiContext.configure do |x|\nTEXT\nRailsAiContext.configure do |config|\nend\n",
+        "NOTE = <<~TEXT\n  RailsAiContext.configure do |x|\nTEXT\nRailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\nend\n",
+        :inserted
+      ],
+      "a one-line block" => [ "RailsAiContext.configure { |c| c.preset = :full }\n", "RailsAiContext.configure { |c| c.preset = :full }\n", :absent ],
+      "a block with no param" => [ "RailsAiContext.configure do\nend\n", "RailsAiContext.configure do\nend\n", :absent ]
+    }.each do |shape, (before, after, status)|
+      it "places a new selection line by the configure block in #{shape}" do
+        expect(described_class.edit_config_line(before, :ai_tools, %i[codex])).to eq([ after, status ])
+      end
     end
 
     it "leaves a project with no initializer alone" do
@@ -186,6 +290,15 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
     it "reports a conflict when the initializer assigns in a shape it cannot rewrite" do
       write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = SOME_CONSTANT\nend\n")
 
+      expect(described_class.write([ :codex ], root: root)).to include(initializer: :conflict)
+    end
+
+    # A line that hands the configuration on may write the key, so the record is the user's to edit, and the YAML answers.
+    it "reads the YAML and reports a conflict when a line reaches the configuration as a whole" do
+      write_yaml("ai_tools: [cursor]\n")
+      write_initializer(configure("  config.ai_tools = %i[codex]\n  config.tap { |c| c.ai_tools = %i[copilot] }"))
+
+      expect(described_class.read(root: root)).to eq([ :cursor ])
       expect(described_class.write([ :codex ], root: root)).to include(initializer: :conflict)
     end
 
@@ -256,26 +369,35 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
         expect(described_class.write([ :codex ], root: root)).to include(initializer: :unchanged)
       end
 
-      # Reporting :unchanged here would have every entry print
-      # "(unchanged)" while the user's new selection was quietly dropped.
-      # This gem owns the file. Refusing to write because its previous
-      # contents will not parse leaves the selection unrecordable for good:
-      # one typo and install can never remember anything again. It is
-      # replaced, and the caller is told it was replaced rather than updated.
-      it "replaces a record it cannot parse, rather than refusing forever" do
-        File.write(File.join(root, ".rails-ai-context.yml"), "ai_tools: [unclosed\n")
+      # The record is also the app's whole standalone config. Written over, a
+      # typo or a permission slip cost every other key in it, and the
+      # selection read through it became all five tools in the initializer.
+      it "leaves a record it cannot parse, and the initializer, as they are" do
+        text = "ai_tools: [unclosed\nexcluded_models: [AdminUser]\nhttp_port: 7000\n"
+        File.write(File.join(root, ".rails-ai-context.yml"), text)
+        write_initializer("RailsAiContext.configure do |config|\n  config.preset = :full\nend\n")
 
-        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :replaced)
-        expect(described_class.read(root: root)).to eq([ :cursor ])
+        result = described_class.write(RailsAiContext::Install::AiTool.all.map(&:key), root: root)
+
+        expect(result).to include(yaml: :failed, initializer: :skipped)
+        expect(File.read(File.join(root, ".rails-ai-context.yml"))).to eq(text)
+        expect(File.read(File.join(root, described_class::INITIALIZER))).not_to include("ai_tools")
+        level, line = described_class.messages(result).first
+        expect(level).to eq(:warn)
+        expect(line).to include(".rails-ai-context.yml", "left as it is")
       end
 
-      it "says out loud that it replaced an unreadable record" do
-        File.write(File.join(root, ".rails-ai-context.yml"), "ai_tools: [unclosed\n")
-        result = described_class.write([ :cursor ], root: root)
+      it "leaves a record it cannot open" do
+        path = File.join(root, ".rails-ai-context.yml")
+        File.write(path, "ai_tools: [claude]\nhttp_port: 7000\n")
+        File.chmod(0o000, path)
+        skip "the file is readable to this user" if File.readable?(path)
 
-        level, text = described_class.messages(result).first
-        expect(level).to eq(:warn)
-        expect(text).to include("could not be read")
+        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :failed)
+        File.chmod(0o644, path)
+        expect(File.read(path)).to eq("ai_tools: [claude]\nhttp_port: 7000\n")
+      ensure
+        File.chmod(0o644, path) if path && File.exist?(path)
       end
 
       it "still reports a failure when the file cannot be written at all" do
@@ -611,7 +733,7 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
     end
 
     it "recovers a selection recorded by an entry that wrote only the initializer" do
-      write_initializer("config.ai_tools = %i[copilot codex]\n")
+      write_initializer(configure("config.ai_tools = %i[copilot codex]"))
 
       expect(described_class.read(root: root)).to eq(%i[copilot codex])
     end
@@ -630,7 +752,7 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
     it "lets the initializer line win over the YAML" do
       write_yaml("tool_mode: mcp\n")
-      write_initializer("  config.tool_mode = :cli\n")
+      write_initializer(configure("  config.tool_mode = :cli"))
 
       expect(described_class.tool_mode(root: root)).to eq(:cli)
     end
@@ -662,7 +784,7 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
     it "lets the initializer line win over the YAML" do
       write_yaml("context_files: true\n")
-      write_initializer("  config.context_files = false\n")
+      write_initializer(configure("  config.context_files = false"))
 
       expect(described_class.context_files(root: root)).to be(false)
     end

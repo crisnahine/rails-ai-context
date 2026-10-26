@@ -101,6 +101,13 @@ module RailsAiContext
       merged
     end
 
+    # Every route as `all_by_controller` holds it, with its controller, in the order Rails matches a
+    # path against them: draw order, then an engine's routes, which carry no position.
+    def table(routes)
+      all_by_controller(routes).flat_map { |controller, entries| entries.map { |entry| entry.merge(controller: controller) } }
+                               .each_with_index.sort_by { |entry, index| [ entry[:position] || Float::INFINITY, index ] }.map(&:first)
+    end
+
     # What a table read from source leaves out; `routes` words it as a note instead of a clause.
     GEM_DRAWN = "routes Rails' engines and gems draw at boot"
 

@@ -19,6 +19,17 @@ module RailsAiContext
         def initialize
           super
           @singleton_depth = 0
+          @def_depth = 0
+          # The def depth each open `class_methods do` block sits at.
+          @class_methods = []
+        end
+
+        def on_def_node_enter(_node)
+          @def_depth += 1
+        end
+
+        def on_def_node_leave(_node)
+          @def_depth -= 1
         end
 
         # `include` inside `class << self` lands on the singleton class, so it
@@ -29,6 +40,13 @@ module RailsAiContext
 
         def on_singleton_class_node_leave(_node)
           @singleton_depth -= 1
+        end
+
+        # A Concern's `class_methods do` block is the body of its ClassMethods module, which the
+        # class extends: an include there gives the class methods, the way `class << self` does.
+        # One inside a method of that block runs with the class as self, so it includes into the class.
+        def on_call_node_leave(node)
+          @class_methods.pop if class_methods_block?(node)
         end
 
         # `singleton_class` called on what stands for the class: nothing or `self` in its body, `base` in a hook.
@@ -46,6 +64,7 @@ module RailsAiContext
         # `Type.include(StatusPatch)` mixes into Type, not the class the line sits in, so the
         # record names Type as `receiver` and it is never an ancestor of the enclosing class.
         def on_call_node_enter(node)
+          @class_methods.push(@def_depth) if class_methods_block?(node)
           receiver = node.receiver && constant_name(node.receiver)
           singleton = self.class.singleton_class_of?(node.receiver) { |inner| inner.nil? || inner.is_a?(Prism::SelfNode) }
           return unless node.receiver.nil? || receiver || singleton
@@ -63,7 +82,7 @@ module RailsAiContext
             name = constant_name(arg)
             next unless name
 
-            ancestor = receiver.nil? && @singleton_depth.zero? && ANCESTOR_MACROS.include?(macro)
+            ancestor = receiver.nil? && @singleton_depth.zero? && @class_methods.last != @def_depth && ANCESTOR_MACROS.include?(macro)
             record = owned_record(node, macro, name, ancestor: ancestor)
             record[:receiver] = receiver if receiver
             record[:top_level] = true if arg.slice.start_with?("::")
@@ -72,6 +91,10 @@ module RailsAiContext
         end
 
         private
+
+        def class_methods_block?(node)
+          node.name == :class_methods && node.receiver.nil? && node.block.is_a?(Prism::BlockNode)
+        end
 
         # `concerning :Topic do` defines Owner::Topic and mixes it in; `inline`
         # says its body is the block, already read as the class's own.

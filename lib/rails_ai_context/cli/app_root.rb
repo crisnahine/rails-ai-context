@@ -36,6 +36,60 @@ module RailsAiContext
         end
       end
 
+      # What a session started in a folder serves: kind :app (root), :apps (apps) or :none (reason), with the walk behind it.
+      Target = Struct.new(:kind, :root, :apps, :reason, :resolution, keyword_init: true)
+
+      TargetApp = Struct.new(:root, :name, keyword_init: true)
+
+      def self.target(start_folder)
+        result = resolve(cwd: start_folder)
+        if result.root.nil?
+          return Target.new(kind: :none, apps: [], reason: "#{start_folder} holds no Rails app.", resolution: result) if result.below.empty?
+
+          return Target.new(kind: :apps, apps: target_apps(result.below, start_folder), resolution: result)
+        end
+        return Target.new(kind: :app, root: result.root, apps: [], resolution: result) if EntryBoot.app_present?(result.root, allow_source_only: true)
+
+        # A monorepo's root runs the app its bin/rails boots, as a folder holding that one app: init sets it up from the root,
+        # whose .mcp.json a session started there reads (ADR-0005).
+        booted = binstub_app(result.root)
+        if booted
+          walk = Result.new(root: booted, walked: :down, below: [ booted ], base: result.root, explicit: false, cwd: result.cwd)
+          return Target.new(kind: :app, root: booted, apps: [], resolution: walk)
+        end
+
+        Target.new(kind: :none, apps: [], resolution: result,
+                   reason: "#{result.root} has a bin/rails but no app source: no config/application.rb, config/environment.rb or app/**/*.rb.")
+      end
+
+      # Each app's name is its workspace server name without the prefix, so two apps never share one.
+      def self.target_apps(roots, base)
+        require_relative "../install/ai_tool"
+        require_relative "../mcp_config_generator"
+        require_relative "../install/workspace"
+        paths = roots.map { |root| display(root, base) }
+        names = Install::Workspace.server_names(paths)
+        roots.zip(paths).map { |root, path| TargetApp.new(root: root, name: names.fetch(path).delete_prefix(Install::Workspace::PREFIX)) }
+          .sort_by(&:name)
+      end
+      private_class_method :target_apps
+
+      # The app below root that its bin/rails names as APP_PATH, nil for none.
+      def self.binstub_app(root)
+        app = app_path_dir(root)
+        app if app && app != root && SafePath.contained?(app.b, root.b) && EntryBoot.app_present?(app, allow_source_only: true)
+      end
+      private_class_method :binstub_app
+
+      # The folder bin/rails's APP_PATH names, nil where it names none.
+      def self.app_path_dir(root)
+        named = File.binread(File.join(root, "bin", "rails"), 4096)[/^\s*APP_PATH\s*=\s*File\.expand_path\(\s*["']([^"'#]+)["']\s*,\s*__dir__\s*\)/, 1]
+        named && File.dirname(File.expand_path(named.force_encoding(root.encoding), File.join(root, "bin")), 2)
+      rescue SystemCallError, IOError
+        nil
+      end
+      private_class_method :app_path_dir
+
       def self.resolve(cwd:, app_path: nil)
         # Every path handed back is spelled in the caller's encoding, which a
         # shell's argument may not share.
@@ -162,10 +216,7 @@ module RailsAiContext
       private_class_method :real
 
       def self.app_root?(dir)
-        marked = File.exist?(File.join(dir, "config", "application.rb")) ||
-          File.exist?(File.join(dir, "config", "environment.rb")) ||
-          rails_binstub?(dir)
-        marked && !EntryBoot.other_framework?(dir)
+        (EntryBoot.rails_config?(dir) || rails_binstub?(dir)) && !EntryBoot.other_framework?(dir)
       end
       private_class_method :app_root?
 
@@ -175,14 +226,7 @@ module RailsAiContext
       def self.dummy_app(root)
         return nil if File.exist?(File.join(root, "config", "environment.rb"))
 
-        named = begin
-          File.binread(File.join(root, "bin", "rails"), 4096)[/^\s*APP_PATH\s*=\s*File\.expand_path\(\s*["']([^"'#]+)["']\s*,\s*__dir__\s*\)/, 1]
-            &.force_encoding(root.encoding)
-        rescue SystemCallError, IOError
-          nil
-        end
-        candidates = [ (File.dirname(File.expand_path(named, File.join(root, "bin")), 2) if named), File.join(root, "test", "dummy"),
-                       File.join(root, "spec", "dummy") ].compact
+        candidates = [ app_path_dir(root), File.join(root, "test", "dummy"), File.join(root, "spec", "dummy") ].compact
         candidates.find { |dir| File.exist?(File.join(dir, "config", "environment.rb")) }
       end
 

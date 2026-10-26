@@ -129,9 +129,10 @@ module RailsAiContext
         if (source = Payload.table_absent_from(schema, model_data))
           return "`#{model_data[:table_name]}` missing from #{source}"
         end
-        return nil if model_data[:table_name] || !model_data[:table_set_by]
+        answer = Introspectors::TableName::Answer.of(model_data)
+        return nil if answer.table || !answer.set_by
 
-        "set by `#{model_data[:table_set_by]}`, which the static tier did not read"
+        "set by `#{answer.set_by}`, which the static tier did not read"
       end
 
       def associations_list(model_data)

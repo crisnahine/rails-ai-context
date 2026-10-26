@@ -16,6 +16,12 @@ module RailsAiContext
       def ask(prompt)
         asker.call(prompt)
       end
+
+      # This surface for a folder below the root, `relative` to it: what it
+      # reports is named from that folder.
+      def at(relative)
+        self.class.new(sayer, asker, place ? File.join(place, relative) : relative)
+      end
     end
   end
 end

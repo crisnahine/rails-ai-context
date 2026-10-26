@@ -6,12 +6,18 @@ require "digest"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
-  def replay(migrations, pk_type: "bigint", adapter: nil)
+  # rails: the version a Gemfile.lock in the folder names, read as the static tier reads it. server: :mysql or :mariadb, as a connection says.
+  def replay(migrations, pk_type: "bigint", adapter: nil, rails: nil, server: nil)
     Dir.mktmpdir do |dir|
       migrations.each_with_index do |content, i|
         File.write(File.join(dir, "202401010000#{i}_step#{i}.rb"), content)
       end
-      return described_class.tables(dir, pk_type: pk_type, adapter: adapter)
+      known = server ? { server: server } : {}
+      return described_class.tables(dir, pk_type: pk_type, adapter: adapter, **known) unless rails
+
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n")
+      return described_class.tables(dir, pk_type: pk_type, adapter: adapter, root: dir, **known)
     end
   end
 
@@ -298,7 +304,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     end
 
     it "keeps null:, a proc default and index: from a create_table block" do
-      expect(column("events", "created_at")).to eq({ name: "created_at", type: "datetime", default: '-> { "CURRENT_TIMESTAMP" }' })
+      expect(column("events", "created_at")).to eq({ name: "created_at", type: "datetime", precision: nil, default: '-> { "CURRENT_TIMESTAMP" }' })
       expect(tables["events"][:indexes].map { |i| i[:name] }).to eq(%w[index_events_on_created_at index_events_on_updated_at])
     end
 
@@ -542,6 +548,34 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       RUBY
 
       expect(tables.keys).not_to include("posts")
+    end
+
+    # CommandRecorder#invert_change_column_comment and invert_change_table_comment swap from: and to:, and refuse a bare comment (7.0 to 8.1).
+    it "swaps from: and to: of a column or table comment, and leaves the comment a bare one would set undone" do
+      tables = replay([ <<~FIRST, <<~SECOND ], adapter: "postgresql")
+        class CreateNotes < ActiveRecord::Migration[8.1]
+          def change
+            create_table :notes, comment: "the table" do |t|
+              t.string :title, comment: "the title"
+              t.string :body, comment: "the body"
+            end
+          end
+        end
+      FIRST
+        class RevertComments < ActiveRecord::Migration[8.1]
+          def change
+            revert do
+              change_column_comment :notes, :title, from: "the old title", to: "the title"
+              change_table_comment :notes, from: "the old table", to: "the table"
+              change_column_comment :notes, :body, "the other body"
+            end
+          end
+        end
+      SECOND
+
+      table = tables["notes"]
+      expect(table[:comment]).to eq("the old table")
+      expect(table[:columns].to_h { |c| [ c[:name], c[:comment] ] }).to include("title" => "the old title", "body" => "the body")
     end
 
     it "runs its statements inverted, last first" do
@@ -1213,6 +1247,14 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(renamed[:indexes]).to eq([ { name: "index_posts_on_heading", columns: %w[heading], unique: false } ])
     end
   end
+  # Live on PostgreSQL 16: a check on a column renamed to a keyword reads back with the new name quoted.
+  it "quotes a keyword the new name of a renamed column is in a check constraint's expression" do
+    table = replay([ "create_table :rk do |t|\n  t.integer :qty\n  t.check_constraint \"qty > 0\", name: \"k\"\nend\n",
+                     "rename_column :rk, :qty, :order\nrename_column :rk, :order, :amount\nrename_column :rk, :amount, :user\n" ], adapter: "postgresql")["rk"]
+
+    expect(table[:check_constraints].map { |check| check[:expression] }).to eq([ '"user" > 0' ])
+  end
+
   # TableDefinition#column (7.0 to 8.1) indexes a column declared with
   # index: (a work_package_journals table can declare type_id and
   # project_id that way), and the replay dropped both indexes.
@@ -1412,6 +1454,31 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
 
       sqlite = replay([ migration ], adapter: "sqlite3")["posts"]
       expect([ sqlite[:foreign_keys].size, sqlite[:check_constraints].size ]).to eq([ 3, 2 ])
+    end
+
+    it "keeps a key's own name and a not-valid check on PostgreSQL until validated, and drops a composite key with any of its columns" do
+      migration = <<~RUBY
+        create_table :owners
+        create_table :posts do |t|
+          t.integer :owner_id
+          t.integer :boss_id
+          t.integer :score
+          t.string :code
+        end
+        add_foreign_key :posts, :owners, name: "fk_owner", validate: false
+        add_foreign_key :posts, :owners, column: :boss_id, validate: false
+        add_foreign_key :posts, :owners, column: [:boss_id, :code], primary_key: [:id, :code]
+        add_check_constraint :posts, "score > 0", name: "k_pos", validate: false
+        add_check_constraint :posts, "score < 9", name: "k_small", validate: false
+        validate_check_constraint :posts, name: "k_small"
+        validate_foreign_key :posts, column: :boss_id
+        remove_column :posts, :code
+      RUBY
+
+      posts = replay([ migration ], adapter: "postgresql")["posts"]
+      expect(posts[:foreign_keys].map { |fk| fk.slice(:column, :name, :validate) }).to eq([ { column: "owner_id", name: "fk_owner", validate: false }, { column: "boss_id" } ])
+      expect(posts[:check_constraints]).to eq([ { name: "k_pos", expression: "score > 0", validate: false }, { name: "k_small", expression: "score < 9" } ])
+      expect(replay([ migration ], adapter: "mysql2")["posts"][:check_constraints].map { |c| c.key?(:validate) }).to eq([ false, false ])
     end
 
     # Rails 7.0's add_foreign_key checks foreign_key_exists?(from, to); 7.1 and 8.0 also compare a given column.
@@ -1637,9 +1704,8 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(table[:columns].map { |c| c[:name] }).to eq(%w[id site_id])
     end
 
-    # The database drops an index when a column in it is dropped (PostgreSQL
-    # drops the whole index; SQLite's table rebuild keeps only indexes whose
-    # columns all survive).
+    # PostgreSQL drops every index that holds a dropped column, whole; MySQL and SQLite's table rebuild keep it on the
+    # columns left. An adapter with no family takes PostgreSQL's rules.
     it "drops every index that held a removed column" do
       expect(table[:indexes].map { |i| i[:name] }).to eq(%w[index_store_accounts_on_site_id])
     end
@@ -1720,8 +1786,628 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       expect(after("remove_foreign_key :posts, column: :editor_id\n")).to eq(%w[user_id])
     end
 
+    # A name the dump hides (fk_rails_ and ten hex digits) is still the key's name: it removes by it and lists by it. The lowest
+    # such name sorts before every other fk_rails_ name, so the default hash Rails would make sorts after the 11-digit one.
+    it "finds a key by the name it was added under when that name is one the dump hides" do
+      hidden = "fk_rails_0000000000"
+      other = "fk_rails_00000000000"
+      tables = lambda do |removal|
+        replay([ <<~RUBY, removal ], adapter: "postgresql")["posts"][:foreign_keys].map { |fk| fk[:column] }
+          create_table :posts do |t|
+            t.bigint :user_id
+            t.bigint :editor_id
+          end
+          add_foreign_key :posts, :users, name: "#{hidden}"
+          add_foreign_key :posts, :users, column: :editor_id, name: "#{other}"
+        RUBY
+      end
+
+      expect(tables.("remove_foreign_key :posts, name: \"#{hidden}\"\n")).to eq(%w[editor_id])
+      expect(tables.("remove_foreign_key :posts, :users\n")).to eq(%w[editor_id])
+    end
+
+    # Live on 7.0.10, 7.1.6, 8.0.5 and 8.1.3: PostgreSQL and MySQL list keys by name, SQLite the last added first,
+    # and only 8.1 prefers the default column over the first listed.
+    it "removes the first key the app's Rails and adapter list when no column is given" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      left = lambda do |rails, adapter|
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n") if rails
+          File.write(File.join(dir, "20240101000000_create.rb"), <<~RUBY)
+            create_table :users
+            create_table :posts do |t|
+              t.bigint :user_id
+              t.bigint :editor_id
+            end
+            create_table :notes do |t|
+              t.bigint :user_id
+              t.bigint :editor_id
+            end
+            add_foreign_key :posts, :users, name: "fk_z"
+            add_foreign_key :posts, :users, column: :editor_id, name: "fk_a"
+            add_foreign_key :notes, :users, name: "fk_b"
+            add_foreign_key :notes, :users, column: :editor_id, name: "fk_y"
+            remove_foreign_key :posts, :users
+            remove_foreign_key :notes, :users
+          RUBY
+          tables = described_class.tables(dir, pk_type: "bigint", adapter: adapter, root: dir)
+          %w[posts notes].map { |t| tables[t][:foreign_keys].map { |fk| fk[:column] } }
+        end
+      end
+
+      %w[7.0.10 7.1.6 8.0.5].each do |rails|
+        expect(left.(rails, "postgresql")).to eq([ %w[user_id], %w[editor_id] ])
+        expect(left.(rails, "mysql2")).to eq([ %w[user_id], %w[editor_id] ])
+        expect(left.(rails, "sqlite3")).to eq([ %w[user_id], %w[user_id] ])
+      end
+      [ "8.1.4", nil ].each do |rails|
+        %w[postgresql mysql2 sqlite3].each { |adapter| expect(left.(rails, adapter)).to eq([ %w[editor_id], %w[editor_id] ]) }
+      end
+    end
+
+    # Live on SQLite with 7.0.10, 7.1.6, 8.0.5 and 8.1.3: PRAGMA foreign_key_list names the last declared key first, and
+    # each table rebuild declares the keys again in that listed order, so every rebuild turns the order around.
+    it "keeps SQLite's key order through each table rebuild and removes the key SQLite lists first" do
+      shapes = {
+        three: <<~RUBY,
+          create_table :users
+          create_table :posts do |t|
+            t.integer :a_id
+            t.integer :b_id
+            t.integer :c_id
+          end
+          add_foreign_key :posts, :users, column: :a_id
+          add_foreign_key :posts, :users, column: :b_id
+          add_foreign_key :posts, :users, column: :c_id
+          remove_foreign_key :posts, :users
+          remove_foreign_key :posts, :users
+        RUBY
+        declared: <<~RUBY,
+          create_table :users
+          create_table :posts do |t|
+            t.references :a, foreign_key: { to_table: :users }
+            t.references :b, foreign_key: { to_table: :users }
+            t.references :c, foreign_key: { to_table: :users }
+          end
+          remove_foreign_key :posts, :users
+        RUBY
+        rebuilt: <<~RUBY,
+          create_table :users
+          create_table :posts do |t|
+            t.integer :user_id
+            t.integer :editor_id
+            t.string :title
+          end
+          add_foreign_key :posts, :users
+          add_foreign_key :posts, :users, column: :editor_id
+          change_column_null :posts, :title, false, ""
+          remove_foreign_key :posts, :users
+        RUBY
+        many_rebuilds: <<~RUBY
+          create_table :users
+          create_table :posts do |t|
+            t.integer :user_id
+            t.integer :editor_id
+            t.string :title
+            t.integer :n
+          end
+          add_foreign_key :posts, :users
+          add_foreign_key :posts, :users, column: :editor_id
+          rename_column :posts, :title, :name
+          add_check_constraint :posts, "n > 0", name: "k"
+          remove_check_constraint :posts, name: "k"
+          change_column_default :posts, :n, 1
+          add_reference :posts, :boss, foreign_key: { to_table: :users }
+          remove_foreign_key :posts, :users
+        RUBY
+      }
+      listed = ->(rails) { shapes.transform_values { |source| replay([ source ], adapter: "sqlite3", rails: rails)["posts"][:foreign_keys].reverse.map { |fk| fk[:column] } } }
+      older = { three: %w[a_id], declared: %w[a_id b_id], rebuilt: %w[editor_id], many_rebuilds: %w[editor_id user_id] }
+      %w[7.0.10 7.1.6 8.0.5].each { |rails| expect(listed.(rails)).to eq(older) }
+      expect(listed.("8.1.4")).to eq(older.merge(many_rebuilds: %w[editor_id boss_id]))
+    end
+
+    # Live on 7.0.10 to 8.1.4 (PostgreSQL 16, MySQL 8.4, MariaDB 10.6 and 11.4, SQLite): validate: false takes effect on PostgreSQL
+    # alone, a key made with it is validated everywhere else, and validate_foreign_key raises NoMethodError off PostgreSQL.
+    it "keeps validate: false on a PostgreSQL foreign key alone and validates it only there" do
+      run = lambda do |adapter, rails|
+        body = "create_table :users\ncreate_table(:posts) { |t| t.bigint :user_id }\nadd_foreign_key :posts, :users, validate: false\n"
+        keys = [ replay([ "class A < ActiveRecord::Migration[#{rails[0, 3]}]\n  def change\n#{body}  end\nend\n" ], adapter: adapter, rails: rails)["posts"][:foreign_keys].first[:validate] ]
+        validated = replay([ "class A < ActiveRecord::Migration[#{rails[0, 3]}]\n  def change\n#{body}validate_foreign_key :posts, :users\n  end\nend\n" ], adapter: adapter, rails: rails)
+        keys << validated["posts"][:foreign_keys].first[:validate]
+      end
+
+      %w[7.0.10 7.1.6 8.1.4].each do |rails|
+        expect(run.("postgresql", rails)).to eq([ false, nil ])
+        %w[mysql2 trilogy sqlite3].each { |adapter| expect(run.(adapter, rails)).to eq([ nil, nil ]) }
+      end
+    end
+
+    # Live on PostgreSQL 16 with activerecord 7.0.10 to 8.1.4: Compatibility::V5_0 gives create_table :t, id: :uuid the default
+    # uuid_generate_v4(), and only that spelling (id: { type: :uuid } gets gen_random_uuid() in every version).
+    it "gives a uuid key the default the migration's version does" do
+      default = lambda do |version, id|
+        migration = "class M < ActiveRecord::Migration[#{version}]\n  def change\n    create_table :t, id: #{id}\n  end\nend\n"
+        replay([ migration ], adapter: "postgresql", rails: "8.1.4")["t"][:columns].first[:default]
+      end
+      function = ->(name) { %(-> { "#{name}" }) }
+
+      %w[4.2 5.0].each do |version|
+        expect(default.(version, ":uuid")).to eq(function.("uuid_generate_v4()"))
+        expect(default.(version, "{ type: :uuid }")).to eq(function.("gen_random_uuid()"))
+      end
+      %w[5.1 6.1 7.0 8.1].each { |version| expect(default.(version, ":uuid")).to eq(function.("gen_random_uuid()")) }
+    end
+
+    # Live on PostgreSQL 16, activerecord 7.0.10 and 8.1.4, Migration[4.2, 5.0, 5.1, 7.0, current]: a string type ("uuid") gets no
+    # default in any version, as TableDefinition#primary_key compares the type with the symbol.
+    it "gives a key spelled id: \"uuid\" a uuid column and no default" do
+      column = lambda do |version, id|
+        migration = "class M < ActiveRecord::Migration[#{version}]\n  def change\n    create_table :t, id: #{id}\n  end\nend\n"
+        replay([ migration ], adapter: "postgresql", rails: "8.1.4")["t"][:columns].first
+      end
+
+      %w[4.2 5.0 5.1 7.0 8.1].each do |version|
+        [ %("uuid"), %({ type: "uuid" }) ].each { |id| expect(column.(version, id)).to include(type: "uuid", primary_key: true).and(satisfy { |col| !col.key?(:default) }) }
+        expect(column.(version, "{ type: :uuid }")[:default]).to eq(%(-> { "gen_random_uuid()" }))
+      end
+    end
+
+    # Live on PostgreSQL 16, MySQL 8.4 and SQLite with activerecord 7.0.10 to 8.1.4 (a column's precision after the migration): a
+    # datetime written without precision: is nil under Compatibility::V6_1 and older (Migration[6.1] and earlier), 6 from 7.0;
+    # t.timestamps and add_timestamps are nil under V5_2 and older and 6 from 6.0; an explicit precision: keeps its value.
+    # schema.rb writes a nil precision as precision: nil and leaves out 6.
+    DATETIME_PRECISION_FORMS = {
+      "t.datetime" => [ "create_table(:t) { |t| t.datetime :a }", [ 6, 1 ] ],
+      "t.column :a, :datetime" => [ "create_table(:t) { |t| t.column :a, :datetime }", [ 6, 1 ] ],
+      "t.datetime index: true" => [ "create_table(:t) { |t| t.datetime :a, index: true }", [ 6, 1 ] ],
+      "add_column" => [ "create_table(:t)\n    add_column :t, :a, :datetime", [ 6, 1 ] ],
+      "change_table t.datetime" => [ "create_table(:t)\n    change_table(:t) { |t| t.datetime :a }", [ 6, 1 ] ],
+      "t.timestamps" => [ "create_table(:t) { |t| t.timestamps }", [ 5, 2 ], %w[created_at updated_at] ],
+      "add_timestamps" => [ "create_table(:t)\n    add_timestamps :t", [ 5, 2 ], %w[created_at updated_at] ],
+      "change_table t.timestamps" => [ "create_table(:t)\n    change_table(:t) { |t| t.timestamps }", [ 5, 2 ], %w[created_at updated_at] ]
+    }.freeze
+
+    it "gives a datetime or timestamps the precision the migration's version does, nil from the old compatibility layers" do
+      precision = lambda do |adapter, rails, version, body, names|
+        migration = "class M < ActiveRecord::Migration[#{version}]\n  def change\n    #{body}\n  end\nend\n"
+        columns = replay([ migration ], adapter: adapter, rails: rails)["t"][:columns]
+        names.map { |name| columns.find { |c| c[:name] == name }.then { |c| c.key?(:precision) ? c[:precision] : :default } }
+      end
+
+      %w[postgresql sqlite3 mysql2].each do |adapter|
+        { "7.0.10" => %w[5.2 6.0 6.1 7.0], "8.1.4" => %w[5.2 6.0 6.1 7.0 8.1] }.each do |rails, versions|
+          versions.each do |version|
+            DATETIME_PRECISION_FORMS.each do |form, (body, newest_nil, names)|
+              names ||= %w[a]
+              nil_here = ([ version.split(".").first.to_i, version.split(".").last.to_i ] <=> newest_nil) <= 0
+              expect(precision.(adapter, rails, version, body, names)).to eq([ nil_here ? nil : :default ] * names.size), "#{form} on #{adapter} Rails #{rails} in Migration[#{version}]"
+            end
+            expect(precision.(adapter, rails, version, "create_table(:t) { |t| t.datetime :a, precision: 3 }", %w[a])).to eq([ 3 ])
+            expect(precision.(adapter, rails, version, "create_table(:t) { |t| t.datetime :a, precision: nil }", %w[a])).to eq([ nil ])
+            expect(precision.(adapter, rails, version, "create_table(:t) { |t| t.timestamps precision: 3 }", %w[created_at updated_at])).to eq([ 3, 3 ])
+            expect(precision.(adapter, rails, version, "create_table(:t) { |t| t.timestamps precision: nil }", %w[created_at])).to eq([ nil ])
+            expect(precision.(adapter, rails, version, "create_table(:t) { |t| t.time :a }", %w[a])).to eq([ :default ])
+          end
+        end
+      end
+    end
+
+    it "gives a changed datetime the precision the migration's version does on MySQL and SQLite" do
+      change = lambda do |adapter, version, call|
+        migrations = [ "class A < ActiveRecord::Migration[8.1]\n  def change\n    create_table(:t) { |t| t.string :a }\n  end\nend\n",
+                       "class B < ActiveRecord::Migration[#{version}]\n  def change\n    #{call}\n  end\nend\n" ]
+        column = replay(migrations, adapter: adapter, rails: "8.1.4")["t"][:columns].find { |c| c[:name] == "a" }
+        column.key?(:precision) ? column[:precision] : :default
+      end
+
+      %w[mysql2 sqlite3].each do |adapter|
+        [ "change_column :t, :a, :datetime", "change_table(:t) { |t| t.change :a, :datetime }" ].each do |call|
+          expect(change.(adapter, "6.1", call)).to be_nil
+          expect(change.(adapter, "7.0", call)).to eq(:default)
+          expect(change.(adapter, "8.1", call)).to eq(:default)
+        end
+      end
+    end
+
+    # Live on PostgreSQL 16, MySQL 8.4 and SQLite with activerecord 7.0.10, 7.1.6, 7.2.4, 8.0.5 and 8.1.4: a literal nil null sets
+    # NOT NULL on 7.0 PostgreSQL and allows NULL on 7.0 MySQL and SQLite (a NOT NULL column too). From 7.1 only the migration's own
+    # change_column_null of a migration written for 7.0 or earlier turns it into false (Compatibility::V7_0 !!null); any other
+    # call raises ArgumentError, so the column stays as it was.
+    it "reads a nil nullability as the app's Rails and the migration's version do" do
+      run = lambda do |adapter, rails, version, call, start|
+        body = "create_table(:things) { |t| t.integer :n, null: #{start == :not_null ? 'false' : 'true'} }\n"
+        migrations = [ "class A < ActiveRecord::Migration[#{rails[0, 3]}]\n  def change\n#{body}  end\nend\n",
+                       "class B < ActiveRecord::Migration[#{version}]\n  def change\n    #{call}\n  end\nend\n" ]
+        replay(migrations, adapter: adapter, rails: rails)["things"][:columns].find { |c| c[:name] == "n" }[:null] == false ? :not_null : :null
+      end
+      top = "change_column_null :things, :n, nil"
+      block = "change_table(:things) { |t| t.change_null :n, nil }"
+
+      %w[postgresql sqlite3 mysql2].each do |adapter|
+        [ top, block ].each do |call|
+          expect(%i[null not_null].map { |start| run.(adapter, "7.0.10", "7.0", call, start) }).to eq(adapter == "postgresql" ? %i[not_null not_null] : %i[null null])
+          %w[7.1.6 7.2.4 8.0.5 8.1.4].each do |rails|
+            current = rails[0, 3]
+            expect(%i[null not_null].map { |start| run.(adapter, rails, "7.0", call, start) }).to eq(call == top ? %i[not_null not_null] : %i[null not_null])
+            expect(%i[null not_null].map { |start| run.(adapter, rails, current, call, start) }).to eq(%i[null not_null])
+          end
+        end
+      end
+    end
+
+    # Live on 8.1.4 against PostgreSQL 16, MySQL 8.4 and SQLite: Compatibility::V8_0 sets _skip_column_match on
+    # remove_foreign_key alone, so a migration written for 8.0 or earlier drops the first key listed, and
+    # validate_foreign_key prefers <to_table singular>_id whatever the migration's version.
+    it "prefers the default column on Rails 8.1 only for a remove_foreign_key in a migration written for 8.1 or later" do
+      outcome = lambda do |adapter, version, statement|
+        body = <<~RUBY
+          create_table :users
+          create_table :posts do |t|
+            t.bigint :user_id
+            t.bigint :editor_id
+          end
+          add_foreign_key :posts, :users, name: "fk_z", validate: false
+          add_foreign_key :posts, :users, column: :editor_id, name: "fk_a", validate: false
+          #{statement} :posts, :users
+        RUBY
+        source = version ? "class M < ActiveRecord::Migration[#{version}]\n  def change\n#{body}  end\nend\n" : body
+        keys = replay([ source ], adapter: adapter, rails: "8.1.4")["posts"][:foreign_keys]
+        statement == "remove_foreign_key" ? keys.map { |fk| fk[:column] } : keys.reject { |fk| fk.key?(:validate) }.map { |fk| fk[:column] }
+      end
+
+      %w[postgresql mysql2 sqlite3].each do |adapter|
+        expect(outcome.(adapter, "8.0", "remove_foreign_key")).to eq(%w[user_id])
+        expect(outcome.(adapter, "7.1", "remove_foreign_key")).to eq(%w[user_id])
+        expect(outcome.(adapter, "8.1", "remove_foreign_key")).to eq(%w[editor_id])
+        expect(outcome.(adapter, nil, "remove_foreign_key")).to eq(%w[editor_id])
+      end
+      expect(outcome.("postgresql", "8.0", "validate_foreign_key")).to eq(%w[user_id])
+      expect(outcome.("postgresql", "8.1", "validate_foreign_key")).to eq(%w[user_id])
+    end
+
+    # Live on 7.1.6 and 8.1.4 against MySQL 8.4, PostgreSQL 16 and SQLite: Compatibility::V7_0 sets :no_collation on a
+    # MySQL change_column and the legacy index names on rename_table, so a migration written for 7.0 or earlier drops a
+    # text column's collation and leaves an index whose default name 7.1 shortened.
+    it "runs change_column and rename_table in a migration written for 7.0 or earlier as Compatibility::V7_0 does" do
+      long = "a_long_column_name_that_makes_an_index_name_too_lng"
+      run = lambda do |adapter, rails, version|
+        create = "class Create < ActiveRecord::Migration[#{rails[0, 3]}]\n  def change\n    create_table(:notes) { |t| t.text :title, collation: \"utf8mb4_bin\" }\n" \
+                 "    create_table(:things) { |t| t.integer :#{long}; t.integer :n; t.index :#{long}; t.index :n }\n  end\nend\n"
+        change = "class Change < ActiveRecord::Migration[#{version}]\n  def change\n    change_column :notes, :title, :text\n    rename_table :things, :renamed\n  end\nend\n"
+        tables = replay([ create, change ], adapter: adapter, rails: rails)
+        [ tables["notes"][:columns].find { |c| c[:name] == "title" }[:collation], tables["renamed"][:indexes].map { |idx| idx[:name] }.sort ]
+      end
+      kept = "idx_on_a_long_column_name_that_makes_an_index_name__2902e5d29a"
+      renamed = "idx_on_a_long_column_name_that_makes_an_index_name__48a9403193"
+
+      # A 7.0 app runs Migration[7.0] as its own, which keeps the collation (7.0.10, live).
+      expect(run.("mysql2", "7.0.10", "7.0").first).to eq("utf8mb4_bin")
+      %w[7.1.6 8.1.4].each do |rails|
+        expect(run.("mysql2", rails, "7.0")).to eq([ nil, [ kept, "index_renamed_on_n" ] ])
+        expect(run.("mysql2", rails, rails[0, 3])).to eq([ "utf8mb4_bin", [ renamed, "index_renamed_on_n" ] ])
+        %w[postgresql sqlite3].each do |adapter|
+          expect(run.(adapter, rails, "7.0").last).to eq([ kept, "index_renamed_on_n" ])
+          expect(run.(adapter, rails, rails[0, 3]).last).to eq([ renamed, "index_renamed_on_n" ])
+        end
+      end
+    end
+
+    # Live on MySQL 8.4 and MariaDB 10.6 and 11.4 with activerecord 7.0.10, 7.1.6, 7.2.4, 8.0.5 and 8.1.4: V7_0 sets
+    # :no_collation on the migration's own change_column, and Table#change calls the connection, so a block's t.change
+    # keeps the collation.
+    it "keeps a text column's collation on a block's t.change in a migration written for 7.0" do
+      run = lambda do |rails, version, call|
+        create = "class A < ActiveRecord::Migration[#{rails[0, 3]}]\n  def change\n    create_table(:notes) { |t| t.string :title, collation: \"utf8mb4_bin\" }\n  end\nend\n"
+        change = "class B < ActiveRecord::Migration[#{version}]\n  def change\n    #{call}\n  end\nend\n"
+        replay([ create, change ], adapter: "mysql2", rails: rails)["notes"][:columns].find { |c| c[:name] == "title" }[:collation]
+      end
+
+      %w[7.0.10 7.1.6 7.2.4 8.0.5 8.1.4].each do |rails|
+        current = rails[0, 3]
+        legacy = rails == "7.0.10" ? "utf8mb4_bin" : nil
+        expect(run.(rails, "7.0", "change_column :notes, :title, :text")).to eq(legacy)
+        expect(run.(rails, "7.0", "change_table(:notes) { |t| t.change :title, :text }")).to eq("utf8mb4_bin")
+        expect(run.(rails, current, "change_column :notes, :title, :text")).to eq("utf8mb4_bin")
+        expect(run.(rails, current, "change_table(:notes) { |t| t.change :title, :text }")).to eq("utf8mb4_bin")
+      end
+    end
+
+    # Live on SQLite with activerecord 7.0.10, 7.1.6, 7.2.4, 8.0.5 and 8.1.4, a default name of 64 bytes: 7.0 never shortens
+    # an index name. From 7.1 Compatibility::V7_0 keeps that for a migration's add_index and rename_table and for a block's
+    # index calls (t.index, index:, and t.references in create_table); add_reference and a change_table's t.references
+    # go to the connection and shorten.
+    LONG_COLUMN = "d" * 48
+    LONG_REFERENCE = "q" * 45
+    INDEX_NAME_FORMS = {
+      "add_index" => [ "create_table(:things) { |t| t.integer :#{LONG_COLUMN} }\n    add_index :things, :#{LONG_COLUMN}", LONG_COLUMN, true ],
+      "t.index in create_table" => [ "create_table(:things) { |t| t.integer :#{LONG_COLUMN}; t.index :#{LONG_COLUMN} }", LONG_COLUMN, true ],
+      "t.index in change_table" => [ "create_table(:things) { |t| t.integer :#{LONG_COLUMN} }\n    change_table(:things) { |t| t.index :#{LONG_COLUMN} }", LONG_COLUMN, true ],
+      "t.integer index: true in create_table" => [ "create_table(:things) { |t| t.integer :#{LONG_COLUMN}, index: true }", LONG_COLUMN, true ],
+      "t.integer index: true in change_table" => [ "create_table(:things)\n    change_table(:things) { |t| t.integer :#{LONG_COLUMN}, index: true }", LONG_COLUMN, true ],
+      "t.references in create_table" => [ "create_table(:things) { |t| t.references :#{LONG_REFERENCE} }", "#{LONG_REFERENCE}_id", true ],
+      "t.references in change_table" => [ "create_table(:things)\n    change_table(:things) { |t| t.references :#{LONG_REFERENCE} }", "#{LONG_REFERENCE}_id", false ],
+      "add_reference" => [ "create_table(:things)\n    add_reference :things, :#{LONG_REFERENCE}", "#{LONG_REFERENCE}_id", false ]
+    }.freeze
+
+    it "names a default index the way the app's Rails and the migration's version do" do
+      conventions = RailsAiContext::Introspectors::SchemaConventions
+      INDEX_NAME_FORMS.each do |form, (body, column, compat)|
+        { "7.0.10" => %w[7.0], "7.1.6" => %w[7.0 7.1], "7.2.4" => %w[7.0 7.2], "8.0.5" => %w[7.0 8.0], "8.1.4" => %w[7.0 8.1] }.each do |rails, versions|
+          versions.each do |version|
+            migration = "class M < ActiveRecord::Migration[#{version}]\n  def change\n    #{body}\n  end\nend\n"
+            names = replay([ migration ], adapter: "sqlite3", rails: rails)["things"][:indexes].map { |idx| idx[:name] }
+            unshortened = rails.start_with?("7.0") || (compat && version == "7.0")
+            expected = unshortened ? "index_things_on_#{column}" : conventions.default_index_name("things", [ column ])
+            expect(names).to eq([ expected ]), "#{form} on Rails #{rails} in Migration[#{version}]: expected #{expected.bytesize} bytes, got #{names.map(&:bytesize)}"
+          end
+        end
+      end
+    end
+
+    # Live as above: rename_column compares the default name of the app's Rails alone, rename_table also Compatibility::V7_0's.
+    it "renames a default index by the app's Rails on rename_column and by the migration's version on rename_table" do
+      conventions = RailsAiContext::Introspectors::SchemaConventions
+      old = "o" * 48
+      fresh = "n" * 48
+      stem = "x" * 23
+      from = "t" * 31
+      to = "u" * 31
+      run = lambda do |rails, made, renamed, body, table|
+        create = "class A < ActiveRecord::Migration[#{made}]\n  def change\n    create_table(:things) { |t| t.integer :#{old}; t.index :#{old} }\n" \
+                 "    create_table(:#{from}) { |t| t.integer :#{stem}; t.index :#{stem} }\n  end\nend\n"
+        rename = "class B < ActiveRecord::Migration[#{renamed}]\n  def change\n    #{body}\n  end\nend\n"
+        replay([ create, rename ], adapter: "sqlite3", rails: rails)[table][:indexes].map { |idx| idx[:name] }
+      end
+      column = "rename_column :things, :#{old}, :#{fresh}"
+      table = "rename_table :#{from}, :#{to}"
+      long = ->(t, c) { [ "index_#{t}_on_#{c}" ] }
+      short = ->(t, c) { [ conventions.default_index_name(t, [ c ]) ] }
+
+      # 7.0.10: nothing is shortened, and every rename follows.
+      expect(run.("7.0.10", "7.0", "7.0", column, "things")).to eq(long.("things", fresh))
+      expect(run.("7.0.10", "7.0", "7.0", table, to)).to eq(long.(to, stem))
+      { "7.1.6" => "7.1", "8.1.4" => "8.1" }.each do |rails, current|
+        [ "7.0", current ].each do |renamed|
+          # The app's Rails generates the old name to compare with, shortened, so a name 7.0 left whole stays.
+          expect(run.(rails, "7.0", renamed, column, "things")).to eq(long.("things", old))
+          expect(run.(rails, current, renamed, column, "things")).to eq(short.("things", fresh))
+        end
+        expect(run.(rails, "7.0", "7.0", table, to)).to eq(long.(to, stem))
+        expect(run.(rails, "7.0", current, table, to)).to eq(long.(from, stem))
+        expect(run.(rails, current, "7.0", table, to)).to eq(short.(from, stem))
+        expect(run.(rails, current, current, table, to)).to eq(short.(to, stem))
+      end
+    end
+
+    # Each row ran live on SQLite with activerecord 7.0.10, 7.1.6, 7.2.4, 8.0.5 and 8.1.4, as a migration of that version
+    # on keys a, b and c added one by one (listed c, a, b). A version a statement raises on is left out of its row.
+    KEYLESS_POSTS = <<~RUBY
+      create_table :posts, id: false, force: true do |t|
+        t.integer :a_id
+        t.integer :b_id
+        t.integer :c_id
+      end
+      add_foreign_key :posts, :users, column: :a_id
+      add_foreign_key :posts, :users, column: :b_id
+      add_foreign_key :posts, :users, column: :c_id
+    RUBY
+    SQLITE_KEY_ORDER = {
+      "add_column :posts, :z, :string" => "c,a,b",
+      "add_column :posts, :z, :string, null: false" => "b,a,c",
+      "add_column :posts, :z, :string, null: false, default: 'x'" => "c,a,b",
+      "add_column :posts, :z, :string, null: false, default: nil" => "b,a,c",
+      "#{KEYLESS_POSTS}add_column :posts, :id, :primary_key" => "b,a,c",
+      "#{KEYLESS_POSTS}add_column :posts, :k, :integer, primary_key: true" => "b,a,c",
+      "add_column :posts, :v, :virtual, type: :integer, as: 'n + 1'" => { "7.0" => "c,a,b", "7.2" => "c,a,b", "8.0" => "c,a,b", "8.1" => "c,a,b" },
+      "add_column :posts, :v, :virtual, type: :integer, as: 'n + 1', stored: true" => { "7.0" => "c,a,b", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      "add_timestamps :posts" => { "7.0" => "c,a,b", "7.1" => "b,a,c", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      "add_timestamps :posts, null: true" => { "7.0" => "c,a,b", "7.1" => "b,a,c", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      "add_timestamps :posts, default: -> { 'CURRENT_TIMESTAMP' }" => { "7.0" => "c,a,b", "7.1" => "b,a,c", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      "add_timestamps :posts, null: false, default: '2020-01-01'" => { "7.0" => "c,a,b", "7.1" => "b,a,c", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      [ "add_timestamps :posts", "4.2" ] => { "7.0" => "c,a,b", "7.1" => "b,a,c", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      "remove_column :posts, :title" => "b,a,c",
+      "remove_column :posts, :nope, if_exists: true" => "b,a,c",
+      "remove_columns :posts, :title, :n" => "b,a,c",
+      "add_timestamps :posts, null: true, default: '2020-01-01'\nremove_timestamps :posts" => { "7.0" => "b,a,c", "7.1" => "c,a,b", "7.2" => "c,a,b", "8.0" => "c,a,b", "8.1" => "c,a,b" },
+      "change_column :posts, :title, :text" => "b,a,c",
+      "change_column_null :posts, :title, false, ''" => "b,a,c",
+      "change_column_default :posts, :title, 'x'" => "b,a,c",
+      "rename_column :posts, :title, :name" => "b,a,c",
+      "add_foreign_key :posts, :accounts, column: :n" => "n,b,a,c",
+      "remove_foreign_key :posts, :users, column: :a_id" => "b,c",
+      "remove_foreign_key :posts, :users" => "b,a",
+      "remove_foreign_key :posts, :accounts, if_exists: true" => "c,a,b",
+      "add_check_constraint :posts, 'n > 0', name: 'k'" => "b,a,c",
+      "add_check_constraint :posts, 'n > 0', name: 'k'\nremove_check_constraint :posts, name: 'k'" => "c,a,b",
+      "remove_check_constraint :posts, name: 'nope', if_exists: true" => { "7.1" => "c,a,b", "7.2" => "c,a,b", "8.0" => "c,a,b", "8.1" => "c,a,b" },
+      "add_reference :posts, :d" => "c,a,b",
+      "add_reference :posts, :d, foreign_key: { to_table: :users }" => "d,b,a,c",
+      "add_reference :posts, :d, null: false" => "b,a,c",
+      "add_reference :posts, :d, null: false, foreign_key: { to_table: :users }" => "d,c,a,b",
+      "add_reference :posts, :d, null: false, default: 0, foreign_key: { to_table: :users }" => "d,b,a,c",
+      "add_reference :posts, :p, polymorphic: true" => "c,a,b",
+      "add_reference :posts, :p, polymorphic: true, null: false" => "c,a,b",
+      "add_belongs_to :posts, :d, null: false, foreign_key: { to_table: :users }" => "d,c,a,b",
+      "add_column :posts, :d_id, :integer\nremove_reference :posts, :d" => "b,a,c",
+      "remove_reference :posts, :c, foreign_key: { to_table: :users }" => "a,b",
+      "add_column :posts, :p_id, :integer\nadd_column :posts, :p_type, :string\nremove_reference :posts, :p, polymorphic: true" => "c,a,b",
+      "add_index :posts, :n" => "c,a,b",
+      "add_index :posts, :n\nremove_index :posts, :n" => "c,a,b",
+      "add_index :posts, :n\nrename_index :posts, 'index_posts_on_n', 'ix'" => "c,a,b",
+      "change_table(:posts) { |t| t.string :z, null: false }" => "b,a,c",
+      "change_table(:posts) { |t| t.references :d, null: false, foreign_key: { to_table: :users } }" => "d,c,a,b",
+      "change_table(:posts) { |t| t.timestamps null: true }" => { "7.0" => "c,a,b", "7.1" => "b,a,c", "7.2" => "b,a,c", "8.0" => "b,a,c", "8.1" => "b,a,c" },
+      "change_table(:posts) { |t| t.remove :title }" => "b,a,c",
+      "change_table(:posts) { |t| t.rename :title, :name }" => "b,a,c",
+      "change_table(:posts) { |t| t.change_null :title, false, '' }" => "b,a,c",
+      "change_table(:posts) { |t| t.check_constraint 'n > 0', name: 'k' }" => "b,a,c",
+      "change_table(:posts) { |t| t.foreign_key :accounts, column: :n }" => "n,b,a,c",
+      "change_table(:posts) { |t| t.remove_references :c, foreign_key: { to_table: :users } }" => "a,b",
+      "change_table(:posts) { |t| t.remove_foreign_key :users, column: :b_id }" => "a,c",
+      "change_table(:posts) { |t| t.index :n }" => "c,a,b",
+      <<~RUBY => "n,b,a"
+        create_table :posts, force: true do |t|
+          t.references :a, foreign_key: { to_table: :users }
+          t.references :b, foreign_key: { to_table: :users }
+          t.integer :n
+          t.check_constraint 'a_id > 0', name: 'k'
+          t.timestamps
+          t.foreign_key :accounts, column: :n
+        end
+      RUBY
+    }.freeze
+
+    it "lists a SQLite table's keys after each statement in the order SQLite does on every Rails version" do
+      base = <<~RUBY
+        create_table :users
+        create_table :accounts
+        create_table :posts do |t|
+          t.integer :a_id
+          t.integer :b_id
+          t.integer :c_id
+          t.string :title
+          t.integer :n
+        end
+        add_foreign_key :posts, :users, column: :a_id
+        add_foreign_key :posts, :users, column: :b_id
+        add_foreign_key :posts, :users, column: :c_id
+      RUBY
+      versions = { "7.0" => "7.0.10", "7.1" => "7.1.6", "7.2" => "7.2.4", "8.0" => "8.0.5", "8.1" => "8.1.4" }
+      migration = ->(body, version) { "class M#{version.delete(".")} < ActiveRecord::Migration[#{version}]\n  def change\n#{body}\n  end\nend\n" }
+      wrong = SQLITE_KEY_ORDER.flat_map do |(statement, written), orders|
+        orders = versions.keys.to_h { |version| [ version, orders ] } if orders.is_a?(String)
+        orders.filter_map do |version, order|
+          keys = replay([ migration.(base, version), migration.(statement, written || version) ], adapter: "sqlite3", rails: versions[version])["posts"][:foreign_keys]
+          got = keys.reverse.map { |fk| fk[:column].delete_suffix("_id") }.join(",")
+          "#{version} #{statement.lines.first.strip}: #{got}, live #{order}" unless got == order
+        end
+      end
+      expect(wrong).to be_empty, "#{wrong.size} rows differ from SQLite:\n#{wrong.join("\n")}"
+    end
+
+    it "reads a quoted name with a doubled quote inside it in SQL a migration executes and in a default's cast" do
+      tables = replay([ <<~'RUBY' ], adapter: "postgresql")
+        create_table :things do |t|
+          t.text :name
+          t.text :c, default: -> { %q('x'::"mo""od") }
+        end
+        execute 'CREATE TABLE "co""py" ("A""b", Cd) AS SELECT id, name FROM things'
+        execute 'CREATE TABLE "qu""al" AS SELECT "t""h".name FROM things "t""h"'
+        execute 'CREATE TABLE "wh""ole" AS TABLE Things'
+        execute 'CREATE TABLE public."ke""p,t" AS SELECT id FROM things'
+        execute 'CREATE TABLE public."dr""o,p" AS SELECT id FROM things'
+        execute 'CREATE TABLE "dr""o" AS SELECT id FROM things'
+        execute 'DROP TABLE public."dr""o,p", "dr""o"'
+        execute %q(CREATE TABLE odd (id bigint, n integer DEFAULT nextval('"Odd_seq"'::regclass)))
+        rename_table :odd, :odder
+        execute %q(CREATE TABLE ca AS SELECT CAST('a' AS "my""t"))
+      RUBY
+
+      expect(tables.keys).to eq([ "things", 'co"py', 'qu"al', 'wh"ole', 'ke"p,t', "odder", "ca" ])
+      # Live on PostgreSQL 16: a cast of a literal names its column by the type.
+      expect(tables["ca"][:columns].map { |c| c[:name] }).to eq([ 'my"t' ])
+      expect(tables["odder"][:columns].last[:default]).to eq(%q(-> { "nextval('\"Odd_seq\"'::regclass)" }))
+      expect(tables['co"py'][:columns].map { |c| c.values_at(:name, :type) }).to eq([ [ 'A"b', "bigint" ], %w[cd text] ])
+      expect(tables['qu"al'][:columns].map { |c| c.values_at(:name, :type) }).to eq([ %w[name text] ])
+      expect(tables['wh"ole'][:columns].map { |c| c[:name] }).to eq(%w[id name c])
+      expect(tables["things"][:columns].last[:default]).to eq("x")
+    end
+
+    it "reads a block's t.foreign_key and t.remove_foreign_key, and a top-level remove_timestamps" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :users
+        create_table :accounts
+        create_table :posts do |t|
+          t.bigint :user_id
+          t.bigint :account_id
+          t.foreign_key :users
+          t.timestamps
+        end
+        change_table :posts do |t|
+          t.foreign_key :accounts
+          t.remove_foreign_key :users
+        end
+        remove_timestamps :posts
+      RUBY
+
+      expect(tables["posts"][:foreign_keys].map { |fk| [ fk[:column], fk[:to_table] ] }).to eq([ %w[account_id accounts] ])
+      expect(tables["posts"][:columns].map { |c| c[:name] }).to eq(%w[id user_id account_id])
+    end
+
+    # Rails' foreign_keys query has no ORDER BY. Live with 30 names, three runs on a fresh server and three after a restart:
+    # MySQL 8.4 and 9.6 list them by name upper-cased, byte by byte (so _ follows the letters); MariaDB 10.6 and 11.4 by
+    # byte; PostgreSQL by name (ORDER BY conname). Both MySQL servers refuse two names differing only in case.
+    KEY_NAME_ORDER = {
+      [ "Fk_b", "fk_a" ] => { mysql: "user_id", mariadb: "editor_id", unknown: "user_id", postgresql: "editor_id" },
+      [ "fk_a", "fkb" ] => { mysql: "user_id", mariadb: "editor_id", unknown: "user_id", postgresql: "editor_id" },
+      [ "fk1", "fk_a" ] => { mysql: "editor_id", mariadb: "editor_id", unknown: "editor_id", postgresql: "editor_id" },
+      [ "fkZ", "fk_a" ] => { mysql: "editor_id", mariadb: "editor_id", unknown: "editor_id", postgresql: "editor_id" },
+      [ "AB_f", "aB_c" ] => { mysql: "user_id", mariadb: "editor_id", unknown: "user_id", postgresql: "editor_id" }
+    }.freeze
+
+    it "removes the key the server lists first: MySQL's name order upper-cased, MariaDB's and PostgreSQL's by byte" do
+      wrong = KEY_NAME_ORDER.flat_map do |(user_key, editor_key), kept|
+        source = <<~RUBY
+          create_table :posts do |t|
+            t.bigint :user_id
+            t.bigint :editor_id
+          end
+          add_foreign_key :posts, :users, name: "#{user_key}"
+          add_foreign_key :posts, :users, column: :editor_id, name: "#{editor_key}"
+        RUBY
+        kept.filter_map do |server, column|
+          adapter = server == :postgresql ? "postgresql" : "mysql2"
+          left = replay([ source, "remove_foreign_key :posts, :users\n" ], adapter: adapter, rails: "8.0.5",
+                        server: (server if %i[mysql mariadb].include?(server)))["posts"][:foreign_keys].map { |fk| fk[:column] }
+          "#{server} #{user_key}/#{editor_key}: kept #{left.inspect}, live kept #{column}" unless left == [ column ]
+        end
+      end
+      expect(wrong).to be_empty, wrong.join("\n")
+    end
+
     it "removes nothing when no key matches" do
       expect(after("remove_foreign_key :posts, :accounts, if_exists: true\n")).to eq(%w[user_id editor_id])
+    end
+
+    describe "by name:" do
+      def named_after(removal, adapter: "postgresql")
+        replay([
+          <<~RUBY,
+            create_table :posts do |t|
+              t.bigint :user_id
+              t.bigint :editor_id
+              t.bigint :boss_id
+            end
+            add_foreign_key :posts, :users
+            add_foreign_key :posts, :users, column: :editor_id, name: "fk_editor", validate: false
+            add_foreign_key :posts, :users, column: :boss_id, name: "fk_boss", validate: false
+          RUBY
+          removal
+        ], adapter: adapter)["posts"][:foreign_keys].map { |fk| fk.slice(:column, :validate) }
+      end
+
+      it "removes the key of that name, alone or with its table" do
+        expect(named_after("remove_foreign_key :posts, name: :fk_boss\n").map { |fk| fk[:column] }).to eq(%w[user_id editor_id])
+        expect(named_after("remove_foreign_key :posts, :users, name: \"fk_boss\"\n").map { |fk| fk[:column] }).to eq(%w[user_id editor_id])
+      end
+
+      it "finds a key Rails named by default under that name" do
+        default = RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("posts", "user_id")
+        expect(named_after("remove_foreign_key :posts, name: \"#{default}\"\n").map { |fk| fk[:column] }).to eq(%w[editor_id boss_id])
+      end
+
+      it "validates the key of that name only" do
+        expect(named_after("validate_foreign_key :posts, name: \"fk_boss\"\n")).to eq([ { column: "user_id" }, { column: "editor_id", validate: false }, { column: "boss_id" } ])
+      end
+
+      # The SQLite adapter reads no key's name, and its remove_foreign_key ignores name:.
+      it "keeps no name on SQLite, as its connection reads none" do
+        source = "create_table :posts do |t|\n  t.bigint :user_id\nend\nadd_foreign_key :posts, :users, name: \"fk_user\"\n"
+        expect(replay([ source ], adapter: "sqlite3")["posts"][:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
+        expect(replay([ source ], adapter: "postgresql")["posts"][:foreign_keys].first[:name]).to eq("fk_user")
+        expect(replay([ source, "remove_foreign_key :posts, :users, name: \"fk_user\"\n" ], adapter: "sqlite3")["posts"][:foreign_keys]).to eq([])
+      end
     end
 
     # Dropping the column drops the constraint on it.
@@ -4432,6 +5118,374 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
       missing = File.join(Dir.tmpdir, "rac-no-such-app-#{Process.pid}")
       expect(described_class.configured_dirs(missing, { "migrations_paths" => "db/other_migrate" })).to eq([])
       expect(described_class.migration_files([ File.join(missing, "db/migrate") ], root: missing)).to eq([])
+    end
+  end
+  describe "an execute's SQL, read with the family's quoting" do
+    it "keeps a table whose SQL holds a semicolon inside a string" do
+      tables = replay([ <<~'RUBY' ], adapter: "postgresql")
+        execute <<~SQL
+          CREATE TABLE notes (id bigserial PRIMARY KEY, body text DEFAULT 'a;b' NOT NULL);
+          CREATE TABLE tags (id bigserial PRIMARY KEY);
+        SQL
+      RUBY
+      expect(tables.keys).to eq(%w[notes tags])
+      expect(tables["notes"][:columns].find { |c| c[:name] == "body" }).to include(default: "a;b", null: false)
+    end
+
+    it "keeps a MySQL table whose string escapes a quote with a backslash, with the value MySQL stores" do
+      tables = replay([ <<~'RUBY' ], adapter: "mysql2")
+        execute "CREATE TABLE memos (id bigint PRIMARY KEY)"
+        execute "CREATE TABLE users (id bigint PRIMARY KEY, login varchar(20) DEFAULT 'it\\'s')"
+        execute "CREATE TABLE notes (id bigint PRIMARY KEY, body varchar(9) DEFAULT 'a\\';b'); CREATE TABLE tags (id bigint PRIMARY KEY)"
+        execute "UPDATE memos SET id = 'it\\'s'; CREATE TABLE labels (id bigint PRIMARY KEY)"
+      RUBY
+      expect(tables.keys).to eq(%w[memos users notes tags labels])
+      expect(tables["users"][:columns].find { |c| c[:name] == "login" }[:default]).to eq("it's")
+      expect(tables["notes"][:columns].find { |c| c[:name] == "body" }[:default]).to eq("a';b")
+    end
+
+    it "reads a MySQL proc default whose string escapes a quote with a backslash as the value MySQL stores" do
+      tables = replay([ <<~'RUBY' ], adapter: "trilogy")
+        create_table :la do |t|
+          t.string :s, default: -> { "'it\\'s'" }
+          t.string :p, default: -> { "'C:\\\\temp'" }
+        end
+      RUBY
+      expect(tables["la"][:columns].drop(1).to_h { |c| [ c[:name], c[:default] ] }).to eq("s" => "it's", "p" => 'C:\temp')
+    end
+
+    it "names a MySQL column by a string alias whose quote is escaped with a backslash, as MySQL reads it" do
+      tables = replay([ <<~'RUBY' ], adapter: "mysql2")
+        create_table :src
+        execute "CREATE TABLE dst AS SELECT id AS 'it\\'s', id 'a\\\\b' FROM src"
+      RUBY
+      expect(tables["dst"][:columns].map { |c| c[:name] }).to eq([ "it's", 'a\b' ])
+    end
+
+    # PostgreSQL 17.9 on the same statements: dd and nd are boolean, k integer.
+    it "keeps the FROM of IS DISTINCT FROM inside its select item, and types the predicate boolean" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :src do |t|
+          t.integer :k
+        end
+        execute "CREATE TABLE dst AS SELECT k IS DISTINCT FROM 1 dd, k IS NOT DISTINCT FROM 2 AS nd, k FROM src"
+      RUBY
+      expect(tables["dst"][:columns].map { |c| c.slice(:name, :type) }).to eq([ { name: "dd", type: "boolean" }, { name: "nd", type: "boolean" }, { name: "k", type: "integer" } ])
+    end
+  end
+
+  # Rails 8.0's dump of the same migration on PostgreSQL 17 and MySQL 9.6: type_to_sql writes a timestamptz no precision
+  # and a bit its limit, a money column is scale 2, a boolean's "0" is false, and MySQL makes a size: text a mediumtext.
+  describe "a column's type and sizes as Rails writes and the dump reads them" do
+    it "replays them on PostgreSQL" do
+      tables = replay([ <<~RUBY ], adapter: "postgresql")
+        create_table :things do |t|
+          t.timestamptz :tz, precision: 3
+          t.bit :b3, limit: 3
+          t.bit_varying :bv, limit: 8
+          t.money :cash
+          t.boolean :flag, default: "0"
+          t.decimal :whole, precision: 8
+        end
+      RUBY
+      expect(tables["things"][:columns].drop(1).map { |c| c.except(:null) }).to eq(
+        [ { name: "tz", type: "timestamptz" }, { name: "b3", type: "bit", limit: 3 }, { name: "bv", type: "bit_varying", limit: 8 },
+          { name: "cash", type: "money", scale: 2 }, { name: "flag", type: "boolean", default: "false" }, { name: "whole", type: "decimal", precision: 8 } ]
+      )
+    end
+
+    it "replays them on MySQL" do
+      tables = replay([ <<~RUBY ], adapter: "mysql2")
+        create_table :people do |t|
+          t.text :bio, size: :medium
+          t.binary :raw, size: :tiny
+          t.boolean :flag, default: "1"
+          t.string :tags, array: true
+        end
+      RUBY
+      expect(tables["people"][:columns].drop(1).map { |c| c.except(:null) }).to eq(
+        [ { name: "bio", type: "text", size: "medium" }, { name: "raw", type: "binary", size: "tiny" }, { name: "flag", type: "boolean", default: "true" },
+          { name: "tags", type: "string" } ]
+      )
+    end
+
+    # Rails 8.0 on PostgreSQL 17 and MySQL 9.6: change_column builds the type from its own options, so an array or a size it does not name is gone.
+    it "drops the array or size a change_column does not name" do
+      pg = replay([ "create_table :notes do |t|\n  t.string :tags, array: true\nend\nchange_column :notes, :tags, :string\n" ], adapter: "postgresql")
+      my = replay([ "create_table :notes do |t|\n  t.text :bio, size: :medium\nend\nchange_column :notes, :bio, :text\n" ], adapter: "mysql2")
+      expect([ pg["notes"][:columns].last, my["notes"][:columns].last ]).to eq([ { name: "tags", type: "string" }, { name: "bio", type: "text" } ])
+    end
+  end
+  # Rails 8.0's dump after the same migrations on PostgreSQL 17, MySQL 9.6 and SQLite 3.
+  describe "a column's removal and rename, as each database carries them to indexes and checks" do
+    let(:accounts) do
+      <<~RUBY
+        create_table :accounts do |t|
+          t.string :name
+          t.string :region
+          t.string :tier
+          t.index [:name, :region], name: "nr"
+          t.index [:region, :tier], unique: true, name: "rt"
+          t.index :region, name: "r_only"
+        end
+        remove_column :accounts, :region, :string
+      RUBY
+    end
+
+    it "keeps an index on the columns left on MySQL and SQLite, unique kept, and drops it on PostgreSQL" do
+      indexes = ->(adapter) { replay([ accounts ], adapter: adapter)["accounts"][:indexes].map { |i| i.slice(:name, :columns, :unique) } }
+      kept = [ { name: "nr", columns: %w[name], unique: false }, { name: "rt", columns: %w[tier], unique: true } ]
+      expect([ indexes.("mysql2"), indexes.("sqlite3"), indexes.("postgresql") ]).to eq([ kept, kept, [] ])
+    end
+
+    it "drops a removed column's sort order from a MySQL index, and a check on that column alone" do
+      table = replay([ <<~RUBY ], adapter: "mysql2")["accounts"]
+        create_table :accounts do |t|
+          t.string :name
+          t.string :region
+          t.index [:region, :name], order: { region: :desc, name: :desc }, name: "rn"
+          t.check_constraint "region <> 'x'", name: "rx"
+        end
+        remove_column :accounts, :region, :string
+      RUBY
+      expect(table[:indexes].map { |i| i.slice(:name, :columns, :order) }).to eq([ { name: "rn", columns: %w[name], order: { "name" => "desc" } } ])
+      expect(table).not_to have_key(:check_constraints)
+    end
+
+    # MySQL 9.6 after the same migration keeps k1 and k4: it drops every check that names no column left, one naming none at all among them.
+    it "drops on MySQL the checks that name no column left, reading a backslash escape as MySQL does" do
+      table = replay([ <<~'RUBY' ], adapter: "mysql2")["t"]
+        create_table :t do |x|
+          x.integer :qty
+          x.string :code
+        end
+        add_check_constraint :t, "'x\\' qty' <> code", name: "k1"
+        add_check_constraint :t, "length('plain') > 0", name: "k2"
+        add_check_constraint :t, "qty > 0", name: "k3"
+        add_check_constraint :t, "`code` <> 'qty'", name: "k4"
+        remove_column :t, :qty
+      RUBY
+      expect(table[:check_constraints].map { |c| c[:name] }).to eq(%w[k1 k4])
+    end
+
+    # MariaDB 10.6 and 11.4 answers. MySQL 9.6 and both refuse remove_column :qty alone (k_two), and MySQL refuses both drops at once.
+    { "remove_columns :t, :qty, :code" => %w[k_other], "change_table(:t) { |x| x.remove :qty, :code }" => %w[k_other],
+      "remove_column :t, :other" => %w[k_one k_two] }.each do |step, kept|
+      it "keeps on MySQL and MariaDB after #{step} the checks #{kept.join(", ")}" do
+        table = replay([ <<~RUBY ], adapter: "mysql2")["t"]
+          create_table :t do |x|
+            x.integer :qty
+            x.integer :code
+            x.integer :other
+          end
+          add_check_constraint :t, "qty > 0", name: "k_one"
+          add_check_constraint :t, "qty <> code", name: "k_two"
+          add_check_constraint :t, "length('plain') > 0", name: "k_none"
+          add_check_constraint :t, "other > 0", name: "k_other"
+          #{step}
+        RUBY
+        expect(table[:check_constraints].map { |c| c[:name] }.sort).to eq(kept)
+      end
+    end
+
+    it "carries a PostgreSQL rename through an index's where, order, include and expression, a check and a generated column" do
+      table = replay([ <<~RUBY ], adapter: "postgresql")["items"]
+        create_table :items do |t|
+          t.integer :qty
+          t.string :code
+          t.index :qty, where: "qty > 0", name: "pos_qty"
+          t.index [:code, :qty], order: { qty: :desc }, name: "ord_qty"
+          t.index :code, include: [:qty], name: "inc_qty"
+          t.index "lower(code)", name: "lc"
+          t.check_constraint "qty >= 0", name: "qty_ok"
+          t.virtual :code_up, type: :string, as: "upper(code)", stored: true
+        end
+        rename_column :items, :qty, :quantity
+        rename_column :items, :code, :sku
+      RUBY
+      expect(table[:indexes].map { |i| i.slice(:name, :columns, :where, :order, :include) }).to eq(
+        [ { name: "pos_qty", columns: %w[quantity], where: "quantity > 0" }, { name: "ord_qty", columns: %w[sku quantity], order: { "quantity" => "desc" } },
+          { name: "inc_qty", columns: %w[sku], include: %w[quantity] }, { name: "lc", columns: [ "lower(sku)" ] } ]
+      )
+      expect(table[:check_constraints]).to eq([ { name: "qty_ok", expression: "quantity >= 0" } ])
+      expect(table[:columns].last).to include(name: "code_up", generated: "upper(sku)")
+    end
+
+    it "leaves a quoted string, another table's column and a function of the same name alone in a rename" do
+      table = replay([ <<~RUBY ], adapter: "postgresql")["items"]
+        create_table :items do |t|
+          t.string :code
+          t.index :code, where: "code <> 'code' AND other.code IS NULL AND code(1) > 0", name: "w"
+        end
+        rename_column :items, :code, :sku
+      RUBY
+      expect(table[:indexes].first[:where]).to eq("sku <> 'code' AND other.code IS NULL AND code(1) > 0")
+    end
+
+    it "drops a PostgreSQL index or check that names a removed column in its where, include or expression" do
+      table = replay([ <<~RUBY ], adapter: "postgresql")["items"]
+        create_table :items do |t|
+          t.integer :qty
+          t.string :code
+          t.string :code2
+          t.boolean :active
+          t.index :code, where: "active", name: "active_code"
+          t.index :code, include: [:qty], name: "inc_qty"
+          t.index "lower(code2)", name: "lc2"
+          t.index "lower(code)", name: "lc"
+          t.check_constraint "qty >= 0", name: "qty_ok"
+        end
+        remove_column :items, :qty
+        remove_column :items, :active
+        remove_column :items, :code2
+      RUBY
+      expect(table[:indexes].map { |i| i[:name] }).to eq(%w[lc])
+      expect(table).not_to have_key(:check_constraints)
+    end
+  end
+  # Rails 8.0's dump after the same migration on PostgreSQL 17, and MySQL 9.6 and SQLite 3 for the comment and collation.
+  describe "what a column and table declare beyond type and sizes, and the enum types" do
+    let(:migration) do
+      <<~RUBY
+        enable_extension "pgcrypto"
+        create_enum :mood, %w[happy meh]
+        add_enum_value :mood, "blue"
+        add_enum_value :mood, "first", before: "happy"
+        rename_enum_value :mood, from: "meh", to: "okay"
+        create_enum :gone, %w[a]
+        drop_enum :gone
+        create_table :orgs, id: :uuid, comment: "orgs" do |t|
+          t.string :code, comment: "a code"
+          t.string :label, collation: "C"
+          t.enum :mood, enum_type: :mood, default: "happy"
+          t.string :note
+        end
+        change_column_comment :orgs, :note, "the note"
+        change_column_comment :orgs, :code, from: "a code", to: "the code"
+        change_table_comment :orgs, from: "orgs", to: "organizations"
+      RUBY
+    end
+
+    it "keeps a column's comment, collation and enum type, the table's comment and a uuid key's default on PostgreSQL" do
+      table = replay([ migration ], adapter: "postgresql")["orgs"]
+      expect(table[:comment]).to eq("organizations")
+      expect(table[:columns].map { |c| c.except(:null) }).to eq(
+        [ { name: "id", type: "uuid", primary_key: true, default: '-> { "gen_random_uuid()" }' }, { name: "code", type: "string", comment: "the code" },
+          { name: "label", type: "string", collation: "C" }, { name: "mood", type: "enum", enum_type: "mood", default: "happy" },
+          { name: "note", type: "string", comment: "the note" } ]
+      )
+    end
+
+    it "lists the enum types and their values as the statements leave them" do
+      result = Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "20240101000000_enums.rb"), migration)
+        described_class.replayed(dir, pk_type: "bigint", adapter: "postgresql")
+      end
+      expect(result.enum_types).to eq([ { name: "mood", values: %w[first happy okay blue] } ])
+    end
+
+    it "keeps a comment on MySQL, where SQLite has none, and a collation on both" do
+      columns = lambda do |adapter|
+        replay([ <<~RUBY ], adapter: adapter)["notes"][:columns].drop(1).map { |c| c.except(:null) }
+          create_table :notes, comment: "the notes" do |t|
+            t.string :code, comment: "a code", collation: "#{adapter == "sqlite3" ? "NOCASE" : "utf8mb4_bin"}"
+          end
+        RUBY
+      end
+      expect(columns.("mysql2")).to eq([ { name: "code", type: "string", comment: "a code", collation: "utf8mb4_bin" } ])
+      expect(columns.("sqlite3")).to eq([ { name: "code", type: "string", collation: "NOCASE" } ])
+      table_comment = ->(adapter) { replay([ "create_table :notes, comment: \"the notes\"\n" ], adapter: adapter)["notes"][:comment] }
+      expect([ table_comment.("mysql2"), table_comment.("sqlite3") ]).to eq([ "the notes", nil ])
+    end
+
+    # PostgreSQL 17 and MySQL 9.6 dumps (Rails 8.0) after the same two migrations.
+    it "drops on change_column the enum type, and the collation PostgreSQL resets and MySQL keeps only on a text type" do
+      pg = replay([ <<~RUBY ], adapter: "postgresql")["t"][:columns].drop(1).map { |c| c.except(:null) }
+        create_enum :mood, %w[a b]
+        create_table :t do |x|
+          x.enum :m, enum_type: :mood
+          x.string :c, comment: "old", collation: "C"
+          x.string :d, comment: "keep", collation: "C"
+        end
+        change_column :t, :m, :string
+        change_column :t, :c, :text, comment: "new"
+        change_column :t, :d, :string, limit: 20
+      RUBY
+      expect(pg).to eq([ { name: "m", type: "string" }, { name: "c", type: "text", comment: "new" }, { name: "d", type: "string", limit: 20, comment: "keep" } ])
+
+      my = replay([ <<~RUBY ], adapter: "mysql2")["t"][:columns].drop(1).map { |c| c.except(:null) }
+        create_table :t do |x|
+          x.string :c, comment: "old", collation: "utf8mb4_bin"
+          x.string :d, comment: "keep", collation: "utf8mb4_bin"
+          x.string :e, collation: "utf8mb4_bin"
+          x.text :f, collation: "utf8mb4_bin"
+          x.string :g, comment: "gone", collation: "utf8mb4_bin"
+        end
+        change_column :t, :c, :integer
+        change_column :t, :d, :string, limit: 20
+        change_column :t, :e, :text
+        change_column :t, :f, :string
+        change_column :t, :g, :text, comment: nil, collation: :no_collation
+      RUBY
+      expect(my).to eq([ { name: "c", type: "integer", comment: "old" }, { name: "d", type: "string", limit: 20, comment: "keep" },
+                         { name: "e", type: "text", collation: "utf8mb4_bin" }, { name: "f", type: "string" }, { name: "g", type: "text" } ])
+    end
+
+    # Rails 7.0 carries a text column's collation only when the call has no collation key; 7.1 to 8.1 also when it is nil.
+    [ [ "7.0.10", nil ], [ "7.1.5", "utf8mb4_bin" ], [ "8.1.4", "utf8mb4_bin" ] ].each do |rails, kept|
+      it "keeps on MySQL Rails #{rails} a text column's collation through change_column with collation: nil as #{kept.inspect}" do
+        allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_return(rails)
+        cols = replay([ <<~RUBY ], adapter: "mysql2")["t"][:columns].drop(1).map { |c| c.except(:null) }
+          create_table :t do |x|
+            x.string :a, collation: "utf8mb4_bin"
+            x.string :b, collation: "utf8mb4_bin"
+          end
+          change_column :t, :a, :text, collation: nil
+          change_column :t, :b, :text
+        RUBY
+        expect(cols).to eq([ { name: "a", type: "text", collation: kept }.compact, { name: "b", type: "text", collation: "utf8mb4_bin" } ])
+      end
+    end
+
+    it "renames the enum type of every column that uses it on rename_enum" do
+      tables = replay([ "create_enum :mood, %w[a b]\ncreate_table :t do |x|\n  x.enum :m, enum_type: :mood\nend\ncreate_table :u do |x|\n  x.enum :n, enum_type: \"mood\"\nend\nrename_enum :mood, :feeling\n" ], adapter: "postgresql")
+      expect([ tables["t"][:columns].last[:enum_type], tables["u"][:columns].last[:enum_type] ]).to eq(%w[feeling feeling])
+    end
+  end
+  # Rails 8.0's dump on PostgreSQL 17 after the same migration.
+  describe "exclusion constraints" do
+    let(:migration) do
+      <<~MIGRATION
+        create_table :things do |t|
+          t.integer :n
+          t.tsrange :during
+          t.integer :room
+          t.exclusion_constraint "n WITH =", using: :gist, name: "excl_n"
+        end
+        add_exclusion_constraint :things, "room WITH =, during WITH &&", using: :gist, name: "no_overlap", where: "room > 0", deferrable: :deferred
+      MIGRATION
+    end
+
+    it "keeps those a table block and add_exclusion_constraint make" do
+      expect(replay([ migration ], adapter: "postgresql")["things"][:exclusion_constraints]).to eq(
+        [ { name: "excl_n", expression: "n WITH =", using: "gist" },
+          { name: "no_overlap", expression: "room WITH =, during WITH &&", using: "gist", where: "room > 0", deferrable: "deferred" } ]
+      )
+    end
+
+    it "drops one remove_exclusion_constraint names, or that names a removed column, and follows a rename" do
+      table = replay([ migration + "remove_exclusion_constraint :things, name: \"excl_n\"\nrename_column :things, :room, :place\n" ], adapter: "postgresql")["things"]
+      expect(table[:exclusion_constraints].map { |c| c[:expression] }).to eq([ "place WITH =, during WITH &&" ])
+      expect(table[:exclusion_constraints].first[:where]).to eq("place > 0")
+      expect(replay([ migration + "remove_column :things, :during\n" ], adapter: "postgresql")["things"][:exclusion_constraints].map { |c| c[:name] }).to eq(%w[excl_n])
+    end
+  end
+
+  describe "a number MySQL stores as an integer default" do
+    # MySQL 9.6 on CREATE TABLE items (a int DEFAULT 2.5e0, b int DEFAULT 3.5e0, c int DEFAULT 2.5) stores 2, 4 and 3.
+    it "rounds an e-notation integer default half to even on MySQL, and an exact one half away from zero" do
+      tables = replay([ "create_table :items do |t|\n  t.integer :a, default: -> { \"2.5e0\" }\n  t.integer :b, default: -> { \"3.5e0\" }\n  t.integer :c, default: -> { \"2.5\" }\nend\n" ], adapter: "mysql2")
+      expect(tables["items"][:columns].drop(1).map { |c| c[:default] }).to eq(%w[2 4 3])
     end
   end
 end

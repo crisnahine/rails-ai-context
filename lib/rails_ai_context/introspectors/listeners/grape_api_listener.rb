@@ -21,7 +21,7 @@ module RailsAiContext
 
         def on_class_node_enter(node)
           name = scope_name(node)
-          superclass = node.superclass && (node.superclass.is_a?(Prism::ConstantReadNode) || node.superclass.is_a?(Prism::ConstantPathNode)) ? constant_path_string(node.superclass) : nil
+          superclass = node.superclass && (node.superclass.is_a?(Prism::ConstantReadNode) || node.superclass.is_a?(Prism::ConstantPathNode)) ? node.superclass.slice : nil
           @results << { kind: :class, owner: name, superclass: superclass }
           @scopes.push(name)
         end
@@ -114,19 +114,19 @@ module RailsAiContext
 
         def keyword(node, key)
           value = extract_keyword_nodes(node)[key]
-          value && (literal_string(value) || value.slice)
+          value && (literal_string(value) || filtered(value.slice))
         end
 
         # `mount V1::Users`, `mount V1::Users => "/v1"` and the braced form.
         def mounts(args)
           args.flat_map do |arg|
             case arg
-            when Prism::ConstantReadNode, Prism::ConstantPathNode then [ [ constant_path_string(arg), "/" ] ]
+            when Prism::ConstantReadNode, Prism::ConstantPathNode then [ [ arg.slice, "/" ] ]
             when Prism::KeywordHashNode, Prism::HashNode
               arg.elements.grep(Prism::AssocNode).filter_map do |assoc|
                 next unless assoc.key.is_a?(Prism::ConstantReadNode) || assoc.key.is_a?(Prism::ConstantPathNode)
 
-                [ constant_path_string(assoc.key), literal_string(assoc.value) || "/" ]
+                [ assoc.key.slice, literal_string(assoc.value) || "/" ]
               end
             else []
             end

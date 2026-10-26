@@ -125,6 +125,49 @@ RSpec.describe RailsAiContext::Introspector do
       expect((sources + dirs).grep(/\A#{Regexp.escape(own)}(?!spec)/)).to be_empty
     end
 
+    it "costs only the controllers section when a routed controller's view folder cannot be listed" do
+      skip "Windows ignores the folder's mode" if Gem.win_platform?
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "pages")
+        FileUtils.mkdir_p([ File.join(dir, "config"), File.join(dir, "app", "controllers"), views ])
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get 'about', to: 'pages#about'\nend\n")
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), "class PagesController < ApplicationController\n  def about; end\nend\n")
+        File.chmod(0o000, views)
+        allow(RailsAiContext.configuration).to receive(:introspectors).and_return(%i[routes controllers])
+
+        RailsAiContext.tier = :static
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:routes]).not_to have_key(:error)
+        expect(result.dig(:controllers, :controllers, "PagesController", :actions)).to eq([ "about" ])
+        expect(result[:_warnings]).to include(introspector: "controllers", error: a_string_including("app/views/pages").and(satisfy { |error| !error.include?(dir) }))
+      ensure
+        File.chmod(0o755, views) if views
+        RailsAiContext.tier = :runtime
+      end
+    end
+
+    it "names the controllers once when the section failed and the route pass fails too" do
+      allow_any_instance_of(RailsAiContext::Introspectors::ControllerIntrospector).to receive(:call).and_raise(RuntimeError, "controllers broke")
+      allow(RailsAiContext::Introspectors::ControllerIntrospector).to receive(:apply_routes).and_raise(RuntimeError, "routes pass broke")
+
+      result = introspector.call
+
+      expect(result[:_warnings].select { |warning| warning[:introspector] == "controllers" }).to eq([ { introspector: "controllers", error: "controllers broke" } ])
+    end
+
+    it "keeps the controllers section as it was when the route pass fails part way" do
+      allow(RailsAiContext::Introspectors::ControllerIntrospector).to receive(:apply_routes) do |section, *|
+        section[:controllers].each_value { |info| info[:actions] = [ "half_applied" ] if info.is_a?(Hash) }
+        raise "routes pass broke"
+      end
+
+      listed = introspector.call[:controllers][:controllers].values.grep(Hash)
+
+      expect(listed).not_to be_empty
+      expect(listed.map { |info| info[:actions] }).not_to include([ "half_applied" ])
+    end
+
     it "collects _warnings when an introspector fails" do
       # Use a minimal config with a known-bad introspector name won't work here,
       # so instead stub one introspector to raise

@@ -73,7 +73,7 @@ module RailsAiContext
         # `types: Entryable::TYPES` names the list only at run time.
         def delegated_types_source(node)
           types = extract_keyword_nodes(node)[:types]
-          NodeSource.text(types) if types && literal_strings(types).blank?
+          filtered(NodeSource.text(types)) if types && literal_strings(types).blank?
         end
 
         # `has_many :sessions do def active ... end end` adds `user.sessions.active`.

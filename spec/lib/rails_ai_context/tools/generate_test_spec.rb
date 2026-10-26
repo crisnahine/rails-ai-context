@@ -15,6 +15,17 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
   before { described_class.reset_cache! }
 
+  # Every file any example here generates must parse as Ruby.
+  before do
+    allow(described_class).to receive(:call).and_wrap_original do |original, *args, **kwargs|
+      original.call(*args, **kwargs).tap do |response|
+        response.content.first[:text].scan(/```ruby\n(.*?)```/m).flatten.each do |source|
+          expect(Prism.parse(source).success?).to be(true), source
+        end
+      end
+    end
+  end
+
   describe ".call" do
     it "returns an MCP::Tool::Response" do
       result = described_class.call(model: "NonExistent")
@@ -77,6 +88,15 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         RSpec.describe User, type: :model do
       MD
+    end
+
+    it "names no guessed table for a model whose table the source computes" do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", fixtures: {}, factory_names: {} },
+        models: { "Archive" => { table_set_by: "Archive.table_name", associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
+      })
+
+      expect(described_class.call(model: "Archive").content.first[:text]).to include("# TODO: no Archive fixture found; build a valid record here")
     end
 
     it "heads a minitest file with its path, fence and test_helper require" do
@@ -676,6 +696,25 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
       expect(text).to include('get "/openid/#{user_id}"')
       expect(text).not_to include("provider")
+    end
+
+    it "names the model where its controller's tests would name a table the source computes" do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", fixture_names: {} },
+        models: { "Archive" => { table_set_by: "Archive.table_name", associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } },
+        controllers: { controllers: { "ArchivesController" => { actions: %w[index show update destroy] } } },
+        routes: { by_controller: { "archives" => [
+          { verb: "GET", path: nil, action: "index" },
+          { verb: "GET", path: "/archives/:id(.:format)", action: "show", name: "archive" },
+          { verb: "PATCH", path: "/archives/:id(.:format)", action: "update" },
+          { verb: "DELETE", path: "/archives/:id(.:format)", action: "destroy" }
+        ] } }
+      })
+
+      text = described_class.call(controller: "ArchivesController").content.first[:text]
+
+      expect(text.scan(/skip "TODO: (Archive has[^"]*)"/).flatten.uniq).to eq([ "Archive has a table name the source computes, so its columns are unknown here; supply the attributes it needs" ])
+      expect(text).not_to include('get "/"')
     end
 
     it "requests a route that answers several verbs with one of them" do
@@ -1918,7 +1957,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(text).to include("it { is_expected.to have_many(:statuses).dependent(:destroy) }")
         expect(text).to include("it { is_expected.to have_one(:profile) }")
         expect(text).to include("it { is_expected.to validate_presence_of(:username) }")
-        expect(text).to include("validates absence of followers_url")
+        expect(text).to include("validate_absence_of(:followers_url)")
         expect(text).not_to include(%(describe "associations" do\n  end))
       end
     end
@@ -2225,7 +2264,8 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         text = described_class.call(file: "app/services/plain_thing.rb").content.first[:text]
 
-        expect(text).to include("describe \".call\"")
+        expect(text).to include("describe \"#call\"")
+        expect(text).to include("result = described_class.new.call")
         expect(text).to include("be_truthy")
         expect(text).not_to include("be_valid")
       end
@@ -2294,17 +2334,17 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
   # instance variables gets no let, and the factory call follows whichever of
   # create and build its specs reach for more.
   describe "setup style read from the app's own specs" do
-    def generated_for(existing_spec, setup: factory_syntax)
+    def generated_for(existing_spec, setup: factory_syntax, model: "Post")
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "spec", "models"))
         File.write(File.join(dir, "spec", "models", "comment_spec.rb"), existing_spec)
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
         allow(described_class).to receive(:cached_context).and_return({
-          tests: { framework: "rspec", test_helper_setup: setup, factory_names: { "spec/factories/posts.rb" => [ :post ] } },
-          models: { "Post" => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
+          tests: { framework: "rspec", test_helper_setup: setup, factory_names: { "spec/factories/#{model.underscore.pluralize}.rb" => [ model.underscore.to_sym ] } },
+          models: { model => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
         })
 
-        described_class.call(model: "Post").content.first[:text]
+        described_class.call(model: model).content.first[:text]
       end
     end
 
@@ -2314,6 +2354,13 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       text = generated_for("let(:a) { create(:post) }\nlet(:b) { create(:post) }\n", setup: [])
 
       expect(text).to include("let(:post) { FactoryBot.create(:post) }")
+    end
+
+    # `let(:skip)` would replace the skip an example calls.
+    it "names the let apart from a method its examples call" do
+      text = generated_for("let(:a) { create(:skip) }\nlet(:b) { create(:skip) }\n", model: "Skip")
+
+      expect(text).to include("let(:skip_record) { create(:skip) }")
     end
 
     it "writes a let when the app's specs use let" do
@@ -2381,6 +2428,30 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(Prism.parse(source).success?).to be(true)
       expect(source).to include("test \"has_many posts\"")
       expect(source).not_to include("_posts")
+    end
+  end
+
+  describe "text with a double quote in a skip" do
+    %w[rspec minitest].each do |framework|
+      it "writes a #{framework} model file that parses when a rule option holds a quote" do
+        bundling_shoulda
+        allow(described_class).to receive(:cached_context).and_return(
+          tests: { framework: framework, fixture_names: {}, factory_names: {} },
+          models: {
+            "Voucher" => {
+              table_name: "vouchers",
+              associations: [],
+              validations: [ { kind: "exclusion", attributes: %w[ tags ], options: { in: %w[admin root] } },
+                             { kind: "validates_date", attributes: %w[ starts_on ], options: { after: '"today"' } } ]
+            }
+          }
+        )
+
+        text = described_class.call(model: "Voucher").content.first[:text]
+        source = text[/```ruby\n(.*?)```/m, 1]
+
+        expect(Prism.parse(source).success?).to be(true), source
+      end
     end
   end
 
@@ -2594,6 +2665,48 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
+    # One `create(:post)` for the visit and another for the path assertion are two different posts.
+    describe "of a nested route" do
+      def nested_system_test(factory: true, models: nil)
+        Dir.mktmpdir do |root|
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+          allow(described_class).to receive(:cached_context).and_return({
+            tests: { framework: "rspec", fixture_names: {}, factory_names: factory ? { "posts.rb" => %w[post], "comments.rb" => %w[comment] } : {} },
+            models: models || { "Comment" => { table_name: "comments", associations: [ { type: "belongs_to", name: "post", foreign_key: "post_id" } ],
+                                                 validations: [ { kind: "presence", attributes: %w[post], implicit: true } ] },
+                                "Post" => { table_name: "posts" } },
+            schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] },
+                                "comments" => { columns: [ { name: "body", type: "text" }, { name: "post_id", type: "integer" } ] } } },
+            controllers: { controllers: { "CommentsController" => { actions: %w[index show] } } },
+            routes: { by_controller: { "comments" => [
+              { verb: "GET", path: "/posts/:post_id/comments", action: "index", name: "post_comments" },
+              { verb: "GET", path: "/posts/:post_id/comments/:id", action: "show", name: "post_comment" }
+            ] } }
+          })
+          return described_class.call(model: "Comment", type: "system").content.first[:text]
+        end
+      end
+
+      it "visits and asserts the one parent a factory builds, and the subject's own record" do
+        text = nested_system_test
+
+        expect(text).to include("let(:post_record) { FactoryBot.create(:post) }")
+        expect(text).to include("let(:comment) { FactoryBot.create(:comment, post: post_record) }")
+        expect(text).to include("visit post_comments_path(post_record)\n    expect(page).to have_current_path(post_comments_path(post_record))")
+        expect(text).to include("visit post_comment_path(post_record, comment)")
+      end
+
+      it "makes the parent and the record up from placeholders when no factory builds them" do
+        text = nested_system_test(factory: false)
+
+        expect(text).to include('let(:post_record) { Post.create!({ title: "MyString" }) }')
+        expect(text).to include('let(:comment) { Comment.create!({ body: "MyText", post_id: post_record.id }) }')
+        expect(text).to include("visit post_comments_path(post_record)\n    expect(page).to have_current_path(post_comments_path(post_record))")
+        expect(text).to include("visit post_comment_path(post_record, comment)")
+        expect(text).not_to include("skip")
+      end
+    end
+
     it "says so when no controller serves the model's pages" do
       Dir.mktmpdir do |root|
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
@@ -2605,6 +2718,192 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         expect(text).to include("No controller serves Setting's pages")
       end
+    end
+  end
+
+  # ActionDispatch::Integration::Runner keeps its own @app, @response, @request and @controller.
+  it "names a minitest record after a model called app something the integration runner does not keep" do
+    Dir.mktmpdir do |root|
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", test_helper_setup: [], fixture_names: { "apps" => %w[one] } },
+        models: { "App" => { table_name: "apps" } },
+        schema: { tables: { "apps" => { columns: [ { name: "id", type: "integer" }, { name: "name", type: "string" } ] } } },
+        controllers: { controllers: { "AppsController" => { actions: %w[show update], strong_params: [ { name: "app_params", requires: "app", permits: %w[name] } ] } } },
+        routes: { by_controller: { "apps" => [ { verb: "GET", path: "/apps/:id", action: "show", name: "app" },
+                                               { verb: "PATCH", path: "/apps/:id", action: "update", name: "app" } ] } }
+      })
+      text = described_class.call(controller: "AppsController").content.first[:text]
+
+      expect(text).to include("@app_record = apps(:one)")
+      expect(text).to include("get app_url(@app_record)")
+      expect(text).to include("params: { app: { name: @app_record.name } }")
+      expect(text).not_to include("@app ")
+    end
+  end
+
+  # Every name a let, local or ivar takes must stay clear of the methods and ivars the example group calls.
+  describe "a resource named after a method or ivar an example calls" do
+    def resource_text(model, framework:, type: nil, factory: false, extra: {})
+      key = model.underscore
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: factory ? { "#{key}.rb" => [ key ] } : nil, fixture_names: {} },
+          models: { model => { table_name: key.pluralize }.merge(extra) },
+          schema: { tables: { key.pluralize => { columns: [ { name: "id", type: "integer" }, { name: "title", type: "string" } ] } } },
+          controllers: { controllers: { "#{model.pluralize}Controller" => { actions: %w[index show create update destroy],
+                                                                           strong_params: [ { name: "#{key}_params", requires: key, permits: %w[title] } ] } } },
+          routes: { by_controller: { key.pluralize => [
+            { verb: "GET", path: "/#{key.pluralize}", action: "index", name: key.pluralize },
+            { verb: "POST", path: "/#{key.pluralize}", action: "create", name: key.pluralize },
+            { verb: "GET", path: "/#{key.pluralize}/:id", action: "show", name: key },
+            { verb: "PATCH", path: "/#{key.pluralize}/:id", action: "update", name: key },
+            { verb: "DELETE", path: "/#{key.pluralize}/:id", action: "destroy", name: key }
+          ] } }
+        })
+        return described_class.call(controller: "#{model.pluralize}Controller", model: (model if type), type: type || "request").content.first[:text]
+      end
+    end
+
+    it "renames the let, so rspec's change matcher and the request helpers still run" do
+      text = resource_text("Change", framework: "rspec")
+
+      expect(text).to include("let(:change_record) { Change.create!")
+      expect(text).to include("change_url(change_record)")
+      expect(text).not_to include("let(:change)")
+      expect(text).to include("}.to change(Change, :count).by(1)")
+    end
+
+    it "renames the let a system spec visits through" do
+      text = resource_text("Page", framework: "rspec", type: "system", factory: true)
+
+      expect(text).to include("let(:page_record) { FactoryBot.create(:page) }")
+      expect(text).to include("visit page_path(page_record)")
+      expect(text).to include("expect(page).to have_current_path(page_path(page_record))")
+    end
+
+    it "names the minitest destroy's local apart from the model's own method, and from every method an example calls" do
+      text = resource_text("Response", framework: "minitest")
+
+      expect(text).to include("response_copy = Response.create!(response_record.attributes")
+      expect(text).to include("delete response_url(response_copy)")
+      expect(text).not_to match(/^\s+response(_record)? = /)
+      expect(resource_text("Post", framework: "minitest")).to include("post_copy = Post.create!(post_record.attributes")
+    end
+
+    it "renames a let named after skip, create, build or sign_in, which the examples and factories call" do
+      %w[Skip Create Build SignIn].each do |model|
+        key = model.underscore
+        expect(resource_text(model, framework: "rspec")).to include("let(:#{key}_record)")
+        expect(resource_text(model, framework: "rspec")).not_to include("let(:#{key})")
+      end
+    end
+
+    it "renames a minitest ivar the test case keeps" do
+      %w[Name Store HtmlDocument RootSession].each do |model|
+        expect(resource_text(model, framework: "minitest")).to include("@#{model.underscore}_record")
+      end
+    end
+
+    # The lists name what the example groups break on when a model is named after it. Both ways: every name is still a
+    # method the frameworks define, and every method the generated examples call is a name on the list.
+    let(:installed_methods) do
+      require "minitest"
+      (ActionDispatch::Integration::Runner.instance_methods + ActionDispatch::IntegrationTest.instance_methods +
+       Minitest::Test.instance_methods + Minitest::Assertions.instance_methods + RSpec::Matchers.instance_methods +
+       RSpec::Core::ExampleGroup.instance_methods + ActionController::TestCase::Behavior.instance_methods +
+       ActionDispatch::TestProcess.instance_methods).map(&:to_s)
+    end
+
+    # rspec-rails, Capybara, FactoryBot and Devise are the app's gems, not this gem's bundle: their names are listed by hand.
+    let(:app_gems_methods) do
+      %w[record have_http_status redirect_to have_current_path page visit driven_by assert_redirected_to assert_response assertion_delegator
+         generate_response_message create_session setup_fixtures queue_adapter_changed_jobs enqueued_jobs performed_jobs before_setup
+         method_missing integration_session app params controller create build build_stubbed attributes_for create_list build_list sign_in sign_out
+         include send assert_current_path]
+    end
+
+    it "keeps its method list to methods the frameworks define" do
+      expect(described_class.singleton_class::SPEC_METHOD_NAMES - installed_methods - app_gems_methods).to eq([])
+    end
+
+    # Every file the generator writes for a model with associations, validations, a login filter and a Devise app:
+    # request specs, system specs, model and unit specs, and the minitest of each.
+    def generated_files
+      rules = [ { kind: "presence", attributes: %w[title] }, { kind: "absence", attributes: %w[legacy] }, { kind: "length", attributes: %w[title], options: { maximum: 9 } },
+                { kind: "uniqueness", attributes: %w[title] }, { kind: "inclusion", attributes: %w[kind], options: { in: %w[a b] } },
+                { kind: "acceptance", attributes: %w[terms] }, { kind: "confirmation", attributes: %w[title] }, { kind: "format", attributes: %w[title], options: { with: "/a/" } },
+                { kind: "numericality", attributes: %w[score] } ]
+      extra = { validations: rules, associations: [ { type: "belongs_to", name: "owner", polymorphic: true }, { type: "has_many", name: "marks" } ],
+                scopes: [ { name: "recent" } ], enums: { "kind" => { "a" => 0 } } }
+      files = { model: {}, model_plain: {} }
+      texts = []
+      %w[rspec minitest].each do |framework|
+        texts << resource_text("Thing", framework: framework)
+        texts << resource_text("Thing", framework: framework, factory: true)
+        texts << resource_text("Thing", framework: framework, extra: { custom_validates: [ "check" ] })
+        texts << resource_text("Thing", framework: framework, extra: extra)
+      end
+      texts << resource_text("Thing", framework: "rspec", type: "system", factory: true)
+      texts << resource_text("Thing", framework: "rspec", type: "system")
+      bundling_shoulda
+      files[:model] = [ resource_text("Thing", framework: "rspec", type: "unit", factory: true, extra: extra), resource_text("Thing", framework: "minitest", type: "unit", extra: extra) ]
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({}))
+      files[:model_plain] = [ resource_text("Thing", framework: "rspec", type: "unit", extra: extra) ]
+      { all: texts + files[:model] + files[:model_plain], model: files[:model] + files[:model_plain] }
+    end
+
+    def called_names(texts)
+      texts.flat_map do |text|
+        text.lines.flat_map do |line|
+          code = line.sub(/#.*/, "").gsub(/"(?:[^"\\]|\\.)*"/, '""')
+          code.scan(/(?<![\w.:@$])([a-z_][a-z0-9_]*[?!]?)(?=[ (]|$)/).flatten
+        end
+      end.uniq
+    end
+
+    let(:dsl) { %w[describe it let before setup test subject do end require class def context] }
+
+    it "lists every method any generated file calls that a framework defines" do
+      known = installed_methods + app_gems_methods
+      missing = (called_names(generated_files[:all]) & known) - described_class.singleton_class::SPEC_METHOD_NAMES - dsl -
+                described_class.singleton_class::MODEL_SPEC_CALLS
+
+      expect(missing).to eq([])
+    end
+
+    it "lists, for a model spec's let, every method the generated model specs call" do
+      known = installed_methods + app_gems_methods
+      missing = (called_names(generated_files[:model]) & known) - described_class.singleton_class::MODEL_SPEC_CALLS - dsl
+
+      expect(missing).to eq([])
+      expect(described_class.singleton_class::MODEL_SPEC_CALLS - known).to eq([])
+    end
+
+    it "keeps the names a model spec's let, a request spec's let and a minitest all call on the list" do
+      expect(%w[skip pending include send is_expected expect assert_equal assert_not assert_response create build sign_in attributes_for page visit change get post] -
+             described_class.singleton_class::SPEC_METHOD_NAMES).to eq([])
+      expect(%w[skip pending expect is_expected create build] - described_class.singleton_class::MODEL_SPEC_CALLS).to eq([])
+    end
+
+    it "keeps the minitest instance variable list in step with the test cases" do
+      seen = []
+      [ ActiveSupport::TestCase, ActionDispatch::IntegrationTest ].each do |base|
+        klass = Class.new(base) { define_method(:test_x) { assert true; $r4_seen = instance_variables } }
+        test = klass.new("test_x")
+        test.run
+        seen.concat($r4_seen + test.instance_variables)
+      end
+      live = seen.map { |name| name.to_s.delete_prefix("@") }.uniq.grep(/\A[a-z][a-z0-9_]*\z/)
+      app_only = %w[request response controller routes cookie_jar html_document root_session]
+
+      expect(live - described_class.singleton_class::TEST_CASE_IVARS).to eq([])
+      expect(described_class.singleton_class::TEST_CASE_IVARS - live - app_only - %w[after_run assertions code connection_subscriber cookies diff encoders
+                                                                                     fixture_cache_key fixture_connection_pools mailer mime name object
+                                                                                     old_perform_deliveries options parallel_executor parallelize_with passed
+                                                                                     request_count run_cleanup_hooks saved_pool_configs simple_stubs store
+                                                                                     uses_transaction view_context_class]).to eq([])
     end
   end
 
@@ -2724,8 +3023,32 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         text = described_class.call(controller: "OrdersController").content.first[:text]
 
-        expect(text).to include("OrdersController declares no strong params, so the action reads no order params")
+        expect(text).to include("OrdersController has no *_params method; send the order params the action permits, if any")
         expect(text).not_to include("params: { order:")
+      end
+    end
+
+    it "claims no params read where an action permits inline" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/orders_controller.rb"), <<~RUBY)
+          class OrdersController < ApplicationController
+            def index; end
+
+            def create
+              Order.create(params.require(:order).permit(:number))
+            end
+          end
+        RUBY
+        orders_test(root)
+        controllers = RailsAiContext::Introspectors::ControllerIntrospector.new(RailsAiContext::StaticApp.new(root)).send(:static_call)
+        context = described_class.cached_context.merge(controllers: controllers)
+        allow(described_class).to receive(:cached_context).and_return(context)
+
+        text = described_class.call(controller: "OrdersController").content.first[:text]
+
+        expect(text).to include("OrdersController has no *_params method; send the order params the action permits, if any")
+        expect(text).not_to include("reads no order params")
       end
     end
 
@@ -2733,9 +3056,1151 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       Dir.mktmpdir do |root|
         text = orders_test(root)
 
-        expect(text).to include("OrdersController declares no strong params, so the action reads no order params")
+        expect(text).to include("OrdersController has no *_params method; send the order params the action permits, if any")
         expect(text).not_to include("params: { order:")
       end
+    end
+  end
+
+  describe "the presence validation a required belongs_to adds" do
+    # Rails writes "must exist" for it, so validate_presence_of, which expects
+    # "can't be blank", fails; belong_to(:account) already checks it.
+    it "writes no validate_presence_of for it" do
+      bundling_shoulda
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factory_names: {} },
+        models: {
+          "Order" => {
+            associations: [ { type: "belongs_to", name: "account" } ],
+            validations: [
+              { kind: "presence", attributes: %w[account], implicit: true },
+              { kind: "presence", attributes: %w[number] }
+            ]
+          }
+        }
+      })
+
+      text = described_class.call(model: "Order").content.first[:text]
+
+      expect(text).to include("belong_to(:account)")
+      expect(text).to include("validate_presence_of(:number)")
+      expect(text).not_to include("validate_presence_of(:account)")
+    end
+  end
+
+  describe "the params a request spec creates a record with" do
+    # FactoryBot.attributes_for leaves out every association, so a post sent
+    # without its required user_id is never saved.
+    def create_spec(validations:, permits: %w[title user_id], associations: [ { type: "belongs_to", name: "user", foreign_key: "user_id" } ])
+      strong_params = permits ? [ { name: "post_params", requires: "post", permits: permits } ] : []
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: "rspec", factories: { count: 2 }, factory_names: { "spec/factories/all.rb" => %w[post user] } },
+          models: { "Post" => { table_name: "posts", associations: associations, validations: validations } },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" }, { name: "user_id", type: "integer" } ] } } },
+          controllers: { controllers: { "PostsController" => { actions: %w[create],
+                                                              strong_params: strong_params } } },
+          routes: { by_controller: { "posts" => [ { verb: "POST", path: "/posts", action: "create", name: "posts" } ] } }
+        })
+        return described_class.call(controller: "PostsController").content.first[:text]
+      end
+    end
+
+    it "sends the id of a required parent the controller permits" do
+      text = create_spec(validations: [ { kind: "presence", attributes: %w[user], implicit: true } ])
+
+      expect(text).to include("let(:valid_attributes) { FactoryBot.attributes_for(:post).merge(user_id: FactoryBot.create(:user).id) }")
+    end
+
+    # An action that permits inline has no *_params method to read, and an
+    # unpermitted key is only logged.
+    it "sends it when the action permits inline" do
+      text = create_spec(validations: [ { kind: "presence", attributes: %w[user], implicit: true } ], permits: nil)
+
+      expect(text).to include("FactoryBot.attributes_for(:post).merge(user_id: FactoryBot.create(:user).id)")
+    end
+
+    it "leaves out a parent that is optional, or required only under a condition" do
+      text = create_spec(validations: [ { kind: "presence", attributes: %w[user], implicit: true, implicit_if: "-> { Current.user }" },
+                                        { kind: "presence", attributes: %w[title] } ])
+
+      expect(text).to include("let(:valid_attributes) { FactoryBot.attributes_for(:post) }")
+    end
+
+    # A polymorphic parent names no one factory, and its id alone saves nothing.
+    it "leaves out a polymorphic parent" do
+      text = create_spec(validations: [ { kind: "presence", attributes: %w[user], implicit: true } ],
+                         associations: [ { type: "belongs_to", name: "user", foreign_key: "user_id", polymorphic: true } ])
+
+      expect(text).to include("let(:valid_attributes) { FactoryBot.attributes_for(:post) }")
+    end
+
+    it "leaves out a parent the controller does not permit" do
+      text = create_spec(validations: [ { kind: "presence", attributes: %w[user], implicit: true } ], permits: %w[title])
+
+      expect(text).to include("let(:valid_attributes) { FactoryBot.attributes_for(:post) }")
+    end
+  end
+
+  describe "a record built from placeholders" do
+    # With no factory and no fixture, `user_id: 1` names no user, and create! raises "User must exist".
+    def placeholder_spec(validations:, permits: %w[title user_id], enums: {}, user: {}, user_columns: [], models: {}, post_columns: [], framework: "rspec",
+                         associations: [ { type: "belongs_to", name: "author", class_name: "User", foreign_key: "user_id" } ])
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: nil },
+          models: { "Post" => { table_name: "posts", associations: associations, validations: validations, enums: enums },
+                    "User" => { table_name: "users", validations: [ { kind: "uniqueness", attributes: %w[email] } ] }.merge(user) }.merge(models),
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" }, { name: "user_id", type: "integer" }, { name: "status", type: "string" },
+                                                     { name: "rating", type: "integer" }, *post_columns ] },
+                              "users" => { columns: [ { name: "id", type: "integer" }, { name: "name", type: "string" }, { name: "email", type: "string" },
+                                                     *user_columns ] } } },
+          controllers: { controllers: { "PostsController" => { actions: %w[create show],
+                                                              strong_params: [ { name: "post_params", requires: "post", permits: permits } ] } } },
+          routes: { by_controller: { "posts" => [ { verb: "POST", path: "/posts", action: "create", name: "posts" },
+                                                  { verb: "GET", path: "/posts/:id", action: "show", name: "post" } ] } }
+        })
+        return described_class.call(controller: "PostsController").content.first[:text]
+      end
+    end
+
+    it "creates a required parent from its own placeholders" do
+      text = placeholder_spec(validations: [ { kind: "presence", attributes: %w[author], implicit: true } ])
+
+      parent = 'user_id: User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString" }).id'
+      expect(text).to include("let(:post_record) { Post.create!({ title: \"MyString\", #{parent} }) }")
+      expect(text).to include("let(:valid_attributes) { { title: \"MyString\", #{parent} } }")
+    end
+
+    it "takes a value the record's inclusion validation lists" do
+      text = placeholder_spec(validations: [ { kind: "inclusion", attributes: %w[status], options: { in: %w[draft published] } } ], permits: %w[status title])
+
+      expect(text).to include('let(:valid_attributes) { { status: "draft", title: "MyString" } }')
+    end
+
+    # A request sends "1" for an integer enum, and Rails raises "'1' is not a valid status".
+    it "takes an enum attribute's first key" do
+      text = placeholder_spec(validations: [], permits: %w[status title], enums: { "status" => { "draft" => 0, "published" => 1 } })
+
+      expect(text).to include('let(:valid_attributes) { { status: "draft", title: "MyString" } }')
+    end
+
+    it "stops at a parent of the record's own class" do
+      text = placeholder_spec(validations: [ { kind: "presence", attributes: %w[original], implicit: true } ],
+                              associations: [ { type: "belongs_to", name: "original", class_name: "Post", foreign_key: "user_id" } ])
+
+      expect(text).to include("let(:valid_attributes) { { title: \"MyString\", user_id: 1 } }")
+    end
+
+    def inclusion(attr, list) = { kind: "inclusion", attributes: [ attr ], options: { in: list } }
+
+    it "takes a range's first value, and the type's placeholder for a list a lambda computes" do
+      expect(placeholder_spec(validations: [ inclusion("rating", "3..5") ], permits: %w[rating])).to include("let(:valid_attributes) { { rating: 3 } }")
+      expect(placeholder_spec(validations: [ inclusion("rating", 2..4) ], permits: %w[rating])).to include("let(:valid_attributes) { { rating: 2 } }")
+      expect(placeholder_spec(validations: [ inclusion("status", "(proc)") ], permits: %w[status])).to include("with a lambda or proc in the in option")
+    end
+
+    it "writes a symbol an inclusion lists as the string a string column holds" do
+      text = placeholder_spec(validations: [ inclusion("status", %i[draft sent]) ], permits: %w[status])
+
+      expect(text).to include('let(:valid_attributes) { { status: "draft" } }')
+    end
+
+    it "takes the inclusion's value for an enum the walk could not read as a list" do
+      text = placeholder_spec(validations: [ inclusion("status", %w[open closed]) ], permits: %w[status], enums: { "status" => "STATUSES" })
+
+      expect(text).to include('let(:valid_attributes) { { status: "open" } }')
+    end
+
+    # Rails raises "'1' is not a valid rating" for a value outside the mapping; left out, the column keeps its default.
+    it "leaves out an enum whose mapping the walk could not read, on the record, its params and a parent" do
+      text = placeholder_spec(validations: [ { kind: "presence", attributes: %w[author], implicit: true } ], permits: %w[rating title user_id],
+                              enums: { "rating" => "RATINGS" }, user: { enums: { "name" => "NAMES" } })
+
+      parent = 'user_id: User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com" }).id'
+      expect(text).to include("let(:valid_attributes) { { title: \"MyString\", #{parent} } }")
+      expect(text).to include("let(:post_record) { Post.create!({ title: \"MyString\", #{parent} }) }")
+      expect(text).to include("# TODO: rating is an enum whose values the source computes; set one it maps")
+      expect(text).to include("# TODO: User#name is an enum whose values the source computes; set one it maps")
+      minitest = placeholder_spec(validations: [], permits: %w[rating title], enums: { "rating" => "RATINGS" }, framework: "minitest")
+      expect(minitest).to include("@post_record ||= Post.create!({ title: \"MyString\" })")
+      expect(minitest).to include("params: { post: { title: \"MyString\" } }")
+      expect(minitest).to include("  # TODO: rating is an enum whose values the source computes; set one it maps")
+    end
+
+    # A controller that finds the record through `@post.comments` 404s on any other post.
+    describe "a nested route's parent" do
+      def nested_spec(permits:, parent: "post", comment_associations: nil, comment_columns: [], models: {}, framework: "rspec",
+                      actions: %w[index create destroy])
+        model = parent.camelize
+        comment_associations ||= [ { type: "belongs_to", name: parent, foreign_key: "#{parent}_id" } ]
+        Dir.mktmpdir do |root|
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+          allow(described_class).to receive(:cached_context).and_return({
+            tests: { framework: framework, factories: nil, factory_names: nil },
+            models: { "Comment" => { table_name: "comments", associations: comment_associations,
+                                     validations: [ { kind: "presence", attributes: [ comment_associations.first[:name] ], implicit: true } ] },
+                      model => { table_name: parent.pluralize, associations: [ { type: "has_many", name: "comments", as: comment_associations.first[:as_role] }.compact ] } }.merge(models),
+            schema: { tables: { "comments" => { columns: [ { name: "body", type: "text" }, { name: "#{parent}_id", type: "integer" }, *comment_columns ] },
+                                parent.pluralize => { columns: [ { name: "title", type: "string" } ] } } },
+            controllers: { controllers: { "CommentsController" => { actions: actions,
+                                                                   strong_params: [ { name: "comment_params", requires: "comment", permits: permits } ] } } },
+            routes: { by_controller: { "comments" => [
+              { verb: "GET", path: "/#{parent.pluralize}/:#{parent}_id/comments", action: "index", name: "#{parent}_comments" },
+              { verb: "POST", path: "/#{parent.pluralize}/:#{parent}_id/comments", action: "create", name: "#{parent}_comments" },
+              { verb: "GET", path: "/#{parent.pluralize}/:#{parent}_id/comments/:id", action: "show", name: "#{parent}_comment" },
+              { verb: "PATCH", path: "/#{parent.pluralize}/:#{parent}_id/comments/:id", action: "update", name: "#{parent}_comment" },
+              { verb: "DELETE", path: "/#{parent.pluralize}/:#{parent}_id/comments/:id", action: "destroy", name: "#{parent}_comment" }
+            ].select { |route| actions.include?(route[:action]) } } }
+          })
+          return described_class.call(controller: "CommentsController").content.first[:text]
+        end
+      end
+
+      # rspec-rails' `app` is the Rails application, and the destroy example's own local is `record`.
+      it "names no let after a method the spec or its examples already use" do
+        app = nested_spec(permits: %w[body], parent: "app")
+        expect(app).to include('let(:app_record) { App.create!({ title: "MyString" }) }')
+        expect(app).to include("delete app_comment_url(app_record, record)")
+        expect(app).not_to include("let(:app)")
+
+        record = nested_spec(permits: %w[body], parent: "record")
+        expect(record).to include('let(:record_record) { Record.create!({ title: "MyString" }) }')
+        expect(record).to include("delete record_comment_url(record_record, record)")
+      end
+
+      # `let(:post)` would hide the request helper `post`.
+      it "is created from placeholders, named in the path, and owns the record" do
+        text = nested_spec(permits: %w[body])
+
+        expect(text).to include('let(:post_record) { Post.create!({ title: "MyString" }) }')
+        expect(text).to include('let(:comment) { Comment.create!({ body: "MyText", post_id: post_record.id }) }')
+        expect(text).to include('let(:valid_attributes) { { body: "MyText" } }')
+        expect(text).to include("get post_comments_url(post_record)")
+        expect(text).to include("post post_comments_url(post_record), params: { comment: valid_attributes }")
+        expect(text).to include("delete post_comment_url(post_record, record)")
+        expect(text).not_to include("skip")
+      end
+
+      it "is created from placeholders in a minitest too, with the record, so every action runs" do
+        text = nested_spec(permits: %w[body post_id], framework: "minitest", actions: %w[index create show update destroy])
+
+        expect(text).to include("  def post_record\n    @post_record ||= Post.create!({ title: \"MyString\" })\n  end\n")
+        expect(text).to include("  def comment_record\n    @comment_record ||= Comment.create!({ body: \"MyText\", post_id: post_record.id })\n  end\n")
+        expect(text).not_to include("setup do")
+        expect(text).to include("get post_comments_url(post_record)")
+        expect(text).to include("post post_comments_url(post_record), params: { comment: { body: \"MyText\", post_id: post_record.id } }")
+        expect(text).to include("get post_comment_url(post_record, comment_record)")
+        expect(text).to include("patch post_comment_url(post_record, comment_record), params: { comment: { body: comment_record.body, post_id: comment_record.post_id } }")
+        expect(text).to include("delete post_comment_url(post_record, comment)")
+        expect(text).not_to include("skip")
+        expect(text).not_to include("deleting a fixture row")
+
+        expect(nested_spec(permits: %w[body], parent: "app", framework: "minitest")).to include("@app_record ||= App.create!")
+      end
+
+      # A parent that cannot be made up cannot be named in the path, and neither can what belongs to it.
+      describe "that belongs to a role no model fills" do
+        let(:post_models) do
+          { "Post" => { table_name: "posts", associations: [ { type: "belongs_to", name: "author", polymorphic: true, foreign_key: "author_id" },
+                                                            { type: "has_many", name: "comments" } ],
+                        validations: [ { kind: "presence", attributes: %w[author], implicit: true } ] } }
+        end
+        let(:reason) { "Post belongs_to :author, polymorphic: true, and no model declares has_many or has_one ..., as: :author" }
+
+        it "is not made up in either framework; every example that needs it skips, saying why" do
+          %w[rspec minitest].each do |framework|
+            text = nested_spec(permits: %w[body], models: post_models, framework: framework, actions: %w[index create show update destroy])
+
+            expect(text).not_to include("MyString")
+            expect(text).not_to include("Post.create!")
+            expect(text).to include("skip \"TODO: #{reason}")
+            expect(text).not_to include("no matching fixture")
+            expect(text.scan("skip \"TODO: #{reason}").size).to eq(5)
+          end
+        end
+
+        it "also keeps a record that needs the unbuildable parent from being made up" do
+          text = placeholder_spec(validations: [ { kind: "presence", attributes: %w[author], implicit: true } ],
+                                  associations: [ { type: "belongs_to", name: "author", class_name: "Owner", foreign_key: "user_id" } ],
+                                  models: { "Owner" => { table_name: "users", associations: [ { type: "belongs_to", name: "holder", polymorphic: true, foreign_key: "holder_id" } ],
+                                                         validations: [ { kind: "presence", attributes: %w[holder], implicit: true } ] } })
+
+          expect(text).not_to include("Post.create!")
+          expect(text).to include("skip \"TODO: Owner belongs_to :holder, polymorphic: true")
+        end
+      end
+
+      it "says its attributes may need adjusting before the parent it makes up, not after" do
+        text = nested_spec(permits: %w[body])
+
+        todo = "# TODO: adjust these attributes if validations reject the placeholder values"
+        expect(text.index(todo)).to be < text.index("let(:post_record)")
+        expect(text.scan(todo).size).to eq(1)
+      end
+
+      it "sends the route parent's id where the controller permits the owning key" do
+        expect(nested_spec(permits: %w[body post_id])).to include('let(:valid_attributes) { { body: "MyText", post_id: post_record.id } }')
+      end
+
+      it "fills a polymorphic owner's id and type from the route parent, before another model that fills the role" do
+        text = nested_spec(permits: %w[body], comment_associations: [ { type: "belongs_to", name: "subject", polymorphic: true, foreign_key: "subject_id", as_role: "subject" } ],
+                           comment_columns: [ { name: "subject_id", type: "integer" }, { name: "subject_type", type: "string" } ],
+                           models: { "Article" => { table_name: "posts", associations: [ { type: "has_many", name: "comments", as: "subject" } ] } })
+
+        expect(text).to include('let(:comment) { Comment.create!({ body: "MyText", subject_id: post_record.id, subject_type: "Post" }) }')
+      end
+    end
+
+    # No model of its own, or a model with no fixture: a parent with a fixture is used as the fixture is, one without is made up.
+    describe "a minitest route parent" do
+      def parent_test(controller: "ReportsController", fixtures: {}, models: nil, permits: nil)
+        models ||= { "Record" => { table_name: "records" } }
+        key = controller.delete_suffix("Controller").underscore
+        Dir.mktmpdir do |root|
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+          allow(described_class).to receive(:cached_context).and_return({
+            tests: { framework: "minitest", test_helper_setup: [], fixture_names: fixtures },
+            models: models,
+            schema: { tables: { "records" => { columns: [ { name: "title", type: "string" } ] },
+                                "comments" => { columns: [ { name: "body", type: "text" }, { name: "record_id", type: "integer" } ] } } },
+            controllers: { controllers: { controller => { actions: %w[index create], strong_params: permits && [ { name: "#{key.singularize}_params", requires: key.singularize, permits: permits } ] }.compact } },
+            routes: { by_controller: { key => [ { verb: "GET", path: "/records/:record_id/#{key}", action: "index", name: "record_#{key}" },
+                                                { verb: "POST", path: "/records/:record_id/#{key}", action: "create", name: "record_#{key}" } ] } }
+          })
+          return described_class.call(controller: controller).content.first[:text]
+        end
+      end
+
+      it "is made up for a controller with no model, and named in its path" do
+        text = parent_test
+
+        expect(text).to include("  def record_record\n    @record_record ||= Record.create!({ title: \"MyString\" })\n  end\n")
+        expect(text).to include("get record_reports_url(record_record)")
+        expect(text).not_to include("no matching fixture")
+      end
+
+      it "is the fixture itself when the app has one, for a controller with and without a model" do
+        text = parent_test(fixtures: { "records" => %w[one] })
+
+        expect(text).to include("get record_reports_url(records(:one))")
+        expect(text).not_to include("create!")
+
+        comments = parent_test(controller: "CommentsController", fixtures: { "records" => %w[one] }, permits: %w[body record_id],
+                               models: { "Record" => { table_name: "records" },
+                                         "Comment" => { table_name: "comments", associations: [ { type: "belongs_to", name: "record", foreign_key: "record_id" } ],
+                                                        validations: [ { kind: "presence", attributes: %w[record], implicit: true } ] } })
+        expect(comments).to include("@comment_record ||= Comment.create!({ body: \"MyText\", record_id: records(:one).id })")
+        expect(comments).to include("get record_comments_url(records(:one))")
+        expect(comments).not_to include("Record.create!")
+      end
+    end
+
+    describe "a required polymorphic parent" do
+      def polymorphic_spec(user: {}, permits: %w[author_id author_type title], models: {}, user_columns: [], framework: "rspec")
+        placeholder_spec(validations: [ { kind: "presence", attributes: %w[author], implicit: true } ], permits: permits,
+                         associations: [ { type: "belongs_to", name: "author", polymorphic: true, foreign_key: "author_id" } ],
+                         post_columns: [ { name: "author_id", type: "integer" }, { name: "author_type", type: "string" } ], user: user,
+                         models: models, user_columns: user_columns, framework: framework)
+      end
+
+      # Rails raises NameError constantizing a made-up `author_type: "MyString"`.
+      it "skips what needs a record or the role's params in a minitest too, saying why, when no model fills the role" do
+        text = polymorphic_spec(framework: "minitest")
+
+        reason = "Post belongs_to :author, polymorphic: true, and no model declares has_many or has_one ..., as: :author"
+        expect(text).not_to include("author_type: \"MyString\"")
+        expect(text).not_to include("Post.create!")
+        expect(text.scan("skip \"TODO: #{reason}").size).to eq(2)
+        expect(polymorphic_spec(framework: "minitest", permits: %w[title])).to include("params: { post: { title: \"MyString\" } }")
+      end
+
+      it "reads each model's roles once a run, however many placeholders ask" do
+        allow(described_class).to receive(:scan_required_roles).and_call_original
+        polymorphic_spec(user: { associations: [ { type: "has_many", name: "posts", as: "author", class_name: "Post" } ] })
+
+        expect(described_class).to have_received(:scan_required_roles).with("Post").once
+      end
+
+      # Rails stores the owner's base_class.polymorphic_name, so `User#posts` finds an Admin's rows only under "User".
+      describe "an STI owner" do
+        let(:fills) { [ { type: "has_many", name: "posts", as: "author", class_name: "Post" } ] }
+        let(:admin) { { table_name: "users", sti: { sti_parent: "User", type_column: "type" }, validations: [ { kind: "uniqueness", attributes: %w[email] } ] } }
+
+        it "is the base class when the subclass inherits its has_many" do
+          text = polymorphic_spec(user: { associations: fills, sti: { sti_base: true, sti_children: %w[Admin], type_column: "type" } },
+                                  models: { "Admin" => admin.merge(associations: fills) }, user_columns: [ { name: "type", type: "string" } ])
+
+          parent = 'author_id: User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString" }).id, author_type: "User"'
+          expect(text).to include("let(:valid_attributes) { { #{parent}, title: \"MyString\" } }")
+        end
+
+        it "writes the base class's name for a subclass that alone declares the has_many" do
+          text = polymorphic_spec(user: { sti: { sti_base: true, sti_children: %w[Admin], type_column: "type" } },
+                                  models: { "Admin" => admin.merge(associations: fills) }, user_columns: [ { name: "type", type: "string" } ])
+
+          parent = 'author_id: Admin.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString", type: "Admin" }).id, author_type: "User"'
+          expect(text).to include("let(:valid_attributes) { { #{parent}, title: \"MyString\" } }")
+        end
+
+        it "writes the top of a deeper STI chain" do
+          root = { sti: { sti_base: true, sti_children: %w[Admin], type_column: "type" } }
+          text = polymorphic_spec(user: root, models: { "Admin" => admin, "Owner" => admin.merge(sti: { sti_parent: "Admin", type_column: "type" }, associations: fills) },
+                                  user_columns: [ { name: "type", type: "string" } ])
+
+          expect(text).to include('type: "Owner" }).id, author_type: "User"')
+        end
+      end
+
+      it "is created as a model whose has_many names the role" do
+        text = polymorphic_spec(user: { associations: [ { type: "has_many", name: "posts", as: "author", class_name: "Post" } ] })
+
+        parent = 'author_id: User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString" }).id, author_type: "User"'
+        expect(text).to include("let(:valid_attributes) { { #{parent}, title: \"MyString\" } }")
+        expect(text).to include("let(:post_record) { Post.create!({ #{parent}, title: \"MyString\" }) }")
+      end
+
+      it "skips what needs a record, saying why, when no model fills the role" do
+        text = polymorphic_spec
+
+        reason = "Post belongs_to :author, polymorphic: true, and no model declares has_many or has_one ..., as: :author"
+        expect(text).not_to include("let(:post_record)")
+        expect(text).to include("skip \"TODO: #{reason}")
+        expect(text.scan("skip \"TODO: #{reason}").size).to eq(2)
+      end
+
+      # The controller sets the owner itself (`@note.owner = current_user`), so the params it permits still create one.
+      it "keeps the create example when the controller permits neither the role's id nor its type" do
+        text = polymorphic_spec(permits: %w[title])
+
+        expect(text).not_to include("let(:post_record)")
+        expect(text).to include('let(:valid_attributes) { { title: "MyString" } }')
+        expect(text).to include("it \"creates a new Post\" do")
+      end
+    end
+
+    describe "an STI parent" do
+      let(:required) { [ { kind: "presence", attributes: %w[author], implicit: true } ] }
+
+      it "names the subclass in its type column" do
+        text = placeholder_spec(validations: required, user_columns: [ { name: "type", type: "string" } ],
+                                associations: [ { type: "belongs_to", name: "author", class_name: "Admin", foreign_key: "user_id" } ],
+                                models: { "Admin" => { table_name: "users", sti: { sti_parent: "User", type_column: "type" },
+                                                          validations: [ { kind: "uniqueness", attributes: %w[email] } ] } })
+
+        expect(text).to include('user_id: Admin.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString", type: "Admin" }).id')
+      end
+
+      it "leaves the type column out for the base class" do
+        text = placeholder_spec(validations: required, user_columns: [ { name: "type", type: "string" } ],
+                                user: { sti: { sti_base: true, sti_children: %w[Admin], type_column: "type" } })
+
+        expect(text).to include('user_id: User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString" }).id')
+      end
+    end
+
+    describe "a parent that authenticates by password" do
+      let(:required) { [ { kind: "presence", attributes: %w[author], implicit: true } ] }
+      let(:parent) { 'user_id: User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString", password: "password123", password_confirmation: "password123" }).id' }
+
+      it "sets has_secure_password's password, not its digest" do
+        text = placeholder_spec(validations: required, user_columns: [ { name: "password_digest", type: "string" } ], user: { has_secure_password: true })
+
+        expect(text).to include(parent)
+      end
+
+      it "sets Devise's password, not its encrypted column" do
+        text = placeholder_spec(validations: required, user_columns: [ { name: "encrypted_password", type: "string" } ],
+                                user: { concerns: %w[Devise::Models::Authenticatable Devise::Models::DatabaseAuthenticatable] })
+
+        expect(text).to include(parent)
+      end
+    end
+
+    # The controller of a model that authenticates by password: the record and the params both carry the password.
+    describe "a record that authenticates by password" do
+      def accounts_test(framework, fixture: false, model: { has_secure_password: true }, column: "password_digest", permits: %w[email password password_confirmation])
+        Dir.mktmpdir do |root|
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+          allow(described_class).to receive(:cached_context).and_return({
+            tests: { framework: framework, factories: nil, factory_names: nil, test_helper_setup: [], fixture_names: fixture ? { "accounts" => [ "one" ] } : {} },
+            models: { "Account" => { table_name: "accounts" }.merge(model) },
+            schema: { tables: { "accounts" => { columns: [ { name: "email", type: "string" }, { name: column, type: "string" } ] } } },
+            controllers: { controllers: { "AccountsController" => { actions: %w[index show create update],
+                                                                    strong_params: [ { name: "account_params", requires: "account", permits: permits } ] } } },
+            routes: { by_controller: { "accounts" => [
+              { verb: "GET", path: "/accounts/:id", action: "show", name: "account" },
+              { verb: "POST", path: "/accounts", action: "create", name: "accounts" },
+              { verb: "PATCH", path: "/accounts/:id", action: "update", name: "account" }
+            ] } }
+          })
+          return described_class.call(controller: "AccountsController").content.first[:text]
+        end
+      end
+
+      let(:password) { 'password: "password123", password_confirmation: "password123"' }
+
+      it "is made up with the password, and sends it, in a request spec" do
+        text = accounts_test("rspec")
+
+        expect(text).to include("let(:account) { Account.create!({ email: \"MyString\", #{password} }) }")
+        expect(text).to include("let(:valid_attributes) { { email: \"MyString\", #{password} } }")
+      end
+
+      it "is made up with the password in a minitest, and its create sends it" do
+        text = accounts_test("minitest")
+
+        expect(text).to include("@account_record ||= Account.create!({ email: \"MyString\", #{password} })")
+        expect(text).to include("params: { account: { email: \"MyString\", #{password} } }")
+      end
+
+      it "sends the password where the subject is a fixture, which holds only the digest" do
+        text = accounts_test("minitest", fixture: true)
+
+        expect(text).to include("params: { account: { email: @account.email, #{password} } }")
+        expect(text).not_to include("@account.password")
+      end
+
+      it "is Devise's password, not its encrypted column" do
+        text = accounts_test("rspec", model: { concerns: %w[Devise::Models::DatabaseAuthenticatable] }, column: "encrypted_password")
+
+        expect(text).to include("let(:account) { Account.create!({ email: \"MyString\", #{password} }) }")
+      end
+    end
+
+    it "leaves an optional parent's key a placeholder" do
+      text = placeholder_spec(validations: [])
+
+      expect(text).to include("let(:valid_attributes) { { title: \"MyString\", user_id: 1 } }")
+    end
+  end
+
+  # A record made up from placeholders must pass the model's own validations where they say how, and every example
+  # that needs it must skip, naming the validation and what to supply, where they do not.
+  describe "the value made up under a validation" do
+    def thing_text(validations, columns: { "title" => "string", "body" => "text" }, framework: "rspec", model: {}, permits: nil, table: "things")
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: nil, fixture_names: {}, test_helper_setup: [] },
+          models: { "Thing" => { table_name: table, validations: validations }.merge(model) },
+          schema: { tables: { table => { columns: columns.map { |name, type| { name: name, type: type } } } } },
+          controllers: { controllers: { "ThingsController" => { actions: %w[index show create update destroy],
+                                                                strong_params: [ { name: "thing_params", requires: "thing", permits: permits || columns.keys } ] } } },
+          routes: { by_controller: { "things" => [
+            { verb: "GET", path: "/things", action: "index", name: "things" },
+            { verb: "POST", path: "/things", action: "create", name: "things" },
+            { verb: "GET", path: "/things/:id", action: "show", name: "thing" },
+            { verb: "PATCH", path: "/things/:id", action: "update", name: "thing" },
+            { verb: "DELETE", path: "/things/:id", action: "destroy", name: "thing" }
+          ] } }
+        })
+        return described_class.call(controller: "ThingsController").content.first[:text]
+      end
+    end
+
+    def rule(kind, attr, options = {}) = { kind: kind, attributes: [ attr ], options: options }
+
+    it "is long enough and short enough for a length rule" do
+      text = thing_text([ rule("length", "body", minimum: 10), rule("length", "title", maximum: 3) ])
+
+      expect(text).to include('let(:valid_attributes) { { body: "MyTextxxxx", title: "MyS" } }')
+      expect(thing_text([ rule("length", "title", is: 12) ])).to include('title: "MyStringxxxx"')
+    end
+
+    it "includes an attribute a rule names though the controller does not permit it" do
+      text = thing_text([ rule("length", "title", maximum: 3) ], permits: %w[body])
+
+      expect(text).to include('let(:thing) { Thing.create!({ body: "MyText", title: "MyS" }) }')
+      expect(text).to include('let(:valid_attributes) { { body: "MyText" } }')
+    end
+
+    it "is inside a numericality rule's bounds" do
+      columns = { "price" => "decimal", "qty" => "integer", "score" => "integer" }
+      text = thing_text([ rule("numericality", "price", greater_than: 20), rule("numericality", "qty", only_integer: true, greater_than_or_equal_to: 5),
+                          rule("numericality", "score", less_than: 0) ], columns: columns)
+
+      expect(text).to include('price: "21"')
+      expect(text).to include("qty: 5")
+      expect(text).to include("score: -1")
+    end
+
+    it "is accepted for an acceptance rule, a virtual attribute too" do
+      text = thing_text([ rule("acceptance", "terms"), rule("acceptance", "agreed") ], columns: { "terms" => "boolean", "title" => "string" }, permits: %w[terms agreed title])
+
+      expect(text).to include('agreed: "1"')
+      expect(text).to include("terms: true")
+    end
+
+    it "repeats the value in a confirmation rule's field" do
+      text = thing_text([ rule("confirmation", "title") ], permits: %w[title title_confirmation])
+
+      expect(text).to include('title: "MyString", title_confirmation: "MyString"')
+      expect(text).not_to include("nil")
+    end
+
+    it "satisfies a format the gem can read, and leaves out an attribute that may be blank" do
+      text = thing_text([ rule("format", "title", with: "URI::MailTo::EMAIL_REGEXP"), rule("format", "body", with: "/\\A\\d+\\z/") ])
+
+      expect(text).to include('body: "1"')
+      expect(text).to include('title: "a@example.com"')
+      expect(thing_text([ rule("format", "title", with: "/\\A[A-Z]{9}\\z/", allow_blank: true) ], permits: %w[title])).to include("let(:valid_attributes) { {  } }")
+    end
+
+    it "is one of the values an acceptance rule accepts" do
+      text = thing_text([ rule("acceptance", "agreed", accept: [ "yes", "ok" ]) ], columns: { "agreed" => "string" })
+
+      expect(text).to include('agreed: "yes"')
+    end
+
+    # A numeric string must meet the column's length rule too.
+    it "is a numeric string of the right length for a numericality rule on a string column" do
+      columns = { "digits" => "string", "code" => "string", "grade" => "string" }
+      text = thing_text([ rule("numericality", "digits", only_integer: true), rule("length", "digits", is: 4),
+                          rule("numericality", "code", greater_than: 5000), rule("length", "code", is: 4),
+                          rule("numericality", "grade", in: "1..5"), rule("length", "grade", minimum: 2) ], columns: columns)
+
+      expect(text).to include('digits: "1000"')
+      expect(text).to include('code: "5001"')
+      expect(text).to include('grade: "01"')
+    end
+
+    it "is inside a length rule given as a range" do
+      expect(thing_text([ rule("length", "title", in: "3..5") ])).to include('title: "MyStr"')
+    end
+
+    describe "that it cannot satisfy" do
+      let(:reasons) do
+        { "format" => "Thing validates format of title (/\\A[A-Z]{9}\\z/); supply a value it accepts",
+          "custom" => "Thing runs the custom validation title_is_real; supply a record that passes it",
+          "attachment" => "Thing validates presence of file, which is not a column; supply it (an attachment, for one)",
+          "kind" => "Thing validates comparison of title, which the gem cannot evaluate; supply a record that passes it" }
+      end
+
+      def stuck_text(validations, framework, **options)
+        thing_text(validations, framework: framework, **options)
+      end
+
+      it "skips every example that needs the record or its params, in both frameworks, saying why" do
+        %w[rspec minitest].each do |framework|
+          text = stuck_text([ rule("format", "title", with: "/\\A[A-Z]{9}\\z/") ], framework)
+
+          expect(text).to include("skip #{"TODO: #{reasons["format"]}".inspect}")
+          expect(text).not_to include("create!")
+          expect(text).not_to include("adjust these attributes")
+          expect(text.scan("skip #{"TODO: #{reasons["format"]}".inspect}").size).to eq(4)
+        end
+      end
+
+      it "skips for a custom validate method" do
+        text = stuck_text([], "rspec", model: { custom_validates: [ "title_is_real" ] })
+
+        expect(text).to include("skip \"TODO: #{reasons["custom"]}\"")
+        expect(text).not_to include("create!")
+      end
+
+      it "skips for a presence rule on an attribute that is no column, an attachment for one" do
+        text = stuck_text([ rule("presence", "file") ], "minitest")
+
+        expect(text).to include("skip \"TODO: #{reasons["attachment"]}\"")
+      end
+
+      it "skips for a rule it cannot evaluate" do
+        text = stuck_text([ rule("comparison", "title", greater_than: "other") ], "rspec")
+
+        expect(text).to include("skip \"TODO: #{reasons["kind"]}\"")
+      end
+
+      # The made-up record fails closed: a rule it does not read completely makes the examples that need the record skip.
+      it "skips for validates_with, a validator class, validates_each and any kind it does not know" do
+        with = { kind: "validates_with", attributes: [], validator: "MemberValidator", options: {} }
+        text = stuck_text([ with ], "rspec")
+
+        expect(text).to include('skip "TODO: Thing runs validates_with MemberValidator; supply a record that passes it"')
+        expect(text).not_to include("create!")
+        expect(stuck_text([ rule("validates_each", "title") ], "minitest")).to include("Thing validates validates_each of title, which the gem cannot evaluate")
+        expect(stuck_text([ rule("email", "title") ], "rspec")).to include("Thing validates email of title, which the gem cannot evaluate")
+      end
+
+      it "skips for an option of a known rule it does not honor, naming the option" do
+        text = stuck_text([ rule("length", "title", minimum: 3, tokenizer: "words") ], "rspec")
+
+        expect(text).to include('skip "TODO: Thing validates length of title with the option tokenizer, which the gem does not honor; supply a value that passes it"')
+      end
+
+      it "skips for a lambda or proc anywhere in the rule" do
+        [ [ "presence", { if: "(proc)" } ], [ "presence", { unless: "->(r) { r.x }" } ], [ "uniqueness", { conditions: "-> { where(x: 1) }" } ] ].each do |kind, options|
+          text = stuck_text([ rule(kind, "title", options) ], "rspec")
+
+          expect(text).to include("skip \"TODO: Thing validates #{kind} of title with a lambda or proc in the #{options.keys.first} option; supply a record that passes it\"")
+        end
+      end
+
+      it "reads a method name in if or unless, and a rule that runs only on update, completely" do
+        text = stuck_text([ rule("presence", "title", if: :paid?), rule("length", "body", minimum: 3, on: :update, comparison: "x") ], "rspec")
+
+        expect(text).not_to include("skip")
+      end
+
+      it "keeps the create when the controller permits no attribute the rule needs, as when it sets the value itself" do
+        text = stuck_text([ rule("format", "title", with: "/\\A[A-Z]{9}\\z/") ], "rspec", permits: %w[body])
+
+        expect(text).to include("it \"creates a new Thing\" do")
+      end
+    end
+
+    # The static tier cannot read a computed table name, so its columns are unknown and every attribute would be nil.
+    it "skips what needs a record when the model's table is computed and its columns cannot be read" do
+      %w[rspec minitest].each do |framework|
+        text = thing_text([ rule("presence", "memo") ], framework: framework, table: nil, columns: {}, model: { table_name: nil, table_set_by: "Thing.table_name" }, permits: %w[memo])
+
+        expect(text).to include("skip \"TODO: Thing has a table name the source computes, so its columns are unknown here; supply the attributes it needs\"")
+        expect(text).not_to include("nil")
+      end
+    end
+  end
+
+  # An example with an empty body passes and proves nothing.
+  describe "a model spec's format, acceptance, confirmation and macro validations" do
+    def signup_spec(framework, validations)
+      bundling_shoulda
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: nil, fixture_names: {} },
+          models: { "Signup" => { table_name: "signups", validations: validations } },
+          schema: { tables: { "signups" => { columns: [ { name: "email", type: "string" }, { name: "terms", type: "boolean" } ] } } }
+        })
+        return described_class.call(model: "Signup").content.first[:text]
+      end
+    end
+
+    let(:rules) do
+      [ { kind: "acceptance", attributes: %w[terms], options: {} }, { kind: "confirmation", attributes: %w[email], options: {} },
+        { kind: "format", attributes: %w[email], options: { with: "/@/" } }, { kind: "validates_with", attributes: %w[email], options: {} } ]
+    end
+
+    it "is a matcher where shoulda has one, and a skip saying what to supply where it has none" do
+      text = signup_spec("rspec", rules)
+
+      expect(text).to include("it { is_expected.to validate_acceptance_of(:terms) }")
+      expect(text).to include("it { is_expected.to validate_confirmation_of(:email) }")
+      expect(text).to include('skip "TODO: set email to a value the format rejects and one it accepts"')
+      expect(text).to include('skip "TODO: assert that a record breaking validates_with on email is invalid and one meeting it is valid"')
+      expect(text).not_to match(/do\n\s+# TODO: implement/)
+    end
+
+    it "is a skip too where the app does not bundle shoulda-matchers" do
+      allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({}))
+      text = signup_spec("rspec", [ { kind: "validates_with", attributes: %w[email], options: {} } ])
+
+      expect(text).to include('skip "TODO: assert that a record breaking validates_with on email is invalid and one meeting it is valid"')
+    end
+  end
+
+  # `resource :profile` has no :id, so nothing in the request names the record the action reads.
+  describe "a singular resource" do
+    def profile_text(framework, fixtures: {})
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: nil, fixture_names: fixtures, test_helper_setup: [] },
+          models: { "Profile" => { table_name: "profiles" } },
+          schema: { tables: { "profiles" => { columns: [ { name: "bio", type: "string" } ] } } },
+          controllers: { controllers: { "ProfilesController" => { actions: %w[show update destroy],
+                                                                 strong_params: [ { name: "profile_params", requires: "profile", permits: %w[bio] } ] } } },
+          routes: { by_controller: { "profiles" => [
+            { verb: "GET", path: "/profile", action: "show", name: "profile" },
+            { verb: "PATCH", path: "/profile", action: "update", name: "profile" },
+            { verb: "DELETE", path: "/profile", action: "destroy", name: "profile" }
+          ] } }
+        })
+        return described_class.call(controller: "ProfilesController").content.first[:text]
+      end
+    end
+
+    it "calls the made-up record before it is shown or updated, in a request spec and a minitest" do
+      spec = profile_text("rspec")
+      expect(spec).to include("      profile\n      get profile_url")
+      expect(spec).to include("      profile\n      patch profile_url")
+
+      test = profile_text("minitest")
+      expect(test).to include("    profile_record\n    get profile_url")
+      expect(test).to include("    profile_record\n    patch profile_url")
+    end
+
+    it "calls the record in a system spec's show page too" do
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: "rspec", factories: nil, factory_names: nil, fixture_names: {}, test_helper_setup: [] },
+          models: { "Profile" => { table_name: "profiles" } },
+          schema: { tables: { "profiles" => { columns: [ { name: "bio", type: "string" } ] } } },
+          controllers: { controllers: { "ProfilesController" => { actions: %w[show] } } },
+          routes: { by_controller: { "profiles" => [ { verb: "GET", path: "/profile", action: "show", name: "profile" } ] } }
+        })
+
+        expect(described_class.call(model: "Profile", type: "system").content.first[:text]).to include("    profile\n    visit profile_path")
+      end
+    end
+
+    it "leaves a fixture's ivar alone, which setup already set" do
+      expect(profile_text("minitest", fixtures: { "profiles" => %w[one] })).not_to match(/^\s+@profile\n/)
+    end
+  end
+
+  # The Dashboard controller has no model: its show needs no record.
+  describe "a singular resource with no model" do
+    def dashboard_text(framework)
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: nil, fixture_names: {}, test_helper_setup: [] },
+          models: {}, controllers: { controllers: { "DashboardsController" => { actions: %w[show] } } },
+          routes: { by_controller: { "dashboards" => [ { verb: "GET", path: "/dashboard", action: "show", name: "dashboard" } ] } }
+        })
+        return described_class.call(controller: "DashboardsController").content.first[:text]
+      end
+    end
+
+    it "requests the page without a record, in both frameworks" do
+      expect(dashboard_text("rspec")).to include("get dashboard_url")
+      expect(dashboard_text("rspec")).not_to include("skip")
+      expect(dashboard_text("minitest")).to include("get dashboard_url")
+      expect(dashboard_text("minitest")).not_to include("skip")
+    end
+  end
+
+  describe "a model spec's validation without a matcher" do
+    def absence_text(framework, rules)
+      bundling_shoulda
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: nil, factory_names: nil, fixture_names: {} },
+          models: { "Trace" => { table_name: "traces", validations: rules } },
+          schema: { tables: { "traces" => { columns: [ { name: "legacy", type: "string" } ] } } }
+        })
+        return described_class.call(model: "Trace").content.first[:text]
+      end
+    end
+
+    it "is a matcher for absence where shoulda has one" do
+      expect(absence_text("rspec", [ { kind: "absence", attributes: %w[legacy], options: {} } ])).to include("it { is_expected.to validate_absence_of(:legacy) }")
+    end
+
+    it "is a skip that names the rule and what to assert where there is no matcher" do
+      text = absence_text("rspec", [ { kind: "comparison", attributes: %w[legacy], options: { less_than: :other } } ])
+
+      expect(text).to include('skip "TODO: assert that a record breaking comparison on legacy (less_than: other) is invalid and one meeting it is valid"')
+      expect(text).not_to include("implement comparison validation test")
+    end
+  end
+
+  describe "a model spec's uniqueness matcher" do
+    # The matcher saves a record built from its subject, and described_class.new leaves every attribute nil.
+    def users_spec(factory_names: nil, user: {}, framework: "rspec", fixture_names: {})
+      bundling_shoulda
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, factories: factory_names && { count: 1 }, factory_names: factory_names, fixture_names: fixture_names },
+          models: { "User" => { table_name: "users", validations: [ { kind: "uniqueness", attributes: %w[email] } ] }.merge(user) },
+          schema: { tables: { "users" => { columns: [ { name: "id", type: "integer" }, { name: "name", type: "string" }, { name: "email", type: "string" } ] } } }
+        })
+        return described_class.call(model: "User").content.first[:text]
+      end
+    end
+
+    it "says which enum its subject leaves out" do
+      text = users_spec(user: { enums: { "name" => "NAMES" } })
+
+      expect(text).to include('subject { described_class.new({ email: "email-#{SecureRandom.hex(4)}@example.com" }) }')
+      expect(text).to include("    # TODO: name is an enum whose values the source computes; set one it maps")
+    end
+
+    # A saved copy of an unsaved record with every attribute nil is what the matcher compares against.
+    it "gets the factory's record as its subject, ahead of it" do
+      text = users_spec(factory_names: { "users.rb" => %w[user] })
+
+      expect(text).to include("subject { FactoryBot.build(:user) }")
+      expect(text.index("subject { FactoryBot.build(:user) }")).to be < text.index("validate_uniqueness_of(:email)")
+    end
+
+    it "is a minitest's duplicate of a saved record made up from placeholders, and says so when none can be" do
+      text = users_spec(framework: "minitest")
+
+      expect(text).to include('duplicate = User.create!({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString" }).dup')
+      expect(text).to include("# TODO: adjust these attributes if validations reject the placeholder values")
+      expect(users_spec(framework: "minitest", fixture_names: { "users" => %w[one] })).to include("duplicate = @user.dup")
+
+      stuck = users_spec(framework: "minitest", user: { associations: [ { type: "belongs_to", name: "owner", polymorphic: true, foreign_key: "owner_id" } ],
+                                                        validations: [ { kind: "uniqueness", attributes: %w[email] }, { kind: "presence", attributes: %w[owner], implicit: true } ] })
+      expect(stuck).to include("skip \"TODO: User belongs_to :owner, polymorphic: true")
+      expect(stuck).not_to include("User.create!")
+    end
+
+    it "gets a subject built from placeholders, ahead of it" do
+      text = users_spec
+      subject = 'subject { described_class.new({ email: "email-#{SecureRandom.hex(4)}@example.com", name: "MyString" }) }'
+
+      expect(text).to include(subject)
+      expect(text.index(subject)).to be < text.index("validate_uniqueness_of(:email)")
+    end
+  end
+
+  describe "the value made up for a unique column" do
+    # A fresh prefix keeps the copied value apart from every row and keeps
+    # it valid: "email-1a2b" fails an email format, "1a2bone@example.com" does not.
+    def users_test(framework)
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, fixture_names: { "users" => [ "one" ] }, factories: { count: framework == "rspec" ? 1 : 0 },
+                   factory_names: framework == "rspec" ? { "spec/factories/users.rb" => %w[user] } : {} },
+          models: { "User" => { table_name: "users", validations: [ { kind: "uniqueness", attributes: %w[email] } ] } },
+          schema: { tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+          controllers: { controllers: { "UsersController" => { actions: %w[create update destroy],
+                                                              strong_params: [ { name: "user_params", requires: "user", permits: %w[email] } ] } } },
+          routes: { by_controller: { "users" => [
+            { verb: "POST", path: "/users", action: "create", name: "users" },
+            { verb: "PATCH", path: "/users/:id", action: "update", name: "user" },
+            { verb: "DELETE", path: "/users/:id", action: "destroy", name: "user" }
+          ] } }
+        })
+        return described_class.call(controller: "UsersController").content.first[:text]
+      end
+    end
+
+    it "prefixes the fixture's own value in a minitest" do
+      text = users_test("minitest")
+
+      expect(text).to include('email: "#{SecureRandom.hex(4)}#{@user.email}"')
+      expect(text).to include('.merge("email" => "#{SecureRandom.hex(4)}#{@user.email}")')
+      expect(text).not_to include("email-")
+    end
+
+    it "prefixes the subject's own value in a request spec" do
+      text = users_test("rspec")
+
+      expect(text).to include('.merge("email" => "#{SecureRandom.hex(4)}#{user.email}")')
+      expect(text).not_to include("email-")
+    end
+  end
+
+  # A copy of the record's own number, date or time is a duplicate; one more than it is not.
+  describe "the value made up for a unique column that is not a string" do
+    def tickets_test(framework, fixture: true, unique: %w[number code], permits: %w[code number title], types: {})
+      Dir.mktmpdir do |root|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        columns = { "number" => "integer", "code" => "string", "title" => "string" }.merge(types)
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: framework, fixture_names: fixture ? { "tickets" => [ "one" ] } : {}, factories: nil, factory_names: nil },
+          models: { "Ticket" => { table_name: "tickets", validations: unique.map { |attr| { kind: "uniqueness", attributes: [ attr ] } } } },
+          schema: { tables: { "tickets" => { columns: columns.map { |name, type| { name: name, type: type } } } } },
+          controllers: { controllers: { "TicketsController" => { actions: %w[create update destroy],
+                                                                strong_params: [ { name: "ticket_params", requires: "ticket", permits: permits } ] } } },
+          routes: { by_controller: { "tickets" => [
+            { verb: "POST", path: "/tickets", action: "create", name: "tickets" },
+            { verb: "PATCH", path: "/tickets/:id", action: "update", name: "ticket" },
+            { verb: "DELETE", path: "/tickets/:id", action: "destroy", name: "ticket" }
+          ] } }
+        })
+        return described_class.call(controller: "TicketsController").content.first[:text]
+      end
+    end
+
+    it "is one more than the fixture's value, in the create and the fresh record a destroy deletes" do
+      text = tickets_test("minitest")
+
+      expect(text).to include('params: { ticket: { code: "#{SecureRandom.hex(4)}#{@ticket.code}", number: @ticket.number + 1, title: @ticket.title } }')
+      expect(text).to include('.merge("number" => @ticket.number + 1, "code" => "#{SecureRandom.hex(4)}#{@ticket.code}")')
+      expect(text).not_to include("differ from existing")
+      expect(text).not_to include("confirm the fresh record")
+    end
+
+    it "does not touch the value of an update, which the record already holds alone" do
+      expect(tickets_test("minitest")).to include("patch ticket_url(@ticket), params: { ticket: { code: ")
+      expect(tickets_test("minitest")).not_to match(/TODO: ensure/)
+    end
+
+    it "is one more than the subject's value in a request spec's destroy, a column the controller does not permit too" do
+      text = tickets_test("rspec", permits: %w[title])
+
+      expect(text).to include('.merge("number" => ticket.number + 1, "code" => "#{SecureRandom.hex(4)}#{ticket.code}")')
+    end
+
+    it "is the placeholder of a record made up from placeholders, which the create finds no other row beside" do
+      text = tickets_test("minitest", fixture: false)
+
+      expect(text).to include("params: { ticket: { code: \"code-\#{SecureRandom.hex(4)}\", number: 1, title: \"MyString\" } }")
+      expect(text).to include('.merge("number" => ticket_record.number + 1, "code" => "#{SecureRandom.hex(4)}#{ticket_record.code}")')
+    end
+
+    it "skips what needs a fresh value for a type that has none, saying why" do
+      text = tickets_test("minitest", unique: %w[active], permits: %w[active title], types: { "active" => "boolean" })
+
+      expect(text).to include("skip \"TODO: active is a unique boolean column; no fresh value can be made up for it")
+      expect(text.scan("no fresh value can be made up").size).to eq(2)
+    end
+  end
+
+  describe "the value a minitest validation test breaks the rule with" do
+    def user_test(validations)
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "minitest", fixture_names: { "users" => [ "one" ] } },
+        models: { "User" => { table_name: "users", validations: validations, enums: { "role" => { "member" => 0, "owner" => 1 } } } },
+        schema: { tables: { "users" => { columns: [ { name: "admin", type: "boolean" }, { name: "role", type: "string" },
+                                                    { name: "status", type: "string" }, { name: "name", type: "string" } ] } } }
+      })
+      described_class.call(model: "User").content.first[:text]
+    end
+
+    def test_block(text, title)
+      text[/  test "#{title}" do\n.*?\n  end/m]
+    end
+
+    # "__invalid_value__" casts to true on a boolean column and raises
+    # ArgumentError on an enum, so neither test could fail the record.
+    it "skips an inclusion on a boolean column or an enum" do
+      text = user_test([ { kind: "inclusion", attributes: %w[admin], options: { in: [ true, false ] } },
+                         { kind: "inclusion", attributes: %w[role], options: { in: "roles.keys" } } ])
+
+      expect(test_block(text, "validates inclusion of admin")).to include('skip "TODO: set admin to a value outside the inclusion list"')
+      expect(test_block(text, "validates inclusion of role")).to include('skip "TODO: set role to a value outside the inclusion list"')
+      expect(text).not_to include("__invalid_value__")
+    end
+
+    it "keeps the made-up value for a string column" do
+      text = user_test([ { kind: "inclusion", attributes: %w[status], options: { in: %w[draft sent] } } ])
+
+      expect(test_block(text, "validates inclusion of status")).to include('@user.status = "__invalid_value__"')
+    end
+
+    it "skips a format whose pattern the made-up value matches" do
+      text = user_test([ { kind: "format", attributes: %w[name], options: { with: "/\\A[\\w\\s-]+\\z/" } } ])
+
+      expect(test_block(text, "validates format of name")).to include('skip "TODO: set name to a value the format rejects"')
+    end
+
+    it "keeps the made-up value for a pattern it breaks, or one it cannot read" do
+      text = user_test([ { kind: "format", attributes: %w[name], options: { with: "/\\A\\d+\\z/" } },
+                         { kind: "format", attributes: %w[status], options: { with: "URI::MailTo::EMAIL_REGEXP" } } ])
+
+      expect(test_block(text, "validates format of name")).to include('@user.name = "invalid-format"')
+      expect(test_block(text, "validates format of status")).to include('@user.status = "invalid-format"')
+    end
+  end
+
+  describe "an inclusion list given as a method call" do
+    # validate_inclusion_of needs in_array or in_range, and raises without one.
+    it "skips the example, since the matcher cannot take the source text" do
+      bundling_shoulda
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factory_names: {} },
+        models: { "User" => { validations: [ { kind: "inclusion", attributes: %w[role], options: { in: "roles.keys", allow_nil: true } } ] } }
+      })
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).to include(%(it "validates inclusion of role" do\n      skip "TODO: set role to a value outside the inclusion list"))
+      expect(text).not_to include("validate_inclusion_of(")
+    end
+
+    it "skips an inclusion on an enum, which raises on a value outside it" do
+      bundling_shoulda
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factory_names: {} },
+        models: { "User" => { validations: [ { kind: "inclusion", attributes: %w[role], options: { in: %w[member owner] } } ],
+                              enums: { "role" => { "member" => 0, "owner" => 1 } } } }
+      })
+
+      text = described_class.call(model: "User").content.first[:text]
+
+      expect(text).not_to include("validate_inclusion_of(")
+    end
+  end
+
+  describe "a plain service's entry point" do
+    def service_spec(source)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "services"))
+        File.write(File.join(dir, "app", "services", "post_publisher.rb"), source)
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "rspec" } })
+        return described_class.call(file: "app/services/post_publisher.rb").content.first[:text]
+      end
+    end
+
+    it "calls a class method call on the class" do
+      text = service_spec("class PostPublisher\n  def self.call\n    true\n  end\nend\n")
+
+      expect(text).to include("describe \".call\"")
+      expect(text).to include("      result = described_class.call\n")
+    end
+
+    it "finds a call defined under class << self" do
+      text = service_spec("class PostPublisher\n  class << self\n    def call; end\n  end\nend\n")
+
+      expect(text).to include("      result = described_class.call\n")
+    end
+
+    # The class has no .call, so described_class.call is a NoMethodError, and
+    # nil for the post is a NoMethodError inside it.
+    it "skips an instance call whose class takes arguments, naming them" do
+      text = service_spec(<<~RUBY)
+        class PostPublisher
+          def initialize(post, notify: true, by:)
+            @post = post
+          end
+
+          def call
+            @post.update!(status: "published")
+          end
+        end
+      RUBY
+
+      expect(text).to include("describe \"#call\"")
+      expect(text).to include('skip "TODO: build what PostPublisher.new takes, then call it"')
+      expect(text).to include("# result = described_class.new(post, by: by).call")
+      expect(text).not_to include("described_class.call")
+    end
+
+    it "skips an instance call that takes arguments" do
+      text = service_spec("class PostPublisher\n  def call(post)\n    post.touch\n  end\nend\n")
+
+      expect(text).to include('skip "TODO: build what PostPublisher#call takes, then call it"')
+      expect(text).to include("# result = described_class.new.call(post)")
+    end
+
+    it "reads the entry point of the service class alone, not a class it nests or one beside it" do
+      text = service_spec(<<~RUBY)
+        class PostPublisher
+          class Step
+            def self.call(step); end
+
+            def initialize(post); end
+          end
+
+          def call; end
+        end
+
+        class PostPublisherError
+          def initialize(message); end
+        end
+      RUBY
+
+      expect(text).to include("describe \"#call\"")
+      expect(text).to include("      result = described_class.new.call\n")
+    end
+
+    it "skips a service with no call" do
+      text = service_spec("class PostPublisher\n  def publish; end\nend\n")
+
+      expect(text).to include('skip "TODO: PostPublisher defines no call; test the method it exposes"')
+      expect(text).not_to include("described_class.call")
     end
   end
 end

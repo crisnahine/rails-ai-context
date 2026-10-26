@@ -72,10 +72,7 @@ module RailsAiContext
       # Rails 6.1+ splits connection handling into the ConnectionHandler
       # registry. Report which roles have a handler registered.
       def detect_pool_handlers
-        return [] unless ActiveRecord::Base.respond_to?(:connection_handler)
         handler = ActiveRecord::Base.connection_handler
-        return [] unless handler.respond_to?(:connection_pool_list)
-
         %w[writing reading].filter_map do |role|
           { role: role, pool_count: handler.connection_pool_list(role.to_sym).size }
         rescue StandardError

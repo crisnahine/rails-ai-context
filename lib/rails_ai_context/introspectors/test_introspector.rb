@@ -22,6 +22,7 @@ module RailsAiContext
         "gitlab_ci" => ".gitlab-ci.yml", "travis" => ".travis.yml", "buildkite" => "{.buildkite/,buildkite.{yml,yaml,json}}",
         "jenkins" => "Jenkinsfile", "bitbucket_pipelines" => "bitbucket-pipelines.yml"
       }.freeze
+      READS = CI_CONFIGS.values.freeze
 
       def call
         ci_steps, ci_steps_dir = detect_ci_steps

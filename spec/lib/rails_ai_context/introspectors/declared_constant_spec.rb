@@ -7,9 +7,126 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     expect(described_class).not_to respond_to(:declarations_in)
   end
 
+  describe ".lookup" do
+    it "reads the later ancestors only when the search reaches them, after the given ones and before the top level" do
+      calls = 0
+      later = -> { calls += 1; [ "Concern" ] }
+      exists = ->(names) { ->(name) { names.include?(name) } }
+
+      expect(described_class.lookup("X", nesting: [ "Mod" ], exists: exists.call(%w[Mod::X Concern::X X]), later_ancestors: later)).to eq("Mod::X")
+      expect(calls).to eq(0)
+      expect(described_class.lookup("X", nesting: [ "Mod" ], exists: exists.call(%w[Concern::X X]), later_ancestors: later)).to eq("Concern::X")
+      expect(described_class.lookup("::X", nesting: [ "Mod" ], exists: exists.call(%w[Concern::X X]), later_ancestors: later)).to eq("X")
+      expect(calls).to eq(1)
+    end
+
+    it "reach answers what exists said for the constant lookup picks, which can be another module than the spelling" do
+      held = { "Mod::Item::Tag" => "Mod::Holder::Tag", "Mod::Item" => "Mod::Item" }
+      exists = ->(name) { held[name] }
+
+      expect(described_class.lookup("Tag", nesting: [ "Mod::Item", "Mod" ], exists: exists)).to eq("Mod::Item::Tag")
+      expect(described_class.reach("Tag", nesting: [ "Mod::Item", "Mod" ], exists: exists)).to eq("Mod::Holder::Tag")
+      expect(described_class.reach("Missing", nesting: [ "Mod" ], exists: exists)).to be_nil
+    end
+
+    # [written, Module.nesting, the innermost scope's ancestors, constants the app has, the one Ruby picks]
+    [
+      [ "Priced", [], [], %w[Priced], "Priced" ],
+      [ "Priced", %w[Shop], [], %w[Shop::Priced Priced], "Shop::Priced" ],
+      [ "Priced", %w[Shop], [], %w[Priced], "Priced" ],
+      [ "::Priced", %w[Shop], [], %w[Shop::Priced Priced], "Priced" ],
+      [ "::Priced", %w[Shop], [], %w[Shop::Priced], nil ],
+      [ "Guard", %w[Admin::UsersController Admin], [], %w[Admin::Guard Guard], "Admin::Guard" ],
+      [ "Taggable", %w[Post], %w[Tracker], %w[Tracker::Taggable Taggable], "Tracker::Taggable" ],
+      [ "Taggable", %w[Post], %w[Tracker], %w[Post::Taggable Tracker::Taggable], "Post::Taggable" ],
+      [ "Taggable", %w[Shop::Tool Shop], %w[Tracker], %w[Shop::Taggable Tracker::Taggable], "Shop::Taggable" ],
+      [ "Taggable", %w[Shop::Tool Shop], %w[Tracker], %w[Tracker::Taggable Taggable], "Tracker::Taggable" ],
+      [ "::Taggable", %w[Post], %w[Tracker], %w[Tracker::Taggable Taggable], "Taggable" ],
+      [ "Billing::Base", %w[Shop], [], %w[Billing::Base], "Billing::Base" ],
+      [ "Billing::Base", %w[Shop], [], %w[Shop::Billing Billing Billing::Base], nil ],
+      [ "Billing::Base", %w[Shop], [], %w[Shop::Billing Shop::Billing::Base Billing Billing::Base], "Shop::Billing::Base" ],
+      [ "Billing::Base", %w[Shop], [], %w[Billing Billing::Base Shop::Billing::Base], "Shop::Billing::Base" ],
+      [ "Billing::Base", %w[Post], %w[Tracker], %w[Tracker::Billing Tracker::Billing::Base Billing Billing::Base], "Tracker::Billing::Base" ],
+      [ "::Billing::Base", %w[Shop], [], %w[Shop::Billing Shop::Billing::Base Billing Billing::Base], "Billing::Base" ],
+      [ "::Billing::Base", %w[Shop], [], %w[Billing Shop::Billing::Base], nil ],
+      [ "Missing", %w[Shop], %w[Tracker], %w[Shop::Priced], nil ]
+    ].each do |written, nesting, ancestors, known, expected|
+      it "picks #{expected.inspect} for #{written} in #{nesting.inspect} with ancestors #{ancestors.inspect} and #{known.inspect}" do
+        found = described_class.lookup(written, nesting: nesting, ancestors: ancestors, exists: ->(name) { known.include?(name) })
+
+        expect(found).to eq(expected)
+      end
+    end
+
+    # Ruby reads the rest of a path inside the head's superclasses, so `Admin::Tools` with `class Admin < Panel` is `Panel::Tools`.
+    it "reads the rest of a qualified name inside each superclass of its head, as Ruby does" do
+      ruby = Module.new.module_eval(<<~RUBY, __FILE__, __LINE__ + 1)
+        class Panel; module Tools; end; end
+        class Admin < Panel; end
+        Admin::Tools.name.split("::").last(2).join("::")
+      RUBY
+      known = %w[Panel Panel::Tools Admin]
+      found = described_class.lookup("Admin::Tools", nesting: [], exists: ->(name) { known.include?(name) },
+                                                     ancestors_of: ->(name) { name == "Admin" ? %w[Panel] : [] })
+
+      expect(ruby).to eq("Panel::Tools")
+      expect(found).to eq(ruby)
+      expect(described_class.lookup("Admin::Tools", nesting: [], exists: ->(name) { known.include?(name) })).to be_nil
+    end
+
+    # Each later segment is read inside the constant the segment before it resolved to, and that constant's superclasses.
+    it "reads each later segment inside the previous segment's superclasses too" do
+      ruby = Module.new.module_eval(<<~RUBY, __FILE__, __LINE__ + 1)
+        class Board; class Widget; end; end
+        module Dash; class Panel < Board; end; end
+        Dash::Panel::Widget.name.split("::").last(2).join("::")
+      RUBY
+      known = %w[Board Board::Widget Dash Dash::Panel]
+      found = described_class.lookup("Dash::Panel::Widget", nesting: [], exists: ->(name) { known.include?(name) },
+                                                            ancestors_of: ->(name) { name == "Dash::Panel" ? %w[Board] : [] })
+
+      expect(ruby).to eq("Board::Widget")
+      expect(found).to eq(ruby)
+    end
+
+    # Zeitwerk defines a namespace from its folder, so no file declares it.
+    it "reads a path whose head is a namespace the app holds constants under" do
+      ruby = Module.new.module_eval(<<~RUBY, __FILE__, __LINE__ + 1)
+        module Desk; class Board; class Widget; end; end; class Panel < Board; end; end
+        Desk::Panel::Widget.name.split("::").last(3).join("::")
+      RUBY
+      known = %w[Desk::Board Desk::Board::Widget Desk::Panel]
+      found = described_class.lookup("::Desk::Panel::Widget", nesting: %w[Shop], exists: ->(name) { known.include?(name) },
+                                                              ancestors_of: ->(name) { name == "Desk::Panel" ? %w[Desk::Board] : [] })
+
+      expect(ruby).to eq("Desk::Board::Widget")
+      expect(found).to eq(ruby)
+    end
+
+    it "asks nothing past the first constant the app has" do
+      asked = []
+      described_class.lookup("Priced", nesting: %w[Shop], exists: ->(name) { asked << name })
+
+      expect(asked).to eq(%w[Shop::Priced])
+    end
+  end
+
   # A file that declares only a module names a constant too, and the path
   # camelization is wrong for it in exactly the way it is wrong for a class:
   # an app inflection only changes case.
+  describe ".own_line_count" do
+    let(:source) { "module Jobs\n  class Base\n    def a; end\n  end\n\n  class Scheduled < Base\n    class Inner\n    end\n  end\nend\n" }
+
+    it "counts the lines a class's own declaration spans, a nested class included" do
+      expect([ described_class.own_line_count(source, "Jobs::Base"), described_class.own_line_count(source, "Jobs::Scheduled") ]).to eq([ 3, 4 ])
+    end
+
+    it "answers nil for a name the source does not declare as a class" do
+      expect(described_class.own_line_count(source, "Jobs")).to be_nil
+      expect(described_class.own_line_count(source, "Nope")).to be_nil
+    end
+  end
+
   describe ".resolve over a file declaring only a module" do
     it "answers the module the file declares, not the camelized path" do
       source = "module ActivityPub\n  module ActorFields\n  end\nend\n"

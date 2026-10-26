@@ -951,4 +951,186 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
   end
+
+  # ActionView looks a bare partial name up under the controller's prefixes
+  # (its own folder, then application), never shared/, with any handler.
+  describe "a partial a view renders" do
+    def partial_warnings(views, file = "app/views/posts/edit.html.erb")
+      Dir.mktmpdir do |root|
+        views.each do |relative, content|
+          full = File.join(root, "app", "views", relative)
+          FileUtils.mkdir_p(File.dirname(full))
+          File.write(full, content)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        return described_class.check_rails_semantics(file, File.join(root, file)).select { |w| w.include?("render") }
+      end
+    end
+
+    it "is found in any template handler, and under application/" do
+      warnings = partial_warnings(
+        "posts/_card.html.haml" => "%p card\n",
+        "application/_flash.html.slim" => "p flash\n",
+        "posts/_row.html.erb" => "row\n",
+        "posts/edit.html.erb" => %(<%= render "card" %>\n<%= render "flash" %>\n<%= render(partial: "posts/row") %>\n)
+      )
+
+      expect(warnings).to eq([])
+    end
+
+    context "when the controller's prefixes are known" do
+      def controllers_context
+        entry = ->(file, parent) { { file: file, parent_class: parent, actions: [] } }
+        { controllers: { controllers: {
+          "ApplicationController" => entry.call("app/controllers/application_controller.rb", "ActionController::Base"),
+          "PostsController" => entry.call("app/controllers/posts_controller.rb", "ApplicationController"),
+          "Admin::PostsController" => entry.call("app/controllers/admin/posts_controller.rb", "PostsController")
+        } } }
+      end
+
+      before { allow(described_class).to receive(:cached_context).and_return(controllers_context) }
+
+      it "finds a partial in a parent controller's folder, as Rails' lookup prefixes do" do
+        warnings = partial_warnings({
+          "posts/_form.html.erb" => "form\n",
+          "admin/posts/edit.html.erb" => %(<%= render "form" %>\n)
+        }, "app/views/admin/posts/edit.html.erb")
+
+        expect(warnings).to eq([])
+      end
+
+      it "does not look in the view's folder for a layout, which has no controller of its own" do
+        warnings = partial_warnings({
+          "layouts/_header.html.erb" => "header\n",
+          "layouts/application.html.erb" => %(<%= render "header" %>\n)
+        }, "app/views/layouts/application.html.erb")
+
+        expect(warnings).to eq([ %(render "header" - partial not found (checked: application/_header)) ])
+      end
+    end
+
+    it "is not found under shared/ by a bare name" do
+      warnings = partial_warnings(
+        "shared/_nav.html.erb" => "nav\n",
+        "posts/edit.html.erb" => %(<%= render "nav" %>\n<%= render "shared/nav" %>\n)
+      )
+
+      expect(warnings).to eq([ %(render "nav" - partial not found (checked: posts/_nav)) ])
+    end
+
+    it "is read from the template's text when its Ruby does not parse, skipping a JavaScript render" do
+      allow(RailsAiContext::AstCache).to receive(:parse_string).and_raise(RuntimeError, "prism exploded")
+      warnings = partial_warnings(
+        "posts/_card.html.haml" => "%p card\n",
+        "posts/edit.html.erb" => %(<%= render "card" %>\n<%= render partial: "gone" %>\n<%= render "rows/\#{@kind}" %>\n<script>turnstile.render "#box"</script>\n)
+      )
+
+      expect(warnings).to eq([ %(render "gone" - partial not found (checked: posts/_gone)) ])
+    end
+
+    it "is checked for a partial layout and a spacer, never a template's layout, in the AST and the text read" do
+      views = {
+        "posts/_row.html.erb" => "row\n",
+        "layouts/admin.html.erb" => "<%= yield %>\n",
+        "posts/edit.html.erb" => <<~ERB
+          <%= render partial: "posts/row", layout: "posts/frame", collection: @posts, spacer_template: "posts/spacer" %>
+          <%= render layout: "posts/box" do %>body<% end %>
+          <%= render template: "posts/row", layout: "admin" %>
+          <%= render "posts/row", layout: "posts/local" %>
+          <%= render "posts/row", layout: "posts/local" do %>body<% end %>
+          <%= render(partial: "posts/unread", layout: "posts/wrap") do %>body<% end %>
+          <%= render template: "posts/unread", layout: "posts/tpl" do %>body<% end %>
+          <%= render(layout: "posts/pbox") { "body" } %>
+          <%= render layout: "posts/lone" %>
+          <%= render partial: @row, layout: "posts/rowframe" %>
+          <%= render @posts, partial: "posts/rlocal" %>
+          <%= render(layout: "posts/blkpass", &blk) %>
+          <%= render layout: "posts/blkbare", &blk %>
+          <%= render({ layout: "posts/braceblk" }) do %>body<% end %>
+          <%= render({ partial: "posts/bracep", layout: "posts/bracel", spacer_template: "posts/braces", collection: @posts }) %>
+          <%= render({ template: "posts/row", layout: "posts/bracetpl" }) %>
+        ERB
+      }
+      expected = [
+        %(render "posts/frame" - partial not found (checked: posts/_frame)),
+        %(render "posts/spacer" - partial not found (checked: posts/_spacer)),
+        %(render "posts/box" - partial not found (checked: posts/_box)),
+        %(render "posts/wrap" - partial not found (checked: posts/_wrap)),
+        %(render "posts/tpl" - partial not found (checked: posts/_tpl)),
+        %(render "posts/pbox" - partial not found (checked: posts/_pbox)),
+        %(render "posts/rowframe" - partial not found (checked: posts/_rowframe)),
+        %(render "posts/blkpass" - partial not found (checked: posts/_blkpass)),
+        %(render "posts/blkbare" - partial not found (checked: posts/_blkbare)),
+        %(render "posts/braceblk" - partial not found (checked: posts/_braceblk)),
+        %(render "posts/bracep" - partial not found (checked: posts/_bracep)),
+        %(render "posts/bracel" - partial not found (checked: posts/_bracel)),
+        %(render "posts/braces" - partial not found (checked: posts/_braces))
+      ]
+
+      expect(partial_warnings(views)).to match_array(expected)
+      allow(RailsAiContext::AstCache).to receive(:parse_string).and_raise(RuntimeError, "prism exploded")
+      expect(partial_warnings(views)).to match_array(expected)
+    end
+
+    it "is a template in any handler where a controller renders a path by name" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "views", "posts"))
+        File.write(File.join(root, "app", "views", "posts", "feed.html.haml"), "%p feed\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        file = "app/controllers/posts_controller.rb"
+        FileUtils.mkdir_p(File.join(root, "app", "controllers"))
+        File.write(File.join(root, file), <<~RUBY)
+          class PostsController < ApplicationController
+            def index
+              render "posts/feed"
+            end
+
+            def show
+              render partial: "posts/gone"
+            end
+          end
+        RUBY
+
+        warnings = described_class.check_rails_semantics(file, File.join(root, file)).select { |w| w.include?("render") }
+
+        expect(warnings).to eq([ %(render "posts/gone" - partial not found (checked: posts/_gone)) ])
+      end
+    end
+  end
+
+  describe "the strong params a controller permits" do
+    def strong_params_warnings(body)
+      Dir.mktmpdir do |root|
+        file = "app/controllers/posts_controller.rb"
+        FileUtils.mkdir_p(File.join(root, "app", "controllers"))
+        File.write(File.join(root, file), "class PostsController < ApplicationController\n#{body}end\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: {} },
+          schema: { tables: { "posts" => { columns: [ { name: "id" }, { name: "title" } ] } } },
+          models: { "Post" => { table_name: "posts", associations: [] } }
+        })
+        return described_class.check_rails_semantics(file, File.join(root, file)).select { |w| w.include?("permits") }
+      end
+    end
+
+    # Query-string filters belong to no model.
+    it "checks no bare permit against the controller's model" do
+      expect(strong_params_warnings("  def index\n    @filters = params.permit(:page, :sort, :q)\n  end\n")).to eq([])
+    end
+
+    it "checks the keys permitted after params.fetch, with or without a default" do
+      with_default = strong_params_warnings("  def post_params\n    params.fetch(:post, {}).permit(:title, :bogus_col)\n  end\n")
+      without = strong_params_warnings("  def post_params\n    params.fetch(:post).permit(:title, :other_col)\n  end\n")
+
+      expect(with_default).to eq([ "permits :bogus_col - not a column in posts table (check virtual attributes or add migration)" ])
+      expect(without).to eq([ "permits :other_col - not a column in posts table (check virtual attributes or add migration)" ])
+    end
+
+    it "checks the keys Rails 8's params.expect permits" do
+      warnings = strong_params_warnings("  def post_params\n    params.expect(post: [ :title, :bogus_col ])\n  end\n")
+
+      expect(warnings).to eq([ "permits :bogus_col - not a column in posts table (check virtual attributes or add migration)" ])
+    end
+  end
 end

@@ -34,6 +34,152 @@ RSpec.describe RailsAiContext::Redaction do
       expect(redact(%(secret_key_base: "0f0f0f0f"), path: "config/x.yml")).to eq(%(secret_key_base: "[FILTERED]"))
     end
 
+    # BUNDLE_<HOST> is where Bundler reads a gem server's credentials, as rails_get_env filters it.
+    it "filters a gem server credential Bundler reads, in every place one is set" do
+      expect(redact("ENV BUNDLE_GEMS__EXAMPLE__COM=abcd1234:efgh5678")).to eq("ENV BUNDLE_GEMS__EXAMPLE__COM=[FILTERED]")
+      expect(redact(%(BUNDLE_GEMS__EXAMPLE__COM: "abcd1234:efgh5678"), path: ".bundle/config"))
+        .to eq(%(BUNDLE_GEMS__EXAMPLE__COM: "[FILTERED]"))
+      expect(redact(%(ENV["BUNDLE_ENTERPRISE__EXAMPLE___GEMS__COM"] = "deploy:t0ken9x"))).to eq(%(ENV["BUNDLE_ENTERPRISE__EXAMPLE___GEMS__COM"] = "[FILTERED]"))
+      expect(redact("RUN bundle config set gems.example.com abcd1234:efgh5678")).to eq("RUN bundle config set gems.example.com [FILTERED]")
+      expect(redact("bundle config --global enterprise.example-gems.com deploy:t0ken9x")).to eq("bundle config --global enterprise.example-gems.com [FILTERED]")
+      expect(redact("BUNDLE_GEM__EXAMPLE__IO=abcd1234:efgh5678")).to eq("BUNDLE_GEM__EXAMPLE__IO=[FILTERED]")
+    end
+
+    it "filters a quoted gem server credential whole, whatever characters its password holds" do
+      creds = %w[1a2b3c4d 5e6f7a8b].join(":")
+      host = %w[BUNDLE_GEMS EXAMPLE COM].join("__")
+      [
+        [ %(RUN bundle config --global gems.example.com "#{creds}"), "Dockerfile", %(RUN bundle config --global gems.example.com "[FILTERED]") ],
+        [ %(RUN bundle config --global gems.example.com '#{creds}'), "Dockerfile", %(RUN bundle config --global gems.example.com '[FILTERED]') ],
+        [ %(      run: bundle config set gems.example.com "#{creds}"), ".github/workflows/ci.yml", %(      run: bundle config set gems.example.com "[FILTERED]") ],
+        [ %(bundle config set gems.example.com "deploy:pa ss;w0rd"), "bin/setup", %(bundle config set gems.example.com "[FILTERED]") ],
+        [ %(#{host}: "deploy:pa,ss9w0rd"), ".bundle/config", %(#{host}: "[FILTERED]") ],
+        [ %(ENV["#{host}"] = "deploy:p;ass9w0rd"), "config/boot.rb", %(ENV["#{host}"] = "[FILTERED]") ],
+        [ %(ENV["#{host}"] = "deploy:p\\"ass) + %(w0rd"), "config/boot.rb", %(ENV["#{host}"] = "[FILTERED]") ],
+        [ %(export #{host}="deploy:pass w0rd"), "bin/setup", %(export #{host}="[FILTERED]") ],
+        [ %(export #{host}='deploy:pa}ss w0rd'), "bin/setup", %(export #{host}='[FILTERED]') ],
+        [ "#{host}=deploy:pa)ss,w0rd", ".env", "#{host}=[FILTERED]" ],
+        [ "#{host}: deploy:pa,ss)w0rd", ".bundle/config", "#{host}: [FILTERED]" ],
+        [ "#{host}: 'deploy:it''s9w0rd'", ".bundle/config", "#{host}: '[FILTERED]'" ],
+        [ "export #{host}='deploy:a'\\''b9w0rd'", "bin/setup", "export #{host}='[FILTERED]'" ],
+        [ "bundle config set gems.example.com 'deploy:a'\\''b9w0rd'", "bin/setup", "bundle config set gems.example.com '[FILTERED]'" ],
+        [ %(export #{host}="deploy:a"'b'"c9"), "bin/setup", %(export #{host}="[FILTERED]") ],
+        [ %(ENV["#{host}"] = 'deploy:pw9'.freeze), "config/boot.rb", %(ENV["#{host}"] = '[FILTERED]'.freeze) ],
+        [ %({"#{host}":"deploy:pw9","other":"x"}), "x.json", %({"#{host}":"[FILTERED]","other":"x"}) ]
+      ].each { |line, path, filtered| expect(redact(line, path: path)).to eq(filtered), line }
+      [ %(bundle config set gems.example.com "${GEM_SERVER_CREDS}"), %({ "#{host}" => ENV.fetch("CREDS"), x: 1 }),
+        %(ENV["#{host}"] = "") ]
+        .each { |line| expect(redact(line)).to eq(line), line }
+    end
+
+    it "filters a gem.* setting with a value unless it is one bundle gem reads" do
+      creds = %w[abcd1234 efgh5678].join(":")
+      [ "BUNDLE_GEM__INTERNAL=#{creds}", "BUNDLE_GEM__LOCAL=#{creds}", "BUNDLE_GEM__PUSH_KEY=#{creds}" ]
+        .each { |line| expect(redact(line)).to eq(line.sub(creds, "[FILTERED]")), line }
+      expect(redact("bundle config set gem.corp #{creds}")).to eq("bundle config set gem.corp [FILTERED]")
+      expect(redact("ENV BUNDLE_GEM__LAN #{creds}", path: "Dockerfile")).to eq("ENV BUNDLE_GEM__LAN [FILTERED]")
+      expect(described_class.env_value("BUNDLE_GEM__INTERNAL", creds)).to eq("[FILTERED]")
+      %w[changelog coc mit bundle ci github_username linter rubocop test].each do |setting|
+        expect(redact("bundle config set gem.#{setting} rspec")).to eq("bundle config set gem.#{setting} rspec"), setting
+        expect(redact("BUNDLE_GEM__#{setting.upcase}=rspec")).to eq("BUNDLE_GEM__#{setting.upcase}=rspec"), setting
+        expect(described_class.env_value("BUNDLE_GEM__#{setting.upcase}", "github")).to eq("github"), setting
+      end
+    end
+
+    it "reads a lowercase env instruction only in a Docker build file" do
+      token = %w[q1w2e3r4 t5y6u7i8o9].join
+      %w[Dockerfile Containerfile app/Dockerfile.prod Dockerfile.prod.arm64 Dockerfile-dev Dockerfile_prod docker/web.dockerfile
+         Web.Dockerfile Containerfile.ci Containerfile-dev Containerfile_prod Web.Containerfile ci/web.containerfile].each do |path|
+        expect(redact("env API_TOKEN #{token}", path: path)).to eq("env API_TOKEN [FILTERED]"), path
+      end
+      %w[bin/setup.sh lib/tasks/env.rake config/deploy.rb Dockerfiles/README.md MyDockerfile bin/Dockerfilelint
+         lib/dockerfile_parser.rb spec/dockerfile_spec.rb lib/containerfile-lint.rb lib/dockerfile.rb docs/Dockerfile.md
+         app/javascript/dockerfile_editor.ts lib/templates/Dockerfile.tt].each do |path|
+        expect(redact("env API_TOKEN #{token}", path: path)).to eq("env API_TOKEN #{token}"), path
+      end
+      expect(redact("ENV API_TOKEN #{token}", path: "ci/build.yml")).to eq("ENV API_TOKEN [FILTERED]")
+    end
+
+    it "judges a legacy ENV line by its value's first word, in any case, and keeps a variable reference" do
+      token = %w[q1w2e3r4 t5y6u7i8o9].join
+      expect(redact("  ENV API_TOKEN #{token} # comment", path: "Dockerfile")).to eq("  ENV API_TOKEN [FILTERED]")
+      expect(redact("env API_TOKEN #{token}", path: "Dockerfile")).to eq("env API_TOKEN [FILTERED]")
+      [ "ENV API_KEY $API_KEY", "ENV API_KEY ${API_KEY}", "env API_KEY $API_KEY # from the build arg" ]
+        .each { |line| expect(redact(line, path: "Dockerfile")).to eq(line) }
+    end
+
+    it "filters a Dockerfile's legacy ENV form, with no = between the name and the value, as the = form is" do
+      expect(redact("ENV BUNDLE_GEMS__EXAMPLE__COM abcd1234:efgh5678", path: "Dockerfile")).to eq("ENV BUNDLE_GEMS__EXAMPLE__COM [FILTERED]")
+      expect(redact("ENV API_TOKEN q1w2e3r4t5y6u7i8o9", path: "Dockerfile")).to eq("ENV API_TOKEN [FILTERED]")
+      expect(redact(%(ENV DATABASE_PASSWORD "hunter2hunter2"), path: "Dockerfile")).to eq(%(ENV DATABASE_PASSWORD "[FILTERED]"))
+      [ "ENV RAILS_ENV production", "ENV PATH /usr/local/bundle/bin:$PATH", "ENV LANG C.UTF-8",
+        "ENV BUNDLE_GEMS__EXAMPLE__COM ${GEM_SERVER_CREDS}", "ENV BUNDLE_WITHOUT development:test" ]
+        .each { |line| expect(redact(line, path: "Dockerfile")).to eq(line) }
+    end
+
+    it "keeps a Bundler setting that holds no credential" do
+      expect(redact("BUNDLE_BUILD__NOKOGIRI=--use-system-libraries")).to eq("BUNDLE_BUILD__NOKOGIRI=--use-system-libraries")
+      expect(redact("BUNDLE_WITHOUT=development:test")).to eq("BUNDLE_WITHOUT=development:test")
+      expect(redact("bundle config set build.nokogiri --use-system-libraries")).to eq("bundle config set build.nokogiri --use-system-libraries")
+      expect(redact("bundle config set path vendor/bundle")).to eq("bundle config set path vendor/bundle")
+      expect(redact("bundle config gem.coc true")).to eq("bundle config gem.coc true")
+      expect(redact("BUNDLE_GEM__TEST=rspec")).to eq("BUNDLE_GEM__TEST=rspec")
+      expect(redact("ENV BUNDLE_GEMS__EXAMPLE__COM=${GEM_SERVER_CREDS}")).to eq("ENV BUNDLE_GEMS__EXAMPLE__COM=${GEM_SERVER_CREDS}")
+      expect(redact(%(ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV.fetch("GEM_SERVER_CREDS")))).to eq(%(ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV.fetch("GEM_SERVER_CREDS")))
+    end
+
+    it "filters a key written as a URL's user, as Bundler copies a git source into the lock" do
+      token = "0123456789abcdef" * 2 + "01234567"
+      expect(redact(%(gem "billing", git: "https://#{token}@github.com/shop/billing.git")))
+        .to eq(%(gem "billing", git: "https://[FILTERED]@github.com/shop/billing.git"))
+      expect(redact("  remote: https://#{token}@github.com/shop/billing.git", path: "Gemfile.lock"))
+        .to eq("  remote: https://[FILTERED]@github.com/shop/billing.git")
+      expect(redact(%(gem "billing", git: "https://git@github.com/shop/billing.git"))).to eq(%(gem "billing", git: "https://git@github.com/shop/billing.git"))
+      expect(redact("ssh://deploy@example.com/repo.git")).to eq("ssh://deploy@example.com/repo.git")
+      expect(redact("https://x7Kp2mQ9vL4nR8sT3wY6@github.com/shop/billing.git")).to eq("https://[FILTERED]@github.com/shop/billing.git")
+    end
+
+    it "reads a URL user as a name only when it is one case on each side of one group of at most four digits" do
+      { "appuser2024production" => true, "DEPLOY2024WORKER" => true, "deploy7worker" => true,
+        "GEMFURYTOKEN1234567" => false, "companydeploytoken2024x9" => false, "1234567890abcdefghij" => false,
+        "appuser20245production" => false, "deployWORKER2024abcd" => false,
+        "deployment2024WORKERS" => true, "DEPLOYMENT2024workers" => true, "deploy_bot" => true }.each do |user, shown|
+        expected = shown ? "https://#{user}@gem.example.io/acct/" : "https://[FILTERED]@gem.example.io/acct/"
+        expect(redact("https://#{user}@gem.example.io/acct/")).to eq(expected), user
+      end
+    end
+
+    # Ruby 3.1 has no match cache: two star groups sharing `_` cost the square of the run.
+    it "reads a long URL user in linear time", :cpu_timed do
+      user = ("_" * 60_000) + %w[abcdefgh 12345678].join
+      seconds = cpu_seconds { expect(redact("https://#{user}@gem.example.io/")).to eq("https://[FILTERED]@gem.example.io/") }
+      expect(seconds).to be < 0.5
+    end
+
+    it "reads a long run of capitals, spaces after a mapping's name or in a key body, a comment word with or without digits, or key markers in linear time", :cpu_timed do
+      inputs = [
+        -> { described_class.redact_source_line(%(API_KEY = "#{'A' * 60_000}")) },
+        -> { described_class.redact_source_lines([ "password: #{' ' * 60_000}!", "  value: x" ], path: "config/app.yml") },
+        -> { described_class.redact_source_lines([ "-----BEGIN RSA PRIVATE KEY-----", "#{' ' * 60_000}!" ]) },
+        -> { described_class.redact_log_line("SELECT 'x' /* #{'a' * 60_000} */") },
+        -> { described_class.redact_log_line("SELECT 'x' /* #{'1a' * 30_000} */") },
+        -> { described_class.redact_source_line(%(k = "#{%w[-----BEGIN \ RSA\ PRIVATE\ KEY-----].join * 8_000}")) }
+      ]
+      inputs.each_with_index { |run, index| expect(cpu_seconds(&run)).to be < 0.5, "input #{index}" }
+    end
+
+    it "leaves an ordinary user name in a URL, digits and all" do
+      expect(redact(%(url = "postgres://appuser2024production@db.internal/app"))).to eq(%(url = "postgres://appuser2024production@db.internal/app"))
+      expect(redact("redis://DEPLOY2024WORKER@cache.internal:6379")).to eq("redis://DEPLOY2024WORKER@cache.internal:6379")
+    end
+
+    it "reads a file's kind from its extension in any case" do
+      expect(redact("Authorization: Basic dXNlcjpwYXNz", path: "log/test.LOG")).to eq("Authorization: [FILTERED]")
+      expect(redact("  password: hunter2hunter2", path: "config/settings.YML")).to eq("  password: [FILTERED]")
+      expect(described_class.redact_source_lines([ %(  "API_TOKEN": {), %(    "value": "hunter2hunter2"), "  }" ], path: "config/secrets.JSON"))
+        .to eq([ %(  "API_TOKEN": {), %(    "value": "[FILTERED]"), "  }" ])
+    end
+
     it "filters a log file's line as rails_read_logs does, a rotated log's too" do
       expect(redact("Authorization: Basic dXNlcjpwYXNz")).to eq("Authorization: Basic dXNlcjpwYXNz")
       expect(redact("Authorization: Basic dXNlcjpwYXNz", path: "log/development.log")).to eq("Authorization: [FILTERED]")
@@ -81,6 +227,15 @@ RSpec.describe RailsAiContext::Redaction do
       expect(redact(%(password: 'abc'))).to eq(%(password: 'abc'))
       expect(redact(%(credentials: 'include'))).to eq(%(credentials: 'include'))
       expect(redact(%(pinned: 'yes please'))).to eq(%(pinned: 'yes please'))
+    end
+
+    # An app password is shown as four groups of four letters, and pasted into smtp_settings that way.
+    it "filters an app password written in four groups under a secret key" do
+      expect(redact(%(  password: "abcd efgh ijkl mnop",), path: "config/initializers/mail.rb")).to eq(%(  password: "[FILTERED]",))
+      expect(described_class.env_value("SMTP_PASSWORD", "abcd efgh ijkl mnop")).to eq("[FILTERED]")
+      expect(redact(%(password_hint: "type four words here"))).to eq(%(password_hint: "type four words here"))
+      expect(redact(%(password: "must be long enough"))).to eq(%(password: "must be long enough"))
+      expect(redact(%(title: "abcd efgh ijkl mnop"))).to eq(%(title: "abcd efgh ijkl mnop"))
     end
 
     # A licence key, a card-shaped token and an all-capitals secret are not
@@ -604,7 +759,7 @@ RSpec.describe RailsAiContext::Redaction do
     end
 
     it "filters a literal shaped like a credential under any name" do
-      expect(redact(%(STRIPE = "sk_live_#{'b' * 20}"))).to eq(%(STRIPE = "[FILTERED]"))
+      expect(redact(%(STRIPE = "sk_live_#{'b' * 24}"))).to eq(%(STRIPE = "[FILTERED]"))
       expect(redact(%(HEADER = "#{jwt}"))).to eq(%(HEADER = "[FILTERED]"))
       expect(redact("aws_id: AKIA#{'A' * 16}")).to eq("aws_id: [FILTERED]")
     end
@@ -676,6 +831,78 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class.redact_source("<%= link_to \"x\", \"https://admin:s3cret@example.com\" %>"))
         .to eq("<%= link_to \"x\", \"https://[FILTERED]@example.com\" %>")
       expect(described_class.redact_source(nil)).to be_nil
+    end
+  end
+
+  describe ".source_slice" do
+    it "filters a slice by the rules of the file it was read from" do
+      expect(described_class.source_slice(%(<%= turbo_stream_from "room", token: "#{'q1' * 10}" %>), path: "app/views/rooms/show.html.erb"))
+        .to eq(%(<%= turbo_stream_from "room", token: "[FILTERED]" %>))
+      expect(described_class.source_slice("  password: hunter2hunter2", path: "config/settings.yml")).to eq("  password: [FILTERED]")
+      expect(described_class.source_slice(nil, path: nil)).to be_nil
+    end
+  end
+
+  describe ".payload_tokens" do
+    shapes = {
+      github: %w[gh p_].join + ("a" * 36), github_oauth: %w[gh o_].join + ("b" * 36),
+      github_fine: %w[github _pat_].join + ("c" * 40), stripe: %w[sk_ live_].join + ("d" * 24),
+      stripe_restricted: %w[rk_ live_].join + ("e" * 24), aws: %w[AK IA].join + ("F" * 16),
+      aws_session: %w[AS IA].join + ("G" * 16), slack: %w[xo xb-].join + ("1" * 12),
+      jwt: [ %w[eyJ hbGciOiJIUzI1NiJ9].join, %w[eyJ zdWIiOiIxMjM0NTY3ODkwIn0].join, "abc123def456ghi" ].join("."),
+      pem: "#{%w[-----BEGIN \ RSA\ PRIVATE\ KEY-----].join}\n#{'M' * 64}\n-----END RSA PRIVATE KEY-----"
+    }
+
+    it "filters each vendor token shape wherever it sits in the payload, a hash key and a route name too" do
+      shapes.each do |kind, token|
+        payload = { routes: [ { path: "/hook/#{token}", name: "hook_#{token}" } ], jobs: { token => [ "queue #{token}" ] } }
+        expect(described_class.payload_tokens(payload))
+          .to eq({ routes: [ { path: "/hook/[FILTERED]", name: "hook_[FILTERED]" } ], jobs: { "[FILTERED]" => [ "queue [FILTERED]" ] } }), kind.to_s
+      end
+    end
+
+    it "leaves ordinary route, queue, table and column names, and what only a key's name marks" do
+      payload = {
+        routes: [ { path: "/api/v1/users/:id/access_tokens", name: "api_v1_user_access_tokens", verb: "GET" } ],
+        jobs: [ { queue: "low_priority" }, { queue: "mailers" }, { queue: "github_sync" } ],
+        schema: { "oauth_access_tokens" => { columns: [ "github_access_token", "skip_test_runs", "task_live_status", "AKIAPROXY" ] } },
+        models: { "Commit" => { sha: "a1b2c3d4" * 5, password: "hunter2hunter2", hook: "/hooks/#{%w[gh p_].join}short" } },
+        counts: [ 1, 2.5, nil, true, :sym ]
+      }
+      expect(described_class.payload_tokens(payload)).to eq(payload)
+    end
+
+    it "keeps a snake_case name holding a Stripe prefix, and filters a key of Stripe's length" do
+      %w[use_sk_live_credentials use_rk_live_credentials sk_live_short12345678901].each do |name|
+        expect(described_class.redact_source(name)).to eq(name), name
+        expect(described_class.payload_tokens([ name ])).to eq([ name ]), name
+      end
+      expect(described_class.redact_source("use_#{%w[sk_ live_].join}#{'d' * 24}")).to eq("use_[FILTERED]")
+      expect(described_class.payload_tokens([ "region_#{%w[AS IA].join}PACIFICNORTHEAST" ])).to eq([ "region_[FILTERED]" ])
+    end
+
+    it "walks a Set, a Struct and a Data value, keeping their class, and keeps a Hash's default proc" do
+      token = %w[gh p_].join + ("a" * 36)
+      pair = Struct.new(:name, :value)
+      expect(described_class.payload_tokens(Set[token, "plain"])).to eq(Set["[FILTERED]", "plain"])
+      expect(described_class.payload_tokens(pair.new("hook", token))).to eq(pair.new("hook", "[FILTERED]"))
+      if defined?(Data)
+        point = Data.define(:path, :count)
+        expect(described_class.payload_tokens(point.new(path: "/h/#{token}", count: 1))).to eq(point.new(path: "/h/[FILTERED]", count: 1))
+      end
+      hash = Hash.new { |h, k| h[k] = [] }
+      hash[:paths] = [ token ]
+      walked = described_class.payload_tokens(hash)
+      expect(walked[:paths]).to eq([ "[FILTERED]" ])
+      expect(walked[:other]).to eq([])
+    end
+
+    it "reads a long hostile value in linear time" do
+      [ "#{%w[gh p_].join}a" * 25_000, "-----BEGIN PRIVATE KEY-----" * 4_000, "eyJ." * 25_000, "_sk_live_" * 12_000, "xoxb-" * 20_000 ].each do |text|
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        described_class.payload_tokens([ text ])
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1.0
+      end
     end
   end
 
@@ -971,7 +1198,11 @@ RSpec.describe RailsAiContext::Redaction do
         %q(SELECT 1 FROM "a" WHERE "a"."id" = 1 /*application='Demo',password='ab*/cd'*/) =>
           %q(SELECT 1 FROM "a" WHERE "a"."id" = 1 /*application='Demo',password='[FILTERED]'*/),
         %q(SELECT 1 /* don't */ FROM "a" WHERE LOWER("a"."api_token") = 'tok1b2c3') =>
-          %q(SELECT 1 /* don't */ FROM "a" WHERE LOWER("a"."api_token") = '[FILTERED]')
+          %q(SELECT 1 /* don't */ FROM "a" WHERE LOWER("a"."api_token") = '[FILTERED]'),
+        %q(SELECT 'x' /* 1secret='abc123def456' */) => %q(SELECT 'x' /* 1secret='[FILTERED]' */),
+        %q(SELECT 'x' /* app=web,-api_token:abc123def456 */) => %q(SELECT 'x' /* app=web,-api_token:[FILTERED] */),
+        %q(SELECT 1 FROM "a" WHERE "a"."id" = 1 /*application='Demo',2password='ab*/cd'*/) =>
+          %q(SELECT 1 FROM "a" WHERE "a"."id" = 1 /*application='Demo',2password='[FILTERED]'*/)
       }.each { |line, want| expect(described_class.redact_log_line(line)).to eq(want), line }
     end
 
@@ -1773,7 +2004,7 @@ RSpec.describe RailsAiContext::Redaction do
 
     it "filters a value in a credential format whatever its name" do
       expect(described_class.value("NPM_TOKEN", "npm_abcdefghijklmnopqrstuvwxyz0123456789")).to eq("[FILTERED]")
-      expect(described_class.value("X", "sk_live_#{'b' * 20}")).to eq("[FILTERED]")
+      expect(described_class.value("X", "sk_live_#{'b' * 24}")).to eq("[FILTERED]")
     end
 
     # The env tool filtered a 41-character contact address by length alone; a default is judged
@@ -1805,13 +2036,13 @@ RSpec.describe RailsAiContext::Redaction do
     # by convention. Only a real credential shape is worth hiding there.
     it "judges an example-file value by its shape alone" do
       expect(described_class.value("DATABASE_PASSWORD", "postgres", placeholder_ok: true)).to eq("postgres")
-      expect(described_class.value("API_KEY", "sk_live_abcdef0123456789", placeholder_ok: true)).to eq("[FILTERED]")
+      expect(described_class.value("API_KEY", "#{%w[sk_ live_].join}abcdef0123456789abcdef01", placeholder_ok: true)).to eq("[FILTERED]")
       expect(described_class.value("DATABASE_PASSWORD", "postgres")).to eq("[FILTERED]")
     end
 
     it "filters a credential-shaped example value that reads like a placeholder" do
       expect(described_class.value("STRIPE_KEY", "todo#{'a1' * 25}", placeholder_ok: true)).to eq("[FILTERED]")
-      expect(described_class.value("KEY", "sk_live_changeme12", placeholder_ok: true)).to eq("[FILTERED]")
+      expect(described_class.value("KEY", "sk_live_changeme#{"1" * 16}", placeholder_ok: true)).to eq("[FILTERED]")
     end
 
     it "answers nil for nil" do
@@ -1820,7 +2051,7 @@ RSpec.describe RailsAiContext::Redaction do
   end
 
   describe ".redact_log_lines" do
-    let(:lines) { [ "INFO started", "INFO Bearer sk_live_abcdef0123456789abcdef used", "INFO done" ] }
+    let(:lines) { [ "INFO started", "INFO Bearer #{%w[sk_ live_].join}abcdef0123456789abcdef01 used", "INFO done" ] }
 
     it "redacts every line" do
       expect(described_class.redact_log_lines(lines)[1]).to eq("INFO Bearer [FILTERED] used")

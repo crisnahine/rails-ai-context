@@ -196,28 +196,28 @@ RSpec.describe RailsAiContext::TestFramework do
 
   describe ".test_subjects" do
     {
-      "require \"rails_helper\"\n\nRSpec.describe Shop::Order, type: :model do\nend\n" => [ %w[Shop::Order] ],
-      "describe ::Widget do\nend\n" => [ %w[Widget] ],
+      "require \"rails_helper\"\n\nRSpec.describe Shop::Order, type: :model do\nend\n" => [ [ "Shop::Order", [] ] ],
+      "describe ::Widget do\nend\n" => [ [ "::Widget", [] ] ],
       "RSpec.describe \"Widgets\", type: :request do\nend\n" => [],
-      "module Shop\n  class OrderTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Order] ],
-      "RSpec.describe Widget do\n  context Gadget do\n  end\nend\n" => [ %w[Widget], %w[Gadget] ],
-      "RSpec.describe \"flows\" do\n  fdescribe Shop::Order do\n    xfeature Shop::Cart do\n    end\n  end\nend\n" => [ %w[Shop::Order], %w[Shop::Cart] ],
+      "module Shop\n  class OrderTest < ActiveSupport::TestCase\n  end\nend\n" => [ [ "::Shop::Order", [] ] ],
+      "RSpec.describe Widget do\n  context Gadget do\n  end\nend\n" => [ [ "Widget", [] ], [ "Gadget", [] ] ],
+      "RSpec.describe \"flows\" do\n  fdescribe Shop::Order do\n    xfeature Shop::Cart do\n    end\n  end\nend\n" => [ [ "Shop::Order", [] ], [ "Shop::Cart", [] ] ],
       "module Shop\n  module Admin\n    RSpec.describe OrdersController do\n    end\n  end\nend\n" =>
-        [ %w[Shop::Admin::OrdersController Shop::OrdersController OrdersController] ],
-      "module Shop\n  describe ::OrdersController do\n  end\nend\n" => [ %w[OrdersController] ],
-      "module Jobs::Inner\n  RSpec.describe Sweep do\n  end\nend\n" => [ %w[Jobs::Inner::Sweep Sweep] ],
+        [ [ "OrdersController", %w[Shop::Admin Shop] ] ],
+      "module Shop\n  describe ::OrdersController do\n  end\nend\n" => [ [ "::OrdersController", %w[Shop] ] ],
+      "module Jobs::Inner\n  RSpec.describe Sweep do\n  end\nend\n" => [ [ "Sweep", %w[Jobs::Inner] ] ],
       "module Shop\n  module Admin::Tools\n    describe Export do\n    end\n  end\nend\n" =>
-        [ %w[Shop::Admin::Tools::Export Shop::Export Export] ],
+        [ [ "Export", %w[Shop::Admin::Tools Shop] ] ],
       "RSpec.shared_examples Widget do\nend\n" => [],
       "module Shop\n  class Admin::Test < ActiveSupport::TestCase\n  end\nend\n" => [],
-      "module Shop\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Draft] ],
-      "module Shop\n  module Shop; end\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Shop::Draft] ],
-      "module A\n  Shop = Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ %w[A::Shop::Draft] ],
-      "module A\n  Shop ||= Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ %w[A::Shop::Draft] ],
-      "module A\n  Shop, Mall = Module.new, Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ %w[A::Shop::Draft] ],
-      "module Shop\n  Shop ||= Module.new\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Shop::Draft] ],
-      "class Bar\n  M = Module.new\nend\nclass Foo < Bar\n  M ||= Module.new\n  class M::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ %w[Bar::M::Draft] ],
-      "module Shop\n  class Shop::Draft\n    RSpec.describe Item do\n    end\n  end\nend\n" => [ %w[Shop::Draft::Item Shop::Item Item] ]
+      "module Shop\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ [ "::Shop::Draft", [] ] ],
+      "module Shop\n  module Shop; end\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ [ "::Shop::Shop::Draft", [] ] ],
+      "module A\n  Shop = Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ [ "::A::Shop::Draft", [] ] ],
+      "module A\n  Shop ||= Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ [ "::A::Shop::Draft", [] ] ],
+      "module A\n  Shop, Mall = Module.new, Module.new\n  module B\n    class Shop::DraftTest < ActiveSupport::TestCase\n    end\n  end\nend\n" => [ [ "::A::Shop::Draft", [] ] ],
+      "module Shop\n  Shop ||= Module.new\n  class Shop::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ [ "::Shop::Draft", [] ] ],
+      "class Bar\n  M = Module.new\nend\nclass Foo < Bar\n  M ||= Module.new\n  class M::DraftTest < ActiveSupport::TestCase\n  end\nend\n" => [ [ "::Bar::M::Draft", [] ] ],
+      "module Shop\n  class Shop::Draft\n    RSpec.describe Item do\n    end\n  end\nend\n" => [ [ "Item", %w[Shop::Draft Shop] ] ]
     }.each do |source, constants|
       it "reads #{constants.inspect} from #{source.lines.grep(/describe|class|shared/).first.strip}" do
         expect(described_class.test_subjects(source).described).to match_array(constants)
@@ -228,16 +228,16 @@ RSpec.describe RailsAiContext::TestFramework do
       source = "module Shop\n  RSpec.describe \"Order\" do\n    describe Presenter do\n    end\n  end\n  " \
                "RSpec.describe Cart do\n    context Item do\n    end\n  end\n  class CartTest < ActiveSupport::TestCase\n    describe Item do\n    end\n  end\nend\n"
 
-      expect(described_class.test_subjects(source).top_level).to contain_exactly(%w[Shop::Cart Cart], %w[Shop::Cart])
+      expect(described_class.test_subjects(source).top_level).to contain_exactly([ "Cart", %w[Shop] ], [ "::Shop::Cart", [] ])
     end
 
     it "reads a top-level group inside a block or a condition whatever comes before or after it" do
       wrapped = "[1].each do\n  RSpec.describe OrderPresenter do\n  end\nend\n"
       conditional = "if true\n  RSpec.describe OrderPresenter do\n  end\nend\n"
 
-      expect(described_class.test_subjects("#{wrapped}RSpec.describe Order do\nend\n").top_level).to contain_exactly(%w[OrderPresenter], %w[Order])
-      expect(described_class.test_subjects("RSpec.describe Order do\nend\n#{wrapped}").top_level).to contain_exactly(%w[OrderPresenter], %w[Order])
-      expect(described_class.test_subjects("#{conditional}RSpec.describe \"x\" do\nend\n").top_level).to contain_exactly(%w[OrderPresenter])
+      expect(described_class.test_subjects("#{wrapped}RSpec.describe Order do\nend\n").top_level).to contain_exactly([ "OrderPresenter", [] ], [ "Order", [] ])
+      expect(described_class.test_subjects("RSpec.describe Order do\nend\n#{wrapped}").top_level).to contain_exactly([ "OrderPresenter", [] ], [ "Order", [] ])
+      expect(described_class.test_subjects("#{conditional}RSpec.describe \"x\" do\nend\n").top_level).to contain_exactly([ "OrderPresenter", [] ])
     end
 
     it "leaves the shared parse cache as it found it" do
@@ -263,7 +263,7 @@ RSpec.describe RailsAiContext::TestFramework do
       found = described_class.test_subjects(source)
 
       expect(found.classes.map { |klass| klass.values_at(:name, :superclass, :nesting) }).to eq([ [ "OrdersControllerTest", "BaseTest", [ "Admin" ] ] ])
-      expect(found.top_level).to contain_exactly(%w[Admin::OrdersController], %w[Order])
+      expect(found.top_level).to contain_exactly([ "::Admin::OrdersController", [] ], [ "Order", [] ])
       expect(Prism).to have_received(:parse).once
     end
   end
@@ -278,6 +278,24 @@ RSpec.describe RailsAiContext::TestFramework do
 
         expect { expect(suite.tested?(:controller, "admin/orders", "Admin::OrdersController")).to be(true) }
           .not_to change(RailsAiContext::AstCache, :size)
+      end
+    end
+
+    # Inside `module Shop`, `describe Order` is Shop::Order, which the app files, so it tests no top-level Order.
+    it "reads a group's subject from the module it is written in" do
+      Dir.mktmpdir do |root|
+        test = "spec/models/order_spec.rb"
+        { test => "module Shop\n  RSpec.describe Order do\n  end\nend\n",
+          "app/models/shop/order.rb" => "module Shop\n  class Order < ApplicationRecord\n  end\nend\n",
+          "app/models/legacy/order_record.rb" => "class Order < ApplicationRecord\nend\n" }.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), body)
+        end
+        RailsAiContext::PathResolver.clear_code_roots
+        suite = described_class::Suite.new(root, [ test ])
+
+        expect(suite.tested?(:model, "order", "Order")).to be(false)
+        expect(suite.tested?(:model, "shop/order", "Shop::Order")).to be(true)
       end
     end
   end

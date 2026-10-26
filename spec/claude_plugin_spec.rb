@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 RSpec.describe "Claude Code plugin" do
   let(:repo) { File.expand_path("..", __dir__) }
@@ -30,8 +31,12 @@ RSpec.describe "Claude Code plugin" do
 
   # Without gem_home, the suite's bundle, where this checkout is the installed gem.
   def launch(dir, gem_home: nil, env: {}, stdin: handshake)
-    Open3.capture3((gem_home ? gemless(gem_home) : {}).merge("CLAUDE_PLUGIN_ROOT" => plugin).merge(env), Gem.ruby, *server_args,
-                   chdir: dir, stdin_data: stdin)
+    Open3.popen3((gem_home ? gemless(gem_home) : {}).merge("CLAUDE_PLUGIN_ROOT" => plugin).merge(env), Gem.ruby, *server_args,
+                 chdir: dir) do |input, output, errors, wait|
+      err = Thread.new { errors.read }
+      out = HeldInput.exchange(input, output, stdin.lines)
+      [ out, err.value, wait.value ]
+    end
   end
 
   # Where the gem cannot serve, the server still connects, with no tools, and gives its reason in one line:
@@ -96,7 +101,7 @@ RSpec.describe "Claude Code plugin" do
       out, err, status = launch(dir, stdin: handshake({ jsonrpc: "2.0", id: 3, method: "ping" }, "not json",
                                                       { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "rails_get_schema" } }))
       replies = out.lines.map { |line| JSON.parse(line) }
-      reason = "#{File.realpath(dir)} holds no Rails app: start Claude Code in a Rails app's folder."
+      reason = "#{File.realpath(dir)} holds no Rails app. Start Claude Code in a Rails app's folder."
 
       expect([ err, status.exitstatus ]).to eq([ "#{reason}\n", 0 ])
       expect(replies[0]).to eq("jsonrpc" => "2.0", "id" => 1,
@@ -188,14 +193,30 @@ RSpec.describe "Claude Code plugin" do
     end
   end
 
-  # The binary hands an app to its own bundle; a RUBYGEMS_GEMDEPS the shell set would only refuse the gem.
-  it "starts the installed gem whatever RUBYGEMS_GEMDEPS names" do
+  # A C locale tags the folder's name binary, and json 3 refuses to write such a string.
+  it "refuses in a folder named outside ASCII under a C locale" do
     Dir.mktmpdir do |gems|
-      Dir.mktmpdir do |dir|
+      Dir.mktmpdir do |base|
         install_checkout(gems, RailsAiContext::VERSION)
-        File.write(File.join(dir, "Gemfile"), %(source "https://rubygems.org"\n))
+        dir = File.join(base, "café").tap { |path| FileUtils.mkdir_p(path) }
+        out, err, status = launch(dir, gem_home: gems, env: { "LANG" => "C", "LC_ALL" => nil, "LC_CTYPE" => nil })
 
-        expect(refusal(dir, gem_home: gems, env: { "RUBYGEMS_GEMDEPS" => File.join(dir, "Gemfile") })).to include("holds no Rails app")
+        expect(status.exitstatus).to eq(0), err
+        expect(err).not_to include("JSON.generate")
+        expect(JSON.parse(out.lines.first).dig("result", "instructions")).to include("café")
+      end
+    end
+  end
+
+  describe "its own refusal under a C locale" do
+    # The line comes in tagged US-ASCII, which json refuses to parse once a byte is outside ASCII.
+    it "answers a request line outside ASCII" do
+      Dir.mktmpdir do |dir|
+        hello = handshake.sub('"name":"spec"', %("name":"caf\u00e9"))
+        out, err, status = launch(dir, gem_home: dir, env: { "LANG" => "C", "LC_ALL" => "C", "LC_CTYPE" => nil }, stdin: hello)
+
+        expect(status.exitstatus).to eq(0), err
+        expect(out.lines.map { |line| JSON.parse(line)["id"] }).to eq([ 1, 2 ])
       end
     end
   end
@@ -213,20 +234,31 @@ RSpec.describe "Claude Code plugin" do
     end
   end
 
-  # Bundler's activate_bin_path takes no requirement, so the bundle's older copy would start, or crash on a file it lacks.
-  it "names the bundle Claude Code inherited when it locks an older copy, and the hook gives no rules" do
-    Dir.mktmpdir do |dir|
-      old = File.join(dir, "old")
+  # A checkout of this gem that calls itself release 5.0.0, as a bundle would lock it.
+  def old_copy(dir)
+    File.join(dir, "old").tap do |old|
       FileUtils.mkdir_p(old)
       FileUtils.cp_r([ File.join(repo, "lib"), File.join(repo, "exe") ], old)
       File.write(File.join(old, "rails-ai-context.gemspec"),
                  %(Gem::Specification.new { |s| s.name = "rails-ai-context"; s.version = "5.0.0"; s.summary = "x"; s.authors = [ "x" ]; ) +
                  %(s.files = []; s.bindir = "exe"; s.executables = [ "rails-ai-context" ] }\n))
-      FileUtils.mkdir_p(File.join(dir, "bundle"))
-      gemfile = File.join(dir, "bundle", "Gemfile")
-      File.write(gemfile, %(gem "rails-ai-context", path: #{old.inspect}\n))
-      File.write("#{gemfile}.lock", "PATH\n  remote: #{old}\n  specs:\n    rails-ai-context (5.0.0)\n\nPLATFORMS\n  ruby\n\n" \
-                                    "DEPENDENCIES\n  rails-ai-context!\n")
+    end
+  end
+
+  def lock_old_copy(folder, old)
+    gemfile = File.join(folder, "Gemfile")
+    FileUtils.mkdir_p(File.join(folder, "config"))
+    File.write(File.join(folder, "config", "application.rb"), "")
+    File.write(gemfile, %(gem "rails-ai-context", path: #{old.inspect}\n))
+    File.write("#{gemfile}.lock", "PATH\n  remote: #{old}\n  specs:\n    rails-ai-context (5.0.0)\n\nPLATFORMS\n  ruby\n\n" \
+                                  "DEPENDENCIES\n  rails-ai-context!\n")
+    gemfile
+  end
+
+  # Bundler's activate_bin_path takes no requirement, so the bundle's older copy would start, or crash on a file it lacks.
+  it "names the bundle Claude Code inherited when it locks an older copy, and the hook gives no rules" do
+    Dir.mktmpdir do |dir|
+      gemfile = lock_old_copy(File.join(dir, "bundle"), old_copy(dir))
       app = File.join(dir, "app")
       FileUtils.mkdir_p(File.join(app, "config"))
       File.write(File.join(app, "config", "application.rb"), "")
@@ -239,20 +271,66 @@ RSpec.describe "Claude Code plugin" do
     end
   end
 
-  # The binary's own advice there is --app-path, which the plugin's entry has no way to pass.
-  it "names where to start Claude Code in a folder of apps, by their paths from there" do
+  # Each app's own bundle decides the copy that serves it, as for a single app.
+  it "gives no rules above several apps whose bundles lock an older copy, and the rules where one does not" do
+    Dir.mktmpdir do |dir|
+      gems = File.join(dir, "gems")
+      install_checkout(gems, RailsAiContext::VERSION)
+      env = gemless(gems).merge("CLAUDE_CONFIG_DIR" => nil)
+      old = old_copy(dir)
+      lock_old_copy(File.join(dir, "apps", "alpha"), old)
+      lock_old_copy(File.join(dir, "apps", "beta"), old)
+      script = File.join(plugin, "scripts", "session_start.rb")
+
+      out, status = Open3.capture2e(env, Gem.ruby, script, chdir: File.join(dir, "apps"))
+      expect([ out, status.exitstatus ]).to eq([ "", 0 ])
+
+      FileUtils.mkdir_p(File.join(dir, "apps", "gamma", "config"))
+      File.write(File.join(dir, "apps", "gamma", "config", "application.rb"), "")
+      out, = Open3.capture2e(env, Gem.ruby, script, chdir: File.join(dir, "apps"))
+      expect(out).to include("Verify Before You Write").and include("alpha (served by its own bundled copy), beta (served by its own bundled copy), gamma. ")
+    end
+  end
+
+  # A gem with no router serves one app; the plugin's entry has no way to pass the --app-path the binary asks for.
+  it "names where to start Claude Code in a folder of apps, by their paths from there, on a gem that serves one app" do
+    Dir.mktmpdir do |gems|
+      Dir.mktmpdir do |dir|
+        install_checkout(gems, RailsAiContext::VERSION)
+        FileUtils.rm(Dir.glob(File.join(gems, "gems", "*", "lib", "rails_ai_context", "{cli/refusal,workspace_server}.rb")))
+        %w[shop/web admin/web].each do |name|
+          FileUtils.mkdir_p(File.join(dir, name, "config"))
+          File.write(File.join(dir, name, "config", "application.rb"), "")
+        end
+        reason = refusal(dir, gem_home: gems)
+
+        expect(reason).to include("holds 2 Rails apps (admin/web, shop/web)").and include("start Claude Code in one of them")
+        # The model can still run each app's tools now, as commands.
+        expect(reason).to include("Until then, each app's tools run as `rails-ai-context --app-path <app> tool <name>`, with <app> one of: admin/web, shop/web.")
+        expect(reason).to include("`claude plugin disable rails-ai-context@rails-ai-context --scope project` run here, or with `--scope local` " \
+                                  "where a --scope local install turns it on. On macOS and Linux, a local setting at the root of a git " \
+                                  "repository the apps share reaches them too.")
+      end
+    end
+  end
+
+  it "serves a folder of apps through one server, each tool taking the app" do
     Dir.mktmpdir do |dir|
       %w[shop/web admin/web].each do |name|
-        FileUtils.mkdir_p(File.join(dir, name, "config"))
-        File.write(File.join(dir, name, "config", "application.rb"), "")
+        FileUtils.cp_r(File.join(repo, "spec", "fixtures", "static_app"), File.join(dir, name).tap { |path| FileUtils.mkdir_p(File.dirname(path)) })
       end
-      reason = refusal(dir)
+      call = { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "rails_get_schema", arguments: { app: "shop-web", detail: "summary" } } }
+      out, err, status = launch(dir, stdin: handshake(call))
+      replies = out.lines.map { |line| JSON.parse(line) }.to_h { |reply| [ reply["id"], reply ] }
 
-      expect(reason).to include("holds 2 Rails apps (admin/web, shop/web)").and include("start Claude Code in one of them")
-      # Project scope is read from the start folder alone, and a local install's setting only where the apps share its repository.
-      expect(reason).to include("`claude plugin disable rails-ai-context@rails-ai-context --scope project` run here, or with `--scope local` " \
-                                "where a --scope local install turns it on. On macOS and Linux, a local setting at the root of a git " \
-                                "repository the apps share reaches them too.")
+      expect(status.exitstatus).to eq(0), err
+      expect(replies[1].dig("result", "instructions")).to include("admin-web (admin/web/), shop-web (shop/web/)")
+      tools = replies[2].dig("result", "tools")
+      expect(tools.size).to be > 20
+      expect(tools.map { |tool| tool.dig("inputSchema", "properties", "app", "enum") }.uniq).to eq([ %w[admin-web shop-web] ])
+      expect(tools.map { |tool| tool.dig("inputSchema", "required") }).to all(include("app"))
+      expect(replies[3]["result"]).to include("isError" => false).or(satisfy { |result| !result.key?("isError") })
+      expect(replies[3].dig("result", "content", 0, "text")).to include("users"), err
     end
   end
 
@@ -260,20 +338,58 @@ RSpec.describe "Claude Code plugin" do
     Dir.mktmpdir do |dir|
       reason = refusal(dir)
 
-      expect(reason).to include("no Rails app").and include("start Claude Code in a Rails app's folder")
+      expect(reason).to include("no Rails app").and include("Start Claude Code in a Rails app's folder")
       expect(reason).not_to include("--app-path")
     end
   end
 
-  # An app root with no app source: the gem's own binary is what refuses it.
-  it "runs the installed gem's serve" do
-    Dir.mktmpdir do |dir|
-      FileUtils.mkdir_p(File.join(dir, "bin"))
-      File.write(File.join(dir, "bin", "rails"), %(ENGINE_PATH = "x"\n))
-      out, err, status = launch(dir)
+  # What the gem's own binary refuses, it refuses by the same handshake, whatever it printed on the way.
+  def gem_refusal(dir, **options)
+    out, err, status = launch(dir, **options)
+    replies = out.lines.map { |line| JSON.parse(line) }
 
-      expect(status.exitstatus).to eq(1), out + err
-      expect(out + err).to include("No Rails app found in")
+    expect(status.exitstatus).to eq(0), err
+    expect(replies.map { |reply| reply["id"] }).to eq([ 1, 2 ]), err
+    expect(replies.last["result"]).to eq("tools" => [])
+    replies.first.dig("result", "instructions")
+  end
+
+  it "refuses by handshake a root whose bin/rails boots an engine that has no app source" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p([ File.join(dir, "bin"), File.join(dir, "lib"), File.join(dir, "app", "assets") ])
+      File.write(File.join(dir, "bin", "rails"), %(ENGINE_PATH = File.expand_path("../lib/eng/engine", __dir__)\n))
+      File.write(File.join(dir, "lib", "eng.rb"), "module Eng; end\n")
+
+      expect(gem_refusal(dir)).to eq("#{File.realpath(dir)} has a bin/rails but no app source: no config/application.rb, " \
+                                     "config/environment.rb or app/**/*.rb. Start Claude Code in a Rails app's folder.")
+    end
+  end
+
+  it "serves the app a monorepo root's bin/rails boots" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p([ File.join(dir, "bin"), File.join(dir, "apps") ])
+      FileUtils.cp_r(File.join(repo, "spec", "fixtures", "static_app"), File.join(dir, "apps", "web"))
+      File.write(File.join(dir, "bin", "rails"), %(APP_PATH = File.expand_path("../apps/web/config/application", __dir__)\nrequire "rails/commands"\n))
+      out, err, status = launch(dir)
+      listed = out.lines.map { |line| JSON.parse(line) }.find { |reply| reply["id"] == 2 }
+
+      expect(status.exitstatus).to eq(0), err
+      expect(listed.dig("result", "tools").size).to be > 20
+      expect(err).to include("using app at apps/web/")
+    end
+  end
+
+  # The static tier refuses a skip_tools it cannot read without the boot that failed.
+  it "refuses by handshake an app the gem cannot serve once it has started" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p([ File.join(dir, "config", "initializers"), File.join(dir, "app", "models") ])
+      File.write(File.join(dir, "config", "application.rb"), "")
+      File.write(File.join(dir, "config", "environment.rb"), "raise 'the app does not boot here'\n")
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget; end\n")
+      File.write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+                 "RailsAiContext.configure do |config|\n  config.skip_tools = ENV.fetch('SKIPPED', '').split(',')\nend\n")
+
+      expect(gem_refusal(dir)).to include("the app does not boot here").and include("skip_tools")
     end
   end
 
@@ -295,7 +411,7 @@ RSpec.describe "Claude Code plugin" do
 
     expect(server).to eq("command" => "ruby", "args" => [ "-e", "load File.join(ENV.fetch('CLAUDE_PLUGIN_ROOT'), 'scripts', 'serve.rb')" ])
     Dir.mktmpdir do |dir|
-      expect(refusal(dir)).to eq("#{File.realpath(dir)} holds no Rails app: start Claude Code in a Rails app's folder.")
+      expect(refusal(dir)).to eq("#{File.realpath(dir)} holds no Rails app. Start Claude Code in a Rails app's folder.")
     end
   end
 
@@ -319,7 +435,7 @@ RSpec.describe "Claude Code plugin" do
       expect(versions).to eq([ floor_version ])
     end
 
-    it "prints the rules in an app and from a folder inside it, and nothing above two apps" do
+    it "prints the rules in an app and from a folder inside it, and above two apps with the --app-path form" do
       Dir.mktmpdir do |dir|
         app(File.join(dir, "shop"))
         hook_in = ->(folder) { Open3.capture2e(gemless(gems), Gem.ruby, hook, chdir: folder).first }
@@ -328,7 +444,20 @@ RSpec.describe "Claude Code plugin" do
         expect(hook_in.(File.join(dir, "shop", "app", "models"))).to include("Verify before you write")
 
         app(File.join(dir, "admin"))
-        expect(hook_in.(dir)).to eq("")
+        expect(hook_in.(dir)).to include("Verify before you write").and include("`rails-ai-context --app-path <app> tool <name>`")
+      end
+    end
+
+    # A release without the gem's settings reader reads the switch and skip_tools the hook's own way.
+    it "reads the app's settings without the gem's reader" do
+      Dir.mktmpdir do |dir|
+        app(dir)
+        hook_in = -> { Open3.capture2e(gemless(gems), Gem.ruby, hook, chdir: dir).first }
+        File.write(File.join(dir, ".rails-ai-context.yml"), "skip_tools: [rails_get_gems]\n")
+        expect(hook_in.()).to include(%(Check `rails_get_config(section:"conventions")` BEFORE))
+
+        File.write(File.join(dir, ".rails-ai-context.yml"), "anti_hallucination_rules: false\n")
+        expect(hook_in.()).to eq("")
       end
     end
 
@@ -337,6 +466,101 @@ RSpec.describe "Claude Code plugin" do
         app(File.join(dir, "shop", "web"))
         app(File.join(dir, "admin", "web"))
         expect(refusal(dir, gem_home: gems)).to include("holds 2 Rails apps (admin/web, shop/web)")
+      end
+    end
+
+    # The binary hands an app to its own bundle; a RUBYGEMS_GEMDEPS the shell set would only refuse the gem.
+    it "serves the app with the installed gem whatever RUBYGEMS_GEMDEPS names" do
+      Dir.mktmpdir do |own|
+        Dir.mktmpdir do |dir|
+          install_checkout(own, RailsAiContext::VERSION)
+          app(dir)
+          File.write(File.join(dir, "Gemfile"), %(source "https://rubygems.org"\n))
+          out, err, status = launch(dir, gem_home: own, env: { "GEM_PATH" => [ own, gems ].join(File::PATH_SEPARATOR),
+                                                                "RUBYGEMS_GEMDEPS" => File.join(dir, "Gemfile") })
+          replies = out.lines.map { |line| JSON.parse(line) }.to_h { |reply| [ reply["id"], reply ] }
+
+          expect(status.exitstatus).to eq(0), err
+          expect(replies[1].dig("result", "serverInfo", "version")).to eq(RailsAiContext::VERSION)
+          expect(replies[2].dig("result", "tools").map { |tool| tool["name"] }).to include("rails_get_schema")
+        end
+      end
+    end
+
+    # The app's bundle has its own copy, a release older than the refusal, which exits where it cannot serve.
+    def bundled_copy_session(body, *more)
+      with_bundled_copy(body) do |dir, env|
+        out, err, status = launch(dir, gem_home: env["GEM_HOME"], env: env, stdin: handshake(*more))
+
+        expect(status.exitstatus).to eq(0), err
+        expect(err).to include("This app's bundle has rails-ai-context 5.0.0")
+        return out.lines.map { |line| JSON.parse(line) }.to_h { |reply| [ reply["id"], reply ] }
+      end
+    end
+
+    def with_bundled_copy(body)
+      Dir.mktmpdir do |own|
+        Dir.mktmpdir do |dir|
+          install_checkout(own, RailsAiContext::VERSION)
+          app(dir)
+          vendored = File.join(dir, "vendored")
+          FileUtils.mkdir_p(File.join(vendored, "exe"))
+          File.write(File.join(vendored, "rails-ai-context.gemspec"),
+                     %(Gem::Specification.new { |s| s.name = "rails-ai-context"; s.version = "5.0.0"; s.summary = "x"; s.authors = [ "x" ]; ) +
+                     %(s.files = []; s.bindir = "exe"; s.executables = [ "rails-ai-context" ] }\n))
+          File.write(File.join(vendored, "exe", "rails-ai-context"), body)
+          File.write(File.join(dir, "Gemfile"), %(gem "rails-ai-context", path: "vendored"\n))
+          File.write(File.join(dir, "Gemfile.lock"), "PATH\n  remote: vendored\n  specs:\n    rails-ai-context (5.0.0)\n\nPLATFORMS\n  ruby\n\n" \
+                                                     "DEPENDENCIES\n  rails-ai-context!\n")
+          yield dir, { "GEM_HOME" => own, "GEM_PATH" => [ own, gems ].join(File::PATH_SEPARATOR) }
+        end
+      end
+    end
+
+    it "exits 0 where the client left while the app's bundled copy stopped, and serves nothing of its own" do
+      with_bundled_copy(%(warn "this copy cannot boot the app"\nexit 1\n)) do |dir, env|
+        stdin, stdout, stderr, wait = Open3.popen3(gemless(env["GEM_HOME"]).merge(env, "CLAUDE_PLUGIN_ROOT" => plugin), Gem.ruby, *server_args, chdir: dir)
+        stdout.close
+        said = []
+        log = Thread.new { stderr.each_line { |line| said << line } }
+        Timeout.timeout(60) { sleep 0.1 until said.join.include?("this copy cannot boot the app") }
+        sleep 1
+        stdin.puts handshake
+        stdin.close
+        status = Timeout.timeout(60) { wait.value }
+        log.join
+
+        expect(status.exitstatus).to eq(0), said.join
+        expect(said).to eq([ "[rails-ai-context] This app's bundle has rails-ai-context 5.0.0; running that copy, as bundle exec does.\n",
+                             "this copy cannot boot the app\n" ])
+      end
+    end
+
+    it "keeps the session where the app's bundled copy exits before it answers" do
+      replies = bundled_copy_session(%(warn "this copy cannot boot the app"\nexit 1\n))
+
+      expect(replies[1].dig("result", "instructions")).to eq("rails-ai-context 5.0.0 from this app's bundle could not start: this copy cannot boot the app")
+      expect(replies[2]["result"]).to eq("tools" => [])
+    end
+
+    it "answers with the reason where the app's bundled copy stops after it answered" do
+      body = <<~RUBY
+        require "json"
+        $stdout.sync = true
+        $stdin.each_line do |line|
+          asked = JSON.parse(line)
+          next unless asked["id"]
+          abort "this copy lost its database" unless asked["method"] == "initialize"
+
+          puts JSON.generate(jsonrpc: "2.0", id: asked["id"], result: { protocolVersion: "2025-06-18", capabilities: { tools: {} },
+                                                                        serverInfo: { name: "rails-ai-context", version: "5.0.0" } })
+        end
+      RUBY
+      replies = bundled_copy_session(body, { jsonrpc: "2.0", id: 3, method: "ping" })
+
+      expect(replies[1].dig("result", "serverInfo", "version")).to eq("5.0.0")
+      [ 2, 3 ].each do |id|
+        expect(replies[id]["error"]).to eq("code" => -32_603, "message" => "rails-ai-context 5.0.0 from this app's bundle stopped: this copy lost its database")
       end
     end
 
@@ -434,13 +658,64 @@ RSpec.describe "Claude Code plugin" do
         write(File.join(dir, ".rails-ai-context.yml"), "skip_tools:\n  - rails_get_conventions\n  - rails_get_gems\n")
         expect(session_start(dir).first).to include(rendered(%w[rails_get_conventions rails_get_gems]))
 
-        # An initializer's literal replaces the file's list, as at boot, in any list form the setter takes.
+        # An initializer's literal joins the file's list, as at boot, in any list form the setter takes.
+        write(File.join(dir, ".rails-ai-context.yml"), "skip_tools: []\n")
         { "%w[rails_get_gems]" => %w[rails_get_gems], "%i[rails_get_conventions]" => %w[rails_get_conventions],
           "%w(rails_get_gems)" => %w[rails_get_gems], "[ :rails_get_gems, \"rails_get_conventions\" ]" => %w[rails_get_gems rails_get_conventions] }.each do |list, tools|
           write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
                 "RailsAiContext.configure do |config|\n  config.skip_tools = #{list}\nend\n")
           expect(session_start(dir).first).to include(rendered(tools)), list
         end
+      end
+    end
+
+    # The gem's own reader answers, so a list built from literals reads as the server reads it.
+    it "leaves out of rule 3 the sections a list of literals joined together turns off" do
+      Dir.mktmpdir do |dir|
+        app(dir)
+        write(File.join(dir, "config", "initializers", "rails_ai_context.rb"),
+              "RailsAiContext.configure do |config|\n  config.skip_tools = %w[rails_get_gems] + %w[rails_get_conventions]\nend\n")
+
+        expect(session_start(dir).first).to include(rendered(%w[rails_get_gems rails_get_conventions]))
+      end
+    end
+
+    # A line the reader cannot follow keeps the literals of the lists it does not touch, and rule 3 never names a
+    # section skip_tools may turn off.
+    it "leaves out of rule 3 every section whose skip_tools it cannot read, and keeps the literals beside another refused list" do
+      Dir.mktmpdir do |dir|
+        app(dir)
+        initializer = File.join(dir, "config", "initializers", "rails_ai_context.rb")
+        write(initializer, "RailsAiContext.configure do |config|\n  config.skip_tools = %w[rails_get_gems]\n" \
+                           "  config.sensitive_patterns += ENV.fetch(\"KEYS\").split\nend\n")
+        expect(session_start(dir).first).to include(rendered(%w[rails_get_gems]))
+
+        write(initializer, "RailsAiContext.configure do |config|\n  config.skip_tools += ENV.fetch(\"SKIP\").split\nend\n")
+        expect(session_start(dir).first).to include(rendered(%w[rails_get_conventions rails_get_gems]))
+      end
+    end
+
+    it "says which line of the app's settings it could not follow, and what answers instead" do
+      Dir.mktmpdir do |dir|
+        app(dir)
+        write(File.join(dir, "config", "initializers", "rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\n  tools = config.ai_tools\n  tools << :copilot\nend\n")
+        out, status = session_start(dir)
+
+        expect(status).to eq(0), out
+        expect(out).to include(rules).and include("[rails-ai-context] config/initializers/rails_ai_context.rb:3: `ai_tools` is changed in place or written by its name, so the YAML or the default answers here")
+      end
+    end
+
+    it "keeps what the gem prints as it loads off the session" do
+      Dir.mktmpdir do |dir|
+        app(dir)
+        plant = File.realpath(File.join(dir, "config"))
+        write(File.join(plant, "rails_ai_context.rb"), "warn \"planted load-time warning\"\n$LOAD_PATH.delete(__dir__)\nrequire \"rails_ai_context\"\n")
+        out, status = session_start(dir, env: { "RUBYOPT" => "#{ENV.fetch('RUBYOPT', '')} -I#{plant}" })
+
+        expect(status).to eq(0), out
+        expect(out).to include(rules)
+        expect(out).not_to include("planted load-time warning")
       end
     end
 
@@ -452,7 +727,8 @@ RSpec.describe "Claude Code plugin" do
           "config.skip_tools += %w[rails_get_gems]" => %w[rails_get_conventions rails_get_gems],
           "config.skip_tools.push(\"rails_get_gems\")" => %w[rails_get_conventions rails_get_gems],
           "config.skip_tools.concat(%w(rails_get_gems))" => %w[rails_get_conventions rails_get_gems],
-          "config.skip_tools = []\n  config.skip_tools.append 'rails_get_gems'" => %w[rails_get_gems],
+          # Assigning after the file loads keeps the file's entries too.
+          "config.skip_tools = []\n  config.skip_tools.append 'rails_get_gems'" => %w[rails_get_conventions rails_get_gems],
           "config.skip_tools = []\n  config.skip_tools.push \"rails_get_gems\", 'rails_get_conventions'" => %w[rails_get_gems rails_get_conventions],
           "config.skip_tools = []\n  config.skip_tools.concat %w[rails_get_gems], ['rails_get_conventions']" => %w[rails_get_gems rails_get_conventions],
           "config.skip_tools = []\n  config.skip_tools << \"rails_get_gems\" << 'rails_get_conventions'" => %w[rails_get_gems rails_get_conventions],
@@ -460,11 +736,12 @@ RSpec.describe "Claude Code plugin" do
           "config.skip_tools += %i[rails_get_gems]" => %w[rails_get_conventions rails_get_gems],
           "config.skip_tools |= %w[rails_get_gems]" => %w[rails_get_conventions rails_get_gems],
           "config.skip_tools |= [ :rails_get_gems ]" => %w[rails_get_conventions rails_get_gems],
-          # The other forms append a symbol as it is, which the server never matches.
-          "config.skip_tools.push(:rails_get_gems)" => %w[rails_get_conventions],
-          "config.skip_tools << :rails_get_gems" => %w[rails_get_conventions],
-          "config.skip_tools.concat(%i[rails_get_gems])" => %w[rails_get_conventions],
-          "config.skip_tools.append :rails_get_gems, \"x\"" => %w[rails_get_conventions] }.each do |code, tools|
+          # The other forms append a symbol as it is, which a booted server never matches; the
+          # static tier turns the tool off, the stricter answer, and so do the rules.
+          "config.skip_tools.push(:rails_get_gems)" => %w[rails_get_conventions rails_get_gems],
+          "config.skip_tools << :rails_get_gems" => %w[rails_get_conventions rails_get_gems],
+          "config.skip_tools.concat(%i[rails_get_gems])" => %w[rails_get_conventions rails_get_gems],
+          "config.skip_tools.append :rails_get_gems, \"x\"" => %w[rails_get_conventions rails_get_gems] }.each do |code, tools|
           write(File.join(dir, "config", "initializers", "rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  #{code}\nend\n")
           expect(session_start(dir).first).to include(rendered(tools)), code
         end
@@ -484,13 +761,88 @@ RSpec.describe "Claude Code plugin" do
       end
     end
 
-    it "prints the rules above the one app a folder holds, and nothing above two" do
+    it "prints the rules above the one app a folder holds, and above several with a line naming the app argument" do
       Dir.mktmpdir do |dir|
         app(File.join(dir, "work", "shop"))
         expect(session_start(dir).first).to include("Verify before you write")
 
         app(File.join(dir, "admin"))
+        out, status = session_start(dir)
+        expect(status).to eq(0)
+        expect(out).to start_with(File.read(File.join(plugin, "rules.md")))
+        expect(out).to end_with("This session's folder holds several Rails apps: admin, shop. Every rails_* tool takes `app`, " \
+                                "one of those names, for the app to answer about.\n")
+      end
+    end
+
+    it "names the --app-path form above several apps where the installed gem serves one app" do
+      Dir.mktmpdir do |gems|
+        Dir.mktmpdir do |dir|
+          install_checkout(gems, RailsAiContext::VERSION)
+          FileUtils.rm(Dir.glob(File.join(gems, "gems", "*", "lib", "rails_ai_context", "{cli/refusal,workspace_server}.rb")))
+          app(File.join(dir, "work", "shop"))
+          app(File.join(dir, "admin"))
+          out, = session_start(dir, env: gemless(gems))
+
+          expect(out).to start_with(File.read(File.join(plugin, "rules.md")))
+          expect(out).to end_with("This session's folder holds several Rails apps, and the plugin's server serves none of them here: " \
+                                  "run each app's tools as `rails-ai-context --app-path <app> tool <name>` from #{File.realpath(dir)}, " \
+                                  "with <app> one of: admin, work/shop.\n")
+        end
+      end
+    end
+
+    it "prints nothing above several apps where a memory on the way up carries the rules" do
+      Dir.mktmpdir do |dir|
+        app(File.join(dir, "shop"))
+        app(File.join(dir, "admin"))
+        write(File.join(dir, "CLAUDE.md"), "## Anti-Hallucination Protocol\n")
         expect(session_start(dir).first).to eq("")
+      end
+    end
+
+    describe "above several apps, each with its own settings" do
+      def apps(dir, *settings)
+        %w[alpha beta].zip(settings).each do |name, yaml|
+          app(File.join(dir, name))
+          write(File.join(dir, name, ".rails-ai-context.yml"), yaml) if yaml
+        end
+      end
+
+      it "prints nothing where every app turns the rules off" do
+        Dir.mktmpdir do |dir|
+          apps(dir, "anti_hallucination_rules: false\n", "anti_hallucination_rules: false\n")
+          expect(session_start(dir)).to eq([ "", 0 ])
+        end
+      end
+
+      it "prints the rules where one app leaves them on" do
+        Dir.mktmpdir do |dir|
+          apps(dir, "anti_hallucination_rules: false\n")
+          expect(session_start(dir).first).to include(rules)
+        end
+      end
+
+      # A call for a section an app turned off fails there, so rule 3 names only what every app serves.
+      it "leaves out of rule 3 a section an app turned off" do
+        Dir.mktmpdir do |dir|
+          apps(dir, "skip_tools:\n  - rails_get_gems\n")
+          out, status = session_start(dir)
+
+          expect(status).to eq(0), out
+          expect(out).to include(rendered(%w[rails_get_gems]))
+          expect(out).to end_with("for the app to answer about.\n")
+        end
+      end
+
+      it "leaves out of rule 3 a section an app skips although its rules switch is off" do
+        Dir.mktmpdir do |dir|
+          apps(dir, nil, "anti_hallucination_rules: false\nskip_tools:\n  - rails_get_gems\n")
+          out, status = session_start(dir)
+
+          expect(status).to eq(0), out
+          expect(out).to include(rendered(%w[rails_get_gems]))
+        end
       end
     end
 
@@ -830,6 +1182,20 @@ RSpec.describe "Claude Code plugin" do
       end
     end
 
+    # Claude Code reads CLAUDE_CONFIG_DIR from the env block of the user's settings too, not from the shell alone.
+    it "leaves out the user's own memory where the user's settings move CLAUDE_CONFIG_DIR" do
+      Dir.mktmpdir do |base|
+        home = File.realpath(base)
+        dir = File.join(home, "work", "shop")
+        app(dir)
+        moved = File.join(home, "work")
+        write(File.join(home, ".claude", "settings.json"), JSON.generate("env" => { "CLAUDE_CONFIG_DIR" => moved }))
+        write(File.join(moved, "CLAUDE.md"), rules)
+
+        expect(session_start(dir, env: { "HOME" => home, "USERPROFILE" => home }).first).to include("Anti-Hallucination Protocol")
+      end
+    end
+
     # A Gemfile no repository holds may sit beside the app's boot.rb, a bundle GemLock leaves unread.
     it "gives the rules for an app whose bundle it cannot read, as the server serves it" do
       Dir.mktmpdir do |gems|
@@ -908,7 +1274,8 @@ RSpec.describe "Claude Code plugin" do
         File.write(File.join(dir, ".rails-ai-context.yml"), %(l0: &l0 "rails_get_gems"\n#{levels}skip_tools: [rails_get_conventions, *l8]\n))
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
-        expect(session_start(dir).first).to include(rendered(%w[rails_get_conventions]))
+        # A list of lists is refused, as the server refuses it, which keeps every tool on.
+        expect(session_start(dir).first).to include(rendered([]))
         expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 8
       end
     end

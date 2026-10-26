@@ -7,6 +7,17 @@ RSpec.describe RailsAiContext::JsonBudget do
     allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(chars)
   end
 
+  it "leaves out actual_name, which only code writing SQL for a constraint reads, at any depth" do
+    data = { tables: { "kids" => { foreign_keys: [ { column: "pa", actual_name: "fk_rails_0123456789", to_table: "parents" } ] } }, list: [ { actual_name: "x", ok: 1 } ] }
+
+    parsed = JSON.parse(described_class.generate(data, nil))
+
+    expect(parsed.dig("tables", "kids", "foreign_keys")).to eq([ { "column" => "pa", "to_table" => "parents" } ])
+    expect(parsed["list"]).to eq([ { "ok" => 1 } ])
+    expect(JSON.parse(described_class.generate(data, 10_000)).to_s).not_to include("actual_name")
+    expect(data.dig(:tables, "kids", :foreign_keys).first).to have_key(:actual_name)
+  end
+
   # Mirrors SchemaIntrospector#call: scalars and one dominant :tables hash,
   # with two of the scalars sitting after it in insertion order.
   let(:schema) do

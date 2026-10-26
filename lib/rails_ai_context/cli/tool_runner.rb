@@ -61,6 +61,11 @@ module RailsAiContext
         end
       end
 
+      # The name typed resolves to, a retired config section's own name included.
+      def tool_name
+        (@retired || tool_class).tool_name
+      end
+
       # The tool's help, or for a retired name its config section's.
       def help
         self.class.tool_help(tool_class, @retired)

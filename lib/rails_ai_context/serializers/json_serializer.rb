@@ -6,7 +6,7 @@ module RailsAiContext
   module Serializers
     class JsonSerializer < Base
       def call
-        JSON.pretty_generate(context)
+        JSON.pretty_generate(JsonBudget.without_internal(context))
       end
     end
   end

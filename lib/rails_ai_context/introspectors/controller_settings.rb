@@ -22,14 +22,16 @@ module RailsAiContext
 
       # { layout: {...}, settings: [{ text: "allow_browser versions: :modern", via: }] } for one class body, with
       # what the app's concerns it includes declare where each `include` stands, `via` naming that concern.
-      # A caller already walking the body with LISTENERS passes that walk.
-      def from_source(source, walked = nil, root: nil, within: nil)
+      def from_source(source, root: nil, within: nil)
         return {} if source.nil?
 
-        walked ||= SourceIntrospector.walk_source(source, LISTENERS)
-        placed = SourceIntrospector.class_level(walked[:settings_calls], walked).map { |call| [ call[:location].to_i, -1, 0, call ] }
-        placed += concern_calls(walked, root, within) if root
-        layout_call, settings = ConcernMacros.in_include_order(placed).partition { |call| call[:macro] == :layout }
+        calls = if root && within
+          own_calls(source, root, within)
+        else
+          walked = SourceIntrospector.walk_source(source, LISTENERS)
+          SourceIntrospector.class_level(walked[:settings_calls], walked)
+        end
+        layout_call, settings = calls.partition { |call| call[:macro] == :layout }
         {
           layout: layout_call.last && layout_of(layout_call.last),
           settings: settings.map { |call| { text: call[:text], via: call[:from_concern] }.compact }.presence
@@ -38,12 +40,10 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, {}, label: "ControllerSettings.from_source")
       end
 
-      # Each call an included concern's block makes, placed at the `include` that reaches it.
-      def concern_calls(walked, root, within)
-        mixins = Array(walked[:mixins])
-        found = ConcernMacros.collect(root, mixins, keys: [ :settings_calls ], prefer: "controller", within: within,
-                                      cache: RunCache.fetch([ :controller_concern_walks ]) { {} }, listeners: LISTENERS)
-        ConcernMacros.at_includes(Array(found.collected[:settings_calls]), found.placement, mixins) { |call| call[:location].to_i }
+      # The class body's calls and its concerns', each where it runs; an ancestor's own are read from that ancestor.
+      def own_calls(source, root, within)
+        found = ControllerFilters.declarations(source, root: root, within: within)
+        Array(found.declarations[:settings_calls]).reject { |call| call[:declared_in] }
       end
 
       # A literal string is the layout, a literal symbol the method that picks it; `nil`
@@ -179,7 +179,7 @@ module RailsAiContext
         layout[:otherwise] ? "#{text}; other actions: #{layout_phrase(layout[:otherwise])}" : text
       end
 
-      private_class_method :layout_of, :concern_calls, :chain_for, :layout_for, :name_lookup, :by_name, :layout_names
+      private_class_method :layout_of, :own_calls, :chain_for, :layout_for, :name_lookup, :by_name, :layout_names
     end
   end
 end

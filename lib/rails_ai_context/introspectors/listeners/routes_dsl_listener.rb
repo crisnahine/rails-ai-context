@@ -86,8 +86,11 @@ module RailsAiContext
         # `before_8_1`: the app's Rails draws every path of `get "/a", "/b"` and names a mount given `as: nil`; 8.1 does neither.
         # `api_only`: the app sets config.api_only, so its own table draws no new or edit route.
         # `mount_name` answers the name Rails gives a mount of a class, or nil.
-        def initialize(scope: [], route_set: nil, names: Set.new, before_8_1: false, api_only: false, mount_name: self.class.method(:mount_name))
+        # `app_constant` answers whether the app keeps a constant in a file of its own.
+        def initialize(scope: [], route_set: nil, names: Set.new, before_8_1: false, api_only: false, mount_name: self.class.method(:mount_name),
+                       app_constant: nil)
           super()
+          @app_constant = app_constant
           @before_8_1 = before_8_1
           @mount_name = mount_name
           @api_only = api_only
@@ -416,14 +419,73 @@ module RailsAiContext
           # A gem macro's configuration until its block turns out to draw routes.
           outer = open_unknown_block if definitions.nil?
           return (outer[:pending] << node unless suppressed?) if outer
-          return emit_dynamic(node) if definitions.nil? || node.arguments || @replaying.include?(key) || definitions.any? { |d| takes_arguments?(d) }
+          bindings = definitions&.map { |definition| argument_bindings(definition, node) }
+          return emit_dynamic(node) if definitions.nil? || @replaying.include?(key) || bindings.include?(nil)
           return if suppressed?
 
+          in_force = definitions.zip(bindings).to_h.compare_by_identity
           each_in_force(definitions) do |definition|
             replaying(key, definition) do
               register_statements(definition.body)
-              replay_dispatcher.dispatch(definition.body) if definition.body
+              @stack << { node: nil, bindings: in_force[definition], block: definition }
+              begin
+                replay_dispatcher.dispatch(definition.body) if definition.body
+              ensure
+                @stack.pop
+              end
             end
+          end
+        end
+
+        ARGUMENT_LITERALS = [ Prism::StringNode, Prism::SymbolNode, Prism::IntegerNode, Prism::FloatNode,
+                              Prism::TrueNode, Prism::FalseNode, Prism::NilNode ].freeze
+
+        # The value each parameter of a routes-file method takes at this call, as Ruby binds them; nil when the call
+        # passes a value the walk cannot read, Ruby would refuse it, or the body may change a parameter.
+        # shortcut: a `*rest`, `**opts` or `...` parameter is not bound, bind it if a routes file needs it.
+        def argument_bindings(definition, node)
+          params = definition.parameters
+          args = node.arguments&.arguments || []
+          return args.empty? ? {} : nil if params.nil?
+          return nil if params.rest || params.keyword_rest || changes_arguments?(definition)
+
+          keywords = args.last if args.last.is_a?(Prism::KeywordHashNode) && params.keywords.any?
+          positional = keywords ? args[0...-1] : args
+          required = params.requireds + params.posts
+          given = positional.size - required.size
+          return nil unless given.between?(0, params.optionals.size)
+
+          bound = params.requireds.zip(positional) + params.optionals.zip(positional[params.requireds.size, given]) +
+                  params.posts.zip(positional.last(params.posts.size))
+          given_keywords = keywords ? keywords.elements.to_h { |e| [ e.is_a?(Prism::AssocNode) && e.key.is_a?(Prism::SymbolNode) && e.key.unescaped.to_sym, e ] } : {}
+          return nil unless given_keywords.keys.all? { |name| params.keywords.any? { |k| k.name == name } }
+
+          bound += params.keywords.map { |param| [ param, given_keywords[param.name]&.value ] }
+          bound.each_with_object({}) do |(param, arg), acc|
+            return nil unless param.respond_to?(:name)
+
+            default = param.value if !arg && param.respond_to?(:value)
+            if arg && readable_argument?(arg)
+              acc[param.name] = extract_value(arg)
+            # A default runs in the method's own scope: a literal, or a parameter bound before it.
+            elsif default.is_a?(Prism::LocalVariableReadNode) && default.depth.zero? && acc.key?(default.name)
+              acc[param.name] = acc[default.name]
+            elsif default && readable_argument?(default, bound: false)
+              acc[param.name] = extract_value(default)
+            else
+              return nil
+            end
+          end
+        end
+
+        # `bound`: a value the walk binds at the call site (a loop variable, an outer parameter) counts too.
+        def readable_argument?(node, bound: true)
+          case node
+          when *ARGUMENT_LITERALS then true
+          when Prism::ArrayNode then node.elements.all? { |e| readable_argument?(e, bound: bound) }
+          when Prism::HashNode, Prism::KeywordHashNode
+            node.elements.all? { |e| e.is_a?(Prism::AssocNode) && readable_argument?(e.key, bound: bound) && readable_argument?(e.value, bound: bound) }
+          else bound && !bound_value(node).nil?
           end
         end
 
@@ -455,11 +517,6 @@ module RailsAiContext
 
         def open_unknown_block
           @stack.reverse.find { |f| f[:unknown_block] }
-        end
-
-        def takes_arguments?(definition)
-          params = definition.parameters
-          !params.nil? && (params.requireds.any? || params.posts.any? || params.keywords.any? { |k| k.is_a?(Prism::RequiredKeywordParameterNode) })
         end
 
         # `controller :pages do` is `scope(controller: :pages)`.
@@ -702,10 +759,10 @@ module RailsAiContext
           when Prism::RegularExpressionNode
             flags = (node.ignore_case? ? Regexp::IGNORECASE : 0) | (node.extended? ? Regexp::EXTENDED : 0) | (node.multi_line? ? Regexp::MULTILINE : 0)
             Regexp.new(node.unescaped, flags).inspect
-          else node.slice
+          else filtered(node.slice)
           end
         rescue RegexpError
-          node.slice
+          filtered(node.slice)
         end
 
         def suppressed?
@@ -844,14 +901,24 @@ module RailsAiContext
 
           path = (opts[:path] || name).to_s
           as = (opts[:as] || name).to_s
+          # Before 8.1 an explicit `module: nil` names no module, and under another module routes to "outer//controller";
+          # 8.1 fills a nil one with the name.
+          no_module = @before_8_1 && opts.key?(:module) && opts[:module].nil?
+          if no_module && @stack.any? { |f| f[:mod] && !f[:mod].empty? }
+            emit_dynamic(node)
+            return push_frame(node, suppress: true)
+          end
+
+          mod = opts[:module] || name unless no_module
           # Rails wraps a namespace drawn in a resource's own scope in `nested`.
-          push_frame(node,
-                     nested: resource_scope?,
-                     prefix: join_path(current_prefix, path),
-                     mod: (opts[:module] || name).to_s,
-                     name_prefix: as,
-                     shallow_path: join_path(current_shallow_path, (literal_option(opts[:shallow_path]) || path).to_s),
-                     shallow_prefix: join_names(current_shallow_prefix, (name_or_marker(opts[:shallow_prefix]) || as).to_s))
+          frame = { nested: resource_scope?,
+                    prefix: join_path(current_prefix, path),
+                    mod: mod&.to_s,
+                    name_prefix: as,
+                    shallow_path: join_path(current_shallow_path, (literal_option(opts[:shallow_path]) || path).to_s),
+                    shallow_prefix: join_names(current_shallow_prefix, (name_or_marker(opts[:shallow_prefix]) || as).to_s) }
+          frame[:shallow] = opts[:shallow] == true if opts.key?(:shallow)
+          push_frame(node, **frame)
         end
 
         def enter_scope(node)
@@ -1220,6 +1287,7 @@ module RailsAiContext
           return emit_dynamic(node) if opts[:on] == RailsAiContext::Confidence::INFERRED
 
           name = route_set ? as && verb_route_name(as, segment, opts[:on]) : verb_route_name(opts[:as], segment, opts[:on])
+          name = nil if as_cleared?(opts)
           if target_given && unreadable_target?(target)
             # Rails names a route to a redirect or a Rack app like any other, so a later route cannot take the name.
             @taken_names.add([ current_engine, name ]) if name && !name.empty? && !name.include?(RailsAiContext::Confidence::INFERRED)
@@ -1323,10 +1391,14 @@ module RailsAiContext
           return emit_dynamic(node) unless target.is_a?(String) && target.include?("#")
 
           controller, action = target.split("#", 2)
-          as = route_options(node)[:as]
-          emit(node, "GET", current_prefix, prefixed_controller(controller), action,
-               [ current_name_prefix, (as.is_a?(Symbol) || as.is_a?(String)) ? as.to_s : "root" ].compact.reject(&:empty?).join("_"))
+          options = route_options(node)
+          as = options[:as]
+          name = [ current_name_prefix, (as.is_a?(Symbol) || as.is_a?(String)) ? as.to_s : "root" ].compact.reject(&:empty?).join("_")
+          emit(node, "GET", current_prefix, prefixed_controller(controller), action, as_cleared?(options) ? nil : name)
         end
+
+        # `as: nil` given outright: Rails generates no name.
+        def as_cleared?(options) = options.key?(:as) && options[:as].nil?
 
         def emit(node, verb, path, controller, action, name)
           path = "#{path}.:format" if required_format?(node)

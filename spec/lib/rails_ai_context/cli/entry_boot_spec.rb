@@ -588,14 +588,67 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       RailsAiContext.configuration.sensitive_patterns = patterns
     end
 
+    # The boot loads the YAML before the initializers, so the initializer's selection is the one a context run writes.
+    it "takes the initializer's ai_tools over the YAML's, as the boot does" do
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/widget.rb"), "class Widget; end\n")
+        File.write(File.join(dir, ".rails-ai-context.yml"), "ai_tools: [cursor]\n")
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        File.write(File.join(dir, "config/initializers/rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+
+        expect(described_class.call(root: dir, allow_static: true, no_boot: true).tier).to eq(:static)
+        expect(RailsAiContext.configuration.ai_tools).to eq(%i[claude])
+      end
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
+
     it "hands the static tier the root it was given" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/models"))
         File.write(File.join(dir, "app/models/widget.rb"), "class Widget; end\n")
-        expect(RailsAiContext::Configuration).to receive(:auto_load!).with(dir)
+        expect(RailsAiContext::UnbootedSettings).to receive(:read).with(dir).and_call_original
 
         described_class.call(root: dir, allow_static: true, no_boot: true)
         expect(RailsAiContext.configuration.app_root).to eq(dir)
+      end
+    end
+
+    # The static tier drops what a boot that failed part way set, so every literal must reach it from the files.
+    it "serves with every literal the app's files set when its boot fails after application.rb ran" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config/environments"))
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        File.write(File.join(dir, "config/application.rb"), <<~RUBY)
+          require "rails"
+          module Probe
+            class Application < Rails::Application
+              RailsAiContext.configure do |config|
+                config.preset = :standard
+                config.excluded_models = %w[Secret]
+                config.server_name = "probe"
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "config/environment.rb"), "require_relative \"application\"\nraise \"boom\"\n")
+        File.write(File.join(dir, "config/environments/development.rb"), "RailsAiContext.configure { |c| c.http_port = 7123 }\n")
+        File.write(File.join(dir, "config/initializers/rails_ai_context.rb"),
+                   "RailsAiContext.configure do |config|\n  config.cache_ttl = 7\n  config.skip_tools = %w[rails_get_gems]\nend\n")
+        script = <<~RUBY
+          require "rails_ai_context"
+          outcome = RailsAiContext::CLI::EntryBoot.call(root: ARGV[0], allow_static: true)
+          c = RailsAiContext.configuration
+          puts JSON.dump([ outcome.tier, outcome.kind, c.introspectors, c.excluded_models, c.server_name, c.http_port, c.cache_ttl, c.skip_tools ])
+        RUBY
+        out, err, status = Open3.capture3({ "RAILS_ENV" => nil, "RACK_ENV" => nil }, RbConfig.ruby, "-I", File.expand_path("../../../../lib", __dir__),
+                                          "-rjson", "-e", script, dir)
+
+        expect(status).to be_success, err
+        expect(JSON.parse(out.lines.last)).to eq([ "static", "boot_failed", RailsAiContext::Configuration::PRESETS[:standard].map(&:to_s),
+                                                   %w[Secret], "probe", 7123, 7, %w[rails_get_gems] ])
       end
     end
 
@@ -609,6 +662,19 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
           FileUtils.mkdir_p(File.join(dir, "config"))
           File.write(File.join(dir, "config/environment.rb"), "raise 'boom'\n")
           yield dir
+        end
+      end
+
+      # A client gives up on the handshake at its own limit, so raising only the boot's would trip that one.
+      it "names the client's connect timeout beside the boot's when a client waits on a slow boot" do
+        allow(RailsAiContext::BootManager).to receive(:boot!)
+          .and_return(RailsAiContext::BootManager::Result.new(status: :failed, error: RailsAiContext::BootManager::BootTimeoutError.new("slow")))
+        failing_app do |dir|
+          typed = described_class.call(root: dir, allow_static: true).messages
+          served = described_class.call(root: dir, allow_static: true, client: true).messages
+
+          expect(typed.join("\n")).not_to include("MCP_TIMEOUT")
+          expect(served).to include(a_string_matching(/raise RAILS_AI_CONTEXT_BOOT_TIMEOUT \(seconds, current: \d+\), and MCP_TIMEOUT \(milliseconds\) for Claude Code, or it stops waiting first\.\z/))
         end
       end
 
@@ -634,6 +700,16 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         failing_app do |dir|
           expect(described_class.call(root: dir, allow_static: false).messages.join).to include("gem10-1.0")
           expect(described_class.call(root: dir, allow_static: true).messages.join).not_to include("gem10-1.0")
+        end
+      end
+
+      it "names each line of the app's settings it could not follow, and what answers instead" do
+        failing_app do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+          File.write(File.join(dir, "config/initializers/rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\n  tools = config.ai_tools\n  tools << :copilot\nend\n")
+          messages = described_class.call(root: dir, allow_static: true).messages
+
+          expect(messages).to include("[rails-ai-context] config/initializers/rails_ai_context.rb:3: `ai_tools` is changed in place or written by its name, so the YAML or the default answers here")
         end
       end
 

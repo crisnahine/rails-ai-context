@@ -207,7 +207,7 @@ module RailsAiContext
           parameters.optionals.each do |p|
             next unless p.is_a?(Prism::OptionalParameterNode)
             prop = { name: p.name.to_s, positional: true }
-            prop[:default] = NodeSource.text(p.value) if p.value
+            prop[:default] = RailsAiContext::Redaction.source_slice(NodeSource.text(p.value)) if p.value
             props << prop
           end
         end
@@ -220,7 +220,7 @@ module RailsAiContext
               props << { name: p.name.to_s }
             when Prism::OptionalKeywordParameterNode
               prop = { name: p.name.to_s }
-              prop[:default] = NodeSource.text(p.value) if p.value
+              prop[:default] = RailsAiContext::Redaction.source_slice(NodeSource.text(p.value)) if p.value
               props << prop
             end
           end

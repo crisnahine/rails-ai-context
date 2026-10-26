@@ -84,8 +84,9 @@ module RailsAiContext
     # `Note.prepend X` mixes X into Note as `prepend X` in Note's body would. The record is `name`'s
     # when, of `name` and the file's `others`, `name` is the one the receiver's nesting reaches first.
     def mixed_into(record, name, others: [])
-      candidates = Introspectors::DeclaredConstant.candidate_names(record[:receiver], Introspectors::DeclaredConstant.record_nesting(record))
-      return unless candidates.find { |candidate| candidate == name.to_s || others.include?(candidate) } == name.to_s
+      reached = Introspectors::DeclaredConstant.lookup(record[:receiver], nesting: Introspectors::DeclaredConstant.record_nesting(record),
+                                                                          exists: ->(candidate) { candidate == name.to_s || others.include?(candidate) })
+      return unless reached == name.to_s
 
       own = record.except(:receiver)
       record.key?(:ancestor) ? own.merge(ancestor: CONCERN_BLOCKS.key?(record[:macro])) : own
@@ -145,14 +146,21 @@ module RailsAiContext
     end
 
     # The constant a mixin names as Ruby reaches it from where it is written: `include
-    # Trackable` in Payment's body is Payment::Trackable when the file defines it by `line`.
-    def local_name(mixin, modules, line: mixin[:location])
+    # Trackable` in Payment's body is Payment::Trackable when the file defines it by `line`,
+    # or when `exists` names the module the app has elsewhere, which can differ from the spelling tried.
+    def local_name(mixin, modules, line: mixin[:location], exists: nil, later: nil)
       name = mixin[:name].to_s
-      Introspectors::DeclaredConstant.candidate_names(name, Introspectors::DeclaredConstant.record_nesting(mixin)).find do |candidate|
+      in_file = lambda do |candidate|
         node = modules[candidate]
         node && (line.nil? || node.location.start_line <= line)
-      end || name.delete_prefix("::")
+      end
+      Introspectors::DeclaredConstant.reach(mixin[:top_level] ? "::#{name}" : name, nesting: Introspectors::DeclaredConstant.record_nesting(mixin),
+                                            exists: ->(candidate) { in_file.call(candidate) ? candidate : named_by(exists&.call(candidate), candidate) },
+                                            later_ancestors: later) || name.delete_prefix("::")
     end
+
+    # `exists` answers with the module the app has (a String) or only that it has the spelling tried.
+    def named_by(answer, candidate) = answer.is_a?(String) ? answer : (candidate if answer)
 
     # The full name; else the shortest owner ending in all its segments; else in its last,
     # unless that owner is one of `others`, so Legacy::Payment never reads Payment's.

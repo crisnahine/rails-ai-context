@@ -189,6 +189,63 @@ RSpec.describe "E2E: static tier", type: :e2e do
         File.delete(script) if File.exist?(script)
       end
     end
+
+    it "carries the same keys inside each model record on both tiers" do
+      # ModelRecord.build drops nil values: a key a tier cannot answer is absent from its records.
+      tier_only = { "booted" => %w[], "static" => %w[confidence patches_unread own_connection] }
+      script = File.join(@builder.app_path, "tmp", "record_parity_probe.rb")
+      concern = File.join(@builder.app_path, "app", "models", "concerns", "publishable.rb")
+      model = File.join(@builder.app_path, "app", "models", "note.rb")
+      FileUtils.mkdir_p([ File.dirname(script), File.dirname(concern) ])
+      File.write(concern, "module Publishable\n  extend ActiveSupport::Concern\n  included { scope :live, -> { where(published: true) } }\nend\n")
+      File.write(model, <<~'RUBY')
+        class Note < ApplicationRecord
+          include Publishable
+          self.table_name = "posts"
+          self.ignored_columns += [ "body" ]
+          enum :title, { draft: "draft", final: "final" }, validate: true, prefix: true
+          has_many :replies, class_name: "Post", foreign_key: :id
+          belongs_to :parent, class_name: "Post", optional: true
+          validates :title, presence: true, if: :published?
+          before_save :touch_title, unless: -> { title.nil? }
+          after_commit :announce, on: :create
+          scope :recent, ->(limit) { order(created_at: :desc).limit(limit) }
+          default_scope { order(:id) }
+          def self.search(term) = where(title: term)
+          def touch_title; end
+          def announce; end
+        end
+      RUBY
+      File.write(script, <<~'RUBY')
+        require "json"
+        require "rails_ai_context"
+
+        klass = RailsAiContext::Introspectors::ModelIntrospector
+        booted = klass.new(Rails.application).call
+        static = klass.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).send(:static_call)
+        report = (booted.keys & static.keys).select { |name| booted[name].is_a?(Hash) && !booted[name][:error] }.to_h do |name|
+          [ name, { "booted" => booted[name].keys.map(&:to_s), "static" => static[name].keys.map(&:to_s) } ]
+        end
+        puts JSON.generate(report)
+      RUBY
+
+      begin
+        result = @cli.run([ "bin/rails", "runner", script ])
+        expect(result.exit_status).to eq(0), result.to_s
+
+        report = JSON.parse(result.stdout.lines.last)
+        expect(report).not_to be_empty
+
+        mismatches = report.filter_map do |name, tiers|
+          booted_only = tiers["booted"] - tiers["static"] - tier_only["booted"]
+          static_only = tiers["static"] - tiers["booted"] - tier_only["static"]
+          "#{name}: booted only #{booted_only.inspect}, static only #{static_only.inspect}" if booted_only.any? || static_only.any?
+        end
+        expect(mismatches).to be_empty, mismatches.join("\n")
+      ensure
+        [ script, concern, model ].each { |path| File.delete(path) if File.exist?(path) }
+      end
+    end
   end
 
   describe "--app-path from outside the app directory" do

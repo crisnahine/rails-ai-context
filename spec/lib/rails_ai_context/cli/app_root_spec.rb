@@ -35,6 +35,96 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
     skip "this filesystem refuses names that are not UTF-8"
   end
 
+  # What a session started in a folder gets: one app, the apps it reaches, or a reason for neither.
+  describe ".target" do
+    def monorepo(path, boots:)
+      root = dir(path)
+      dir("#{path}/bin")
+      File.write(File.join(root, "bin", "rails"), %(APP_PATH = File.expand_path("../#{boots}/config/application", __dir__)\nrequire "rails/commands"\n))
+      root
+    end
+
+    def described(target)
+      case target.kind
+      when :app then [ :app, target.root ]
+      when :apps then [ :apps, target.apps.map { |found| [ found.name, found.root ] } ]
+      else [ :none, target.reason ]
+      end
+    end
+
+    it "answers each start folder with the app, the apps or why neither" do
+      shop = app("one/shop")
+      FileUtils.mkdir_p(File.join(shop, "packs/billing/app/models"))
+      File.write(File.join(shop, "packs/billing/app/models/invoice.rb"), "class Invoice; end\n")
+      alpha = app("two/alpha")
+      beta = app("two/beta")
+      deep_alpha = app("deep/apps/alpha")
+      deep_beta = app("deep/apps/beta")
+      mixed_alpha = app("mixed/alpha")
+      mixed_beta = app("mixed/svc/beta")
+      web = app("mono/apps/web")
+      app("mono/apps/admin")
+      monorepo("mono", boots: "apps/web")
+      engine = monorepo("engine", boots: "nowhere").tap do |root|
+        File.write(File.join(root, "bin", "rails"), %(ENGINE_PATH = File.expand_path("../lib/eng/engine", __dir__)\n))
+        dir("engine/lib/eng")
+        File.write(File.join(root, "lib", "eng.rb"), "module Eng; end\n")
+        dir("engine/app/assets")
+      end
+      cafe = app("café")
+      empty = dir("empty")
+
+      table = {
+        shop => [ :app, shop ],
+        File.join(shop, "app", "models") => [ :app, shop ],
+        File.join(shop, "packs", "billing") => [ :app, shop ],
+        File.join(tmp, "one") => [ :app, shop ],
+        File.join(tmp, "two") => [ :apps, [ [ "alpha", alpha ], [ "beta", beta ] ] ],
+        File.join(tmp, "deep") => [ :apps, [ [ "alpha", deep_alpha ], [ "beta", deep_beta ] ] ],
+        File.join(tmp, "mixed") => [ :apps, [ [ "alpha", mixed_alpha ], [ "beta", mixed_beta ] ] ],
+        File.join(tmp, "mono") => [ :app, web ],
+        File.join(tmp, "mono", "docs").tap { |path| FileUtils.mkdir_p(path) } => [ :app, web ],
+        engine => [ :none, "#{engine} has a bin/rails but no app source: no config/application.rb, config/environment.rb or app/**/*.rb." ],
+        empty => [ :none, "#{empty} holds no Rails app." ],
+        cafe => [ :app, cafe ]
+      }
+      expect(table.keys.to_h { |folder| [ folder, described(described_class.target(folder)) ] }).to eq(table)
+    end
+
+    it "takes the bin/rails app only where it lies below the folder" do
+      root = monorepo("mono", boots: "../outside")
+      app("outside")
+      expect(described(described_class.target(root))).to eq([ :none, "#{root} has a bin/rails but no app source: " \
+                                                                       "no config/application.rb, config/environment.rb or app/**/*.rb." ])
+    end
+
+    it "serves nothing from the home folder or the filesystem root" do
+      home = dir("home")
+      app("home/shop")
+      app("home/projects/admin")
+      allow(Dir).to receive(:home).and_return(home)
+
+      expect(described(described_class.target(home))).to eq([ :none, "#{home} holds no Rails app." ])
+      expect(described_class.target("/").kind).to eq(:none)
+    end
+
+    it "names two apps that share a folder name by their paths" do
+      a = app("work/shop/web")
+      b = app("work/admin/web")
+      expect(described(described_class.target(dir("work")))).to eq([ :apps, [ [ "admin-web", b ], [ "shop-web", a ] ] ])
+    end
+
+    it "keeps the walk the binary relays" do
+      shop = app("shop")
+      target = described_class.target(dir("shop/app/models"))
+      expect([ target.resolution.root, target.resolution.walked ]).to eq([ shop, :up ])
+
+      web = app("mono/apps/web")
+      target = described_class.target(monorepo("mono", boots: "apps/web"))
+      expect([ target.resolution.root, target.resolution.walked ]).to eq([ web, :down ])
+    end
+  end
+
   describe ".resolve" do
     it "keeps the current directory when it is an app" do
       root = app("shop")

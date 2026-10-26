@@ -978,4 +978,29 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       )
     end
   end
+
+  describe "an app with rich text" do
+    it "counts the models that declare it" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Forum", models: {},
+        action_text: { rich_text_fields: [ { model: "Memo", field: "body" }, { model: "Memo", field: "notes" }, { model: "Topic", field: "body" } ] }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("Action Text: 2 models with rich text fields.")
+    end
+
+    it "counts attachments beside the rich text" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "Forum", models: {},
+        active_storage: { attachments: [ { model: "Memo", name: "file" }, { model: "Topic", name: "cover" } ] },
+        action_text: { rich_text_fields: [ { model: "Memo", field: "body" } ] }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("Active Storage: 2 attachments across models.\nAction Text: 1 model with rich text fields.")
+    end
+  end
 end

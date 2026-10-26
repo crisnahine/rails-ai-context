@@ -21,7 +21,7 @@ module RailsAiContext
 
         mongoid = model_info[:mongoid] == true
         table_name = mongoid ? model_info[:collection] : model_info[:table_name]
-        table_data = Payload.model_table(schema_data, model_info) if table_name && !mongoid
+        table_data = Payload.model_schema_table(schema_data, model_info) if table_name && !mongoid
 
         columns = if mongoid
           Array(model_info[:fields]).map { |field| { name: field[:name].to_s, type: field[:type] }.compact }

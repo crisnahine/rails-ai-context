@@ -318,6 +318,18 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
 
+    # Sidekiq merges sidekiq_options down the chain, so the nearest class's retry is the one that holds.
+    it "lists a worker's retry setting as the nearest class sets it" do
+      workers = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/workers"))
+        File.write(File.join(dir, "app/workers/base_worker.rb"), "class BaseWorker\n  include Sidekiq::Worker\n  sidekiq_options retry: false\nend\n")
+        File.write(File.join(dir, "app/workers/sync_worker.rb"), "class SyncWorker < BaseWorker\n  sidekiq_options retry: 5\n  def perform; end\nend\n")
+        File.write(File.join(dir, "app/workers/plain_worker.rb"), "class PlainWorker < BaseWorker\n  def perform; end\nend\n")
+      end[:workers]
+
+      expect(workers.to_h { |worker| [ worker[:name], worker[:retries] ] }).to eq("SyncWorker" => [ "sidekiq retry: 5" ], "PlainWorker" => [ "sidekiq retry: false" ])
+    end
+
     it "lists each job a file declares, each on its own queue" do
       jobs = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/jobs"))
@@ -1249,6 +1261,89 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         end[:workers]
 
         expect(workers.map { |w| w[:name] }).not_to include("QueueNames")
+      end
+
+      # A class whose entry point only raises leaves the work to its subclasses, as Discourse's Jobs::Scheduled does.
+      it "leaves an abstract worker out of the workers and lists it as a base" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          File.write(File.join(dir, "app", "jobs", "base.rb"), <<~RUBY)
+            module Jobs
+              class Base
+                include Sidekiq::Job
+
+                def perform(*args)
+                  execute(args)
+                end
+
+                def execute(opts = {})
+                  raise "Overwrite me!"
+                end
+              end
+
+              class Scheduled < Base
+                def perform(*args)
+                  super
+                end
+              end
+
+              class Notifier < Base
+                def execute(opts = {}); end
+              end
+
+              class Daily < Scheduled
+                def execute(opts = {}); end
+              end
+
+              class Stub < Base
+                def perform; raise NotImplementedError; end
+              end
+
+              class Marked < Base
+                self.abstract_class = true
+              end
+            end
+          RUBY
+        end
+
+        expect(result[:workers].map { |w| w[:name] }).to contain_exactly("Jobs::Notifier", "Jobs::Daily")
+        expect(result[:job_bases].map { |b| b[:name] }).to include("Jobs::Base", "Jobs::Scheduled", "Jobs::Stub", "Jobs::Marked")
+      end
+
+      it "lists a worker that overrides perform under a base whose execute raises" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          File.write(File.join(dir, "app", "jobs", "x_base.rb"), <<~RUBY)
+            class XBase
+              include Sidekiq::Job
+              def perform(*args) = execute(args)
+              def execute(args) = raise(NotImplementedError)
+            end
+          RUBY
+          File.write(File.join(dir, "app", "jobs", "over_perform.rb"), "class OverPerform < XBase\n  def perform(*args)\n    real_work\n  end\nend\n")
+          File.write(File.join(dir, "app", "jobs", "over_execute.rb"), "class OverExecute < XBase\n  def execute(args); end\nend\n")
+        end
+
+        expect(result[:workers].map { |w| w[:name] }).to contain_exactly("OverPerform", "OverExecute")
+        expect(result[:job_bases].map { |b| b[:name] }).to eq([ "XBase" ])
+      end
+
+      it "sizes a worker by its own class, not the file it shares" do
+        workers = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "workers"))
+          File.write(File.join(dir, "app", "workers", "pair.rb"), <<~RUBY)
+            class Pair
+              include Sidekiq::Worker
+              def perform; end
+            end
+
+            class PairError < StandardError
+              def message = "pair"
+            end
+          RUBY
+        end[:workers]
+
+        expect(workers.map { |w| [ w[:name], w[:line_count] ] }).to eq([ [ "Pair", 4 ] ])
       end
 
       it "answers nothing for an app with no workers" do

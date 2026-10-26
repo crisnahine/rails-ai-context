@@ -68,7 +68,7 @@ module RailsAiContext
 
         # Enrich with schema columns if available
         table_name = data[:table_name]
-        schema = Payload.model_table(context[:schema], data) if table_name
+        schema = Payload.model_schema_table(context[:schema], data) if table_name
         enriched = data.merge(schema: schema).compact
 
         [ json_content(uri, enriched) ]

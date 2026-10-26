@@ -29,6 +29,7 @@ module RailsAiContext
         def initialize(prefix: nil, name_prefix: nil, routes: nil)
           super()
           @routes = routes || RoutesDslListener.new
+          @app_constant = @routes.app_constant
           @scopes = [ { node: nil, prefix: prefix && prefix != "/" ? prefix : nil, name: name_prefix } ]
           # A record read in a body Rails runs only where it is replayed, with that body's keys.
           @held = {}.compare_by_identity

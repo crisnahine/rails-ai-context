@@ -50,6 +50,18 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
       expect(text).to include("belongs_to")
     end
 
+    # A polymorphic interface or a class no model defines is a target, not a model.
+    it "counts only models when centered on one" do
+      models_data[:Comment][:associations] << { macro: :belongs_to, name: :author, polymorphic: true }
+      models_data[:Comment][:associations] << { macro: :belongs_to, name: :ghost, class_name: "Ghost" }
+
+      whole = described_class.call(format: "text").content.first[:text]
+      centered = described_class.call(model: "Post", format: "text").content.first[:text]
+
+      expect(whole).to include("**Models:** 3")
+      expect(centered).to include("**Models:** 3")
+    end
+
     it "centers graph on a model" do
       response = described_class.call(model: "Post", format: "text")
       text = response.content.first[:text]

@@ -236,21 +236,31 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
     # that name exists. A composite index that merely contains the column is
     # no collision, and it is exactly when the new index is worth adding.
     describe "the duplicate-index warning" do
-      def advise(indexes)
+      def advise(indexes, column: "author_id", rails: nil)
         allow(described_class).to receive(:cached_context).and_return({
           schema: { tables: { "posts" => {
-            columns: [ { name: "blog_id", type: "integer" }, { name: "author_id", type: "integer" } ],
+            columns: [ { name: "blog_id", type: "integer" }, { name: column, type: "integer" } ],
             indexes: indexes
           } } },
-          models: {}
-        })
-        described_class.call(action: "add_index", table: "posts", column: "author_id").content.first[:text]
+          models: {}, rails_version: rails
+        }.compact)
+        described_class.call(action: "add_index", table: "posts", column: column).content.first[:text]
       end
 
       it "warns when the index add_index would name already exists" do
         text = advise([ { name: "index_posts_on_author_id", columns: %w[author_id], unique: false } ])
 
         expect(text).to include("already exists")
+      end
+
+      # Rails 7.0 never shortens a default name, so a 64-byte index_posts_on_<column> exists there; 7.1 would name it idx_on_....
+      it "names the default index the way the app's Rails does for a long column" do
+        column = "c" * 49
+        index = [ { name: "index_posts_on_#{column}", columns: [ column ], unique: false } ]
+
+        expect(advise(index, column: column, rails: "7.0.10")).to include("already exists")
+        expect(advise(index, column: column, rails: "7.1.6")).not_to include("already exists")
+        expect(advise(index, column: column)).not_to include("already exists")
       end
 
       it "does not warn when the column only sits in a composite index" do
@@ -295,7 +305,8 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
             "orders" => { columns: [
               { name: "total", type: "decimal", precision: 10, scale: 2, null: false, default: "0.0" },
               { name: "paid", type: "boolean", null: false, default: "false" },
-              { name: "items_count", type: "integer", default: "0" }
+              { name: "items_count", type: "integer", default: "0" },
+              { name: "shipped_at", type: "datetime", precision: nil }
             ] },
             "customers" => { columns: [] }
           } },
@@ -315,6 +326,13 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         text = described_class.call(action: "remove_column", table: "orders", column: "total").content.first[:text]
 
         expect(text).to include("    remove_column :orders, :total, :decimal, precision: 10, scale: 2, null: false, default: \"0.0\"\n")
+      end
+
+      # Added back from a bare :datetime, the column would take Rails 7's precision of 6.
+      it "writes precision: nil into the options that add a datetime with no precision back" do
+        text = described_class.call(action: "remove_column", table: "orders", column: "shipped_at").content.first[:text]
+
+        expect(text).to include("    remove_column :orders, :shipped_at, :datetime, precision: nil\n")
       end
 
       # SchemaDumper writes a boolean or number default as its literal (type_cast_for_schema), a decimal as a string.
@@ -391,6 +409,14 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
         expect(response.content.first[:text])
           .to include("- **Admin::ActionLog** - directly affected (table: admin_action_logs)")
+      end
+
+      it "refuses a model whose table the source computes, naming who sets it" do
+        context = described_class.cached_context.merge(models: { "Archive" => { table_set_by: "Archive.table_name" } })
+        allow(described_class).to receive(:cached_context).and_return(context)
+        response = described_class.call(action: "add_column", table: "Archive", column: "note2", type: "string")
+
+        expect(response.content.first[:text]).to eq("**Error:** the table of `Archive` is set by `Archive.table_name`, which the static tier did not read; pass the table name.")
       end
 
       it "names the association that points at that model" do
@@ -1004,6 +1030,21 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
     end
 
+    context "when the static tier has no version and the gem's own process has Rails loaded" do
+      before do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "[UNAVAILABLE: app not booted]", schema: { tables: {} }, models: {}
+        })
+      end
+
+      it "does not take the gem's Rails for the app's, and says the version is unknown" do
+        text = text_for(action: "add_index", table: "accounts", column: "domain")
+
+        expect(text).to include("ActiveRecord::Migration[7.0]", "Could not determine this app's Rails version")
+      end
+    end
+
     context "when nothing names a Rails version" do
       before do
         hide_const("Rails")
@@ -1039,6 +1080,33 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text_for(action: "add_index", table: "users", column: "email"))
           .to include("ActiveRecord::Migration[7.2]")
       end
+    end
+  end
+
+  # A replay that skipped helper calls cannot say a table is absent: one those calls create would be missing from it.
+  describe "a table asked for from a replay that skipped migration helper calls" do
+    def advise_for(skipped, **params)
+      schema = { adapter: "static_parse", tables: { "posts" => { columns: [ { name: "id", type: "bigint" } ] } }, total_tables: 1 }
+      schema[:skipped_calls] = skipped if skipped
+      allow(described_class).to receive(:cached_context).and_return(models: {}, schema: schema)
+      described_class.call(**params).content.first[:text]
+    end
+
+    it "says the table may exist, in place of saying the migration will fail" do
+      skipped = %w[db/migrate/1_a.rb:7]
+      removing = advise_for(skipped, action: "remove_column", table: "users", column: "name")
+      adding = advise_for(skipped, action: "add_column", table: "users", column: "name")
+
+      [ removing, adding ].each do |text|
+        expect(text).to include("1 migration helper call was not replayed (db/migrate/1_a.rb:7), so a table it creates is missing from this schema and 'users' may exist")
+        expect(text).not_to include("not found in current schema")
+        expect(text).not_to include("This migration will fail.")
+      end
+    end
+
+    it "keeps the flat warning where nothing was skipped" do
+      expect(advise_for(nil, action: "remove_column", table: "users", column: "name")).to include("Table `users` not found in current schema. This migration will fail.")
+      expect(advise_for([], action: "add_column", table: "users", column: "name")).to include("Table `users` not found in current schema.")
     end
   end
 
@@ -1329,6 +1397,338 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       text = advise({ "users" => "uuid", "widgets" => "bigint" }, action: "create_table", table: "gadgets", column: "name:string")
 
       expect(text).to include("create_table :gadgets do |t|")
+    end
+  end
+
+  # The columns of schema.rb dumps of real PostgreSQL 17 and MySQL 9.6 tables (Rails 8.0); migration_advisor_rollback_spec
+  # runs the same migrations up and down on those databases.
+  describe "a rollback that writes the column back as the schema holds it" do
+    def advise(adapter, columns, **params)
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: adapter, tables: { "users" => { columns: columns } } }, models: {} })
+      described_class.call(table: "users", **params).content.first[:text]
+    end
+
+    let(:pg) do
+      [ { name: "mood", type: "enum", enum_type: "mood", default: "happy" }, { name: "tags", type: "string", array: true, default: "[]" },
+        { name: "names", type: "string", limit: 10, array: true, default: '["a", "b c"]' }, { name: "meta", type: "jsonb", null: false, default: "{}" },
+        { name: "code", type: "string", limit: 20, comment: "a code", collation: "C", default: "12" },
+        { name: "odd", type: "string", array: true, default: '[system("x")]' } ]
+    end
+
+    let(:my) do
+      [ { name: "kind", type: "enum('a','b')", default: "a" }, { name: "visits", type: "bigint", unsigned: true, default: "0" },
+        { name: "bio", type: "text", size: "medium" }, { name: "code", type: "string", default: "12" } ]
+    end
+
+    it "keeps a PostgreSQL column's enum type, array and json defaults, comment and collation" do
+      lines = %w[mood tags names meta code odd].map { |column| advise("postgresql", pg, action: "remove_column", column: column)[/^    remove_column .*$/] }
+      expect(lines).to eq([ %(    remove_column :users, :mood, :enum, default: "happy", enum_type: "mood"),
+                            "    remove_column :users, :tags, :string, array: true, default: []",
+                            %(    remove_column :users, :names, :string, limit: 10, array: true, default: ["a", "b c"]),
+                            "    remove_column :users, :meta, :jsonb, null: false, default: {}",
+                            %(    remove_column :users, :code, :string, limit: 20, default: "12", collation: "C", comment: "a code"),
+                            '    remove_column :users, :odd, :string, array: true, default: "[system(\"x\")]"' ])
+    end
+
+    # The booted tier reads a jsonb default off PostgreSQL 17 as its JSON text.
+    it "writes a json default the connection reads as JSON text as the Ruby literal" do
+      columns = [ { name: "prefs", type: "jsonb", default: '{"a": null, "b": [1, null]}' }, { name: "raw", type: "json", default: "not json" },
+                  { name: "num", type: "jsonb", default: "12" }, { name: "dumped", type: "jsonb", default: '{"a" => nil}' } ]
+      lines = %w[prefs raw num dumped].map { |column| advise("postgresql", columns, action: "remove_column", column: column)[/^    remove_column .*$/] }
+      expect(lines).to eq([ "    remove_column :users, :prefs, :jsonb, default: #{{ "a" => nil, "b" => [ 1, nil ] }.inspect}",
+                            %(    remove_column :users, :raw, :json, default: "not json"), %(    remove_column :users, :num, :jsonb, default: "12"),
+                            %(    remove_column :users, :dumped, :jsonb, default: {"a" => nil}) ])
+    end
+
+    it "writes a MySQL type SQL spells as a string, and keeps unsigned and size" do
+      lines = %w[kind visits bio].map { |column| advise("mysql2", my, action: "remove_column", column: column)[/^    remove_column .*$/] }
+      expect(lines).to eq([ %(    remove_column :users, :kind, "enum('a','b')", default: "a"), "    remove_column :users, :visits, :bigint, default: 0, unsigned: true",
+                            "    remove_column :users, :bio, :text, size: :medium" ])
+    end
+
+    # MariaDB 10.6 and 11.4 dump a json column so, its check named after it; MySQL 9.6 and MariaDB keep a hand-written one's own name.
+    it "writes a MariaDB longtext with its own json_valid check back as json, and a string or a differently named check as written" do
+      allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "mysql2", tables: { "users" => {
+        columns: [ { name: "data", type: "text", size: "long", collation: "utf8mb4_bin" }, { name: "s", type: "string" }, { name: "x", type: "text", size: "long" } ],
+        check_constraints: [ { name: "data", expression: "json_valid(`data`)" }, { name: "s", expression: "json_valid(`s`)" },
+                             { name: "x_is_json", expression: "json_valid(`x`)" } ]
+      } } }, models: {} })
+      lines = %w[data s x].map { |column| described_class.call(table: "users", action: "remove_column", column: column).content.first[:text][/^    remove_column .*$/] }
+      expect(lines).to eq([ %(    remove_column :users, :data, :json, size: :long, collation: "utf8mb4_bin"), "    remove_column :users, :s, :string",
+                            "    remove_column :users, :x, :text, size: :long" ])
+      expect(described_class.call(table: "users", action: "remove_column", column: "data").content.first[:text]).not_to include("remove_check_constraint")
+    end
+
+    describe "the indexes, checks and foreign keys a column takes with it" do
+      let(:table) do
+        { columns: [ { name: "id", type: "bigint" }, { name: "qty", type: "integer" }, { name: "code", type: "string" }, { name: "other", type: "integer" },
+                     { name: "owner_id", type: "bigint" } ],
+          indexes: [ { name: "one_qty", columns: [ "qty" ] }, { name: "two_code_qty", columns: %w[code qty], unique: true, order: { "qty" => "desc" } },
+                     { name: "pos_code", columns: [ "code" ], where: "qty > 0" }, { name: "lens", columns: %w[code qty], length: { "code" => 4 }, type: "fulltext" },
+                     { name: "plus_one", columns: [ "(qty + 1)" ], using: "hash" },
+                     { name: "trgm", columns: [ "code" ], opclass: { "code" => "gin_trgm_ops" }, using: "gin", include: [ "other" ], nulls_not_distinct: true },
+                     { name: "index_users_on_owner_id", columns: [ "owner_id" ] } ],
+          check_constraints: [ { name: "k_one", expression: "qty > 0" }, { name: "k_other", expression: "other > 0" }, { name: "k_none", expression: "length('plain') > 0" },
+                               { name: "k_two", expression: "qty <> code" }, { name: "k_late", expression: "qty < 100", validate: false } ],
+          foreign_keys: [ { from_table: "users", to_table: "owners", column: "owner_id", primary_key: "id", on_delete: "cascade", name: "fk_owner" },
+                          { from_table: "users", to_table: "owners", column: "other", primary_key: "uid", on_update: "restrict", deferrable: "deferred", validate: false,
+                            name: RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("users", "other") },
+                          { from_table: "users", to_table: "lots", column: %w[code other], primary_key: %w[code uid] } ] }
+      end
+      let(:orders) { { columns: [ { name: "id", type: "bigint" } ], foreign_keys: [ { from_table: "orders", to_table: "users", column: "user_code", primary_key: "code" } ] } }
+
+      def advised(adapter, column, rails_version: nil)
+        allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: adapter, tables: { "users" => table, "orders" => orders } }, models: {},
+                                                                        rails_version: rails_version }.compact)
+        described_class.call(table: "users", action: "remove_column", column: column).content.first[:text]
+      end
+
+      def change_body(adapter, column)
+        text = advised(adapter, column)
+        [ text[/  def change\n(.*?)  end\n/m, 1].lines.map(&:strip), text[/^\*\*Reversible:\*\*.*$/] ]
+      end
+
+      def warnings(adapter, column)
+        advised(adapter, column).scan(/^\*\*Warning:\*\*.*$/)
+      end
+
+      it "on PostgreSQL removes every index and check that names the column first" do
+        body, note = change_body("postgresql", "qty")
+        expect(body).to eq([ %(remove_index :users, :qty, name: "one_qty"),
+                             %(remove_index :users, [:code, :qty], name: "two_code_qty", unique: true, order: { qty: :desc }),
+                             %(remove_index :users, :code, name: "pos_code", where: "qty > 0"),
+                             %(remove_index :users, [:code, :qty], name: "lens", type: :fulltext, length: { code: 4 }),
+                             %(remove_index :users, "(qty + 1)", name: "plus_one", using: :hash),
+                             %(remove_check_constraint :users, "qty > 0", name: "k_one"),
+                             %(remove_check_constraint :users, "qty <> code", name: "k_two"),
+                             %(remove_check_constraint :users, "qty < 100", name: "k_late", validate: false),
+                             "remove_column :users, :qty, :integer" ])
+        expect(note).to eq("**Reversible:** Yes: the rollback adds the column back with its type and options, " \
+                           "then the checks, indexes and foreign keys the up removes, as the schema shows them")
+        expect(warnings("postgresql", "qty")).to eq([])
+      end
+
+      it "on MySQL shrinks a multi-column index as the server does, and removes a check that names no column" do
+        body, = change_body("mysql2", "qty")
+        expect(body).to eq([ %(remove_index :users, :qty, name: "one_qty"),
+                             %(remove_index :users, [:code, :qty], name: "two_code_qty", unique: true, order: { qty: :desc }),
+                             %(add_index :users, :code, name: "two_code_qty", unique: true),
+                             %(remove_index :users, :code, name: "pos_code", where: "qty > 0"),
+                             %(remove_index :users, [:code, :qty], name: "lens", type: :fulltext, length: { code: 4 }),
+                             %(add_index :users, :code, name: "lens", type: :fulltext, length: { code: 4 }),
+                             %(remove_index :users, "(qty + 1)", name: "plus_one", using: :hash),
+                             %(remove_check_constraint :users, "qty > 0", name: "k_one"),
+                             %(remove_check_constraint :users, "length('plain') > 0", name: "k_none"),
+                             %(remove_check_constraint :users, "qty <> code", name: "k_two"),
+                             %(remove_check_constraint :users, "qty < 100", name: "k_late", validate: false),
+                             "remove_column :users, :qty, :integer" ])
+        transaction = " MySQL and MariaDB do not run DDL in a transaction, so a failure leaves the steps above it done and the migration unrecorded."
+        expect(warnings("mysql2", "qty")).to eq([
+          "**Warning:** the index `two_code_qty` stays unique on `code` alone, so its `add_index` fails on rows that share a value there.#{transaction}",
+          "**Warning:** MySQL refuses to drop a column an expression index uses, so this removes the index `plus_one` first; only the rollback adds it back.",
+          "**Warning:** the check `k_two` (`qty <> code`) also names `code`: MySQL, MariaDB and SQLite refuse to drop `qty` while it holds, " \
+          "so this removes the check, and the rule is gone until the rollback."
+        ])
+      end
+
+      it "on SQLite shrinks a multi-column index, and removes an index whose where or expression names the column and the checks that do" do
+        body, = change_body("sqlite3", "qty")
+        expect(body).to eq([ %(remove_index :users, :qty, name: "one_qty"),
+                             %(remove_index :users, [:code, :qty], name: "two_code_qty", unique: true, order: { qty: :desc }),
+                             %(add_index :users, :code, name: "two_code_qty", unique: true),
+                             %(remove_index :users, :code, name: "pos_code", where: "qty > 0"),
+                             %(remove_index :users, [:code, :qty], name: "lens", type: :fulltext, length: { code: 4 }),
+                             %(add_index :users, :code, name: "lens", type: :fulltext, length: { code: 4 }),
+                             %(remove_index :users, "(qty + 1)", name: "plus_one", using: :hash),
+                             %(remove_check_constraint :users, "qty > 0", name: "k_one"),
+                             %(remove_check_constraint :users, "qty <> code", name: "k_two"),
+                             %(remove_check_constraint :users, "qty < 100", name: "k_late", validate: false),
+                             "remove_column :users, :qty, :integer" ])
+        expect(warnings("sqlite3", "qty")).to eq([
+          "**Warning:** the index `two_code_qty` stays unique on `code` alone, so its `add_index` fails on rows that share a value there.",
+          "**Warning:** the check `k_two` (`qty <> code`) also names `code`: MySQL, MariaDB and SQLite refuse to drop `qty` while it holds, " \
+          "so this removes the check, and the rule is gone until the rollback."
+        ])
+      end
+
+      it "removes the column's foreign key with its options before its index, and an index's opclass, include and nulls_not_distinct" do
+        body, = change_body("postgresql", "owner_id")
+        expect(body).to eq([ %(remove_foreign_key :users, :owners, column: :owner_id, on_delete: :cascade, name: "fk_owner"),
+                             %(remove_index :users, :owner_id, name: "index_users_on_owner_id"), "remove_column :users, :owner_id, :bigint" ])
+        expect(change_body("postgresql", "other").first).to eq(
+          [ "remove_foreign_key :users, :owners, column: :other, primary_key: :uid, on_update: :restrict, deferrable: :deferred, validate: false",
+            %(remove_foreign_key :users, :lots, column: ["code", "other"], primary_key: ["code", "uid"]),
+            %(remove_index :users, :code, name: "trgm", using: :gin, include: [:other], opclass: { code: :gin_trgm_ops }, nulls_not_distinct: true),
+            %(remove_check_constraint :users, "other > 0", name: "k_other"), "remove_column :users, :other, :integer" ]
+        )
+      end
+
+      it "removes a composite foreign key with any of its columns, its columns and keys written as arrays of names" do
+        expect(change_body("postgresql", "code").first.first).to eq(%(remove_foreign_key :users, :lots, column: ["code", "other"], primary_key: ["code", "uid"]))
+      end
+
+      # Rails 7.0's foreign key methods compare a column as a string and interpolate it into the key's name.
+      it "on Rails 7.0 removes and restores a composite foreign key with SQL, a single-column one with remove_foreign_key" do
+        name = RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("users", %w[code other])
+        table[:foreign_keys].last.merge!(on_delete: "cascade", deferrable: "deferred", validate: false)
+        expect(advised("postgresql", "code", rails_version: "7.0.10")[/  def change\n(.*?)\n    remove_index/m, 1]).to eq(<<~RUBY.chomp
+              # Rails 7.0's foreign key methods take one column, so this key on several goes through SQL.
+              reversible do |dir|
+                dir.up { execute "ALTER TABLE \\"users\\" DROP CONSTRAINT \\"#{name}\\"" }
+                dir.down { execute "ALTER TABLE \\"users\\" ADD CONSTRAINT \\"#{name}\\" FOREIGN KEY (\\"code\\", \\"other\\") REFERENCES \\"lots\\" (\\"code\\", \\"uid\\") ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED NOT VALID" }
+              end
+        RUBY
+          .gsub(/^/, "    "))
+        expect(advised("mysql2", "code", rails_version: "7.0.10")[/  def change\n(.*?)\n    remove_index/m, 1].lines.drop(2).first(2).map(&:strip)).to eq([
+          "dir.up { execute \"ALTER TABLE `users` DROP FOREIGN KEY `#{name}`\" }",
+          "dir.down { execute \"ALTER TABLE `users` ADD CONSTRAINT `#{name}` FOREIGN KEY (`code`, `other`) REFERENCES `lots` (`code`, `uid`) ON DELETE CASCADE\" }"
+        ])
+        expect(advised("postgresql", "owner_id", rails_version: "7.0.10")).to include(%(    remove_foreign_key :users, :owners, column: :owner_id, on_delete: :cascade, name: "fk_owner"\n))
+        expect(advised("postgresql", "code", rails_version: "7.1")).not_to include("execute")
+      end
+
+      # Live on 7.0.10 with SQLite: remove_foreign_key raises on the key's array, and remove_column drops only the half on the
+      # column, so the rebuilt table keeps the rest pointing at the parent, which SQLite refuses unless that is unique alone.
+      it "on Rails 7.0 and SQLite leaves a composite foreign key to remove_column and says that usually fails" do
+        text = advised("sqlite3", "code", rails_version: "7.0.10")
+        expect(text).not_to include("remove_foreign_key :users, :lots")
+        expect(text).not_to include("execute")
+        expect(text.scan(/^\*\*Warning:\*\*.*$/)).to include(
+          "**Warning:** Rails 7.0 has no call that drops the foreign key on `code`, `other` to `lots` on SQLite, so this leaves it to `remove_column`, " \
+          "which rebuilds `users` keeping the key on `other` to `lots.uid`. SQLite refuses that rebuild (foreign key mismatch) unless `lots.uid` is " \
+          "unique on its own, and the rollback does not put the key back as one."
+        )
+        expect(advised("sqlite3", "code", rails_version: "7.1")).to include(%(    remove_foreign_key :users, :lots, column: ["code", "other"], primary_key: ["code", "uid"]\n))
+      end
+
+      # SQLite has no call that drops such a key on every Rails, so an unknown one gets 7.1's, labelled; the SQL runs on every one.
+      it "on an unknown Rails writes SQLite's composite key calls as 7.1 has them, with the label, and keeps the SQL elsewhere" do
+        allow(described_class).to receive(:resolved_rails_version).and_return(nil)
+        orders[:foreign_keys] = [ { from_table: "orders", to_table: "users", column: %w[user_code user_qty], primary_key: %w[code qty] } ]
+        label = "assuming Rails 7.1+ as Gemfile.lock names no Rails version; on 7.0 this call raises"
+        text = advised("sqlite3", "code")
+        expect(text).to include(%(    remove_foreign_key :users, :lots, column: ["code", "other"], primary_key: ["code", "uid"]\n))
+        expect(text.scan(/^\*\*(?:Warning|Note):\*\*.*$/)).to include(
+          %(**Note:** `remove_foreign_key :users, :lots, column: ["code", "other"], primary_key: ["code", "uid"]` is written #{label}.),
+          "**Warning:** a foreign key on `orders` references `users.code`, so the drop fails while it holds: " +
+          %(run `remove_foreign_key :orders, :users, column: ["user_code", "user_qty"], primary_key: ["code", "qty"]` first, #{label}.)
+        )
+        expect(text).not_to include("Rails 7.0 has no call")
+        expect(text).to include("**Reversible:** Yes: the rollback adds the column back")
+        expect(advised("postgresql", "code")).to include("dir.up { execute ")
+        expect(advised("postgresql", "code")).not_to include(label)
+      end
+
+      it "on Rails 7.0 and SQLite says the rollback does not bring back the composite key it leaves to remove_column" do
+        expect(advised("sqlite3", "code", rails_version: "7.0.10")[/^\*\*Reversible:\*\*.*$/]).to eq(
+          "**Reversible:** Partly: the rollback adds the column back with its type and options, then the checks, indexes and foreign keys the up removes, " \
+          "as the schema shows them, but not the foreign key on `code`, `other` to `lots`"
+        )
+      end
+
+      it "on Rails 7.0 drops and restores a composite key by the name the database has when the schema hides it" do
+        table[:foreign_keys].last.merge!(actual_name: "fk_rails_0123456789")
+        orders[:foreign_keys] = [ { from_table: "orders", to_table: "users", column: %w[user_code user_qty], primary_key: %w[code qty], actual_name: "fk_rails_9876543210" } ]
+        text = advised("postgresql", "code", rails_version: "7.0.10")
+
+        expect(text).to include(%(DROP CONSTRAINT \\"fk_rails_0123456789\\"), %(ADD CONSTRAINT \\"fk_rails_0123456789\\" FOREIGN KEY))
+        expect(text).to include(%(DROP CONSTRAINT \\"fk_rails_9876543210\\"))
+      end
+
+      it "on Rails 7.0 says to drop a composite key on another table that references the column with SQL, and on SQLite that no call can" do
+        orders[:foreign_keys] = [ { from_table: "orders", to_table: "users", column: %w[user_code user_qty], primary_key: %w[code qty] } ]
+        name = RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("orders", %w[user_code user_qty])
+        said = ->(adapter, rails) { advised(adapter, "code", rails_version: rails).scan(/^\*\*Warning:\*\*.*$/).grep(/on `orders`/) }
+        head = "**Warning:** a foreign key on `orders` references `users.code`, so the drop fails while it holds: "
+        expect(said.("postgresql", "7.0.10")).to eq([ %(#{head}run `execute "ALTER TABLE \\"orders\\" DROP CONSTRAINT \\"#{name}\\""` first.) ])
+        expect(said.("mysql2", "7.0.10")).to eq([ %(#{head}run `` execute "ALTER TABLE `orders` DROP FOREIGN KEY `#{name}`" `` first.) ])
+        expect(said.("sqlite3", "7.0.10")).to eq([ "#{head}Rails 7.0 has no call that drops a foreign key on several columns on SQLite, " \
+                                                   "so `orders` has to be rebuilt without it first." ])
+        expect(said.("postgresql", "7.1")).to eq([ %(#{head}run `remove_foreign_key :orders, :users, column: ["user_code", "user_qty"], primary_key: ["code", "qty"]` first.) ])
+      end
+
+      it "on Rails 7.0 quotes the tables of a composite key as identifiers: a name with a quote or a dot is one, schema.name is two" do
+        orders[:foreign_keys] = [ { from_table: 'q"t', to_table: "users", column: %w[user_code user_qty], primary_key: %w[code qty], actual_name: "fk_rails_0123456789" } ]
+        allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "postgresql", tables: { "users" => table, 'q"t' => orders, "x.y" => { columns: [] } },
+                                                                                  qualified_tables: { "audit.log" => { columns: [] } } },
+                                                                        models: {}, rails_version: "7.0.10" })
+
+        text = described_class.call(table: "users", action: "remove_column", column: "code").content.first[:text]
+
+        expect(text).to include(%(execute "ALTER TABLE \\"q\\"\\"t\\" DROP CONSTRAINT \\"fk_rails_0123456789\\""))
+      end
+
+      it "on Rails 7.0 writes ALTER TABLE for a key referencing a qualified or dotted table with the right identifiers" do
+        sql = lambda do |from, to, tables|
+          orders[:foreign_keys] = [ { from_table: from, to_table: to, column: %w[user_code user_qty], primary_key: %w[code qty] } ]
+          allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "postgresql", tables: tables.merge("users" => table) }, models: {}, rails_version: "7.0.10" })
+          described_class.send(:composite_key_sql, from, orders[:foreign_keys].first, RailsAiContext::DatabaseFamily.of("postgresql")).last
+        end
+
+        expect(sql.("audit.log", "x.y", { "x.y" => { columns: [] } })).to include('ALTER TABLE "audit"."log"', 'REFERENCES "x.y" ("code", "qty")')
+        expect(sql.("my-table", "users", { "my-table" => { columns: [] } })).to include('ALTER TABLE "my-table" ADD CONSTRAINT')
+      end
+
+      it "writes valid Ruby for a key on another table whose name is not a plain identifier" do
+        orders[:foreign_keys] = [ { from_table: 'q"t', to_table: "users", column: "user_code", primary_key: "code" } ]
+        allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "postgresql", tables: { "users" => table, 'q"t' => orders } }, models: {} })
+
+        text = described_class.call(table: "users", action: "remove_column", column: "code").content.first[:text]
+        call = text[/run `(remove_foreign_key [^`]*)` first/, 1]
+
+        expect(call).to start_with('remove_foreign_key :"q\\"t", :users')
+        expect { RubyVM::InstructionSequence.compile(call) }.not_to raise_error
+      end
+
+      it "warns about a foreign key held by a table in another PostgreSQL schema" do
+        orders[:foreign_keys] = [ { from_table: "app.orders", to_table: "users", column: %w[user_code user_qty], primary_key: %w[code qty] } ]
+        allow(RailsAiContext::Introspectors::SchemaIntrospector).to receive(:qualified_tables).and_return({ "app.orders" => orders })
+        allow(described_class).to receive(:cached_context).and_return({ schema: { adapter: "postgresql", tables: { "users" => table } }, models: {}, rails_version: "7.0.10" })
+
+        text = described_class.call(table: "users", action: "remove_column", column: "code").content.first[:text]
+
+        expect(text).to include("a foreign key on `app.orders` references `users.code`", 'ALTER TABLE \\"app\\".\\"orders\\" DROP CONSTRAINT')
+      end
+
+      it "says which call to run first for a key on another table that references the column" do
+        expect(warnings("postgresql", "code")).to eq([
+          "**Warning:** a foreign key on `orders` references `users.code`, so the drop fails while it holds: " \
+          "run `remove_foreign_key :orders, :users, column: :user_code, primary_key: :code` first."
+        ])
+      end
+
+      it "says remove_column reverses with the type and options it is given, and calls it irreversible nowhere" do
+        text = advised("postgresql", "other")
+        expect(text).to include("**Note:** `remove_column` reverses only with the column's type and options, which the line below gives.")
+        expect(text).not_to include("irreversible")
+      end
+    end
+
+    it "quotes a keyword column in using:" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "PostgreSQL", tables: { "users" => { columns: [ { name: "order", type: "string" } ] } } }, models: {}
+      })
+      text = described_class.call(action: "change_type", table: "users", column: "order", type: "integer").content.first[:text]
+
+      expect(text).to include(%(using: "\\"order\\"::integer"))
+    end
+
+    it "casts a PostgreSQL string to an integer with using:, dropping the default it cannot cast first, and nothing on MySQL" do
+      pg_text = advise("postgresql", pg, action: "change_type", column: "code", type: "integer")
+      expect(pg_text).to include("    change_column_default :users, :code, nil\n    change_column :users, :code, :integer, using: \"code::integer\"")
+      expect(pg_text).to include(%(    change_column :users, :code, :string, limit: 20, default: "12", collation: "C", comment: "a code"\n))
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: postgresql\n  database: app\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        expect(advise("static_parse", pg, action: "change_type", column: "code", type: "integer")).to include(%(using: "code::integer"))
+      end
+      back = advise("postgresql", [ { name: "n", type: "integer" } ], action: "change_type", column: "n", type: "string")
+      expect(back).to include("    change_column :users, :n, :string\n")
+      expect(back).to include(%(    change_column :users, :n, :integer, using: "n::integer"\n))
+      my_text = advise("mysql2", my, action: "change_type", column: "code", type: "integer")
+      expect(my_text).to include("    change_column :users, :code, :integer\n")
+      expect(my_text).not_to include("using:")
     end
   end
 end

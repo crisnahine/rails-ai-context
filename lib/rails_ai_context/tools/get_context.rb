@@ -367,8 +367,8 @@ module RailsAiContext
                         AnalyzeFeature.feature_word_match?(models[model_name][:table_name], feature_name)
             matched_models << model_name
             table_name = models[model_name][:table_name]
-            next unless table_name
-            matched_tables << table_name
+            next unless table_name && matched_tables.add?(table_name)
+
             parts << section_text(compose(GetSchema, table: table_name))
           end
 

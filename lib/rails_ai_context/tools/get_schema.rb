@@ -64,7 +64,8 @@ module RailsAiContext
             table_down = table.downcase
             # "Post" and "Admin::ActionLog" are model names here, and the model
             # tier knows the table each of them reads.
-            table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
+            answer = RailsAiContext::Introspectors::TableName.of_model(table, models_data)
+            table_as_table = answer.table
             _, table_key, table_data, listed_as = Payload.schema_tables(schema).find { |_, k, _|
               k.downcase == table_down || k == table_as_table || k == table.underscore
             } || Payload.table_holders(schema, table).first
@@ -90,13 +91,18 @@ module RailsAiContext
                 )
               end
 
+              if answer.set_by && !table_as_table
+                return text_response("The table of `#{table}` is set by `#{answer.set_by}`, which the static tier did not read; pass the table name.")
+              end
+
               recovery = "Call rails_get_schema(detail:\"summary\") to see all tables"
               # Rails' own schema.rb dumper writes no view; only a gem such as scenic adds them.
               if Payload.parsed_schema?(schema)
                 recovery += ". Without a connection a view is listed only when the dump records it: structure.sql does, schema.rb only through a gem such as scenic"
               end
               return not_found_response("Table", table, Payload.schema_tables(schema).map { |_, name, _| name }.uniq.sort, recovery_tool: recovery,
-                                                                                                         note: Payload.missing_qualified_table(schema, table))
+                                                                                                         note: [ Payload.missing_qualified_table(schema, table), Payload.skipped_calls_note(schema, table) ].compact.join("\n\n").presence,
+                                                                                                         verdict: (schema[:skipped_calls].present? ? "is not in the schema the replay built" : "not found"))
             end
             # Databases holding the same table read as one; ones that differ each show their own.
             groups = Payload.schema_tables(schema).select { |_, name, _| name == table_key }
@@ -109,7 +115,7 @@ module RailsAiContext
                 format_table_markdown(table_key, data, in_db, schema[:enum_types], schema[:search_path]).sub("\n\n", "\n\n**Database:** #{dbs.join(", ")}\n")
               end.join("\n\n")
             else
-              return json_response(table_data.except(:unread_calls).merge({ database: database }.compact)) if format == "json"
+              return json_response(table_data.except(:unread_calls).merge({ database: database, fk_ignore_pattern_note: (FK_PATTERN_TEXT if schema[:fk_ignore_pattern_unread] && table_data[:foreign_keys]&.any?) }.compact)) if format == "json"
 
               output = format_table_markdown(table_key, table_data, models_data, schema[:enum_types], schema[:search_path],
                                              listed_as: listed_as, schema: schema, database: (databases.first if databases.size == 1))
@@ -133,7 +139,7 @@ module RailsAiContext
             end
 
             lines = [ "# Schema Summary (#{Introspectors::SchemaConventions.relations_phrase(tables)})", "" ]
-            lines << "**Adapter:** #{adapter_label(ctx)}" if schema[:adapter]
+            lines << "**Adapter:** #{RailsAiContext::SchemaAdapter.label_with_reason(ctx)}" if schema[:adapter]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
               data = tables[name]
@@ -289,18 +295,13 @@ module RailsAiContext
         end
       end
 
-      # The same seam the generated context files use. Answering this question
-      # locally is how one app came to be told it runs on PostgreSQL by
-      # CLAUDE.md and on "unknown" by this tool, in the same session.
-      private_class_method def self.adapter_label(ctx)
-        RailsAiContext::SchemaAdapter.label_with_reason(ctx)
-      end
-
       # Rails builds no model for a has_and_belongs_to_many join table, so one
       # is not a table whose model is missing. The name is the two tables
-      # sorted, unless the association writes :join_table itself.
+      # sorted, unless the association writes :join_table itself. unnamed: the
+      # models whose join table a computed table name leaves unknown.
       private_class_method def self.habtm_join_tables(models)
-        models.each_with_object(Set.new) do |(name, data), found|
+        unnamed = []
+        names = models.each_with_object(Set.new) do |(name, data), found|
           next unless data.is_a?(Hash)
 
           Array(data[:associations]).each do |assoc|
@@ -311,17 +312,20 @@ module RailsAiContext
               found << declared.to_s
               next
             end
-            next unless data[:table_name]
+            unless data[:table_name]
+              unnamed |= [ name ]
+              next
+            end
 
             written = assoc[:class_name] || options[:class_name] || assoc[:name].to_s.camelize.singularize
             other = RailsAiContext::Introspectors::TableName.resolve_class(written, name) { |candidate| candidate if models.key?(candidate) }
-            found << RailsAiContext::Introspectors::HabtmJoinTables.join_table_name(
-              data[:table_name], RailsAiContext::Introspectors::TableName.for_model_name(other, models)
-            )
+            other_table = RailsAiContext::Introspectors::TableName.of_model(other, models).table
+            other_table ? found << RailsAiContext::Introspectors::HabtmJoinTables.join_table_name(data[:table_name], other_table) : unnamed |= [ name ]
           end
         end
+        { names: names, unnamed: unnamed }
       rescue => e
-        RailsAiContext.debug_fail(e, Set.new, label: "habtm_join_tables")
+        RailsAiContext.debug_fail(e, { names: Set.new, unnamed: [] }, label: "habtm_join_tables")
       end
 
       # Tables a gem creates and declares its model for, by the names its install migration uses.
@@ -395,8 +399,14 @@ module RailsAiContext
         lines << "**Extensions:** #{schema[:extensions].join(', ')}" if schema[:extensions]&.any?
         # The context keeps a search path only when it holds more than public.
         lines << "**Search path:** #{schema[:search_path].join(', ')}" if schema[:search_path].is_a?(Array)
+        lines << FK_PATTERN_NOTE if schema[:fk_ignore_pattern_unread]
         lines
       end
+
+      FK_PATTERN_TEXT = "This app sets SchemaDumper.fk_ignore_pattern, which a read without booting cannot apply: a foreign key's name is left " \
+                        "out only where it matches Rails' default (fk_rails_ and ten hex digits), so a booted read may hide a name listed here " \
+                        "or list one hidden here."
+      FK_PATTERN_NOTE = "_#{FK_PATTERN_TEXT}_"
 
       # The dump a static parse read, from its own note when nothing else names it.
       private_class_method def self.dump_name(schema)
@@ -494,7 +504,10 @@ module RailsAiContext
         listed = %i[check_constraints generated_columns].filter_map do |key|
           [ key, schema[key].select { |row| page.key?(row[:table].to_s) } ] if schema[key].is_a?(Array)
         end
-        json_response(schema.merge(tables: page, **listed.to_h, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed]))
+        base = schema.except(:fk_ignore_pattern_unread)
+        base = base.merge(fk_ignore_pattern_note: FK_PATTERN_TEXT) if schema[:fk_ignore_pattern_unread]
+        json_response(base.merge(tables: page, **listed.to_h, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed],
+                                   habtm_join_tables_unnamed: coverage[:unnamed_joins]))
       end
 
       COVERAGE_CAP = 15
@@ -504,13 +517,17 @@ module RailsAiContext
       private_class_method def self.model_coverage(tables, models, schema = nil)
         # A view or virtual table often has no model and is still read, so only tables count.
         database = ("primary" if schema)
+        # A base the gem may not read could own any table, so none can be said to lack a model.
+        return { gems: {}, unclaimed: [], unnamed_joins: [] } if models.any? { |_, d| d.is_a?(Hash) && d[:hidden_base] }
+
+        joins = habtm_join_tables(models)
         unclaimed = tables.keys.sort.select { |name| !tables[name][:kind] && models_for_table(name, models, schema: schema, database: database).empty? } -
-                    habtm_join_tables(models).to_a
+                    joins[:names].to_a
         unclaimed -= declared_join_tables(models).to_a if unclaimed.any?
         # A file the walk could not read claims no table, but it is still a model file.
         unclaimed -= models.filter_map { |_, d| d[:table_name] || Introspectors::TableName.stem(d[:file]) if d.is_a?(Hash) && d[:error] && d[:file] }
         gems = gem_owned(unclaimed)
-        { gems: gems, unclaimed: unclaimed - gems.values.flatten }
+        { gems: gems, unclaimed: unclaimed - gems.values.flatten, unnamed_joins: joins[:unnamed] }
       end
 
       private_class_method def self.model_coverage_lines(tables, models, schema = nil)
@@ -521,6 +538,9 @@ module RailsAiContext
           lines << "\u26A0 **Tables with no model file in this app**: #{capped(unclaimed)}"
           lines << "A gem that owns a table declares its model in the gem, so check the Gemfile before " \
                    "treating one of these as dead."
+          coverage[:unnamed_joins].each do |model|
+            lines << "`#{model}` has a has_and_belongs_to_many whose other table is computed, so a join table in this list may be its."
+          end
         end
         lists = [ unclaimed, *coverage[:gems].values ]
         if lists.any? { |list| list.size > COVERAGE_CAP }
@@ -540,6 +560,7 @@ module RailsAiContext
         label = col[:type].to_s
         sizes = [ col[:precision], col[:scale] ].compact
         label += "(#{sizes.join(',')})" if col[:precision]
+        label += ", precision: nil" if col.key?(:precision) && col[:precision].nil?
         label += "[]" if col[:array]
         label += ", limit: #{col[:limit]}" if col[:limit]
         label += ", size: #{col[:size]}" if col[:size]
@@ -654,17 +675,28 @@ module RailsAiContext
         if data[:foreign_keys]&.any?
           lines << "" << "### Foreign keys"
           data[:foreign_keys].each do |fk|
-            actions = fk.slice(:on_delete, :on_update, :deferrable, :validate).map { |key, value| "#{key}: #{value}" }
+            actions = fk.slice(:name, :on_delete, :on_update, :deferrable, :validate).map { |key, value| "#{key}: #{value}" }
             lines << "- `#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:column])}` → " \
                      "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`" \
                      "#{" (#{actions.join(', ')})" if actions.any?}"
           end
+          lines << "" << FK_PATTERN_NOTE if schema&.dig(:fk_ignore_pattern_unread)
         end
 
         if data[:check_constraints]&.any?
           lines << "" << "### Check constraints"
           data[:check_constraints].each do |constraint|
-            lines << "- #{"`#{constraint[:name]}`: " if constraint[:name]}#{constraint[:expression]}"
+            lines << "- #{"`#{constraint[:name]}`: " if constraint[:name]}#{constraint[:expression]}#{" (validate: false)" if constraint[:validate] == false}"
+          end
+        end
+
+        if data[:exclusion_constraints]&.any?
+          lines << "" << "### Exclusion constraints"
+          data[:exclusion_constraints].each do |constraint|
+            using = " USING #{constraint[:using]}" if constraint[:using]
+            where = " WHERE (#{constraint[:where]})" if constraint[:where]
+            lines << "- #{"`#{constraint[:name]}`: " if constraint[:name]}EXCLUDE#{using} (#{constraint[:expression]})#{where}" \
+                     "#{" (deferrable: #{constraint[:deferrable]})" if constraint[:deferrable]}"
           end
         end
 

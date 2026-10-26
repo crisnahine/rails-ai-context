@@ -56,16 +56,37 @@ module RailsAiContext
     # object. Reported as such, so nobody hunts for a misspelling.
     RUBY_ONLY_KEYS = %i[custom_tools].freeze
 
-    # Load configuration from a YAML file, applying values to the current config instance.
+    # The lists that keep a file or tool out of reach, the YAML's entries kept beside the code's so no tier serves what another withholds.
+    UNION_KEYS = %i[sensitive_patterns excluded_paths skip_tools].freeze
+
+    # Load configuration from a YAML file, applying values to `config`.
     # Only keys present in the YAML are set; absent keys keep their defaults.
-    def self.load_from_yaml(path)
+    def self.load_from_yaml(path, config = RailsAiContext.configuration)
       return unless File.exist?(path)
 
-      data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES, aliases: true) || {}
+      data, error = read_yaml(path)
+      return $stderr.puts("[rails-ai-context] WARNING: #{yaml_problem(path, error)}") if error
+
+      apply_yaml(data, path, config)
+    end
+
+    # @return [Array(Object, Exception)] the file's data, or nil and the error that kept it from being read
+    def self.read_yaml(path)
+      [ YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES, aliases: true) || {}, nil ]
+    rescue Psych::Exception, SystemCallError => e
+      # File.exist? is true for a directory and for a file the process cannot
+      # read, and this runs inside an engine initializer on every boot.
+      [ nil, e ]
+    end
+
+    def self.yaml_problem(path, error)
+      error.is_a?(SystemCallError) ? "#{path} could not be read (#{error.message}). Using defaults." : "#{path} has invalid YAML (#{error.message}). Using defaults."
+    end
+
+    def self.apply_yaml(data, path, config)
       return $stderr.puts("[rails-ai-context] WARNING: #{path}: the file holds no `key: value` settings. Ignored.") unless data.is_a?(Hash)
 
-      config = RailsAiContext.configuration
-
+      defaults = new
       data.each do |key, value|
         # A permitted Date or Time key has no `to_sym`, and a NoMethodError
         # here escapes into app boot.
@@ -84,10 +105,20 @@ module RailsAiContext
           next
         end
         next if value.nil?
-        next if config.block_assigned_keys.include?(key_sym)
+
+        union = UNION_KEYS.include?(key_sym)
+        next if config.block_assigned_keys.include?(key_sym) && !union
 
         begin
+          next config.public_send(:"#{key_sym}=", coerce_value(key_sym, value)) unless union
+
+          # A block before the file that assigned the key keeps all it wrote; an in-place edit, what it added.
+          current = Array(config.public_send(key_sym)).map(&:to_s)
+          current -= defaults.public_send(key_sym) unless config.block_assigned_keys.include?(key_sym)
           config.public_send(:"#{key_sym}=", coerce_value(key_sym, value))
+          entries = config.public_send(key_sym).map(&:to_s)
+          config.public_send(:"#{key_sym}=", entries | current)
+          config.yaml_entries[key_sym] = entries
         rescue ArgumentError => e
           # A bad value degrades the same way bad syntax does: warn, keep the
           # default, and let the rest of the file apply.
@@ -96,14 +127,6 @@ module RailsAiContext
       end
 
       config
-    rescue Psych::Exception => e
-      $stderr.puts "[rails-ai-context] WARNING: #{path} has invalid YAML (#{e.message}). Using defaults."
-      nil
-    rescue SystemCallError => e
-      # File.exist? is true for a directory and for a file the process cannot
-      # read, and this runs inside an engine initializer on every boot.
-      $stderr.puts "[rails-ai-context] WARNING: #{path} could not be read (#{e.message}). Using defaults."
-      nil
     end
 
     # Load .rails-ai-context.yml as the base over the defaults, once per
@@ -153,7 +176,6 @@ module RailsAiContext
         value
       end
     end
-    private_class_method :coerce_value
 
     # A list of names, from YAML or Ruby. An empty item, such as an unset ENV
     # lookup, is dropped; a nested list is the same mistake as a bad value.
@@ -190,8 +212,8 @@ module RailsAiContext
       end
     end
 
-    # Keys a `RailsAiContext.configure` block assigned. The YAML load skips
-    # them, so the block wins key by key whether it sits in an initializer,
+    # Keys a `RailsAiContext.configure` block assigned, or any code before the file loaded. The YAML load
+    # skips them, so the code wins key by key whether it sits in an initializer,
     # config/application.rb or an environment file.
     def block_assigned_keys
       @block_assigned_keys ||= []
@@ -217,25 +239,34 @@ module RailsAiContext
 
     # The writer is what records, so assigning a key its default value still
     # claims it for the block; comparing values around the block would not.
+    # A union key assigned after the file loaded keeps the file's entries beside the new value.
     BLOCK_ASSIGNMENT_RECORDER = Module.new do
       YAML_KEYS.each do |key|
         define_method(:"#{key}=") do |value|
-          block_assigned_keys << key if @recording_block_assignments
           super(value)
+          block_assigned_keys << key if @recording_block_assignments || !config_file_applied?
+          return unless UNION_KEYS.include?(key) && yaml_entries.key?(key)
+
+          instance_variable_set(:"@#{key}", Array(public_send(key)) | yaml_entries[key])
         end
       end
+    end
+
+    # What .rails-ai-context.yml gave each union key, so a later assignment keeps it.
+    def yaml_entries
+      @yaml_entries ||= {}
     end
     prepend BLOCK_ASSIGNMENT_RECORDER
 
     PRESETS = {
       standard: %i[schema models routes jobs gems conventions controllers tests migrations stimulus
                    view_templates config components
-                   turbo auth performance i18n],
+                   turbo auth performance i18n].freeze,
       full: %i[schema models routes jobs gems conventions stimulus database_stats controllers views view_templates turbo
                i18n config active_storage action_text auth api tests rake_tasks assets
                devops action_mailbox migrations seeds middleware engines env_config multi_database
                components performance frontend_frameworks
-               initializers autoload connection_pool active_support credentials security observability env]
+               initializers autoload connection_pool active_support credentials security observability env].freeze
     }.freeze
 
     # MCP server settings
@@ -355,7 +386,14 @@ module RailsAiContext
     # answers from the record, so no surface re-asks a question already
     # answered.
     def ai_tools
-      @ai_tools ||= Install::SelectionRecord.read(root: selection_root)
+      return @ai_tools unless @ai_tools.nil?
+
+      # Read once per root, so each call does not read every initializer again.
+      root = selection_root
+      return @ai_tools_read if @ai_tools_read_root == root
+
+      @ai_tools_read_root = root
+      @ai_tools_read = UnbootedSettings.read(root).ai_tools
     end
 
     # Tool invocation mode: :mcp (MCP primary + CLI fallback) or :cli (CLI only)
@@ -459,6 +497,7 @@ module RailsAiContext
         *.pem *.key *.p8 *.p12 *.pfx *.jks *.keystore
         **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa
         .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
+        .npmrc .yarnrc .bundle/config
       ]
       @auto_mount          = false
       @allow_http_in_production = false

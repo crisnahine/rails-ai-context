@@ -201,4 +201,21 @@ RSpec.describe RailsAiContext::AstCache do
       expect(described_class.parse(path, ruby: "3.3.0").success?).to be true
     end
   end
+
+  describe ".source" do
+    it "reads a file once per run, frozen, and again in the next run" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "post.rb")
+        File.write(path, "class Post\nend\n")
+        allow(RailsAiContext::SafeFile).to receive(:read).and_call_original
+
+        texts = RailsAiContext::RunCache.around { Array.new(2) { described_class.source(path) } }
+        RailsAiContext::RunCache.around { described_class.source(path) }
+
+        expect(texts.uniq).to eq([ "class Post\nend\n" ])
+        expect(texts.first).to be_frozen
+        expect(RailsAiContext::SafeFile).to have_received(:read).with(path).twice
+      end
+    end
+  end
 end

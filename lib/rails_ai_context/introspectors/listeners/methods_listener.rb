@@ -49,6 +49,10 @@ module RailsAiContext
           has_one: :extension, belongs_to: :extension, concern: :extension
         }.freeze
 
+        # Their block runs on the class itself, or only yields, so a def in it is the class's.
+        OWN_BLOCKS = (RUN_ONCE + %i[class_eval module_eval class_exec module_exec with_options silence_warnings
+                                    define_singleton_method lambda proc]).to_set.freeze
+
         # Each defines a public method whatever `private` section it sits in;
         # only Rails' `private: true` makes one private.
         DELEGATORS = %i[delegate def_delegators def_instance_delegators def_delegator def_instance_delegator instance_delegate].freeze
@@ -124,6 +128,12 @@ module RailsAiContext
             record_delegated(node) if @def_depth.zero?
           when DEFINERS
             record_defined(node) if @def_depth.zero? && @frames.last.kind != :extension
+          when :instance_eval, :instance_exec
+            # Ruby defines singleton methods there.
+            @scoped_blocks[node.block] = :singleton if node.block.is_a?(Prism::BlockNode)
+          else
+            # A macro (`params do`) in a class body usually runs its block on a class it builds, so a def in it is no method of this one.
+            @scoped_blocks[node.block] ||= :extension if node.block.is_a?(Prism::BlockNode) && !@owner_stack.empty? && !OWN_BLOCKS.include?(node.name)
           end
         end
 

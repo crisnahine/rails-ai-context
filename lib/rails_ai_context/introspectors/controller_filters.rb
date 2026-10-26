@@ -50,25 +50,8 @@ module RailsAiContext
         methods: Listeners::MethodsListener
       }.freeze
 
-      # The class body's receiverless calls by name, read only once a mixin's class method declares a filter.
-      # A class method the chain defines makes its own calls where a call of it runs
-      # (`def self.public_page = allow_unauthenticated_access only: :show`), each listed as Relayed.
-      CallSites = Struct.new(:source, :defs) do
-        def sites_by_name
-          @sites_by_name ||= begin
-            tree = AstCache.parse_string(source)&.value
-            sites = tree ? SourceIntrospector.calls_outside_methods(tree, self_receiver: true) : {}
-            defs ? ControllerFilters.relayed(sites, defs.call) : sites
-          end
-        end
-      end
-
-      # The body's calls and the calls its concerns' blocks make, all run with the class as self.
-      Sites = Struct.new(:body, :blocks) do
-        def sites_by_name
-          @sites_by_name ||= ConcernMacros::Run.merge_calls(ConcernMacros::Run.merge_calls({}, body.sites_by_name), blocks)
-        end
-      end
+      # The chain walk reads the class-level settings ControllerSettings reports with the filters.
+      CHAIN_LISTENERS = LISTENERS.merge(settings_calls: ControllerSettings::LISTENERS[:settings_calls]).freeze
 
       module_function
 
@@ -81,61 +64,54 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
 
-      # The class body's filters and every included concern's, in Rails' order: an `include`
-      # adds its concern's filters where it stands, each named in `from_concern`. A class
-      # method the body calls (`allow_unauthenticated_access`) declares what its body does,
-      # with the call's options, where the call stands, wherever on the chain it is defined.
+      # The class body's filters and every included concern's, in Rails' order, each concern's named in
+      # `from_concern`; a parent's own filters come from their entries.
       #
       # @param within [String] the class's constant, for a namespace-relative `include`
       # @param cache [Hash, nil] see ConcernMacros.collect
       # @return [Array(Array<Hash>, Array<String>)] the filters, and the
       #   included modules whose file could not be read
       def with_concerns(source, root:, within:, cache: nil)
-        # A tool reading each route's base controller walks the same concerns for every route.
-        cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
-        walked = SourceIntrospector.walk_source(source, LISTENERS)
-        mixins = Array(walked[:mixins])
-        chain_defs = nil
-        calls = CallSites.new(source, -> { chain_defs ||= class_method_defs(source, mixins, within, root, cache) })
-        # One walk, so a concern two includes reach is added once, as Ruby does.
-        found = ConcernMacros.collect(
-          root, mixins, keys: [ :filters ], prefer: "controller", within: within, cache: cache, calls: calls, listeners: LISTENERS
-        )
-        collected, placement, block_sites = found.collected, found.placement, found.block_sites
-        own_defs = singleton_expansions(source, walked, calls, Set.new)
-        defined = own_defs.map { |entry| entry[:site].name }.to_set
-        # A concern method the body calls declares for the body; one a concern's own block calls stays the concern's.
+        found = declarations(source, root: root, within: within, cache: cache)
         own_file = nil
-        filed = Array(collected[:filters]).map do |entry|
-          path = placement.dig(entry[:from_concern], 2)
-          own_file ||= [ base_source(root, within, nil)&.last ] if path
-          with_file(entry, path, root, own_file&.first)
-        end
-        by_body, by_concern = filed.partition { |entry| body_call?(entry, calls) }
-        called = by_body.reject { |entry| defined.include?(entry[:site].name) }
-        defined.merge(called.map { |entry| entry[:site].name })
-        defined.merge(by_concern.filter_map { |entry| entry[:site]&.name })
-        base_unread = []
-        inherited = base_expansions(source, within, root, Sites.new(calls, found.included_calls), defined, cache, base_unread)
-        # A base's method a concern's block calls declares where that concern is included.
-        from_blocks, inherited = inherited.partition { |entry| block_sites.key?(entry[:site].__id__) }
-        by_concern += from_blocks.map { |entry| entry.merge(from_concern: block_sites[entry[:site].__id__].first) }
         # A class method the chain defines answers the call, not the gem's macro of that name.
-        own_level = SourceIntrospector.class_level(walked[:filters], walked)
-        if own_level.any? { |entry| GEM_FILTERS.key?(entry[:macro]) }
-          shadowed = calls.defs.call.keys.to_set(&:to_s)
-          own_level = own_level.reject { |entry| GEM_FILTERS.key?(entry[:macro]) && shadowed.include?(entry[:macro].to_s) }
+        entries = Array(found.declarations[:filters]).reject do |entry|
+          entry[:declared_in] || (GEM_FILTERS.key?(entry[:macro]) && found.class_methods.include?(entry[:macro].to_s))
         end
-        placed = own_level.map { |entry| [ entry[:location].to_i, -1, 0, entry ] } +
-                 (own_defs + called + inherited).map { |entry| [ ConcernMacros::Relayed.root(entry[:site]).location.start_line, -1, 0, entry.except(:site, :definer, :from_concern) ] } +
-                 ConcernMacros.at_includes(by_concern, placement, mixins) { |entry| entry[:site] ? entry[:site].location.start_line : entry[:location].to_i }
-        entries = ConcernMacros.in_include_order(placed)
         filters = entries.flat_map do |entry|
-          record(entry, root).map { |filter| entry[:from_concern] ? filter.merge(from_concern: entry[:from_concern]) : filter }
+          origin = found.origin(entry)
+          # A concern method the body calls declares for the body; a base's method a concern's block calls, for that concern.
+          concern = if origin&.called then nil
+          elsif origin&.inherited then origin.via || entry[:from_concern]
+          else entry[:from_concern] || origin&.via
+          end
+          path = entry[:from_concern] ? found.files[entry[:from_concern]] : origin&.file
+          own_file ||= [ base_source(root, within, nil)&.last ] if path
+          record(with_file(entry, path, root, own_file&.first), root).map { |filter| concern ? filter.merge(from_concern: concern) : filter }
         end
-        [ filters, found.unread | outside_modules(mixins, root, within) | base_unread ]
+        unread = found.unread.reject { |entry| entry.reason == :base }.map(&:name)
+        found.chain.each { |link| unread |= outside_modules(Array(link.own&.dig(:mixins)), root, link.name) }
+        [ filters, unread ]
       rescue => e
         RailsAiContext.debug_fail(e, [ [], [] ], label: "controller filter read with concerns")
+      end
+
+      # The filters and the settings calls a controller's chain declares, read in one walk for both.
+      def declarations(source, root:, within:, cache: nil)
+        RunCache.fetch([ :controller_declarations, root.to_s, within.to_s, source ]) do
+          # A tool reading each route's base controller walks the same concerns for every route.
+          cache ||= RunCache.fetch([ :controller_concern_walks ]) { {} }
+          ClassDeclarations.for(within, lookup: ->(name) { base_file(root, name) }, keys: %i[filters settings_calls], listeners: CHAIN_LISTENERS,
+                                        root: root.to_s, prefer: "controller", source: source, cache: cache, bases: bases(root, within, source))
+        end
+      end
+
+      # [name, file] of each app controller the class inherits from, nearest first, through a gem controller whose
+      # parent the app's initializers name.
+      def bases(root, within, source)
+        source_of = ->(name) { (file = base_file(root, name)) && (ClassDeclarations.source(file) || "") }
+        onward = ->(name) { ActionFilters.gem_controller_base(name, root) }
+        SuperclassChain.superclasses(within.to_s, source, source_of, onward: onward).map { |name| [ name, base_file(root, name) ] }
       end
 
       # actionpack and actionview declare callbacks only in class macros (allow_browser), so including one of theirs adds none.
@@ -149,7 +125,7 @@ module RailsAiContext
           next unless mixin[:ancestor] && !mixin[:inline]
           next unless ConcernMembership.candidate?(name) && ConcernMembership.excluded?(name) && !name.start_with?(SILENT_FRAMEWORK)
 
-          name unless ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within)
+          name unless ConcernPaths.module_source(root.to_s, name, prefer: "controller", within: within, line: mixin[:location])
         end
       end
 
@@ -157,133 +133,19 @@ module RailsAiContext
         SourceIntrospector.walk_source(source, LISTENERS.slice(:filters, :methods, :nested))
       end
 
-      # What the class methods `source` defines itself (`def self.x`, `class << self`) declare at
-      # each call `calls` makes of one, skipping the names in `taken`.
-      def singleton_expansions(source, walked, calls, taken)
-        declaring = Array(walked[:methods]).select { |m| m[:scope] == :class && !taken.include?(m[:name].to_s) }
-        declaring = declaring.select { |m| declares_filters?(walked, m) }
-        return [] if declaring.empty?
-
-        sites = calls.sites_by_name
-        declaring = declaring.select { |m| sites.key?(m[:name].to_s) }
-        return [] if declaring.empty?
-
-        tree = AstCache.parse_string(source).value
-        declaring.flat_map do |method|
-          definition = AstWalk.def_at(tree, method[:offset])
-          next [] unless definition
-
-          found, = ConcernMacros.expand_calls(definition, sites.fetch(method[:name].to_s), [ :filters ], LISTENERS) do |entry, call|
-            [ entry.merge(site: call) ]
-          end
-          Array(found[:filters])
-        end
-      end
-
-      # Whether the method's body holds a filter macro the walk saw.
-      def declares_filters?(walked, method)
-        range = method[:offset].to_i...method[:end_offset].to_i
-        Array(walked[:filters]).any? { |entry| range.cover?(entry[:offset].to_i) }
-      end
-
-      # What a class method an app-defined base or one of its concerns defines declares at
-      # each call this class makes of it, nearest base first. Adds to `unread` the modules
-      # a base includes that the walk could not read, as their filters reach this class too.
-      def base_expansions(source, within, root, calls, taken, cache, unread = [])
-        found = []
-        each_base(source, within, root, cache) do |label, base, _path, file, walked|
-          own = singleton_expansions(base, walked, calls, taken).map { |entry| entry.merge(file: file) }
-          taken.merge(own.map { |entry| entry[:site].name })
-          found_in = ConcernMacros.collect(root, Array(walked[:mixins]), keys: [ :filters ], prefer: "controller",
-                                           within: label, cache: cache, calls: calls, listeners: LISTENERS)
-          mixed = Array(found_in.collected[:filters]).select { |entry| body_call?(entry, calls) && !taken.include?(entry[:site].name) }
-                                                     .map { |entry| with_file(entry, found_in.placement.dig(entry[:from_concern], 2), root) }
-          taken.merge(mixed.map { |entry| entry[:site].name })
-          found.concat(own + mixed)
-          unread.concat(Array(found_in.unread) | outside_modules(Array(walked[:mixins]), root, label))
-        end
-        found
-      end
-
-      # Each app-defined base of the class, nearest first: [constant, source, realpath, app-relative path, walk].
-      # Like the other chain walks it ends at the framework or a base it cannot read; `seen` ends a cycle.
-      def each_base(source, within, root, cache)
-        seen = Set.new
-        name, scope = superclass_of(source, within)
-        loop do
-          break unless name && root
-
-          label, base, path, file = base_source(root, name, scope)
-          break unless base && seen.add?(path)
-
-          # Every controller reaches ApplicationController, so its walk is read once per run.
-          key = [ :controller_base_walk, path, base ]
-          walked = cache ? (cache[key] ||= SourceIntrospector.walk_source(base, LISTENERS)) : RunCache.fetch(key) { SourceIntrospector.walk_source(base, LISTENERS) }
-          yield label, base, path, file, walked
-          name, scope = RunCache.fetch([ :controller_base_superclass, path, label ]) { superclass_of(base, label) }
-        end
-      end
-
-      # The class methods the class and its app-defined bases define, their own and their concerns', by name,
-      # nearest first as Ruby's lookup finds them.
-      def class_method_defs(source, mixins, within, root, cache)
-        found = {}
-        add = lambda do |text, owner, modules, label|
-          tree = AstCache.parse_string(text)&.value
-          bodies = tree ? DeclaredConstant.class_bodies(tree, label) : []
-          # A file whose class is spelled other than its constant still defines its methods somewhere in it.
-          scope = bodies.empty? ? Array(tree && AstWalk.each(tree).to_a) : bodies.flat_map { |body| AstWalk.scope(body) }
-          ConcernMacros::SingletonLookup.own_defs(scope, owner).each { |definition| found[definition.name] ||= definition }
-          given = ConcernMacros.collect(root, modules, keys: [ :filters ], prefer: "controller", within: label, cache: cache, listeners: LISTENERS).mixins
-          Array(given).reverse_each { |_, _, defs, _| defs.each_value { |list| list.each { |definition| found[definition.name] ||= definition } } }
-        end
-        add.call(source, within, mixins, within)
-        each_base(source, within, root, cache) { |label, base, path, _, walked| add.call(base, path, Array(walked[:mixins]), label) }
-        found
-      end
-
-      # `sites` with the calls each class method `defs` names makes in turn, bound to the call running it.
-      def relayed(sites, defs)
-        queue = sites.flat_map { |name, nodes| nodes.map { |node| [ name, node ] } }
-        read = Set.new
-        until queue.empty?
-          name, site = queue.shift
-          definition = defs[name]
-          next unless definition&.node && read.add?([ definition.key, ConcernMacros::Relayed.root(site).__id__ ])
-
-          text = CallSiteExpansion.rewritten(definition.node, site)
-          tree = text && AstCache.parse_string(text)&.value
-          next unless tree
-
-          SourceIntrospector.calls_outside_methods(tree, self_receiver: true).each do |inner, nodes|
-            nodes.each do |node|
-              call = ConcernMacros::Relayed.new(node, site, definition)
-              (sites[inner] ||= []) << call
-              queue << [ inner, call ]
-            end
-          end
-        end
-        sites
-      end
-
-      # Whether the entry is what a method declares at a call the class body makes.
-      def body_call?(entry, calls)
-        site = entry[:site]
-        site && Array(calls.sites_by_name[site.name.to_s]).any? { |call| call.equal?(site) }
-      end
-
-      # [superclass, Module.nesting where it is read] of the class `within` names in `source`.
-      def superclass_of(source, within)
-        declaration = DeclaredConstant.parent_declaration(source, within.to_s)
-        declaration&.superclass && [ declaration.superclass, declaration.nesting ]
+      # The file of the app controller the name means, for the chain walk; nil for one outside the app.
+      def base_file(root, name)
+        RunCache.fetch([ :controller_base_source, root.to_s, name ]) { constant_source(root, name) }&.[](2)
       end
 
       # [constant, source, realpath, app-relative path] of the app controller base the name resolves to, as Ruby looks it up.
       def base_source(root, name, scope)
         RunCache.fetch([ :controller_base, root.to_s, name, scope ]) do
-          DeclaredConstant.candidate_names(name, scope).lazy.filter_map do |candidate|
-            RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { constant_source(root, candidate) }
-          end.first
+          sources = {}
+          exists = ->(candidate) { sources[candidate] = RunCache.fetch([ :controller_base_source, root.to_s, candidate ]) { constant_source(root, candidate) } }
+          source_of = ->(candidate) { exists.call(candidate)&.[](1) }
+          found = DeclaredConstant.lookup(name, nesting: Array(scope), exists: exists, ancestors_of: SuperclassChain.ancestors_of(source_of))
+          found && sources[found]
         end
       end
 
@@ -351,8 +213,9 @@ module RailsAiContext
         # the body that made it, so an ancestor's skip of the same name does
         # not reach it.
         mark = skipped ? { skipped: true } : { declared: true }
-        # Rails unshifts each name onto the chain the class inherited; ActionFilters places it.
-        mark[:prepend] = true if macro.start_with?("prepend_")
+        # Rails unshifts each name onto the chain the class inherited, for a prepend_* macro and for
+        # prepend: true on any other; ActionFilters places it.
+        mark[:prepend] = true if macro.start_with?("prepend_") || (!skipped && (entry[:options] || {})[:prepend] == true)
         tail = constraints(entry)
         names.map { |name| { name: name, kind: kind, **mark, **tail } }
       end
@@ -439,9 +302,7 @@ module RailsAiContext
         statements.body.first
       end
 
-      private_class_method :walk, :outside_modules, :singleton_expansions, :declares_filters?, :base_expansions, :each_base,
-                           :class_method_defs,
-                           :superclass_of, :base_source, :constant_source, :with_file, :body_call?, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
+      private_class_method :walk, :bases, :outside_modules, :base_file, :base_source, :constant_source, :with_file, :record, :bundled?, :positional_names, :constraints, :condition_text, :normalize, :action_condition, :lambda_body
     end
   end
 end

@@ -57,9 +57,21 @@ module RailsAiContext
         generate(data, RailsAiContext.configuration.max_tool_response_chars)
       end
 
+      # Keys that carry what only code writing SQL reads (a foreign key's real name where the dump hides it), never an answer.
+      INTERNAL_KEYS = %i[actual_name].freeze
+
+      def without_internal(data)
+        case data
+        when Hash then data.each_with_object({}) { |(key, value), copy| copy[key] = without_internal(value) unless INTERNAL_KEYS.include?(key) }
+        when Array then data.map { |value| without_internal(value) }
+        else data
+        end
+      end
+
       # Pretty JSON when the payload fits, a reduced compact document when it
       # does not. Never returns a string that fails to parse.
       def generate(data, max)
+        data = without_internal(data)
         content = JSON.pretty_generate(data)
         return content unless max && content.length > max
 

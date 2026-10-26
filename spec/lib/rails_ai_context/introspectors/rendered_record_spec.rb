@@ -214,6 +214,7 @@ RSpec.describe RailsAiContext::Introspectors::RenderedRecord do
 
     expect(resolved).to eq([ [ "member", true ], [ "guest", true ] ])
     expect(walks).to eq(1)
+    # Once, for the parent's associations; the concern walk's constant lookup keeps its own answer per scope.
     expect(RailsAiContext::PathResolver).to have_received(:file_for_constant).with(@root, "BaseMembership").once
   end
 end

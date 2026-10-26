@@ -47,6 +47,48 @@ RSpec.describe RailsAiContext::Introspectors::SchemaConventions do
     end
   end
 
+  # The dumper hides a key's name when it matches SchemaDumper.fk_ignore_pattern, not only when it hashes to the current column
+  # (ForeignKeyDefinition#export_name_on_schema_dump?, 7.0 to 8.1): a key made on Rails 4.2 or before a rename keeps its old fk_rails_ name.
+  describe ".foreign_key_entry names" do
+    it "leaves out any fk_rails_ name of ten hex digits, and keeps every other" do
+      names = %w[fk_rails_0123456789 fk_rails_f868b47f6a fk_rails_0123456789a fk_rails_012345678 fk_rails_0123456789g my_fk FK_RAILS_0123456789]
+      kept = names.select { |name| described_class.foreign_key_entry("posts", "users", "user_id", "id", name: name).key?(:name) }
+
+      expect(kept).to eq(%w[fk_rails_0123456789a fk_rails_012345678 fk_rails_0123456789g my_fk FK_RAILS_0123456789])
+    end
+
+    it "follows the pattern it is given in place of the default" do
+      entry = ->(name, ignore) { described_class.foreign_key_entry("posts", "users", "user_id", "id", name: name, ignore: ignore) }
+
+      expect(entry.("tmp_fk", /\Atmp_/)).not_to have_key(:name)
+      expect(entry.("fk_rails_0123456789", /\Atmp_/)).to include(name: "fk_rails_0123456789")
+    end
+
+    it "keeps a hidden name as actual_name only where Rails would not make that name for the columns" do
+      made = described_class.foreign_key_name("posts", "user_id")
+      entry = ->(name, column = "user_id") { described_class.foreign_key_entry("posts", "users", column, "id", name: name) }
+
+      expect(entry.("fk_rails_0123456789")).to include(actual_name: "fk_rails_0123456789").and(satisfy { |key| !key.key?(:name) })
+      expect(entry.(made)).not_to have_key(:actual_name)
+      expect(entry.("my_fk")).not_to have_key(:actual_name)
+      expect(entry.(made, %w[a b])).to include(actual_name: made)
+    end
+  end
+
+  describe ".serial_index" do
+    it "names MySQL's unique index after its first column, or <column>_2 on when that name is taken" do
+      taken = [ { name: "email" } ]
+
+      expect(described_class.serial_index([], %w[email name])).to include(name: "email", columns: %w[email name], unique: true)
+      expect(described_class.serial_index(taken, "email")).to include(name: "email_2")
+      expect(described_class.serial_index([], [ "(lower(`email`))" ])).to include(name: "functional_index")
+    end
+
+    it "answers an empty column list with an index of no columns rather than raising" do
+      expect(described_class.serial_index([], [])).to include(columns: [], unique: true)
+    end
+  end
+
   describe ".default_index_name" do
     it "names a short index the Rails way" do
       expect(described_class.default_index_name("posts", %w[user_id created_at])).to eq("index_posts_on_user_id_and_created_at")

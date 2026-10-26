@@ -374,6 +374,23 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
+    context "with a Devise module in a concern's prepended block" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
+      let(:fixture_concern) { File.join(Rails.root, "app/models/trackish.rb") }
+
+      before do
+        File.write(fixture_model, "class Member < ApplicationRecord\n  devise :database_authenticatable\n  include Trackish\nend\n")
+        File.write(fixture_concern, "module Trackish\n  extend ActiveSupport::Concern\n\n  prepended do\n    devise :trackable\n  end\nend\n")
+      end
+
+      after { FileUtils.rm_f([ fixture_model, fixture_concern ]) }
+
+      # ActiveSupport::Concern runs a prepended block only on prepend.
+      it "leaves out what the block runs only for a class that prepends the concern" do
+        expect(result[:devise_modules_per_model]["Member"]).to eq(%w[database_authenticatable])
+      end
+    end
+
     context "with a Devise module added by a module the concern nests and includes" do
       let(:fixture_model) { File.join(Rails.root, "app/models/member.rb") }
       let(:fixture_concern) { File.join(Rails.root, "app/models/lockdown.rb") }
@@ -485,9 +502,9 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
         second = File.join(Rails.root, "app/models/guest_member.rb")
         File.write(second, "class GuestMember < ApplicationRecord\n  include MemberOmniauthable\n  devise :registerable\nend\n")
         walks = 0
-        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_wrap_original do |original, source, *rest|
-          walks += 1 if source.start_with?("module MemberOmniauthable")
-          original.call(source, *rest)
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_dispatch).and_wrap_original do |original, parsed, map|
+          walks += 1 if map.key?(:mixins) && parsed.source.source.start_with?("module MemberOmniauthable")
+          original.call(parsed, map)
         end
 
         per_model = result[:devise_modules_per_model]

@@ -211,6 +211,32 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       end
     end
 
+    # The tail reads the last 1 MB, so its first line is the end of a longer one: one cut inside
+    # a key name leaves a value no rule can see is a secret.
+    it "drops the cut first line of a tail over 1 MB" do
+      head = %(I, [2026-03-29T10:00:00 #1] INFO -- : Parameters: {"user"=>{"email"=>"a@b.co", "pa)
+      tail = %(ssword"=>"SuperSecretPw99", "bio"=>"%s"}}\n)
+      tail = format(tail, "x" * (described_class::MAX_READ_BYTES - tail.bytesize + 2))
+      File.binwrite(File.join(log_dir, "test.log"), head + tail)
+      expect(tail.bytesize).to eq(described_class::MAX_READ_BYTES)
+
+      text = described_class.call(lines: 5).content.first[:text]
+
+      expect(text).not_to include("SuperSecretPw99")
+      expect(text).not_to include("Log file is empty")
+      expect(text).to include("its last line is longer than the 1 MB read")
+    end
+
+    it "says a search window holds no whole line rather than that the log is empty" do
+      stub_const("#{described_class}::SEARCH_READ_BYTES", 100)
+      File.binwrite(File.join(log_dir, "test.log"), "short line\n#{'y' * 300}\n")
+
+      text = described_class.call(search: "short").content.first[:text]
+
+      expect(text).not_to include("Log file is empty")
+      expect(text).to include("its last line is longer than the 100 Bytes read")
+    end
+
     it "respects the lines parameter" do
       result = described_class.call(lines: 3)
       text = result.content.first[:text]

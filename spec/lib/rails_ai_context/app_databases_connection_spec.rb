@@ -13,6 +13,9 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
   def sqlite_file(name, marker: name)
     path = File.join(@dir, "#{name}.sqlite3")
     db = SQLite3::Database.new(path)
+    # Already WAL, as an app database is after its first Rails 7.1+ connection: Rails 7.1 waits for a lock
+    # holding the GVL, so a lease waiting on another one halfway through the switch would never let it finish.
+    db.execute("PRAGMA journal_mode = WAL")
     db.execute("CREATE TABLE marker (name text)")
     db.execute("INSERT INTO marker VALUES (?)", [ marker ])
     path
@@ -20,7 +23,7 @@ RSpec.describe RailsAiContext::AppDatabases::Database do
     db&.close
   end
 
-  # The timeout `rails new` writes: without it two leases opening one file at once race for the WAL switch and one gets SQLITE_BUSY.
+  # The timeout `rails new` writes, so leases opening one file at once wait for each other.
   def config(env, name, database)
     ActiveRecord::DatabaseConfigurations::HashConfig.new(env, name, { adapter: "sqlite3", database: database, timeout: 5000 })
   end

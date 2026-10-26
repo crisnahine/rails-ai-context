@@ -477,6 +477,81 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       end
     end
 
+    # git quotes a path with a byte outside ASCII unless told not to, and the quoted name matched no file.
+    describe "a path outside ASCII" do
+      def git(*args)
+        out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false",
+                                      *args, chdir: @dir)
+        raise out unless status.success?
+
+        out
+      end
+
+      it "is reviewed under its own name" do
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          FileUtils.mkdir_p(File.join(dir, "app/models"))
+          File.write(File.join(dir, "app/models/post.rb"), "class Post\nend\n")
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          File.write(File.join(dir, "app/models/café.rb"), "class Café\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "config/café"))
+          File.write(File.join(dir, "config/café/deploy.key"), "k\n")
+          git("add", "-A")
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+          text = described_class.call(ref: "HEAD").content.first[:text]
+
+          expect(text).to include("### app/models/café.rb (model)")
+          expect(text).to include("+class Café")
+          expect(text).not_to include("\\303")
+          expect(text[/### config\/café\/deploy\.key.*?(?=###|\z)/m]).to include("on `sensitive_patterns`")
+        end
+      end
+
+      # git quotes a name holding a control character, `"` or `\` whatever quotePath says; -z lists it as it is.
+      it "is reviewed under its own name when it holds a quote, a backslash or a tab" do
+        skip "Windows refuses these characters in a file name" if Gem.win_platform?
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          FileUtils.mkdir_p(File.join(dir, "app/models"))
+          File.write(File.join(dir, "app/models/post.rb"), "class Post\nend\n")
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          names = [ %(app/models/say"hi.rb), %(app/models/back\\slash.rb), "app/models/tab\there.rb" ]
+          names.each { |name| File.write(File.join(dir, name), "class Odd\nend\n") }
+          git("add", "-A")
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+          text = described_class.call(ref: "HEAD").content.first[:text]
+
+          names.each { |name| expect(text).to include("### #{name} (model)") }
+          expect(text.scan("+class Odd").size).to eq(3)
+        end
+      end
+
+      it "lists an untracked file under its own name when it holds a quote, a backslash or a tab" do
+        skip "Windows refuses these characters in a file name" if Gem.win_platform?
+        Dir.mktmpdir do |dir|
+          @dir = dir
+          git("init", "-q")
+          FileUtils.mkdir_p(File.join(dir, "app/models"))
+          File.write(File.join(dir, "app/models/post.rb"), "class Post\nend\n")
+          git("add", "-A")
+          git("commit", "-q", "-m", "init")
+          names = [ %(app/models/say"hi.rb), %(app/models/back\\slash.rb), "app/models/tab\there.rb" ]
+          names.each { |name| File.write(File.join(dir, name), "class Odd\nend\n") }
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+          text = described_class.call(ref: "HEAD").content.first[:text]
+
+          names.each { |name| expect(text).to include("### #{name} (model)") }
+        end
+      end
+    end
+
     describe "a diff that holds secrets" do
       let(:token) { "Xk2mQ9pLw7Rt#{'Z4ab'}" }
       let(:live_key) { "sk_live_#{'b' * 24}" }

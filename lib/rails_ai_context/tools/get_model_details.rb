@@ -84,6 +84,7 @@ module RailsAiContext
               line += " - #{count_phrase(assoc_count, "association")}, #{count_phrase(val_count, "validation")}" if assoc_count > 0 || val_count > 0
               lines << line
             end
+            lines << "" << STATIC_ASSOCIATIONS if RailsAiContext.static_tier?
             lines << "" << "_Use `model:\"Name\"` for full detail, or `detail:\"full\"` for association lists._#{pagination_hint}"
             text_response(lines.join("\n"))
 
@@ -102,11 +103,14 @@ module RailsAiContext
               line += " - #{assocs}" unless assocs.empty?
               lines << line
             end
+            lines << "" << STATIC_ASSOCIATIONS if RailsAiContext.static_tier?
             lines << "" << "_Use `model:\"Name\"` for validations, scopes, callbacks, and more._#{pagination_hint}"
             text_response(lines.join("\n"))
           end
         end
       end
+
+      STATIC_ASSOCIATIONS = "_Static tier: only the associations the source declares; a gem that adds associations at boot is not listed._"
 
       # How many methods this page prints. The payload caps its own list
       # before this one does, which is why the heading counts what was
@@ -279,6 +283,9 @@ module RailsAiContext
             detail += " [UNAVAILABLE: #{a[:unavailable]}]" if a[:unavailable]
             lines << detail
           end
+          lines << "" << STATIC_ASSOCIATIONS if RailsAiContext.static_tier?
+        elsif RailsAiContext.static_tier?
+          lines << "" << "## Associations" << "_None declared in the source. A gem that adds associations at boot is not listed._"
         end
 
         # Validations - compress repeated inclusion lists, deduplicate same kind+attribute

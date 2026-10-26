@@ -78,6 +78,22 @@ RSpec.describe RailsAiContext::Serializers::SectionMarkerWriter do
     end
   end
 
+  # A line that starts with U+FEFF is no CommonMark heading, so a block put
+  # in front of the BOM broke the user's top heading.
+  it "puts a first block after the file's BOM, and uninstall gives the bytes back" do
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "CLAUDE.md")
+      original = "\xEF\xBB\xBF# My notes\r\nKeep this line\r\n".b
+      File.binwrite(path, original)
+
+      described_class.write_with_markers(path, "new", root: dir)
+
+      expect(File.binread(path)).to eq("\xEF\xBB\xBF#{begin_marker}\r\nnew\r\n#{end_marker}\r\n\r\n# My notes\r\nKeep this line\r\n".b)
+      RailsAiContext::Install::Cleanup.remove(tools: [ :claude ], keeping: [], root: dir)
+      expect(File.binread(path)).to eq(original)
+    end
+  end
+
   # What lies outside the block is written back as it came.
   it "keeps the bytes of a file that is not UTF-8" do
     Dir.mktmpdir do |dir|

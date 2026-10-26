@@ -19,7 +19,7 @@ RSpec.describe RailsAiContext::Serializers::ContextModeDispatch do
 
       define_method(:full_serializer_class) { full_class }
       def initialize(context) = @context = context
-      def render_compact = "compact"
+      def render_compact_rules = "compact"
     end
   end
 

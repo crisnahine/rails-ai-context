@@ -80,7 +80,8 @@ module RailsAiContext
           next unless SafePath.contained?(real, File.realpath(views_root_of(path)))
 
           content = RailsAiContext::SafeFile.read(real) or next
-          files << { file: path.sub("#{root}/", ""), relative: relative, content: content }
+          file = path.sub("#{root}/", "")
+          files << { file: file, relative: relative, content: RailsAiContext::Redaction.source_slice(content, path: file) }
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
           next
         end
@@ -349,7 +350,7 @@ module RailsAiContext
           case arg
           when Prism::SymbolNode, Prism::StringNode then { literal: arg.unescaped }
           when Prism::InterpolatedStringNode then return nil
-          else { expr: arg.slice }
+          else { expr: RailsAiContext::Redaction.source_slice(arg.slice) }
           end
         end
       rescue StandardError => e

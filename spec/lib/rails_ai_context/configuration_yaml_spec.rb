@@ -402,8 +402,9 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.skip_tools).to eq(%w[rails_get_gems])
       end
 
-      config.skip_tools = [ "rails_get_schema", nil ]
-      expect(config.skip_tools).to eq(%w[rails_get_schema])
+      ruby = described_class.new
+      ruby.skip_tools = [ "rails_get_schema", nil ]
+      expect(ruby.skip_tools).to eq(%w[rails_get_schema])
       expect { config.http_port = [ 1 ] }.to raise_error(ArgumentError, "http_port must be a number (got a list of 1 item)")
       expect { config.preset = [ :full ] }.to raise_error(ArgumentError, "preset must be standard or full (got a list of 1 item)")
     end
@@ -460,7 +461,7 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
           expect(RailsAiContext.configuration.live_reload).to eq(read), written
         end
 
-        RailsAiContext.configuration = described_class.new
+        RailsAiContext.configuration = described_class.new.tap(&:config_file_applied!)
         RailsAiContext.configuration.live_reload = false
         File.write(yaml_path, "live_reload: \"off\"\n")
         expect(capture_stderr { described_class.load_from_yaml(yaml_path) })
@@ -746,17 +747,66 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
     end
 
     # A block in config/application.rb or config/environments/*.rb runs before
-    # the engine's file load, so precedence cannot depend on placement.
+    # the engine's file load, so precedence cannot depend on placement. A list
+    # that keeps files or tools back keeps the file's entries beside the block's.
     it "keeps a key the block set even when the file loads afterwards" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, ".rails-ai-context.yml"),
-                   YAML.dump({ "skip_tools" => [ "rails_query" ], "server_name" => "from-yaml" }))
+                   YAML.dump({ "skip_tools" => [ "rails_query" ], "server_name" => "from-yaml", "tool_mode" => "cli" }))
 
         RailsAiContext.configure { |c| c.skip_tools = [ "rails_console" ] }
+        RailsAiContext.configure { |c| c.tool_mode = :mcp }
         RailsAiContext::Configuration.load_config_file!(dir)
 
-        expect(config.skip_tools).to eq([ "rails_console" ])
+        expect(config.skip_tools).to contain_exactly("rails_query", "rails_console")
+        expect(config.tool_mode).to eq(:mcp)
         expect(config.server_name).to eq("from-yaml")
+      end
+    end
+
+    # The booted tier served a file config/application.rb added to sensitive_patterns, which the static tier refused.
+    it "keeps every pattern the code adds beside the file's, whether the code runs before or after the load" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "sensitive_patterns" => [ "config/master.key" ], "excluded_paths" => [ "from_yaml" ] }))
+
+        RailsAiContext.configure { |c| c.sensitive_patterns << "config/partner_keys.yml" }
+        RailsAiContext::Configuration.load_config_file!(dir)
+        RailsAiContext.configure { |c| c.excluded_paths = [ "from_initializer" ] }
+
+        expect(config.sensitive_patterns).to contain_exactly("config/master.key", "config/partner_keys.yml")
+        expect(config.excluded_paths).to contain_exactly("from_yaml", "from_initializer")
+        expect(RailsAiContext::SafePath.sensitive?("config/partner_keys.yml")).to be(true)
+      end
+    end
+
+    it "keeps the file's entries beside a list key the code sets to nil or a single string, before or after the load" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "sensitive_patterns" => [ "config/partner.yml" ], "excluded_paths" => [ "from_yaml" ] }))
+
+        RailsAiContext.configure { |c| c.excluded_paths = "before" }
+        RailsAiContext::Configuration.load_config_file!(dir)
+        expect(config.excluded_paths).to contain_exactly("from_yaml", "before")
+
+        RailsAiContext.configure do |c|
+          c.sensitive_patterns = nil
+          c.excluded_paths = "tmp"
+        end
+
+        expect(config.sensitive_patterns).to contain_exactly("config/partner.yml")
+        expect(config.excluded_paths).to contain_exactly("from_yaml", "tmp")
+      end
+    end
+
+    it "keeps a default pattern a block assigned before the load, beside the file's" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "sensitive_patterns" => [ ".env" ] }))
+
+        RailsAiContext.configure { |c| c.sensitive_patterns = %w[config/master.key config/partner.yml] }
+        RailsAiContext::Configuration.load_config_file!(dir)
+
+        expect(config.sensitive_patterns).to contain_exactly(".env", "config/master.key", "config/partner.yml")
       end
     end
 
@@ -772,6 +822,31 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
 
         expect(config.introspectors).to eq(RailsAiContext::Configuration::PRESETS[:standard])
         expect(config.server_name).to eq("from-yaml")
+      end
+    end
+    # application.rb and an environment file run before the file, an initializer after it; code wins in each.
+    it "keeps a key code assigns outside a configure block, before or after the load" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "server_name" => "from-yaml", "cache_ttl" => 99, "http_port" => 7999 }))
+
+        RailsAiContext.configuration.server_name = "from-application"
+        RailsAiContext.configuration.cache_ttl = 7
+        RailsAiContext::Configuration.load_config_file!(dir)
+        RailsAiContext.configuration.http_port = 7123
+
+        expect([ config.server_name, config.cache_ttl, config.http_port ]).to eq([ "from-application", 7, 7123 ])
+      end
+    end
+
+    # A booted app without the engine loads the file late, through auto_load!.
+    it "keeps a key code assigned before a late auto_load!" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "server_name" => "from-yaml", "cache_ttl" => 99 }))
+
+        RailsAiContext.configuration.server_name = "from-application"
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect([ config.server_name, config.cache_ttl ]).to eq([ "from-application", 99 ])
       end
     end
   end
@@ -792,6 +867,37 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         config = RailsAiContext::Configuration.new
         config.app_root = dir
         expect(config.ai_tools).to be_nil
+      end
+    end
+
+    it "reads the files once while nothing is recorded, and again for another root" do
+      Dir.mktmpdir do |dir|
+        config = RailsAiContext::Configuration.new
+        config.app_root = dir
+        expect(RailsAiContext::UnbootedSettings).to receive(:read).with(dir).once.and_call_original
+        2.times { expect(config.ai_tools).to be_nil }
+
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "ai_tools" => %w[cursor] }))
+        Dir.mktmpdir do |other|
+          expect(RailsAiContext::UnbootedSettings).to receive(:read).with(other).and_call_original
+          config.app_root = other
+          expect(config.ai_tools).to be_nil
+        end
+      end
+    end
+
+    it "reads the record again when the app root changes" do
+      Dir.mktmpdir do |first|
+        Dir.mktmpdir do |second|
+          File.write(File.join(first, ".rails-ai-context.yml"), YAML.dump({ "ai_tools" => %w[cursor] }))
+          File.write(File.join(second, ".rails-ai-context.yml"), YAML.dump({ "ai_tools" => %w[codex] }))
+          config = RailsAiContext::Configuration.new
+          config.app_root = first
+          expect(config.ai_tools).to eq(%i[cursor])
+
+          config.app_root = second
+          expect(config.ai_tools).to eq(%i[codex])
+        end
       end
     end
 

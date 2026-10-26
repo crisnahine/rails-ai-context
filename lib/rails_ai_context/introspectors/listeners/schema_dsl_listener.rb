@@ -97,6 +97,8 @@ module RailsAiContext
             extract_check_constraint(node)
           elsif node.name == :unique_constraint && table_receiver?(node.receiver)
             extract_unique_constraint(node)
+          elsif node.name == :exclusion_constraint && table_receiver?(node.receiver)
+            extract_exclusion_constraint(node)
           elsif node.name == :timestamps && table_receiver?(node.receiver)
             @results << { type: :timestamps, options: extract_keyword_options(node), location: node.location.start_line }
           elsif table_receiver?(node.receiver) && !read_elsewhere?(node.name)
@@ -106,7 +108,7 @@ module RailsAiContext
 
         # Block methods the replay reads, or that never add an index.
         OTHER_TABLE_METHODS = %i[
-          foreign_key remove_foreign_key remove_check_constraint rename_index
+          remove_check_constraint rename_index
           column_exists? index_exists? foreign_key_exists? check_constraint_exists?
         ].to_set.freeze
 
@@ -205,6 +207,7 @@ module RailsAiContext
             on_update:   options[:on_update],
             deferrable:  options[:deferrable],
             validate:    options[:validate],
+            name:        options[:name],
             location:    node.location.start_line
           }.compact
         end
@@ -259,6 +262,7 @@ module RailsAiContext
             table:      local_name(table_arg.unescaped),
             expression: expr_arg.unescaped,
             name:       literal_string(extract_keyword_nodes(node)[:name]),
+            validate:   (false if extract_keyword_options(node)[:validate] == false),
             location:   node.location.start_line
           }.compact
         end
@@ -276,6 +280,7 @@ module RailsAiContext
             type:       :check_constraint,
             expression: expr_arg.unescaped,
             name:       literal_string(extract_keyword_nodes(node)[:name]),
+            validate:   (false if extract_keyword_options(node)[:validate] == false),
             location:   node.location.start_line
           }.compact
         end
@@ -287,6 +292,12 @@ module RailsAiContext
             options:  extract_keyword_options(node),
             location: node.location.start_line
           }
+        end
+
+        def extract_exclusion_constraint(node)
+          expression = literal_string(node.arguments&.arguments&.first) or return
+
+          @results << { type: :exclusion_constraint, expression: expression, options: extract_keyword_options(node), location: node.location.start_line }
         end
 
         def column_call?(node)

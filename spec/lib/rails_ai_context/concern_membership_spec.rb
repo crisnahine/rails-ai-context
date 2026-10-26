@@ -4,6 +4,33 @@ require "spec_helper"
 require "tmpdir"
 
 RSpec.describe RailsAiContext::ConcernMembership do
+  describe ".local_name" do
+    def mixin_in(source)
+      RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { mixins: RailsAiContext::Introspectors::Listeners::MixinsListener })[:mixins].first
+    end
+
+    let(:app) { %w[Publishable Admin::Publishable] }
+
+    it "names an include inside a namespace by the app's module nearest to it" do
+      mixin = mixin_in("module Admin\n  class Post\n    include Publishable\n  end\nend\n")
+
+      expect(described_class.local_name(mixin, {}, exists: ->(name) { app.include?(name) })).to eq("Admin::Publishable")
+    end
+
+    it "names an include by the module exists answers with, not the spelling it tried" do
+      mixin = mixin_in("module Admin\n  class Post\n    include Publishable\n  end\nend\n")
+      exists = ->(name) { "Base::Publishable" if name == "Admin::Post::Publishable" }
+
+      expect(described_class.local_name(mixin, {}, exists: exists)).to eq("Base::Publishable")
+    end
+
+    it "names an include written from the root by the top-level module" do
+      mixin = mixin_in("module Admin\n  class Post\n    include ::Publishable\n  end\nend\n")
+
+      expect(described_class.local_name(mixin, {}, exists: ->(name) { app.include?(name) })).to eq("Publishable")
+    end
+  end
+
   describe ".included_modules and .mixins_with_modules" do
     let(:modules) do
       root = RailsAiContext::AstCache.parse_string(<<~RUBY).value

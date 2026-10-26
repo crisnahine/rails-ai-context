@@ -357,6 +357,24 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  describe "an excluded_paths entry that names a folder by its path" do
+    it "leaves that folder's components out of the count and the framework" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p([ File.join(root, "app/javascript/components"), File.join(root, "app/javascript/legacy") ])
+        File.write(File.join(root, "package.json"), '{ "dependencies": { "vue": "^3.4.0", "react": "^18.2.0" } }')
+        2.times { |i| File.write(File.join(root, "app/javascript/components/c#{i}.jsx"), "") }
+        5.times { |i| File.write(File.join(root, "app/javascript/legacy/v#{i}.vue"), "") }
+        allow(RailsAiContext.configuration).to receive(:excluded_paths).and_return(%w[node_modules app/javascript/legacy])
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frameworks].keys.first).to eq(:react)
+      end
+    end
+  end
+
   describe "an Angular app's frontend root" do
     it "counts the components its own framework writes" do
       require "tmpdir"

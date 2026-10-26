@@ -25,6 +25,13 @@ RSpec.describe RailsAiContext::Configuration do
     expect(config.introspectors).to eq(described_class::PRESETS[:full])
   end
 
+  # The static tier lets any file read a frozen constant of the configuration, so none may be changed through one.
+  it "freezes every data constant all the way down" do
+    expect { described_class::PRESETS[:full] << :extra }.to raise_error(FrozenError)
+    data = described_class.constants(false).map { |name| described_class.const_get(name, false) }.reject { |value| value.is_a?(Module) }
+    expect(data).to all(satisfy { |value| Ractor.shareable?(value) })
+  end
+
   it "excludes internal Rails models by default" do
     expect(config.excluded_models).to include("ApplicationRecord")
     expect(config.excluded_models).to include("ActiveStorage::Blob")

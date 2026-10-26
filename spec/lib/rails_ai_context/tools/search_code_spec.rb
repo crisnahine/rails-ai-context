@@ -90,6 +90,37 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
+    # The server inherits the shell's environment, and with it any ripgrep config the user keeps.
+    it "search the same files whatever ripgrep config the environment names" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      files = { ".ignore" => "ignored.rb\n", "ignored.rb" => "Listing\n", ".hidden/listing.rb" => "Listing\n", "own.rb" => "Listing\n" }
+      with_search_app(files) do |dir|
+        Dir.mktmpdir do |outside|
+          File.write(File.join(outside, "notes.rb"), "Listing\n")
+          begin
+            File.symlink(outside, File.join(dir, "linked"))
+          rescue NotImplementedError, SystemCallError
+            skip "symlinks unavailable"
+          end
+          config = File.join(outside, "rgrc")
+          File.write(config, "--follow\n--hidden\n--no-ignore\n")
+          lines = ->(rows) { rows.map { |r| r[:file] }.sort }
+          search = -> { lines.call(described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir, 0).first) }
+          plain = search.call
+
+          previous = ENV["RIPGREP_CONFIG_PATH"]
+          ENV["RIPGREP_CONFIG_PATH"] = config
+          begin
+            expect(search.call).to eq(plain)
+          ensure
+            ENV["RIPGREP_CONFIG_PATH"] = previous
+          end
+          expect(plain).to eq(%w[own.rb])
+        end
+      end
+    end
+
     # The `ignore` crate (0.4.31, dir.rs `Ignore::matched_ignore`) ranks by
     # file type across the whole tree: any .rgignore match, deepest first,
     # beats any .ignore match, which beats any .gitignore, then
@@ -318,6 +349,32 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
         end
       end
     end
+
+    it "reads an excluded path from the app root whatever folder the process runs in" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_search_app({ "app/javascript/legacy/x.js" => "Listing\n", "app/models/y.rb" => "Listing\n" }) do |dir|
+        previous = RailsAiContext.configuration.excluded_paths
+        RailsAiContext.configuration.excluded_paths = previous + %w[app/javascript/legacy]
+        rows, = Dir.chdir(Dir.tmpdir) { described_class.send(:search_with_ripgrep, "Listing", dir, nil, 1000, dir) }
+
+        expect(rows.map { |r| r[:file] }).to eq(%w[app/models/y.rb])
+      ensure
+        RailsAiContext.configuration.excluded_paths = previous
+      end
+    end
+    it "keeps a file whose path below the root holds the root's own spelling" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_search_app({}) do |dir|
+        nested = File.join(dir, "packs", "billing#{dir}", "models", "invoice.rb")
+        FileUtils.mkdir_p(File.dirname(nested))
+        File.write(nested, "class Invoice\nend\n")
+        rows, = described_class.send(:search_with_ripgrep, "class Invoice", dir, nil, 1000, dir)
+
+        expect(rows.map { |r| r[:file] }).to eq([ "packs/billing#{dir}/models/invoice.rb" ])
+      end
+    end
   end
 
   describe ".call" do
@@ -489,6 +546,31 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
           expect(rg).not_to include(a_string_including("secret.rb"))
           expect(ruby).to eq(rg)
         end
+      end
+    end
+
+    it "reads an excluded path of a linked-in pack from the app root, whatever folder the process runs in or how the root is spelled" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      with_monorepo do |app|
+        FileUtils.mkdir_p(File.join(app, "../../packages/billing/lib/legacy"))
+        File.write(File.join(app, "../../packages/billing/lib/legacy/old.rb"), "unpaid = 1\n")
+        previous = RailsAiContext.configuration.excluded_paths
+        RailsAiContext.configuration.excluded_paths = previous + %w[packs/billing/lib/legacy]
+        Dir.mktmpdir do |dir|
+          spelled = File.join(File.realpath(dir), "spelled")
+          File.symlink(app, spelled)
+          [ app, spelled ].each do |root|
+            [ root, File.join(root, "packs/billing") ].each do |search_path|
+              rows, = Dir.chdir(Dir.tmpdir) { described_class.send(:search_with_ripgrep, "unpaid", search_path, nil, 1000, root) }
+
+              expect(rows.map { |r| r[:file] }).not_to include("packs/billing/lib/legacy/old.rb")
+              expect(rows.map { |r| r[:file] }).to include("packs/billing/app/models/invoice.rb")
+            end
+          end
+        end
+      ensure
+        RailsAiContext.configuration.excluded_paths = previous
       end
     end
 

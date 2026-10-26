@@ -50,7 +50,7 @@ module RailsAiContext
     def marked(root)
       RunCache.fetch([ :base_mixins_marked, root ]) do
         scanned_files(root).filter_map do |file|
-          source = SafeFile.read(file)
+          source = AstCache.source(file)
           [ file, AstCache.parse(file).value ] if source && MARKERS.any? { |marker| source.include?(marker) }
         end
       end

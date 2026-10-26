@@ -237,21 +237,103 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
     end
   end
 
-  describe ".for_model_name" do
-    let(:models) { { "Admin::ActionLog" => { table_name: "admin_action_logs" } } }
+  describe ".of_model" do
+    let(:models) { { "Admin::ActionLog" => { table_name: "admin_action_logs", primary_key: "uuid" }, "Archive" => { table_set_by: "Archive.table_name" } } }
 
-    it "answers the table the model tier recorded" do
-      expect(described_class.for_model_name("Admin::ActionLog", models)).to eq("admin_action_logs")
+    it "answers the table and key the model tier recorded" do
+      expect(described_class.of_model("Admin::ActionLog", models).to_h).to eq(table: "admin_action_logs", set_by: nil, primary_key: "uuid")
     end
 
     it "matches the model name case-insensitively" do
-      expect(described_class.for_model_name("admin::actionlog", models)).to eq("admin_action_logs")
+      expect(described_class.of_model("admin::actionlog", models).table).to eq("admin_action_logs")
     end
 
     it "falls back to the convention for a name no model carries" do
-      expect(described_class.for_model_name("Widget", models)).to eq("widgets")
+      expect(described_class.of_model("Widget", models).table).to eq("widgets")
+    end
+
+    it "answers no table for a model recorded with none, never the convention" do
+      expect(described_class.of_model("Plain", { "Plain" => { error: "unreadable" } }).table).to be_nil
+    end
+
+    it "answers no table for a model whose table the source computes" do
+      expect(described_class.of_model("Archive", models).to_h).to eq(table: nil, set_by: "Archive.table_name", primary_key: nil)
     end
   end
+
+  # The oracle is ActiveRecord 8.0.5.1 asked for each class's table_name with the same classes defined.
+  describe ".for_class" do
+    def model(superclass = "ApplicationRecord", **declared)
+      { path: "/app/models/x.rb", superclass: superclass }.merge(declared)
+    end
+
+    def answer(records, name, **lookup)
+      records = { "ApplicationRecord" => model("ActiveRecord::Base", abstract: true) }.merge(records)
+      described_class.for_class(name, described_class::Lookup.new(records, **lookup)).to_h
+    end
+
+    it "wraps the stem in an abstract base's prefix and suffix" do
+      records = { "LegacyRecord" => model(abstract: true, table_name_prefix: "legacy_", table_name_suffix: "_v1"),
+                  "Widget" => model("LegacyRecord", path: "/app/models/widget.rb") }
+
+      expect(answer(records, "Widget")).to eq(table: "legacy_widgets_v1", set_by: nil, primary_key: nil)
+    end
+
+    it "names the setting, and no table, where the class computes its table name" do
+      records = { "Archive" => model(path: "/app/models/archive.rb", unread_settings: [ :table_name ]) }
+
+      expect(answer(records, "Archive")).to eq(table: nil, set_by: "Archive.table_name", primary_key: nil)
+    end
+
+    it "names a computed prefix the enclosing module or the app declares" do
+      records = { "Tracker" => { path: "/app/models/tracker.rb", unread_settings: [ :table_name_prefix ] }, "Tracker::Goal" => model(path: "/app/models/tracker/goal.rb") }
+
+      expect(answer(records, "Tracker::Goal")[:set_by]).to eq("Tracker.table_name_prefix")
+      expect(answer({ "Post" => model(path: "/app/models/post.rb") }, "Post", unread_settings: [ :table_name_suffix ])[:set_by])
+        .to eq("ActiveRecord::Base.table_name_suffix")
+    end
+
+    it "reads an STI child's table and key off its parent" do
+      records = { "Post" => model(path: "/app/models/post.rb", primary_key: "uuid"), "Draft" => model("Post", path: "/app/models/draft.rb") }
+
+      expect(answer(records, "Draft")).to eq(table: "posts", set_by: nil, primary_key: "uuid")
+    end
+
+    it "prefixes a nested class with its model namespace's singular table, and takes that class's own prefix" do
+      records = { "LegacyRecord" => model(abstract: true, table_name_prefix: "legacy_", table_name_suffix: "_v1"),
+                  "Project" => model("LegacyRecord", path: "/app/models/project.rb"),
+                  "Project::Phase" => model(path: "/app/models/project/phase.rb"),
+                  "Admin" => { path: "/app/models/admin.rb", table_name_prefix: "admin_" },
+                  "Admin::Report" => model(path: "/app/models/admin/report.rb"),
+                  "Admin::Report::Line" => model(path: "/app/models/admin/report/line.rb") }
+      expect(answer(records, "Project::Phase")[:table]).to eq("legacy_legacy_projects_v1_phases_v1")
+      expect(answer(records, "Admin::Report")[:table]).to eq("admin_reports")
+      expect(answer(records, "Admin::Report::Line")[:table]).to eq("admin_report_lines")
+    end
+
+    it "reads pluralize_table_names off the superclass chain, and an engine's prefix off its namespace" do
+      records = { "Singular" => model(abstract: true, pluralize_table_names: false), "Person" => model("Singular", path: "/app/models/person.rb"),
+                  "Rss::Feed" => model(path: "/app/models/rss/feed.rb") }
+
+      expect(answer(records, "Person")[:table]).to eq("person")
+      expect(answer(records, "Rss::Feed", isolated_prefixes: { "Rss" => "rss_" })[:table]).to eq("rss_feeds")
+    end
+
+    # File.basename("", ".rb").pluralize is "", which is truthy and was once taken as the child's table.
+    it "does not read a table through a parent the walk recorded as an error" do
+      records = { "Post" => { error: "boom" }, "Draft" => model("Post", path: "/app/models/draft.rb") }
+
+      expect(answer(records, "Draft")[:table]).to eq("drafts")
+    end
+
+    it "takes a gem parent's table from the dumps, and names the parent when they hold none or several" do
+      records = { "Tag" => model("ActsAsTaggableOn::Tag", path: "/app/models/tag.rb") }
+
+      expect(answer(records, "Tag", dump_tables: ->(names) { names & %w[tags] })[:table]).to eq("tags")
+      expect(answer(records, "Tag")).to eq(table: nil, set_by: "ActsAsTaggableOn::Tag", primary_key: nil)
+    end
+  end
+
   # Rails' rule, unchanged from 7.0 through 8.1: full_table_name_prefix takes
   # the first module parent that responds to table_name_prefix, and
   # isolate_namespace defines one on the namespace as

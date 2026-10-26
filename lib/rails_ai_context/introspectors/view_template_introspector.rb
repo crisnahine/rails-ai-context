@@ -33,9 +33,6 @@ module RailsAiContext
         }
       end
 
-      # Template handlers whose whole source is Ruby.
-      RUBY_TEMPLATE_EXTENSIONS = %w[.rb .jbuilder .builder .ruby].freeze
-
       # The one reader of a template's ivars, so `get_view` and this
       # introspector cannot disagree about what a template uses. Only the Ruby
       # inside ERB tags: over the whole file the regex read the CSS rule
@@ -53,7 +50,7 @@ module RailsAiContext
 
         erb = path ? path.to_s.end_with?(".erb") : RailsAiContext::ErbSource.tagged?(text)
         ruby = erb ? RailsAiContext::ErbSource.tag_bodies(text) : text
-        erb || path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS) ? strip_string_literals(ruby) : ruby
+        erb || path.to_s.end_with?(*RenderCalls::RUBY_TEMPLATE_EXTENSIONS) ? strip_string_literals(ruby) : ruby
       end
 
       # Detect whether a view file is a Phlex view (Ruby DSL, not ERB)
@@ -370,9 +367,9 @@ module RailsAiContext
         builders = RenderCalls.form_builders(content, path: path)
         # The partial or template a render call names, positionally or as a
         # keyword anywhere in its arguments, with or without parentheses.
-        RenderCalls.render_calls(content).each do |at, args|
+        RenderCalls.render_calls(content, path: path).each do |at, args, block|
           spans << (at...(at + args.length))
-          named = RenderCalls.rendered_names(args)
+          named = RenderCalls.rendered_names(args, block: block)
           # An interpolated name is decided at runtime, not a partial on disk.
           refs.concat(named.select { |name| name.match?(RenderCalls::PARTIAL_NAME) })
           chain = RenderCalls.render_line(args)[RenderCalls::IMPLICIT_RENDER, 1] if named.empty?

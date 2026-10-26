@@ -38,7 +38,7 @@ module RailsAiContext
     # relative to `dir`, a count, or whether any match.
     def glob(dir, pattern)
       dir = dir.to_s
-      Dir.glob(pattern, base: dir).map { |relative| File.join(dir, relative) }
+      Dir.glob(pattern, base: dir).map { |relative| File.join(dir, relative) }.reject { |path| hidden?(path) }
     end
 
     def model_dirs(root) = dirs_for(root, "app/models")
@@ -95,10 +95,10 @@ module RailsAiContext
     # Every directory Rails autoloads from: each app/* directory, the concerns
     # inside them (railties globs `{*,*/concerns}`), lib, and what it declares.
     def autoload_roots(root)
-      app_roots(root) +
+      (app_roots(root) +
         ConcernPaths.resolve(root) +
         dirs_for(root, "lib") +
-        declared_roots(root)
+        declared_roots(root)).uniq
     rescue StandardError => e
       RailsAiContext.debug_fail(e, [], label: "PathResolver.autoload_roots")
     end
@@ -153,10 +153,33 @@ module RailsAiContext
     end
     private_class_method :read_path_gem_libs
 
-    # The roots config/application.rb adds by hand, such as lib_static.
+    # The roots config/application.rb adds by hand, such as lib_static, in the order Rails gives its autoload paths.
     def declared_roots(root)
       key = File.expand_path(root.to_s)
-      declared(key)[:autoload].map { |relative| File.join(key, relative) }
+      found = declared(key)
+      # A root declared before its folder was made counts once the folder is there.
+      made = found[:pending].empty? ? [] : found[:pending].select { |relative| contained_dir?(File.join(key, relative), root_key(key)) }
+      (found[:autoload] + made).map { |relative| File.join(key, relative) }
+    end
+
+    # The declared roots Rails puts before app/* in its autoload paths, in order.
+    def leading_roots(root)
+      key = File.expand_path(root.to_s)
+      leading = declared(key)[:leading].map { |relative| File.join(key, relative) }
+      declared_roots(key) & leading
+    end
+
+    # The declared roots and path gems' libs that are looked in but never watched: each is read again every run, so
+    # the declaration index kept across calls and the fingerprint watch the same folders.
+    def unwatched_roots(root)
+      key = File.expand_path(root.to_s)
+      excluded = Array(RailsAiContext.configuration.excluded_paths).map(&:to_s)
+      RunCache.fetch([ :unwatched_roots, key, excluded ]) do
+        prefix = SafePath.dir_prefix(key)
+        declared = declared(key)[:unwatched].map { |relative| File.join(key, relative) }
+        gems = path_gem_libs(key).select { |dir| dir.start_with?(prefix) && root_kind(key, dir.delete_prefix(prefix), excluded) != :watch }
+        ((declared_roots(key) & declared) + gems).freeze
+      end
     end
 
     # The lib subdirectories `autoload_lib(ignore:)` keeps out of autoloading.
@@ -169,12 +192,28 @@ module RailsAiContext
     # roots it adds, app-relative and kept only when they exist inside the app.
     def declared(root)
       key = File.expand_path(root.to_s)
-      DECLARED_ROOTS.compute_if_absent(key) { read_declared(key) }
+      excluded = Array(RailsAiContext.configuration.excluded_paths).map(&:to_s)
+      DECLARED_ROOTS.compute_if_absent([ key, excluded ]) { read_declared(key, excluded) }
     end
 
-    NONE_DECLARED = { autoload: [].freeze, ignored: [].freeze, views: [].freeze }.freeze
+    NONE_DECLARED = { autoload: [].freeze, pending: [].freeze, unwatched: [].freeze, leading: [].freeze, ignored: [].freeze, views: [].freeze }.freeze
 
-    def read_declared(root)
+    # railties' `_all_autoload_paths`: config.all_autoload_paths, then config.all_eager_load_paths, whose own paths
+    # come before paths.eager_load (app/*) from 7.1 on. In 7.0 config.autoload_paths and config.eager_load_paths start
+    # as the paths.add roots of their kind at their first read and are appended to, so those roots come first.
+    AUTOLOAD_ORDER = %i[autoload paths_autoload eager app paths_eager once paths_once].freeze
+    AUTOLOAD_ORDER_7_0 = %i[paths_autoload autoload app paths_eager eager paths_once once].freeze
+    # The config list each paths.add kind is copied into at its first read in 7.0; a root added after that is in neither.
+    COPIED_7_0 = { paths_autoload: :autoload, paths_eager: :eager, paths_once: :once }.freeze
+
+    # Never a root, whatever the app declares.
+    NEVER_ROOTS = %w[vendor/bundle node_modules tmp log].freeze
+    # Other people's code: no root below one is the app's, and no walk enters one inside a root.
+    BUNDLED = %w[vendor/bundle node_modules].freeze
+    # A root below one is looked in but never watched, as an excluded one is.
+    UNWATCHED = %w[vendor tmp log].freeze
+
+    def read_declared(root, excluded)
       path = File.join(root, "config", "application.rb")
       return NONE_DECLARED unless File.file?(path)
 
@@ -185,13 +224,122 @@ module RailsAiContext
       )
       real_root = File.realpath(root)
       inside = ->(relative) { contained_dir?(File.join(root, relative), real_root) }
+      rails_7_0 = rails_7_0?(root)
+      order = rails_7_0 ? AUTOLOAD_ORDER_7_0 : AUTOLOAD_ORDER
+      added = settled(expand_globs(root, found[:autoload]), rails_7_0)
+      ranked = added.each_with_index.sort_by { |(_, list), index| [ order.index(list), index ] }.map(&:first).uniq(&:first)
+      kinds = ranked.to_h { |relative, _| [ relative, root_kind(root, relative, excluded) ] }.reject { |_, kind| kind == :drop }
+      autoload = kinds.keys
       {
-        autoload: found[:autoload].uniq.select(&inside).freeze,
+        autoload: autoload.select(&inside).freeze,
+        pending: autoload.reject { |relative| Dir.exist?(File.join(root, relative)) }.freeze,
+        unwatched: kinds.filter_map { |relative, kind| relative if kind == :unwatched }.freeze,
+        leading: ranked.filter_map { |relative, list| relative if order.index(list) < order.index(:app) }.freeze,
         ignored: found[:ignored].uniq.select(&inside).freeze,
         views: found[:views].uniq.select { |_direction, relative| inside.(relative) }.freeze
       }.freeze
     rescue StandardError => e
       RailsAiContext.debug_fail(e, NONE_DECLARED, label: "PathResolver.declared_roots")
+    end
+
+    # A literal Dir glob is the folders it matches in the app, as Rails reads it at boot.
+    def expand_globs(root, added)
+      added.flat_map do |path, list, glob|
+        next [ [ path, list ] ] unless glob
+
+        Dir.glob(path, base: root.to_s).filter_map { |match| [ match.chomp("/"), list ] if File.directory?(File.join(root, match)) }
+      end
+    end
+    private_class_method :expand_globs
+
+    # The roots the file leaves in each list, in the order written. An assignment replaces its list, and in 7.0 also
+    # the paths.add roots copied into it; a list read first (appended to, assigned) takes no later paths.add in 7.0.
+    def settled(added, rails_7_0)
+      read = {}
+      added.each_with_object([]) do |(path, list), kept|
+        if path == :reset
+          kept.reject! { |_, kind| kind == list || (rails_7_0 && COPIED_7_0[kind] == list) }
+          read[list] = true
+        else
+          read[list] = true if rails_7_0 && COPIED_7_0.value?(list)
+          kept << [ path, list ] unless rails_7_0 && read[COPIED_7_0[list]]
+        end
+      end
+    end
+    private_class_method :settled
+
+    # An app with no lockfile to read is taken as a current one.
+    def rails_7_0?(root)
+      version = GemLock.for(root).rails_version
+      !version.nil? && Gem::Version.new(version) < Gem::Version.new("7.1")
+    rescue ArgumentError
+      false
+    end
+    private_class_method :rails_7_0?
+
+    # :drop for a root outside the app, one of NEVER_ROOTS, or one under BUNDLED; :unwatched for one under UNWATCHED
+    # or excluded itself or through a parent; else :watch.
+    def root_kind(root, relative, excluded_paths)
+      prefix = SafePath.dir_prefix(root)
+      path = File.expand_path(relative, root)
+      return :drop unless path.start_with?(prefix)
+
+      relative = path.delete_prefix(prefix)
+      return :drop if NEVER_ROOTS.include?(relative)
+      return :drop if BUNDLED.any? { |bundled| relative.start_with?("#{bundled}/") }
+      return :unwatched if UNWATCHED.any? { |dir| relative.start_with?("#{dir}/") }
+
+      excluded = ExcludedPaths.matcher(root, excluded_paths)
+      segments = relative.split("/")
+      segments.each_index.any? { |count| excluded.call(segments.first(count + 1).join("/"), true) } ? :unwatched : :watch
+    end
+    private_class_method :root_kind
+
+    # Whether a walk inside an autoload root (app/*, a declared root, a path gem's lib) leaves `path` out: it is or sits
+    # in a node_modules or vendor/bundle below the root. Zeitwerk loads every other folder, tmp, log and vendor among
+    # them, so excluded_paths, whose defaults name those at any depth, prunes nothing here, as for app/* before.
+    def pruned?(root, path, dir: false)
+      key = File.expand_path(root.to_s)
+      relative = path.to_s.delete_prefix(SafePath.dir_prefix(key))
+      relative = File.dirname(relative) unless dir
+      pruner(key).call(relative)
+    end
+
+    def pruner(key)
+      RunCache.fetch([ :pruner, key ]) do
+        prefix = SafePath.dir_prefix(key)
+        tops = (app_roots(key) + declared_roots(key) + path_gem_libs(key)).filter_map { |dir| dir.delete_prefix(prefix) if dir.start_with?(prefix) }
+        seen = {}
+        lambda do |relative|
+          seen.fetch(relative) { seen[relative] = tops.any? { |top| relative.start_with?("#{top}/") && bundled_below?(key, top, relative) } }
+        end
+      end
+    end
+    private_class_method :pruner
+
+    # A node_modules folder, the app's own vendor/bundle, or a vendor/bundle that holds an installed bundle
+    # (Bundler's `<engine>/<version>/` with `gems` and `specifications`):
+    # `app/models/vendor/bundle` can be a namespace.
+    def bundled_below?(root, top, relative)
+      path = top
+      relative.delete_prefix("#{top}/").split("/").any? do |segment|
+        path = File.join(path, segment)
+        File.basename(path) == "node_modules" || (path.end_with?("vendor/bundle") && (path == "vendor/bundle" || installed_bundle?(root, path)))
+      end
+    end
+
+    def installed_bundle?(root, relative)
+      Dir.glob("*/*", base: File.join(root, relative)).any? do |version|
+        %w[gems specifications].all? { |folder| File.directory?(File.join(root, relative, version, folder)) }
+      end
+    end
+    private_class_method :installed_bundle?
+    private_class_method :bundled_below?
+
+    # The `exclude:` of a FileWalk inside the app's roots, one per run.
+    def pruned_walk(root)
+      key = File.expand_path(root.to_s)
+      RunCache.fetch([ :pruned_walk, key ]) { ->(path, dir) { dir && pruned?(key, path, dir: true) } }
     end
 
     # A declared root is still a path the file wrote: `#{config.root}/../shared`
@@ -203,14 +351,86 @@ module RailsAiContext
     end
 
     # `roots:` takes pre-resolved roots, so a caller with many constants resolves once.
+    # A file under sensitive_patterns is no constant's file: a reader would show its source.
     def file_for_constant(root, name, roots: nil)
-      constant_file(roots || autoload_roots(root), name.to_s) || namespaced_file(root, name.to_s)
+      found = constant_file(roots || autoload_roots(root), name.to_s) || namespaced_file(root, name.to_s)
+      found unless found && sensitive?(root, found)
     end
+
+    def sensitive?(root, path)
+      SafePath.sensitive?(path.to_s.delete_prefix(SafePath.dir_prefix(File.expand_path(root.to_s))))
+    end
+
+    SCOPE = :rails_ai_context_source_scope
+    # Ruby and JavaScript, plus every extension ViewFile reads as a template; a config file the tools read on
+    # purpose (database.yml) is not source.
+    CODE_EXTENSIONS = %w[rb rake js jsx mjs cjs ts tsx coffee].freeze
+
+    # The app a run reads, so every walk and constant lookup leaves out a source file under sensitive_patterns.
+    # The root is the run's own whatever fails: the app given, the default app, the configured root, the folder.
+    def scoped_to(app)
+      outer = Thread.current[SCOPE]
+      Thread.current[SCOPE] = run_root(app)
+      yield
+    ensure
+      Thread.current[SCOPE] = outer
+    end
+
+    # The block with no run's gate, for the one reader that must know a hidden file exists without reading it.
+    def unscoped
+      outer = Thread.current[SCOPE]
+      Thread.current[SCOPE] = nil
+      yield
+    ensure
+      Thread.current[SCOPE] = outer
+    end
+
+    def run_root(app)
+      root = app.root if app.respond_to?(:root)
+      root ||= begin
+        RailsAiContext.default_app.root
+      rescue StandardError
+        RailsAiContext.configuration.app_root
+      end
+      File.expand_path((root || Dir.pwd).to_s)
+    end
+    private_class_method :run_root
+
+    # Whether the run's app marks this source file sensitive; false outside a run or for a path outside the app.
+    def hidden?(path)
+      root = Thread.current[SCOPE]
+      path = path.to_s
+      return false unless root && source_file?(path) && path.start_with?(prefix = SafePath.dir_prefix(root))
+
+      SafePath.sensitive?(path.delete_prefix(prefix))
+    end
+
+    def source_file?(path)
+      ext = File.extname(path).delete_prefix(".").downcase
+      CODE_EXTENSIONS.include?(ext) || ViewFile.handler_extensions.include?(ext) ||
+        (ViewFile::RAW_FORMAT_EXTENSIONS.include?(ext) && path.include?("/views/"))
+    end
+    private_class_method :source_file?
 
     # The first of `dirs` holding the file Zeitwerk loads `name` from; a block refuses a found file.
     def constant_file(dirs, name, declared: false)
-      dirs.lazy.filter_map { |dir| (path = constant_path(dir, name, declared: declared)) && (!block_given? || yield(path)) && path }.first
+      head = name.to_s.delete_prefix("::").split("::", 2).first.to_s
+      holding = RunCache.active? ? dirs_holding(dirs).fetch(loose_key(head), []) : dirs
+      # A file at a namespaced name's path counts only when it declares that name (Billing::Invoice is not `class Invoice`).
+      declared ||= name.to_s.include?("::")
+      holding.lazy.filter_map { |dir| (path = constant_path(dir, name, declared: declared)) && !hidden?(path) && (!block_given? || yield(path)) && path }.first
     end
+
+    # The dirs, in order, under each name an entry of theirs can spell: a constant's first segment can only be found
+    # in a dir with an entry it spells, so a miss across hundreds of dirs reads one list.
+    def dirs_holding(dirs)
+      RunCache.fetch([ :dirs_holding, dirs ]) do
+        dirs.each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |dir, index|
+          entries(dir).map { |entry| loose_key(entry.delete_suffix(".rb")) }.uniq.each { |key| index[key] << dir }
+        end
+      end
+    end
+    private_class_method :dirs_holding
 
     # The file under `dir` Zeitwerk loads `name` from (`namespace`: the root's own). An entry an unread inflector spells
     # counts only when the file declares `name`; `declared: true` asks that of every file.
@@ -284,7 +504,7 @@ module RailsAiContext
       namespaced_roots(root).each do |dir, namespace|
         next unless name.start_with?("#{namespace}::")
 
-        path = constant_path(dir, name, namespace: namespace)
+        path = constant_path(dir, name, namespace: namespace, declared: true)
         return path if path
       end
       nil

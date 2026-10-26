@@ -167,7 +167,7 @@ module RailsAiContext
         end
 
         # Side effects
-        side_effects = extract_side_effects(source)
+        side_effects = side_effects_of(source)
         if side_effects.any?
           lines << "" << "## Side Effects"
           side_effects.each { |s| lines << "- #{s}" }
@@ -324,7 +324,7 @@ module RailsAiContext
             full_path = File.join(root, s[:file])
             source = safe_read(full_path)
             if source
-              side_effects = extract_side_effects(source)
+              side_effects = side_effects_of(source)
               lines << "- **Side effects:** #{side_effects.join(', ')}" if side_effects.any?
 
               rescue_blocks = extract_rescue_blocks(source)
@@ -573,29 +573,6 @@ module RailsAiContext
         # Also detect bare rescue
         rescues << "StandardError (implicit)" if source.match?(/rescue\s*$/) || source.match?(/rescue\s*=>/)
         rescues.to_a.sort
-      end
-
-      private_class_method def self.extract_side_effects(source)
-        effects = Set.new
-
-        effects << "database write (save!)" if source.match?(/\.save!/)
-        effects << "database write (save)" if source.match?(/\.save\b/) && !source.match?(/\.save!/)
-        effects << "database write (update!)" if source.match?(/\.update!/)
-        effects << "database write (update)" if source.match?(/\.update\b/) && !source.match?(/\.update!/)
-        effects << "database write (create!)" if source.match?(/\.create!/)
-        effects << "database write (create)" if source.match?(/\.create\b/) && !source.match?(/\.create!/)
-        effects << "database write (destroy)" if source.match?(/\.destroy[!]?/)
-        effects << "database write (delete)" if source.match?(/\.delete\b/)
-        effects << "email delivery (deliver)" if source.match?(/\.deliver_later|\.deliver_now/)
-        effects << "job enqueue" if Introspectors::SourceCalls.enqueue_calls(source, enqueue_helpers).any?
-        effects << "Turbo broadcast" if source.match?(/broadcast_|Turbo::StreamsChannel/)
-        effects << "HTTP request" if source.match?(/Faraday|Net::HTTP|HTTParty|RestClient|\.post\(|\.get\(/)
-        effects << "file write" if source.match?(/File\.write|File\.open.*["']w/)
-        effects << "cache write" if source.match?(/Rails\.cache\.write|Rails\.cache\.fetch/)
-        effects << "transaction" if source.match?(/\.transaction\b/)
-        effects << "logging" if source.match?(/Rails\.logger|logger\./)
-
-        effects.to_a.sort
       end
 
       # Every caller is capped at CALLER_LIMIT, and the renderer says so: a

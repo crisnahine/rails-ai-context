@@ -5,6 +5,878 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.38.0] - 2026-10-27
+
+### Security
+
+- **Source text the context records is filtered where it is read.** That covers
+  a turbo frame's `src`, a turbo line, a broadcast's call, a job's retry macro
+  and `queue_as` block, a model's scope body, callback block and condition
+  lambda, validation and macro options, attribute and column defaults, branch
+  conditions, route constraints and stream parts. `rails_get_turbo_map`,
+  `rails_get_callbacks`, `rails_get_job_pattern`, `.ai-context.json` and every
+  generated file show the filtered text.
+- **A GitHub, Stripe, AWS, Slack or other vendor token, a JWT or a private key
+  is filtered wherever it appears in the assembled context,** also where no key
+  name stands beside it (a route path, a queue name, a column default) and
+  inside a `Set`, `Struct` or `Data` value. `gho_`, `ghr_`, `github_pat_` and
+  `ASIA` tokens are recognized, and an app password written as four groups of
+  four letters under a secret key is filtered.
+- **A gem server credential is filtered whole in every form a project writes
+  it.** It is found by its name (`BUNDLE_<HOST>`, `bundle config <host>
+  <credentials>`, `Bundler.settings`, `ENV[...]`, `ENV.store`, `ENV.fetch`
+  defaults, fish `set -x`, cmd `setx`, PowerShell, a Dockerfile `ENV` or
+  exec-form `RUN`, `.bundle/config`, a key used as a URL's user) and read as one
+  word in single, double, `$'...'`, backtick, `%q` and unclosed quotes, in
+  adjacent parts, and in a value that holds spaces. A credential split over
+  lines is filtered too: a YAML block scalar, a quote that spans lines, a
+  heredoc, a value after a trailing backslash or on the line after its name, and
+  `name` and `value` keys of one object (JSON, YAML, container env entries, CI
+  variables). A value written under a credential's name on the next lines (a
+  scalar, a list, a nested mapping, a JSON string) or in sibling keys of its
+  object (`Name` and `Value`, `key` and `val`, `ParameterKey` and
+  `ParameterValue`) is filtered, and a descriptive key such as `description`
+  stays. The code after the value is kept.
+- **More ways a project sets a gem server credential are read.** They are a flag
+  or a quoted host after `bundle config`, a host with a port, a variable as the
+  host, `BUNDLE_GITHUB__COM`, `Set-Item` and `New-Item` in PowerShell,
+  `Bundler.settings` calls, `printf` and `%` formats, `%q|...|`, `&quot;`
+  quotes, Markdown tables and bold names, and a name next to another setting in
+  a `sed` expression.
+- **Where a line names a gem server credential in a form the scanner does not
+  know, every literal after the name is filtered and only references stay.** The
+  forms are an operator such as `?=`, `+=` or `:=`, a space, a quoted host key
+  and a markup tag. A statement the line leaves open (an operator, an open
+  bracket or call, a value on the next line, a Ruby value that ends in `||`,
+  `&&`, `or`, `and`, `+`, `?`, `:` or `\`, an open `do`, `begin`, `if` or
+  `case`, a method chain or string on the next line) holds the same rule for the
+  lines after it, and a shell or Dockerfile `\` continuation carries it across
+  comment lines, blank lines and white space after the backslash.
+- **A literal inside a credential's value is filtered and a reference to one is
+  kept.** `"$GEM_CREDS"`, `"$(cat /run/secrets/x)"`, `ENV[...]` and a Ruby
+  variable stay as written, a default inside `${NAME:-...}` or a template is
+  filtered, and so is a literal after `||`, `&&`, `+`, `? :`, `then` or `else`,
+  in a method chain (`.sub`, `.join`), in a block and in an `ENV.fetch` default
+  or block. A literal inside a command substitution, backticks, a template
+  function call or ERB is filtered and the command's own words stay. An
+  identifier or a call that reads a value is kept, and so is a message string
+  after `abort` or `raise`.
+- **Every `gem.*` Bundler setting that has a value is filtered, except the nine
+  `bundle gem` reads:** `changelog`, `coc`, `mit`, `bundle`, `ci`,
+  `github_username`, `linter`, `rubocop` and `test`. `rails_get_env` follows the
+  same rule.
+- **A Dockerfile's `ENV NAME value` line is filtered like `ENV NAME=value`,**
+  with the instruction in any case, a trailing comment, and a first word that is
+  a secret. `ENV NAME $VAR` and `${VAR}` are shown as written. A lowercase `env
+  NAME value` line counts as a Docker instruction only in a Dockerfile, a
+  Containerfile, `Dockerfile.<name>`, `Dockerfile-<name>`, `Dockerfile_<name>`
+  and `*.dockerfile`, so a source file named like one is not read as one.
+- **A key used as a URL's user is filtered when it has more than four digits in
+  a row or more than one group of digits,** and a query log tag whose key
+  follows a digit, a dot or a dash in a SQL comment has its value filtered. A
+  plain user name such as `appuser2024` is shown.
+- **`.npmrc`, `.yarnrc` and `.bundle/config` are on the default
+  `sensitive_patterns`.** Every directory walk and constant lookup (models,
+  controllers, jobs, migrations, base classes, concerns, route files, views,
+  partials, Stimulus and Turbo listings) also leaves out a Ruby, template or
+  JavaScript file under `sensitive_patterns`, so such a file adds no name or
+  structure to any tool. The same list covers every template extension the view
+  reader handles (rabl, arb, liquid, markdown, prawn and plain html among them),
+  the `app/graphql` listings and the template counts, and a custom `app/`
+  directory a sensitive pattern covers is left out of the convention list. The
+  gate stays on when the default app cannot be built.
+- **`rails_review_changes` lists a changed file under its own name when the path
+  holds a byte outside ASCII, a quote, a backslash or a control character, and
+  checks that name against `sensitive_patterns`.**
+- **`rails_read_logs` no longer shows the cut first line of the window a long
+  log is tailed through.**
+- **`rails_search_code` and the unbooted settings read ignore a ripgrep config
+  named by `RIPGREP_CONFIG_PATH`,** so they read only the files they read
+  without one.
+- **`rails_get_edit_context` picks redaction rules by the file's own name,** and
+  tells a log, YAML or JSON file by its extension in any case.
+- **The booted server withholds what the static tier withholds.** A pattern that
+  `config/application.rb` or an environment file adds to `sensitive_patterns` or
+  `excluded_paths`, or a tool it adds to `skip_tools`, is kept when
+  `.rails-ai-context.yml` sets the same list, and an initializer that assigns
+  one of these lists keeps the file's entries too.
+- **On the booted tier, a model file under `sensitive_patterns` is left out of
+  every answer,** with no file line, scope or method, as on the static tier. A
+  model whose base file is under `sensitive_patterns` stays listed as one the
+  gem cannot read, and `rails_get_schema` no longer says the base's table has no
+  model.
+- **`doctor`'s literal-secret check reads keys by the names the tools redact
+  by.** `master_key`, `pepper` and `signing_key` are caught, and a descriptor
+  such as `token_ttl` is not.
+
+### Added
+
+- **The Claude Code plugin serves a session started in a folder of several Rails
+  apps.** One server lists each tool once with an `app` argument, starts that
+  app's own server at the first call that names it, lists that app's custom
+  tools once it runs (left out: the tools its `skip_tools` turns off), serves
+  its resources at `rails-ai-context://apps/<app>/...`, and answers a call for
+  an app whose server stops as a tool error with that server's last lines. The
+  session-start rules come in that folder too, with a line naming the apps.
+  `CLI::AppRoot.target` gives the one answer the server, the hook, `doctor` and
+  the settings reader share.
+- **The plugin's server instructions name the app they serve** and say that
+  paths in answers are relative to it. They give the `rails-ai-context
+  --app-path <dir> tool <name>` form for another app, and stay under Claude
+  Code's 4096-character cut with many apps by naming the first ones and how many
+  more.
+- **`RailsAiContext::UnbootedSettings.read(root)` returns an app's settings as
+  its boot would apply them, read without running anything.** What it could not
+  read is reported per file, line and key.
+- **Exclusion constraints show up in the schema answer on every tier:**
+  schema.rb's `t.exclusion_constraint`, structure.sql's `ADD CONSTRAINT ...
+  EXCLUDE`, migrations' `add_exclusion_constraint` and
+  `remove_exclusion_constraint`, and the live PostgreSQL connection.
+- **An app with no schema dump gets its PostgreSQL enum types, check constraints
+  and generated columns in the schema answer.** They are replayed from
+  `create_enum`, `add_enum_value`, `rename_enum_value`, `rename_enum` and
+  `drop_enum`, on a secondary database too.
+- **The schema keeps a foreign key's name when it is not the one Rails gives,
+  and a check constraint's `validate: false`.** Both are read from schema.rb,
+  structure.sql (pg_dump, mysqldump and `NOT VALID`), migrations and the live
+  connection, and `get_schema` shows them. A SQLite dump keeps no key name, as
+  the SQLite adapter reads none.
+
+### Changed
+
+- **`sensitive_patterns`, `excluded_paths` and `skip_tools` are the union of the
+  YAML and every value the code adds, whichever runs first, on every tier.**
+  Assigning one of them in Ruby no longer drops the entries the YAML lists. See
+  docs/adr/0014.
+- **The static tier, `tool --list`, `init`, `doctor` at an engine's root and the
+  recorded selection read `ai_tools`, `tool_mode`, `context_files` and
+  `anti_hallucination_rules` in the boot's order:** application.rb and the
+  environment's file, then the YAML, then the initializers, the last literal
+  winning. An initializer's `config.ai_tools = %i[]` reads as no tool, as at
+  boot. The plugin's session hook reads the settings with the gem's own reader
+  when the installed release has it.
+- **One rule decides which constant a written name means, the one Ruby uses.** A
+  name written from the root (`::Priced`) is the top-level constant alone. Any
+  other name is tried in each enclosing scope outward, then in the class's
+  ancestors, then at the top level. A qualified name finds its head that way and
+  reads the rest inside it. Every resolver in the gem asks it, including the
+  ones for concern, parent controller, test subject and helper module names.
+- **What a class declares through its superclasses, its concerns and the class
+  methods it calls comes from one walk.** Models, controller filters and
+  settings, jobs, gem column macros, rendered records and Devise modules share
+  it, so a rule about run order holds for all of them. A model's validations are
+  listed base first, in the order Rails runs them. A model's macros no longer
+  carry an internal `owner` field.
+- **A table name the source computes is shown as set by that setting, and no
+  table is guessed for the model.** That covers `self.table_name =
+  ENV.fetch(...)` and a prefix, suffix or `pluralize_table_names` only the
+  running app knows. Generated tests, guide examples, habtm join tables and the
+  schema lookup stop deriving one, and `migration_advisor` asks for the table
+  name.
+- **Both tiers build a model's record the same way,** so the static tier's
+  scopes carry the same fields as the booted tier's (name, body, required
+  params, confidence). A `has_many` or `has_one` declared with `as:` carries the
+  role as `as` on both tiers. The static model answers say that a gem which adds
+  associations at boot is not listed.
+- **The SQL gate, the structure.sql reader and the migration replay read SQL
+  text through one scanner that knows each database family's quoting**
+  (backslash escapes, `E''`, dollar quotes, doubled quotes, backtick and bracket
+  names, comments). What the SQL gate accepts and refuses is unchanged.
+- **One module decides how schema.rb writes a column for each database family
+  and Rails version.** The structure.sql reader, the migration replay and the
+  live connection go through it, so the three tiers agree on a column's type,
+  sizes and default.
+- **A long-running server keeps the static tier's index of constants across tool
+  calls while the app's fingerprint holds.** A controller or feature call after
+  the first two no longer re-reads every Ruby file under the autoload
+  directories (about half a second on an app with 3,000 such files). The index
+  holds each name's file and no parse tree, about 2 MB on a large app where a
+  tree-holding index took 11 to 35 MB. A constant's file is looked up only in
+  the autoload directories with an entry its first segment spells, which cut the
+  static model and controller passes of an app with about 300 autoload
+  directories from 5.5s and 12.6s to 3.2s and 2.9s of CPU.
+- **Each introspector that opens files outside the watched folders declares them
+  as `READS`, and the per-call snapshot and the fingerprint watch the union.** A
+  tree a reader walks, such as `public/**/*.json` for OpenAPI specs, is walked
+  for its own extensions only. `rails_get_api` no longer looks for a spec under
+  `public/system/` or `public/uploads/`.
+- **`excluded_paths` has one reading: gitignore rules from the app root, as
+  `rails_search_code` already read them.** The frontend scan and the doctor's
+  secret-file walk honour an entry written as a path from the root
+  (`app/javascript/legacy`) or a glob (`backups/*`), where they matched folder
+  names only. A change to `excluded_paths` applies to the declared autoload
+  roots without a restart.
+- **The truncation footer names `detail:"summary"` only for a tool that takes
+  `detail`,** and otherwise lists the tool's own params. `rails_get_autoload`
+  reports `mode: zeitwerk` without probing, and the `zeitwerk_available` key is
+  gone.
+- **`rails_get_job_pattern` and `rails_get_service_pattern` list side effects
+  from one shared list.** A database write names the methods it saw on one line
+  (`database write (save!, update)`), and both tools give the same answer for
+  the same body.
+- **Every route entry carries a `position`, its place in draw order,** so a
+  reader can tell which route Rails matches a path against first.
+- **`init`, `init` in a folder of apps, the install generator and the first
+  `rails ai:context` run the install in one order:** every question first (AI
+  tools, setup, what to remove, legacy files, the pre-commit hook), then the
+  removals, the record, the MCP configs, `.gitignore`, the hook and the context
+  files. Nothing is removed until every question is answered. The question about
+  the files v5.0.0 stopped writing is asked with the others, and `--prune` in a
+  folder of apps removes those files before any app is recorded.
+- **`doctor` judges each MCP config by the install's own verdict for it,** so
+  the two no longer disagree, and it names every config the install cannot merge
+  into in one sentence. A Codex config that declares the gem's server twice in a
+  form the install keeps now gets the edit named, where `doctor` said to run the
+  install and the install changed nothing.
+- **In a folder of several apps, each app's server starts as the `ruby` on
+  `PATH` in the app's folder and runs the newest copy of the gem that Ruby
+  has.** A shim version manager (rbenv, asdf, mise) picks the Ruby the app's
+  `.ruby-version`, `.tool-versions` or mise file names. A Ruby without the gem
+  answers a tool call by naming that Ruby and the `gem install` to run, and the
+  first answer says when a version file names another Ruby than the one the
+  server runs.
+- **An app's server that stops under the plugin starts again at its next call,**
+  and a plugin session whose bundle has its own copy of the gem stays connected
+  when that copy stops, with the refusal and what the copy printed.
+- **A plugin serve that cannot serve after the gem has loaded answers the
+  handshake with the reason and no tools, and exits 0.** Exiting 1 made Claude
+  Code skip the plugin in every folder for 15 minutes. That covers an engine
+  root with no app source, an app whose boot fails while the static tier cannot
+  read its `skip_tools`, and any error the command raises. The server answers
+  `initialize` with the client's protocol revision where it knows it.
+- **In a folder of several apps, an app's server boots under the typed limit (60
+  seconds, or `RAILS_AI_CONTEXT_BOOT_TIMEOUT`),** not the 20 seconds a client's
+  handshake allows, and the server tells Claude Code when an app's resource list
+  changes. Outside that folder a slow boot names `MCP_TIMEOUT` beside
+  `RAILS_AI_CONTEXT_BOOT_TIMEOUT`.
+- **The session-start rules above several apps follow each app's settings.**
+  None print where every app turns them off, rule 3 names a `rails_get_config`
+  section only where no app skips it (an app with the rules off included), and an
+  app whose bundle locks an older copy of the gem is said to be served by that
+  copy, with no rules printed for it. The hook finds the
+  user's own memory in the config folder Claude Code reads, a
+  `CLAUDE_CONFIG_DIR` from managed or user settings included.
+- **`init` above several apps whose committed settings turn the plugin on writes
+  no Claude Code server, names the per-app servers an earlier run left in
+  `.mcp.json`, and `--prune` removes them.** It also names the local settings
+  file that turns the plugin off there. At a monorepo root whose `bin/rails`
+  boots an app below, `init` sets that app up from the root with `--app-path`.
+  With a gem older than this release, the plugin's refusal in that folder names
+  the `--app-path` commands the model can run meanwhile.
+- **`doctor` and `uninstall` count a session started above several apps among
+  the sessions that run the plugin for each of them.**
+
+### Fixed
+
+#### Routes
+
+- **Static routes follow Rails for the options of `namespace`.** `namespace
+  :admin, shallow: true` draws the nested member routes shallow (`admin_item` at
+  `/admin/items/:id`), a verb route or `root` with `as: nil` has no name and a
+  later route can take it, and `namespace :v1, module: nil` routes to
+  `posts#index` on Rails 7.0 to 8.0 and to `v1/posts#index` on 8.1.
+- **A method defined in a routes file and called with arguments draws its routes
+  and mounts where it is called, under the caller's namespace.** Each parameter
+  is bound to the literal argument or its default, and a call the walk cannot
+  read is still counted as a construct it could not expand. (#613)
+- **A mount reads its constant as Ruby does.** `mount UI` inside `module Admin`
+  is `Admin::UI` when the app keeps that class in its own file, `mount UI` in
+  `class Admin < Panel` is `Panel::UI`, and `mount ::Users` in a Grape API under
+  `module V1` is the top-level `Users`. (#614)
+- **A route pass that fails part way leaves the controllers section as the
+  introspector wrote it,** where it narrowed the actions of the controllers
+  reached before the error.
+
+#### Views
+
+- **A form helper whose parenthesised arguments span lines names its builder.**
+  `form_with(\n model: @post\n) do |f|` makes `render f` a render site of the
+  builder's partial. (#615)
+- **A template whose strict locals comment declares a name no longer counts as a
+  view reference of the helper with that name** on Rails 7.1 and later, where
+  the bare name reads the local. `rails_get_helper_methods` still lists a view
+  that calls the helper with parentheses (`title("Home")`). (#619)
+- **A `render` call names the partials Rails renders for every form it takes.**
+  A partial layout (`layout: "posts/frame"`), a collection's `spacer_template:`,
+  a block-form `render layout: "posts/frame" do`, a block passed with `&`, and a
+  braced options hash are read, in `rails_validate`, the view tools and
+  `rails_analyze_feature` alike. `render partial: "row", layout: "x" do` renders
+  only the layout, and `render layout: "x"` with no block and no `partial:`
+  names none.
+- **The view reader skips what is not a partial or a call.** `render { "body" }`
+  names no partial, a `.jbuilder`, `.builder` or `.ruby` template's multi-line
+  call is read as Ruby, a Phlex form helper keeps its block (only an ERB
+  template ends a call at `%>`), and an unclosed `(` no longer makes the reader
+  scan the rest of the template once per call. A partial rendered in ERB without
+  parentheses keeps the locals of a hash broken across lines.
+
+#### Models and concerns
+
+- **A name written from the root reaches the top-level constant.** `include
+  ::Priced` inside `module Shop` lists `Shop::Tool` under `Priced`, and the same
+  holds for a controller's `include ::Exportable` inside `module Admin`, for
+  `model_details --no-boot`, and for the class a test, a parent controller's
+  class method and a helper module name in a namespace.
+- **A model or controller that includes a name its superclass's mixin nests
+  reads the nested module, as Ruby does.** With `Tracker::Taggable` and a
+  top-level `Taggable`, `model_details` and `controllers` show the nested
+  module's associations and filters on both tiers, and `rails_get_concern` lists
+  the model that includes it. (#608)
+- **A namespaced model lists the concern Ruby picks.** `include Publishable`
+  inside `module Admin` is `Admin::Publishable` with its own methods when the
+  app has it, and `include ::Publishable` stays the top-level one. (#610)
+- **A class-method macro a model's base defines gives one association or
+  callback per call, with that call's arguments and options,** on both tiers
+  (`def self.has_notes(name) = has_many name, as: :notable`). A call the static
+  tier cannot bind lists its association as computed. `set_callback :save,
+  :after, :x` is listed in the place Rails runs it.
+- **`onboard` no longer credits Devise modules from a concern's `prepended do`
+  block to a model that includes the concern.** (#612)
+- **`enum :state, {...}, validate: true` lists the inclusion validator Rails
+  adds,** on both tiers. A subclass that redefines a `belongs_to` as optional
+  keeps the presence validator its base adds, and the presence validators a
+  required `belongs_to` adds are listed in the order Rails registers them. An
+  app locked to Rails 7.0 lists no enum validator.
+- **A table prefix and suffix reach the models Rails gives them to.** An
+  abstract base's `table_name_prefix` and `table_name_suffix` reach its models
+  (`Widget < LegacyRecord` is `legacy_widgets_v1`), a class nested in a model
+  takes the model's prefix and not a doubled one, and
+  `"#{table_name_prefix}things"` and a habtm `join_table:` read the prefix
+  through the superclass chain. A model listed as an error keeps who sets its
+  table.
+- **A concern or module named inside a class body is found in Ruby's order.**
+  Each enclosing scope's own constants come first, then the class's ancestors (a
+  module an included module includes, a superclass's prepended modules before
+  the superclass, no module twice), then the top level. Only the `include` and
+  `prepend` lines above the one being resolved count, and an `include` inside a
+  method does not.
+- **The static tier mixes modules in as Rails runs them.** A Concern included by
+  another Concern goes to the including class, an `included do` or `prepended
+  do` block's lines join the including class ahead of the Concern, a Concern the
+  class already has runs nothing again, a `def self.included(base)` hook that
+  includes a module into `base` adds it right after the module, and `concerning
+  :Topic do ... end` gives the class a `Class::Topic` Concern.
+- **The static tier reads a namespace the way Zeitwerk loads it.** A file that
+  opens a namespace around its own class and adds to it (`module Shop; include
+  X; class Order; end; end` in `shop/order.rb`, also with another class beside
+  `Order`) mixes `X` into `Shop`, several such files count in eager load order
+  after the namespace's own file, and one namespace under several autoload roots
+  runs `app/models` before `app/models/concerns`, as Rails' sorted glob gives
+  them.
+- **A namespaced constant name (`Billing::Invoice`) finds only a file that
+  declares that namespaced constant,** not a file that declares a top-level
+  `Invoice`.
+- **The static tier orders and filters autoload roots as Rails does for the
+  app's Rails version.** A root added with `config.autoload_paths` or
+  `config.autoload_lib` comes before `app/*`, an `eager_load_paths` one comes
+  before it from Rails 7.1 and after it on 7.0, and a `paths.add` one comes
+  after it. On Rails 7.0 a `paths.add ..., autoload: true` root comes before a
+  `config.autoload_paths` one, a `paths.add` root written after its `config`
+  list was first read is left out (an `autoload_once` one too), and
+  `config.autoload_paths = [...]` replaces the earlier `paths.add` roots.
+  Anything but a literal list leaves the roots as they were, and a splat, a
+  union, a sum in either order and `.uniq` add to them. A literal `Dir[...]` or
+  `Dir.glob` in the assignment is expanded to the folders it matches, as at
+  boot. A namespace reopened in `lib` and in `app/models` gets its mixins in
+  Ruby's order, and `lib`'s file for a constant wins over `app`'s.
+- **Some roots are not read.** A lib directory kept out of autoloading by
+  `config.autoload_lib(ignore:)`, a root that is `vendor/bundle`,
+  `node_modules`, `tmp` or `log` or sits under `vendor/bundle` or
+  `node_modules`, and an installed bundle (a `<engine>/<version>/` folder holding
+  `gems` and `specifications`) are left out. `Vendor::Bundle` and other
+  namespaces under a `vendor/bundle` folder inside an autoload root are read, and
+  so are folders such as `lib/vendor`, `lib/log` and `app/models/log`.
+- **A job lists the `retry_on` and `discard_on` handlers and the callbacks its
+  superclasses and concerns declare, in the order ActiveJob keeps them,**
+  including a `prepend: true` callback, an `included` block's callbacks, a
+  callback a plain module adds in `def self.included(base)`, and one a class
+  method declares (written as the call runs it, `after_perform :logit, if: -> {
+  true }`). A callback whose arguments run across lines reads
+  `before_perform(:a, :b)`.
+- **A job reads its superclass once.** Its kind and inherited settings come from
+  one resolution, a worker shows the Sidekiq retry setting of the nearest class
+  that sets one, a job that sets `self.queue_name_prefix =` shows the prefixed
+  queue, and an enqueue call from a class is resolved through the enclosing
+  class's whole ancestor list before a top-level job of the same name.
+- **An abstract job is a base, not a worker.** A class whose entry point
+  (`perform` or `execute`, the nearest one up its chain) only raises, or that
+  sets `self.abstract_class = true` or calls `abstract!`, is listed with the
+  bases and left out of the workers and jobs. A worker's line count is its own
+  class's lines, not its file's.
+- **A method defined inside the block of a macro call is not listed as a public
+  method of the enclosing class** by `rails_get_service_pattern` or any other
+  tool that lists a class's methods (a DSL's `params do ... end` runs the block
+  on a class it builds). `class_eval`, `with_options`, `included` and
+  `class_methods` blocks keep theirs.
+- **A Mongoid document no longer lists callbacks from a module the app mixes
+  into every ActiveRecord model.** A gem tree macro (`acts_as_tree`) on an
+  abstract base counts as each subclass's parent key in the missing-index check,
+  and a class method body that starts by deleting a key from something other
+  than a parameter is read instead of costing the model's whole entry.
+
+#### Controllers
+
+- **A controller's strong params method is read from the class or module Ruby
+  finds it in first.** A concern's `post_params` hides the parent's and is
+  listed itself. Including again a module a parent already included adds
+  nothing, and a prepended module wins over the class. (#609)
+- **An `include` inside a Concern's `class_methods do` block no longer lists
+  that module's methods as controller actions.** (#611)
+- **The static filter chain follows Rails.** `prepend: true` on `before_action`,
+  `after_action` and `around_action` goes to the head. Including a concern again
+  in a subclass brings back no filter a parent already got, and a skip between
+  the two holds. A filter a plain module's `def self.included(base)` declares
+  with `base.before_action` is added at each include. A class method a
+  controller calls through another class method declares with the outer call's
+  arguments.
+- **A controller's skip records and parent read the right source.**
+  `controllers` no longer strikes a filter through when a second controller in
+  the same file skips it, a parent the listing leaves out is read from its own
+  class body, and a parent written as a qualified name (`Shop::BaseController`,
+  `::Admin::Base`) is the one Ruby picks. A block filter is named by its
+  app-relative file when the app's root is spelled through a link.
+
+#### Schema and migrations
+
+- **A MySQL structure.sql or a replayed `execute` keeps a table whose string
+  escapes a quote with a backslash (`DEFAULT 'it\'s'`),** where it vanished from
+  the schema with no note. Defaults and comments are decoded as the server
+  stores them (`'C:\\temp'` reads as `C:\temp`), and a semicolon inside a string
+  or a table comment no longer cuts the statement.
+- **structure.sql keeps what a quoted name holds.** An index whose quoted name
+  holds a character outside a word (`"idx-c"`, `"Weird Name"`, `"índice"`,
+  `` `d key` ``), a foreign key, check or unique constraint (also one added by
+  `ALTER TABLE ... ADD CONSTRAINT`, as pg_dump and mysqldump write it), an index
+  key, a column's collation, a schema, a schema-qualified table, a column
+  comment, an extension, an enum column type and a `nextval` default whose
+  quoted name holds a hyphen, a space, a doubled quote or any character outside
+  a word are read, and so is a table after a string or comment that never
+  closes. A `nextval` default names its sequence quoted as PostgreSQL prints it
+  (`nextval('"Odd_seq"'::regclass)`).
+- **A PostgreSQL identifier is quoted the way `quote_ident` does,** in
+  structure.sql, the migration replay and `migration_advisor`: keywords
+  (`"user"`, `"order"`, and the words only a later release quotes, `json` and
+  `merge_action`, from the union of PostgreSQL 13 to 17) and a name with a dollar
+  sign, in a `nextval` default, a renamed column inside a check or index
+  expression and a `using:` cast.
+- **A replayed PostgreSQL `CREATE TABLE ... AS SELECT` reads `IS [NOT] DISTINCT
+  FROM` as part of its select item,** so the table keeps its columns. A select
+  item whose top-level operator is a comparison or boolean predicate is typed
+  boolean on PostgreSQL and integer on MySQL, and a MySQL string alias with a
+  backslash-escaped quote names its column as MySQL does. SQL a migration
+  executes reads quoted names the way the database does in `DROP TABLE`, in
+  `CREATE TABLE ... AS` (its name, its column list, the selected table, its
+  alias and a cast's type) and in a default's cast, and on PostgreSQL an
+  unquoted name in the column list, the selected table and its alias folds to
+  lower case. (#616)
+- **A replayed MySQL integer default written in e-notation is stored the way
+  MySQL stores it:** `2.5e0` is 2 and `2.5` is 3. A boolean default is cast the
+  way Rails casts it (`"0"` is false), and a PostgreSQL uuid primary key gets
+  the `gen_random_uuid()` default Rails gives it. (#617)
+- **A replayed `remove_column` and `rename_column` follow the column into
+  everything that names it.** On MySQL and SQLite a remove keeps an index on the
+  columns that are left and drops it when none is left. On PostgreSQL a remove
+  also drops every index whose include list, where clause or expression names
+  the column and every check and exclusion constraint that names it, and a
+  rename follows the column into those, into sort order and into generated
+  columns. A composite foreign key that holds the column goes with it.
+- **A replayed column keeps its comment, collation, enum type and MySQL `size:`,
+  and a table keeps its comment.** `change_column` keeps a comment unless given,
+  drops an array flag, a `size:` or an enum type it does not name, and treats
+  collation as Rails does for the database and version.
+- **A replayed `remove_foreign_key` with no column acts on the key the app's
+  database drops.** That is the first key the database lists: by name on
+  PostgreSQL, with MySQL's names compared upper-cased (so `_` sorts after the
+  letters) and MariaDB's byte by byte, and the last declared on SQLite. With
+  `name:` it acts on that key. Rails 8.1 prefers the key on `<to_table
+  singular>_id`, for `validate_foreign_key` always and for `remove_foreign_key`
+  only in a migration written for 8.1 or later. The server comes from the app's
+  established connection; where none has named it, the replay takes MySQL's order
+  and the schema note says so whenever MariaDB would drop another key.
+- **On SQLite the replay keeps the foreign key order through every call that
+  rebuilds the table.** That covers `add_column` with `null: false` and no
+  default, a key column or (Rails 7.2 and later) a stored virtual column,
+  `add_reference` and `remove_reference` (once per column and key), and
+  `add_timestamps` (one rebuild from Rails 7.1). A statement inside
+  `create_table`'s block and an `if_exists:` call that finds nothing rebuild
+  nothing.
+- **Replayed foreign key calls follow Rails for the database.**
+  `validate_foreign_key` changes nothing on MySQL, MariaDB and SQLite, where
+  Rails raises, and a key made with `validate: false` there is a validated key. A
+  `t.foreign_key` or `t.remove_foreign_key` inside `create_table` or
+  `change_table`, and a top-level `remove_timestamps`, are replayed, and a
+  revert swaps `from:` and `to:` of `change_column_comment` and
+  `change_table_comment`.
+- **Schema answers read the version a migration was written for.** A migration
+  written for Rails 7.0 or earlier drops a MySQL text column's collation on its
+  own `change_column` unless it names one (a block's `t.change` keeps it), on
+  Rails 7.1 and later. A default index name is not shortened on Rails 7.0, and
+  from 7.1 not in the calls such a migration runs through the 7.0 compatibility
+  layer (`add_index`, `rename_table`, a block's `t.index`, `index:` and, in
+  `create_table`, `t.references`); `add_reference`, a `change_table` block's
+  `t.references` and `rename_column` follow the app's Rails alone, and the
+  advisor's duplicate-index warning uses the app's rule. `create_table :t, id:
+  :uuid` in a migration written for 5.0 or earlier gets `uuid_generate_v4()` on
+  PostgreSQL, and `id: "uuid"` (a string) a uuid key with no default. On Rails
+  7.0 `change_column_null` with a literal `nil` sets NOT NULL on PostgreSQL and
+  allows NULL on MySQL and SQLite; from 7.1 a migration written for 7.0 or
+  earlier sets NOT NULL in its own call and every other call raises, so the
+  column stays.
+- **A datetime with no precision shows `precision: nil` on every tier** (schema.rb,
+  structure.sql, replay, connection), as schema.rb writes it, where it read as
+  6. A migration or `Schema[x.y]` file written for 6.1 or earlier gives a
+  datetime that spelling, and one written for 5.2 or earlier gives `timestamps`
+  that spelling. `get_schema` shows `datetime, precision: nil` and the advisor's
+  rollback writes it.
+- **structure.sql reads column types as schema.rb writes them.** A decimal of
+  scale 0 shows no `scale:`, a `bit` or `bit varying` column is named and sized,
+  a `money` column has scale 2, a SQLite `text(n)` keeps its limit, a column of
+  a PostgreSQL domain is its base type with none of the domain's sizes (a
+  default cast to the domain is dropped), and a foreign key name that matches
+  `SchemaDumper.fk_ignore_pattern` is left out on every tier, so an `fk_rails_`
+  name left by a rename no longer shows. The booted tier uses the connection's
+  pattern, keeps a SQLite text or blob limit and lists the index behind a unique
+  or exclusion constraint with the constraint only. An app that sets the pattern
+  is told, in the schema answer, that a read without booting cannot apply it.
+- **Every table has one `schema.name` key on every tier, its real name as Rails
+  sees it.** A name holding a dot, a quote, a hyphen or a space is listed under
+  that name (a table `x.y` in schema `other` and a table `y` in schema `x` are
+  two tables, and a sequence named with a dot keeps its name), and `schema --table my-table` finds it by the
+  name it was written with or a quoted spelling of it. Quoting happens only
+  where SQL or Ruby source is written.
+- **Schema answers read odd search paths and names.** A PostgreSQL search path
+  with a quote, comma or backslash in a schema name is read whole, from
+  `database.yml` and from the connection, an empty quoted entry (`""`) is
+  dropped, a serial's sequence name is cut to 63 bytes at a character boundary,
+  and a SQLite virtual table's column written in single quotes, brackets,
+  backticks or double quotes with a space, comma or doubled quote in the name is
+  listed, from schema.rb, structure.sql and the connection.
+- **`get_schema` and `migration_advisor` do not state a table absent when a
+  replay skipped migration helper calls.** The answer names the skipped calls
+  (file:line) and says a table they create is missing from it. A habtm whose
+  other table's name is computed is listed as `habtm_join_tables_unnamed`, and
+  `rails_performance_check` says `Assumed:` when the replay assumed MySQL's
+  foreign key order.
+- **`migration_advisor` writes `remove_column` and `change_type` migrations that
+  run and roll back to the same column.** The remove drops the column's foreign
+  keys, covering indexes and checks first, with every option the schema shows,
+  and rolling back restores the whole table. Rollbacks keep an enum's
+  `enum_type:`, an array or json default as a literal, a type SQL spells as a
+  string, MySQL's `unsigned:` and `size:`, a collation and a comment, and a
+  MariaDB json column comes back as `:json`. It warns where the up does more
+  than a plain drop, and PostgreSQL `change_type` adds `using:` for a cast
+  PostgreSQL will not do alone. It warns when `remove_column` drops a column
+  that a composite foreign key held by a table in another PostgreSQL schema
+  references, and does not call the drop reversible without that warning.
+- **`migration_advisor` on Rails 7.0 does not write a foreign key call 7.0
+  cannot run.** For a key over several columns it warns, and when another
+  table's key references the dropped column it gives the `execute` line that
+  drops it on PostgreSQL and MySQL and says no call can on SQLite. The SQL that
+  drops and restores a key over several columns names the constraint the
+  database has, also when the schema hides that name. On SQLite the warning says
+  `remove_column` usually fails there and the rollback cannot restore the key as
+  one. With the Rails version unknown, a key over several columns on SQLite gets
+  the `remove_foreign_key` call Rails 7.1 and later run, labelled as an
+  assumption, and a static read that names no Rails version says so and stamps
+  7.0.
+- **structure.sql with a very long run of blanks, parentheses, brackets, commas
+  or quotes in a definition reads in linear time on Ruby 3.1,** where a domain
+  with 16000 blanks took 5 to 13 seconds.
+
+#### Settings
+
+- **The static tier and the plugin's server start in a checkout of this gem's
+  own source, or an app that vendors one under another folder name.** They read
+  the gem's code as the app's settings and refused. A folder that holds
+  `rails-ai-context.gemspec` is left out, except the app's own `config/` folder.
+- **A boot that fails after `config/application.rb` ran serves the static tier
+  with every key's literal,** where it served the defaults and dropped `preset`,
+  `excluded_models`, `server_name` and `http_port`. A typo in a setting no
+  longer resets `ai_tools` to all five.
+- **The static tier no longer refuses a whole app when a file's top level reads
+  a frozen constant of `RailsAiContext::Configuration` (`PRESETS`) or a list
+  joined from literals (`%w[a] + %w[b]`).** (#620)
+- **The settings read without a boot count a write only where the boot would run
+  it.** Only a configure block's param and `RailsAiContext.configuration` count,
+  a write under `if`, `case`, a proc or `after_initialize` is reported and left
+  to the YAML or the default, `defined?(RailsAiContext)` and
+  `RailsAiContext.respond_to?` are the only guards (`defined?(Rails::Console)`
+  or `ENV.respond_to?` make nothing run), a top-level `return`, `next` or `raise`
+  that a condition may take makes what follows conditional, and a write inside
+  another library's configure block with the same param name is not the gem's. An
+  in-place edit (`<<`, `push`, `append`, `concat`, `unshift`, `prepend`,
+  `delete`, `clear`, `replace`, a `!` call, `[]=`) is followed in order, as the
+  boot runs it. `send`, `tap`, `then`, `method`, `alias` and `instance_eval` on a
+  setting or the configuration are reported per file and line, and so is an
+  element taken from the list an add hands back and then changed in place
+  (`config.excluded_models.dup.concat(%w[x]).first << "x"`). A list that hides
+  things (`excluded_models` and the like) keeps what was read before it.
+- **The unbooted reader and the boot agree on odd values.** An `ai_tools` name
+  that is no known tool is kept and writing context files refuses it by name, a
+  negative number literal is read, a write to `config.rails_ai_context` is
+  reported as unread, a control escape in a literal is reported, and an
+  initializer that sets `sensitive_patterns`, `excluded_paths` or `skip_tools`
+  to `nil` or a single string no longer raises inside the boot.
+- **On a booted app, `RailsAiContext.configuration.server_name = "x"` in
+  `config/application.rb` or an environment file is no longer overwritten by
+  `.rails-ai-context.yml`.** `Configuration#ai_tools` no longer keeps the first
+  app's selection after `app_root` changes, and `Configuration::PRESETS` cannot
+  be changed through its lists.
+- **`init`, `tool --help`, `context --no-boot`, `doctor` and the session-start
+  hook say which file and line of Ruby could not be read without a boot, and
+  what answers in its place.** `init` gives no tool count when `skip_tools`
+  cannot be read, `tool --list` in such an app prints the reason and exits 1,
+  `rails ai:context` names the initializer whose write the boot keeps, and
+  `context --no-boot` writes the tools an initializer chose.
+- **The settings reader works under a C locale** when the app's folder or an
+  initializer's name is not ASCII, and a configure block guarded by a modifier
+  `if defined?(RailsAiContext)` is read as running.
+
+#### Install
+
+- **`uninstall`, `--prune` and the switch to the MCP-only setup leave a
+  `CLAUDE.md`, `AGENTS.md` or `.cursorrules` whose rails-ai-context markers do
+  not pair up as it is, and name it.** Before, they removed everything from the
+  first BEGIN to the only END, the user's lines between them included.
+- **A context file or initializer that starts with a byte order mark keeps it
+  first.** The gem's block goes after the mark, a file 5.37 wrote with the block
+  above the mark gets it back at the front on the next write, and a generator
+  re-run keeps the mark in front of the `defined?(RailsAiContext)` guard instead
+  of moving it into the constant's name.
+- **`init`, `init` in a folder of apps, the install generator and the first
+  `rails ai:context` stop before anything is written, and name the file,** when
+  `.rails-ai-context.yml` or `config/initializers/rails_ai_context.rb` cannot
+  take the write the answers make (read-only, an unwritable folder, or a link
+  out of the app). Before, the files were written for the new selection while
+  the record kept naming the old one.
+- **A generator re-run finds the initializer's configure block by parsing the
+  file.** The missing sections go inside it whatever the block parameter is
+  called, with a comment after it, in the brace form, or with a heredoc line
+  that starts with `end`, and a CRLF file keeps CRLF. An initializer with code
+  after the block, or a guard like `return unless defined?(RailsAiContext)`, no
+  longer gets sections outside the block or a second guard. A file that does not
+  parse, or has no configure block, is left as it is and named.
+- **A file the user made read-only, and a folder link that leads nowhere, no
+  longer stop the run.** A context file, MCP config, initializer or `.gitignore`
+  that cannot be written is left and named, the files under a dead link are
+  named as left behind it, and a pre-commit hook that is a link, or that its
+  permissions keep from rewriting, is left and named while the run goes on.
+- **`uninstall` and `--prune` remove an MCP entry only when the gem wrote it.**
+  An entry of yours that runs the gem stays and is named with its file,
+  `uninstall` removes an HTTP entry under the gem's name from
+  `.codex/config.toml`, and "files removed" is no longer said for a tool whose
+  config kept your entry. Above several apps, `--prune` removes the per-app
+  servers the gem wrote, an app's that is gone too.
+- **The install and `doctor` word an MCP config they cannot merge into the same
+  way** ("Make it valid JSON holding an object", "Delete one of them by hand"),
+  `doctor` says "Save .codex/config.toml as UTF-8" for a Codex config that is
+  not, and `init` in a folder of apps names each app's record the way it names
+  its `.gitignore`.
+- **`init` and `doctor` give one answer for a local `enabledPlugins` value that
+  is no boolean:** it turns the committed plugin off, since only `true` turns a
+  plugin on.
+- **A binary run from a checkout, or one RubyGems did not activate, loads the
+  gem from its own copy,** so another installed release cannot take
+  `InitializerSettings` or redefine constants. `init` also names the pre-commit
+  hook when a denied read stops its plan.
+- **A new selection line goes into a configure block whose `do |config|` line
+  ends in a comment, and never into a heredoc that quotes a configure block.**
+- **A tool's `--help` note names only the file when the stopping setting has no
+  line number, and names the binary's command in a folder that holds only
+  `config/boot.rb` or an `app/` folder with no Ruby file.** `tool NAME --help`
+  notes that the tool may be off wherever `skip_tools` cannot be read, and in a
+  folder with no app prints no rake form that cannot run there.
+
+#### Plugin
+
+- **The plugin's server answers under a C or unset locale.** It reads a request
+  line outside ASCII, runs in a folder named outside ASCII (it crashed and
+  turned the plugin off for 15 minutes), answers its own refusal to a non-ASCII
+  line, and reports a failed resource read.
+- **A folder whose only Rails mark is a `bin/rails` that boots an app below it
+  (a monorepo root) serves that app,** for every command and the plugin, instead
+  of saying "using app at ./" and then "No Rails app found".
+- **A call the plugin's router fails on answers a tool error instead of no
+  answer,** and a `ping` from an app's server gets an empty result.
+- **In a folder of several apps, each app's server runs the Ruby its own version
+  file names under rbenv, asdf or mise shims,** even when the session pinned
+  another, and gets none of the session Ruby's gems. The router stops a server
+  that stopped answering before it starts another, stops every server when the
+  session ends, names a signal that killed one, and exits 0 when the session
+  ends while a bundled copy is stopping.
+- **In a folder of several apps, the first tool list leaves out what an app's
+  `skip_tools` turns off.** A call for a skipped tool or section is answered at
+  once, and the router refuses a tool early only for a `skip_tools` entry the
+  YAML or an outright write in the running environment gives (a write under a
+  condition, in a block that runs later or in another environment's file starts
+  the app and relays the call). A call for a tool an app does not serve names
+  `skip_tools` beside the release, a request an app's custom tool makes of the
+  client mid-call (sampling, elicitation, roots) is answered with an error, a
+  call cancelled before it reaches its app's server is dropped, and the router
+  reads each app's settings once.
+- **In a folder of apps, a mise file whose tools name no Ruby is passed over,
+  and one that names a Ruby it cannot read stops the walk,** so a parent
+  folder's `.ruby-version` gives no false version note. `tools.ruby = "x"`,
+  `tools.ruby.version = "x"` and an inline `tools = { ruby = "x" }` are read.
+- **The session hook no longer lets warnings printed as the gem loads reach the
+  session,** and no longer names a `rails_get_config` section that a
+  `skip_tools` list joined from literals turns off.
+
+#### Tools
+
+- **Redaction no longer rewrites what holds no secret.** `bundle config gem.coc
+  true` and `BUNDLE_GEM__TEST` are shown, a snake_case name holding `sk_live_`
+  (`use_sk_live_credentials`) is kept, a Bundler setting without a credential
+  (`BUNDLE_PATH`, `BUNDLE_JOBS`, `build.*`) no longer swallows the credential
+  after it on the line, a placeholder (`changeme`, `user:password`,
+  `<user>:<token>`) is shown, and an apostrophe earlier in a comment no longer
+  hides a credential written in single quotes after it. A YAML alias or tag, a
+  JSON number or array, a shell test on `$BUNDLE_...`, a name in a list, a Ruby
+  expression after the value, a credential name written as the value of a
+  constant, `op read` references and bracketed or angle-bracket placeholders are
+  no longer filtered or cut. A line with an invalid byte no longer stops
+  redaction, and `redact_source` reads UTF-16 text.
+- **Source and log redaction run in linear time on Ruby 3.1.** A long URL user,
+  spaces after a secret's name, spaces in a private key's body, a long run of
+  capitals, a long word in a SQL comment, many Bundler settings, quotes or
+  backslashes on one line took seconds or minutes.
+- **A response cut at the size limit ends on a whole line and closes an open
+  code fence,** an indented list-item fence included, so the footer and the
+  static-tier banner read as prose. `rails_get_turbo_map` no longer leaves the
+  rest of its answer inside an open code block when a subscription has no line
+  to show.
+- **A running server sees edits to files its tools read outside the watched
+  folders:** OpenAPI and Swagger specs (`openapi.json`,
+  `swagger/v1/swagger.yaml`, `docs/*.yml`, `public/**`), `config/vite.json` and
+  `.rabl` templates. Build output, `node_modules` and upload folders no longer
+  drop the cache, the build folder an app configures (`public_output_path`,
+  `publicOutputDir`) no longer moves the fingerprint, and an autoload root added
+  after the server started or reached through a deploy link is looked up and
+  kept app-relative, also after the link moves to the next release.
+- **Watching an autoload root follows where it sits.** A folder
+  `config/application.rb` adds to the autoload paths before the folder exists is
+  looked up and watched once it is made. A root that `excluded_paths` names, or
+  that sits under `vendor`, `tmp` or `log`
+  (`Rails.root.join("vendor/engines/billing/lib")`), and an in-repo path gem's
+  `lib` there, is searched for constants but not watched and is read fresh on
+  every call. No lookup, per-call check or file watcher enters a `node_modules`
+  or `vendor/bundle` folder at any depth inside `app/*`, a declared root or an
+  in-repo path gem's `lib`.
+- **A routed controller's view folder that cannot be listed costs the
+  controllers section a warning,** where every tool failed, and a failed section
+  is named once. `rails_get_context(feature:)` adds a table's schema once
+  however many models share the table. A name the kept index files under an
+  edited file gives no answer instead of `NoMethodError`.
+- **`rails_generate_test` writes RSpec model specs that pass.** It no longer
+  writes `validate_presence_of` for a required `belongs_to`, makes a unique
+  column's value from the record's own value so an email stays an email, skips
+  an inclusion on a boolean or an enum, an inclusion list that is a method call,
+  and a format the made-up value matches, and writes a real
+  `validate_acceptance_of`, `validate_confirmation_of` (with its matching
+  field) or `validate_absence_of` matcher, or a skip that says what to assert or
+  supply, not an empty body. A uniqueness check builds its subject from
+  placeholders (from the factory when there is one) and duplicates a saved
+  record, where it ran against an unsaved one or a record with every attribute
+  nil. In the static tier, a model whose table name the source computes skips the
+  examples that need a record and says its columns are unknown.
+- **A record `rails_generate_test` makes up from placeholders passes the model's
+  rules, and fails closed on what it cannot satisfy.** It satisfies length,
+  numericality (also on a string column, with a numeric string of the right
+  length), acceptance (`accept:` values), confirmation, format and absence
+  rules, takes a range's first value, a listed symbol as a string on a string
+  column, an enum's first key, an inclusion's first listed value, the inclusion's
+  value where the enum is computed, and the subclass name in an STI parent's type
+  column (none for the base class), and carries the password and confirmation of
+  a `has_secure_password` or Devise model. `validates_with`, a validator class,
+  an unknown rule kind, an option the gem does not honor, a list it cannot read, a
+  lambda or proc in a create-time rule, a format it cannot satisfy, a custom
+  `validate`, an attachment or other attribute that is no column and an enum
+  whose mapping the source computes (a TODO names it as `Model#attribute`) make
+  the examples that need the record skip, naming the rule and what to supply.
+  Strings it writes (an exclusion list, a quoted pattern, a backslash in a rule)
+  are valid Ruby, and the note that attributes may need adjusting comes before
+  the parent a request spec makes up.
+- **`rails_generate_test` writes request specs, minitests and system specs that
+  save their records.** Each required parent is created and its id sent, also
+  for a controller under a nested route (`/posts/:post_id/comments`, where the
+  route parent is created first, named in the path and used as the record's
+  owning key); with no factory or fixture the parents and the record come from
+  placeholders, and a parent's fixture is used as it is where the app has one. A
+  required polymorphic parent is made as a model whose `has_many` or `has_one`
+  names the role with `as:` (an STI owner is the base class that declares the
+  role, and `*_type` holds the base's name), and what needs a parent whose role
+  no model fills skips and says why. A create or destroy gives a unique number,
+  date or time one more than the record's own value, covers a unique column the
+  controller does not permit, and skips with a reason for a unique column with
+  no such value. A minitest builds a made-up record or route parent in a method
+  the first test that needs it calls, also for a nested controller with no model
+  of its own, so one the model rejects fails only the tests that use it, and a
+  system spec builds each route parent once as a let. A singular `resource
+  :profile` builds the record it reads first, and a controller with no model and
+  no `:id` (a singular dashboard) is requested without a record. A record named
+  `app`, `record`, `request`, `response`, `controller`, `routes`,
+  `integration_session`, `change`, `page`, `visit`, `name`, `store`, `Skip`,
+  `Create`, `Build`, `Include`, `Send`, `SignIn` or any other name an example
+  group or factory call uses gets a `_record` let, ivar or `_copy` local, so it
+  does not replace the example group's own.
+- **`rails_generate_test` service specs call `.call` only on a class that
+  defines one and `new.call` for an instance `call`,** read `call` and
+  `initialize` from the service class itself, skip with the arguments named when
+  the service needs them, and no longer claim a controller reads no params when
+  an action permits inline.
+- **`rails_validate` finds a rendered partial the way Rails does:** any template
+  handler, the rendering controller's folder and each parent controller's, then
+  `application/`, never `shared/` for a bare name and none in `layouts/` for a
+  layout, so HAML and Slim partials are no longer reported missing. It checks the
+  keys `params.expect(post: [...])` and `params.fetch(:post, {}).permit(...)`
+  permit, as it does after `require`, and no longer checks a bare
+  `params.permit(:page, :sort)` against the controller's model.
+- **`rails_analyze_feature` counts a controller as tested by a request spec that
+  sends a request one of its routes answers first in draw order** (a literal
+  path, a `"POST /path"` describe string, a route helper, `visit`, also one
+  interpolated at the start of a path string), so a slug or catch-all route
+  (`/:slug`, `/*path`) takes no credit for other controllers' request specs.
+  Requests are read from the Ruby AST. A helper in `expect(response).to
+  redirect_to(posts_path)` of another controller's spec marks nothing tested.
+  (#618)
+- **`rails_performance_check` reports a missing counter cache unless the
+  `belongs_to` that points back has an active one.** It finds that `belongs_to`
+  by `inverse_of:`, `foreign_key:` or the class it names (resolved from the
+  child's namespace outward, whatever the inflection), reads the counter column
+  each side uses as Rails does, and reads a `belongs_to` or `has_many` from the
+  model's concerns and bases.
+- **`rails_get_job_pattern` and `rails_get_service_pattern` count database
+  writes by what the call is.** `update_all`, `delete_all`, `delete_by`,
+  `update_column(s)`, `insert_all`, `upsert`, `touch`, `touch_all`,
+  `increment!`, class-level counters and raw SQL through a connection
+  (`execute`, `exec_update`, `exec_insert`, `exec_delete`; a literal `SELECT` is
+  a read) count, and `File.open(path, mode: "w")` is a file write. A persistence
+  call that no Hash, Array, Set or String answers (`save`, `destroy`, `touch`,
+  `find_or_create_by` and the like) counts on anything but a file, a path,
+  `session`, `cookies`, `flash` or a cache or Redis client, and `update`,
+  `create` or `delete` counts on a model, a chain of record or relation methods
+  from one, or a local, instance variable or parameter that holds a record. A
+  known record origin wins over the `session`, `cookies`, `flash`, cache and
+  Redis names, so `Session.find(1).destroy` and `CacheEntry.delete_all` count.
+  `Rails.cache.delete`, `hash.delete(key)`, `params[:user].delete(:password)`,
+  `Order.pluck(:id).delete`, `Order.first.attributes.delete`, `File.delete`,
+  `ENV.delete`, `Stripe::Customer.create` and `Tempfile.create` do not. A job or
+  service file with bytes that are not valid UTF-8 is read.
+- **`rails_diagnose` suggests a column or association for an undefined method on
+  an instance and a scope or class method on a class,** and a `package.json` or
+  `tsconfig.json` that starts with a byte order mark is read, so the app no
+  longer looks like it has no JS packages and TypeScript turned off.
+- **`rails_dependency_graph` centered on a model counts only models, and
+  `rails_onboard` prints its Action Text line again.**
+- **`rails_search_code` reads an `excluded_paths` entry with a slash from the
+  app root whatever folder the process runs in** and finds a file whose path
+  below the root holds the root's own spelling. `rails_read_logs` says a log's
+  last line is longer than the part it reads, where it said a non-empty log was
+  empty, and `rails_search_docs` with `fetch: true` answers the fetched guide
+  when its cache file is read-only.
+- **The tool guide's examples name a model whose table is known,** or the
+  placeholder model with the placeholder table.
+
 ## [5.37.0] - 2026-10-25
 
 ### Security

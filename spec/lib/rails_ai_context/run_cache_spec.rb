@@ -73,4 +73,18 @@ RSpec.describe RailsAiContext::RunCache do
       expect([ described_class.active?, "hero".pluralize ]).to eq([ false, "heros" ])
     end
   end
+
+  it "keeps a kept value for the run, and hands it to the keeper a server sets past the run" do
+    keeper = described_class.keeper
+    calls = 0
+    described_class.keeper = nil
+    expect(described_class.around { Array.new(2) { described_class.kept(:k) { calls += 1 } } }).to eq([ 1, 1 ])
+    expect(described_class.kept(:k) { calls += 1 }).to eq(2)
+
+    kept = {}
+    described_class.keeper = ->(key, &read) { kept.fetch(key) { kept[key] = read.call } }
+    expect(Array.new(2) { described_class.around { described_class.kept(:k) { calls += 1 } } }).to eq([ 3, 3 ])
+  ensure
+    described_class.keeper = keeper
+  end
 end

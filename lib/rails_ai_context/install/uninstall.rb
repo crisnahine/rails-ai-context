@@ -28,12 +28,13 @@ module RailsAiContext
       end)
 
       # `app_roots:` as for Program.cleanup_removed_tools: a folder of apps
-      # keeps its MCP configs in `root` and the rest in each app.
+      # keeps its MCP configs in `root` and the rest in each app. `kept`
+      # collects each MCP entry that stays, a user's: { file:, name:, starts: }.
       #
       # @return [Boolean] whether anything was removed
-      def call(surface, root:, app_roots: [ root ])
+      def call(surface, root:, app_roots: [ root ], kept: [])
         changed = Program.remove_tools(surface, AiTool.keys, selected: [], previous: AiTool.keys, root: root,
-                                                             app_roots: app_roots, http_entries: true)
+                                                             app_roots: app_roots, http_entries: true, kept: kept)
 
         app_roots.each do |app_root|
           changed = true if remove_files(surface, app_root: app_root, root: root)

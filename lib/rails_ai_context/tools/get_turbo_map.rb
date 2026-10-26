@@ -307,9 +307,7 @@ module RailsAiContext
           lines << "## Stream Subscriptions (#{view_subscriptions.size})"
           view_subscriptions.each do |s|
             lines << "- `turbo_stream_from` `#{s[:stream]}` - `#{s[:file]}:#{s[:line]}`"
-            lines << "  ```erb"
-            lines << "  #{s[:snippet]}"
-            lines << "  ```" if s[:snippet]
+            lines.push("  ```erb", "  #{s[:snippet]}", "  ```") if s[:snippet]
           end
           lines << ""
         end

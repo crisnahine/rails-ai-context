@@ -1845,22 +1845,64 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       ])
     end
 
-    it "counts a call to a method that takes arguments, or that calls itself, as not expanded" do
-      results = routes_for(<<~RUBY)
+    # A live RouteSet (7.0.10 and 8.1.4) draws api_v1_ping at /api/v1/ping and api_v2_pong at /api/v2/pong.
+    it "draws a method called with arguments where it is called, each parameter the argument given or its default" do
+      records = route_records(<<~'RUBY')
+        Rails.application.routes.draw do
+          def versioned(v, kind = "ping", to: "ping#show")
+            get "v#{v}/#{kind}", to: to
+          end
+          namespace :api do
+            versioned 1
+            versioned 2, "pong", to: "pong#show"
+          end
+        end
+      RUBY
+
+      expect(records.map { |r| [ r[:name], r[:path], "#{r[:controller]}##{r[:action]}" ] }).to eq([
+        [ "api_v1_ping", "/api/v1/ping", "api/ping#show" ],
+        [ "api_v2_pong", "/api/v2/pong", "api/pong#show" ]
+      ])
+    end
+
+    # A live RouteSet (7.0.10, 8.0.5.1, 8.1.4) draws y at /y, z at /z and vw at /vw: a default reads the method's own
+    # parameters. The walk reads a default that is a literal or one earlier parameter, and counts any other as unread.
+    it "reads a parameter's default from the parameters bound before it, never from a caller's local of that name" do
+      records = route_records(<<~'RUBY')
+        Rails.application.routes.draw do
+          def m(a, b = a)
+            get b, to: "p#s"
+          end
+          def n(a, b = "v#{a}")
+            get b, to: "p#t"
+          end
+          %w[x].each { |a| m("y") }
+          m("z")
+          %w[x].each { |a| n("w") }
+        end
+      RUBY
+
+      expect(records.map { |r| [ r[:name], r[:path], "#{r[:controller]}##{r[:action]}" ] }).to eq([
+        [ "y", "/y", "p#s" ], [ "z", "/z", "p#s" ]
+      ])
+    end
+
+    it "counts a method called with an argument it cannot read, or one that calls itself, as not expanded" do
+      results = routes_for(<<~'RUBY')
         Rails.application.routes.draw do
           def versioned(v)
-            get "v\#{v}/ping", to: "ping#show"
+            get v, to: "ping#show"
           end
           def loop_routes
             loop_routes
           end
-          versioned 1
+          versioned ENV["V"]
           loop_routes
         end
       RUBY
 
       expect(results.select { |r| r[:type] == :route }).to be_empty
-      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to eq(%i[versioned loop_routes])
+      expect(results.count { |r| r[:type] == :dynamic }).to eq(2)
     end
 
     it "says which condition a route is drawn under" do
@@ -2143,7 +2185,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
         PAGES.each { |x| extra(x) }
       end')
       expect(results.map { |r| r[:type] == :route ? r[:path] : r[:macro] }).to eq(
-        [ :section, :section, "/home", "/a", :extra, "/b", :extra, :extra ]
+        [ "/admin/items", "/staff/items", "/home", "/a", "/a/extra", "/b", "/b/extra", :extra ]
       )
     end
 
@@ -2417,6 +2459,92 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
         Section.names.each { |name| resources :widgets, only: :index, path: name }
       end')
       expect(records).to eq([ { type: :dynamic, macro: :resources, location: 2 } ])
+    end
+  end
+
+  # Each expectation below is what ActionDispatch::Routing::RouteSet#draw gives for the same source, Rails 7.0 to 8.1.
+  describe "namespace options and as: nil" do
+    def drawn(source, **options)
+      listener = described_class.new(**options)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+      listener.results.select { |r| r[:type] == :route }.map { |r| [ r[:name], r[:verb], r[:path], "#{r[:controller]}##{r[:action]}" ] }
+    end
+
+    it "draws a nested resource's member routes shallow under a namespace given shallow: true" do
+      routes = drawn(<<~RUBY)
+        Rails.application.routes.draw do
+          namespace :admin, shallow: true do
+            resources :shops, only: [] do
+              resources :items, only: %i[index show]
+            end
+          end
+        end
+      RUBY
+
+      expect(routes).to eq([
+        [ "admin_shop_items", "GET", "/admin/shops/:shop_id/items", "admin/items#index" ],
+        [ "admin_item", "GET", "/admin/items/:id", "admin/items#show" ]
+      ])
+    end
+
+    it "gives a verb route with as: nil no name, and leaves the name free for a later route" do
+      routes = drawn(<<~RUBY)
+        Rails.application.routes.draw do
+          root to: "home#show", as: nil
+          get "a", to: "b#c", as: nil
+          post "webhooks/stripe", to: "webhooks#stripe", as: nil
+          resources :posts, only: [] do
+            get :preview, on: :member, as: nil
+          end
+          resources :things, only: :index, as: nil
+          get "a", to: "b#d"
+        end
+      RUBY
+
+      expect(routes).to eq([
+        [ nil, "GET", "/", "home#show" ],
+        [ nil, "GET", "/a", "b#c" ],
+        [ nil, "POST", "/webhooks/stripe", "webhooks#stripe" ],
+        [ nil, "GET", "/posts/:id/preview", "posts#preview" ],
+        [ "things", "GET", "/things", "things#index" ],
+        [ "a", "GET", "/a", "b#d" ]
+      ])
+    end
+
+    # Rails 8.1's namespace fills a nil module: with the namespace's name; before 8.1 an explicit nil means no module.
+    it "routes a namespace given module: nil to the bare controller before Rails 8.1, and to the namespaced one on 8.1" do
+      source = <<~RUBY
+        Rails.application.routes.draw do
+          namespace :v1, module: nil do
+            get "ping", to: "pings#show"
+            resources :posts, only: :index
+          end
+        end
+      RUBY
+
+      expect(drawn(source, before_8_1: true)).to eq([
+        [ "v1_ping", "GET", "/v1/ping", "pings#show" ],
+        [ "v1_posts", "GET", "/v1/posts", "posts#index" ]
+      ])
+      expect(drawn(source).map(&:last)).to eq([ "v1/pings#show", "v1/posts#index" ])
+    end
+
+    # Before 8.1, Rails joins the outer module with the nil one and routes to `api//pings`, a controller no app defines.
+    it "counts a namespace given module: nil inside another module as a shape it cannot place before Rails 8.1" do
+      source = <<~RUBY
+        Rails.application.routes.draw do
+          namespace :api do
+            namespace :v1, module: nil do
+              get "ping", to: "pings#show"
+            end
+          end
+        end
+      RUBY
+      listener = described_class.new(before_8_1: true)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+
+      expect(listener.results.map { |r| r[:type] }).to eq([ :dynamic ])
+      expect(drawn(source)).to eq([ [ "api_v1_ping", "GET", "/api/v1/ping", "api/v1/pings#show" ] ])
     end
   end
 end

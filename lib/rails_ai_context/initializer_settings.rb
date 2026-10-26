@@ -3,6 +3,7 @@
 require "find"
 require "open3"
 require "prism"
+require "set"
 
 module RailsAiContext
   # The security settings an app's Ruby config writes, read without running it. The static tier runs
@@ -13,7 +14,7 @@ module RailsAiContext
   # which runs as the file loads; a method's body there, a tool's or a helper's that runs when
   # called, is read for what it writes.
   module InitializerSettings
-    KEYS = %i[sensitive_patterns excluded_paths skip_tools].freeze
+    KEYS = Configuration::UNION_KEYS
     # Each returns the array, so `<<` chains append to it too, and so do these removals.
     ADDS = %i[<< push append concat unshift prepend insert].freeze
     SELF_REMOVES = %i[delete_if reject! select! filter! keep_if clear].freeze
@@ -56,17 +57,20 @@ module RailsAiContext
                        "!rails-ai-context-[0-9]*/", "!**/generators/**/templates/**" ].freeze
     # A file Rails runs as configuration is read whole.
     CONFIG = %r{(?:\A|/)config/}
+    # The app's own configuration; this gem's checkout holds only config/routes.rb there, so no gemspec hides it.
+    APP_CONFIG = %r{\Aconfig/}
     # Deeper than any configuration nests; read no further, so the reader never runs out of stack.
     MAX_DEPTH = 1000
     # Rails globs these through a link, which neither search below follows.
     BOOT_GLOBS = %w[config/initializers/**/*.rb config/environments/*.rb].freeze
     # A block in these runs before .rails-ai-context.yml is read, and a key it assigns keeps the YAML off that key.
     BEFORE_YAML = %r{\Aconfig/(?:application|environments/[^/]+)\.rb\z}
-    # Ruby config files are small; a larger one is searched for the gem's name before it is refused.
-    MAX_SOURCE = 10_000_000
     MARKERS = %w[RailsAiContext rails_ai_context].freeze
+    GEMSPEC = "rails-ai-context.gemspec"
 
-    Found = Struct.new(:values, :assigned, :refusals)
+    # definite: the values written outright where the app runs, none under a branch, a block that runs later or another environment's file.
+    Found = Struct.new(:values, :assigned, :refusals, :definite)
+    CONDITIONAL_NODES = %i[if unless case case_match].freeze
 
     module_function
 
@@ -74,20 +78,50 @@ module RailsAiContext
     #
     # @raise [ConfigurationError] naming the first line it could not read
     def apply!(root, config = RailsAiContext.configuration)
-      root = File.expand_path(root.to_s)
+      refusal = apply(root, config).first
+      raise ConfigurationError, refusal.message if refusal
+    end
+
+    # A line this reader cannot follow, which keeps the static tier from serving; `reason` is a refusal's own, which a file
+    # that does not parse carries.
+    def refusal(file, line, what, key = nil, reason = nil)
+      file = UnbootedSettings.label(file)
+      return UnbootedSettings::Refusal.new(file, line, key, reason, true) if reason
+
+      UnbootedSettings::Refusal.new(file, line, key, "the static tier cannot read #{what}", true,
+                                    "the static tier cannot read #{what} without booting the app, so it serves nothing: " \
+                                    "the file a setting there keeps back would be read. Write the value as a literal list, such as " \
+                                    "%w[config/keys.yml], or set it in .rails-ai-context.yml, which every tier reads.")
+    end
+
+    # The literals applied to config for every key no refused line touches; none when one reaches the whole configuration.
+    #
+    # @return [Array<UnbootedSettings::Refusal>] each line it could not read, its key nil when the line reaches the
+    #   configuration as a whole
+    def apply(root, config)
+      root = File.expand_path(root.to_s).b
       found = boot_files(root).to_h { |relative| [ relative, read(File.join(root, relative), relative) ] }
-      if (file, line, what = found.values.flat_map(&:refusals).first)
-        raise ConfigurationError, "#{file}:#{line}: the static tier cannot read #{what} without booting the app, so it serves nothing: " \
-          "the file a setting there keeps back would be read. Write the value as a literal list, such as %w[config/keys.yml], " \
-          "or set it in .rails-ai-context.yml, which every tier reads."
-      end
+      refusals = found.values.flat_map(&:refusals)
+      refused = refusals.map(&:key)
+      return refusals if refused.include?(nil)
 
       defaults = Configuration.new
-      KEYS.each do |key|
+      (KEYS - refused).each do |key|
         added = found.values.flat_map { |each| each.values[key] }
         added += defaults.public_send(key) if found.any? { |relative, each| relative.match?(BEFORE_YAML) && each.assigned.include?(key) }
         config.public_send(:"#{key}=", (config.public_send(key) + added.map(&:to_s)).uniq) if added.any?
       end
+      refusals
+    end
+
+    # The values of a union key every boot is certain to apply, or nil when a line this reader cannot follow touches it.
+    def definite(root, key)
+      root = File.expand_path(root.to_s).b
+      found = boot_files(root).map { |relative| read(File.join(root, relative), relative) }
+      refused = found.flat_map(&:refusals).map(&:key)
+      return nil if refused.include?(nil) || refused.include?(key)
+
+      found.flat_map { |each| each.definite[key] }.map(&:to_s).uniq
     end
 
     # The Ruby files that name the gem, hidden files, links and folders the boot does not run aside,
@@ -96,7 +130,27 @@ module RailsAiContext
     # app is not. ripgrep finds them when it is there; the walk lists the same files without it.
     def boot_files(root)
       found = (Executable.on_path?("rg") && ripgrep_files(root)) || walked_files(root).select { |relative| names_gem?(File.join(root, relative)) }
-      (found + Dir.glob(BOOT_GLOBS, base: root).select { |relative| names_gem?(File.join(root, relative)) }).uniq.sort
+      copies = {}
+      (found + Dir.glob(BOOT_GLOBS, base: root).map(&:b)
+                                                  .select { |relative| names_gem?(File.join(root, relative)) }).uniq.sort
+        .reject { |relative| !relative.match?(APP_CONFIG) && gem_source?(root, relative, copies) }
+    end
+
+    # This gem's own source, a checkout or a vendored copy under any name, found by its gemspec in a folder above the file.
+    # A linked gemspec counts for nothing, as the walk follows no link.
+    def gem_source?(root, relative, copies)
+      dir = File.dirname(relative)
+      loop do
+        folder = dir == "." ? root : File.join(root, dir)
+        return true if copies.fetch(folder) { copies[folder] = gemspec_file?(File.join(folder, GEMSPEC)) }
+        return false if dir == "."
+
+        dir = File.dirname(dir)
+      end
+    end
+
+    def gemspec_file?(path)
+      File.file?(path) && !File.symlink?(path)
     end
 
     # nil when ripgrep fails, so the walk answers instead. It reads a file with a NUL in it as Ruby does,
@@ -105,9 +159,9 @@ module RailsAiContext
       globs = [ "*.rb", "!.*", *UNBOOTED_GLOBS ].flat_map { |glob| [ "-g", glob ] }
       markers = MARKERS.flat_map { |marker| [ "-e", marker ] }
       # The path is given, or ripgrep searches its standard input, which a pipe is.
-      out, status = Open3.capture2("rg", "--files-with-matches", "--fixed-strings", "--no-ignore", "--no-messages", "--text", "--null",
+      out, status = Open3.capture2("rg", "--no-config", "--files-with-matches", "--fixed-strings", "--no-ignore", "--no-messages", "--text", "--null",
                                    "--path-separator", "/", *globs, *markers, ".", chdir: root, err: File::NULL)
-      out.split("\0").map { |path| path.delete_prefix("./") } if status.success? || status.exitstatus == 1
+      out.b.split("\0").map { |path| path.delete_prefix("./") } if status.success? || status.exitstatus == 1
     rescue SystemCallError
       nil
     end
@@ -139,20 +193,36 @@ module RailsAiContext
     end
 
     def read(path, relative)
-      found = Found.new(Hash.new { |hash, key| hash[key] = [] }, Set.new, [])
-      source = SafeFile.read(path, max_size: MAX_SOURCE)
+      found = Found.new(Hash.new { |hash, key| hash[key] = [] }, Set.new, [], Hash.new { |hash, key| hash[key] = [] })
+      source = SafeFile.read(path, max_size: UnbootedSettings::MAX_SOURCE)
       result = source && AstCache.parse_string(source)
-      if result.nil? || result.errors.any?
-        found.refusals << [ relative, result ? result.errors.first.location.start_line : 1, "this file" ]
-      elsif too_deep?(result.value)
-        found.refusals << [ relative, 1, "this file" ]
+      if result&.errors&.any?
+        error = result.errors.find { |e| e.type != :unexpected_token_close_context } || result.errors.first
+        found.refusals << refusal(relative, unclosed_line(result.value) || error.location.start_line, "this file", nil,
+                                  "this file does not parse as Ruby (#{error.message}), so the static tier serves nothing until it is fixed.")
+      elsif result.nil? || too_deep?(result.value)
+        found.refusals << refusal(relative, 1, "this file")
       else
         Reader.new(found, relative, config: relative.match?(CONFIG)).visit(result.value)
       end
       found
     rescue SystemStackError
-      found.refusals.unshift([ relative, 1, "this file" ])
+      found.refusals.unshift(refusal(relative, 1, "this file"))
       found
+    end
+
+    # Prism versions put a missing `end` at the opener or at the end of the input; the tree gives every
+    # version's unclosed node an empty closing, and the innermost one is the literal or block the error names.
+    def unclosed_line(root)
+      stack = [ root ]
+      lines = []
+      until stack.empty?
+        node = stack.pop
+        closing = (node.closing_loc if node.respond_to?(:closing_loc)) || (node.end_keyword_loc if node.respond_to?(:end_keyword_loc))
+        lines << node.location.start_line if closing&.length&.zero?
+        stack.concat(node.compact_child_nodes)
+      end
+      lines.max
     end
 
     def too_deep?(node)
@@ -192,6 +262,17 @@ module RailsAiContext
         @keys = {}.compare_by_identity
         @element_of = {}.compare_by_identity
         @frames = Hash.new { |hash, name| hash[name] = [] }
+        @configure_blocks = Set.new.compare_by_identity
+        @conditional = 0
+        @elsewhere = (other = file[%r{\Aconfig/environments/(\w+)\.rb\z}, 1]) && other != UnbootedSettings.running_environment
+      end
+
+      # A write under a branch, a rescue, a loop or a block that runs later is not certain; `if defined?(RailsAiContext)` is.
+      def uncertain
+        @conditional += 1
+        yield
+      ensure
+        @conditional -= 1
       end
 
       # A statement's value goes nowhere, but the last one's is the value of what holds it: a block's, a
@@ -204,16 +285,22 @@ module RailsAiContext
       %i[parentheses if unless case case_match begin].each do |type|
         define_method(:"visit_#{type}_node") do |node|
           @used.push(!@statements.include?(node))
-          super(node)
+          guard = type == :if && node.predicate.is_a?(Prism::DefinedNode)
+          CONDITIONAL_NODES.include?(type) && !guard ? uncertain { super(node) } : super(node)
         ensure
           @used.pop
         end
       end
 
+      %i[while until for and or rescue rescue_modifier].each do |type|
+        define_method(:"visit_#{type}_node") { |node| uncertain { super(node) } }
+      end
+
+      # A method's body sees none of the names outside it.
       def visit_def_node(node)
         @used.push(true)
         @methods += 1
-        super
+        scoped(@roots) { uncertain { super } }
       ensure
         @methods -= 1
         @used.pop
@@ -221,17 +308,18 @@ module RailsAiContext
 
       def visit_lambda_node(node)
         @used.push(true)
-        super
+        scoped(node.locals) { uncertain { super } }
       ensure
         @used.pop
       end
 
-      # A block given each pattern is read once, by each_element.
+      # A block given each pattern is read once, by each_element. A block's own params hide the names outside it.
       def visit_block_node(node)
         return if @consumed.include?(node)
 
         @used.push(!@discarding.include?(node))
-        super
+        hidden = @configure_blocks.include?(node) ? [] : node.locals + (node.parameters.is_a?(Prism::ItParametersNode) ? [ :it ] : [])
+        scoped(hidden) { @configure_blocks.include?(node) ? super : uncertain { super } }
       ensure
         @used.pop unless @consumed.include?(node)
       end
@@ -299,13 +387,17 @@ module RailsAiContext
       end
 
       # RailsAiContext::Engine names a class the app may mount; RailsAiContext::Configuration is the
-      # settings themselves. Outside config/ a constant of it may be read.
+      # settings themselves. Outside config/ a constant of it may be read, and anywhere one that is
+      # frozen data, which nothing can change a setting through.
       def visit_constant_path_node(node)
         parent = node.parent
-        @consumed << parent if !strict? && parent.is_a?(Prism::ConstantPathNode) && parent.name == :Configuration && gem_constant?(parent.parent)
+        if parent.is_a?(Prism::ConstantPathNode) && parent.name == :Configuration && gem_constant?(parent.parent) &&
+           (!strict? || frozen_data?(node.name))
+          @consumed << parent
+        end
         if gem_constant?(node.parent)
           @consumed << node.parent
-          refuse(node, "RailsAiContext::Configuration") if node.name == :Configuration && (strict? || !@consumed.include?(node))
+          refuse(node, "RailsAiContext::Configuration") if node.name == :Configuration && !@consumed.include?(node)
         elsif gem_constant?(node) && !@consumed.include?(node)
           refuse(node, "RailsAiContext")
         end
@@ -323,6 +415,18 @@ module RailsAiContext
       def visit_defined_node(_node); end
 
       private
+
+      def frozen_data?(name)
+        Configuration.const_defined?(name, false) && (value = Configuration.const_get(name, false)).frozen? && Ractor.shareable?(value)
+      end
+
+      def scoped(hidden)
+        saved = @roots
+        @roots -= hidden
+        yield
+      ensure
+        @roots = saved
+      end
 
       def gem_name?(node)
         (node.is_a?(Prism::SymbolNode) || node.is_a?(Prism::StringNode)) && node.unescaped.match?(GEM_NAME)
@@ -355,6 +459,7 @@ module RailsAiContext
         return refuse(node, what: "the parameters of this configure block") if param == :unread
 
         @roots.push(param)
+        @configure_blocks << node.block
         visit(node.block)
       ensure
         @roots.pop if param && param != :unread
@@ -524,6 +629,20 @@ module RailsAiContext
 
         @found.assigned << key if assigned
         @found.values[key].concat(values)
+        @found.definite[key].concat(values) if @conditional.zero? && !@elsewhere && !chosen?(node)
+      end
+
+      # Whether the value written picks among literals at run time (`ENV["X"] ? a : b`).
+      def chosen?(node)
+        nodes = node.respond_to?(:arguments) ? node.arguments&.arguments : [ (node.value if node.respond_to?(:value)) ]
+        stack = Array(nodes).compact
+        until stack.empty?
+          current = stack.pop
+          return true if current.is_a?(Prism::IfNode) || current.is_a?(Prism::UnlessNode)
+
+          stack.concat(current.compact_child_nodes)
+        end
+        false
       end
 
       # The strings a value holds, or nil when it is no literal: a string or a symbol, an array of
@@ -535,7 +654,14 @@ module RailsAiContext
         when Prism::ArrayNode
           values = node.elements.map { |element| literals(element.is_a?(Prism::SplatNode) ? element.expression : element) }
           values.flatten if values.all?
-        when Prism::CallNode then literals(node.receiver) if node.name == :freeze && node.receiver && node.arguments.nil?
+        when Prism::CallNode
+          if node.name == :freeze && node.receiver && node.arguments.nil?
+            literals(node.receiver)
+          elsif %i[+ | - &].include?(node.name) && node.receiver && !node.block && node.arguments&.arguments&.size == 1
+            left = literals(node.receiver)
+            right = literals(node.arguments.arguments.first)
+            left.public_send(node.name, right) if left && right
+          end
         when Prism::ParenthesesNode then literals(node.body.body.first) if node.body.is_a?(Prism::StatementsNode) && node.body.body.size == 1
         when Prism::IfNode, Prism::UnlessNode
           other = node.is_a?(Prism::IfNode) ? node.subsequent : node.else_clause
@@ -595,7 +721,7 @@ module RailsAiContext
       end
 
       def refuse(node, name = nil, what: "what this line does to `#{name}`")
-        @found.refusals << [ @file, node.location.start_line, what ]
+        @found.refusals << InitializerSettings.refusal(@file, node.location.start_line, what, (name if KEYS.include?(name)))
         nil
       end
     end

@@ -1,0 +1,306 @@
+@ config/boot.rb O1-jobs
+ENV["BUNDLE_JOBS"] = "4"
+@ config/boot.rb O2-gemfile
+ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)
+@ config/boot.rb O3-without
+ENV["BUNDLE_WITHOUT"] = "development:test"
+@ config/boot.rb O4-path
+ENV["BUNDLE_PATH"] = "vendor/bundle" if ENV["CI"]
+@ config/boot.rb O5-github-https-flag
+ENV["BUNDLE_GITHUB__HTTPS"] = "true"
+@ config/boot.rb O6-bundle-ok
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV.fetch("GEM_CRED") { abort "set GEM_CRED" }
+@ config/boot.rb O7-ref-then-code
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV["GEM_CRED"]; puts "ok"
+@ config/boot.rb O8-ref-modifier
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV["GEM_CRED"] if ENV["GEM_CRED"]
+@ config/boot.rb O9-credentials
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = Rails.application.credentials.gem_cred
+@ config/boot.rb O10-nil
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = nil
+@ config/boot.rb O11-delete
+ENV.delete("BUNDLE_GEMS__EXAMPLE__COM")
+@ config/boot.rb O12-key-check
+if ENV.key?("BUNDLE_GEMS__EXAMPLE__COM") then puts "set" end
+@ config/boot.rb O13-fetch-raise
+abort "missing" unless ENV["BUNDLE_GEMS__EXAMPLE__COM"]
+@ config/boot.rb O14-cmp
+raise "bad" if ENV["BUNDLE_GEMS__EXAMPLE__COM"] == "x"
+@ config/boot.rb O15-present
+x = ENV["BUNDLE_GEMS__EXAMPLE__COM"].present? ? "yes" : "no"
+@ config/boot.rb O16-split
+user, pass = ENV["BUNDLE_GEMS__EXAMPLE__COM"].to_s.split(":")
+@ config/boot.rb O17-env-hash-ref
+env = { "BUNDLE_GEMS__EXAMPLE__COM" => ENV["GEM_CRED"], "A" => "b" }
+@ config/boot.rb O18-comment
+# Set BUNDLE_GEMS__EXAMPLE__COM before running bin/setup.
+@ config/boot.rb O19-log
+puts "BUNDLE_GEMS__EXAMPLE__COM is not set"
+@ config/boot.rb O20-log-colon
+warn "BUNDLE_GEMS__EXAMPLE__COM: missing"
+@ config/boot.rb O21-str-const
+CRED_VAR = "BUNDLE_GEMS__EXAMPLE__COM".freeze
+@ config/boot.rb O22-arr-of-names
+NAMES = %w[BUNDLE_GEMS__EXAMPLE__COM BUNDLE_JOBS].freeze
+@ config/boot.rb O23-arr-of-names2
+NAMES = ["BUNDLE_GEMS__EXAMPLE__COM", "BUNDLE_JOBS"].freeze
+@ config/boot.rb O24-each
+%w[a b].each { |n| ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV[n] }
+@ config/boot.rb O25-hash-sym-key-ref
+config = { gems: ENV["BUNDLE_GEMS__EXAMPLE__COM"], other: "x" }
+@ config/boot.rb O26-method-def
+def cred = ENV.fetch("BUNDLE_GEMS__EXAMPLE__COM", nil)
+@ deploy.sh O30-ref
+export BUNDLE_GEMS__EXAMPLE__COM="$GEM_CRED"
+@ deploy.sh O31-ref-then
+export BUNDLE_GEMS__EXAMPLE__COM="$GEM_CRED" && bundle install
+@ deploy.sh O32-test-z
+[ -z "$BUNDLE_GEMS__EXAMPLE__COM" ] && exit 1
+@ deploy.sh O33-test-eq
+[ "$BUNDLE_GEMS__EXAMPLE__COM" = "x" ] || echo no
+@ deploy.sh O34-echo
+echo "using $BUNDLE_GEMS__EXAMPLE__COM"
+@ deploy.sh O35-jobs
+export BUNDLE_JOBS=4 BUNDLE_RETRY=3
+@ deploy.sh O36-config-jobs
+bundle config set --local jobs 4
+@ deploy.sh O37-config-path
+bundle config set --local path vendor/bundle && bundle install
+@ deploy.sh O38-config-without
+bundle config set without "development test"
+@ deploy.sh O39-config-delete
+bundle config unset gems.example.com && bundle install
+@ deploy.sh O40-config-get
+bundle config get gems.example.com
+@ deploy.sh O41-config-list
+bundle config list
+@ deploy.sh O42-ref-config
+bundle config set gems.example.com "$GEM_CRED"
+@ deploy.sh O43-ref-config-brace
+bundle config set gems.example.com "${GEM_USER}:${GEM_PASS}"
+@ deploy.sh O44-ref-config-cmdsub
+bundle config set gems.example.com "$(cat /run/secrets/gem)"
+@ deploy.sh O45-ref-config-bare
+bundle config set gems.example.com $GEM_CRED
+@ deploy.sh O46-ref-chain
+bundle config set gems.example.com "$GEM_CRED"; bundle install --jobs 4 --retry 3
+@ deploy.sh O47-ref-then-pipe
+bundle config set gems.example.com "$GEM_CRED" | tee log
+@ deploy.sh O48-ref-then-redirect
+bundle config set gems.example.com "$GEM_CRED" > /dev/null 2>&1
+@ deploy.sh O49-ref-then-comment
+bundle config set gems.example.com "$GEM_CRED" # corp
+@ deploy.sh O50-env-then-cmd
+BUNDLE_JOBS=4 bundle install
+@ deploy.sh O51-if-block
+if [ -n "$BUNDLE_GEMS__EXAMPLE__COM" ]; then echo set; fi
+@ deploy.sh O52-while
+while read -r l; do BUNDLE_GEMS__EXAMPLE__COM="$l" bundle; done
+@ deploy.sh O53-defaults-empty
+export BUNDLE_GEMS__EXAMPLE__COM=
+@ deploy.sh O54-defaults-empty-q
+export BUNDLE_GEMS__EXAMPLE__COM=""
+@ deploy.sh O55-unset
+unset BUNDLE_GEMS__EXAMPLE__COM
+@ deploy.sh O56-var-assign-ref
+BUNDLE_GEMS__EXAMPLE__COM=$(vault read -field=cred secret/gems)
+@ deploy.sh O57-op-read
+BUNDLE_GEMS__EXAMPLE__COM="$(op read op://vault/gems/cred)"
+@ deploy.sh O58-op-read-bt
+BUNDLE_GEMS__EXAMPLE__COM=`op read op://vault/gems/cred`
+@ deploy.sh O59-aws-ssm
+export BUNDLE_GEMS__EXAMPLE__COM=$(aws ssm get-parameter --name /gems/cred --with-decryption --query Parameter.Value --output text)
+@ deploy.sh O60-cat-secret
+export BUNDLE_GEMS__EXAMPLE__COM="$(cat /run/secrets/gem_cred)"
+@ x.yml O61-yaml-ref
+BUNDLE_GEMS__EXAMPLE__COM: ${GEM_CRED}
+@ x.yml O62-yaml-ref-q
+BUNDLE_GEMS__EXAMPLE__COM: "${GEM_CRED}"
+@ x.yml O63-yaml-gha
+BUNDLE_GEMS__EXAMPLE__COM: ${{ secrets.GEM_CRED }}
+@ x.yml O64-yaml-gha-two
+BUNDLE_GEMS__EXAMPLE__COM: ${{ secrets.GEM_USER }}:${{ secrets.GEM_PASS }}
+@ x.yml O65-yaml-then-key
+BUNDLE_GEMS__EXAMPLE__COM: ${GEM_CRED}
+BUNDLE_JOBS: 4
+@ x.yml O66-yaml-empty
+BUNDLE_GEMS__EXAMPLE__COM:
+BUNDLE_JOBS: 4
+@ x.yml O67-yaml-secretref
+BUNDLE_GEMS__EXAMPLE__COM:
+  secretKeyRef: { name: a, key: b }
+@ x.yml O68-yaml-valueFrom
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  valueFrom:
+    secretKeyRef:
+      name: gems
+      key: cred
+- name: OTHER
+  value: "x"
+@ x.yml O69-yaml-name-then-other-value
+- name: BUNDLE_JOBS
+  value: "4"
+@ x.yml O70-yaml-k8s-sibling
+- name: BUNDLE_GEMS__EXAMPLE__COM
+  valueFrom: { secretKeyRef: { name: a, key: b } }
+- name: RAILS_ENV
+  value: production
+@ x.yml O71-yaml-description
+BUNDLE_GEMS__EXAMPLE__COM:
+  description: "Credential for the gem server, ask in #devops"
+@ x.yml O72-yaml-comment
+# BUNDLE_GEMS__EXAMPLE__COM: set this in CI settings
+@ x.yml O73-yaml-required
+BUNDLE_GEMS__EXAMPLE__COM:
+  required: true
+  description: gem credential
+@ docker-compose.yml O74-compose-passthrough
+    environment:
+      - BUNDLE_GEMS__EXAMPLE__COM
+      - BUNDLE_JOBS=4
+@ docker-compose.yml O75-compose-ref
+    environment:
+      - BUNDLE_GEMS__EXAMPLE__COM=${BUNDLE_GEMS__EXAMPLE__COM}
+@ docker-compose.yml O76-compose-ref-default
+    environment:
+      - BUNDLE_GEMS__EXAMPLE__COM=${BUNDLE_GEMS__EXAMPLE__COM:?set it}
+@ Dockerfile O77-arg-bare
+ARG BUNDLE_GEMS__EXAMPLE__COM
+@ Dockerfile O78-env-ref
+ENV BUNDLE_GEMS__EXAMPLE__COM=$BUNDLE_GEMS__EXAMPLE__COM
+@ Dockerfile O79-env-ref-next
+ENV BUNDLE_GEMS__EXAMPLE__COM=${BUNDLE_GEMS__EXAMPLE__COM} \
+    BUNDLE_JOBS=4
+@ Dockerfile O80-run-secret-mount
+RUN --mount=type=secret,id=gems BUNDLE_GEMS__EXAMPLE__COM="$(cat /run/secrets/gems)" bundle install
+@ Dockerfile O81-run-bundle-install
+RUN bundle install --jobs 4 --retry 3 && rm -rf ~/.bundle
+@ Dockerfile O82-run-chained-config
+RUN bundle config set --local deployment true && bundle config set --local without "development test" && bundle install
+@ Dockerfile O83-run-config-ref-chain
+RUN bundle config set gems.example.com "$(cat /run/secrets/gems)" && bundle install && bundle config unset gems.example.com
+@ Dockerfile O84-run-multi-lines
+RUN bundle config set gems.example.com "$GEM_CRED" && \
+    bundle install --jobs 4 && \
+    rm -rf /root/.bundle
+@ Dockerfile O85-env-two-lines
+ENV BUNDLE_JOBS=4
+ENV BUNDLE_RETRY=3
+@ Dockerfile O86-label
+LABEL org.opencontainers.image.title="app" description="uses BUNDLE_GEMS__EXAMPLE__COM"
+@ .bundle/config O87-bundle-config-jobs
+---
+BUNDLE_JOBS: "4"
+BUNDLE_PATH: "vendor/bundle"
+BUNDLE_WITHOUT: "development:test"
+@ .bundle/config O88-bundle-config-lock
+BUNDLE_FROZEN: "true"
+BUNDLE_DEPLOYMENT: "true"
+@ .bundle/config O89-bundle-mirror
+BUNDLE_MIRROR__HTTPS://RUBYGEMS.ORG/: "https://mirror.example.com"
+@ Gemfile O90-gemfile-source
+source "https://rubygems.org"
+gem "rails", "~> 8.0"
+@ Gemfile O91-gemfile-source-env
+source "https://#{ENV['GEM_USER']}:#{ENV['GEM_PASS']}@gems.example.com"
+@ Gemfile O92-gemfile-block
+source "https://gems.example.com/" do
+  gem "corp-gem"
+end
+@ Gemfile O93-gemfile-git
+gem "x", git: "https://github.com/org/x.git", branch: "main"
+@ Gemfile O94-gemfile-git-token-env
+gem "x", git: "https://#{ENV['GH_TOKEN']}@github.com/org/x.git"
+@ README.md O95-prose
+Set BUNDLE_GEMS__EXAMPLE__COM in your environment before running bin/setup.
+@ README.md O96-prose-colon
+Required: BUNDLE_GEMS__EXAMPLE__COM (ask in the platform channel).
+@ README.md O97-prose-code
+Run `bundle config set gems.example.com "$GEM_CRED"` once.
+@ README.md O98-prose-code-user-pass
+Run `bundle config set gems.example.com user:password`.
+@ README.md O99-prose-code-angle
+Run `bundle config set gems.example.com <user>:<token>`.
+@ README.md O100-prose-code-upper
+Run `bundle config set gems.example.com USER:TOKEN`.
+@ README.md O101-fence-ref
+```sh
+export BUNDLE_GEMS__EXAMPLE__COM="$GEM_CRED"
+bundle install
+```
+@ README.md O102-fence-placeholder
+```sh
+export BUNDLE_GEMS__EXAMPLE__COM=your-credential-here
+```
+@ README.md O103-fence-xxx
+```sh
+export BUNDLE_GEMS__EXAMPLE__COM=xxxxxxxx:xxxxxxxx
+```
+@ README.md O104-fence-dots
+```sh
+export BUNDLE_GEMS__EXAMPLE__COM=...
+```
+@ README.md O105-fence-ellipsis-angle
+export BUNDLE_GEMS__EXAMPLE__COM=<your credential>
+@ README.md O106-fence-braces
+export BUNDLE_GEMS__EXAMPLE__COM={your credential}
+@ README.md O107-fence-brackets
+export BUNDLE_GEMS__EXAMPLE__COM=[your credential]
+@ README.md O108-fence-changeme
+export BUNDLE_GEMS__EXAMPLE__COM=changeme
+@ README.md O109-fence-example
+export BUNDLE_GEMS__EXAMPLE__COM=example
+@ README.md O110-fence-token
+export BUNDLE_GEMS__EXAMPLE__COM=token
+@ README.md O111-fence-secret
+export BUNDLE_GEMS__EXAMPLE__COM=secret
+@ README.md O112-fence-user-pass-lit
+export BUNDLE_GEMS__EXAMPLE__COM=username:password
+@ .env.example O113-empty
+BUNDLE_GEMS__EXAMPLE__COM=
+@ .env.example O114-placeholder
+BUNDLE_GEMS__EXAMPLE__COM=your_user:your_password
+@ .env.example O115-comment-after-empty
+BUNDLE_GEMS__EXAMPLE__COM= # set me
+@ .env.example O116-next-var
+BUNDLE_GEMS__EXAMPLE__COM=
+RAILS_ENV=development
+@ .env.example O117-multi
+BUNDLE_GEMS__EXAMPLE__COM=${GEM_CRED}
+BUNDLE_JOBS=4
+@ .env.example O118-comment-header
+# BUNDLE_GEMS__EXAMPLE__COM=
+@ deploy.sh O119-continuation-ref
+bundle config set gems.example.com "$GEM_CRED" \
+  --global
+@ deploy.sh O120-continuation-then-code
+export BUNDLE_GEMS__EXAMPLE__COM="$GEM_CRED" \
+  BUNDLE_JOBS=4
+@ deploy.sh O121-unclosed-dq-code
+echo "start
+export BUNDLE_JOBS=4
+echo "end"
+@ deploy.sh O122-heredoc-nonbundle
+cat <<EOF > config.yml
+jobs: 4
+EOF
+@ deploy.sh O123-fn
+setup() { export BUNDLE_GEMS__EXAMPLE__COM="$(get_cred)"; bundle install; }
+@ deploy.sh O124-case
+case "$1" in cred) BUNDLE_GEMS__EXAMPLE__COM="$2";; esac
+@ deploy.sh O125-ternary-ish
+BUNDLE_GEMS__EXAMPLE__COM="${GEM_CRED:-$(cat ~/.gem_cred)}"
+@ deploy.sh O126-cond-assign
+[ -n "$X" ] && BUNDLE_GEMS__EXAMPLE__COM="$X" || BUNDLE_GEMS__EXAMPLE__COM="$Y"
+@ deploy.sh O127-test-bracket-eq
+[[ $BUNDLE_GEMS__EXAMPLE__COM == "x" ]]
+@ deploy.sh O128-regex-match
+[[ $BUNDLE_GEMS__EXAMPLE__COM =~ ^[a-z]+:.+ ]]
+@ spec/boot_spec.rb O129-spec-stub
+allow(ENV).to receive(:[]).with("BUNDLE_GEMS__EXAMPLE__COM").and_return("x")
+@ spec/boot_spec.rb O130-spec-expect
+expect(ENV["BUNDLE_GEMS__EXAMPLE__COM"]).to eq("x")
+@ spec/boot_spec.rb O131-spec-with-env
+with_env("BUNDLE_GEMS__EXAMPLE__COM" => nil) { example.run }
+@ spec/boot_spec.rb O132-stub-const
+stub_const("ENV", ENV.to_h.merge("BUNDLE_GEMS__EXAMPLE__COM" => ENV["REAL"]))

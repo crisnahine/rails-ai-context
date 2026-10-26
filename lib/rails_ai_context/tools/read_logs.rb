@@ -100,9 +100,12 @@ module RailsAiContext
 
         # Tail the file; a search reads back further and keeps its last matches.
         searching = !search.to_s.strip.empty?
-        raw_lines, whole_file = searching ? read_window(path, SEARCH_READ_BYTES) : [ tail_file(path, lines), nil ]
+        read_bytes = searching ? SEARCH_READ_BYTES : MAX_READ_BYTES
+        raw_lines, whole_file = read_window(path, read_bytes)
+        raw_lines = raw_lines.last(lines) unless searching
         if raw_lines.empty?
-          return empty_response("# Log: #{File.basename(path)}\nLog file is empty.\n\n---\nAvailable log files: #{available.join(', ')}")
+          said = whole_file ? "Log file is empty." : "No whole line to show: its last line is longer than the #{human_size(read_bytes)} read from its end."
+          return empty_response("# Log: #{File.basename(path)}\n#{said}\n\n---\nAvailable log files: #{available.join(', ')}")
         end
 
         # Detect format and filter by level
@@ -161,24 +164,6 @@ module RailsAiContext
       # A log is tailed, never read whole, so the per-file cap does not apply.
       private_class_method def self.locate_log(relative, listed: false)
         RailsAiContext::SafePath.locate(relative, under: rails_app.root.to_s, max_size: Float::INFINITY, listed: listed)
-      end
-
-      # ── Reverse tail ────────────────────────────────────────────────
-
-      private_class_method def self.tail_file(path, num_lines)
-        size = File.size(path)
-        return [] if size == 0
-
-        read_bytes = [ size, MAX_READ_BYTES ].min
-
-        File.open(path, "rb") do |f|
-          f.seek(-read_bytes, IO::SEEK_END) if size > read_bytes
-          content = f.read
-          content.force_encoding("UTF-8")
-          content.encode!("UTF-8", invalid: :replace, undef: :replace)
-          lines = content.split("\n")
-          lines.last(num_lines)
-        end
       end
 
       # Every whole line in the last `bytes` of the file, and whether that is

@@ -591,16 +591,12 @@ module RailsAiContext
         end
 
         def section_storage(ctx)
-          storage = Payload.section(ctx, :active_storage)
-          text = Payload.section(ctx, :action_text)
-          return [] unless storage || text
-
+          attachments = Payload.storage_attachments(ctx)
           lines = []
-          if storage && storage[:attachments]&.any?
-            lines << "Active Storage: #{count_phrase(storage[:attachments].size, "attachment")} across models."
-          end
-          if text && text[:models]&.any?
-            lines << "Action Text: #{count_phrase(text[:models].size, "model")} with rich text fields."
+          lines << "Active Storage: #{count_phrase(attachments.size, "attachment")} across models." if attachments.any?
+          rich_models = Payload.rich_text_fields(ctx).map { |field| field[:model] }.uniq
+          if rich_models.any?
+            lines << "Action Text: #{count_phrase(rich_models.size, "model")} with rich text fields."
           end
           return [] if lines.empty?
 

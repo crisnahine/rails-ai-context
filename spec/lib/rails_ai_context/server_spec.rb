@@ -220,6 +220,12 @@ RSpec.describe RailsAiContext::Server do
       )
     end
 
+    # Every path an answer gives is relative to this root, which the walk from the start folder found.
+    it "names the app it serves and how to reach another" do
+      expect(described_class.instructions).to include("Serving the Rails app at #{Rails.root}; file paths in answers are relative to it. " \
+                                                      "For another app, run `rails-ai-context --app-path <dir> tool <name>`.")
+    end
+
     it "is what a client is handed" do
       allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(false)
 

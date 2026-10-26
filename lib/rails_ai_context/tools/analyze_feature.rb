@@ -173,10 +173,11 @@ module RailsAiContext
             lines << "## Models (#{matched.size})"
             matched.sort.each do |name, data|
               lines << "" << "### #{name}"
-              lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
+              table_line = data[:table_name] ? "`#{data[:table_name]}`" : Serializers::SectionFacts.table_note(ctx[:schema], data)
+              lines << "**Table:** #{table_line}" if table_line
 
               table_name = data[:table_name]
-              if table_name && (table_data = RailsAiContext::Payload.model_table(ctx[:schema], data))
+              if table_name && (table_data = RailsAiContext::Payload.model_schema_table(ctx[:schema], data))
                 if table_data&.dig(:columns)&.any?
                   cols = table_data[:columns].reject { |c| %w[id created_at updated_at].include?(c[:name]) }
                   col_strs = cols.map { |c| col_type = c[:array] ? "#{c[:type]}[]" : c[:type]; [ c[:name], col_type ].compact.join(":") }
@@ -375,10 +376,7 @@ module RailsAiContext
             relative = path.sub("#{real_views_dir}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
             line_count = source.lines.size
-            partials = source.scan(/render\s+(?:partial:\s*)?["']([^"']+)["']/).flatten
-            # Record renders (`render @post`, `render post`) resolve to the
-            # record's partial; surface them alongside string renders.
-            partials |= source.scan(/render[( ]\s*@?([a-z_][\w]*)\s*[,)\s%]/).flatten - %w[partial layout json plain text file inline template action status]
+            partials = rendered_partials(source, path)
             stimulus = source.scan(/data-controller=["']([^"']+)["']/).flat_map { |m| m.first.split }
             detail = "- `#{relative}` (#{count_phrase(line_count, "line")})"
             detail += " renders: #{partials.join(', ')}" if partials.any?
@@ -388,6 +386,19 @@ module RailsAiContext
           lines << ""
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "discover_views")
+        end
+
+        # A render call's partial or template names, and for a record render
+        # (`render @post`) the record, read as rails_get_view reads them.
+        def rendered_partials(source, path = nil)
+          reader = Introspectors::RenderCalls
+          reader.render_calls(source, path: path).flat_map do |_, args, block|
+            named = reader.rendered_names(args, block: block).select { |name| name.match?(reader::PARTIAL_NAME) }
+            next named if named.any?
+
+            record = reader.render_line(args)[reader::IMPLICIT_RENDER, 1]&.split(".")&.last&.delete_prefix("@")
+            record && !reader::RENDER_KEYWORD_ARGS.include?(record) ? [ record ] : []
+          end.uniq
         end
 
         # --- AF4: Stimulus Controllers ---
@@ -493,10 +504,11 @@ module RailsAiContext
 
           # Check controllers
           controllers = Payload.controllers(ctx)
+          routes = RouteCoverage.table(ctx[:routes])
           controllers.each_key do |ctrl_name|
             next unless feature_word_match?(ctrl_name, pattern)
             snake = RailsAiContext::Payload.controller_route_key(ctx, ctrl_name)
-            unless suite.tested?(:controller, snake, ctrl_name, file: Payload.controller_file(ctx, ctrl_name))
+            unless suite.tested?(:controller, snake, ctrl_name, file: Payload.controller_file(ctx, ctrl_name), routes: routes)
               gaps << "Controller `#{ctrl_name}` - no test file found"
             end
           end

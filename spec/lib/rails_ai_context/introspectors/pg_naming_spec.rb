@@ -20,6 +20,44 @@ RSpec.describe RailsAiContext::Introspectors::PgNaming do
     end
   end
 
+  # Each row is the name PostgreSQL 16 gave `CREATE TABLE <table> (<column> serial)` (pg_get_serial_sequence): 63 bytes at most, the
+  # longer name cut first, and never in the middle of a character.
+  describe ".serial_sequence_name" do
+    [
+    [ "заказы_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "колонка_yyyyyyyyyyyyyyyyyyyy", "заказы_xxxxxxxxxxxxxxxx_колонка_yyyyyyyyyyyyyy_seq" ],
+    [ "ттттттттттттттттттттттттттттттт", "ккккккккккккккккккккккккккккккк", "тттттттттттттт_кккккккккккккк_seq" ],
+    [ "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt", "id", "tttttttttttttttttttttttttttttttttttttttttttttttttttttttt_id_seq" ],
+    [ "заказызаказызаказызаказызаказы", "ид", "заказызаказызаказызаказызак_ид_seq" ],
+    [ "tttttttttttttttttttttttttttttt", "ééééééééééééééééééééééééééééééé", "ttttttttttttttttttttttttttttt_éééééééééééééé_seq" ],
+    [ "ééééééééééééééééééééééééééééééé", "ccccccccccccccccccccccccccccccc", "éééééééééééééé_ccccccccccccccccccccccccccccc_seq" ],
+    [ "日本語日本語日本語日本語日本語日本語", "列列列列列列列列列列", "日本語日本語日本語_列列列列列列列列列_seq" ],
+    [ "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa_üüüüüüüüüüüüüü_seq" ],
+    [ "😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀_😀😀😀😀😀😀😀_seq" ],
+    [ "tttttttttttttttttttttttttttttttttttttttttttttttttt", "cccccccccccccccccccccccccccccccccccccccccccccccccc", "ttttttttttttttttttttttttttttt_ccccccccccccccccccccccccccccc_seq" ],
+    [ "ééééééééééééééééééééééééééééééa", "éééééééééééééééééééééééééééééb", "éééééééééééééé_éééééééééééééé_seq" ],
+    [ "abééééééééééééééééééééééééééééé", "éééééééééééééééééééééééééééééé", "abééééééééééééé_éééééééééééééé_seq" ],
+    [ "plain_table", "id", "plain_table_id_seq" ]
+    ].each do |table, column, sequence|
+      it "names the sequence of #{table.bytesize} bytes and #{column.bytesize} bytes #{sequence.bytesize} bytes long" do
+        expect(described_class.serial_sequence_name(table, column, "seq")).to eq(sequence)
+        expect(sequence.bytesize).to be <= 63
+      end
+    end
+  end
+
+  # A taken name makes PostgreSQL label the sequence seq1, which leaves an odd number of bytes to share; the column loses the extra one.
+  describe ".serial_sequence_name with a numbered suffix" do
+    [
+    [ "tttttttttttttttttttttttttttttttttttttttt", "cccccccccccccccccccccccccccccccccccccccc", "ttttttttttttttttttttttttttttt_cccccccccccccccccccccccccccc_seq1" ],
+    [ "ttttttttttttttttttttttttttttttttttttttttt", "ccccccccccccccccccccccccccccccccccccccccc", "ttttttttttttttttttttttttttttt_cccccccccccccccccccccccccccc_seq1" ],
+    [ "éééééééééééééééééééé", "üüüüüüüüüüüüüüüüüüüü", "éééééééééééééé_üüüüüüüüüüüüüü_seq1" ]
+    ].each do |table, column, sequence|
+      it "names the sequence of #{table.bytesize} bytes and #{column.bytesize} bytes #{sequence}" do
+        expect(described_class.serial_sequence_name(table, column, "seq1")).to eq(sequence)
+      end
+    end
+  end
+
   describe ".enum_list" do
     let(:enums) { { "app.status" => %w[on], "public.mood" => %w[happy], "audit.level" => %w[low] } }
 

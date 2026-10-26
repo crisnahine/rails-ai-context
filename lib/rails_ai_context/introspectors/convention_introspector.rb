@@ -232,6 +232,7 @@ module RailsAiContext
         Dockerfile docker-compose.yml
         .github/workflows/ci.yml
       ].freeze
+      READS = CONFIG_FILES
 
       def detect_config_files
         CONFIG_FILES.select { |f| file_exists?(f) }
@@ -248,7 +249,7 @@ module RailsAiContext
 
         Dir.children(app_dir)
           .select { |d| File.directory?(File.join(app_dir, d)) }
-          .reject { |d| STANDARD_APP_DIRS.include?(d) }
+          .reject { |d| STANDARD_APP_DIRS.include?(d) || SafePath.sensitive?("app/#{d}/") }
           .sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_custom_directories")

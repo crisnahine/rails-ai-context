@@ -80,7 +80,8 @@ module RailsAiContext
         unbound = bindings.filter_map { |name, binding| name if name.is_a?(Symbol) && binding.source.nil? }
         data = data.transform_values do |found|
           Array(found).reject do |entry|
-            held = names_unbound?(entry, out, unbound)
+            # A computed association name is already an answer: the entry says its name is computed.
+            held = !(entry.is_a?(Hash) && entry[:computed_name]) && names_unbound?(entry, out, unbound)
             conditional << declaration(entry, out, []) if held
             held
           end
@@ -117,6 +118,23 @@ module RailsAiContext
         node.is_a?(Prism::CallNode) && EVALS.include?(node.name) && node.block.is_a?(Prism::BlockNode) &&
           node.receiver && !node.receiver.is_a?(Prism::SelfNode) &&
           !(node.receiver.is_a?(Prism::LocalVariableReadNode) && bound(bindings, node.receiver, depth)&.value.equal?(INCLUDER))
+      end
+
+      # `Class.new(Base) do ... end` in a method body runs its block with the new class as self; in a class
+      # body the model walk reads it as the class it is assigned to.
+      ANONYMOUS = %w[Class Module Struct Data].freeze
+
+      def anonymous_class?(node)
+        node.is_a?(Prism::CallNode) && node.name == :new && node.block.is_a?(Prism::BlockNode) &&
+          (node.receiver.is_a?(Prism::ConstantReadNode) || node.receiver.is_a?(Prism::ConstantPathNode)) &&
+          ANONYMOUS.include?(node.receiver.slice.delete_prefix("::"))
+      end
+
+      # The receiver a foreign block runs on, as the source writes it: `Class.new(Base)` for an anonymous class.
+      def foreign_receiver(node)
+        return node.receiver.slice unless anonymous_class?(node)
+
+        node.slice.byteslice(0, node.block.location.start_offset - node.location.start_offset).strip
       end
 
       # A required parameter the call passes the including class to stands for that class.
@@ -310,7 +328,7 @@ module RailsAiContext
 
           receiver = call.receiver
           key = Array(call.arguments&.arguments)
-          binding = receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth.zero? && bindings[receiver.name]
+          binding = bindings[receiver.name] if receiver.is_a?(Prism::LocalVariableReadNode) && receiver.depth.zero?
           next false unless binding&.value_sources && key.one? && key.first.is_a?(Prism::SymbolNode)
           next false if node.is_a?(Prism::LocalVariableWriteNode) && node.name == receiver.name
 
@@ -546,10 +564,10 @@ module RailsAiContext
         when Prism::BlockNode, Prism::LambdaNode
           depth += 1
         end
-        if foreign_eval?(node, bindings, depth)
+        if anonymous_class?(node) || foreign_eval?(node, bindings, depth)
           block_out = Output.new
           emit(node.block.body, bindings, block_out, [], depth + 1, conditions) if node.block.body
-          out.foreign << [ node.receiver.slice, block_out, conditions ]
+          out.foreign << [ foreign_receiver(node), block_out, conditions ]
           out.foreign.concat(block_out.foreign)
           return out.append("nil", node.location.start_line)
         end
@@ -731,7 +749,7 @@ module RailsAiContext
         other = other.statements if other.is_a?(Prism::ElseNode)
 
         if truth == UNKNOWN
-          predicate = node.predicate.slice
+          predicate = RailsAiContext::Redaction.source_slice(node.predicate.slice)
           runs = unless_node ? "not #{predicate}" : predicate
           skips = unless_node ? predicate : "not #{predicate}"
           undecided << emit_ways(out, bindings, undecided, depth, conditions, [ [ taken, runs ], [ other, skips ] ])
@@ -749,9 +767,9 @@ module RailsAiContext
         subject = node.predicate ? evaluate(node.predicate, bindings, depth) : nil
         chosen = pick_when(node, subject, bindings, depth)
         if chosen == UNKNOWN
-          label = node.predicate&.slice
+          label = node.predicate && RailsAiContext::Redaction.source_slice(node.predicate.slice)
           ways = node.conditions.map do |branch|
-            tested = branch.conditions.map(&:slice).join(", ")
+            tested = RailsAiContext::Redaction.source_slice(branch.conditions.map(&:slice).join(", "))
             [ branch.statements, label ? "#{label} is #{tested}" : tested ]
           end
           ways << [ node.else_clause&.statements, "no `when` matches" ]

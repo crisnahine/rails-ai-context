@@ -53,9 +53,9 @@ module RailsAiContext
         migrate_dirs = MigrationReplay.migration_dirs(root)
         if MigrationReplay.migration_files(migrate_dirs, root: root).any?
           pk_type = SchemaConventions.implicit_pk_type(root)
-          return from_tables(MigrationReplay.tables(migrate_dirs, pk_type: pk_type, root: root,
-                                                        adapter: SchemaConventions.database_adapter_for(root, nil)),
-                             source: :migrations, path: migrate_dirs.first)
+          replayed = MigrationReplay.replayed(migrate_dirs, pk_type: pk_type, root: root, adapter: SchemaConventions.database_adapter_for(root, nil),
+                                                            server: RailsAiContext::DatabaseFamily.established_mysql_server)
+          return from_tables(replayed.tables, source: :migrations, path: migrate_dirs.first, mysql_order_assumed: replayed.counts.mysql_order_assumed)
         end
 
         from_tables({}, source: :none, path: nil)
@@ -63,13 +63,19 @@ module RailsAiContext
 
       # A reader over an already-parsed tables hash, for the sources that do
       # not go through the schema.rb event fold.
-      def self.from_tables(tables, source:, path:, views: {}, qualified_tables: {})
+      def self.from_tables(tables, source:, path:, views: {}, qualified_tables: {}, mysql_order_assumed: 0)
         reader = allocate
         reader.send(:initialize_from_tables, tables, source, path, views, qualified_tables)
+        reader.instance_variable_set(:@mysql_order_assumed, mysql_order_assumed)
         reader
       end
 
       attr_reader :source
+
+      # The tables where the replay took MySQL's foreign key order for a server it could not name.
+      def mysql_order_assumed
+        @mysql_order_assumed || 0
+      end
 
       # partitions: the tables the database says are partitions, which a
       # schema.rb from before Rails 8 dumps as plain tables.
@@ -320,7 +326,7 @@ module RailsAiContext
           schema[:tables][event[:table]] = { options: options, columns: implied, indexes: [] }
           return event[:table]
         when :column
-          schema[:tables][current]&.dig(:columns)&.push(column_entry(event)) if current
+          schema[:tables][current]&.dig(:columns)&.push(column_entry(event, schema[:stamp])) if current
         when :index
           schema[:tables][current]&.dig(:indexes)&.push(index_entry(event)) if current
         when :timestamps
@@ -332,6 +338,9 @@ module RailsAiContext
           (target[:indexes] ||= []) << index_entry(event) if target
         when :foreign_key
           schema[:foreign_keys] << event.slice(:from, :to, :column, :primary_key, *SchemaConventions::FOREIGN_KEY_OPTIONS)
+        when :exclusion_constraint
+          table = current && schema[:tables][current]
+          (table[:exclusion_constraints] ||= []) << event.slice(:expression, :options) if table
         when :unique_constraint
           table = schema[:tables][current] if current
           (table[:unique_constraints] ||= []) << event.slice(:columns, :options) if table
@@ -344,9 +353,9 @@ module RailsAiContext
         when :stamp
           schema[:stamp] = event[:version] || PgNaming::UNSTAMPED_DUMP
         when :check_constraint
-          schema[:check_constraints] << { table: current, **event.slice(:name, :expression) } if current
+          schema[:check_constraints] << { table: current, **event.slice(:name, :expression, :validate) } if current
         when :add_check_constraint
-          schema[:check_constraints] << event.slice(:table, :name, :expression)
+          schema[:check_constraints] << event.slice(:table, :name, :expression, :validate)
         when :view
           schema[:views][event[:name]] = { materialized: event[:materialized], sql: event[:sql] }
         when :virtual_table
@@ -358,8 +367,8 @@ module RailsAiContext
         current
       end
 
-      def column_entry(event)
-        options = event[:options] || {}
+      def column_entry(event, version)
+        options = SchemaConventions.compat_precision(event[:options] || {}, event[:column_type], SchemaConventions.version_parts(version))
         {
           name:    column_name(event),
           type:    event[:column_type],
@@ -379,8 +388,10 @@ module RailsAiContext
         return unless table
 
         options = event[:options] || {}
-        SchemaConventions.timestamps_columns(options, version: SchemaConventions.version_parts(version)).each do |stamp|
-          table[:columns] << column_entry(event.merge(name: stamp[:name], column_type: stamp[:type], options: options.except(:index).merge(null: stamp.fetch(:null, true))))
+        parts = SchemaConventions.version_parts(version)
+        precision = SchemaConventions.compat_precision(options.slice(:precision), "datetime", parts, timestamps: true)
+        SchemaConventions.timestamps_columns(options, version: parts).each do |stamp|
+          table[:columns] << column_entry(event.merge(name: stamp[:name], column_type: stamp[:type], options: options.except(:index).merge(precision, null: stamp.fetch(:null, true))), nil)
           table[:indexes] << { columns: [ stamp[:name] ], options: options[:index].is_a?(Hash) ? options[:index] : {} } if options[:index]
         end
       end

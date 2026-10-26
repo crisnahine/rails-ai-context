@@ -7,9 +7,11 @@ module RailsAiContext
   module Introspectors
     # Tables for an app with no schema dump, replayed from migrations in the dump readers' shape.
     module MigrationReplay
-      Counts = Struct.new(:unnamed, :unnamed_columns, :helper_calls, :failed_files)
-      Result = Struct.new(:tables, :counts)
-      Run = Struct.new(:pk_type, :adapter, :rails_version, :root, :real_root, :db_dirs, :read, :helpers, :counts, :held, keyword_init: true)
+      # mysql_order_assumed: the tables where remove_foreign_key took MySQL's key order, the server unknown, and MariaDB's differs.
+      # skipped: the file:line of each statement not replayed, which counts in helper_calls.
+      Counts = Struct.new(:unnamed, :unnamed_columns, :helper_calls, :failed_files, :mysql_order_assumed, :skipped)
+      Result = Struct.new(:tables, :counts, :enum_types)
+      Run = Struct.new(:pk_type, :adapter, :server, :rails_version, :root, :real_root, :db_dirs, :read, :helpers, :counts, :held, :enums, keyword_init: true)
 
       module_function
 
@@ -18,32 +20,34 @@ module RailsAiContext
 
       # @param migrations_dir [String, Array<String>] one or more migrations paths
       # @return [Hash] table name => { columns:, indexes:, foreign_keys: }
-      def tables(migrations_dir, pk_type:, root: nil, adapter: nil)
-        replayed(migrations_dir, pk_type: pk_type, root: root, adapter: adapter).tables
+      def tables(migrations_dir, pk_type:, root: nil, adapter: nil, server: nil)
+        replayed(migrations_dir, pk_type: pk_type, root: root, adapter: adapter, server: server).tables
       end
 
       # @return [Result] the tables, and the Counts the schema note reports
-      # adapter is database.yml's for the database, where Rails' statements differ by adapter.
-      def replayed(migrations_dir, pk_type:, root: nil, adapter: nil)
+      # adapter is database.yml's for the database, where Rails' statements differ by adapter; server is
+      # DatabaseFamily.established_mysql_server's for it, nil when unknown.
+      def replayed(migrations_dir, pk_type:, root: nil, adapter: nil, server: nil)
         dirs = Array(migrations_dir)
-        run = new_run(dirs, pk_type: pk_type, root: root, adapter: adapter)
+        run = new_run(dirs, pk_type: pk_type, root: root, adapter: adapter, server: server)
         tables = {}
         # Rails orders every migrations path by version, not one directory at a time.
         migration_files(dirs, root: run.real_root).each { |path| replay_file(path, tables, run) }
 
         tables.reject! { |name, _| SchemaConventions.bookkeeping_table?(name) }
+        run.counts.mysql_order_assumed = tables.count { |_, data| data.delete(:mysql_order_assumed) }
         Statements.composite_keys_not_null(tables, adapter)
         Statements.dumped_decimals(tables, adapter)
         Statements.nextval_defaults(tables) if Statements.postgres_rules?(adapter)
         Statements.settle_sequences(tables)
-        PgNaming.drop_real_limits(tables.values, run.rails_version) if Statements.postgres_rules?(adapter)
-        Result.new(tables, run.counts)
+        enum_types = Statements.postgres_rules?(adapter) ? PgNaming.enum_list(run.enums, PgNaming::DEFAULT_SEARCH_PATH, run.rails_version) : []
+        Result.new(tables, run.counts, enum_types)
       end
 
-      def new_run(dirs, pk_type:, root: nil, adapter: nil)
+      def new_run(dirs, pk_type:, root: nil, adapter: nil, server: nil)
         root = File.expand_path((root || File.join(dirs.first.to_s, "..", "..")).to_s)
-        Run.new(pk_type: pk_type, adapter: adapter, rails_version: RailsVersion.of(root), root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new, held: {},
-                counts: Counts.new(0, 0, 0, 0))
+        Run.new(pk_type: pk_type, adapter: adapter, server: server, rails_version: RailsVersion.of(root), root: root, real_root: real_root(root), db_dirs: db_dirs(root, dirs), read: [], helpers: Set.new, held: {}, enums: {},
+                counts: Counts.new(0, 0, 0, 0, 0, []))
       end
 
       # database.yml's migrations_paths for the primary, else db/migrate and db/post_migrate
@@ -202,7 +206,7 @@ module RailsAiContext
         ast_data = SourceIntrospector.walk_dispatch(parsed, {
           migration: -> { Listeners::MigrationDslListener.new(table_helpers: run.helpers) },
           schema: -> { Listeners::SchemaDslListener.new },
-          replay: -> { Listeners::MigrationReplayListener.new }
+          replay: -> { Listeners::MigrationReplayListener.new(adapter: run.adapter) }
         })
 
         # A down body undoes the migration, so replaying it beside up cancels it out.
@@ -222,14 +226,17 @@ module RailsAiContext
         entries.each { |entry| entry[:migration_version] = version }
 
         # Migration[5.0] and older run Compatibility::V5_0, which keys a table and its references with integer.
-        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type, run.adapter, run.rails_version, run.held)
+        dispatch(entries, tables, version && (version <=> [ 5, 0 ]) <= 0 ? "integer" : run.pk_type, run)
         mark_inferred(tables, inferred, inferred_existed) if used_inferred
-        count(entries, run.counts)
+        count(entries, run.counts, path && path.delete_prefix("#{run.real_root.to_s.chomp('/')}/"))
       end
 
       # Each statement on the table it names, a block's on the table its block
       # opened; only a table definition (create_table's block) indexes timestamps.
-      def dispatch(entries, tables, pk_type, adapter, rails_version, held)
+      def dispatch(entries, tables, pk_type, run)
+        adapter = run.adapter
+        rails_version = run.rails_version
+        held = run.held
         current_table = nil
         creating = false
         skipped_at = nil
@@ -240,6 +247,8 @@ module RailsAiContext
           entry = entry.merge(table: current_table, definition: creating) if entry[:block]
           target = entry[:table] || current_table
           parent = Statements.inherited_state(tables, target) if Statements.postgres_rules?(adapter) && !defining?(entry, creating)
+          next Statements.enum_statement(run.enums, entry, tables) if Listeners::MigrationReplayListener::ENUM_STATEMENTS.include?(entry[:action])
+
           if entry.key?(:action)
             case entry[:action]
             when :create_table, :change_table
@@ -252,17 +261,20 @@ module RailsAiContext
               creating = entry[:action] == :create_table
             when :drop_table, :drop_join_table, :rename_table then current_table = nil
             end
-            made = Statements.apply(entry, tables, pk_type, adapter: adapter, rails_version: rails_version)
+            made = Statements.apply(entry, tables, pk_type, adapter: adapter, rails_version: rails_version, server: run.server)
             current_table, creating = made, true if entry[:action] == :create_join_table
           elsif entry[:type] == :create_table
             # schema.rb's reader sees the same string-named create_table; it skips what the migration skipped.
             current_table = entry[:location] == skipped_at ? nil : entry[:table]
             creating = true
-            Statements.seed_table(tables, current_table, entry[:options], pk_type, default: SchemaConventions.key_default(entry[:options] || {}, entry), adapter: adapter)
+            Statements.seed_table(tables, current_table, entry[:options], pk_type, default: SchemaConventions.key_default(entry[:options] || {}, entry), adapter: adapter,
+                                                                                   version: entry[:migration_version])
           elsif entry[:type] == :column && current_table
-            Statements.apply_schema_column(entry, current_table, tables, pk_type, adapter, rails_version)
+            Statements.apply_schema_column(entry, current_table, tables, pk_type, adapter, rails_version, definition: creating)
           elsif entry[:type] == :index && current_table
-            Statements.apply_schema_index(entry, current_table, tables)
+            Statements.apply_schema_index(entry, current_table, tables, rails_version)
+          elsif entry[:type] == :exclusion_constraint && current_table
+            Statements.add_exclusion_constraint(tables[current_table], entry[:expression], entry[:options] || {}, adapter)
           elsif entry[:type] == :unique_constraint && current_table
             Statements.add_unique_constraint(tables[current_table], entry[:columns], entry[:options] || {}, adapter, rails_version)
           elsif entry[:type] == :unread_call && current_table
@@ -284,7 +296,8 @@ module RailsAiContext
       INVERSE = { create_table: :drop_table, add_column: :remove_column, add_index: :remove_index,
                   add_reference: :remove_reference, add_belongs_to: :remove_reference,
                   add_foreign_key: :remove_foreign_key, add_check_constraint: :remove_check_constraint,
-                  add_unique_constraint: :remove_unique_constraint }.freeze
+                  add_unique_constraint: :remove_unique_constraint, create_enum: :drop_enum,
+                  add_exclusion_constraint: :remove_exclusion_constraint }.freeze
 
       # Migration#revert runs its block's statements inverted and last first.
       # CommandRecorder#revert flips reverting, so a revert inside one runs forward.
@@ -322,6 +335,9 @@ module RailsAiContext
         when :rename_table then head.merge(table: head[:new_name], new_name: head[:table])
         when :add_timestamps then head.merge(action: :remove_columns, columns: %w[created_at updated_at])
         when :change_column_null then head.merge(null: !head[:null]) unless head[:null].nil?
+        when :change_column_comment, :change_table_comment
+          options = head[:options] || {}
+          head.merge(options: options.merge(from: options[:to], to: options[:from])) if options.key?(:from) && options.key?(:to)
         when :change_column_default
           options = head[:options] || {}
           if options.key?(:from) && options.key?(:to)
@@ -341,8 +357,10 @@ module RailsAiContext
       end
 
       # Counted after the flow, so a call only down or a rescue reaches is not.
-      def count(entries, counts)
-        counts.helper_calls += entries.count { |e| e[:kind] == :not_replayed || e[:unread_query] }
+      def count(entries, counts, file = nil)
+        skipped = entries.select { |e| e[:kind] == :not_replayed || e[:unread_query] }
+        counts.helper_calls += skipped.size
+        counts.skipped.concat(skipped.map { |e| "#{file}:#{e[:location]}" }) if file
         counts.unnamed += entries.count { |e| e[:table].nil? && e[:action] == :create_table }
         counts.unnamed_columns += entries.count { |e| e[:action] == :add_column && e[:column].nil? && e[:table] } + entries.sum { |e| e[:unnamed_columns].to_i }
       end

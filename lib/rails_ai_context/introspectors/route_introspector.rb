@@ -278,7 +278,7 @@ module RailsAiContext
         real_root = File.realpath(root)
         list.filter_map do |relative|
           path = File.expand_path(relative, root)
-          next unless File.file?(path)
+          next unless File.file?(path) && !PathResolver.hidden?(path)
 
           path if SafePath.contained?(File.realpath(path), real_root)
         end.uniq
@@ -405,7 +405,8 @@ module RailsAiContext
         scope = draw[:scope] || []
         already_read << [ path, scope ]
         routes = Listeners::RoutesDslListener.new(scope: scope, route_set: method(:route_set_prefixes), names: @route_names,
-                                                  before_8_1: rails_before_8_1?, api_only: api_only_app?, mount_name: method(:mount_name))
+                                                  before_8_1: rails_before_8_1?, api_only: api_only_app?, mount_name: method(:mount_name),
+                                                  app_constant: ->(name) { !constant_source(name).nil? })
         ast = SourceIntrospector.walk(path, {
           routes: -> { routes },
           mounts: -> { Listeners::MountListener.new(prefix: draw[:prefix], name_prefix: draw[:name_prefix], routes: routes) }
@@ -597,9 +598,9 @@ module RailsAiContext
       end
 
       def group_by_controller(routes)
-        routes.group_by { |r| r[:controller] }.transform_values do |controller_routes|
-          controller_routes.map do |r|
-            entry = { verb: r[:verb], path: r[:path], action: r[:action], name: r[:name] }
+        routes.each_with_index.group_by { |r, _| r[:controller] }.transform_values do |controller_routes|
+          controller_routes.map do |r, position|
+            entry = { verb: r[:verb], path: r[:path], action: r[:action], name: r[:name], position: position }
             entry[:params] = r[:params] if r[:params]
             entry[:restful] = r[:restful] unless r[:restful].nil?
             entry[:condition] = r[:condition] if r[:condition]

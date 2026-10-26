@@ -20,14 +20,14 @@ module RailsAiContext
 
           @results << {
             name: name.to_s,
-            receiver: node.receiver&.slice,
+            receiver: node.receiver && filtered(node.receiver.slice),
             line: node.location.start_line,
             offset: node.location.start_offset,
             arguments: extract_arg_values(node),
             computed: computed_arguments(node),
             constants: constant_arguments(node),
             options: extract_keyword_sources(node),
-            snippet: node.slice.lines.first.to_s.strip,
+            snippet: filtered(node.slice.lines.first.to_s.strip),
             owner: @owner_stack.dup
           }
         end

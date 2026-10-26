@@ -17,12 +17,13 @@ module RailsAiContext
       def entries(hits)
         Array(hits).filter_map do |hit|
           options = hit[:option_nodes] || {}
-          case hit[:macro]
+          entry = case hit[:macro]
           when :retry_on then with_options("retry_on #{hit[:values].join(', ')}", options)
           when :discard_on then "discard_on #{hit[:values].join(', ')}"
           when :sidekiq_options then "sidekiq retry: #{source_of(options[:retry])}" if options[:retry]
           when *BLOCK_MACROS then "#{hit[:macro]} #{hit[:block]}".strip
           end
+          entry && RailsAiContext::Redaction.source_slice(entry)
         end
       end
 

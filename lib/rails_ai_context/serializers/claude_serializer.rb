@@ -8,7 +8,6 @@ module RailsAiContext
     class ClaudeSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
-      include ToolGuideHelper
       include CompactSerializerHelper
       include ContextModeDispatch
 
@@ -16,11 +15,6 @@ module RailsAiContext
 
       def full_serializer_class
         FullClaudeSerializer
-      end
-
-      # CompactSerializerHelper names it for the rules file it produces.
-      def render_compact
-        render_compact_rules
       end
     end
 

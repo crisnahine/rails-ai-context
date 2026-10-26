@@ -12,6 +12,12 @@ RSpec.describe RailsAiContext::Serializers::JsonSerializer do
       expect(parsed).to be_a(Hash)
     end
 
+    it "leaves out a foreign key's actual_name" do
+      context = { schema: { tables: { "kids" => { foreign_keys: [ { column: "pa", actual_name: "fk_rails_0123456789" } ] } } } }
+
+      expect(described_class.new(context).call).not_to include("actual_name")
+    end
+
     it "preserves all context keys" do
       context = { app_name: "MyApp", rails_version: "8.0", ruby_version: "3.4" }
       output = described_class.new(context).call

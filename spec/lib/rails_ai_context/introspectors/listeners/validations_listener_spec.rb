@@ -9,6 +9,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
     expect(parse_and_dispatch("validates :email, uniqueness: false, length: { maximum: 5 }").map { |r| r[:kind] }).to eq(%w[length])
   end
 
+  # Rails 7.1+: `validate:` is an option after the values, and a value among bare keyword values.
+  it "reads the inclusion validator an enum's validate option adds, and none for a keyword value or false" do
+    found = parse_and_dispatch("enum :level, %i[low high], validate: true").map { |r| r.slice(:kind, :attributes, :options, :added_by) }
+
+    expect(found).to eq([ { kind: "inclusion", attributes: %w[level], options: { in: %w[low high] }, added_by: "enum validate: true" } ])
+    expect(parse_and_dispatch("enum :level, low: 0, validate: true")).to eq([])
+    expect(parse_and_dispatch("enum :level, { low: 0 }, validate: false")).to eq([])
+  end
+
   it "detects validates with presence" do
     results = parse_and_dispatch("validates :email, presence: true")
     expect(results.size).to eq(1)

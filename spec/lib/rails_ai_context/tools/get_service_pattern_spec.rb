@@ -728,6 +728,22 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
           end
         RUBY
 
+        File.write(File.join(services_dir, "configure_service.rb"), <<~RUBY)
+          class ConfigureService
+            params do
+              attribute :kind
+
+              def kind_is_valid
+                true
+              end
+            end
+
+            def call(kind)
+              kind
+            end
+          end
+        RUBY
+
         File.write(File.join(services_dir, "post_status_service.rb"), <<~RUBY)
           class PostStatusService < BaseService
             class UnexpectedMentionsError < StandardError
@@ -795,6 +811,15 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("**AccountSearchService**")
         expect(text).to match(/\*\*AccountSearchService\*\*[^\n]*call\(query/)
         expect(text).not_to match(/\*\*AccountSearchService\*\*[^\n]*build/)
+      end
+
+      it "lists no method of a class a params block builds as the service's own" do
+        text = described_class.call(detail: "standard").content.first[:text]
+        single = described_class.call(service: "ConfigureService").content.first[:text]
+
+        expect(text).to match(/\*\*ConfigureService\*\*[^\n]*call\(kind/)
+        expect(text).not_to include("kind_is_valid")
+        expect(single).not_to include("kind_is_valid")
       end
 
       it "does not let a nested class's private modifier hide the outer entry point" do
@@ -1494,16 +1519,42 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
   # A scheduled enqueue and the app's own helper enqueue as surely as
   # perform_later does, and a comment naming one does not.
-  describe "the job enqueue side effect" do
+  # The job and service tools list one body's effects alike.
+  it "reads the model names of each app within one run" do
+    Dir.mktmpdir do |with|
+      Dir.mktmpdir do |without|
+        FileUtils.mkdir_p(File.join(with, "app", "models"))
+        File.write(File.join(with, "app", "models", "order.rb"), "class Order < ApplicationRecord\nend\n")
+        answers = RailsAiContext::RunCache.around do
+          [ with, without ].map do |root|
+            allow(Rails.application).to receive(:root).and_return(Pathname.new(root))
+            described_class.send(:side_effects_of, "Order.first.update(a: 1)")
+          end
+        end
+
+        expect(answers).to eq([ [ "database write (update)" ], [] ])
+      end
+    end
+  end
+
+  describe "the side effects of a body" do
+    let(:tmpdir) { Dir.mktmpdir }
+
     before do
-      allow(described_class).to receive(:cached_context)
-        .and_return(jobs: { enqueue_helpers: [ { owner: "Jobs", method: "enqueue", job_arg: 0 } ] })
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), "class Order < ApplicationRecord\nend\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
+      File.write(File.join(tmpdir, "app", "services", "sync_service.rb"), "class SyncService\n  def call(order)\n    return if order.destroyed?\n    client.get(\"/status\")\n    File.open(\"data.csv\") { |f| f.read }\n    order.update!(synced: true)\n  end\nend\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      described_class.reset_cache!
     end
 
-    it "is read off the enqueue calls" do
-      expect(described_class.send(:extract_side_effects, "RefreshWorker.perform_in(5.minutes)")).to include("job enqueue")
-      expect(described_class.send(:extract_side_effects, "Jobs.enqueue(:process_post)")).to include("job enqueue")
-      expect(described_class.send(:extract_side_effects, "# SyncJob.perform_later\nx = 1")).not_to include("job enqueue")
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "lists the write and the request, not a predicate or a read" do
+      text = described_class.call(service: "SyncService").content.first[:text]
+
+      expect(text).to include("## Side Effects\n- HTTP request\n- database write (update!)\n")
     end
   end
 end

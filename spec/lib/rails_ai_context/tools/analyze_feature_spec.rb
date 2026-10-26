@@ -239,6 +239,16 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    it "says which setting a model's computed table comes from" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Archive" => { table_set_by: "Archive.table_name", associations: [], validations: [] } }
+      )
+
+      text = described_class.call(feature: "archive").content.first[:text]
+
+      expect(text).to include("**Table:** set by `Archive.table_name`, which the static tier did not read")
+    end
+
     it "lists the admin resources that expose the feature's model, with ActiveAdmin's permitted params" do
       Dir.mktmpdir("rac_admin") do |tmp|
         FileUtils.mkdir_p([ File.join(tmp, "app", "admin"), File.join(tmp, "app", "dashboards") ])
@@ -1250,6 +1260,161 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
         expect(gaps(tmp, "post", %w[Post])).to include("- Controller `PostsController` - no test file found")
       end
+    end
+  end
+
+  # The same names rails_get_view lists for the template.
+  describe "the partials a view renders" do
+    it "reads render(partial: ...), records, and no JavaScript render" do
+      Dir.mktmpdir("rac_views") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "views", "posts"))
+        File.write(File.join(tmp, "app", "views", "posts", "edit.html.erb"), <<~ERB)
+          <%= render(partial: "posts/card") %>
+          <%= render "nav" %>
+          <%= render @post %>
+          <script>turnstile.render "box"</script>
+        ERB
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "post").content.first[:text]
+
+        expect(text).to include("- `posts/edit.html.erb` (4 lines) renders: posts/card, nav, post\n")
+      end
+    end
+
+    it "lists every partial one render call names" do
+      Dir.mktmpdir("rac_views") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "views", "posts"))
+        File.write(File.join(tmp, "app", "views", "posts", "edit.html.erb"), %(<%= render partial: "posts/row", layout: "posts/frame" %>\n<%= render layout: "posts/box" do %>x<% end %>\n))
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        expect(described_class.call(feature: "post").content.first[:text]).to include("renders: posts/row, posts/frame, posts/box\n")
+      end
+    end
+  end
+
+  # A request spec is filed by the resource it drives, often in the singular,
+  # and reaches the controller through the routes it requests.
+  describe "a controller its request spec reaches through a route" do
+    def token_gaps(spec_body, file: File.join("spec", "requests", "oauth", "token_spec.rb"))
+      Dir.mktmpdir("rac_route_test") do |tmp|
+        FileUtils.mkdir_p(File.dirname(File.join(tmp, file)))
+        File.write(File.join(tmp, file), spec_body)
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "Oauth::TokensController" => { file: "app/controllers/oauth/tokens_controller.rb", actions: [ "revoke" ] } } },
+          routes: { by_controller: { "oauth/tokens" => [
+            { verb: "POST", path: "/oauth/revoke(.:format)", controller: "oauth/tokens", action: "revoke", name: "oauth_revoke" },
+            { verb: "GET", path: "/oauth/tokens/:id(.:format)", controller: "oauth/tokens", action: "show", name: "oauth_token" }
+          ] } }
+        )
+        return described_class.call(feature: "token").content.first[:text]
+      end
+    end
+
+    it "counts a request sent to the controller's path" do
+      text = token_gaps(%(RSpec.describe "POST /oauth/revoke", type: :request do\n  it "revokes" do\n    post "/oauth/revoke"\n  end\nend\n))
+
+      expect(text).not_to include("Controller `Oauth::TokensController` - no test file found")
+    end
+
+    it "counts a request to a path with a segment, or through a route helper" do
+      by_segment = token_gaps(%(RSpec.describe "tokens" do\n  it "shows" do\n    get "/oauth/tokens/\#{token.id}"\n  end\nend\n))
+      by_helper = token_gaps(%(RSpec.describe "tokens" do\n  it "revokes" do\n    post oauth_revoke_path\n  end\nend\n))
+
+      expect([ by_segment, by_helper ]).to all(satisfy { |text| !text.include?("Controller `Oauth::TokensController` - no test file found") })
+    end
+
+    it "still reports a controller whose paths the spec never requests" do
+      text = token_gaps(%(RSpec.describe "tokens" do\n  it "lists" do\n    get "/oauth/applications"\n    get "/oauth/revoke/history"\n  end\nend\n))
+
+      expect(text).to include("Controller `Oauth::TokensController` - no test file found")
+    end
+
+    it "counts a route helper only as the path a request is sent to" do
+      redirect = token_gaps(%(RSpec.describe "comments" do\n  it "redirects" do\n    post "/comments"\n    expect(response).to redirect_to(oauth_revoke_path)\n  end\nend\n))
+      sent = token_gaps(%(RSpec.describe "tokens" do\n  it "shows" do\n    get(oauth_token_path(token))\n  end\nend\n))
+      visited = token_gaps(%(RSpec.describe "tokens", type: :system do\n  it "shows" do\n    visit oauth_token_path(token)\n  end\nend\n),
+                           file: File.join("spec", "system", "token_spec.rb"))
+
+      interpolated = token_gaps(%(RSpec.describe "tokens" do\n  it "pages" do\n    get "\#{oauth_token_path(token)}?page=2"\n  end\nend\n))
+      redirect_in_string = token_gaps(%(RSpec.describe "comments" do\n  it "links" do\n    get "/comments"\n    expect(body).to include("\#{oauth_revoke_path}")\n  end\nend\n))
+
+      expect(redirect).to include("Controller `Oauth::TokensController` - no test file found")
+      expect(redirect_in_string).to include("Controller `Oauth::TokensController` - no test file found")
+      expect([ sent, visited, interpolated ]).to all(satisfy { |text| !text.include?("Controller `Oauth::TokensController` - no test file found") })
+    end
+
+    # Rails sends a path to the first route in the table that matches it, so a catch-all or
+    # slug route answers only what no route drawn before it does.
+    def table_gaps(spec_body, by_controller)
+      Dir.mktmpdir("rac_route_test") do |tmp|
+        file = File.join(tmp, "spec", "requests", "site_spec.rb")
+        FileUtils.mkdir_p(File.dirname(file))
+        File.write(file, spec_body)
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: {
+            "PagesController" => { file: "app/controllers/pages_controller.rb", actions: [ "show" ] },
+            "UsersController" => { file: "app/controllers/users_controller.rb", actions: [ "show" ] }
+          } },
+          routes: { by_controller: by_controller }
+        )
+        return described_class.call(feature: "page").content.first[:text] + described_class.call(feature: "user").content.first[:text]
+      end
+    end
+
+    let(:site_routes) do
+      { "dashboard" => [ { verb: "GET", path: "/dashboard", action: "index", name: "dashboard", position: 0 } ],
+        "devise/sessions" => [ { verb: "GET", path: "/users/sign_in", action: "new", name: "new_user_session", position: 1 } ],
+        "users" => [ { verb: "GET", path: "/users/:id(.:format)", action: "show", name: "user", position: 2 } ],
+        "pages" => [ { verb: "GET", path: "/:slug(.:format)", action: "show", name: "page", position: 3 } ] }
+    end
+
+    it "does not count a slug or parameter route for a request an earlier route answers" do
+      text = table_gaps(%(RSpec.describe "site", type: :request do\n  it "works" do\n    get "/dashboard"\n    get "/users/sign_in"\n  end\nend\n), site_routes)
+
+      expect(text).to include("Controller `PagesController` - no test file found")
+      expect(text).to include("Controller `UsersController` - no test file found")
+    end
+
+    it "counts a slug route for a request no earlier route answers" do
+      text = table_gaps(%(RSpec.describe "site", type: :request do\n  it "works" do\n    get "/about"\n    get "/users/\#{user.id}"\n  end\nend\n), site_routes)
+
+      expect(text).not_to include("Controller `PagesController` - no test file found")
+      expect(text).not_to include("Controller `UsersController` - no test file found")
+    end
+
+    it "answers a path by the table's draw order, not the order controllers are listed in" do
+      reordered = site_routes.slice("pages", "users", "devise/sessions", "dashboard")
+      text = table_gaps(%(RSpec.describe "site", type: :request do\n  it "works" do\n    get "/users/sign_in"\n  end\nend\n), reordered)
+
+      expect(text).to include("Controller `UsersController` - no test file found")
+    end
+
+    it "credits the controllers behind a constrained route as well as the one the constraint lets through" do
+      routes = { "pages" => [ { verb: "GET", path: "/:slug(.:format)", action: "show", name: "page", position: 0, constraints: "{slug: /about|help/}" } ],
+                 "users" => [ { verb: "GET", path: "/users", action: "show", name: "user", position: 1 } ] }
+      text = table_gaps(%(RSpec.describe "site", type: :request do\n  it "works" do\n    get "/users"\n  end\nend\n), routes)
+
+      expect(text).not_to include("Controller `UsersController` - no test file found")
+      expect(text).not_to include("Controller `PagesController` - no test file found")
+    end
+
+    it "compares the verb a request is sent with" do
+      text = table_gaps(%(RSpec.describe "site", type: :request do\n  it "works" do\n    post "/about"\n  end\nend\n), site_routes)
+
+      expect(text).to include("Controller `PagesController` - no test file found")
+    end
+
+    # A client library's spec posts to the path on another server.
+    it "counts no request from a test outside the request and controller folders" do
+      text = token_gaps(%(RSpec.describe "token client" do\n  it "revokes" do\n    client.post "/oauth/revoke"\n  end\nend\n),
+                        file: File.join("spec", "lib", "token_client_spec.rb"))
+
+      expect(text).to include("Controller `Oauth::TokensController` - no test file found")
     end
   end
 end

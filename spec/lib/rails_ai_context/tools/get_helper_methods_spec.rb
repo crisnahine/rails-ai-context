@@ -155,6 +155,55 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    # Rendering either partial with `locals: { title: "Local" }` prints <h1>Local</h1> on Rails 7.1 and later (haml 7.4 too):
+    # the strict locals comment makes `title` a keyword argument of the template. Rails 7.0 ignores the comment.
+    context "when a template declares a strict local named like a helper" do
+      around do |example|
+        Dir.mktmpdir("helper-strict-locals") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/views/application"))
+          FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+          File.write(File.join(dir, "app/helpers/application_helper.rb"), "module ApplicationHelper\n  def title = \"Shop\"\nend\n")
+          File.write(File.join(dir, "app/views/application/_heading.html.haml"), "-# locals: (title:)\n%h1= title\n")
+          File.write(File.join(dir, "app/views/application/_heading_erb.html.erb"), "<%# locals: (title:) -%>\n<h1><%= title %></h1>\n")
+          File.write(File.join(dir, "app/views/application/_plain.html.erb"), "<h1><%= title %></h1>\n")
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({})
+      end
+
+      it "counts no reference where the bare name reads the local" do
+        text = described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+
+        expect(text).to include("`title` used in: application/_plain.html.erb\n")
+      end
+
+      # Ruby sends `title("Home")` to the method even when a local named title exists.
+      it "counts a call with parentheses, which never reads the local" do
+        File.write(File.join(@root, "app/views/application/_called.html.erb"), "<%# locals: (title:) -%>\n<h1><%= title(\"Home\") %></h1>\n")
+        text = described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+
+        expect(text).to include("`title` used in: application/_called.html.erb, application/_plain.html.erb\n")
+      end
+
+      it "counts the reference on Rails 7.0, which reads no strict locals comment" do
+        File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.0.8)\n    railties (7.0.8)\n\nDEPENDENCIES\n  rails\n")
+        previous = RailsAiContext.tier
+        RailsAiContext.tier = :static
+        text = begin
+          described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+        ensure
+          RailsAiContext.tier = previous
+        end
+
+        expect(text).to include("`title` used in: application/_heading.html.haml, application/_heading_erb.html.erb, application/_plain.html.erb")
+      end
+    end
+
     context "when a template lives in a view path the app appends" do
       around do |example|
         Dir.mktmpdir("helper-overlay") do |dir|
@@ -701,6 +750,19 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
 
         expect(text).to include("- `plain_tag` (Tags, `lib/tags.rb`)")
         expect(text).not_to include("admin_tag")
+      end
+
+      it "reads a controller's include from the module it is written in before the top level" do
+        FileUtils.mkdir_p(File.join(@root, "lib/admin"))
+        File.write(File.join(@root, "lib/admin/tags.rb"), "module Admin::Tags\n  def self.included(base)\n    base.helper_method :admin_tag\n  end\nend\n")
+        File.write(File.join(@root, "lib/tags.rb"), "module Tags\n  def self.included(base)\n    base.helper_method :plain_tag\n  end\nend\n")
+        FileUtils.mkdir_p(File.join(@root, "app/controllers/admin"))
+        File.write(File.join(@root, "app/controllers/admin/feed_controller.rb"), "module Admin\n  class FeedController < ApplicationController\n    include Tags\n  end\nend\n")
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- `admin_tag` (Admin::Tags, `lib/admin/tags.rb`)")
+        expect(text).not_to include("plain_tag")
       end
 
       it "parses a lib module kept in its outer constant's file once" do

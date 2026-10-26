@@ -112,7 +112,6 @@ module RailsAiContext
             next
           end
 
-          FileUtils.mkdir_p(File.dirname(filepath))
           content = serialize(fmt)
 
           if fmt == :json
@@ -145,6 +144,8 @@ module RailsAiContext
         end
       rescue RailsAiContext::SafeFile::LinkedOut
         result[:not_applicable][filepath] = RailsAiContext::SafeFile::LINKED
+      rescue *RailsAiContext::SafeFile::DENIED
+        result[:not_applicable][filepath] = RailsAiContext::SafeFile::UNWRITABLE
       end
 
       # The JSON carries the run's own timestamp, so a run that found nothing

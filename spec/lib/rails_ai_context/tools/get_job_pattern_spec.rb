@@ -1415,6 +1415,38 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(enqueuers_of("Admin::SyncJob")).not_to include("app/services/admin/exports.rb")
     end
 
+    # Ruby reads a bare constant inside the enclosing class's superclasses before the top level.
+    it "credits a job the enclosing class's superclass holds over the top-level one" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs", "tracker", "base_job"))
+      File.write(File.join(tmpdir, "app", "jobs", "notify_job.rb"), "class NotifyJob < ActiveJob::Base\n  def perform; end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "base_job.rb"), "module Tracker\n  class BaseJob < ActiveJob::Base\n  end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "base_job", "notify_job.rb"),
+                 "module Tracker\n  class BaseJob\n    class NotifyJob < ActiveJob::Base\n      def perform; end\n    end\n  end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "daily_job.rb"),
+                 "module Tracker\n  class DailyJob < BaseJob\n    def perform = NotifyJob.perform_later\n  end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(enqueuers_of("Tracker::BaseJob::NotifyJob")).to include("app/jobs/tracker/daily_job.rb")
+      expect(enqueuers_of("NotifyJob")).not_to include("app/jobs/tracker/daily_job.rb")
+    end
+
+    it "credits a job held by a superclass two levels up" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs", "tracker", "base_job"))
+      File.write(File.join(tmpdir, "app", "jobs", "notify_job.rb"), "class NotifyJob < ActiveJob::Base\n  def perform; end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "base_job.rb"), "module Tracker\n  class BaseJob < ActiveJob::Base\n  end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "base_job", "notify_job.rb"),
+                 "module Tracker\n  class BaseJob\n    class NotifyJob < ActiveJob::Base\n      def perform; end\n    end\n  end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "mid_job.rb"), "module Tracker\n  class MidJob < BaseJob\n  end\nend\n")
+      File.write(File.join(tmpdir, "app", "jobs", "tracker", "daily_job.rb"),
+                 "module Tracker\n  class DailyJob < MidJob\n    def perform = NotifyJob.perform_later\n  end\nend\n")
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      expect(enqueuers_of("Tracker::BaseJob::NotifyJob")).to include("app/jobs/tracker/daily_job.rb")
+      expect(enqueuers_of("NotifyJob")).not_to include("app/jobs/tracker/daily_job.rb")
+    end
+
     it "does not credit the top-level job with it" do
       expect(enqueuers_of("SyncJob")).to include("app/controllers/reports_controller.rb")
       expect(enqueuers_of("SyncJob")).not_to include("app/controllers/admin/reports_controller.rb")
@@ -1889,16 +1921,25 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
   # A scheduled enqueue and the app's own helper enqueue as surely as
   # perform_later does, and a comment naming one does not.
-  describe "the job enqueue side effect" do
+  # The job and service tools list one body's effects alike.
+  describe "the side effects of a body" do
+    let(:tmpdir) { Dir.mktmpdir }
+
     before do
-      allow(described_class).to receive(:cached_context)
-        .and_return(jobs: { enqueue_helpers: [ { owner: "Jobs", method: "enqueue", job_arg: 0 } ] })
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), "class Order < ApplicationRecord\nend\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs"))
+      File.write(File.join(tmpdir, "app", "jobs", "sync_job.rb"), "class SyncJob < ApplicationJob\n  def perform(order)\n    return if order.destroyed?\n    client.get(\"/status\")\n    File.open(\"data.csv\") { |f| f.read }\n    order.update!(synced: true)\n  end\nend\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      described_class.reset_cache!
     end
 
-    it "is read off the enqueue calls" do
-      expect(described_class.send(:extract_side_effects, "RefreshWorker.perform_in(5.minutes)")).to include("job enqueue")
-      expect(described_class.send(:extract_side_effects, "Jobs.enqueue(:process_post)")).to include("job enqueue")
-      expect(described_class.send(:extract_side_effects, "# SyncJob.perform_later\nx = 1")).not_to include("job enqueue")
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "lists the write and the request, not a predicate or a read" do
+      text = described_class.call(job: "SyncJob").content.first[:text]
+
+      expect(text).to include("## Side Effects\n- HTTP request\n- database write (update!)\n")
     end
   end
 

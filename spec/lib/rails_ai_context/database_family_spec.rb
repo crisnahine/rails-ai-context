@@ -4,6 +4,21 @@ require "spec_helper"
 require "prism"
 
 RSpec.describe RailsAiContext::DatabaseFamily do
+  describe ".established_mysql_server" do
+    it "names MariaDB or MySQL from an established connection, and nothing before one or off the family" do
+      server = lambda do |connected, adapter_name, mariadb|
+        allow(ActiveRecord::Base).to receive(:connected?).and_return(connected)
+        allow(ActiveRecord::Base).to receive(:connection).and_return(double(adapter_name: adapter_name, mariadb?: mariadb))
+        described_class.established_mysql_server
+      end
+
+      expect(server.(true, "Trilogy", true)).to eq(:mariadb)
+      expect(server.(true, "Mysql2", false)).to eq(:mysql)
+      expect(server.(false, "Mysql2", true)).to be_nil
+      expect(server.(true, "PostgreSQL", false)).to be_nil
+    end
+  end
+
   describe ".of" do
     spellings = {
       # Live adapter_name values.

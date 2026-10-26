@@ -14,11 +14,7 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
     end
 
     it "detects the autoloader mode" do
-      expect(result[:mode]).to be_in(%w[zeitwerk classic unknown])
-    end
-
-    it "reports zeitwerk availability" do
-      expect(result[:zeitwerk_available]).to eq(true).or(eq(false))
+      expect(result[:mode]).to eq("zeitwerk")
     end
 
     it "returns autoload_paths as array of strings" do

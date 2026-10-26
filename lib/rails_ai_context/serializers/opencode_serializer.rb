@@ -8,7 +8,6 @@ module RailsAiContext
     class OpencodeSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
-      include ToolGuideHelper
       include CompactSerializerHelper
       include ContextModeDispatch
 
@@ -16,10 +15,6 @@ module RailsAiContext
 
       def full_serializer_class
         FullOpencodeSerializer
-      end
-
-      def render_compact
-        render_compact_rules
       end
     end
 

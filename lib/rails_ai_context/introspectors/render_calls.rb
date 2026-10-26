@@ -6,6 +6,9 @@ module RailsAiContext
     # partial each names and the locals it hands over. The view introspector,
     # rails_get_view and rails_get_partial_interface all read them here.
     module RenderCalls
+      # Template handlers whose whole source is Ruby.
+      RUBY_TEMPLATE_EXTENSIONS = %w[.rb .jbuilder .builder .ruby].freeze
+
       RENDER_KEYWORD_ARGS = %w[
         partial layout collection json plain html text xml body file inline
         js status location content_type template formats spacer_template
@@ -17,7 +20,17 @@ module RailsAiContext
       RENDER_POSITIONAL = /\A\s*(["'])((?:\\.|(?!\1).)*)\1/m
       # A partial or template name: a path, never text with spaces or quotes in it.
       PARTIAL_NAME = %r{\A[\w./-]+\z}
-      RENDER_NAMED = /(?:\b(?:partial|template)\s*:|:(?:partial|template)\s*=>)\s*["']([^"']+)["']/
+      PARTIAL_NAMED = /(?:\bpartial\s*:|:partial\s*=>)\s*["']([^"']+)["']/
+      TEMPLATE_NAMED = /(?:\btemplate\s*:|:template\s*=>)\s*["']([^"']+)["']/
+      # The partials an options hash renders beside its own: a partial layout and a collection's spacer.
+      PARTIAL_LAYOUT = /(?:\blayout\s*:|:layout\s*=>)\s*["']([^"']+)["']/
+      SPACER_TEMPLATE = /(?:\bspacer_template\s*:|:spacer_template\s*=>)\s*["']([^"']+)["']/
+      PARTIAL_KEY = /(?<![\w:])partial:(?!:)|:partial\s*=>/
+      # A block on the call: a `do` ending an unparenthesised call's text, or a `do` or `{` right after its parentheses.
+      TRAILING_DO = /\bdo\s*(?:\|[^|]*\|)?\s*-?\s*\z/
+      BLOCK_AFTER = /\A[ \t]*(?:do\b|\{)/
+      # A block passed as an argument: `&blk`, `&:sym`, `&method(:x)`, or a bare `&`.
+      BLOCK_PASS = /(?:\A|,)\s*&(?:\s*(?:,|\z)|[\w@:(])/
       # A partial named outside a render call: turbo_stream.prepend and the
       # broadcast_* methods take `partial:`, and jbuilder renders one with
       # `json.partial!` or `json.array! ..., partial:`.
@@ -36,19 +49,42 @@ module RailsAiContext
         "render #{args.gsub(/\s+/, " ").strip}"
       end
 
-      # Each render call as [offset, argument text]: its balanced parentheses,
-      # or the rest of the line and every line a trailing comma continues onto,
+      # Each render call as [offset, argument text, whether it takes a block]: its balanced
+      # parentheses, or the rest of the line and every line a trailing comma continues onto,
       # up to the ERB tag's `%>`.
-      def self.render_calls(content)
+      def self.render_calls(content, path: nil)
+        kind = template_kind(content, path)
         content.to_enum(:scan, RENDER_CALL).map do
           at = Regexp.last_match.end(0)
-          rest = content[at..]
+          rest = call_text(content[at..], kind)
           open = rest[/\A\s*\(/]
-          next [ at, continued_line(rest).split("%>", 2).first ] unless open
+          unless open
+            # Ruby binds a `{` here as the call's block: its body is no argument.
+            next [ at, "", true ] if rest.match?(/\A[ \t]*\{/)
+
+            args = (kind == :erb ? rest : continued_line(rest)).split("%>", 2).first
+            next [ at, args, top_level(args).match?(TRAILING_DO) || block_pass?(args) ]
+          end
 
           span = RailsAiContext::Brackets.span(rest, open.length - 1, comments: :ruby)
-          [ at, span ? span[1...-1] : rest[open.length..].split("%>", 2).first ]
+          next [ at, rest[open.length..].split("%>", 2).first, false ] unless span
+
+          args = span[1...-1]
+          [ at, args, rest[(open.length - 1 + span.length)..].match?(BLOCK_AFTER) || block_pass?(args) ]
         end
+      end
+
+      def self.block_pass?(args)
+        top_level(args).rstrip.match?(BLOCK_PASS)
+      end
+      private_class_method :block_pass?
+
+      # A braced options hash, `render({ partial: "x" })`, as the bare keywords Rails reads it the same as;
+      # RenderingHelper#render ignores a second argument beside a Hash.
+      def self.bare_options(args)
+        open = args[/\A\s*\{/] or return args
+        group = RailsAiContext::Brackets.span(args, open.length - 1, comments: :ruby)
+        group ? group[1...-1] : args
       end
 
       def self.continued_line(text)
@@ -60,6 +96,32 @@ module RailsAiContext
         lines.join
       end
       private_class_method :continued_line
+
+      # How far a call in the template can run: :erb to its tag's `%>`, whatever Ruby is open; :ruby (a Phlex view)
+      # through its brackets; :markup (HAML, Slim) over the lines a trailing comma or backslash continues it onto.
+      def self.template_kind(content, path)
+        return RailsAiContext::ErbSource.tagged?(content) ? :erb : :ruby unless path
+        return :erb if path.to_s.end_with?(".erb")
+
+        path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS) ? :ruby : :markup
+      end
+
+      def self.call_text(text, kind)
+        case kind
+        when :erb then text[0...(text.index("%>") || text.length)]
+        when :markup then continued_line(text)
+        else text
+        end
+      end
+      private_class_method :call_text
+
+      # A call's text as Ruby reads it: parenthesised arguments to their closing paren, however many lines they take.
+      def self.call_line(text, kind)
+        text = call_text(text, kind)
+        span = text.start_with?("(") && RailsAiContext::Brackets.span(text, 0, comments: :ruby)
+        span ? span + continued_line(text[span.length..]) : continued_line(text)
+      end
+      private_class_method :call_line
 
       # The argument text with every nested (), [] and {} group dropped, so a
       # `template:` inside `locals: {...}` or `Foo.new(...)` is not the call's.
@@ -82,6 +144,7 @@ module RailsAiContext
       # none. Read block scope, callers and the controller when an app shows one of these.
       def self.form_builders(content, path: nil)
         locals = nil
+        kind = template_kind(content, path)
         content.to_enum(:scan, FORM_BUILDER_CALL).each_with_object({}) do |_, builders|
           match = Regexp.last_match
           source = match[1]
@@ -95,7 +158,7 @@ module RailsAiContext
             next unless source && (builders.key?(source) || !own)
           end
 
-          call = continued_line(content[match.end(0)..]).split(/<%|%>/, 2).first
+          call = call_line(content[match.end(0)..], kind).split(/<%|%>/, 2).first
           param = block_param(call) or next
 
           builder = call[/\bbuilder:\s*(?:::)?([A-Z][\w:]*)/, 1]
@@ -160,25 +223,57 @@ module RailsAiContext
         RailsAiContext::ViewFile.each(root, "**/_*").filter_map { |path, relative| canonical_name(relative) if RailsAiContext::ViewFile.template?(path) }.to_set
       end
 
-      # The partials or templates a render call's arguments name, positionally
-      # or as a keyword anywhere at their top level.
-      def self.rendered_names(args)
-        [ args[RENDER_POSITIONAL, 2], *top_level(args).scan(RENDER_NAMED).flatten ].compact
+      # The partials a render call's arguments name: a positional name, after which the hash is
+      # locals, or what a leading options hash renders.
+      def self.partial_names(args, block: false)
+        args = bare_options(args)
+        positional = args[RENDER_POSITIONAL, 2]
+        return [ positional ] if positional
+        return [] unless args.match?(OPTIONS_HASH)
+
+        top = top_level(args)
+        named = { "layout" => top[PARTIAL_LAYOUT, 1], "spacer_template" => top[SPACER_TEMPLATE, 1] }
+        named["partial"] = top[PARTIAL_NAMED, 1] if top.match?(PARTIAL_KEY)
+        options_partials(named, block: block)
+      end
+
+      # As RenderingHelper#render reads a leading options hash (key => string name, or nil):
+      # with a block it renders the layout: as the partial, merged over any partial:;
+      # without one a layout: and spacer_template: go with a partial:, and beside anything else a layout: is a layout.
+      def self.options_partials(named, block:)
+        keys = if block then %w[layout spacer_template]
+        elsif named.key?("partial") then %w[partial layout spacer_template]
+        else []
+        end
+        named.values_at(*keys).compact
+      end
+
+      # The partials and templates a render call's arguments name.
+      def self.rendered_names(args, block: false)
+        args = bare_options(args)
+        names = partial_names(args, block: block)
+        return names if block || !args.match?(OPTIONS_HASH)
+
+        names + top_level(args).scan(TEMPLATE_NAMED).flatten
       end
 
       # The partial a render call's arguments name, positionally or as `partial:`.
-      def self.rendered_name(args)
-        rendered_names(args).first
+      def self.rendered_name(args, block: false)
+        rendered_names(args, block: block).first
       end
 
       # The partial a render name reaches from a view in `folder`, given the
       # canonical names of the partials on disk: a bare name is looked up under
       # the controller's prefixes, its own folder and then application.
-      # shortcut: the view's folder stands in for its controller's prefixes; a partial
-      # rendered from another controller, or a controller inheriting another's, resolves elsewhere.
-      def self.partial_key(ref, folder, partials)
+      # `prefixes` are the folders of the controller that renders the view, nearest first; without
+      # them the view's folder stands in (shortcut: a partial rendered from another controller resolves elsewhere).
+      def self.partial_key(ref, folder, partials, prefixes: nil)
         return ref if ref.include?("/")
 
+        if prefixes
+          keys = (prefixes + [ "application" ]).uniq.map { |prefix| "#{prefix}/#{ref}" }
+          return keys.find { |key| partials.include?(key) } || keys.first
+        end
         own = folder == "." ? ref : "#{folder}/#{ref}"
         !partials.include?(own) && partials.include?("application/#{ref}") ? "application/#{ref}" : own
       end
@@ -192,6 +287,7 @@ module RailsAiContext
       # reads the arguments: after a positional name or record, the hash that
       # follows is the locals whole; an options hash passes its `locals:`.
       def self.render_locals(args)
+        args = bare_options(args)
         return passed_locals(args) if args.match?(OPTIONS_HASH)
 
         rest = +""

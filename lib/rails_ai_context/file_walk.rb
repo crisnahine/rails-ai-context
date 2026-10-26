@@ -22,9 +22,10 @@ module RailsAiContext
     # @param dir [String] directory to walk
     # @param skip [Array<String>] directory names never entered
     # @param root [String] the app root a link may not lead out of
+    # @param exclude [#call, nil] (path, directory?) => whether to leave the entry out, as ExcludedPaths.matcher answers
     # @yield [String] each file path, spelled under `dir`
-    def each_file(dir, skip: [], root: dir)
-      return enum_for(:each_file, dir, skip: skip, root: root) unless block_given?
+    def each_file(dir, skip: [], root: dir, exclude: nil)
+      return enum_for(:each_file, dir, skip: skip, root: root, exclude: exclude) unless block_given?
 
       dir = dir.to_s
       return unless File.directory?(dir) && !PathResolver.linked_out?(dir, root)
@@ -42,7 +43,10 @@ module RailsAiContext
           next if name.start_with?(".") || skip.include?(name)
 
           path = File.join(current, name)
+          next if PathResolver.hidden?(path)
+
           stat = File.lstat(path)
+          next if exclude&.call(path, stat.directory? || (stat.symlink? && File.directory?(path)))
           if stat.symlink?
             target = File.stat(path)
             if target.directory?
@@ -69,13 +73,13 @@ module RailsAiContext
     # starts, and one run walks each start once.
     #
     # @return [Array<String>] sorted paths, spelled under `dir`
-    def glob(dir, pattern, root:, skip: [])
+    def glob(dir, pattern, root:, skip: [], exclude: nil)
       dir = dir.to_s
       segments = pattern.split("/")
       plain = segments.take_while { |segment| !segment.match?(/[*?\[{\\]/) }.first(segments.size - 1)
       start = plain.empty? ? dir : File.join(dir, *plain)
       prefix = SafePath.dir_prefix(dir)
-      RunCache.fetch([ :file_walk, start, root.to_s, skip ]) { each_file(start, skip: skip, root: root).sort }
+      RunCache.fetch([ :file_walk, start, root.to_s, skip, exclude ]) { each_file(start, skip: skip, root: root, exclude: exclude).sort }
         .select { |path| File.fnmatch?(pattern, path.delete_prefix(prefix), GLOB_FLAGS) }
     end
 

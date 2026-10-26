@@ -27,6 +27,15 @@ RSpec.describe RailsAiContext::Serializers::GuideExamples do
     }
   end
 
+  it "passes over a model whose table the source computes, and names the placeholder pair when none has a known table" do
+    archive = { file: "app/models/archive.rb", table_set_by: "Archive.table_name", associations: [ 1, 2, 3 ].map { |n| { type: "has_many", name: "a#{n}" } } }
+    examples = described_class.new(models: { "Archive" => archive })
+
+    expect([ examples.model, examples.table ]).to eq([ "YourModel", "your_models" ])
+    expect(described_class.new(library.merge(models: library[:models].merge("Archive" => archive))).then { |found| [ found.model, found.table ] })
+      .to eq([ "Book", "books" ])
+  end
+
   describe "an app with models, controllers and views of its own" do
     subject(:examples) { described_class.new(library) }
 

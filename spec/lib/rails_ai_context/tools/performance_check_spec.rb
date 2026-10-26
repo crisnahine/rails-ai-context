@@ -67,6 +67,15 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(described_class.call(detail: "standard").content.first[:text]).to include("- **page_views** (analytics database)\n  add_index :page_views, :user_id")
     end
 
+    it "says the key order it assumed for a replayed schema, in the summary too" do
+      performance_data[:assumed_key_order] = "1 table whose remove_foreign_key with no column took the key MySQL lists first (assuming MySQL; MariaDB lists another first)"
+
+      %w[summary standard].each do |detail|
+        expect(described_class.call(detail: detail).content.first[:text])
+          .to include("**Assumed:** 1 table whose remove_foreign_key with no column took the key MySQL lists first (assuming MySQL; MariaDB lists another first); a foreign key finding on it may name the other key\n")
+      end
+    end
+
     it "says a database it did not check is one only another environment configures" do
       performance_data[:unchecked_databases] = [ { name: "warehouse", reason: "db/warehouse_schema.rb is not on disk" } ]
       allow(described_class).to receive(:cached_context).and_return(

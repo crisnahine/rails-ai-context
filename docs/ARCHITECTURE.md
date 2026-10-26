@@ -26,7 +26,7 @@ graph TD
         subgraph engine["Introspection Engine"]
             direction LR
             I["Introspectors\n40 modules\nPresets\nCached"]
-            AST["AST Engine\nPrism\n46 listeners\nConfidence tags"]
+            AST["AST Engine\nPrism\n47 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
@@ -161,6 +161,8 @@ Auto-registration via Ruby's `inherited` hook:
 Built on the official `mcp` Ruby SDK:
 
 - **Transports**: stdio (default) or HTTP (Streamable HTTP via `MCP::Server::Transports::StreamableHTTPTransport`)
+- **Router** (`WorkspaceServer`, ADR-0012): the plugin's stdio serve in a folder of several apps. It answers the handshake and the lists itself, adds a required `app` argument to every tool, and hands each call to that app's own serve, a `ChildServer` it starts at the app's first call
+- **Proxy** (`ChildServer.proxy`): the plugin's serve in front of an app's bundled copy, passing every line on, so the session stays connected if that copy stops
 - **Tools**: all active tools (builtin + custom − skip_tools)
 - **Resources**: 9 static resources + 5 dynamic VFS resource templates
 - **Instrumentation**: bridges to `ActiveSupport::Notifications`
@@ -221,8 +223,9 @@ Result: controller and view tools automatically include relevant schema informat
 
 Thor-based CLI that works standalone (no Gemfile entry):
 
-- `AppRoot` - Decides which app a command reads before anything reads the working directory: `--app-path` as given, else the working directory, else the nearest app root above it, else the one app below it (several are refused by name, and `init` sets them all up)
+- `AppRoot` - Decides which app a command reads before anything reads the working directory: `--app-path` as given, else the working directory, else the nearest app root above it, else the one app below it. Several below are refused by name, except by the plugin's serve, which `AppRoot.target` hands the folder of apps to route (see MCP Server), and `init`, which sets them all up
 - `EntryBoot` - Boots the app `AppRoot` chose for the standalone binary, or says which tier it fell back to
+- `Refusal` - Where the plugin's serve cannot serve, answers the MCP handshake with no tools and the reason, so Claude Code does not skip the plugin; also the line parse and the `initialize` answer the router and the proxy share
 - `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output
 - Supports `--json` mode for machine-readable output
 - Same 35 tools available as MCP and CLI

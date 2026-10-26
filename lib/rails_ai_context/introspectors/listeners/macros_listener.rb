@@ -153,7 +153,7 @@ module RailsAiContext
 
         def record_setting(node)
           value = node.arguments&.arguments&.first or return
-          @results << { macro: :model_setting, setting: node.name.to_s.delete_suffix("="), value: value.slice,
+          @results << { macro: :model_setting, setting: node.name.to_s.delete_suffix("="), value: filtered(value.slice),
                         literal: setting_literal(value), location: node.location.start_line, confidence: confidence_for(node) }
         end
 
@@ -169,7 +169,7 @@ module RailsAiContext
         def record_gem_macro(node)
           first = node.arguments&.arguments&.first
           text = if NAMED_ONLY_MACROS.include?(node.name) && first
-            "#{node.name} #{first.slice}"
+            filtered("#{node.name} #{first.slice}")
           else
             one_line_source(node, upto: node.block&.location&.start_offset).gsub(/\s+/, " ").strip
           end
@@ -351,7 +351,7 @@ module RailsAiContext
           end
 
           # Sources, so `default: "anon"` prints as the file writes it.
-          options = extract_keyword_sources(node).merge(extract_keyword_nodes(node).slice(:default).transform_values(&:slice))
+          options = extract_keyword_sources(node).merge(extract_keyword_nodes(node).slice(:default).transform_values { |value| filtered(value.slice) })
 
           @results << {
             macro:      :attribute,

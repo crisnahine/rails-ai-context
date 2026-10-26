@@ -426,7 +426,8 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(helper.cli_cmd("schema")).to eq("rails-ai-context tool schema")
     end
 
-    it "defaults to the rake tasks (in-Gemfile) when there is no Gemfile.lock at all" do
+    it "defaults to the rake tasks (in-Gemfile) when there is no Gemfile.lock and the Gemfile cannot be read in full" do
+      File.write(File.join(tmpdir, "Gemfile"), "gemspec\n")
       expect(helper.install_form).to eq(:tasks)
     end
 

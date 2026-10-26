@@ -25,6 +25,13 @@ RSpec.describe RailsAiContext::PackageJson do
     expect(described_class.present?(@root, "vite")).to be(true)
   end
 
+  # Windows editors write a BOM, and npm reads past it.
+  it "reads a package.json that starts with a byte order mark" do
+    write("\uFEFF#{JSON.generate("dependencies" => { "react" => "^19.0.0" })}")
+
+    expect(described_class.deps(@root)).to eq("react" => "^19.0.0")
+  end
+
   it "counts a tool reached through its own scope" do
     write(JSON.generate("devDependencies" => { "@tailwindcss/vite" => "^4.0.0" }))
 

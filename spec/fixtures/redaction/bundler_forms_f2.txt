@@ -1,0 +1,422 @@
+@ config/boot.rb R1-env-assign
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"
+@ config/boot.rb R2-or-assign
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] ||= "usr7k:Pw9T4il"
+@ config/boot.rb R3-store
+ENV.store("BUNDLE_GEMS__EXAMPLE__COM", "usr7k:Pw9T4il")
+@ config/boot.rb R4-merge
+ENV.update("BUNDLE_GEMS__EXAMPLE__COM" => "usr7k:Pw9T4il")
+@ config/boot.rb R5-hash-sym
+env = { "BUNDLE_GEMS__EXAMPLE__COM" => "usr7k:Pw9T4il", "A" => "b" }
+@ config/boot.rb R6-hash-colon
+env = { BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il", A: "b" }
+@ config/boot.rb R7-fmt
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = format("%s:%s", "usr7k", "Pw9T4il")
+@ config/boot.rb R8-interp-literal
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:#{ENV['P']}"
+@ config/boot.rb R9-interp-literal-user-only
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "#{ENV['U']}:Pw9T4il"
+@ config/boot.rb R10-concat
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k" + ":" + "Pw9T4il"
+@ config/boot.rb R11-join
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ["usr7k", "Pw9T4il"].join(":")
+@ config/boot.rb R12-heredoc
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = <<~CRED.strip
+  usr7k:Pw9T4il
+CRED
+@ config/boot.rb R13-percent-w
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = %w[usr7k Pw9T4il].join(":")
+@ config/boot.rb R14-percent-q-braces
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = %q{usr7k:Pw9T4il}
+@ config/boot.rb R15-percent-Q-paren
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = %Q(usr7k:Pw9T4il)
+@ config/boot.rb R16-percent-bare
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = %(usr7k:Pw9T4il)
+@ config/boot.rb R17-ternary
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ci? ? "usr7k:Pw9T4il" : nil
+@ config/boot.rb R18-unless-mod
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il" unless ENV["CI"]
+@ config/boot.rb R19-semicolons
+ENV["A"] = "1"; ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"; ENV["B"] = "2"
+@ config/boot.rb R20-fetch-default
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV.fetch("CRED", "usr7k:Pw9T4il")
+@ config/boot.rb R21-or-default
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV["CRED"] || "usr7k:Pw9T4il"
+@ config/boot.rb R22-dig
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = Rails.application.credentials.dig(:gem, :cred) || "usr7k:Pw9T4il"
+@ config/boot.rb R23-system
+system("bundle config set gems.example.com usr7k:Pw9T4il")
+@ config/boot.rb R24-system-array
+system("bundle", "config", "set", "gems.example.com", "usr7k:Pw9T4il")
+@ config/boot.rb R25-backtick
+`bundle config set gems.example.com usr7k:Pw9T4il`
+@ config/boot.rb R26-percent-x
+%x(bundle config set gems.example.com usr7k:Pw9T4il)
+@ config/boot.rb R27-settings-set
+Bundler.settings.set_local("gems.example.com", "usr7k:Pw9T4il")
+@ config/boot.rb R28-settings-aset
+Bundler.settings["gems.example.com"] = "usr7k:Pw9T4il"
+@ config/boot.rb R29-open3
+Open3.capture2("bundle", "config", "set", "gems.example.com", "usr7k:Pw9T4il")
+@ config/boot.rb R30-spawn-env
+spawn({ "BUNDLE_GEMS__EXAMPLE__COM" => "usr7k:Pw9T4il" }, "bundle", "install")
+@ config/boot.rb R31-multi-line-hash
+env = {
+  "BUNDLE_GEMS__EXAMPLE__COM" =>
+    "usr7k:Pw9T4il",
+}
+@ config/boot.rb R32-multi-line-assign
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] =
+  "usr7k:Pw9T4il"
+@ config/boot.rb R33-line-cont
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:" \
+  "Pw9T4il"
+@ config/boot.rb R34-plus-cont
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:" +
+  "Pw9T4il"
+@ config/boot.rb R35-heredoc-two
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = <<~A + <<~B
+  usr7k:
+A
+  Pw9T4il
+B
+@ config/boot.rb R36-symbol-key-string
+config = { "gems.example.com": "usr7k:Pw9T4il" }
+@ config/boot.rb R37-comment-secret
+# BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ config/boot.rb R38-doc-comment-example
+# Example: bundle config set gems.example.com usr7k:Pw9T4il
+@ config/boot.rb R39-sq-escaped
+ENV['BUNDLE_GEMS__EXAMPLE__COM'] = 'usr7k:Pw9\'T4il'
+@ config/boot.rb R40-dq-escaped-hash
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9\#{x}T4il"
+@ config/boot.rb R41-dq-newline-esc
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9\\T4il"
+@ config/boot.rb R42-trailing-bs-in-sq
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = 'usr7k:Pw9T4il\\'
+@ config/boot.rb R43-then-method
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il".freeze
+@ config/boot.rb R44-then-dup
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il".dup << "x"
+@ config/boot.rb R45-case-when
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = case ENV["E"] when "a" then "usr7k:Pw9T4il" else nil end
+@ config/boot.rb R46-block-tap
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = ENV["X"].then { |x| x || "usr7k:Pw9T4il" }
+@ config/boot.rb R47-string-new
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = String.new("usr7k:Pw9T4il")
+@ config/boot.rb R48-base64
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = Base64.decode64("dXNyN2s6UHc5VDRpbA==")
+@ config/boot.rb R49-two-eq
+a = ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"
+@ config/boot.rb R50-puts
+puts "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il"
+@ config/boot.rb R51-nul~
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k\0:Pw9T4il"
+@ config/boot.rb R52-crlf~
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"\r
+ENV["B"] = "x"\r
+@ config/boot.rb R53-tab~
+ENV["BUNDLE_GEMS__EXAMPLE__COM"]\t=\t"usr7k:Pw9T4il"
+@ config/boot.rb R54-unicode-ruby
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il✓"
+@ config/boot.rb R55-unicode-quote
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = “usr7k:Pw9T4il”
+@ config/boot.rb R56-gsub
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:XX".sub("XX", "Pw9T4il")
+@ config/boot.rb R57-regex-ish
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = /usr7k:Pw9T4il/.source
+@ config/boot.rb R58-sym-to-s
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = :"usr7k:Pw9T4il".to_s
+@ config/boot.rb R59-gsub-tmpl
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "TOKEN:Pw9T4il".sub("TOKEN", "usr7k")
+@ config/boot.rb R60-yield
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = yield || "usr7k:Pw9T4il"
+@ config/initializers/x.rb R61-config-attr
+config.bundle_credential = "usr7k:Pw9T4il"
+@ config/deploy.rb R62-capistrano-set
+set :default_env, { "BUNDLE_GEMS__EXAMPLE__COM" => "usr7k:Pw9T4il" }
+@ config/deploy.rb R63-capistrano-execute
+execute :bundle, :config, "gems.example.com", "usr7k:Pw9T4il"
+@ Rakefile R64-sh
+sh "bundle config set gems.example.com usr7k:Pw9T4il"
+@ Rakefile R65-sh-env
+sh({ "BUNDLE_GEMS__EXAMPLE__COM" => "usr7k:Pw9T4il" }, "bundle install")
+@ app.json J1-env
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": { "value": "usr7k:Pw9T4il" } } }
+@ app.json J2-env-plain
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" } }
+@ package.json J3-script
+{ "scripts": { "setup": "bundle config set gems.example.com usr7k:Pw9T4il" } }
+@ devcontainer.json J4-remoteEnv
+{ "remoteEnv": { "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" } }
+@ devcontainer.json J5-containerEnv-multi
+{
+  "containerEnv": {
+    "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il",
+    "X": "y"
+  }
+}
+@ .vscode/launch.json J6-env-array
+{ "env": [ { "name": "BUNDLE_GEMS__EXAMPLE__COM", "value": "usr7k:Pw9T4il" } ] }
+@ .vscode/launch.json J7-pair-reverse
+{ "value": "usr7k:Pw9T4il", "name": "BUNDLE_GEMS__EXAMPLE__COM" }
+@ .vscode/launch.json J8-jsonc-comment
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" /* corp */ } }
+@ .vscode/launch.json J9-escaped-quote
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9\"T4il" } }
+@ .vscode/launch.json J10-unicode-escape
+{ "env": { "BUNDLE_GEMS__EXAMPLE__COM": "usr7k\u003aPw9T4il" } }
+@ task-def.json J11-ecs
+{ "environment": [ { "name": "BUNDLE_GEMS__EXAMPLE__COM", "value": "usr7k:Pw9T4il" } ] }
+@ task-def.json J12-ecs-multiline
+{ "environment": [
+  {
+    "name": "BUNDLE_GEMS__EXAMPLE__COM",
+    "value": "usr7k:Pw9T4il"
+  }
+] }
+@ task-def.json J13-ecs-valueFrom-and-value
+{ "name": "BUNDLE_GEMS__EXAMPLE__COM", "valueFrom": "arn:x", "value": "usr7k:Pw9T4il" }
+@ config.toml T1-plain
+BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9T4il"
+@ config.toml T2-table
+[env]
+BUNDLE_GEMS__EXAMPLE__COM = 'usr7k:Pw9T4il'
+@ config.toml T3-inline
+env = { BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9T4il", X = "y" }
+@ config.toml T4-quoted-key
+"BUNDLE_GEMS__EXAMPLE__COM" = "usr7k:Pw9T4il"
+@ config.toml T5-ml
+BUNDLE_GEMS__EXAMPLE__COM = """
+usr7k:Pw9T4il
+"""
+@ config.toml T6-ml-literal
+BUNDLE_GEMS__EXAMPLE__COM = '''usr7k:
+Pw9T4il'''
+@ config.toml T7-esc
+BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9\"T4il"
+@ fly.toml T8-fly-env
+[env]
+  BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9T4il"
+@ values.yaml K1-helm-env
+env:
+  BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ values.yaml K2-helm-extraEnv
+extraEnv:
+  - name: BUNDLE_GEMS__EXAMPLE__COM
+    value: "usr7k:Pw9T4il"
+@ deployment.yaml K3-k8s-env
+        env:
+        - name: BUNDLE_GEMS__EXAMPLE__COM
+          value: usr7k:Pw9T4il
+@ deployment.yaml K4-k8s-valueFrom-ok
+        - name: BUNDLE_GEMS__EXAMPLE__COM
+          valueFrom:
+            secretKeyRef:
+              name: gems
+              key: cred
+@ deployment.yaml K5-k8s-value-then-name
+        - value: usr7k:Pw9T4il
+          name: BUNDLE_GEMS__EXAMPLE__COM
+@ deployment.yaml K6-k8s-value-folded
+        - name: BUNDLE_GEMS__EXAMPLE__COM
+          value: >-
+            usr7k:
+            Pw9T4il
+@ deployment.yaml K7-k8s-value-sq-multi
+        - name: BUNDLE_GEMS__EXAMPLE__COM
+          value: 'usr7k:
+            Pw9T4il'
+@ deployment.yaml K8-k8s-args
+        args: ["bundle", "config", "set", "gems.example.com", "usr7k:Pw9T4il"]
+@ deployment.yaml K9-k8s-command-block
+        command:
+        - sh
+        - -c
+        - bundle config set gems.example.com usr7k:Pw9T4il && bundle install
+@ configmap.yaml K10-data
+data:
+  BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+@ secret.yaml K11-stringData
+stringData:
+  BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ secret.yaml K12-data-base64
+data:
+  BUNDLE_GEMS__EXAMPLE__COM: dXNyN2s6UHc5VDRpbA==
+@ values.yaml K13-helm-tpl
+env:
+  BUNDLE_GEMS__EXAMPLE__COM: {{ .Values.cred | default "usr7k:Pw9T4il" | quote }}
+@ values.yaml K14-helm-tpl-print
+env:
+  BUNDLE_GEMS__EXAMPLE__COM: {{ printf "%s:%s" "usr7k" .Values.pw | quote }}
+@ values.yaml K15-yaml-dq-multi
+env:
+  BUNDLE_GEMS__EXAMPLE__COM: "usr7k:\
+    Pw9T4il"
+@ values.yaml K16-yaml-tag
+env:
+  BUNDLE_GEMS__EXAMPLE__COM: !!str usr7k:Pw9T4il
+@ Procfile PR1
+release: BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle exec rake db:migrate
+@ Procfile PR2
+web: bundle config set gems.example.com usr7k:Pw9T4il && bundle exec puma
+@ Procfile.dev PR3
+web: env BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il" bin/rails s
+@ README.md M1-code-span
+Run `bundle config set gems.example.com usr7k:Pw9T4il` first.
+@ README.md M2-code-span-env
+Set `BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il` in your shell.
+@ README.md M3-fenced
+```sh
+bundle config set gems.example.com usr7k:Pw9T4il
+bundle install
+```
+@ README.md M4-fenced-ruby
+```ruby
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"
+```
+@ README.md M5-table
+| Name | Value |
+| --- | --- |
+| `BUNDLE_GEMS__EXAMPLE__COM` | `usr7k:Pw9T4il` |
+@ README.md M6-bullets
+- `BUNDLE_GEMS__EXAMPLE__COM`: usr7k:Pw9T4il
+@ README.md M7-double-backtick
+Run ``bundle config set gems.example.com "usr7k:Pw9T4il"`` now.
+@ README.md M8-html
+<code>BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il</code>
+@ README.md M9-link
+[creds](https://usr7k:Pw9T4il@gems.example.com/)
+@ README.md M10-indented-code
+    BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ README.md M11-prose-set-to
+Set BUNDLE_GEMS__EXAMPLE__COM to usr7k:Pw9T4il before building.
+@ README.md M12-prose-is
+BUNDLE_GEMS__EXAMPLE__COM is usr7k:Pw9T4il
+@ README.rst M13-rst-literal
+``BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il``
+@ README.md M14-url-in-text
+see https://usr7k:Pw9T4il@gems.example.com/ for the mirror
+@ README.md M15-config-with-quotes-prose
+Use "bundle config set gems.example.com usr7k:Pw9T4il" then continue.
+@ README.md M16-emphasis
+**BUNDLE_GEMS__EXAMPLE__COM**=usr7k:Pw9T4il
+@ README.md M17-html-entity
+<pre>bundle config set gems.example.com &quot;usr7k:Pw9T4il&quot;</pre>
+@ README.md M18-sh-prompt
+$ bundle config set gems.example.com usr7k:Pw9T4il
+@ README.md M19-sh-prompt-env
+$ BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install
+@ README.md M20-yaml-fence
+```yaml
+env:
+  BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+```
+@ docs/setup.md M21-json-fence
+```json
+{ "BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il" }
+```
+@ docs/setup.md M22-dockerfile-fence
+```dockerfile
+ARG BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+RUN bundle install
+```
+@ Makefile X1-make
+	bundle config set gems.example.com usr7k:Pw9T4il
+@ Makefile X2-make-var
+BUNDLE_GEMS__EXAMPLE__COM := usr7k:Pw9T4il
+@ Makefile X3-make-export
+export BUNDLE_GEMS__EXAMPLE__COM = usr7k:Pw9T4il
+@ Makefile X4-make-dollar-dollar
+	BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il $(MAKE) install
+@ Justfile X5-just
+export BUNDLE_GEMS__EXAMPLE__COM := "usr7k:Pw9T4il"
+@ Brewfile X6
+ENV["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"
+@ app.rb X7-js-process-env
+process.env.BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9T4il";
+@ build.js X8-js-exec
+execSync(`bundle config set gems.example.com usr7k:Pw9T4il`);
+@ build.js X9-js-obj
+const env = { BUNDLE_GEMS__EXAMPLE__COM: 'usr7k:Pw9T4il', X: 1 };
+@ build.py X10-py-environ
+os.environ["BUNDLE_GEMS__EXAMPLE__COM"] = "usr7k:Pw9T4il"
+@ build.py X11-py-subprocess
+subprocess.run(["bundle", "config", "set", "gems.example.com", "usr7k:Pw9T4il"])
+@ build.py X12-py-fstring
+os.environ["BUNDLE_GEMS__EXAMPLE__COM"] = f"usr7k:{pw}T4il"
+@ main.tf X13-terraform
+  environment_variables = { BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9T4il" }
+@ main.tf X14-tf-heredoc
+user_data = <<-EOT
+  export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+EOT
+@ playbook.yml X15-ansible
+  environment:
+    BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ playbook.yml X16-ansible-shell
+    - shell: bundle config set gems.example.com usr7k:Pw9T4il
+@ playbook.yml X17-jinja
+    BUNDLE_GEMS__EXAMPLE__COM: "{{ vault_cred | default('usr7k:Pw9T4il') }}"
+@ .envrc X18-direnv
+export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .tool-versions X19
+BUNDLE_GEMS__EXAMPLE__COM usr7k:Pw9T4il
+@ Vagrantfile X20-vagrant
+config.vm.provision "shell", inline: "bundle config set gems.example.com usr7k:Pw9T4il"
+@ Vagrantfile X21-vagrant-env
+config.vm.provision "shell", env: { "BUNDLE_GEMS__EXAMPLE__COM" => "usr7k:Pw9T4il" }
+@ .circleci/config.yml X22-circle
+      - run:
+          command: bundle config set gems.example.com usr7k:Pw9T4il
+@ .circleci/config.yml X23-circle-env
+          environment:
+            BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+@ bitbucket-pipelines.yml X24
+          script:
+            - export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .travis.yml X25-travis-global
+env:
+  global:
+    - BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .travis.yml X26-travis-secure-ok
+env:
+  global:
+    - secure: "abc"
+@ Jenkinsfile X27-groovy
+    environment { BUNDLE_GEMS__EXAMPLE__COM = 'usr7k:Pw9T4il' }
+@ Jenkinsfile X28-groovy-sh
+        sh "bundle config set gems.example.com usr7k:Pw9T4il"
+@ Jenkinsfile X29-groovy-triple
+        sh '''
+          bundle config set gems.example.com usr7k:Pw9T4il
+        '''
+@ azure-pipelines.yml X30-azure
+    - script: bundle config set gems.example.com usr7k:Pw9T4il
+@ azure-pipelines.yml X31-azure-vars
+variables:
+  - name: BUNDLE_GEMS__EXAMPLE__COM
+    value: usr7k:Pw9T4il
+@ bin/setup X32-ruby-shebang
+system("bundle config --local gems.example.com 'usr7k:Pw9T4il'")
+@ bin/setup X33-ruby-sh-n
+`BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install`
+@ Dockerfile X34-multi-line-env
+ENV BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il \
+    BUNDLE_JOBS=4
+@ Dockerfile X35-env-legacy-space
+ENV BUNDLE_GEMS__EXAMPLE__COM usr7k:Pw9T4il
+@ Dockerfile X36-heredoc-run
+RUN <<EOT
+bundle config set gems.example.com usr7k:Pw9T4il
+EOT
+@ Dockerfile X37-label
+LABEL cred="BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il"
+@ Dockerfile X38-copy-no
+COPY --chmod=600 <<EOF /root/.bundle/config
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+EOF
+@ Dockerfile X39-run-mount
+RUN --mount=type=secret,id=x BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install
+@ Dockerfile X40-env-long
+ENV BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4ilAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"

@@ -207,8 +207,14 @@ module RailsAiContext
     end
 
     # The table a model reads, from the database its `connects_to` writes to.
-    def model_table(schema, model)
+    def model_schema_table(schema, model)
       model_tables(schema, model).first&.last
+    end
+
+    # The table and key a model name reads, as the model tier answered them (TableName.of_model): no table,
+    # and who sets it, where the static tier could not read a setting the table depends on.
+    def model_table(ctx, name)
+      Introspectors::TableName.of_model(name, models(ctx))
     end
 
     # [database, table] for each database a model may read its table from: the one it writes
@@ -236,19 +242,39 @@ module RailsAiContext
       table_holders(schema, name).map { |db, _, _| db || "primary" }
     end
 
+    QUOTABLE_NAME = /\A(?:(?:#{SqlScan::NAME_TEXT})\.)*(?:#{SqlScan::NAME_TEXT})\z/
+
+    # The keys a table may be listed under for a name as written: the name itself, then (when it is made of plain and quoted
+    # parts) its parts unquoted and joined by dots. A table is keyed by its real name, so `"q""t"` and `"my-table"` find `q"t` and
+    # `my-table`; a name qualified by a schema is the qualified lookup's, which holds a table in a schema that shadows it.
+    def table_name_forms(name)
+      name = name.to_s
+      forms = [ name ]
+      if name.match?(QUOTABLE_NAME)
+        parts = SqlScan.qualified_parts(name)
+        forms << parts.join(".")
+      end
+      forms.uniq
+    end
+
     # A schema-qualified name the listing does not hold is looked up when asked for: a table outside
     # the search path, or a listed one by its qualified name, as Rails resolves both.
     def table_holders(schema, name)
-      found = table_index(schema).fetch(name.to_s, [])
-      return found if found.any? || !name.to_s.include?(".") || !schema.is_a?(Hash)
+      forms = table_name_forms(name)
+      found = forms.lazy.map { |form| table_index(schema).fetch(form, []) }.find(&:any?) || []
+      return found if found.any? || !schema.is_a?(Hash)
 
       secondary = schema[:secondary_databases].is_a?(Hash) ? schema[:secondary_databases].keys : []
-      [ nil, *secondary ].filter_map do |db|
-        live = db.nil? && !parsed_schema?(schema) && DatabaseFamily.of(schema[:adapter].to_s).postgresql?
-        shown, data = Introspectors::SchemaIntrospector.qualified_table(name.to_s, database: db&.to_s, live: live)
-        # The fourth entry is the name the listing shows the table under, which its models read.
-        [ db&.to_s, name.to_s, data, shown ] if data
+      forms.select { |form| form.include?(".") }.each do |form|
+        holders = [ nil, *secondary ].filter_map do |db|
+          live = db.nil? && !parsed_schema?(schema) && DatabaseFamily.of(schema[:adapter].to_s).postgresql?
+          shown, data = Introspectors::SchemaIntrospector.qualified_table(form, database: db&.to_s, live: live)
+          # The fourth entry is the name the listing shows the table under, which its models read.
+          [ db&.to_s, form, data, shown ] if data
+        end
+        return holders if holders.any?
       end
+      []
     end
 
     # True only when a live connection's listing was read for the model's database and lacks its table:
@@ -271,8 +297,8 @@ module RailsAiContext
     def table_absent_from(schema, model)
       return unless model.is_a?(Hash) && model[:table_name] && !model[:table_name].to_s.include?(".") && !model[:own_connection]
       return unless writing_database(model) == "primary"
-      # A setting, concern or base the static tier could not read may set the table name.
-      return if model[:table_set_by] || Array(model[:concerns_unread]).any? || Array(model[:bases_unread]).any?
+      # A concern or base the static tier could not read may set the table name.
+      return if Array(model[:concerns_unread]).any? || Array(model[:bases_unread]).any?
       return unless schema.is_a?(Hash) && parsed_schema?(schema) && model_tables(schema, model).empty?
 
       schema[:declared_in]
@@ -283,6 +309,17 @@ module RailsAiContext
       return unless schema.is_a?(Hash) && parsed_schema?(schema) && name.to_s.include?(".")
 
       Introspectors::SchemaIntrospector.qualified_table_note(name.to_s)
+    end
+
+    # A replay that skipped helper calls cannot say a table does not exist: one those calls create would be missing from it.
+    def skipped_calls_note(schema, table)
+      skipped = Array(schema.is_a?(Hash) ? schema[:skipped_calls] : nil)
+      return if skipped.empty?
+
+      shown = skipped.first(5).join(", ")
+      shown += ", and #{skipped.size - 5} more" if skipped.size > 5
+      "#{CountPhrase.call(skipped.size, "migration helper call")} #{skipped.size == 1 ? "was" : "were"} not replayed (#{shown}), so a table " \
+        "#{skipped.size == 1 ? "it creates is" : "they create is"} missing from this schema and '#{table}' may exist."
     end
 
     # Read from the dump: the context names the adapter and keeps "static_parse" under adapter_source.
@@ -334,6 +371,11 @@ module RailsAiContext
       carried = models.dig(name.to_s, :file) if models.is_a?(Hash) && !models[:error]
 
       carried || "app/models/#{name.to_s.underscore}.rb"
+    end
+
+    # The model's file below its models root, without the extension: where a test mirrors it.
+    def model_stem(ctx, name)
+      model_file(ctx, name).sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
     end
 
     # The file a job or mailer was read from, nil when the tier recorded

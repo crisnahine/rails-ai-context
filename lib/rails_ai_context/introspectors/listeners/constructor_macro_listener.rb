@@ -100,7 +100,7 @@ module RailsAiContext
           if element.is_a?(Prism::KeywordHashNode) || element.is_a?(Prism::HashNode)
             return element.elements.grep(Prism::AssocNode).filter_map do |assoc|
               key = literal_string(assoc.key)
-              [ :key, key, assoc.value.slice ] if key
+              [ :key, key, filtered(assoc.value.slice) ] if key
             end
           end
 
@@ -115,7 +115,7 @@ module RailsAiContext
           body = node.body if node.is_a?(Prism::LambdaNode)
           body = node.block.body if node.is_a?(Prism::CallNode) && %i[lambda proc].include?(node.name) && node.block.is_a?(Prism::BlockNode)
           statements = body.is_a?(Prism::StatementsNode) ? body.body : []
-          statements.size == 1 ? statements.first.slice : node.slice
+          filtered(statements.size == 1 ? statements.first.slice : node.slice)
         end
       end
     end

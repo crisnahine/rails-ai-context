@@ -398,6 +398,18 @@ Proof sources:
    27377 and 90210 and in defined order, and on Ruby 3.1 to 4.0 with Rails
    7.0 to 8.1; and the unit suite and the E2E harness on Linux, macOS and
    Windows.
+   In the v5.38.0 release QA: each fix's example failing on the code before
+   it; the migration replay's key order against SQLite on Rails 7.0 to 8.1
+   and against PostgreSQL 16, MySQL 8.4 and MariaDB 10.6 and 11.4, with the
+   advisor's rollbacks run on each; generated tests run in RSpec and minitest
+   apps with and without factories and fixtures, booted and static, over
+   thirty model shapes; the source redaction over a corpus of more than a
+   thousand credential forms and its cost on Ruby 3.1 and 3.4; the plugin's
+   router on folders of apps, a non-app folder and the gem's own checkout;
+   every answer on one private app and copies of three large open-source
+   apps, booted and static; the unit suite at seeds 1, 27377 and 90210 and
+   in defined order, on Ruby 3.1 to 4.0 with Rails 7.0 to 8.1; and the unit
+   suite and the E2E harness on Linux, macOS and Windows.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

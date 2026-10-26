@@ -96,21 +96,47 @@ module RailsAiContext
         name == base || name.end_with?("::#{base}")
       end
 
-      # A bare superclass resolves through Module.nesting: `module Shop; class W < BaseWorker` tries Shop::BaseWorker first.
-      # A nil `nesting` is read off the declared name, which is right for the nested form only.
-      def resolve_in_scope(declared, parent, nesting: nil)
-        parent = parent.to_s.delete_prefix("::")
-        return nil if parent.empty?
+      # A superclass resolves through Module.nesting: `module Shop; class W < BaseWorker` tries Shop::BaseWorker first.
+      # A nil `nesting` is read off the declared name, which is right for the nested form only. Answers what the block does.
+      # `ancestors_of` is DeclaredConstant.lookup's, for a qualified name whose later segment sits in a superclass.
+      def resolve_in_scope(declared, parent, nesting: nil, ancestors_of: nil)
+        return nil if parent.to_s.delete_prefix("::").empty?
 
-        ((nesting || nesting_of(declared)).map { |scope| "#{scope}::#{parent}" } + [ parent ]).each do |candidate|
-          # `class CostQuery::Export < Export` names the top-level Export; the
-          # nearest candidate is the class itself, which is nobody's parent.
-          next if candidate == declared.to_s
+        # `class CostQuery::Export < Export` names the top-level Export: the class itself is nobody's parent.
+        DeclaredConstant.reach(parent, nesting: nesting || nesting_of(declared), ancestors_of: ancestors_of,
+                                       exists: ->(candidate) { candidate != declared.to_s && yield(candidate) })
+      end
 
-          found = yield(candidate)
-          return found if found
+      # The superclasses of the class `name` declares in `source`, nearest first, each named as Ruby resolves it;
+      # `source_of` maps a constant to its file's source, nil outside the app. The chain ends at a class outside the
+      # app or one seen already, unless `onward` names the app class a gem's class inherits from.
+      def superclasses(name, source, source_of, depth: MAX_DEPTH, onward: nil)
+        found = []
+        first = name
+        text = source
+        while text
+          declaration = DeclaredConstant.parent_declaration(text, name)
+          break unless declaration&.superclass
+
+          base, text = resolve_in_scope(declaration.name, declaration.superclass, nesting: declaration.nesting,
+                                                                                  ancestors_of: ancestors_of(source_of, depth: depth - 1)) do |candidate|
+            (written = source_of.call(candidate)) && [ candidate, written ]
+          end
+          base = onward&.call(declaration.superclass.delete_prefix("::")) unless base
+          text = source_of.call(base) if base && !text
+          break unless base && base != first && !found.include?(base)
+
+          found << base
+          name = base
         end
-        nil
+        found
+      end
+
+      # DeclaredConstant.lookup's `ancestors_of` over the app's sources: a constant to its superclasses.
+      def ancestors_of(source_of, depth: MAX_DEPTH)
+        return nil unless depth.positive?
+
+        ->(name) { (text = source_of.call(name)) ? superclasses(name, text, source_of, depth: depth) : [] }
       end
 
       # The nesting the nested form gives a class: every enclosing name, innermost first.

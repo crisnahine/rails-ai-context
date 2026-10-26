@@ -47,7 +47,7 @@ module RailsAiContext
         horizon = Time.now - AstCache::RACY_WINDOW
 
         manifests = {}
-        Fingerprinter.manifests(@root).each do |name|
+        Fingerprinter.watched(@root).each do |name|
           path = File.expand_path(name, @root)
           manifests[path] = look_at(path, @manifests[path], horizon)
         rescue SystemCallError
@@ -60,7 +60,7 @@ module RailsAiContext
         entered = Set.new
         # One run, so the link checks answer once per look.
         RunCache.around do
-          Fingerprinter.watched_dirs(@root).each { |top| walk(top, horizon, dirs, entered) }
+          Fingerprinter.walks(@root).each { |top, rule| walk(top, rule, horizon, dirs, entered) }
         end
         # A directory the walk no longer reaches took its files with it.
         @changed = true if @dirs&.any? { |path, dir| !dirs.key?(path) && (dir.files.any? || dir.cassettes.any?) }
@@ -81,7 +81,7 @@ module RailsAiContext
 
       # The real tree first, then each directory linked in from the app's
       # repository, as the readers walk one (FileWalk).
-      def walk(top, horizon, dirs, entered)
+      def walk(top, rule, horizon, dirs, entered)
         start = real_dir(top) or return
         pending = [ top ]
         linked = []
@@ -91,7 +91,7 @@ module RailsAiContext
           stat = dir_stat(path)
           next unless stat
 
-          dir = listing(path, stat, horizon)
+          dir = listing(path, stat, rule, horizon)
           dirs[path] = dir
           look_at_all(dir.files, dir.seen, horizon)
           pending.concat(dir.subdirs)
@@ -153,11 +153,11 @@ module RailsAiContext
       # directory read again, each file keeping what was seen of it. A file
       # added or removed since the kept listing is a change, and so is a
       # directory that appeared with files in it.
-      def listing(path, stat, horizon)
+      def listing(path, stat, rule, horizon)
         kept = @dirs && @dirs[path]
         return kept if kept&.settled && kept.mtime == stat.mtime && kept.ino == stat.ino
 
-        subdirs, links, files, cassettes = list(path)
+        subdirs, links, files, cassettes = list(path, rule)
         before = kept ? kept.files.zip(kept.seen).to_h : {}
         seen = files.map { |file| before[file] }
         if kept
@@ -172,7 +172,7 @@ module RailsAiContext
       # that may lead to a directory: one that does, or that leads nowhere
       # yet. walk decides at every look whether to enter it. In name order,
       # so a directory two links lead to is spelled the same way each time.
-      def list(path)
+      def list(path, rule)
         subdirs = []
         links = []
         files = []
@@ -183,8 +183,8 @@ module RailsAiContext
           entry = File.join(path, name)
           stat = File.lstat(entry)
           if stat.directory?
-            subdirs << entry
-          elsif WATCHED_EXTNAMES.include?(File.extname(name))
+            subdirs << entry unless rule.prunes?(entry.delete_prefix(@prefix))
+          elsif rule.reads?(entry.delete_prefix(@prefix))
             (entry.delete_prefix(@prefix).match?(CASSETTES) ? cassettes : files) << entry unless entry.include?(BUILD_OUTPUT)
           elsif stat.symlink? && !File.file?(entry)
             links << entry

@@ -362,6 +362,11 @@ RSpec.describe RailsAiContext::SafePath do
       include_examples "blocks", ".my.cnf"
       include_examples "blocks", ".aws/credentials"
       include_examples "blocks", ".aws/config"
+      # Registry and gem server credentials: npm, yarn 1 and pnpm read .npmrc, Bundler .bundle/config.
+      include_examples "blocks", ".npmrc"
+      include_examples "blocks", "frontend/.npmrc"
+      include_examples "blocks", ".yarnrc"
+      include_examples "blocks", ".bundle/config"
     end
 
     describe "private keys and certificates" do
@@ -484,6 +489,20 @@ RSpec.describe RailsAiContext::SafePath do
         expect(described_class.canonical(File.join(broken, "app")).b).to eq(File.join(latin, "app"))
         expect(described_class.canonical(File.join(broken, "\u0448\u043e\u043f")).b).to eq(File.join(latin, "\u0448\u043e\u043f".b))
       end
+    end
+  end
+
+  describe ".sensitive? inside a run" do
+    it "asks the patterns once per path, and again once the list changes" do
+      allow(RailsAiContext.configuration).to receive(:sensitive_patterns).and_return([ "vault/" ])
+      asked = 0
+      allow(described_class).to receive(:sensitive_path?).and_wrap_original { |original, path| (asked += 1) && original.call(path) }
+
+      answers = RailsAiContext::RunCache.around { 3.times.map { described_class.sensitive?("app/vault/a.rb") } }
+      allow(RailsAiContext.configuration).to receive(:sensitive_patterns).and_return([ "other/" ])
+      changed = RailsAiContext::RunCache.around { described_class.sensitive?("app/vault/a.rb") }
+
+      expect([ answers, asked, changed ]).to eq([ [ true, true, true ], 2, false ])
     end
   end
 end

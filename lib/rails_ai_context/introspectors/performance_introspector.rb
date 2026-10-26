@@ -37,6 +37,8 @@ module RailsAiContext
           summary: nil # populated below
         }.tap do |result|
           result[:unchecked_databases] = unchecked if unchecked.any?
+          assumed = SchemaReader.for(root).mysql_order_assumed
+          result[:assumed_key_order] = SchemaConventions.mysql_order_assumed_phrase(assumed) if assumed.positive?
           result[:summary] = build_summary(result)
         end
       end
@@ -91,8 +93,8 @@ module RailsAiContext
         end
       end
 
-      # A hash lookup first: TableName.for_model_name scans every model, and
-      # this runs once per model.
+      # A hash lookup: TableName.of_model scans every model for a name it does
+      # not hold, and this runs once per model.
       def model_table(class_name)
         table_of(class_name, resolved_models)
       end
@@ -125,7 +127,9 @@ module RailsAiContext
       end
 
       def model_record(record, ast, class_name, classes, modules)
-        associations = ConcernMembership.owned_with_modules(ast[:associations], class_name, classes, ast[:mixins], modules)
+        found = declarations(record, ast.merge(declared_classes: classes), class_name)
+        # A name declared again is the last declaration, as Rails replaces the reflection.
+        associations = Array(found.declarations[:associations]).reverse.uniq { |a| a[:name].to_s }.reverse
         of_type = ->(type) { associations.select { |a| a[:type] == type }.map { |a| { name: a[:name].to_s, options: a[:options] || {} } } }
         {
           name: class_name,
@@ -133,7 +137,7 @@ module RailsAiContext
           table_name: model_table(class_name),
           has_many: of_type.call("has_many"),
           belongs_to: of_type.call("belongs_to"),
-          macro_columns: macro_columns(ast, class_name, classes, modules),
+          macro_columns: macro_columns(found, class_name),
           counter_cultures: ConcernMembership.owned_with_modules(ast[:counter_culture], class_name, classes, ast[:mixins], modules)
                                              .map { |c| counter_culture_record(c) }
         }
@@ -148,21 +152,31 @@ module RailsAiContext
       # ponytail: a fixed list; a gem outside it declares columns the static walk cannot see.
       COLUMN_MACROS = [ *TREE_MACROS.keys, VERSIONS_MACRO ].freeze
       COLUMN_MACRO_LISTENER = -> { Listeners::GenericMacroListener.new(*COLUMN_MACROS) }
-      COLUMN_MACRO_CONCERN_LISTENERS = { column_macros: COLUMN_MACRO_LISTENER, mixins: Listeners::MixinsListener }.freeze
+      CONCERN_LISTENERS = { associations: Listeners::AssociationsListener, column_macros: COLUMN_MACRO_LISTENER,
+                            mixins: Listeners::MixinsListener, methods: Listeners::MethodsListener }.freeze
 
-      # The [table, column] a gem macro declares, in the model or its concerns.
+      # The associations and gem macros the model, its concerns and its bases declare, in one walk.
+      def declarations(record, walked, class_name)
+        ClassDeclarations.for(class_name, lookup: ->(name) { model_files[name] }, keys: %i[associations column_macros], listeners: CONCERN_LISTENERS,
+                                          root: root, prefer: "model", source: record.source, file: record.path, cache: (@concern_cache ||= {}),
+                                          read: ->(path, source, _name) { walked if source || path == record.path })
+      end
+
+      # The [table, column] a gem macro declares, in the model, its concerns or its bases.
       # The models section cannot carry it statically: the macro is a gem's.
-      def macro_columns(ast, class_name, classes, modules)
-        mixins = ConcernMembership.mixins_with_modules(ast[:mixins], class_name, classes, modules)
-        collected = ConcernMacros.collect(root, mixins, keys: %i[column_macros], prefer: "model",
-                                          within: class_name, cache: (@concern_cache ||= {}),
-                                          listeners: COLUMN_MACRO_CONCERN_LISTENERS).collected
-        own = ConcernMembership.owned_with_modules(ast[:column_macros], class_name, classes, ast[:mixins], modules)
-        (own + Array(collected[:column_macros])).map do |macro|
+      def macro_columns(found, class_name)
+        Array(found.declarations[:column_macros]).map do |macro|
           options = macro[:options] || {}
           next [ versions_table(options, class_name), "item_id" ] if macro[:macro] == VERSIONS_MACRO
 
           [ model_table(class_name), (options[TREE_MACROS[macro[:macro]]] || "parent_id").to_s ]
+        end.uniq
+      end
+
+      # Each class a model file declares, by the file declaring it.
+      def model_files
+        @model_files ||= model_sources.each_with_object({}) do |record, found|
+          DeclaredConstant.declarations(record.source, all: true).each { |declaration| found[declaration.name] ||= record.path }
         end
       end
 
@@ -203,6 +217,7 @@ module RailsAiContext
 
       def detect_missing_counter_cache(model_data, schema_data)
         missing = []
+        models = model_data.to_h { |m| [ m[:name], m ] }
 
         model_data.each do |model|
           model[:has_many].each do |assoc|
@@ -212,31 +227,80 @@ module RailsAiContext
             next if options.key?(:through)
 
             assoc_name = assoc[:name]
-            count_col = "#{assoc_name}_count"
+            count_col = named_counter_column(options[:counter_cache]) || "#{assoc_name}_count"
 
             table = schema_data[model[:table_name]]
             next unless table
             next unless table[:columns].any? { |c| c[:name] == count_col }
-            next if options.key?(:counter_cache)
             next if app_written_counter_columns.include?(count_col)
 
             belongs_to_model = association_model(model_data, assoc, model[:name])
             next unless belongs_to_model
-            next if belongs_to_model[:belongs_to].any? { |b| b[:options].key?(:counter_cache) }
-            inverse_name = options[:as] || model[:name].demodulize.underscore
+            inverse = inverse_belongs_to(belongs_to_model, options, model[:name], models)
+            inverse_name = inverse ? inverse[:name] : (options[:as] || model[:name].demodulize.underscore).to_s
+            # Only the belongs_to pointing back here keeps this column, and only when its counter is on.
+            next if inverse && belongs_to_counter_column(inverse[:options][:counter_cache], belongs_to_model[:name]) == count_col
             next if counter_culture_keeps?(belongs_to_model, inverse_name, count_col)
 
             missing << {
               model: model[:name],
               association: assoc_name,
               column: count_col,
-              suggestion: "Add counter_cache: true to belongs_to " \
-                          ":#{inverse_name} in #{belongs_to_model[:name]}"
+              suggestion: "Add counter_cache: #{count_col == default_counter_column(belongs_to_model[:name]) ? "true" : ":#{count_col}"} " \
+                          "to belongs_to :#{inverse_name} in #{belongs_to_model[:name]}"
             }
           end
         end
 
         missing
+      end
+
+      # The belongs_to on the child that points back at owner, found the way Rails pairs them:
+      # inverse_of, then the foreign key, then the class it names, resolved from the child's namespace outward.
+      def inverse_belongs_to(child, options, owner, models)
+        candidates = child[:belongs_to]
+        named = options[:as] || options[:inverse_of]
+        return candidates.find { |b| b[:name] == named.to_s } if named
+
+        if options[:foreign_key]
+          by_key = candidates.find { |b| (b[:options][:foreign_key] || "#{b[:name]}_id").to_s == options[:foreign_key].to_s }
+          return by_key if by_key
+        end
+        default = owner.demodulize.underscore
+        resolved = candidates.to_h do |b|
+          [ b, TableName.model_for((b[:options][:class_name] || b[:name].classify).to_s, child[:name], models) ]
+        end
+        of_owner = candidates.select { |b| resolved[b] == owner }
+        # A name no model answers may still be the owner's; one another model answers is not.
+        of_owner.find { |b| b[:name] == default } || of_owner.first || candidates.find { |b| b[:name] == default && resolved[b].nil? }
+      end
+
+      # The column a belongs_to's counter_cache writes, as reflection.rb's counter_cache_column reads it:
+      # a name, a Rails 7.2+ hash's column: (active: false still writes it), or the child's own plural.
+      def belongs_to_counter_column(counter, child)
+        return if [ nil, false, "false", "nil" ].include?(counter)
+
+        named_counter_column(counter) || default_counter_column(child)
+      end
+
+      def named_counter_column(counter)
+        if counter.is_a?(Hash)
+          # Before 7.2 Rails took the hash itself as the column name.
+          return counter.to_s unless hash_counter_cache?
+
+          counter = counter[:column]
+        end
+        counter.to_s if (counter.is_a?(String) || counter.is_a?(Symbol)) && !%w[true false nil].include?(counter.to_s)
+      end
+
+      def hash_counter_cache?
+        return @hash_counter_cache if defined?(@hash_counter_cache)
+
+        @hash_counter_cache = RailsVersion.at_least?(RailsVersion.of(root), "7.2")
+      end
+
+      def default_counter_column(child)
+        "#{child.demodulize.underscore.pluralize}_count"
       end
 
       # counter_culture names its column `<child table>_count` unless column_name says
@@ -320,8 +384,7 @@ module RailsAiContext
       end
 
       def table_of(class_name, models)
-        details = models[class_name]
-        ((details.is_a?(Hash) && details[:table_name]) || TableName.for_model_name(class_name, {})).to_s
+        TableName.of_model(class_name, models.slice(class_name)).table.to_s
       end
 
       def detect_missing_fk_indexes(schema_data, model_data = [], foreign_keys = [])
@@ -353,14 +416,14 @@ module RailsAiContext
                   table: table_name,
                   column: "#{base_name}_type, #{base_name}_id",
                   polymorphic: true,
-                  suggestion: "add_index :#{table_name}, [:#{base_name}_type, :#{base_name}_id]"
+                  suggestion: "add_index #{SchemaConventions.source_symbol(table_name)}, [#{SchemaConventions.source_symbol("#{base_name}_type")}, #{SchemaConventions.source_symbol("#{base_name}_id")}]"
                 }
               end
             else
               missing << {
                 table: table_name,
                 column: col[:name],
-                suggestion: "add_index :#{table_name}, :#{col[:name]}"
+                suggestion: "add_index #{SchemaConventions.source_symbol(table_name)}, #{SchemaConventions.source_symbol(col[:name])}"
               }
             end
           end

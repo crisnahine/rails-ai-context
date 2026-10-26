@@ -26,8 +26,33 @@ RSpec.describe RailsAiContext::InstallMode do
       expect(described_class.standalone?).to be(true)
     end
 
-    it "defaults to false (in-Gemfile) when there is no Gemfile.lock at all" do
+    it "defaults to false (in-Gemfile) when there is no Gemfile.lock and the Gemfile cannot be read in full" do
+      File.write(File.join(tmpdir, "Gemfile"), %(source "https://rubygems.org"\ngemspec\n))
       expect(described_class.standalone?).to be(false)
+    end
+
+    it "stays in-Gemfile for an app folder with no Gemfile yet" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
+      File.write(File.join(tmpdir, "app", "models", "widget.rb"), "class Widget\nend\n")
+      expect(described_class.standalone?).to be(false)
+    end
+
+    describe "in a folder the binary reads no app in" do
+      # The binary refuses there, so no rake task can run either.
+      it "names the binary where only config/boot.rb or an app/ with no Ruby file is there" do
+        FileUtils.mkdir_p(File.join(tmpdir, "config"))
+        File.write(File.join(tmpdir, "config", "boot.rb"), "")
+        expect(described_class.standalone?).to be(true)
+
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "assets"))
+        expect(described_class.standalone?).to be(true)
+      end
+    end
+
+    # No app is there to run a rake task in, so the help names the binary.
+    it "is true in a folder with no Gemfile and no Gemfile.lock" do
+      expect(described_class.standalone?).to be(true)
+      expect(described_class.tool_command("schema")).to eq("rails-ai-context tool schema")
     end
 
     it "defaults to false when detection raises" do

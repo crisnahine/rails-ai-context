@@ -90,6 +90,11 @@ module RailsAiContext
       Prism.parse_file_success?(path, version: version || NEWEST_GRAMMAR)
     end
 
+    # A file's text, read once per run and frozen, since the scans of one run read the same thousands of files.
+    def self.source(path)
+      RunCache.fetch([ :file_text, path.to_s ]) { SafeFile.read(path)&.freeze }
+    end
+
     # Parse a Ruby source string, cached by content digest, so every extractor
     # handed the same text shares one parse.
     def self.parse_string(source, ruby: nil)

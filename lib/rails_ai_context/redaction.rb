@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
 require_relative "safe_path"
+require_relative "source_files"
+require_relative "redaction/bundler_credentials"
 
 # strscan and json are gems an app's bundle pins, and the CLI reads files before the app boots: each loads when first named.
 autoload :StringScanner, "strscan"
 autoload :JSON, "json"
+autoload :Set, "set"
 
 module RailsAiContext
   # Every value that leaves the app through this gem - config source slices,
@@ -20,9 +23,14 @@ module RailsAiContext
 
     PLACEHOLDER_NAMES = SafePath::PLACEHOLDER_SUFFIXES.map { |suffix| Regexp.escape(suffix.delete_prefix(".")) }.join("|")
     EXAMPLE_FILE = /\.(?:#{PLACEHOLDER_NAMES})\b/
-    YAML_FILE = /\.ya?ml(?:\.(?:erb|#{PLACEHOLDER_NAMES}))*\z/
+    YAML_FILE = /\.ya?ml(?:\.(?:erb|#{PLACEHOLDER_NAMES}))*\z/i
+    SOURCE_OR_DOC_EXTNAMES = (SourceFiles::EXTNAMES + %w[.ru .md .markdown .txt .rdoc .adoc]).freeze
+    # A Docker build file as Docker and its tooling name one: Dockerfile, Dockerfile.prod, Dockerfile-dev, web.Dockerfile.
+    # A name ending in a source or doc extension (dockerfile_parser.rb, Dockerfile.md) is not one.
+    DOCKER_FILE = %r{(?:\A|/)(?:(?:Docker|Container)file(?![^/]*(?:#{SOURCE_OR_DOC_EXTNAMES.map { |ext| Regexp.escape(ext) }.join("|")})\z)
+                     (?:[._-][^/]*+)?|[^/]*\.(?:docker|container)file)\z}ix
     # A log, rotated or kept ones included: Logger's development.log.0, logrotate's .log-20261001, .log-2026-10-01 and .log.old, and a .log.bak.
-    LOG_FILE = /\.log(?:\.\d+|-\d{4}-?\d{2}-?\d{2}(?:-?\d{2})?|\.old|\.bak)?\z/
+    LOG_FILE = /\.log(?:\.\d+|-\d{4}-?\d{2}-?\d{2}(?:-?\d{2})?|\.old|\.bak)?\z/i
 
     # Regex by design: these scrub vocabulary out of values already read from
     # the AST or a log file rather than parsing structure. A credential can
@@ -74,8 +82,9 @@ module RailsAiContext
     OPAQUE_RUN = /[A-Za-z0-9+=]{16,}/
     # A URL's user part with no password: a name shows, a key in its place (a DSN's) does not.
     ENV_USER = %r{://([^\s/"'<>@:]+)@}
-    # Bundler's settings that name no gem server, whose BUNDLE_<HOST> holds a user and password.
-    BUNDLER_SETTINGS = %w[BUILD LOCAL MIRROR GITHUB].freeze
+    # One case on each side of at most four digits. Each part is atomic, since overlapping groups backtrack
+    # on Ruby 3.1; `\d{0,4}+` would be a repeat in Ruby, not possessive.
+    NAME_USER = /\A(?:[a-z_.-]*+|[A-Z_.-]*+)(?>\d{0,4})(?:[a-z_.-]*+|[A-Z_.-]*+)\z/
     GROUPED_HEX = /\A\h{16,}\z/
     QUOTED_SECRET = /#{SECRET_NAME}#{ASSIGN}["'][^"']*["']/
     # Stops before a collection: the value pattern ends at the first comma or
@@ -107,19 +116,20 @@ module RailsAiContext
     LOG_VALUE = /(?!["']?\[FILTERED\])(?:"[^"]*"|'[^']*'|[^\s"',;)\]}]+)/
 
     # Formats that are a credential wherever they appear: nothing else in
-    # code or config is written this way. A JWT's signature may be empty.
+    # code or config is written this way, so one may follow an `_` (a route name). A JWT's signature may be empty.
     CREDENTIAL_TOKENS = [
-      /\bAKIA[0-9A-Z]{16}\b/,
+      /(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
       # A key's first digit sits near its start: a bound keeps each try short when a run of `sk-` offers
       # a start at every repeat. A JWT is read by filter_jwts.
-      /\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/,
-      /\brk_(?:live|test)_[A-Za-z0-9]{10,}\b/,
-      /\bSG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{10,}\b/,
-      /\bxox[bpras]-[A-Za-z0-9-]{10,}\b/,
-      /\bgh[pus]_[A-Za-z0-9]{36,}\b/,
-      /\bglpat-[A-Za-z0-9_-]{20,}\b/,
-      /\bnpm_[A-Za-z0-9]{36,}\b/,
-      /\bsk-(?:ant-|proj-)?(?=[\w-]{0,255}\d)[\w-]{32,}/
+      /(?<![A-Za-z0-9])sk_(?:live|test)_[A-Za-z0-9]{24,}\b/,
+      /(?<![A-Za-z0-9])rk_(?:live|test)_[A-Za-z0-9]{24,}\b/,
+      /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{10,}\b/,
+      /(?<![A-Za-z0-9])xox[bpras]-[A-Za-z0-9-]{10,}\b/,
+      /(?<![A-Za-z0-9])gh[opsur]_[A-Za-z0-9]{36,}\b/,
+      /(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{40,}\b/,
+      /(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}\b/,
+      /(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36,}\b/,
+      /(?<![A-Za-z0-9])sk-(?:ant-|proj-)?(?=[\w-]{0,255}\d)[\w-]{32,}/
     ].freeze
 
     # The characters a JWT's three parts and their dots are written in, a run long enough to hold one.
@@ -131,9 +141,12 @@ module RailsAiContext
     # and the block lasts while its lines read as key body: base64, an armor header, blank.
     LINE_TAIL = %r{(?:\\n)?["'`]?[ \t]*(?:[\\+,][ \t]*)?\z}
     PEM_OPENS = /#{PEM_BEGIN}[ \t]*(?:\\n)?(?:\z|(?<=\\n)["'`][ \t]*[\\+,]?[ \t]*\z|["'`][ \t]*[\\+,][ \t]*\z)/
-    PEM_BODY = %r{\A\s*["'`]?(?:[A-Za-z0-9+/=]+|(?:Proc-Type|DEK-Info|Version|Comment):.*)?#{LINE_TAIL}}
-    # A key in one literal: the marker, any armor headers, then a body-length base64 run.
-    PEM_INLINE = %r{#{PEM_BEGIN}.*?[A-Za-z0-9+/]{40,}}m
+    PEM_BODY = %r{\A\s*+["'`]?(?:[A-Za-z0-9+/=]+|(?:Proc-Type|DEK-Info|Version|Comment):.*)?#{LINE_TAIL}}
+    # A key in one literal: the marker, any armor headers, then a body-length base64 run. Searched from
+    # the first marker only (pem_inline?): tried from every marker, a run of markers cost their square.
+    PEM_INLINE_BODY = %r{[A-Za-z0-9+/]{40}}
+    # A key in a payload value: the marker to its end marker, or to the end of the value.
+    PEM_BLOCK = /#{PEM_BEGIN}.*?(?:#{PEM_END}|\z)/m
 
     # Each entry is [pattern, replacement]. The replacement is spelled beside
     # the pattern rather than worked out later by grepping the pattern's own
@@ -165,6 +178,8 @@ module RailsAiContext
 
     # In source, only a string literal is a value; the rest is code to leave byte for byte.
     STRING_LITERAL = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/
+    DOUBLE_QUOTED = /"(?:[^"\\]|\\.)*+"/
+    SINGLE_QUOTED = /'(?:[^'\\]|\\.)*+'/
 
     # A key is a name, bare or quoted whole (`'api/verify_token'` is a route path). Password
     # words hold short literals (a PIN), so they stay out of SECRET_WORD, which logs share.
@@ -231,9 +246,10 @@ module RailsAiContext
     # A comment, Rails' query log tags among them, to the line's end when cut off. MySQL runs `/*!` and
     # `/*+` as SQL, so those are read as SQL. A tag's quoted value may hold `*/`; an apostrophe in prose
     # (`/* don't */`) starts no value.
-    SQL_COMMENT = %r{/\*(?![!+])(?:(?<![\w.-])[A-Za-z_][\w.-]*+\s*=\s*'(?:[^'\\]|\\.)*+'|.)*?(?:\*/|\z)}m
-    # A query log tag: sqlcommenter's key='value' or the legacy key:value.
-    COMMENT_TAG = /(?<key>[A-Za-z_][\w.-]*)\s*[=:]\s*(?<value>'(?:[^'\\]|\\.)*'?|[^,\s*\/]+)/
+    SQL_COMMENT = %r{/\*(?![!+])(?:(?<![\w.-])[\d.-]*+[A-Za-z_][\w.-]*+\s*=\s*'(?:[^'\\]|\\.)*+'|.)*?(?:\*/|\z)}m
+    # A query log tag: sqlcommenter's key='value' or the legacy key:value. The key starts at its word's first
+    # letter, read from the word's start so a long word is read once.
+    COMMENT_TAG = /(?<![\w.-])[\d.-]*+(?<key>[A-Za-z_][\w.-]*+)\s*+[=:]\s*(?<value>'(?:[^'\\]|\\.)*'?|[^,\s*\/]+)/
     # PostgreSQL's array overlap and containment compare a column with a value too.
     SQL_COMPARISON = %w[= != <> <=> < > <= >= && @> <@].freeze
     # Read as one token, so the `>` in a JSON arrow is no comparison.
@@ -285,6 +301,8 @@ module RailsAiContext
     # bracket or separator starts; a `:name=` setter symbol, a `(?<=name=`
     # lookbehind and a regex's wildcard (`/--password=.+/`) are not assignments. A comma that no
     # `name=` follows continues the value, a list of keys (`API_KEYS=k1,k2`).
+    # A Dockerfile's legacy `ENV NAME value`: the value runs to the end of the line and is judged by its first word.
+    DOCKER_ENV = /\A(?<head>[ \t]*(?<instruction>(?i:ENV))[ \t]+(?<name>BUNDLE_[A-Z0-9_]+|#{KEY_NAME})[ \t]+)(?!=)(?<value>\S(?:.*\S)?)/
     ENV_ASSIGNMENT = /(?<![\w.:=!])(?<name>#{KEY_NAME})=(?!\#\{|\.[*+?])(?<value>[^\s"'`$<>\\()\[\]{},;&]++(?:,(?![\w-]+=[^\s=,;&"'])[^\s"'`$<>\\()\[\]{},;&]++)*+)/
 
     # A query parameter named with brackets (`user[password]=`, `api_keys[]=`), raw or percent-encoded
@@ -320,9 +338,11 @@ module RailsAiContext
     # list entry by a sibling (`- key: CLIENT_SECRET`, `- name: API_TOKEN`) over its `value:`.
     NAMED_OBJECT = /"(?<name>#{DASHED_KEY_NAME})"[ \t]*:[ \t]*\{[^{}]*\}/
     NAMED_VALUE_PAIR = /(?<head>"value"[ \t]*:[ \t]*")(?<value>[^"]*)"/
-    NAMING_LINE = /\A(?<indent>[ \t]*)(?:-[ \t]+(?:key|name)[ \t]*:[ \t]+["']?(?<name>#{KEY_NAME})["']?|["']?(?<name>#{KEY_NAME})["']?[ \t]*:[ \t]*\{?)[ \t]*\z/
+    GIVEN_NAME = /#{KEY_NAME}|#{BundlerCredentials::NAME}/
+    NAMING_LINE = /\A(?<indent>[ \t]*)(?:-[ \t]+(?:key|name)[ \t]*:[ \t]+["']?(?<name>#{GIVEN_NAME})["']?|["']?(?<name>#{GIVEN_NAME})["']?[ \t]*:[ \t]*+\{?)[ \t]*\z/
+    VALUE_HEAD = /\A[ \t]*["']?value["']?[ \t]*:[ \t]*/
     VALUE_LINE = /\A(?<head>[ \t]*["']?value["']?[ \t]*:[ \t]*)(?:(?<quote>["'])(?<value>[^"']*)\k<quote>|(?<value>[^\s"'#,{\[][^#,]*?))(?<tail>[ \t]*,?[ \t]*(?:#.*)?)\z/
-    STRUCTURED_FILE = /#{YAML_FILE}|\.json(?:\.(?:#{PLACEHOLDER_NAMES}))*\z/
+    STRUCTURED_FILE = /#{YAML_FILE}|\.json(?:\.(?:#{PLACEHOLDER_NAMES}))*\z/i
 
     class << self
       # Source slices and config values.
@@ -340,12 +360,66 @@ module RailsAiContext
       def redact_source_line(line, path: nil)
         return line unless line.is_a?(String)
 
+        source_line(line, path, nil).first
+      end
+
+      # Consecutive lines, so a PEM key across them is filtered whole, and in a
+      # YAML or JSON file a `value` under a mapping a secret's name names; the
+      # line count is kept, since callers number the lines.
+      def redact_source_lines(lines, path: nil)
+        carry = nil
+        redacted = outside_key_bodies(lines.map { |line| readable(line) }) do |line|
+          shown, carry = source_line(line, path, carry)
+          shown
+        end
+        return redacted unless path.to_s.match?(STRUCTURED_FILE) && !path.to_s.match?(%r{(?:\A|/)locales?/})
+
+        pairs = named_values(redacted, path.to_s.match?(EXAMPLE_FILE), path)
+        BundlerCredentials.name_value_pairs(pairs, path) { |literal| placeholder?(literal) }
+      end
+
+      # A slice of the app's source - a method body, a template - as a tool
+      # prints it: the same lines, each secret filtered.
+      def redact_source(text, path: nil)
+        return text unless text.is_a?(String)
+
+        text = readable(text)
+        trailing = text.end_with?("\n") ? "\n" : ""
+        redact_source_lines(text.lines.map(&:chomp), path: path).join("\n") + trailing
+      end
+
+      # Text any redaction can read: a UTF-16 or UTF-32 string is transcoded and an invalid byte replaced, since
+      # a pattern raises on either.
+      def readable(text)
+        return text unless text.is_a?(String)
+        return text.encode("UTF-8", invalid: :replace, undef: :replace) unless text.encoding.ascii_compatible?
+
+        text.valid_encoding? ? text : text.scrub
+      end
+      private :readable
+
+      # Source text an introspector records in the payload, filtered where it is captured; `path` nil for none.
+      def source_slice(text, path: nil)
+        redact_source(text, path: path)
+      end
+
+      # The line filtered and what the next line still belongs to: a gem server credential's open quote,
+      # block scalar, heredoc or trailing backslash.
+      def source_line(line, path, carry)
+        line = line.scrub unless line.valid_encoding?
+        opener = carry&.first == :opener
+        carry = nil if opener
+        line, carry = BundlerCredentials.continue(line, carry, path: path) { |literal| placeholder?(literal) } if carry
         # Locale files hold translations: only credential formats are filtered.
         # Example files often hold real values, so only a plain placeholder is kept.
         locale = path.to_s.match?(%r{(?:\A|/)locales?/})
         example = path.to_s.match?(EXAMPLE_FILE)
         result = line.gsub(URI_USERINFO) { |m| placeholder?(m) ? m : "#{Regexp.last_match(1)}#{FILTERED}@" }
+        result = result.gsub(ENV_USER) { |m| key_user?(Regexp.last_match(1)) ? "://#{FILTERED}@" : m }
         unless locale
+          result, opened = BundlerCredentials.redact(result, path: path, opener: opener) { |literal| placeholder?(literal) }
+          carry = opened || carry
+          result = BundlerCredentials.inline_pairs(result, path) { |literal| placeholder?(literal) }
           result = result.gsub(KEYED_LITERAL) do |m|
             match = Regexp.last_match
             # `cond ? "pass" : "fail"` is a ternary: its branches are values, not a key and its value.
@@ -354,6 +428,20 @@ module RailsAiContext
             filter_literal(m, match, example)
           end
           result = result.gsub(CALL_KEYED) { |m| filter_literal(m, Regexp.last_match, example) }
+          result = result.sub(DOCKER_ENV) do |m|
+            match = Regexp.last_match
+            # Docker reads an instruction in any case; elsewhere `env NAME value` is a shell command.
+            next m unless match[:instruction] == "ENV" || path.to_s.match?(DOCKER_FILE)
+
+            quote = match[:value].match?(/\A".+"\z/) ? '"' : ""
+            value = match[:value][/\A\S+/].delete_prefix('"').delete_suffix('"')
+            next m if value.start_with?("$")
+
+            secret = if bundler_credential?(match[:name]) then !placeholder?(value)
+            elsif !match[:name].start_with?("BUNDLE_") then keyed_secret?(match[:name], value, example)
+            end
+            secret ? "#{match[:head]}#{quote}#{FILTERED}#{quote}" : m
+          end
           result = result.gsub(ENV_ASSIGNMENT) do |m|
             match = Regexp.last_match
             next m unless keyed_secret?(match[:name], match[:value], example)
@@ -363,32 +451,39 @@ module RailsAiContext
           result = result.gsub(FLAG_ARGUMENT) { |m| filter_flag(m, Regexp.last_match, example) }
           result = result.gsub(NAMED_OBJECT) { |m| filter_named_object(m, Regexp.last_match, example) }
         end
-        result = result.gsub(STRING_LITERAL) { |lit| credential?(lit[1..-2]) ? "#{lit[0]}#{FILTERED}#{lit[0]}" : lit }
+        result = filter_string_literals(result)
         result = filter_jwts(CREDENTIAL_TOKENS.reduce(result) { |text, pattern| text.gsub(pattern, FILTERED) })
         result = scheme_credentials(result)
         # A log shown as a file (a tracked log's diff) gets what rails_read_logs filters too.
-        return redact_log_line(result) if path.to_s.match?(LOG_FILE)
+        return [ redact_log_line(result), carry ] if path.to_s.match?(LOG_FILE)
 
-        path.to_s.match?(YAML_FILE) && !locale ? yaml_scalar(result, example) : result
+        [ path.to_s.match?(YAML_FILE) && !locale ? yaml_scalar(result, example) : result, carry ]
+      end
+      private :source_line
+
+      # A secret no name marks, in any string of the assembled payload: only formats no identifier is written in.
+      def payload_tokens(value)
+        case value
+        when String then vendor_tokens(value)
+        when Hash
+          walked = value.to_h { |key, inner| [ key.is_a?(String) ? vendor_tokens(key) : key, payload_tokens(inner) ] }
+          walked.default_proc = value.default_proc if value.default_proc
+          walked
+        when Array then value.map { |inner| payload_tokens(inner) }
+        when Set then value.class.new(value.map { |inner| payload_tokens(inner) })
+        when Struct then value.dup.tap { |copy| copy.members.each { |member| copy[member] = payload_tokens(copy[member]) } }
+        else data_value?(value) ? value.with(**value.to_h.transform_values { |inner| payload_tokens(inner) }) : value
+        end
       end
 
-      # Consecutive lines, so a PEM key across them is filtered whole, and in a
-      # YAML or JSON file a `value` under a mapping a secret's name names; the
-      # line count is kept, since callers number the lines.
-      def redact_source_lines(lines, path: nil)
-        redacted = outside_key_bodies(lines) { |line| redact_source_line(line, path: path) }
-        return redacted unless path.to_s.match?(STRUCTURED_FILE) && !path.to_s.match?(%r{(?:\A|/)locales?/})
-
-        named_values(redacted, path.to_s.match?(EXAMPLE_FILE))
+      def data_value?(value)
+        defined?(::Data) && ::Data.respond_to?(:define) && value.is_a?(::Data)
       end
 
-      # A slice of the app's source - a method body, a template - as a tool
-      # prints it: the same lines, each secret filtered.
-      def redact_source(text, path: nil)
-        return text unless text.is_a?(String)
-
-        trailing = text.end_with?("\n") ? "\n" : ""
-        redact_source_lines(text.lines.map(&:chomp), path: path).join("\n") + trailing
+      def vendor_tokens(text)
+        text = CREDENTIAL_TOKENS.reduce(text) { |current, pattern| current.match?(pattern) ? current.gsub(pattern, FILTERED) : current }
+        text = text.gsub(PEM_BLOCK, FILTERED) if text.include?("-----BEGIN ")
+        filter_jwts(text)
       end
 
       # A config value arrives without its context, so the setting's name is
@@ -489,10 +584,10 @@ module RailsAiContext
         text.include?("eyJ") && filter_jwts(text) != text
       end
 
-      # The next `eyJ` at or after from that no word character stands before (`surveyJobs` holds none).
+      # The next `eyJ` at or after from that no letter or digit stands before (`surveyJobs` holds none).
       def jwt_start(run, from)
         while (at = run.index("eyJ", from))
-          return at if at.zero? || !run[at - 1].match?(/[A-Za-z0-9_]/)
+          return at if at.zero? || !run[at - 1].match?(/[A-Za-z0-9]/)
 
           from = at + 1
         end
@@ -558,7 +653,15 @@ module RailsAiContext
       # split into groups, a key in a URL's user part, or a run of 16 letters and digits with both in it.
       def secret_shaped?(text)
         ENV_SECRET_SHAPES.any? { |shape| text.match?(shape) } || grouped_hex?(text) ||
-          text.scan(ENV_USER).any? { |(user)| opaque_text?(user) || grouped_hex?(user) } || opaque_text?(text)
+          text.scan(ENV_USER).any? { |(user)| key_user?(user) } || opaque_text?(text)
+      end
+
+      # A URL's user part that is a key (a token as GitHub takes one), not a name. A name is one case on
+      # each side of at most four digits (`appuser2024production`); a key mixes them through.
+      def key_user?(user)
+        return true if credential?(user) || grouped_hex?(user)
+
+        opaque_text?(user) && !user.match?(NAME_USER)
       end
 
       def opaque_text?(text)
@@ -569,11 +672,8 @@ module RailsAiContext
         text.delete("-_").match?(GROUPED_HEX)
       end
 
-      # BUNDLE_<HOST>, the host's dots written `__`: the one place Bundler reads a gem server's password.
       def bundler_credential?(name)
-        return false unless name.start_with?("BUNDLE_") && name.index("__", 7)
-
-        !BUNDLER_SETTINGS.any? { |setting| name.start_with?("BUNDLE_#{setting}__") }
+        BundlerCredentials.credential?(name)
       end
 
       # Redacting before the search means a term can only match text the
@@ -598,6 +698,31 @@ module RailsAiContext
       end
 
       private
+
+      # Each string literal that is a credential by its format. A quote that opens no string leaves every later
+      # quote of its kind unable to close one (a close would be an unescaped quote the scan has passed), so the
+      # text is read once, not once per quote.
+      def filter_string_literals(text)
+        return text unless text.include?('"') || text.include?("'")
+
+        scanner = StringScanner.new(text)
+        out = +""
+        dead = {}
+        until scanner.eos?
+          out << scanner.scan(/[^"']*+/)
+          break if scanner.eos?
+
+          quote = scanner.peek(1)
+          literal = dead[quote] ? nil : scanner.scan(quote == '"' ? DOUBLE_QUOTED : SINGLE_QUOTED)
+          if literal
+            out << (credential?(literal[1..-2]) ? "#{quote}#{FILTERED}#{quote}" : literal)
+          else
+            dead[quote] = true
+            out << scanner.getch
+          end
+        end
+        out
+      end
 
       # A matched name and literal, with the literal filtered when it holds a secret.
       def filter_literal(text, match, example)
@@ -638,9 +763,14 @@ module RailsAiContext
 
       # The `value` lines of each mapping a secret's name names (NAMING_LINE), up to the line
       # that leaves it: one no deeper than the name. A boolean or null is no secret.
-      def named_values(lines, example)
+      def named_values(lines, example, path)
         named = nil
+        carry = nil
         lines.map do |line|
+          if carry
+            line, carry = BundlerCredentials.continue(line, carry, path: path) { |literal| placeholder?(literal) }
+            next line if carry
+          end
           if (naming = line.match(NAMING_LINE))
             named = { name: naming[:name], indent: naming[:indent].size }
             next line
@@ -648,6 +778,14 @@ module RailsAiContext
           next line if line.strip.empty?
 
           named = nil if named && line[/\A[ \t]*/].size <= named[:indent]
+          if named && BundlerCredentials.credential?(named[:name].to_s)
+            head = line.match(VALUE_HEAD)
+            next line unless head
+
+            line, carry = BundlerCredentials.redact_value(line, head.end(0), path: path, column: head[0][/\A[ \t]*/].size) { |literal| placeholder?(literal) }
+            next line
+          end
+
           value = named && line.match(VALUE_LINE)
           next line unless value
 
@@ -740,11 +878,16 @@ module RailsAiContext
         !policy_value?(value)
       end
 
+      def pem_inline?(text)
+        marker = text.match(PEM_BEGIN)
+        marker ? text.match?(PEM_INLINE_BODY, marker.end(0)) : false
+      end
+
       # By format only: a long random literal is as often an id as a key.
       def credential?(inner)
         return false if placeholder?(inner)
 
-        inner.match?(PEM_INLINE) || CREDENTIAL_TOKENS.any? { |pattern| inner.match?(pattern) } || jwt?(inner)
+        pem_inline?(inner) || CREDENTIAL_TOKENS.any? { |pattern| inner.match?(pattern) } || jwt?(inner)
       end
 
       PLACEHOLDER = /\#\{|<%|\$\{|%\{|\{\w+\}|\A<[^<>]*>\z|\A(?:[xX]{3,}|\*{3,})\z|
@@ -785,7 +928,9 @@ module RailsAiContext
 
       # An env or header-variable name: capitals joined by `_`, led by `_` or
       # `HTTP_` or naming a secret word (`_FORUM_API`, `HTTP_API_KEY`).
-      ENV_NAME = /\A_?[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\z/
+      ENV_NAME = /\A_?[A-Z][A-Z0-9]*(?:_+[A-Z0-9]+)+\z/
+
+      APP_PASSWORD = /\A[a-z]{4}(?: [a-z]{4}){3}\z/
 
       # A switch's value (`showPassword=false`), not a credential, under any name.
       NOT_A_SECRET_WORD = /\A(?:true|false|yes|no|on|off|null|nil|none|undefined)\z/i
@@ -796,11 +941,11 @@ module RailsAiContext
         return false if value.match?(NOT_A_SECRET_WORD)
         # The key's own name, in any case (`currentPassword: "current_password"`, an enum's `password: 'password'`).
         return false if snake_name(value) == snake_name(key)
-        # Whitespace makes a message, except in a passphrase.
-        return false if value.match?(/\s/) && !key.match?(/passphrase/i)
+        # Whitespace makes a message, except in a passphrase or an app password's four groups of four.
+        return false if value.match?(/\s/) && !key.match?(/passphrase/i) && !value.match?(APP_PASSWORD)
         # Under a password key a word-joined value is the password itself.
         return false if !password && names_a_secret?(value)
-        return false if value.match?(ENV_NAME) && (value.start_with?("_", "HTTP_") || secret_words?(value))
+        return false if value.match?(ENV_NAME) && (value.start_with?("_", "HTTP_", "BUNDLE_") || secret_words?(value))
 
         # A password may be spelled like a header name, an address or a hostname (`P4ss-W0rd`).
         (password ? NOT_A_SECRET - [ HEADER_NAME, ADDRESS, HOSTNAME ] : NOT_A_SECRET).none? { |shape| value.match?(shape) }
@@ -819,7 +964,7 @@ module RailsAiContext
       end
 
       def secret_words?(value)
-        words = value.gsub(/([A-Z]+)([A-Z][a-z])/, '\\1_\\2').gsub(/([a-z])([A-Z])/, '\\1_\\2')
+        words = value.gsub(/(?<=[A-Z])(?=[A-Z][a-z])/, "_").gsub(/([a-z])([A-Z])/, '\\1_\\2')
                      .downcase.split(/[_.-]+/).reject(&:empty?)
         (words + words.each_cons(2).map { |pair| pair.join("_") }).any? { |word| word.match?(WHOLE_SECRET_WORD) }
       end

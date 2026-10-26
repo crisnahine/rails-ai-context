@@ -310,6 +310,38 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # The serializer made the file's folder itself before the write, so a
+    # folder link that leads nowhere raised EEXIST there and stopped the run.
+    it "names a file under a folder link that leads nowhere as left, and writes the rest" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        File.symlink(File.join(dir, "nope/gh"), File.join(dir, ".github"))
+
+        result = described_class.new(context, format: %i[copilot claude]).call
+
+        expect(result[:not_applicable][File.join(dir, ".github/copilot-instructions.md")]).to eq(RailsAiContext::SafeFile::LINKED)
+        expect(result[:written]).to include(File.join(dir, "CLAUDE.md"))
+        expect(File.exist?(File.join(dir, "nope"))).to be(false)
+      end
+    end
+
+    it "leaves a read-only CLAUDE.md as it is, says so, and writes the rest" do
+      skip "root writes any file" if Process.uid.zero?
+
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        path = File.join(dir, "CLAUDE.md")
+        File.write(path, "# locked by team\n")
+        File.chmod(0o444, path)
+
+        result = described_class.new(context, format: %i[claude json]).call
+
+        expect(File.read(path)).to eq("# locked by team\n")
+        expect(result[:not_applicable][path]).to eq(RailsAiContext::SafeFile::UNWRITABLE)
+        expect(result[:written]).to include(File.join(dir, ".ai-context.json"))
+      end
+    end
+
     it "does not use markers for JSON format" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)

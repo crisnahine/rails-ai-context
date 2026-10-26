@@ -81,7 +81,7 @@ module RailsAiContext
         # opening inside a PEM key still knows it is inside one. `near` is looked for in the lines
         # as the caller sees them: found in the file as written, a guess at a filtered value's
         # start brought back a window where a wrong guess brought "not found".
-        redacted = RailsAiContext::Redaction.redact_source_lines(source_lines.map(&:rstrip), path: file)
+        redacted = RailsAiContext::Redaction.redact_source_lines(source_lines.map(&:rstrip), path: located.relative)
 
         at_line = line.to_i.between?(1, source_lines.size)
         matches = if at_line

@@ -15,8 +15,9 @@ module RailsAiContext
 
     # A call made inside a class method's body, standing where the call that ran
     # that body (`outer`) was made; `definition` is the body it sits in.
-    Relayed = Struct.new(:node, :outer, :definition) do
-      def arguments = node.arguments
+    # `bound` is the call as that run makes it, its arguments read with the body's parameters bound.
+    Relayed = Struct.new(:node, :outer, :definition, :bound) do
+      def arguments = (bound || node).arguments
       def location = node.location
       def name = node.name
 
@@ -286,6 +287,26 @@ module RailsAiContext
         forget
       end
 
+      # Whether a call's chain starts in a class body, the class's own or a base's.
+      def body_call?(site) = read.ranks.key?(root(site).__id__)
+
+      # The module whose `included` block or hook makes the call a chain of calls starts from, if one does.
+      def block_owner(site)
+        id = root(site).__id__
+        @walks.each_value.lazy.filter_map { |walk| walk.blocks[id]&.first }.first
+      end
+
+      # Whether a call's chain starts in a plain mixin hook (`def self.included`), whose self is the module.
+      def hook_call?(site)
+        id = root(site).__id__
+        @walks.each_value.any? { |walk| walk.blocks[id]&.last }
+      end
+
+      # The names of every class method the class files and the modules the walks reached define.
+      def defined_names
+        (read.defs + @walks.each_value.flat_map { |walk| walk.mixins.each_value.flat_map { |mixin| mixin.defs.values.flatten } }).to_set(&:name)
+      end
+
       # Every call the classes may make, by name. Resolving one needs every walk,
       # so a body is read for any call of its name.
       def sites_by_name
@@ -304,9 +325,9 @@ module RailsAiContext
                 (found[definition.alias_of] ||= []) << site
                 queue << [ definition.alias_of, site ]
               end
-              definition.calls.each do |inner, nodes|
-                nodes.each do |node|
-                  relayed = Relayed.new(node, site, definition)
+              relayed_calls(definition, site).each do |inner, nodes|
+                nodes.each do |node, bound|
+                  relayed = Relayed.new(node, site, definition, bound)
                   (found[inner] ||= []) << relayed
                   queue << [ inner, relayed ]
                 end
@@ -315,6 +336,25 @@ module RailsAiContext
           end
           found
         end
+      end
+
+      # The calls a body makes with its parameters bound to the call running it, as [call as written, call as run];
+      # as written when the binding leaves part of the body undecided.
+      def relayed_calls(definition, site)
+        # The binding reads the call's arguments and block alone, and one base's method is called alike by many classes.
+        key = [ site.arguments&.slice, site.respond_to?(:block) && site.block&.slice ]
+        bound = RunCache.fetch_for(:relayed_calls, definition.node, key) do
+          text = definition.node && Introspectors::CallSiteExpansion.rewritten(definition.node, site)
+          tree = text && AstCache.parse_string(text)&.value
+          tree ? Introspectors::SourceIntrospector.calls_outside_methods(tree, self_receiver: true) : {}
+        end
+        definition.calls.to_h do |name, nodes|
+          runs = bound[name]
+          [ name, nodes.each_with_index.map { |node, index| [ node, (runs[index] if runs&.size == nodes.size) ] } ]
+        end
+      rescue StandardError => e
+        # A body the binding cannot read relays its calls as written.
+        RailsAiContext.debug_fail(e, definition.calls.transform_values { |nodes| nodes.map { |node| [ node, nil ] } }, label: "relayed calls of #{definition.name}")
       end
 
       # A copy of `entry` for each run of a call that reaches `definer`'s body
@@ -535,9 +575,11 @@ module RailsAiContext
       # asked about none the class calls answers the same for every such class.
       attr_reader :consulted
 
-      def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil, known: nil)
+      def initialize(root, dirs, keys, cache, listeners, calls = nil, extra = [], file = nil, known: nil, owned: ConcernMembership::OWNED_KEYS)
         # The class's own file, which can declare a module it includes.
         @own_file = file
+        # The keys the class's own walk kept to the class, so a module its file declares is read for those.
+        @owned = owned
         # Written at the top level, so each name is the constant it resolves to.
         @paths = extra.to_h { |mixin| [ mixin.name, mixin.path ] }
         @root = root
@@ -558,8 +600,7 @@ module RailsAiContext
         @skipped_methods = Set.new
         @consulted = Set.new
         @placement = {}
-        # The modules the class has mixed in so far, as Ruby orders its ancestors.
-        # shortcut: starts empty, so a module only the superclass includes is never searched; seed it from the superclass's mixins once a superclass's nested module is reported missing.
+        # What the class has mixed in so far, as Ruby orders it; ConcernPaths reads its superclasses' part.
         @ancestors = []
         @prepended = 0
         @mixins = []
@@ -571,8 +612,8 @@ module RailsAiContext
       # directories the lookup needs. `file` is the concern file the names
       # were written in, which can declare the module a name means.
       # `within` is the nesting a name with no owner of its own is written in; `slice` is [Module.nesting, name as written]
-      # of the module `file` was sliced from, which its records' owners do not carry.
-      def walk(names, within, depth, file = nil, slice = nil)
+      # of the module `file` was sliced from, which its records' owners do not carry, and `offset` the lines of `file` above it.
+      def walk(names, within, depth, file = nil, slice = nil, offset = 0)
         return if depth.negative?
 
         # `names` may be the mixin records themselves, which say how each
@@ -592,7 +633,9 @@ module RailsAiContext
           scope = owners&.any? ? Introspectors::DeclaredConstant.record_nesting(mixin, *slice) : within
           # `::Name` is Object's constant only: no lexical scope, no module the class mixed in.
           reference = mixin.is_a?(Hash) && mixin[:top_level] ? "::#{name}" : name
-          label, path, _, node = base ? [ name, given ] : named(reference, scope, source, file ? [] : @ancestors) || beside(file, reference, scope)
+          # A sliced module's records count lines from the slice; the offset makes them lines of the file.
+          line = mixin[:location] + offset if mixin.is_a?(Hash) && mixin[:location]
+          label, path, _, node = base ? [ name, given ] : named(reference, scope, source, file ? [] : @ancestors, line) || beside(file, reference, scope)
           nested = [ label, node ] if node
           source = path if nested
           # A module is walked once, as the constant the name resolves to where it is written;
@@ -629,13 +672,14 @@ module RailsAiContext
           own_lines, inner, concern = memo([ :ranges, source_key, label ]) { own_and_nested_ranges(tree, label) }
           scope = [ singleton, inner + unrun, own_lines, hooks ]
           # The class's own file was read with the class, which kept only its own declarations.
-          keys = nested && source == @own_file ? @keys & ConcernMembership::OWNED_KEYS : @keys
+          keys = nested && source == @own_file ? @keys & @owned : @keys
           shift = nested ? nested.last.location.start_line - 1 : 0
+          byte_shift = nested ? nested.last.location.start_offset : 0
           keys.each do |key|
-            applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(in_file(entry, shift), label, hook: in_hook?(entry, hooks)) }
+            applied(data[key], bodies, *scope).each { |entry| @collected[key] << tagged(in_file(entry, shift, byte_shift), label, hook: in_hook?(entry, hooks)) }
           end
           expand_called(tree, data, [ own_lines, inner ], label, keys, [ path, shift ]).each do |key, entries|
-            entries.each { |entry| @collected[key] << tagged(in_file(entry, shift), label) }
+            entries.each { |entry| @collected[key] << tagged(in_file(entry, shift, byte_shift), label) }
           end
 
           joined = applied(data[:mixins], bodies, *scope, keep_called: true).filter_map do |mixin|
@@ -651,7 +695,7 @@ module RailsAiContext
             outer = @inside
             @inside = [ added, mixin[:location] ] if added
             inner_slice = [ body, (nested.last.constant_path.slice if nested.last.is_a?(Prism::ModuleNode)) ] if nested
-            walk([ dependency(mixin, macro, concern && !added) ], body, depth - 1, path, inner_slice)
+            walk([ dependency(mixin, macro, concern && !added) ], body, depth - 1, path, inner_slice, shift)
             @inside = outer
           end
           # ActiveSupport::Concern runs a concern's dependencies before it, so
@@ -673,22 +717,20 @@ module RailsAiContext
       def memo(key)
         return yield if @cache.nil?
 
-        key = [ @root, @dirs, *key ]
-        return @cache[key] if @cache.key?(key)
-
-        @cache[key] = yield
+        # The app and its directories stand as one token: hashing a long directory list on every lookup cost more than the walk.
+        @memo_token ||= ((@cache[:memo_scopes] ||= {})[[ @root, @dirs ]] ||= Object.new)
+        key = [ @memo_token, *key ]
+        @cache.fetch(key) { @cache[key] = yield }
       end
 
-      # [constant, file, ...] for the first candidate Ruby reaches, a base module or ConcernPaths.resolved's, or nil;
-      # a top-level name is read through `ancestors` first, as Ruby reads the class's constants through its ancestors.
-      def named(name, within, file, ancestors = [])
-        found = memo([ :named, name, within, file ]) { ConcernPaths.resolved(@root, name, within: within, dirs: @dirs, file: file) }
-        candidates = Introspectors::DeclaredConstant.candidate_names(name, within)
-        extra = candidates.find { |candidate| @paths.key?(candidate) }
-        found = [ extra, @paths[extra] ] if extra && (found.nil? || candidates.index(extra) <= candidates.index(found.first))
-        return found unless (found.nil? || found.first == candidates.last) && !name.start_with?("::")
-
-        ancestors.lazy.filter_map { |owner| named("#{owner}::#{name}", [], file) }.first || found
+      # [constant, file, ...] for the constant Ruby picks, a base module or ConcernPaths.resolved's, or nil.
+      # The walk keeps adding to its ancestors, so a key holds a copy; the base mixins stand as one token.
+      def named(name, within, file, ancestors = [], line = nil)
+        ancestors = ancestors.dup.freeze
+        @paths_token ||= @cache && ((@cache[:known_paths] ||= {})[@paths] ||= Object.new)
+        memo([ :named, name, within, file, ancestors, @paths_token, line ]) do
+          ConcernPaths.resolved(@root, name, within: within, dirs: @dirs, file: file, ancestors: ancestors, known: @paths, line: line)
+        end
       end
 
       # A plugin's lib is on the load path, so a module it names can sit under the
@@ -698,11 +740,11 @@ module RailsAiContext
 
         memo([ :beside, file, name, within ]) do
           dir = File.dirname(file)
-          candidates = Introspectors::DeclaredConstant.candidate_names(name, within)
-          candidate, path = candidates.lazy.filter_map { |each| (found = PathResolver.constant_path(dir, each)) && [ each, found ] }.first
+          candidate, path = Introspectors::DeclaredConstant.reach(name, nesting: within, exists: ->(each) { (found = PathResolver.constant_path(dir, each)) && [ each, found ] })
           # The file can sit under a shorter path than the constant it declares.
           declared = path && Introspectors::DeclaredConstant.named(SafeFile.read(path), candidate)
-          [ candidates.include?(declared) ? declared : candidate, path ] if path
+          reaches = declared && Introspectors::DeclaredConstant.lookup(name, nesting: within, exists: ->(each) { each == declared })
+          [ reaches || candidate, path ] if path
         end
       end
 
@@ -914,12 +956,17 @@ module RailsAiContext
         into
       end
 
-      # A nested module's walk counts lines from its own slice; the entry carries the file's.
-      def in_file(entry, shift)
-        return entry unless shift.positive? && entry.is_a?(Hash) && entry[:location]
+      # A nested module's walk counts lines and offsets from its own slice; the entry carries the file's.
+      def in_file(entry, shift, byte_shift = 0)
+        return entry unless entry.is_a?(Hash)
 
-        ConcernMacros.moved(entry) { |line| line + shift }
+        entry = ConcernMacros.moved(entry) { |line| line + shift } if shift.positive? && entry[:location]
+        return entry unless byte_shift.positive?
+
+        OFFSET_KEYS.each_with_object(entry.dup) { |key, moved| moved[key] += byte_shift if moved[key].is_a?(Integer) }
       end
+
+      OFFSET_KEYS = %i[offset end_offset parent_offset].freeze
 
       # A mixin hook runs again for a subclass that includes the module again; a Concern's block does not.
       def tagged(entry, concern_name, hook: false)
@@ -961,7 +1008,7 @@ module RailsAiContext
       read = true
       sites.each do |call|
         # `:conditional` and `:foreign` come back as keys too, when asked for.
-        Introspectors::CallSiteExpansion.entries(definition, call, listeners, includer: includer).each do |key, entries|
+        expanded_entries(definition, call, listeners, includer).each do |key, entries|
           found[key].concat(Array(entries).flat_map { |entry| yield entry, call }) if keys.include?(key)
         end
         # The call now reads as what the method declares; a caller that read the call itself as a
@@ -975,20 +1022,15 @@ module RailsAiContext
       [ found, read ]
     end
 
-    # [line, order, at, entry] for each entry a concern's block declares: at the `include` reaching that
-    # concern, then by the concern's place in Ruby's order, then by `at` (the block yields it).
-    def at_includes(entries, placement, mixins)
-      line_of = Array(mixins).reverse.to_h { |mixin| [ mixin[:name], mixin[:location].to_i ] }
-      entries.map do |entry|
-        top, order = placement[entry[:from_concern]]
-        [ line_of[top].to_i, order.to_i, yield(entry), entry ]
-      end
-    end
+    # What one call of the method declares reads its arguments and block alone, and a base's method is
+    # called alike by many classes, so a run reads each such call once.
+    def expanded_entries(definition, call, listeners, includer)
+      return Introspectors::CallSiteExpansion.entries(definition, call, listeners, includer: includer) if includer&.any? || call.nil?
 
-    # The entries of [line, order, at, entry] tuples in the order Rails adds them; a tie keeps its place.
-    def in_include_order(placed)
-      placed.each_with_index.sort_by { |(line, order, at, _), index| [ line, order, at, index ] }.map { |(_, _, _, entry), _| entry }
+      key = [ listeners, call.arguments&.slice, call.respond_to?(:block) && call.block&.slice ]
+      RunCache.fetch_for(:expanded_calls, definition, key) { Introspectors::CallSiteExpansion.entries(definition, call, listeners) }
     end
+    private_class_method :expanded_entries
 
     # `entry` with every line it carries mapped through the block.
     def moved(entry)
@@ -1020,6 +1062,8 @@ module RailsAiContext
     #   the kind from outside its file, read from the file they name
     # @param listeners [Hash] the listener map each concern file is walked
     #   with; it must carry `mixins` for the walk to follow nested concerns
+    # @param owned [Array<Symbol>] the keys the caller's walk of the class kept to the class, so a module
+    #   the class's own file declares is read for those keys alone
     # @return [Collected] its fields, in order:
     #   the collected entries per key, the names whose file could not be read,
     #   the names `excluded_concerns` hid that the walk would otherwise have
@@ -1032,19 +1076,19 @@ module RailsAiContext
     #   (`SingletonLookup.module_defs`), and [added, line] when code a module runs later adds it
     #   (`SingletonLookup.added_in`)]
     def collect(root, mixins, keys:, prefer: nil, within: nil, cache: nil, calls: nil,
-                listeners: Introspectors::SourceIntrospector::LISTENER_MAP, extra: [], file: nil)
+                listeners: Introspectors::SourceIntrospector::LISTENER_MAP, extra: [], file: nil, owned: ConcernMembership::OWNED_KEYS)
       # A module the class extends itself with gives it class methods, though no ancestor.
       walked = Array(mixins).select { |mixin| SingletonLookup.joins?(mixin, true) } +
                extra.map { |mixin| { name: mixin.name, macro: mixin.macro, path: mixin.path } }
       return Collected.new({}, [], [], {}, {}, Set.new, {}, []) if walked.empty?
 
-      # Most walks never look at the class's calls, so a base's walk is the
-      # same for every subclass: kept in the caller's per-run cache.
-      memo_key = cache && [ :collect, root.to_s, mixins, keys, prefer, within, listeners, extra, file ]
-      # A walk is the class's own only where it asked about a method the class itself calls.
-      own_calls = memo_key ? Run.merge_calls({}, calls&.sites_by_name).keys.to_set : Set.new
-      if memo_key && (consulted, result = cache[memo_key])
-        return fresh(result) unless consulted.intersect?(own_calls)
+      # A walk depends on the class only through the calls of the methods it asked about, so a base's
+      # walk is the same for every subclass making the same such calls: kept in the caller's per-run cache.
+      memo_key = cache && [ :collect, root.to_s, mixins, keys, prefer, within, listeners, extra, file, owned ]
+      sites = memo_key ? Run.merge_calls({}, calls&.sites_by_name) : {}
+      signature_of = ->(consulted) { consulted.select { |name| sites.key?(name) }.sort.map { |name| [ name, sites[name].map { |site| site_key(site) } ] } }
+      if memo_key && (hit = Array(cache[memo_key]).find { |consulted, signature, _| signature_of.call(consulted) == signature })
+        return fresh(hit.last)
       end
 
       # Resolved once per call and held by the run: the configured paths
@@ -1052,7 +1096,7 @@ module RailsAiContext
       # hook.
       dirs = ConcernPaths.ordered_dirs(root.to_s, prefer)
       scope = ConcernPaths.scope(root, within)
-      run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file)
+      run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, owned: owned)
       run.walk(walked, scope, MAX_DEPTH)
       consulted = run.consulted.dup
       # An `included do` can call a method a concern read before the block did, so walk
@@ -1063,7 +1107,7 @@ module RailsAiContext
         break if run.included_calls.none? { |name, sites| asked.include?(name) && (sites.map(&:__id__) - Array(known[name]).map(&:__id__)).any? }
 
         known = run.included_calls
-        run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, known: known)
+        run = Run.new(root.to_s, dirs, keys, cache, listeners, calls, extra, file, known: known, owned: owned)
         run.walk(walked, scope, MAX_DEPTH)
         consulted.merge(run.consulted)
       end
@@ -1071,9 +1115,24 @@ module RailsAiContext
       result = Collected.new(run.collected, run.unresolved, run.hidden, run.included_calls, run.placement, run.skipped_methods,
                              run.block_sites, run.mixins)
       # The repeat walks follow the concerns' own included calls, the same for every class.
-      cache[memo_key] = [ consulted, fresh(result) ] if memo_key && !consulted.intersect?(own_calls)
+      if memo_key
+        variants = (cache[memo_key] ||= [])
+        variants.pop if variants.size >= COLLECT_VARIANTS
+        variants.unshift([ consulted, signature_of.call(consulted), fresh(result) ])
+      end
       result
     end
+
+    # The walks of one module list kept per run, for classes that call its methods differently.
+    COLLECT_VARIANTS = 8
+
+    # A call as the walk's answer depends on it: the node itself, or for a call a class method's body
+    # makes, the call that started the chain, the body and the line.
+    def site_key(site)
+      site.is_a?(Relayed) ? [ Relayed.root(site).__id__, site.definition.key, site.location.start_line ] : site.__id__
+    end
+
+    private_class_method :site_key
 
     # A copy a caller may change without changing the cached walk.
     def fresh(result)

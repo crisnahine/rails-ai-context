@@ -5,6 +5,12 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector, "AST edge cases" do
   let(:introspector) { described_class.new(Rails.application) }
 
+  # stub_const resolves a pending autoload to find what to restore, so a file rewritten before the
+  # stub would load as the app's real ApplicationController and stay that way for every later spec.
+  before(:context) { ApplicationController }
+
+  after(:context) { expect(ApplicationController.ancestors).not_to include(ActionController::API) }
+
   describe "CSP with multiple directives on separate lines" do
     let(:init_path) { File.join(Rails.root, "config/initializers/content_security_policy.rb") }
 

@@ -133,14 +133,39 @@ which leaves the committed file as it is.
   server then reads the app Claude Code was started in, the app above that
   folder, or the one app below it, as every command does. At user scope the
   plugin starts in every project; outside a Rails app its server connects with
-  no tools and tells the session why. In a folder that holds several apps it
-  says to start Claude Code in one of them; for a session over all of them,
-  use the [workspace](CLI.md#init-standalone-only) entries `init` writes, and
-  turn the plugin off for that folder with `claude plugin disable
-  rails-ai-context@rails-ai-context --scope project` run there, or `--scope
-  local` where a `--scope local` install turns it on. On macOS and Linux a
-  local setting written at a git repository's root reaches every session in
-  that repository, the apps' too. On Windows, and where the repository's root
+  no tools and tells the session why. A monorepo's root whose `bin/rails`
+  boots an app below it serves that app. A folder that holds several apps
+  serves them all from one server (rails-ai-context 5.38.0 or later): every
+  tool takes an `app` argument naming the app, the session-start rules list
+  the names, and each app's own server starts at the first call that names
+  it, as the `ruby` on `PATH` in that app's folder. Where rbenv's, asdf's or
+  mise's shims are on `PATH`, the shim picks that Ruby by the app's own
+  `.ruby-version` or `.tool-versions`, whatever folder the session started in or
+  pinned: ahead of the first shims folder on `PATH`, the server leaves out
+  each folder under the manager's own `versions/` or `installs/` (where its
+  `exec` or `mise x` put the session's Ruby) and keeps every other folder, such
+  as a system Ruby's `/usr/bin`. It also leaves out the variables that name the
+  session's version. rvm,
+  chruby and `mise activate` without shims pick a Ruby only through a shell
+  hook, which a server's child never runs, so there every app runs the
+  session's Ruby; where an app's version file names another Ruby, the first
+  answer for that app says so. An app whose shim picks another Ruby than the server's gets
+  none of the server's gems, so it needs the gem installed for its own Ruby.
+  The server asks the shim which Ruby it runs once per app, and again at the
+  app's next server start after a version file changes: the app's own or a
+  parent folder's, or the manager's global one (rbenv's `version`, the home
+  folder's `.tool-versions`, mise's global config). Once it has
+  started, the list follows that app's own tools (its custom tools, its
+  `skip_tools`, an older bundled copy's arguments, under a name ending in the
+  app's) and Claude Code reads it again. An app whose server stops is started
+  again at its next call, and the failed call says what it printed last.
+  Resources name the app in the URI (`rails-ai-context://apps/<app>/schema`).
+  Each answer's paths are relative to its app's folder, which the server's
+  instructions name. An older gem serves one app, and in a folder of
+  several it says to start Claude Code in one of them and names the
+  `rails-ai-context --app-path <app> tool <name>` commands meanwhile. On
+  macOS and Linux a local setting written at a git repository's root reaches
+  every session in that repository, the apps' too. On Windows, and where the repository's root
   is your home folder or belongs to another user, a local setting reaches only
   sessions started in the folder it was written in. Where `init` at a
   repository's root wrote an app's own `.mcp.json`, which sessions started in
@@ -162,20 +187,32 @@ which leaves the committed file as it is.
   serve, its server still connects, with no tools, and tells the session why,
   naming the Ruby and the folder: no gem for that Ruby, an older one, a Ruby
   too old, a bundle Claude Code inherited from `bundle exec` that lacks the
-  gem, several apps or none. The same line is the server's stderr, which
-  `claude --debug` shows. A start that fails after that, from the gem's own
-  error or an inherited bundle not installed for that Ruby (Bundler's trace,
+  gem, no app or an app the gem cannot serve. The same line is the server's
+  stderr, which `claude --debug` shows. From 5.38.0 the gem's own serve
+  refuses the same way whatever stops it, and it keeps an app's bundled copy
+  of any release behind it: a copy that stops before the handshake is
+  answered by the same refusal, with what the copy printed, and one that
+  stops later leaves an error naming that for each request. A start that
+  fails before the plugin's script runs, such as an inherited bundle not
+  installed for that Ruby (Bundler's trace,
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md#mcp-server-fails-to-start)), is
   listed as failed in `/mcp`, and Claude Code then skips the server in new
   sessions for about 15 minutes: reconnect it in `/mcp` once the cause is
-  fixed. A session gets no rules while the server has no tools for them to
-  name.
+  fixed. A session gets no rules where the server has no tools for them to
+  name, but for a folder of several apps on a gem older than 5.38.0: there
+  the rules come with a last line naming the
+  `rails-ai-context --app-path <app> tool <name>` commands to run instead.
 - **Install the gem, not its setup, for Claude Code.** Where the app's
   `.claude/settings.json` turns the plugin on, the install generator and
   `init` write no `.mcp.json` server and say why, and so does `init` in a
   folder holding one app, where that folder's own `.claude/settings.json`
   turns it on; it still writes the app's own `.mcp.json` for sessions started
-  in the app, which do not read that folder's settings, and says so. Where
+  in the app, which do not read that folder's settings, and says so. In a
+  folder of several apps whose own `.claude/settings.json` turns it on,
+  `init` writes no Claude Code server either, since the plugin serves each
+  app there, and names the per-app servers an earlier `init` left in
+  `.mcp.json`, which would list every tool twice; `--prune` removes the ones
+  it wrote, and names any you wrote or added a key to, for you to remove. Where
   only your own settings turn it on, they still write one for the team, and
   their next step says to turn it off for yourself with `/mcp`.
 - **The plugin or another server, not both.** Claude Code starts the plugin's
@@ -473,7 +510,7 @@ When your AI tool opens a folder that holds several apps (`work/shop`, `work/adm
 | Claude Code, Codex CLI, OpenCode | `rails-ai-context serve --app-path shop`, with `RAILS_AI_CONTEXT_SERVER_NAME=shop-rails-ai-context` |
 | Cursor, GitHub Copilot (VS Code) | the same, with `--app-path ${workspaceFolder}/shop` |
 
-Claude Code, Codex and OpenCode start a server in the folder they were launched in, so start them in `work/`. Cursor and VS Code expand `${workspaceFolder}` to the folder their config sits in. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming the Gemfile that app's bundle reads (its own, or a monorepo's shared one), spelled the same way. `RAILS_AI_CONTEXT_SERVER_NAME` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
+A monorepo's root whose `bin/rails` boots an app below it is set up the same way, as a folder holding that one app: its `.mcp.json` names the app by `--app-path`, since a session started at the root reads that file. Claude Code, Codex and OpenCode start a server in the folder they were launched in, so start them in `work/`. The [Claude Code plugin](#as-a-plugin) needs none of these entries: started in `work/`, its one server serves every app there, by the `app` each call names. Cursor and VS Code expand `${workspaceFolder}` to the folder their config sits in. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming the Gemfile that app's bundle reads (its own, or a monorepo's shared one), spelled the same way. `RAILS_AI_CONTEXT_SERVER_NAME` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
 
 ---
 

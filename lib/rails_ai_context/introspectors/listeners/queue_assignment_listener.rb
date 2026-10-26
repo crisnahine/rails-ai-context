@@ -47,7 +47,7 @@ module RailsAiContext
           return if RECOVERY_NODES.any? { |type| value.is_a?(type) }
 
           literal = value.is_a?(Prism::SymbolNode) || value.is_a?(Prism::StringNode)
-          @results << { form: form, queue: literal ? value.unescaped : nil, source: value.slice,
+          @results << { form: form, queue: literal ? value.unescaped : nil, source: filtered(value.slice),
                         location: node.location.start_line, confidence: literal ? Confidence::VERIFIED : Confidence::INFERRED }
         end
       end

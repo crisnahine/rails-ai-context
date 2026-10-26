@@ -132,6 +132,21 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           ])
         end
 
+        it "never looks for a spec among uploaded files" do
+          write("public/system/users/000/001/openapi.json", '{"openapi": "3.0.0"}')
+          write("public/uploads/spec.yml", "openapi: 3.0.0\n")
+
+          expect(result[:openapi_spec]).not_to include(a_string_matching(%r{public/(?:system|uploads)/}))
+        end
+
+        it "lists a spec in an API namespace that shares a name with a build or upload folder" do
+          write("app/api/system/openapi.json", '{"openapi": "3.0.0"}')
+          write("app/api/assets/openapi.json", '{"openapi": "3.0.0"}')
+          write("docs/vite/api.yml", "openapi: 3.0.0\n")
+
+          expect(result[:openapi_spec]).to include("app/api/system/openapi.json", "app/api/assets/openapi.json", "docs/vite/api.yml")
+        end
+
         it "does not open a locale file to look for a spec key" do
           allow(RailsAiContext::SafePath).to receive(:locate).and_call_original
           result

@@ -5,7 +5,46 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::Listeners::AutoloadPathsListener do
   def paths_in(source)
     RailsAiContext::Introspectors::SourceIntrospector
-      .walk_source(source, { paths: described_class })[:paths]
+      .walk_source(source, { paths: described_class })[:paths].map(&:first)
+  end
+
+  it "names the list railties keeps each root in, which orders it among the app's roots" do
+    source = <<~RUBY
+      config.autoload_paths << "lib_static"
+      config.eager_load_paths += %W(\#{config.root}/extras)
+      config.autoload_once_paths << "once_here"
+      config.autoload_lib(ignore: %w[assets tasks])
+      config.paths.add "lib/base", eager_load: true, autoload: true
+      config.paths.add "app/middleware", eager_load: true
+    RUBY
+
+    expect(RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { paths: described_class })[:paths]).to eq(
+      [ [ "lib_static", :autoload ], [ "extras", :eager ], [ "once_here", :once ], [ "lib", :autoload ],
+        [ "lib/base", :paths_autoload ], [ "app/middleware", :paths_eager ] ]
+    )
+  end
+
+  it "marks an assignment as replacing its list, and names the autoload_once root paths.add makes" do
+    source = "config.autoload_paths = %W(\#{config.root}/lib_static)\nconfig.paths.add \"once\", autoload_once: true\n"
+
+    expect(RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { paths: described_class })[:paths])
+      .to eq([ [ :reset, :autoload ], [ "lib_static", :autoload ], [ "once", :paths_once ] ])
+  end
+
+  it "resets a list only for a literal list, and reads a self-referencing sum as an append" do
+    walk = lambda do |source|
+      RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, { paths: described_class })[:paths]
+    end
+
+    expect(walk.call("config.autoload_paths = config.autoload_paths + %w[b]")).to eq([ [ "b", :autoload ] ])
+    expect(walk.call("config.autoload_paths = [*config.autoload_paths, 'b']")).to eq([ [ "b", :autoload ] ])
+    expect(walk.call("config.autoload_paths = (config.autoload_paths | %w[b]).uniq")).to eq([ [ "b", :autoload ] ])
+    expect(walk.call("config.autoload_paths = %w[b] + config.autoload_paths")).to eq([ [ "b", :autoload ] ])
+    expect(walk.call("config.autoload_paths = %w[a] + %w[b]")).to eq([ [ :reset, :autoload ], [ "a", :autoload ], [ "b", :autoload ] ])
+    expect(walk.call("config.autoload_paths = Dir['x/*']")).to eq([ [ :reset, :autoload ], [ "x/*", :autoload, :glob ] ])
+    expect(walk.call("config.autoload_paths = [*other, 'b']")).to eq([])
+    expect(walk.call("x = %w[b]\nconfig.autoload_paths = x")).to eq([])
+    expect(walk.call("config.autoload_paths = %w[b]")).to eq([ [ :reset, :autoload ], [ "b", :autoload ] ])
   end
 
   it "reads every literal form an app adds a root with" do
@@ -51,6 +90,19 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AutoloadPathsListener d
     RUBY
 
     expect(paths_in(source)).to eq([])
+  end
+
+  it "reads a literal Dir glob as a pattern to expand, and no other Dir call" do
+    walk = lambda do |line|
+      RailsAiContext::Introspectors::SourceIntrospector.walk_source(line, { paths: described_class })[:paths]
+    end
+
+    expect(walk.call('config.autoload_paths += Dir["#{config.root}/app/models/**/"]')).to eq([ [ "app/models/**/", :autoload, :glob ] ])
+    expect(walk.call("config.autoload_paths += Dir.glob(Rails.root.join('app', 'models', '{**}'))")).to eq([ [ "app/models/{**}", :autoload, :glob ] ])
+    expect(walk.call("config.eager_load_paths += Dir['lib/*/']")).to eq([ [ "lib/*/", :eager, :glob ] ])
+    expect(walk.call("config.autoload_paths += Dir['/etc/*']")).to eq([])
+    expect(walk.call("config.autoload_paths += Dir.glob('x/*', base: dir)")).to eq([])
+    expect(walk.call("config.autoload_paths += Dir['x/*'].reject { |p| p.end_with?('y') }")).to eq([])
   end
 
   it "leaves a computed root unread rather than guessing at it" do

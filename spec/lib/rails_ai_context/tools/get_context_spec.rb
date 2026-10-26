@@ -541,4 +541,23 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       RailsAiContext.configuration.skip_tools = saved
     end
   end
+
+  describe "a feature word that names several models on one table" do
+    before do
+      cache = RailsAiContext::Tools::BaseTool::SHARED_CACHE
+      cache[:context] = {
+        models: { "User" => { table_name: "users" }, "Admin::User" => { table_name: "users" }, "UserWithAttrs" => { table_name: "users" } },
+        schema: { tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } }
+      }
+      cache[:timestamp] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    after { RailsAiContext::Tools::BaseTool.reset_cache! }
+
+    it "adds the table's schema once" do
+      text = described_class.call(feature: "user").content.first[:text]
+
+      expect(text.scan("## Table: users").size).to eq(1)
+    end
+  end
 end

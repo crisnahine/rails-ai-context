@@ -746,4 +746,42 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("**Classification:** unknown")
     end
   end
+
+  # `post.published` raises again where published is a scope, and Post.title
+  # raises where title is a column: the suggestion is drawn from what the
+  # receiver can answer.
+  describe "a closest name for the receiver the message names" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Gadget" => { table_name: "gadgets", associations: [], scopes: %w[published recent], class_methods: [], instance_methods: [] } },
+        schema: { tables: { "gadgets" => { columns: [ { name: "published_at", type: "datetime" }, { name: "title", type: "string" } ] } } }
+      )
+    end
+
+    def diagnosis(error) = described_class.call(error: error).content.first[:text]
+
+    it "suggests a column for an instance, never a scope" do
+      text = diagnosis("NoMethodError: undefined method 'publishd_at' for an instance of Gadget")
+
+      expect(text).to include("Did you mean `published_at`?")
+      expect(diagnosis("NoMethodError: undefined method 'recnt' for an instance of Gadget")).not_to include("`recent`")
+    end
+
+    it "suggests a scope for a class, never a column" do
+      expect(diagnosis("NoMethodError: undefined method 'recnt' for class Gadget")).to include("Did you mean `recent`?")
+      expect(diagnosis("NoMethodError: undefined method `recnt' for Gadget:Class")).to include("Did you mean `recent`?")
+      expect(diagnosis("NoMethodError: undefined method 'tittle' for class Gadget")).not_to include("`title`")
+    end
+
+    # Booted, the loaded class answers for a class receiver too: Post.recent is
+    # a scope the payload here does not list.
+    it "asks the loaded class whether it answers a class method" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Post" => { table_name: "posts", associations: [], scopes: [], class_methods: [], instance_methods: [] } },
+        schema: { tables: { "posts" => { columns: [] } } }
+      )
+
+      expect(diagnosis("NoMethodError: undefined method 'recent' for class Post")).not_to include("undefined_method_on_model")
+    end
+  end
 end

@@ -14,7 +14,8 @@ module RailsAiContext
       # tier is :booted, :static or :absent. kind names why the static tier
       # is active - :requested, :source_only or :boot_failed - so consumers
       # branch on a fact instead of parsing the reason text.
-      Outcome = Struct.new(:tier, :reason, :kind, :messages, keyword_init: true)
+      # notes: the lines of `messages` that say what settings the static tier could not read, which a command that rewrites them says itself.
+      Outcome = Struct.new(:tier, :reason, :kind, :messages, :notes, keyword_init: true)
 
       NO_APP_HINT = "Run this command inside a Rails app or a folder holding one (or pass --app-path)."
 
@@ -54,10 +55,13 @@ module RailsAiContext
       # directory a walk passes (app/models, db/migrate), it parsed Gemfiles
       # no app was found beside.
       def self.app_present?(root, allow_source_only: false)
-        present = File.exist?(File.join(root, "config", "environment.rb")) ||
-          (allow_source_only && (File.exist?(File.join(root, "config", "application.rb")) ||
-                                 source_file?(File.join(root, "app"))))
+        present = allow_source_only ? rails_config?(root) || source_file?(File.join(root, "app")) : File.exist?(File.join(root, "config", "environment.rb"))
         present && !other_framework?(root)
+      end
+
+      # What marks a Rails app's root before any of its source is read.
+      def self.rails_config?(root)
+        %w[application.rb environment.rb].any? { |name| File.exist?(File.join(root, "config", name)) }
       end
 
       # Whether app/ holds a Ruby file, as app/**/*.rb would match one: the
@@ -100,9 +104,10 @@ module RailsAiContext
       # its --app-path, under bundle exec when that is how it ran. `shown` is
       # the root as the messages name it: a typed --app-path as typed, where
       # the cwd spells it through any symlink (/private/var on macOS). `client` is true for a
-      # process a client started (the stdio server); every other run is typed.
+      # process a client or the router started (the stdio server); every other run is typed. `client_waits` is true
+      # where a client is waiting on its handshake, which the router's children are not.
       def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, command: nil,
-                    doctor: "rails-ai-context doctor", shown: root, client: false)
+                    doctor: "rails-ai-context doctor", shown: root, client: false, client_waits: client)
         messages = []
 
         if allow_static && no_boot
@@ -142,7 +147,8 @@ module RailsAiContext
 
           messages << "[rails-ai-context] App boot failed: #{result.failure_summary}"
           if result.error.is_a?(BootManager::BootTimeoutError)
-            messages << "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
+            client_limit = ", and MCP_TIMEOUT (milliseconds) for Claude Code, or it stops waiting first" if client_waits
+            messages << "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})#{client_limit}."
           end
           result.configure_hint.each { |line| messages << "[rails-ai-context]   #{line}" }
           pin = ruby_pin_note(root, client: client) if wrong_ruby_failure?(result.error)
@@ -281,13 +287,17 @@ module RailsAiContext
         # Every tool response carries this in its footer, so an absolute path in a boot error goes root-relative.
         RailsAiContext.static_reason = RailsAiContext::PortablePath.relativize_text(reason, root)
         RailsAiContext.static_kind = kind
-        RailsAiContext.configuration.app_root = root
-        Configuration.auto_load!(root)
-        # No initializer runs here, so the security settings one writes are read from its source.
-        InitializerSettings.apply!(root)
+        # No initializer runs here, so the settings one writes are read from its source.
+        settings = UnbootedSettings.read(root)
+        refusal = settings.static_refusal
+        raise ConfigurationError, refusal.message if refusal
+
+        RailsAiContext.configuration = settings.config
         # A failed boot's reason is already the line above.
         messages << "[rails-ai-context] static tier active#{": #{reason}" unless kind == :boot_failed}"
-        Outcome.new(tier: :static, reason: reason, kind: kind, messages: messages)
+        notes = settings.notes.map { |note| "[rails-ai-context] #{note}" }
+        messages.concat(notes)
+        Outcome.new(tier: :static, reason: reason, kind: kind, messages: messages, notes: notes)
       rescue StandardError, ScriptError => e
         messages << "Error: #{e.message}"
         # `reason` on an :absent outcome means the app's own boot failed, which

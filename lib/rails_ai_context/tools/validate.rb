@@ -405,7 +405,7 @@ module RailsAiContext
       private_class_method def self.babel_key?(manifest)
         return false unless File.file?(manifest)
 
-        data = JSON.parse(RailsAiContext::SafeFile.read(manifest).to_s)
+        data = RailsAiContext::PackageJson.json(RailsAiContext::SafeFile.read(manifest).to_s)
         data.is_a?(Hash) && data.key?("babel")
       rescue JSON::ParserError
         false
@@ -430,7 +430,7 @@ module RailsAiContext
         while dir == root || dir.start_with?("#{root}/")
           manifest = File.join(dir, "package.json")
           if File.file?(manifest)
-            type = (JSON.parse(RailsAiContext::SafeFile.read(manifest).to_s)["type"] rescue nil)
+            type = (RailsAiContext::PackageJson.json(RailsAiContext::SafeFile.read(manifest).to_s)["type"] rescue nil)
             return %w[module commonjs].include?(type) ? type : nil
           end
           dir = File.dirname(dir)

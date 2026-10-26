@@ -91,6 +91,43 @@ RSpec.describe "Standalone pre-boot load" do
       "entry_boot.rb pulls in a framework before the app boots:\n#{output}"
   end
 
+  # The files init loads by path come from this checkout, so the gem entry must too: another installed
+  # copy named by the entry mixes two releases (InitializerSettings.apply missing, constants redefined).
+  describe "with another copy of the gem installed" do
+    let(:other_home) { Dir.mktmpdir("other-copy") }
+    let(:app) { Dir.mktmpdir("bare-app") }
+
+    before do
+      lib = File.join(other_home, "gems/rails-ai-context-99.0.0/lib")
+      FileUtils.mkdir_p([ lib, File.join(other_home, "specifications"), File.join(app, "config"), File.join(app, "app/models") ])
+      File.write(File.join(lib, "rails_ai_context.rb"), "abort 'OTHER COPY LOADED'\n")
+      File.write(File.join(other_home, "specifications/rails-ai-context-99.0.0.gemspec"),
+        "Gem::Specification.new { |s| s.name = 'rails-ai-context'; s.version = '99.0.0'; s.summary = 'x'; s.authors = ['x']; s.require_paths = ['lib'] }\n")
+      File.write(File.join(app, "config/application.rb"), "module Probe; class Application < Rails::Application; end; end\n")
+    end
+
+    after { FileUtils.rm_rf([ other_home, app ]) }
+
+    def run_exe(*args)
+      env = { "GEM_PATH" => [ other_home, *Gem.path ].join(File::PATH_SEPARATOR) }
+      Bundler.with_unbundled_env { Open3.capture2e(env, RbConfig.ruby, File.join(root, "exe/rails-ai-context"), *args, chdir: app, stdin_data: "") }
+    end
+
+    it "finishes init with the checkout's own entry" do
+      output, status = run_exe("init", "--tools", "cursor", "--mcp-only", "--defaults")
+
+      expect(output).not_to include("OTHER COPY LOADED"), output
+      expect(status).to be_success, output
+    end
+
+    it "lists the tools with the checkout's own entry" do
+      output, status = run_exe("tool", "--list")
+
+      expect(output).not_to include("OTHER COPY LOADED"), output
+      expect(status).to be_success, output
+    end
+  end
+
   # A Ruby outside the bundle, as the installed binary starts, given the
   # script as an argument rather than through a shell: cmd.exe, Windows'
   # shell, reads none of the quoting a POSIX one does.

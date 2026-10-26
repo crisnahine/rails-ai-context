@@ -1,0 +1,362 @@
+@ Dockerfile D1-env-eq-quoted-then-more
+ENV BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il" BUNDLE_JOBS=4
+@ Dockerfile D2-env-two-creds
+ENV BUNDLE_GEMS__A__COM=usr7k:Pw9T4il BUNDLE_GEMS__B__COM=usr7k:Pw9T4il
+@ Dockerfile D3-arg
+ARG BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ Dockerfile D4-run-export-semi
+RUN export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il; bundle install
+@ Dockerfile D5-run-env-prefix
+RUN BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install
+@ Dockerfile D6-exec-json
+RUN ["bundle", "config", "set", "gems.example.com", "usr7k:Pw9T4il"]
+@ Dockerfile D7-echo-append
+RUN echo "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il" >> /usr/local/bundle/config
+@ Dockerfile D8-dq-in-sq
+RUN sh -c 'bundle config set gems.example.com "usr7k:Pw9T4il"'
+@ Dockerfile D9-sq-in-dq
+RUN sh -c "bundle config set gems.example.com 'usr7k:Pw9T4il'"
+@ Dockerfile D10-escaped-dq-in-dq
+RUN sh -c "bundle config set gems.example.com \"usr7k:Pw9T4il\""
+@ Dockerfile D11-continuation-split
+RUN bundle config set gems.example.com \
+    usr7k:Pw9T4il
+@ Dockerfile D12-continuation-mid-value
+RUN bundle config set gems.example.com usr7k:\
+Pw9T4il
+@ Dockerfile D13-upper-host
+RUN bundle config set GEMS.EXAMPLE.COM usr7k:Pw9T4il
+@ Dockerfile D14-port
+RUN bundle config set gems.example.com:8443 usr7k:Pw9T4il
+@ Dockerfile D15-url-key
+RUN bundle config set https://gems.example.com/ usr7k:Pw9T4il
+@ Dockerfile D16-url-userinfo-key
+RUN bundle config set https://usr7k:Pw9T4il@gems.example.com/ true
+@ Gemfile D17-source-url-userinfo
+source "https://usr7k:Pw9T4il@gems.example.com"
+@ Gemfile D19-git-source
+git_source(:corp) { |r| "https://usr7k:Pw9T4il@git.example.com/#{r}.git" }
+@ docker-compose.yml C1-env-list
+services:
+  web:
+    environment:
+      - BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ docker-compose.yml C2-env-map
+services:
+  web:
+    environment:
+      BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+@ docker-compose.yml C3-build-args
+    build:
+      args:
+        BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ docker-compose.yml C5-mixed-case-name
+      environment:
+        Bundle_Gems__Example__Com: usr7k:Pw9T4il
+@ docker-compose.yml C6-flow-map
+    environment: { BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il", RAILS_ENV: test }
+@ docker-compose.yml C7-flow-seq
+    environment: ["BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il", "RAILS_ENV=test"]
+@ docker-compose.yml C8-inline-comment
+      BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il # corp gems
+@ docker-compose.yml C9-yaml-anchor
+x-env: &env
+  BUNDLE_GEMS__EXAMPLE__COM: &cred usr7k:Pw9T4il
+@ docker-compose.yml C10-quoted-key
+      "BUNDLE_GEMS__EXAMPLE__COM": 'usr7k:Pw9T4il'
+@ docker-compose.yml C11-alias-use
+x-env: &env
+  BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+svc:
+  environment: *env
+@ .github/workflows/ci.yml G2-run-block
+      - run: |
+          bundle config set --local gems.example.com usr7k:Pw9T4il
+          bundle install
+@ .github/workflows/ci.yml G3-run-folded
+      - run: >-
+          bundle config set gems.example.com
+          usr7k:Pw9T4il
+@ .github/workflows/ci.yml G4-github-env
+      - run: echo "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il" >> $GITHUB_ENV
+@ .github/workflows/ci.yml G5-env-sq
+        env:
+          BUNDLE_GEMS__EXAMPLE__COM: 'usr7k:Pw9T4il'
+@ .github/workflows/ci.yml G6-expr-literal
+        env:
+          BUNDLE_GEMS__EXAMPLE__COM: ${{ secrets.X || 'usr7k:Pw9T4il' }}
+@ .github/workflows/ci.yml G7-expr-literal-concat
+        env:
+          BUNDLE_GEMS__EXAMPLE__COM: usr7k:${{ secrets.PASS }}
+@ .github/workflows/ci.yml G8-and-chain
+      - run: echo ok && bundle config set gems.example.com usr7k:Pw9T4il
+@ .github/workflows/ci.yml G9-format
+        env:
+          BUNDLE_GEMS__EXAMPLE__COM: ${{ format('{0}:Pw9T4il', 'usr7k') }}
+@ .gitlab-ci.yml L1-variables
+variables:
+  BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+@ .gitlab-ci.yml L2-variables-value
+variables:
+  BUNDLE_GEMS__EXAMPLE__COM:
+    value: "usr7k:Pw9T4il"
+    description: "corp"
+@ .gitlab-ci.yml L3-script
+  script:
+    - bundle config set gems.example.com "usr7k:Pw9T4il"
+@ .gitlab-ci.yml L4-script-quoted-item
+  script:
+    - 'bundle config set gems.example.com usr7k:Pw9T4il'
+@ .gitlab-ci.yml L5-before-script
+  before_script:
+    - export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+    - bundle install
+@ .gitlab-ci.yml L6-description-first
+variables:
+  BUNDLE_GEMS__EXAMPLE__COM:
+    description: "corp"
+    value: "usr7k:Pw9T4il"
+@ .gitlab-ci.yml L7-extends-expand
+variables:
+  BUNDLE_GEMS__EXAMPLE__COM:
+    value: usr7k:Pw9T4il
+    expand: false
+@ .bundle/config B1-plain
+---
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ .bundle/config B2-unquoted
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+@ .bundle/config.example B3-example-copy
+BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il
+@ .bundle/config.sample B4-sample
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ .bundle/config.bak B5-bak
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+@ .bundle/config.local B6-local
+BUNDLE_GEMS__EXAMPLE__COM: 'usr7k:Pw9T4il'
+@ .bundle/config B7-github-com
+BUNDLE_GITHUB__COM: "usr7k:Pw9T4il"
+@ .bundle/config B8-github-com-token
+BUNDLE_GITHUB__COM: "ghp_usr7kPw9T4il:x-oauth-basic"
+@ .bundle/config B9-mixed-host
+BUNDLE_GEMS__example__COM: "usr7k:Pw9T4il"
+@ .bundle/config B10-crlf~
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"\r
+BUNDLE_JOBS: "4"\r
+@ .bundle/config B11-tab~
+BUNDLE_GEMS__EXAMPLE__COM:\t"usr7k:Pw9T4il"
+@ .bundle/config B12-tab-before-name~
+\tBUNDLE_GEMS__EXAMPLE__COM:\tusr7k:Pw9T4il
+@ .bundle/config B13-token-only
+BUNDLE_GITHUB__COM: Pw9T4il
+@ .bundle/config B14-key-with-dash-host
+BUNDLE_GEMS__MY-CORP__COM: "usr7k:Pw9T4il"
+@ .bundle/config B15-numeric-port-host
+BUNDLE_GEMS__EXAMPLE__COM__8443: "usr7k:Pw9T4il"
+@ .bundle/config B16-with-config-comment
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il" # note
+@ .bundle/config B17-block-scalar
+BUNDLE_GEMS__EXAMPLE__COM: |
+  usr7k:Pw9T4il
+@ .bundle/config B18-quoted-key-yaml
+"BUNDLE_GEMS__EXAMPLE__COM": "usr7k:Pw9T4il"
+@ .bundle/config B19-complex-key
+? BUNDLE_GEMS__EXAMPLE__COM
+: usr7k:Pw9T4il
+@ .bundle/config B20-multiline-dq
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:
+  Pw9T4il"
+@ .env.example E1-plain
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .env.example E2-export
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il"
+@ .env.example E3-sq
+BUNDLE_GEMS__EXAMPLE__COM='usr7k:Pw9T4il'
+@ .env.example E4-space-around
+BUNDLE_GEMS__EXAMPLE__COM = usr7k:Pw9T4il
+@ .env.example E5-comment-after
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il # corp
+@ .env.example E6-nul~
+BUNDLE_GEMS__EXAMPLE__COM=usr7k\0:Pw9T4il
+@ .env.example E7-unicode-dq
+BUNDLE_GEMS__EXAMPLE__COM=“usr7k:Pw9T4il”
+@ .env.example E8-unicode-sq
+BUNDLE_GEMS__EXAMPLE__COM=‘usr7k:Pw9T4il’
+@ .env.example E9-semi-then
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il;BUNDLE_JOBS=4
+@ .env.example E10-glued-after-setting
+BUNDLE_JOBS=4BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .env.example E11-jobs-semi-cred
+BUNDLE_JOBS=4;BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .env.example E12-escaped-quote
+BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9\"T4il"
+@ .env.example E13-backslash-end-dq
+BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il\
+@ .env.example E14-bs-continuation-bare
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9\
+T4il
+@ .env.example E15-lowercase-var
+bundle_gems__example__com=usr7k:Pw9T4il
+@ .env.example E16-dollar-literal
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9$$T4il
+@ .env.example E17-ref-plus-literal
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:${PASS}
+@ .env.example E18-ref-plus-literal-q
+BUNDLE_GEMS__EXAMPLE__COM="usr7k:${PASS}"
+@ .env.example E19-cmdsub-pass
+BUNDLE_GEMS__EXAMPLE__COM="usr7k:$(cat /run/secret)"
+@ .env.example E20-cmdsub-user
+BUNDLE_GEMS__EXAMPLE__COM="$(cat /run/user):Pw9T4il"
+@ .env.example E21-default
+BUNDLE_GEMS__EXAMPLE__COM=${CRED:-usr7k:Pw9T4il}
+@ .env.example E22-default-q
+BUNDLE_GEMS__EXAMPLE__COM="${CRED:-usr7k:Pw9T4il}"
+@ .env.example E23-alt
+BUNDLE_GEMS__EXAMPLE__COM=${CRED:+usr7k:Pw9T4il}
+@ .env.example E24-backtick-echo
+BUNDLE_GEMS__EXAMPLE__COM=`echo usr7k:Pw9T4il`
+@ .env.example E25-unclosed-dq
+BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il
+@ .env.example E26-ref-both
+BUNDLE_GEMS__EXAMPLE__COM=${U}:${P}
+@ .env.example E27-two-creds-one-line
+BUNDLE_GEMS__A__COM=usr7k:Pw9T4il BUNDLE_GEMS__B__COM=usr7k:Pw9T4il
+@ .env.example E28-bom-first-line
+﻿BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ .env.example E29-fullwidth-colon
+BUNDLE_GEMS__EXAMPLE__COM=usr7k：Pw9T4il
+@ .env.example E30-double-eq
+BUNDLE_GEMS__EXAMPLE__COM==usr7k:Pw9T4il
+@ deploy.sh S1-backtick-lit
+export BUNDLE_GEMS__EXAMPLE__COM=`echo usr7k:Pw9T4il`
+@ deploy.sh S2-cmdsub-echo
+export BUNDLE_GEMS__EXAMPLE__COM=$(echo usr7k:Pw9T4il)
+@ deploy.sh S3-cmdsub-printf-nested
+export BUNDLE_GEMS__EXAMPLE__COM="$(printf '%s' "usr7k:Pw9T4il")"
+@ deploy.sh S4-two-on-line
+export BUNDLE_GEMS__A__COM=usr7k:Pw9T4il BUNDLE_GEMS__B__COM=usr7k:Pw9T4il
+@ deploy.sh S5-env-prefix
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install --jobs 4
+@ deploy.sh S6-env-cmd
+env BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle exec rake
+@ deploy.sh S7-heredoc
+cat > .bundle/config <<EOF
+BUNDLE_GEMS__EXAMPLE__COM: "usr7k:Pw9T4il"
+EOF
+@ deploy.sh S8-heredoc-quoted-tag
+cat <<'EOF' > /tmp/x
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+EOF
+@ deploy.sh S9-printf
+printf 'BUNDLE_GEMS__EXAMPLE__COM=%s\n' 'usr7k:Pw9T4il' >> .env
+@ deploy.sh S10-tee
+echo 'BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il' | tee -a .bundle/config
+@ deploy.sh S11-sed
+sed -i 's/^BUNDLE_GEMS__EXAMPLE__COM:.*/BUNDLE_GEMS__EXAMPLE__COM: usr7k:Pw9T4il/' .bundle/config
+@ deploy.sh S12-config-quoted-host
+bundle config set "gems.example.com" "usr7k:Pw9T4il"
+@ deploy.sh S13-config-eq-form
+bundle config set --local gems.example.com=usr7k:Pw9T4il
+@ deploy.sh S14-config-flag-after
+bundle config gems.example.com usr7k:Pw9T4il --global
+@ deploy.sh S15-config-two
+bundle config set gems.a.com usr7k:Pw9T4il && bundle config set gems.b.com usr7k:Pw9T4il
+@ deploy.sh S16-config-env-user
+bundle config set gems.example.com "$USER:Pw9T4il"
+@ deploy.sh S17-vars-assigned-first
+U=usr7k; P=Pw9T4il; bundle config set gems.example.com "$U:$P"
+@ deploy.sh S18-export-ref-pass
+export BUNDLE_GEMS__EXAMPLE__COM="usr7k:${GEM_PASS}"
+@ deploy.sh S19-ansi-c
+export BUNDLE_GEMS__EXAMPLE__COM=$'usr7k:Pw9\x54il'
+@ deploy.sh S20-subshell
+(export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il)
+@ deploy.sh S21-brace-group
+{ export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il; }
+@ deploy.sh S22-if-then
+if true; then export BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il; fi
+@ deploy.sh S23-pipe
+echo hi | BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il cat
+@ deploy.sh S24-redirect-after
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il>/dev/null
+@ deploy.sh S25-ssh-sq
+ssh host "export BUNDLE_GEMS__EXAMPLE__COM='usr7k:Pw9T4il'; bundle install"
+@ deploy.sh S26-ssh-escaped
+ssh host "export BUNDLE_GEMS__EXAMPLE__COM=\"usr7k:Pw9T4il\"; bundle install"
+@ deploy.sh S27-docker-run
+docker run -e BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il img
+@ deploy.sh S28-docker-run-q
+docker run -e "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il" img
+@ deploy.sh S29-build-arg
+docker build --build-arg BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il .
+@ deploy.sh S30-build-arg-eq
+docker build --build-arg=BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il .
+@ deploy.sh S31-kubectl
+kubectl create secret generic s --from-literal=BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ deploy.sh S32-heroku
+heroku config:set BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il -a app
+@ deploy.sh S33-fly
+fly secrets set BUNDLE_GEMS__EXAMPLE__COM="usr7k:Pw9T4il"
+@ deploy.sh S34-curl-json
+curl -d '{"BUNDLE_GEMS__EXAMPLE__COM":"usr7k:Pw9T4il"}' https://x
+@ deploy.sh S35-xargs
+echo usr7k:Pw9T4il | xargs -I{} bundle config set gems.example.com {}
+@ deploy.sh S36-read-here-string
+bundle config set gems.example.com "$(cat <<< 'usr7k:Pw9T4il')"
+@ deploy.sh S37-ruby-e
+ruby -e 'ENV["BUNDLE_GEMS__EXAMPLE__COM"]="usr7k:Pw9T4il"'
+@ deploy.sh S38-env-flag-i
+env -i BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle
+@ deploy.sh S39-sudo-env
+sudo -E BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install
+@ deploy.sh S40-window-eq
+BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il\
+@ deploy.sh S41-backslash-eol-nextline
+export BUNDLE_GEMS__EXAMPLE__COM=\
+  usr7k:Pw9T4il
+@ config.fish F1-set-x
+set -x BUNDLE_GEMS__EXAMPLE__COM usr7k:Pw9T4il
+@ config.fish F2-set-gx-q
+set -gx BUNDLE_GEMS__EXAMPLE__COM "usr7k:Pw9T4il"
+@ config.fish F3-set-Ux
+set -Ux BUNDLE_GEMS__EXAMPLE__COM 'usr7k:Pw9T4il'
+@ config.fish F4-then-cmd
+set -x BUNDLE_GEMS__EXAMPLE__COM usr7k:Pw9T4il; bundle install
+@ config.fish F5-env-prefix
+env BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il bundle install
+@ profile.ps1 P1-env
+$env:BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9T4il"
+@ profile.ps1 P2-env-sq
+$env:BUNDLE_GEMS__EXAMPLE__COM='usr7k:Pw9T4il'
+@ profile.ps1 P3-setenv
+[Environment]::SetEnvironmentVariable("BUNDLE_GEMS__EXAMPLE__COM", "usr7k:Pw9T4il", "User")
+@ profile.ps1 P4-setitem
+Set-Item -Path Env:BUNDLE_GEMS__EXAMPLE__COM -Value "usr7k:Pw9T4il"
+@ profile.ps1 P5-bundle-config
+bundle config set gems.example.com "usr7k:Pw9T4il"
+@ profile.ps1 P6-backtick-escape
+$env:BUNDLE_GEMS__EXAMPLE__COM = "usr7k:Pw9`"T4il"
+@ profile.ps1 P7-here-string
+$env:BUNDLE_GEMS__EXAMPLE__COM = @"
+usr7k:Pw9T4il
+"@
+@ profile.ps1 P8-sq-escaped
+$env:BUNDLE_GEMS__EXAMPLE__COM = 'usr7k:Pw9''T4il'
+@ build.cmd W1-set
+set BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il
+@ build.cmd W2-set-q
+set "BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il"
+@ build.bat W3-setx
+setx BUNDLE_GEMS__EXAMPLE__COM usr7k:Pw9T4il
+@ build.bat W4-percent
+set BUNDLE_GEMS__EXAMPLE__COM=usr7k:%PASS%
+@ build.bat W5-bundle-config
+bundle config set gems.example.com usr7k:Pw9T4il
+@ build.bat W6-caret
+set BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9^&T4il
+@ build.bat W7-setlocal-ampersand
+set BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il&& bundle install
+@ build.bat W8-delayed
+set BUNDLE_GEMS__EXAMPLE__COM=usr7k:Pw9T4il & bundle install
+@ build.ps1 W9-setx-q
+setx BUNDLE_GEMS__EXAMPLE__COM "usr7k:Pw9T4il" /M

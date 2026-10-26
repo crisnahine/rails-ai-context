@@ -7,7 +7,6 @@ module RailsAiContext
     module RenderedRecord
       LISTENERS = { associations: Listeners::AssociationsListener, methods: Listeners::MethodsListener,
                     mixins: Listeners::MixinsListener, classes: Listeners::ClassDefinitionListener }.freeze
-      ASSOCIATION_LISTENERS = LISTENERS.slice(:associations, :mixins).freeze
 
       # Each association is [model, collection?], a Through or :unknown; `partial_path` is nil when computed.
       Model = Data.define(:associations, :partial_path)
@@ -166,7 +165,7 @@ module RailsAiContext
         name = declared_name(walked[:classes], name)
         own = ActionResolver.own_methods(walked[:methods], name)
                             .find { |m| m[:scope] == :instance && m[:name].to_s == "to_partial_path" }
-        Model.new(declared(walked, name, root, memo), own ? literal_return(path, own[:offset]) : default_path(name.underscore))
+        Model.new(declared(walked, path, name, root, memo), own ? literal_return(path, own[:offset]) : default_path(name.underscore))
       end
 
       # The class the file declares for `name`: a camelized guess loses an acronym only the app's inflector spells.
@@ -175,26 +174,15 @@ module RailsAiContext
         names.include?(name) ? name : names.find { |found| PathResolver.loose_key(found) == PathResolver.loose_key(name) } || name
       end
 
-      # What the class declares in its file, its included concerns and its parent model, the nearest winning.
-      def declared(walked, name, root, memo)
-        classes = Array(walked[:classes])
-        mixins = ConcernMembership.owned_by(walked[:mixins], name, others: classes.map { |klass| klass[:name] } - [ name ])
-        concerns = ConcernMacros.collect(root.to_s, mixins, keys: %i[associations], prefer: "model", within: name,
-                                         listeners: ASSOCIATION_LISTENERS, cache: RunCache.fetch([ :rendered_record_concern_walks ]) { {} })
-                                .collected[:associations]
-        [ parent(classes, name, root, memo)&.associations, by_name(concerns), by_name(walked[:associations]) ].compact.reduce({}, :merge)
+      # What the class declares in its file, its included concerns and its parent models, the nearest winning.
+      def declared(walked, path, name, root, memo)
+        lookup = ->(constant) { (file = autoload_file(constant, root, memo)) && !PathResolver.linked_out?(file, root.to_s) ? file : nil }
+        found = ClassDeclarations.for(name, lookup: lookup, keys: %i[associations], listeners: LISTENERS, root: root.to_s, prefer: "model", file: path,
+                                            read: ->(file, _source, _name) { walked if file == path }, cache: RunCache.fetch([ :rendered_record_concern_walks ]) { {} })
+        by_name(found.declarations[:associations])
       end
 
       def by_name(associations) = Array(associations).to_h { |assoc| [ assoc[:name].to_s, target(assoc) ] }
-
-      # The parent model the class's superclass names; nil for a base with no file here.
-      def parent(classes, name, root, memo)
-        klass = classes.find { |found| name == found[:name] || name.end_with?("::#{found[:name]}") } or return nil
-        found = SuperclassChain.resolve_in_scope(name, klass[:superclass], nesting: klass[:nesting]) do |candidate|
-          candidate if autoload_file(candidate, root, memo)
-        end
-        found && read(found, root, memo)
-      end
 
       def target(assoc)
         options = assoc[:options] || {}

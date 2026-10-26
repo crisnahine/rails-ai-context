@@ -401,6 +401,8 @@ RSpec.describe RailsAiContext::Doctor do
     around do |example|
       Dir.mktmpdir do |dir|
         @root = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(@root, "app", "models"))
+        File.write(File.join(@root, "app", "models", "widget.rb"), "class Widget\nend\n")
         example.run
       end
     end
@@ -680,6 +682,23 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_settings_read" do
+    it "names each line the settings reader could not follow, and says nothing when it followed them all" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config/initializers"))
+        File.write(File.join(dir, "config/initializers/rails_ai_context.rb"), "RailsAiContext.configure { |config| config.ai_tools = %i[codex] }\n")
+        check = described_class.new(RailsAiContext::StaticApp.new(dir))
+        expect(check.send(:check_settings_read)).to be_nil
+
+        File.write(File.join(dir, "config/initializers/rails_ai_context.rb"), "RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\n  tools = config.ai_tools\n  tools << :copilot\nend\n")
+        result = check.send(:check_settings_read)
+
+        expect([ result.status, result.message ]).to eq([ :warn, "config/initializers/rails_ai_context.rb:3: `ai_tools` is changed in place or written by its name, so the YAML or the default answers here" ])
+        expect(check.run[:checks].map(&:name)).to include("Settings read without a boot")
+      end
+    end
+  end
+
   describe "#check_initializer_guard" do
     subject(:check) { doctor.send(:check_initializer_guard) }
 
@@ -863,11 +882,12 @@ RSpec.describe RailsAiContext::Doctor do
     # generator does.
     around do |example|
       Dir.mktmpdir do |dir|
-        # Another app beside this one, so no folder above it resolves to this app, as on a machine with several.
+        # Another app beside this one, as on a machine with several.
         FileUtils.mkdir_p(File.join(dir, "blog", "config"))
         File.write(File.join(dir, "blog", "config", "application.rb"), "")
         @root = File.join(File.realpath(dir), "shop")
-        FileUtils.mkdir_p(@root)
+        FileUtils.mkdir_p(File.join(@root, "app", "models"))
+        File.write(File.join(@root, "app", "models", "widget.rb"), "class Widget\nend\n")
         @bin = bin_dir_with("bundle", "rails-ai-context")
         example.run
       ensure
@@ -895,6 +915,39 @@ RSpec.describe RailsAiContext::Doctor do
 
     let(:bundled) { %w[bundle exec rails-ai-context serve] }
     let(:bare) { %w[rails-ai-context serve] }
+
+    # Doctor prints the install's verdict for each row of the write path's table.
+    context "against the install's verdict table" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+      end
+
+      McpConfigRows.rows.each do |shape, (tool, text, expected)|
+        it "renders the install's verdict on #{shape}" do
+          allow(RailsAiContext.configuration).to receive(:ai_tools).and_return([ tool ])
+          relative = RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:path]
+          write(relative, text) if text
+          full = File.join(@root, relative)
+          verdict = app_doctor.send(:install_verdict, tool, full)
+          expect(verdict).to have_attributes(expected.slice(:action, :readable))
+
+          status = if !expected[:readable] then :fail
+          elsif expected[:action] == :keep then :pass
+          else :warn
+          end
+          expect(check.status).to eq(status), check.message
+          if (reason = expected[:reason])
+            reason = /#{Regexp.escape(reason)}/ unless reason.is_a?(Regexp)
+            # The problem beside the label, or the fix's own words for it.
+            expect([ check.message[/\): (.*)\z/m, 1], check.fix[/: (.*), so the install leaves it as it is\z/, 1] ]).to include(reason)
+          end
+          edit = verdict.by_hand(relative, next_run: false)
+          expect(check.fix).to include(edit) if edit
+          expect(check.fix).to eq("Run `rails-ai-context init` to fix") if expected[:action] == :write
+        end
+      end
+    end
 
     context "when tool_mode is :cli" do
       before do
@@ -1423,9 +1476,17 @@ RSpec.describe RailsAiContext::Doctor do
         File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"), JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
 
         expect(check.message).to end_with("lists every tool twice")
-        expect(check.fix).to end_with("or run `claude plugin disable rails-ai-context@rails-ai-context --scope local`")
+        # The folder above holds this app and another, so a session there runs the plugin for this app too.
+        expect(check.fix).to end_with("or run `claude plugin disable rails-ai-context@rails-ai-context --scope local` here and in ..")
       ensure
         FileUtils.rm_f([ File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "settings.json"), File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json") ])
+      end
+
+      # Only true turns a plugin on, as init says too.
+      it "names a local value that is no boolean as turning the committed plugin off" do
+        write(".claude/settings.json", plugin_settings)
+        write(".claude/settings.local.json", plugin_settings([ "1.0" ]))
+        expect(fresh_doctor.send(:check_mcp_json).message).to include("turns it off for you")
       end
 
       # The plugin's choice counts where its committed settings make it, whatever one user turned off.
@@ -1660,10 +1721,10 @@ RSpec.describe RailsAiContext::Doctor do
         expect(fix.call).to eq("Save .mcp.json as UTF-8, then remove the gem's server from it; the rails-ai-context plugin serves this app")
 
         write(".mcp.json", %({"mcpServers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]},}}))
-        expect(fix.call).to eq("Make .mcp.json valid JSON holding an object, then remove the gem's server from it; the rails-ai-context plugin serves this app")
+        expect(fix.call).to eq("Make .mcp.json plain JSON by hand, then remove the gem's server from it; the rails-ai-context plugin serves this app")
 
         write(".claude/settings.local.json", plugin_settings(false))
-        expect(fix.call).to eq("Make .mcp.json valid JSON holding an object")
+        expect(fix.call).to eq("Make .mcp.json plain JSON by hand")
       end
 
       # The server the install leaves serves this user, under whatever name.
@@ -1914,9 +1975,18 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.fix).to eq("Delete all but one by hand")
       end
 
-      it "fails two tables, one name quoted, with the install as the fix, which merges them" do
+      # The install keeps an entry of the gem's that starts its server with a command of its own, so it never merges these.
+      it "fails two tables, one name quoted, of a command the install does not write, with deleting all but one as the fix" do
         write(".codex/config.toml", %([mcp_servers."rails-ai-context"]\ncommand = "rails-ai-context"\n\n) +
                                     %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\n))
+
+        expect(check.status).to eq(:fail)
+        expect(check.fix).to eq("Delete all but one by hand")
+      end
+
+      it "fails two tables the install writes, with the install as the fix, which merges them" do
+        write(".codex/config.toml", %([mcp_servers."rails-ai-context"]\ncommand = "rails-ai-context"\nargs = ["serve"]\n\n) +
+                                    %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\n))
 
         expect(check.status).to eq(:fail)
         expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
@@ -1950,7 +2020,7 @@ RSpec.describe RailsAiContext::Doctor do
       it "fails it as a file Codex cannot read" do
         expect(check.status).to eq(:fail)
         expect(check.message).to end_with(".codex/config.toml (Codex CLI): Codex CLI cannot read it: it is not UTF-8, which TOML is")
-        expect(check.fix).to eq("Save it as UTF-8")
+        expect(check.fix).to eq("Save .codex/config.toml as UTF-8")
       end
     end
 
@@ -2155,7 +2225,16 @@ RSpec.describe RailsAiContext::Doctor do
       it "asks for the file to be made valid before init runs, in a standalone install" do
         allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
 
-        expect(check.fix).to eq("Make .mcp.json valid JSON holding an object (the install leaves a file it cannot merge into as it is), " \
+        expect(check.fix).to eq("Make .mcp.json valid JSON holding an object, then run `rails-ai-context init`")
+      end
+
+      it "names every config it cannot merge into in one edit and one install run" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor opencode])
+        write(".cursor/mcp.json", "not json{{{")
+        write("opencode.json", "[1, 2]")
+
+        expect(check.fix).to eq("Make .mcp.json, .cursor/mcp.json valid JSON holding an object and make opencode.json a JSON object, " \
                                 "then run `rails-ai-context init`")
       end
     end
@@ -2172,7 +2251,8 @@ RSpec.describe RailsAiContext::Doctor do
       it "reports both, as the install would refuse them" do
         expect(check.status).to eq(:fail)
         expect(check.message).to include("2 of 2")
-        expect(check.fix).to start_with("Make .mcp.json, .vscode/mcp.json valid JSON holding an object")
+        expect(check.fix).to eq('Make .mcp.json a JSON object and make "servers" in .vscode/mcp.json an object, ' \
+                                "then run `rails generate rails_ai_context:install`")
         expect(fresh_doctor.run[:checks].map(&:message).join)
           .not_to include("has invalid JSON")
       end
@@ -2403,7 +2483,8 @@ RSpec.describe RailsAiContext::Doctor do
     around do |example|
       Dir.mktmpdir do |dir|
         @work = File.realpath(dir)
-        FileUtils.mkdir_p(File.join(@work, "a"))
+        FileUtils.mkdir_p(File.join(@work, "a", "app", "models"))
+        File.write(File.join(@work, "a", "app", "models", "widget.rb"), "class Widget\nend\n")
         example.run
       end
     end
@@ -2724,11 +2805,14 @@ RSpec.describe RailsAiContext::Doctor do
         FileUtils.rm_f(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"))
       end
 
-      # Started in a folder of apps, the plugin serves none, so the folder's entry is the only server.
-      it "passes the folder's entry when the folder holds more apps" do
+      # Started in a folder of apps, the plugin serves each of them, so the folder's entry runs a second server.
+      it "warns of the folder's entry when the folder holds more apps" do
         write("b/config/application.rb", "")
 
-        expect(workspace_doctor.send(:check_mcp_json).status).to eq(:pass)
+        check = workspace_doctor.send(:check_mcp_json)
+        expect(check.status).to eq(:warn)
+        expect(check.message).to end_with("`rails-ai-context-a` in ../.mcp.json runs the server beside the rails-ai-context plugin, " \
+                                          "so Claude Code lists every tool twice")
       end
     end
 
@@ -2765,8 +2849,7 @@ RSpec.describe RailsAiContext::Doctor do
 
       expect(check.status).to eq(:fail)
       expect(check.message).to include(".vscode/mcp.json")
-      expect(check.fix).to eq("Make ../.vscode/mcp.json valid JSON holding an object (the install leaves a file it cannot merge " \
-                              "into as it is), then run `rails-ai-context init` in the folder that holds it")
+      expect(check.fix).to eq("Make ../.vscode/mcp.json valid JSON holding an object, then run `rails-ai-context init` in the folder that holds it")
     end
 
     it "passes over a config above it that names no server of the gem's" do
@@ -2894,6 +2977,19 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # Doctor asks the names the tools redact by, which a list of its own left short of.
+    it "reads a secret by every name the tools redact by, and not by a descriptor's" do
+      app_with("config/settings.local.yml" => "master_key: 0f1e2d3c4b5a6978\npepper: s4ltyp3pp3r\ntoken_ttl: 3600s\n", ".gitignore" => "/.env*\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to eq("A literal secret in config/settings.local.yml (`master_key` on line 1), which .gitignore does not cover")
+      end
+      app_with("config/settings.local.yml" => "token_ttl: 3600s\n", ".gitignore" => "/.env*\n") do |dir|
+        expect(gitignore_check_for(dir).status).to eq(:pass)
+      end
+    end
+
     it "passes over a literal secret in a config .gitignore covers" do
       app_with("config/database.yml" => "development:\n  password: hunter2\n", ".gitignore" => "/config/database.yml\n") do |dir|
         expect(gitignore_check_for(dir).status).to eq(:pass)
@@ -2929,6 +3025,16 @@ RSpec.describe RailsAiContext::Doctor do
 
         expect(check.status).to eq(:pass)
         expect(check.message).to eq("Secret files gitignored: .env")
+      end
+    end
+
+    it "walks past an excluded_paths entry as search reads it, a glob or a path from the root" do
+      app_with("backups/2024/.env" => "A=1\n", "app/assets/legacy/.env" => "A=1\n", "config/master.key" => "x\n",
+               ".gitignore" => "/config/master.key\n") do |dir|
+        allow(RailsAiContext.configuration).to receive(:excluded_paths).and_return(%w[node_modules backups/* app/assets/legacy])
+        check = gitignore_check_for(dir)
+
+        expect(check.message).to eq("Secret files gitignored: config/master.key")
       end
     end
 
@@ -3547,6 +3653,15 @@ RSpec.describe RailsAiContext::Doctor do
           expect(doctor.send(:check_views).message).to eq("2 files under test/dummy/app/views, app/views")
           expect(doctor.send(:check_schema).message).to start_with("test/dummy/db/schema.rb found")
           expect(doctor.send(:check_routes).message).to eq("test/dummy/config/routes.rb found")
+        end
+
+        it "reads the engine's own settings file, leaving the running configuration alone" do
+          write(".rails-ai-context.yml", "ai_tools: [cursor]\nskip_tools: [rails_query]\n")
+          running = RailsAiContext.configuration
+
+          expect(doctor.send(:configured_ai_tools)).to eq(%i[cursor])
+          expect(doctor.send(:install_config).skip_tools).to eq(%w[rails_query])
+          expect(RailsAiContext.configuration).to equal(running)
         end
 
         it "names the engine's root as where a pending migration is run" do

@@ -43,18 +43,48 @@ module RailsAiContext
 
       # The dump leaves out column:, primary_key:, validate: true and deferrable: false where they are Rails'
       # defaults; Rails 7.0 reads DEFERRABLE INITIALLY IMMEDIATE back as true, which 7.1 names :immediate.
-      def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil, deferrable: nil, validate: nil)
+      # A name is kept only where the dumper writes it: not one that matches SchemaDumper.fk_ignore_pattern (ignore:), as the
+      # ones Rails makes up and the ones an old hash left do. A hidden name that is not the one Rails would make for the
+      # columns stays as actual_name, for SQL that names the constraint.
+      def foreign_key_entry(from, to, column, primary_key, on_delete: nil, on_update: nil, deferrable: nil, validate: nil, name: nil, ignore: FOREIGN_KEY_IGNORE)
         known = ->(value) { value unless value == RailsAiContext::Confidence::INFERRED }
+        column = primary_key_value(column) || "#{to.to_s.split('.').last.to_s.singularize}_id"
+        name = known.(name)&.to_s
+        hidden = name if !name.nil? && !name.empty? && ignore.match?(name) && name != foreign_key_name(from, column)
         {
-          from_table: from, to_table: to,
-          column: primary_key_value(column) || "#{to.to_s.split('.').last.to_s.singularize}_id",
+          from_table: from, to_table: to, column: column,
           primary_key: primary_key_value(primary_key) || "id",
           on_delete: known.(on_delete)&.to_s, on_update: known.(on_update)&.to_s,
-          deferrable: (deferrable == true ? "immediate" : known.(deferrable)&.to_s if deferrable), validate: (false if validate == false)
+          deferrable: (deferrable == true ? "immediate" : known.(deferrable)&.to_s if deferrable), validate: (false if validate == false),
+          name: (name unless name.nil? || name.empty? || ignore.match?(name)), actual_name: hidden
         }.compact
       end
 
-      FOREIGN_KEY_OPTIONS = %i[on_delete on_update deferrable validate].freeze
+      # A table or column name as a Ruby symbol literal, quoted where the name is not a plain identifier.
+      def source_symbol(name)
+        name.to_s.to_sym.inspect
+      end
+
+      # The name the database holds for a key: the dump-facing name, else the hidden one, else the one Rails makes.
+      def real_foreign_key_name(table, fk)
+        (fk[:name] || fk[:actual_name] || foreign_key_name(table, fk[:column])).to_s
+      end
+
+      FOREIGN_KEY_OPTIONS = %i[on_delete on_update deferrable validate name].freeze
+
+      # SchemaDumper.fk_ignore_pattern's default (7.0 to 8.1).
+      FOREIGN_KEY_IGNORE = /\Afk_rails_[0-9a-f]{10}\z/
+
+      # What an answer says where the replay took MySQL's key order for a MySQL-family server it could not name.
+      def mysql_order_assumed_phrase(count)
+        "#{RailsAiContext::CountPhrase.call(count, "table")} whose remove_foreign_key with no column took the key MySQL " \
+          "lists first (assuming MySQL; MariaDB lists another first)"
+      end
+
+      # Rails' name for an unnamed foreign key (foreign_key_name, 7.1 to 8.1; 7.0 has one column only, which hashes the same).
+      def foreign_key_name(table, columns)
+        "fk_rails_#{Digest::SHA256.hexdigest("#{table}_#{Array(columns).map(&:to_s).join("_and_")}_fk")[0, 10]}"
+      end
 
       # An index's options past name, columns, unique and where, as schema.rb
       # writes them; btree is every adapter's default, so the dump leaves it out.
@@ -75,6 +105,13 @@ module RailsAiContext
         value = Array(columns).to_h { |column| [ column, value ] } unless value.is_a?(Hash)
         value = value.reject { |_, v| v.nil? || v.to_s.empty? }
         value.to_h { |key, v| [ key.to_s, v.is_a?(Integer) ? v : v.to_s ] } unless value.empty?
+      end
+
+      # An exclusion constraint as schema.rb writes it (exclusion_constraints_in_create, 7.1 to 8.1): its elements, the
+      # index method, the predicate and how it defers; deferrable: false is the default the dump leaves out.
+      def exclusion_constraint_entry(name, expression, using: nil, where: nil, deferrable: nil)
+        known = ->(value) { value.to_s unless value.nil? || value == false || value == RailsAiContext::Confidence::INFERRED }
+        { name: known.(name), expression: expression, using: known.(using), where: known.(where), deferrable: known.(deferrable) }.compact
       end
 
       # deferrable: false is the default the dump leaves out.
@@ -115,15 +152,15 @@ module RailsAiContext
       # Rails' limit before it shortens an index name (max_index_name_size).
       MAX_INDEX_NAME_SIZE = 62
 
-      # Rails' name for an unnamed index (index_name, 7.0 to 8.1), shortened past
-      # 62 bytes as 7.1+ does; a longer name could not exist before 7.1.
-      def default_index_name(table, columns)
+      # Rails' name for an unnamed index (index_name, 7.0 to 8.1), shortened past 62 bytes from 7.1.
+      # legacy: 7.0's rule, which never shortens (Rails 7.0, or Compatibility::V7_0 on a later one).
+      def default_index_name(table, columns, legacy: false)
         # A String key with a non-word character is an expression, named by its
         # words (index_name_options, 7.0 and 8.1); an Array is joined as written.
         columns = columns.scan(/\w+/).join("_") if columns.is_a?(String) && columns.match?(/\W/)
         cols = Array(columns).map(&:to_s)
         name = "index_#{table}_on_#{cols.join('_and_')}"
-        return name if name.bytesize <= MAX_INDEX_NAME_SIZE
+        return name if legacy || name.bytesize <= MAX_INDEX_NAME_SIZE
 
         hashed = "_#{Digest::SHA256.hexdigest(name)[0, 10]}"
         "idx_on_#{cols.join('_')}".byteslice(0, MAX_INDEX_NAME_SIZE - hashed.bytesize) + hashed
@@ -177,7 +214,7 @@ module RailsAiContext
 
       # ReferenceDefinition's columns and index (7.0 to 8.1), as the migration's
       # version runs it: no index by default to 4.2, the default pair name to 6.0.
-      def reference_definition(table, name, options, pk_type, version: nil)
+      def reference_definition(table, name, options, pk_type, version: nil, legacy: false)
         options ||= {}
         options = { index: false }.merge(options) if version && (version <=> [ 4, 2 ]) <= 0
         null = options[:null] == false ? { null: false } : {}
@@ -193,7 +230,7 @@ module RailsAiContext
         names = columns.map { |col| col[:name] }
         polymorphic_name = options[:polymorphic] && !(version && (version <=> [ 6, 0 ]) <= 0)
         index_name = index_opts[:name]&.to_s ||
-                     (polymorphic_name ? "index_#{table}_on_#{name}" : default_index_name(table, names))
+                     (polymorphic_name ? "index_#{table}_on_#{name}" : default_index_name(table, names, legacy: legacy))
         { columns: columns, index: index_entry(index_name, names, index_opts) }
       end
 
@@ -218,6 +255,14 @@ module RailsAiContext
           column[:default] = format_default(options[:default]) if options.key?(:default)
           column
         end
+      end
+
+      # Compatibility::V6_1 and older give a datetime written without a precision: nil (7.0 made it 6), and V5_2 and
+      # older do the same to timestamps (6.0 made them 6); a precision the call gives stays.
+      def compat_precision(options, type, version, timestamps: false)
+        return options if options.key?(:precision) || version.nil? || type.to_s != "datetime"
+
+        (version <=> (timestamps ? [ 5, 2 ] : [ 6, 1 ])).positive? ? options : options.merge(precision: nil)
       end
 
       # The implicit primary key's type is adapter-specific: bigint everywhere
@@ -300,10 +345,33 @@ module RailsAiContext
         { kind: materialized ? "materialized_view" : "view", columns: columns, indexes: Array(indexes), foreign_keys: [], sql: sql }.compact
       end
 
+      # A virtual table argument that is a column: a bare or quoted name (double quotes, backticks, single quotes or
+      # brackets, a quote doubled inside), then fts5's UNINDEXED.
+      VIRTUAL_COLUMN = /\A(?:"((?:[^"]|"")+)"|`((?:[^`]|``)+)`|'((?:[^']|'')+)'|\[([^\]]+)\]|(\w+))(?:\s+UNINDEXED)?\z/i
+
       # A virtual table's columns are its module arguments that set no option (fts5's tokenize=...).
       def virtual_table_entry(mod, arguments)
-        columns = Array(arguments).filter_map { |arg| arg.strip[/\A["`]?(\w+)["`]?(?:\s+UNINDEXED)?\z/i, 1] }
+        columns = Array(arguments).filter_map do |arg|
+          double, back, single, bracket, plain = arg.strip.match(VIRTUAL_COLUMN)&.captures
+          double&.gsub('""', '"') || back&.gsub("``", "`") || single&.gsub("''", "'") || bracket || plain
+        end
         { kind: "virtual_table", module: mod, columns: columns.map { |name| { name: name } }, indexes: [], foreign_keys: [] }.compact
+      end
+
+      # MySQL makes a column a statement declares serial unique, apart from the table's whole key (serial_index).
+      def serial_index?(family, type, column, key)
+        family == :mysql && type.to_s.casecmp?("serial") && column[:primary_key] != true && Array(key) != [ column[:name] ]
+      end
+
+      # The unique index MySQL adds for a serial column or an unnamed UNIQUE: named after its first column, or <column>_2 on when that name is taken.
+      # shortcut: none is listed for a serial that is the whole key, where MySQL adds one and MariaDB none; tell the servers apart if a tool needs it.
+      def serial_index(indexes, columns)
+        column = Array(columns).first.to_s
+        column = "functional_index" if column.start_with?("(")
+        name = column
+        suffix = 1
+        name = "#{column}_#{suffix += 1}" while indexes.any? { |index| index[:name] == name }
+        index_entry(name, Array(columns), unique: true)
       end
 
       # MySQL's dumper writes a tiny, medium or long text or blob type as size:.

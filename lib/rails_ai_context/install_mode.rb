@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "gem_lock"
+require_relative "cli/entry_boot"
 
 module RailsAiContext
   # Detects how the gem is installed into the current app so user-facing copy
@@ -79,16 +80,35 @@ module RailsAiContext
     # exec that can be another app's (`init --app-path ../b` run from a), and
     # a workspace sets up apps that are not the one it runs in.
     def standalone?(root: nil)
-      lock = RailsAiContext::GemLock.for(root || app_root)
+      root ||= app_root
+      lock = RailsAiContext::GemLock.for(root)
       return !lock.present?("rails-ai-context") unless lock.missing?
 
       # nil when the Gemfile cannot be read in full: missing, unparseable, or
       # pulling gems in from files a pre-boot read does not follow
-      # (eval_gemfile, gemspec).
+      # (eval_gemfile, gemspec). A folder with no app and no Gemfile Bundler
+      # would find has no rake task to run, so only the binary works there.
       gems = lock.gemfile_gems
-      gems.nil? ? false : !gems.include?("rails-ai-context")
+      return no_app?(root) && no_gemfile?(root) if gems.nil?
+
+      !gems.include?("rails-ai-context")
     rescue => e
       RailsAiContext.debug_fail(e, false, label: "standalone install detection")
+    end
+
+    def no_app?(root)
+      !CLI::EntryBoot.app_present?(root.to_s, allow_source_only: true)
+    end
+
+    # Bundler looks for one in the folder and every folder above it.
+    def no_gemfile?(root)
+      dir = File.expand_path(root.to_s)
+      loop do
+        return false if %w[Gemfile gems.rb].any? { |name| File.exist?(File.join(dir, name)) }
+        return true if File.dirname(dir) == dir
+
+        dir = File.dirname(dir)
+      end
     end
 
     # Found the way the app's selection is: the root the CLI set, else

@@ -362,9 +362,10 @@ module RailsAiContext
             next unless %i[include prepend].include?(mixin[:macro])
 
             # Controllers share most candidates, so each is looked up once.
-            hit = Introspectors::DeclaredConstant.candidate_names(mixin[:name], Introspectors::DeclaredConstant.record_nesting(mixin)).lazy.filter_map do |candidate|
+            found = Introspectors::DeclaredConstant.lookup(mixin[:name], nesting: Introspectors::DeclaredConstant.record_nesting(mixin), exists: lambda do |candidate|
               @lookups.fetch(candidate) { @lookups[candidate] = lookup(candidate) || false }
-            end.first
+            end)
+            hit = found && @lookups[found]
             @found << hit if hit && !@found.include?(hit)
           end
         end
@@ -390,9 +391,15 @@ module RailsAiContext
       private_constant :LibModules
 
       private_class_method def self.find_view_references(method_names, real_root)
+        # A strict locals comment (Rails 7.1 on) makes each name it declares a local, which a bare read never sends to a helper.
+        strict = Introspectors::RailsVersion.at_least?(Introspectors::RailsVersion.of(real_root), "7.1.0.a")
         views = markup_views(real_root).filter_map do |real, relative|
           content = RailsAiContext::SafeFile.read(real)
-          [ relative, called_names(Introspectors::ViewTemplateIntrospector.code_in(content, path: real)) ] if content
+          next unless content
+
+          declared = strict ? Array(GetPartialInterface.extract_magic_comment_locals(content)) : []
+          code = Introspectors::ViewTemplateIntrospector.code_in(content, path: real)
+          [ relative, called_names(code) - (declared - code.scan(PAREN_CALL).flatten) ]
         end
 
         method_names.each_with_object({}) do |method_name, references|
@@ -406,7 +413,10 @@ module RailsAiContext
       # The names a template calls by themselves: not `@post.subtitle`, `:title`,
       # the `icon` of `icon-edit` or a `title:` key.
       CALLED_NAME = /(?<![\w@.:-])[A-Za-z_]\w*[?!]?(?![\w?!:-])/
-      private_constant :CALLED_NAME
+      # `title("x")` goes to the method even where a local `title` exists.
+      # shortcut: a call with arguments and no parentheses (`title "x"`) still reads as the local.
+      PAREN_CALL = /(?<![\w@.:-])([A-Za-z_]\w*[?!]?)\(/
+      private_constant :CALLED_NAME, :PAREN_CALL
 
       private_class_method def self.called_names(code)
         code.scan(CALLED_NAME).to_set

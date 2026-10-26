@@ -69,6 +69,12 @@ RSpec.describe RailsAiContext::Introspectors::ActionSource do
     find_in(nested, "Admin::WidgetsController", "export") do |found|
       expect(found[:file]).to eq("app/controllers/concerns/admin/exportable.rb")
     end
+    rooted = app_base.merge(concerns).merge(
+      "app/controllers/admin/widgets_controller.rb" => "module Admin\n  class WidgetsController < BaseController\n    include ::Exportable\n  end\nend\n"
+    )
+    find_in(rooted, "Admin::WidgetsController", "export") do |found|
+      expect(found[:file]).to eq("app/controllers/concerns/exportable.rb")
+    end
   end
 
   it "does not take another class's def of the same name from a parent's file" do

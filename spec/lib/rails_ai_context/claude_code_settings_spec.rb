@@ -5,7 +5,7 @@ require "spec_helper"
 RSpec.describe RailsAiContext::ClaudeCodeSettings do
   around do |example|
     Dir.mktmpdir do |dir|
-      # Another app beside this one's folder, so the folder above it resolves to no app of its own, as on a machine with several.
+      # Another app beside this one's folder: a session in the folder above both serves each of them.
       app(File.join(dir, "blog"))
       @dir = File.join(File.realpath(dir), "work")
       @root = File.join(@dir, "shop")
@@ -69,8 +69,9 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       write(File.join(@root, ".claude", "settings.json"), "enabledPlugins" => { "rails-ai-context@mirror" => false })
       expect(fresh.plugin?).to be(true)
 
+      # A folder of several apps serves each one, by the call's app argument.
       app(File.join(@dir, "admin"))
-      expect(fresh.plugin?).to be(false)
+      expect(fresh.plugin_sessions).to include(@dir)
     end
 
     # The plugin has no version but the commit it came from, so no constraint list matches it.
@@ -394,6 +395,8 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       expect(settings.plugin?).to be(true)
 
       app(File.join(@dir, "admin"))
+      expect(fresh.plugin?).to be(true)
+      FileUtils.rm_rf(File.join(@root, "config"))
       expect(fresh.plugin?).to be(false)
     end
 
@@ -485,7 +488,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
       expect(settings.plugin_on_in?(@root)).to be(false)
       expect(settings.plugin_on_in?(@dir)).to be(true)
-      expect(settings.plugin_sessions).to eq([ @dir ])
+      expect(settings.plugin_sessions).to eq([ @dir, File.dirname(@dir) ])
     end
 
     # Claude Code starts the server while any marketplace's copy is on.
@@ -495,7 +498,6 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
       expect(settings.plugin_ids_in(@root)).to eq(%w[rails-ai-context@rails-ai-context rails-ai-context@mirror])
       # The last one merged replaces the others' same-named server.
-      expect(settings.plugin_id_in(@root)).to eq("rails-ai-context@mirror")
       expect(settings.plugin_id).to eq("rails-ai-context@mirror")
     end
   end
@@ -555,8 +557,8 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
     it "names the settings file whose value holds, and every id the plugin runs under" do
       write(File.join(@root, ".claude", "settings.local.json"), plugin(false))
-      expect(settings.setting_for("rails-ai-context@rails-ai-context", @root))
-        .to eq([ :local, false, File.join(@root, ".claude", "settings.local.json") ])
+      verdict = settings.serving(@root)
+      expect([ verdict.cause, verdict.scope, verdict.path ]).to eq([ :turned_off, :local, File.join(@root, ".claude", "settings.local.json") ])
 
       write(File.join(@root, ".claude", "settings.local.json"), "enabledPlugins" => { "rails-ai-context@rails-ai-context" => true, "rails-ai-context@mirror" => true })
       expect(fresh.enabled_plugin_ids).to eq(%w[rails-ai-context@rails-ai-context rails-ai-context@mirror])
@@ -680,7 +682,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       write(File.join(@config, "settings.json"), plugin(true))
       write(managed, {})
       write(File.join(@root, ".claude", "settings.local.json"), "deniedMcpServers" => [ { "serverName" => "plugin:rails-ai-context:rails-ai-context" } ])
-      expect(fresh.plugin_sessions).to eq([ @dir ])
+      expect(fresh.plugin_sessions).to eq([ @dir, File.dirname(@dir) ])
       expect(fresh.block_in(@dir)).to be_nil
       expect(fresh.block_in(@root))
         .to have_attributes(rule: :denied, scope: :local, folder: @root, path: File.join(@root, ".claude", "settings.local.json"))
@@ -971,6 +973,38 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
     end
   end
 
+  # One answer to whether the plugin the committed settings turn on runs for this user, which init and doctor both render.
+  describe "#serving" do
+    it "takes only a winning true as on, so a local version list turns the committed plugin off" do
+      write(File.join(@root, ".claude", "settings.json"), plugin(true))
+      write(File.join(@root, ".claude", "settings.local.json"), plugin([ "1.0" ]))
+
+      verdict = settings.serving(@root)
+      expect([ verdict.runs?, verdict.cause, verdict.scope, verdict.path ])
+        .to eq([ false, :turned_off, :local, File.join(@root, ".claude", "settings.local.json") ])
+    end
+
+    it "runs where the committed settings turn it on and nothing turns it off" do
+      write(File.join(@root, ".claude", "settings.json"), plugin(true))
+      write(File.join(@config, "settings.json"), plugin(false))
+
+      verdict = settings.serving(@root)
+      expect([ verdict.runs?, verdict.cause ]).to eq([ true, nil ])
+    end
+
+    it "names a plugin that is on but does not start here as not running" do
+      write(File.join(@root, ".claude", "settings.json"), plugin(true))
+      write(claude_json, "projects" => { @root => { "disabledMcpServers" => [ described_class::PLUGIN_SERVER ] } })
+
+      verdict = settings.serving(@root)
+      expect([ verdict.runs?, verdict.cause ]).to eq([ false, :not_running ])
+    end
+
+    it "keeps the scope arithmetic behind the verdict" do
+      expect(described_class.public_instance_methods(false) & %i[setting_for setting_scope plugin_id_in]).to eq([])
+    end
+  end
+
   describe "#duplicates" do
     before { write(File.join(@root, ".claude", "settings.json"), plugin(true)) }
 
@@ -1032,7 +1066,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       write(File.join(@config, "settings.json"), plugin(true))
       write(claude_json, "mcpServers" => { "rails-ai-context" => ours })
 
-      expect(settings.duplicates).to contain_exactly(have_attributes(scope: :user, sessions: [ @root, @dir ]))
+      expect(settings.duplicates).to contain_exactly(have_attributes(scope: :user, sessions: [ @root, @dir, File.dirname(@dir) ]))
     end
 
     # Claude Code loads every .mcp.json from the folder it started in up to the

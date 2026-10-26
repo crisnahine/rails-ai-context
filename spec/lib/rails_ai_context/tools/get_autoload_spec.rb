@@ -8,7 +8,6 @@ RSpec.describe RailsAiContext::Tools::GetAutoload do
   let(:autoload_data) do
     {
       mode: "zeitwerk",
-      zeitwerk_available: true,
       autoloaders: [
         { name: "main", tag: "main", collapsed: [ "app/models/concerns" ], ignored: [], root_dirs: [ "app/models" ] },
         { name: "once", tag: "once", collapsed: [], ignored: [], root_dirs: [] }

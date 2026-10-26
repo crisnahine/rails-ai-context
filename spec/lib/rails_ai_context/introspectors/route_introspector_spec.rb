@@ -660,6 +660,15 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    # Inside `module Admin`, Ruby finds UI in Admin's own constants first, and the app keeps Admin::UI in a file of its own.
+    it "names a mounted app by the constant Ruby picks where the mount is written" do
+      routes = "module Admin\n  Rails.application.routes.draw do\n    mount UI => \"/ui\"\n  end\nend\n"
+      ui = "module Admin\n  class UI\n    def self.call(_env) = [ 200, {}, [] ]\n  end\nend\n"
+
+      expect(static_mounts_of(routes, "app/lib/admin/ui.rb" => ui)).to eq([ [ "Admin::UI", "/ui" ] ])
+      expect(static_mounts_of(routes)).to eq([ [ "UI", "/ui" ] ])
+    end
+
     def mounted_engines_of(routes, files = {})
       Dir.mktmpdir do |dir|
         { "config/routes.rb" => routes, **files }.each do |path, source|
@@ -668,6 +677,14 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         end
         described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines]
       end
+    end
+
+    # Inside class Admin < Panel, Ruby finds UI in Panel after Admin's own constants, before the top level.
+    it "names a mounted app by a constant the enclosing class inherits" do
+      routes = "class Panel\nend\n\nclass Admin < Panel\n  Rails.application.routes.draw do\n    mount UI => \"/ui\"\n  end\nend\n"
+      ui = "class Panel\n  class UI\n    def self.call(_env) = [ 200, {}, [] ]\n  end\nend\n"
+
+      expect(static_mounts_of(routes, "app/lib/panel/ui.rb" => ui, "app/lib/ui.rb" => "class UI\nend\n")).to eq([ [ "Panel::UI", "/ui" ] ])
     end
 
     def static_mounts_of(routes, files = {})
@@ -710,8 +727,8 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       )
     end
 
-    # Live, a routes-file method draws at each call, a literal list's block once per element and a block given to
-    # `resources :aa, :bb` once per name; a method called with arguments is read once where it is defined.
+    # Live, a routes-file method draws at each call, with arguments or without, a literal list's block once per
+    # element and a block given to `resources :aa, :bb` once per name.
     it "lists a Rack app in a method, a loop or a multi-name resource at each place Rails draws it" do
       routes = <<~'RUBY'
         Rails.application.routes.draw do
@@ -747,11 +764,28 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       RUBY
 
       expect(static_mounts_of(routes)).to eq(
-        [ [ "ArgsApp", "/args" ], [ "MethodApp", "/hc" ], [ "MethodApp", "/admin/hc" ],
+        [ [ "MethodApp", "/hc" ], [ "MethodApp", "/admin/hc" ], [ "ArgsApp", "/args" ],
           [ "LoopApp", "/a" ], [ "LoopRouteApp", "/g/a" ], [ "LoopApp", "/b" ], [ "LoopRouteApp", "/g/b" ],
           [ "ScopedLoopApp", "/c/hc" ], [ "ScopedLoopApp", "/d/hc" ], [ "PathLoopApp", "/e/hc" ], [ "PathLoopApp", "/f/hc" ],
           [ "NamesApp", "/aa/:aa_id/x" ], [ "NamesApp", "/bb/:bb_id/x" ] ]
       )
+    end
+
+    # A live RouteSet (7.0.10 and 8.1.4) attaches the mount at /adm/hc: the body runs where it is called.
+    it "lists a Rack app a method called with arguments mounts under the caller's namespace" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          def status_mount(name)
+            mount StatusApp => "/hc", as: name
+          end
+
+          namespace :adm do
+            status_mount(:adm_status)
+          end
+        end
+      RUBY
+
+      expect(static_mounts_of(routes)).to eq([ [ "StatusApp", "/adm/hc" ] ])
     end
 
     # Live, the concern's block keeps the mapper its `tap` handed it, wherever it is applied.
@@ -1314,7 +1348,25 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
         posts = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]["posts"]
 
         expect(posts).to eq([ { verb: "GET", path: "/dev_only", action: "index", name: "dev_only", restful: true,
-                                condition: "if Rails.env.development?" } ])
+                                condition: "if Rails.env.development?", position: 0 } ])
+      end
+    end
+
+    it "numbers every route in draw order across controllers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            get "a", to: "posts#index"
+            get "b", to: "pages#show"
+            get "c", to: "posts#show"
+          end
+        RUBY
+
+        table = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:by_controller]
+
+        expect(RailsAiContext::RouteCoverage.table(by_controller: table).map { |r| [ r[:controller], r[:path] ] })
+          .to eq([ [ "posts", "/a" ], [ "pages", "/b" ], [ "posts", "/c" ] ])
       end
     end
 

@@ -783,7 +783,7 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     end
 
     it "keeps reading past an escaped quote in an argument" do
-      expect(partials_in("escaped.html.erb", %{<%= render("a \\" (b", partial: "real") %>\n})).to eq([ "real" ])
+      expect(partials_in("escaped.html.erb", %{<%= render(object: "a \\" (b", partial: "real") %>\n})).to eq([ "real" ])
     end
 
     it "does not read a partial name built at runtime" do

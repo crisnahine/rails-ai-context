@@ -100,6 +100,19 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(post_scope_names).to include("published", "recent")
     end
 
+    it "records a scope's body with its secrets filtered" do
+      key = %w[AK IA].join + ("M" * 16)
+      scopes = RailsAiContext::Introspectors::ModelRecord.scopes({ scopes: [ { name: "sealed", body: %(where(api_key: "#{key}")) } ] })
+
+      expect(scopes).to eq([ { name: "sealed", body: %(where(api_key: "[FILTERED]")), required_params: [] } ])
+    end
+
+    it "gives a default scope a body only when the source holds one" do
+      scopes = RailsAiContext::Introspectors::ModelRecord.default_scopes({ scopes: [ { name: "default_scope", default: true, confidence: "[INFERRED]" } ] })
+
+      expect(scopes).to eq([ { confidence: "[INFERRED]" } ])
+    end
+
     it "extracts enums with values" do
       expect(result["User"][:enums]).to have_key("role")
       expect(result["User"][:enums]["role"]).to be_a(Hash)
@@ -518,6 +531,59 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(models["Invoice"]).to include(file: "app/domain/invoice.rb", table_name: "notes")
         expect(models["EnterpriseThing"][:file]).to eq("enterprise/app/models/enterprise_thing.rb")
       end
+    end
+
+    def static_models(files)
+      Dir.mktmpdir do |dir|
+        files.each do |name, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+          File.write(File.join(dir, name), source)
+        end
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    # Inside `module Admin`, `include Publishable` is Admin::Publishable, as Admin::Post.ancestors says booted.
+    it "names a concern by the module Ruby picks from the model's namespace" do
+      models = static_models(
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/models/concerns/publishable.rb" => "module Publishable\n  extend ActiveSupport::Concern\nend\n",
+        "app/models/concerns/admin/publishable.rb" => "module Admin\n  module Publishable\n    extend ActiveSupport::Concern\n  end\nend\n",
+        "app/models/admin/post.rb" => "module Admin\n  class Post < ApplicationRecord\n    include Publishable\n  end\nend\n",
+        "app/models/admin/note.rb" => "module Admin\n  class Note < ApplicationRecord\n    include ::Publishable\n  end\nend\n"
+      )
+
+      expect(models["Admin::Post"][:concerns]).to eq(%w[Admin::Publishable])
+      expect(models["Admin::Note"][:concerns]).to eq(%w[Publishable])
+    end
+
+    # Ruby reads a constant through the class's ancestors before the top level, and the superclass's include puts Tracker there.
+    it "reads an include through the modules the superclass mixes in, before the top level" do
+      models = static_models(
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\n  include Tracker\nend\n",
+        "app/models/concerns/tracker.rb" => "module Tracker\n  extend ActiveSupport::Concern\n\n  module Taggable\n    extend ActiveSupport::Concern\n    included do\n      has_many :tracker_tags\n    end\n  end\nend\n",
+        "app/models/concerns/taggable.rb" => "module Taggable\n  extend ActiveSupport::Concern\n  included do\n    has_many :top_tags\n  end\nend\n",
+        "app/models/post.rb" => "class Post < ApplicationRecord\n  include Taggable\nend\n",
+        "app/models/note.rb" => "class ::Note < ApplicationRecord\n  include Taggable\nend\n",
+        "app/models/base_record.rb" => "class ::BaseRecord < ApplicationRecord\n  self.abstract_class = true\nend\n",
+        "app/models/item.rb" => "class Item < BaseRecord\n  include Taggable\nend\n"
+      )
+
+      %w[Post Note Item].each { |model| expect(models[model][:associations].map { |a| a[:name] }).to eq(%w[tracker_tags]) }
+    end
+
+    it "reads the modules a base mixes in once per run, however many subclasses include something" do
+      files = {
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  self.abstract_class = true\n  include Tracker\nend\n",
+        "app/models/concerns/tracker.rb" => "module Tracker\n  extend ActiveSupport::Concern\nend\n",
+        "app/models/concerns/taggable.rb" => "module Taggable\n  extend ActiveSupport::Concern\nend\n"
+      }
+      %w[post note item].each { |model| files["app/models/#{model}.rb"] = "class #{model.camelize} < ApplicationRecord\n  include Taggable\nend\n" }
+      allow(RailsAiContext::ConcernPaths).to receive(:read_ancestry).and_call_original
+
+      RailsAiContext::RunCache.around { static_models(files) }
+
+      expect(RailsAiContext::ConcernPaths).to have_received(:read_ancestry).with(anything, anything, anything, "ApplicationRecord").once
     end
 
     # Rails keeps one reflection per name, the last declared, in the order the body runs: Post's tags are
@@ -990,7 +1056,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         gadget = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Gadget"]
 
         expect(gadget[:model_settings]).to be_nil
-        expect(gadget[:macros].map { |m| m[:macro] }).to eq([ :encrypts ])
+        expect(gadget[:gem_macros]).to be_nil
+        expect(gadget[:encryption_details].map { |m| m[:field] }).to eq([ "serial" ])
       end
     end
 
@@ -1952,22 +2019,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # An error entry carries no path, and File.basename("", ".rb").pluralize
-    # is "", which is truthy and so was accepted as the child's table. No
-    # walk reaches this today, because model_class? already rejects a child
-    # whose chain hits an error entry, so the resolution is pinned directly.
-    it "does not resolve a table through a candidate that carries no path" do
-      Dir.mktmpdir do |dir|
-        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
-        candidates = {
-          "Post" => { error: "boom" },
-          "Draft" => { path: File.join(dir, "app", "models", "draft.rb"), superclass: "Post" }
-        }
-
-        expect(introspector.send(:resolve_table_name, "Draft", candidates)).to eq("drafts")
-      end
-    end
-
     it "reports a custom validate once, under custom_validates" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -2388,6 +2439,22 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         customer = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Customer"]
         expect(customer.values_at(:callbacks, :callback_conditions)).to eq([ { "before_save" => %w[stamp sync] }, {} ])
+      end
+    end
+
+    # ActiveRecord::Base.include reaches ActiveRecord models only; a Mongoid document never has it.
+    it "leaves out of a document what the app mixes into every ActiveRecord model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "config", "initializers", "audit.rb"), "ActiveRecord::Base.include(Auditable)\n")
+        File.write(File.join(dir, "app", "models", "concerns", "auditable.rb"),
+                   "module Auditable\n  extend ActiveSupport::Concern\n  included do\n    after_save :audit\n  end\nend\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), "class Customer\n  include Mongoid::Document\n  after_save :a\nend\n")
+
+        customer = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Customer"]
+        expect(customer[:callbacks]).to eq("after_save" => %w[a])
       end
     end
 
@@ -7073,7 +7140,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
 
         expect(post[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
-        %i[associations validations scopes methods].each do |key|
+        %i[associations validations scopes].each do |key|
           expect(post[key].map { |r| r[:confidence] })
             .to all(eq(RailsAiContext::Confidence::STATIC)), "#{key} still claims more than the entry"
         end
@@ -7359,7 +7426,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_call)
 
-        expect(result["Post"][:instance_methods].size).to eq(described_class::PAYLOAD_METHOD_CAP)
+        expect(result["Post"][:instance_methods].size).to eq(RailsAiContext::Introspectors::ModelRecord::PAYLOAD_METHOD_CAP)
         expect(result["Post"][:source_instance_methods].size).to eq(35)
         expect(result["Post"][:source_instance_methods]).to include("step_35")
       end
@@ -7374,7 +7441,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         details = introspector.send(:extract_model_details, Post)
 
-        expect(details[:instance_methods].size).to eq(described_class::PAYLOAD_METHOD_CAP)
+        expect(details[:instance_methods].size).to eq(RailsAiContext::Introspectors::ModelRecord::PAYLOAD_METHOD_CAP)
         expect(details[:source_instance_methods].size).to eq(35)
         expect(details[:source_instance_methods]).to include("step_35")
       end
@@ -7416,6 +7483,105 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         _, options = ticket(dir, "  enum :level, { low: 0, high: 1 }, instance_methods: false, prefix: true\n", rails: "7.0.8")
 
         expect(options).to eq("level" => { prefix: true })
+      end
+    end
+  end
+  describe "the table and the record, read the way Rails reads them" do
+    def static_app(dir, files)
+      files = { "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n" }.merge(files)
+      files.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+      described_class.new(RailsAiContext::StaticApp.new(dir))
+    end
+
+    # ActiveRecord 8.0.5.1: Widget.table_name is legacy_widgets_v1.
+    it "wraps a model's table in the prefix and suffix its abstract base sets" do
+      Dir.mktmpdir do |dir|
+        models = static_app(dir, "app/models/legacy_record.rb" => "class LegacyRecord < ApplicationRecord\n  self.abstract_class = true\n  self.table_name_prefix = \"legacy_\"\n  self.table_name_suffix = \"_v1\"\nend\n",
+                                 "app/models/widget.rb" => "class Widget < LegacyRecord\nend\n").static_call
+
+        expect(models["Widget"][:table_name]).to eq("legacy_widgets_v1")
+      end
+    end
+
+    it "answers no table, and who sets it, for a table name the class computes" do
+      Dir.mktmpdir do |dir|
+        models = static_app(dir, "app/models/archive.rb" => "class Archive < ApplicationRecord\n  self.table_name = ENV.fetch(\"ARCHIVE_TABLE\", \"posts\")\nend\n").static_call
+
+        expect(models["Archive"]).to include(table_set_by: "Archive.table_name")
+        expect(models["Archive"]).not_to have_key(:table_name)
+        expect(RailsAiContext::Serializers::SectionFacts.table_note(nil, models["Archive"])).to eq("set by `Archive.table_name`, which the static tier did not read")
+      end
+    end
+
+    it "keeps who sets the table on an entry the static walk reports as an error" do
+      Dir.mktmpdir do |dir|
+        introspector = static_app(dir, "app/models/archive.rb" => "class Archive < ApplicationRecord\n  self.table_name = ENV.fetch(\"ARCHIVE_TABLE\", \"posts\")\nend\n")
+        allow(introspector).to receive(:static_model_details).and_raise("boom")
+        models = introspector.static_call
+        unloadable = introspector.tap { |found| found.instance_variable_set(:@unloadable, { "Archive" => "boom" }) }.send(:unloadable_models)
+
+        expect(models["Archive"]).to include(error: "boom", table_set_by: "Archive.table_name")
+        expect(unloadable["Archive"]).to include(error: "boom", table_set_by: "Archive.table_name")
+        expect(RailsAiContext::Introspectors::TableName.of_model("Archive", models).to_h).to eq(table: nil, set_by: "Archive.table_name", primary_key: nil)
+      end
+    end
+
+    # Rails 7.1+ runs `validates_inclusion_of :state, in: enum keys` for it: Invoice.validators holds inclusion on state.
+    it "lists the inclusion validator `enum ..., validate: true` adds, on both tiers, as that line's" do
+      Dir.mktmpdir do |dir|
+        introspector = static_app(dir, "Gemfile" => "gem \"rails\"\n",
+                                       "Gemfile.lock" => "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{Rails.version})\n\nDEPENDENCIES\n  rails\n",
+                                       "app/models/user.rb" => "class User < ApplicationRecord\n  enum :name, { draft: \"draft\", paid: \"paid\" }, validate: { allow_nil: true }\nend\n")
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "users"
+          enum :name, { draft: "draft", paid: "paid" }, validate: { allow_nil: true }
+        end
+        model.define_singleton_method(:name) { "User" }
+
+        expected = { kind: "inclusion", attributes: %w[name], options: { in: %w[draft paid], allow_nil: true }, added_by: "enum validate: true" }
+        [ introspector.static_call["User"], introspector.send(:extract_model_details, model) ].each do |record|
+          expect(record[:validations].map { |v| v.slice(:kind, :attributes, :options, :added_by, :reflection_only) }).to eq([ expected ])
+        end
+      end
+    end
+
+    # ActiveRecord 7.0.10 passes validate: on to the attribute and adds no validator; 7.1 adds the inclusion.
+    it "lists the inclusion validator of `enum ..., validate: true` only from Rails 7.1, and says so when no Rails is locked" do
+      assumed = "enum validate: true, assuming Rails 7.1+ as Gemfile.lock names no Rails version"
+      [ [ "7.0.10", [] ], [ "7.1.6", [ "enum validate: true" ] ], [ nil, [ assumed ] ] ].each do |rails, labels|
+        Dir.mktmpdir do |dir|
+          lock = rails ? { "Gemfile" => "gem \"rails\"\n", "Gemfile.lock" => "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{rails})\n\nDEPENDENCIES\n  rails\n" } : {}
+          models = static_app(dir, lock.merge("app/models/user.rb" => "class User < ApplicationRecord\n  enum :name, { draft: \"draft\" }, validate: true\nend\n")).static_call
+
+          expect(models["User"][:validations].map { |v| v[:added_by] }).to eq(labels)
+        end
+      end
+    end
+
+    # Rails never removes the parent's validator, and keeps it where the parent declared it:
+    # ActiveRecord 8.0.5.1 News.validators is [presence author, presence editor].
+    it "keeps the presence a parent's belongs_to adds when a subclass redefines it as optional, in the parent's order" do
+      Dir.mktmpdir do |dir|
+        introspector = static_app(dir, "config/application.rb" => "module App\n  class Application < Rails::Application\n    config.load_defaults 7.1\n  end\nend\n",
+                                       "app/models/article.rb" => "class Article < ApplicationRecord\n  belongs_to :author\n  belongs_to :editor\nend\n",
+                                       "app/models/news.rb" => "class News < Article\n  belongs_to :author, optional: true\nend\n",
+                                       "app/models/feature.rb" => "class Feature < Article\n  belongs_to :author\nend\n")
+        models = introspector.static_call
+        article = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          belongs_to :author, class_name: "User", required: true
+          belongs_to :editor, class_name: "User", required: true
+        end
+        article.define_singleton_method(:name) { "Article" }
+        news = Class.new(article) { belongs_to :author, class_name: "User", optional: true }
+        news.define_singleton_method(:name) { "News" }
+        booted = introspector.send(:extract_model_details, news)[:validations].select { |v| v[:kind] == "presence" }.map { |v| v[:attributes] }
+
+        expect(booted).to eq([ %w[author], %w[editor] ])
+        %w[News Feature].each { |name| expect(models[name][:validations].select { |v| v[:implicit] }.map { |v| v[:attributes] }).to eq(booted) }
       end
     end
   end

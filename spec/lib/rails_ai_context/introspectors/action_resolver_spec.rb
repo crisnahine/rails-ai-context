@@ -402,6 +402,37 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
     end
   end
 
+  describe ".resolve_entry_name" do
+    # The answers Ruby gives, read in a throwaway namespace; the listing names the same classes from the top level.
+    let(:ruby) do
+      Module.new.module_eval(<<~RUBY, __FILE__, __LINE__ + 1)
+        class Panel; class Base; end; end
+        class Admin < Panel; end
+        class Admin::Shell; end
+        module Tracker; class Admin; class Shell; end; end; end
+        module Tracker; class Gadget < Admin::Shell; end; end
+        [ Admin::Base, Tracker::Gadget.superclass ].map { |klass| klass.name.split("::").drop(1).join("::") }
+      RUBY
+    end
+    let(:entries) do
+      { "Panel" => { parent_class: nil }, "Panel::Base" => { parent_class: nil }, "Admin" => { parent_class: "Panel" },
+        "Admin::Shell" => { parent_class: nil }, "Tracker::Admin" => { parent_class: nil }, "Tracker::Admin::Shell" => { parent_class: nil },
+        "Gadget" => { parent_class: "::Admin::Base" }, "Tracker::Gadget" => { parent_class: "Admin::Shell" } }
+    end
+
+    it "reads a rooted path's later segment inside the superclasses of the segment before it" do
+      expect(described_class.resolve_entry_name(entries, "::Admin::Base", "Gadget")).to eq(ruby.first)
+    end
+
+    it "reads a qualified path's head from the nesting before the top level" do
+      expect(described_class.resolve_entry_name(entries, "Admin::Shell", "Tracker::Gadget")).to eq(ruby.last)
+    end
+
+    it "reads a rooted path from the top level alone" do
+      expect(described_class.resolve_entry_name(entries, "::Admin::Shell", "Tracker::Gadget")).to eq("Admin::Shell")
+    end
+  end
+
   describe ".app_base_name?" do
     it "names the conventional base, plain and namespaced" do
       expect(described_class.app_base_name?("ApplicationController", kind: :controller)).to be(true)

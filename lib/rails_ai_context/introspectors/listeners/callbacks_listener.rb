@@ -55,6 +55,7 @@ module RailsAiContext
 
         def on_call_node_enter(node)
           return record_skip(node) if node.name == :skip_callback && in_scope?(node)
+          return record_set_callback(node) if node.name == :set_callback && in_scope?(node)
           return record_broadcasts(node) if BROADCASTS.key?(node.name) && in_scope?(node)
           return record_defined(node) if node.name == :define_model_callbacks && in_scope?(node)
 
@@ -128,6 +129,26 @@ module RailsAiContext
               confidence: confidence_for(node)
             }
           end
+        end
+
+        # Rails' set_callback(:event, :kind, *filters): the kind defaults to :before, and unlike the
+        # model macros it adds no implicit prepend, so the record carries `prepend` only when written.
+        def record_set_callback(node)
+          positional = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
+          event = literal_string(positional.first)
+          return unless event
+
+          rest = positional.drop(1)
+          kind = KINDS.include?(literal_string(rest.first)) ? literal_string(rest.shift) : "before"
+          type = "#{kind}_#{event}"
+          library_chain = event unless CALLBACK_METHODS.include?(type.to_sym) || defined_here.include?(type.to_sym)
+          return if library_chain && !@library_chains
+
+          targets = (node.block ? [ [ INLINE_BLOCK, RailsAiContext::Confidence::INFERRED ] ] : []) + rest.map do |arg|
+            (name = literal_string(arg)) ? [ name, confidence_for(node) ] : [ proc_argument?(arg) ? INLINE_BLOCK : one_line_source(arg), RailsAiContext::Confidence::INFERRED ]
+          end
+          options = scope_options(receiver_name(node)).merge(extract_keyword_sources(node))
+          emit(node, [ type ], targets, options, library_chain: library_chain)
         end
 
         # Each filter Rails registers, in its order: the block first, then every positional

@@ -182,11 +182,11 @@ module RailsAiContext
       # @return [Hash{String => String, nil}] column name, folded as SQLite compares names (ASCII only) => what its
       #   part of a CREATE TABLE statement says after AS; nil where that cannot be told
       def column_expressions(definition)
-        scanner = SqlGate::Scanner.new(SqlGate.comment_free(definition, SQLITE))
+        scanner = SqlScan::Scanner.new(SqlGate.comment_free(definition, SQLITE))
         depth = 0
         parts = [ +"" ]
         until scanner.eos?
-          read = SqlGate.quoted(scanner, SQLITE)&.last || scanner.getch
+          read = SqlScan.quoted(scanner, SQLITE)&.last || scanner.getch
           depth -= 1 if read == ")"
           if depth == 1 && read == "," then parts << +""
           elsif depth.positive? then parts.last << read
@@ -235,9 +235,9 @@ module RailsAiContext
       # What a virtual table's definition says after the table's own name: `USING module(arguments)`.
       # SQLite stores it from the name on, and a quoted name can hold the word USING.
       def module_clause(sql)
-        scanner = SqlGate::Scanner.new(sql)
+        scanner = SqlScan::Scanner.new(sql)
         scanner.skip(/\s*CREATE\s+VIRTUAL\s+TABLE\s+/i)
-        SqlGate.quoted(scanner, SQLITE) || scanner.skip(/[^\s"'`\[]+/)
+        SqlScan.quoted(scanner, SQLITE) || scanner.skip(/[^\s"'`\[]+/)
         scanner.rest
       end
 

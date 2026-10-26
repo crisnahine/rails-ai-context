@@ -31,6 +31,17 @@ RSpec.describe RailsAiContext::Introspectors::Includers do
     expect(result).to eq("Admin::Helper" => [ "Admin::Report" ], "Helper" => [ "Report" ])
   end
 
+  # `include ::Priced` is Object's Priced however near a Shop::Priced is.
+  it "credits an include written from the root to the top-level module" do
+    result = of(%w[Shop::Priced Priced], {
+      "app/models/concerns/priced.rb" => "module Priced\nend\n",
+      "app/models/concerns/shop/priced.rb" => "module Shop\n  module Priced\n  end\nend\n",
+      "app/models/shop/tool.rb" => "module Shop\n  class Tool\n    include ::Priced\n  end\nend\n"
+    })
+
+    expect(result).to eq("Priced" => [ "Shop::Tool" ])
+  end
+
   # A qualified name's first segment resolves from the namespace outward too.
   it "credits a relative qualified include to the module it names from the includer's namespace" do
     result = of(%w[Wiki::Concerns::Request], {

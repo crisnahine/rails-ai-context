@@ -1175,7 +1175,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         source = "class ExportsController < ApplicationController\n  include Exportable\nend\n"
 
         expect(introspector.send(:concern_actions, [ "Exportable" ], "ExportsController", [])).to eq([ "export" ])
-        expect(introspector.send(:concern_methods, source, "ExportsController")).to eq(Set["export", "export_params"])
+        File.write(File.join(dir, "app/controllers/exports_controller.rb"), source)
+        owners = introspector.send(:method_lookup, [ [ "ExportsController", nil, source ] ])
+        expect(owners.flat_map { |_, facts| facts[:defined].to_a }.to_set).to eq(Set["export", "export_params"])
       end
     end
 
@@ -1203,7 +1205,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         source = "class ExportsController < ApplicationController\n  include Exportable\nend\n"
 
         expect(introspector.send(:concern_actions, [ "Exportable" ], "ExportsController", [])).to contain_exactly("export", "download")
-        expect(introspector.send(:concern_methods, source, "ExportsController")).to eq(Set["export", "download", "download_params"])
+        File.write(File.join(dir, "app/controllers/exports_controller.rb"), source)
+        owners = introspector.send(:method_lookup, [ [ "ExportsController", nil, source ] ])
+        expect(owners.flat_map { |_, facts| facts[:defined].to_a }.to_set).to eq(Set["export", "download", "download_params"])
       end
     end
 
@@ -1226,7 +1230,26 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         source = "class HomonymsController < ApplicationController\n  include Homonym\nend\n"
 
         expect(introspector.send(:concern_actions, [ "Homonym" ], "HomonymsController", [])).to eq([ "tool_action" ])
-        expect(introspector.send(:concern_methods, source, "HomonymsController")).to eq(Set["tool_action", "tool_params"])
+        File.write(File.join(dir, "app/controllers/homonyms_controller.rb"), source)
+        owners = introspector.send(:method_lookup, [ [ "HomonymsController", nil, source ] ])
+        expect(owners.flat_map { |_, facts| facts[:defined].to_a }.to_set).to eq(Set["tool_action", "tool_params"])
+      end
+    end
+
+    # Ruby: `include X` runs before `include A` makes A::X reachable, so the class mixes in the top-level X.
+    it "reads each include of the class at its own line" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/concerns"))
+        File.write(File.join(dir, "app/controllers/concerns/x.rb"), "module X\n  private def top_params = params.require(:top).permit(:a)\nend\n")
+        File.write(File.join(dir, "app/controllers/concerns/a.rb"), "module A\n  module X\n    private def inner_params = params.require(:inner).permit(:a)\n  end\nend\n")
+        introspector = described_class.new(double("app", root: Pathname.new(dir)))
+        source = "class HomonymsController < ApplicationController\n  include X\n  include A\nend\n"
+        File.write(File.join(dir, "app/controllers/homonyms_controller.rb"), source)
+
+        owners = introspector.send(:method_lookup, [ [ "HomonymsController", nil, source ] ])
+
+        expect(owners.first(3).map(&:first)).to eq(%w[HomonymsController A X])
+        expect(owners.assoc("X").last[:defined]).to eq(Set["top_params"])
       end
     end
 

@@ -88,6 +88,7 @@ module RailsAiContext
       # Shared cache across all tool subclasses, protected by a Mutex
       # for thread safety in multi-threaded servers (e.g., Puma).
       SHARED_CACHE = { mutex: Mutex.new }
+      RunCache.keeper = ->(key, &read) { kept_beside_context(key, &read) }
 
       # Per thread, one list per running tool call of the composed tools it left out.
       LEFT_OUT = :rails_ai_context_left_out
@@ -178,6 +179,13 @@ module RailsAiContext
           jobs.is_a?(Hash) ? Array(jobs[:enqueue_helpers]) : []
         end
 
+        # What a job's or a service's source does beyond its return value.
+        def side_effects_of(source)
+          models = RunCache.fetch([ :app_model_names, rails_app.root.to_s ]) { Introspectors::SourceScan.model_names(rails_app.root.to_s) }
+          columns = Payload.schema_tables(Payload.section(cached_context, :schema)).flat_map { |_, _, table| Array(table[:columns]).map { |column| column[:name].to_s } }.to_set
+          Introspectors::SideEffects.of(source, enqueue_helpers, models: models, columns: columns)
+        end
+
         # Cache introspection results with TTL + fingerprint invalidation.
         # Uses SHARED_CACHE so all tool subclasses share one introspection
         # result instead of each caching independently.
@@ -234,6 +242,31 @@ module RailsAiContext
           value = yield
           SHARED_CACHE[:mutex].synchronize do
             (SHARED_CACHE[:kept] ||= {})[key] = { mark: mark, value: value.deep_dup } if mark && SHARED_CACHE[:fingerprint] == mark
+          end
+          value
+        end
+
+        # kept_with_context for a reader below the tools, which never introspects or waits: with no context held or the
+        # cache busy, it reads anew. Every call shares the value, so it is frozen whole.
+        def kept_beside_context(key)
+          mutex = SHARED_CACHE[:mutex]
+          return yield unless mutex.try_lock
+
+          begin
+            mark = SHARED_CACHE[:fingerprint]
+            kept = SHARED_CACHE.dig(:kept, key)
+            return kept[:value] if mark && kept && kept[:mark] == mark
+          ensure
+            mutex.unlock
+          end
+          value = Ractor.make_shareable(yield)
+          return value unless mark && mutex.try_lock
+
+          begin
+            # A value read while the context was taken again keeps the old mark, which no later read matches.
+            (SHARED_CACHE[:kept] ||= {})[key] = { mark: mark, value: value }
+          ensure
+            mutex.unlock
           end
           value
         end
@@ -512,10 +545,10 @@ module RailsAiContext
 
         # Structured not-found error with fuzzy suggestion and recovery hint.
         # Helps AI agents self-correct without retrying blind.
-        def not_found_response(type, name, available, recovery_tool: nil, note: nil)
+        def not_found_response(type, name, available, recovery_tool: nil, note: nil, verdict: "not found")
           # Don't suggest the exact same string the user typed - that's useless
           suggestions = find_closest_matches(name, available) - [ name ]
-          lines = [ "#{type} '#{echo_input(name)}' not found." ]
+          lines = [ "#{type} '#{echo_input(name)}' #{verdict}." ]
           if suggestions.size == 1
             lines << "Did you mean '#{suggestions.first}'?"
           elsif suggestions.any?
@@ -1085,13 +1118,25 @@ module RailsAiContext
             # Whole lines only, so no half a fact is left, unless the last line break is far back.
             cut = text.rindex("\n", max)
             truncated = text[0...(cut && cut > max / 2 ? cut : max)]
-            truncated += "\n\n---\n_Response truncated (#{text.length} chars). Use `detail:\"summary\"` for an overview, or filter by a specific item (e.g. `table:\"users\"`)._"
+            fences = truncated.lines.select { |line| line.lstrip.start_with?("```") }
+            truncated += "\n#{fences.last[/\A */]}```" if fences.size.odd?
+            truncated += "\n\n---\n_Response truncated (#{text.length} chars).#{narrowing_hint}_"
             truncated += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: cli_form(truncated) } ])
           else
             text += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: cli_form(text) } ])
           end
+        end
+
+        # How to ask for less, in the params this tool takes.
+        def narrowing_hint
+          properties = (respond_to?(:input_schema) ? input_schema&.to_h : nil)&.dig(:properties)
+          params = (properties.is_a?(Hash) ? properties.keys.map(&:to_s) : []) - [ "detail" ]
+          narrow = "narrow it with one of #{params.map { |name| "`#{name}`" }.join(", ")}" if params.any?
+          return narrow ? " To see less, #{narrow}." : "" unless detail_param?
+
+          " Use `detail:\"summary\"` for an overview#{", or #{narrow}" if narrow}."
         end
 
         # A call to one of this gem's tools as an answer writes it:

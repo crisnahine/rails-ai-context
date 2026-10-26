@@ -90,7 +90,7 @@ module RailsAiContext
 
         seen << path
         text = RailsAiContext::SafeFile.read(path) or return nil
-        config = JSON.parse(jsonc(text))
+        config = RailsAiContext::PackageJson.json(jsonc(text))
         return nil unless config.is_a?(Hash)
 
         options = {}

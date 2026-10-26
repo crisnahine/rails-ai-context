@@ -38,6 +38,15 @@ RSpec.describe "AI tool identity ownership" do
     expect(paths).to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.mcp_config[:path] ] })
   end
 
+  it "builds doctor's MCP config table once, frozen" do
+    checks = RailsAiContext::Doctor.send(:mcp_config_checks)
+
+    expect(RailsAiContext::Doctor.send(:mcp_config_checks)).to equal(checks)
+    expect(checks).to be_frozen
+    expect(checks.values).to all(be_frozen)
+    expect(checks.fetch(:claude)).to eq(path: ".mcp.json", name: "Claude Code", label: ".mcp.json (Claude Code)", folder_variable: nil)
+  end
+
   it "keeps every rules_dir inside the tool's own context paths" do
     RailsAiContext::Install::AiTool.all.each do |tool|
       next unless tool.rules_dir

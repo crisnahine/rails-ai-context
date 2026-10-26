@@ -38,6 +38,20 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
     expect(snapshot.changed?).to be(false)
   end
 
+  it "never lists a folder below a node_modules or vendor/bundle inside an autoload root" do
+    write("app/models/node_modules/pkg/lib/k.rb", "module K\nend\n")
+    write("app/models/vendor/bundle/ruby/3.3.0/gems/x/lib/x.rb", "module X\nend\n")
+    write("app/models/vendor/bundle/ruby/3.3.0/specifications/x.gemspec", "")
+    write("app/models/log/entry.rb", "module Log\n  class Entry\n  end\nend\n")
+    listed = []
+    allow(snapshot).to receive(:list).and_wrap_original { |list, path, *rest| (listed << path.delete_prefix("#{root}/")) && list.call(path, *rest) }
+
+    snapshot.changed?
+
+    expect(listed).to include("app/models", "app/models/log", "app/models/vendor")
+    expect(listed.grep(%r{node_modules|vendor/bundle})).to eq([])
+  end
+
   context "after a look" do
     before { snapshot.changed? }
 
@@ -70,6 +84,30 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
       FileUtils.rm_rf(File.join(root, "app/services/billing"))
 
       expect(snapshot.changed?).to be(true)
+    end
+
+    it "leaves out of a reader's tree what that reader skips, there and inside a source walk" do
+      %w[public docs].each { |dir| FileUtils.mkdir_p(File.join(root, dir)) }
+      snapshot.changed?
+      %w[public/packs/manifest.json public/vite/manifest.json public/system/users/000/001/meta.json public/uploads/a.json
+         docs/node_modules/left-pad/package.json app/javascript/node_modules/left-pad/package.json].each { |file| write(file, "{}\n") }
+
+      listed = []
+      allow(snapshot).to receive(:list).and_wrap_original do |list, path, rule|
+        listed << path.delete_prefix("#{root}/")
+        list.call(path, rule)
+      end
+      expect(snapshot.changed?).to be(false)
+      expect(listed).to include("public")
+      expect(listed).not_to include(a_string_matching(%r{\A(?:public/(?:packs|vite|system|uploads)|docs/node_modules)}))
+      write("swagger/v1/swagger.yaml", "openapi: 3.0.1\n")
+      expect(snapshot.changed?).to be(true)
+      write("public/api/openapi.json", %({"openapi": "3.0.1"}\n))
+      expect(snapshot.changed?).to be(true)
+      %w[app/api/system/openapi.json app/api/assets/openapi.json docs/vite/api.json].each do |file|
+        write(file, %({"openapi": "3.0.1"}\n))
+        expect(snapshot.changed?).to be(true), file
+      end
     end
 
     it "sees a root manifest change" do
@@ -214,9 +252,9 @@ RSpec.describe RailsAiContext::Fingerprinter::Snapshot do
       File.symlink("..", File.join(root, "app/models/up"))
       fresh = described_class.new(root)
       listed = []
-      allow(fresh).to receive(:list).and_wrap_original do |list, path|
+      allow(fresh).to receive(:list).and_wrap_original do |list, path, rule|
         listed << File.realpath(path)
-        list.call(path)
+        list.call(path, rule)
       end
 
       Timeout.timeout(10) { fresh.changed? }

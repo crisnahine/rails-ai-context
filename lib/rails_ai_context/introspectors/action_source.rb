@@ -140,7 +140,7 @@ module RailsAiContext
         mixins.reverse_each do |mixin|
           next unless ConcernMembership.candidate?(mixin[:name])
 
-          mod, path = resolve(root, mixin[:name].to_s, scopes)
+          mod, path = resolve(root, mixin[:top_level] ? "::#{mixin[:name]}" : mixin[:name].to_s, scopes)
           source = path && PathResolver.project_file?(path, root) && SafeFile.read(path)
           next unless source
 
@@ -157,12 +157,12 @@ module RailsAiContext
       # Admin::Exportable, and in a compact `class Admin::WidgetsController`
       # it cannot.
       def resolve(root, name, scopes)
-        candidates = name.start_with?("::") ? [ name.delete_prefix("::") ] : [ *scopes.map { |scope| "#{scope}::#{name}" }, name ]
-        candidates.each do |candidate|
-          found = ConcernPaths.find_named(root, candidate, prefer: "controller") || ConcernPaths.outer_named(root, candidate)
-          return found if found && found.first == candidate
-        end
-        nil
+        found = nil
+        DeclaredConstant.lookup(name, nesting: scopes, exists: lambda { |candidate|
+          named = ConcernPaths.find_named(root, candidate, prefer: "controller") || ConcernPaths.outer_named(root, candidate)
+          found = named if named && named.first == candidate
+        })
+        found
       end
 
       # A module's own body: the module, then each namespace around its name.

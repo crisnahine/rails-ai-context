@@ -15,6 +15,7 @@ module RailsAiContext
         "config/deploy.yml" => "kamal", "Capfile" => "capistrano", "app.json" => "heroku", "fly.toml" => "fly.io",
         "render.yaml" => "render", "render.yml" => "render", "railway.toml" => "railway", "railway.json" => "railway"
       }.freeze
+      READS = (PROCFILES + COMPOSE_FILES + DEPLOY_MARKERS.keys).freeze
 
       def call
         {

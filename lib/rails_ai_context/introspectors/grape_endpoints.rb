@@ -20,7 +20,7 @@ module RailsAiContext
 
         classes = read(root.to_s)
         mounts.each_with_object({}) do |mount, found|
-          name = resolve(classes, mount[:engine].delete_prefix("::"), nil)
+          name = resolve(classes, mount[:engine], nil)
           next unless name && grape?(classes, name)
 
           list = expand(classes, name, base: [ mount[:path] ], namespace: [], prefix: nil, version: nil, seen: [])
@@ -59,16 +59,12 @@ module RailsAiContext
         classes
       end
 
-      # A name written inside V1 can mean V1::Users or a top-level Users.
+      # A name written inside V1 can mean V1::Users or a top-level Users; `::Users` is the top-level one alone.
+      # shortcut: a compact `class V1::Root` reaches V1 too, as the nesting is read per owner segment; record each class's Module.nesting to fix.
       def resolve(classes, name, scope)
-        candidates = []
-        parts = scope.to_s.split("::")
-        until parts.empty?
-          candidates << "#{parts.join('::')}::#{name}"
-          parts.pop
-        end
-        candidates << name
-        candidates.find { |candidate| classes.key?(candidate) } || (name if ROOTS.include?(name))
+        bare = name.delete_prefix("::")
+        DeclaredConstant.lookup(name, nesting: DeclaredConstant.nesting(scope.to_s.split("::")), exists: ->(candidate) { classes.key?(candidate) }) ||
+          (bare if ROOTS.include?(bare))
       end
 
       def grape?(classes, name, seen = [])
@@ -76,7 +72,7 @@ module RailsAiContext
         return false if seen.include?(name) || !classes[name]
 
         parent = classes[name][:superclass] or return false
-        grape?(classes, resolve(classes, parent, name.rpartition("::").first) || parent, seen + [ name ])
+        grape?(classes, resolve(classes, parent, name.rpartition("::").first) || parent.delete_prefix("::"), seen + [ name ])
       end
 
       def expand(classes, name, base:, namespace:, prefix:, version:, seen:)

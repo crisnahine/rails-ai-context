@@ -5,6 +5,7 @@
 # Ruby 3.1, where `[...].to_set` raised NoMethodError.
 require "set"
 require_relative "safe_file"
+require_relative "install/surface"
 
 module RailsAiContext
   # One-time cleanup for files that were removed in a breaking release.
@@ -17,6 +18,8 @@ module RailsAiContext
 
     module_function
 
+    # Asks, then removes at once, for the entries outside the install program.
+    #
     # @param ai_tools [Array<Symbol>, nil] formats user has selected; nil means all
     # @param root [String, Pathname] project root directory
     # @param io [IO] stream for output (stderr by default)
@@ -26,44 +29,56 @@ module RailsAiContext
     #   command names it, when they typed it outside the root: the files and
     #   the rm line are named from there, so the rm removes them where it is run
     def prompt_legacy_files(ai_tools, root:, io: $stderr, warn_only: false, place: nil, delete: false)
+      surface = Install::Surface.new(->(text, _level) { io.puts text }, lambda { |prompt|
+        io.print "#{prompt} "
+        $stdin.gets
+      }, place)
+      remove(surface, ask(surface, ai_tools, root: root, warn_only: warn_only, delete: delete), root: root)
+    end
+
+    # The legacy files present and the question about them, through the
+    # install's surface, named from its place.
+    #
+    # @return [Array<Array(String, String)>] [shown, full] pairs to delete
+    def ask(surface, ai_tools, root:, warn_only: false, delete: false)
       allowed = ai_tools ? Array(ai_tools).map(&:to_sym).to_set : nil
 
       present = LEGACY_FILES.filter_map do |entry|
         next if allowed && !allowed.include?(entry[:ai_tool])
         full = File.join(root.to_s, entry[:path])
-        [ place ? File.join(place, entry[:path]) : entry[:path], full ] if File.exist?(full)
+        [ surface.place ? File.join(surface.place, entry[:path]) : entry[:path], full ] if File.exist?(full)
       end
-      return if present.empty?
+      return [] if present.empty?
 
-      io.puts ""
-      io.puts "Legacy files detected (removed in v5.0.0):"
-      present.each { |(rel, _)| io.puts "  #{rel}" }
-      io.puts ""
-      io.puts "These files are no longer regenerated and contain stale guidance."
+      surface.say ""
+      surface.say "Legacy files detected (removed in v5.0.0):"
+      present.each { |(rel, _)| surface.say "  #{rel}" }
+      surface.say ""
+      surface.say "These files are no longer regenerated and contain stale guidance."
+      return present if delete
 
-      if !delete && (warn_only || !$stdin.tty?)
-        io.puts "Delete manually when ready:"
-        io.puts "  #{rm_line(present)}"
-        return
-      end
-
-      unless delete
-        io.print "Delete them? [y/N]: "
-        input = $stdin.gets&.strip&.downcase || "n"
+      if warn_only || !$stdin.tty?
+        surface.say "Delete manually when ready:"
+        surface.say "  #{rm_line(present)}"
+        return []
       end
 
-      if delete || input == "y" || input == "yes"
-        present.each do |(rel, full)|
-          SafeFile.delete(full, root: root)
-          io.puts "  Removed #{rel}"
-        rescue SafeFile::LinkedOut
-          io.puts "  Left #{rel} as it is - #{SafeFile::LINKED}"
-        rescue SystemCallError
-          io.puts "  Could not remove #{rel} - check its permissions"
-        end
-      else
-        io.puts "  Kept. Delete manually when ready:"
-        io.puts "    #{rm_line(present)}"
+      return present if %w[y yes].include?(surface.ask("Delete them? [y/N]:").to_s.strip.downcase)
+
+      surface.say "  Kept. Delete manually when ready:"
+      surface.say "    #{rm_line(present)}"
+      []
+    end
+
+    # @param present [Array<Array(String, String)>] what ask returned
+    def remove(surface, present, root:)
+      present.each do |(rel, full)|
+        SafeFile.delete(full, root: root)
+        surface.say "  Removed #{rel}", :ok
+      rescue SafeFile::LinkedOut
+        surface.say "  Left #{rel} as it is - #{SafeFile::LINKED}", :warn
+      rescue SystemCallError
+        surface.say "  Could not remove #{rel} - check its permissions", :warn
       end
     end
 

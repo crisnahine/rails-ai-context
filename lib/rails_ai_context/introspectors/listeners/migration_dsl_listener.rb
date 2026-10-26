@@ -20,7 +20,7 @@ module RailsAiContext
 
         REFERENCE_ACTIONS = %i[add_reference remove_reference add_belongs_to remove_belongs_to].to_set.freeze
 
-        FOREIGN_KEY_ACTIONS = %i[add_foreign_key remove_foreign_key].to_set.freeze
+        FOREIGN_KEY_ACTIONS = %i[add_foreign_key remove_foreign_key validate_foreign_key].to_set.freeze
 
         ALL_ACTIONS = (
           SINGLE_TABLE_ACTIONS | COLUMN_ACTIONS | INDEX_ACTIONS |
@@ -102,7 +102,7 @@ module RailsAiContext
             result.merge!(column_type: literal_string(args[2]), **default_fields(node))
           when :change_column_null
             # The nullability is the third positional, not a keyword.
-            result[:null] = boolean_value(args[2])
+            result.merge!(null_fields(args[2]))
           when :change_column_default
             # The new default may be positional as well as from:/to:.
             result.merge!(new_default_fields(node, args[2]))

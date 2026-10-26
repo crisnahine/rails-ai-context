@@ -8,6 +8,12 @@ module RailsAiContext
       class MigrationReplayListener < BaseListener
         include SchemaDslListener::TableBlock
 
+        # adapter: database.yml's, whose quoting splits an execute's SQL into statements.
+        def initialize(adapter: nil)
+          super()
+          @adapter = adapter
+        end
+
         def on_def_node_enter(node)
           return unless node.name == :down
 
@@ -20,7 +26,8 @@ module RailsAiContext
           remove_index: :remove_index, rename: :rename_column, remove_timestamps: :remove_columns,
           change: :change_column, change_default: :change_column_default, change_null: :change_column_null,
           timestamps: :add_timestamps, check_constraint: :add_check_constraint, remove_check_constraint: :remove_check_constraint,
-          remove_unique_constraint: :remove_unique_constraint
+          remove_unique_constraint: :remove_unique_constraint, remove_exclusion_constraint: :remove_exclusion_constraint,
+          foreign_key: :add_foreign_key, remove_foreign_key: :remove_foreign_key
         }.freeze
 
         def on_call_node_enter(node)
@@ -44,6 +51,8 @@ module RailsAiContext
                           location: node.location.start_line }
           elsif TOP_LEVEL.include?(node.name) && node.receiver.nil?
             @results << top_level(node, args)
+          elsif ENUM_STATEMENTS.include?(node.name) && node.receiver.nil?
+            @results << enum_statement(node, args)
           # shortcut: only a migration's own execute is read, bare or on self, not SQL run another way (a connection call, an app's DB helper); read those if an app needs them.
           elsif node.name == :execute && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode))
             sql_node = args.first
@@ -57,8 +66,8 @@ module RailsAiContext
             end
             statements.each do |sql|
               if (match = DROP_TABLE.match(sql))
-                match[1].split(",").each do |name|
-                  @results << { action: :drop_table, table: name.strip.delete('"`').split(".").last, options: match[2] ? { force: :cascade } : {},
+                match[1].scan(SqlScan::QUALIFIED_NAME_TEXT).each do |name|
+                  @results << { action: :drop_table, table: SqlScan.names(name).last, options: match[2] ? { force: :cascade } : {},
                                 location: node.location.start_line }
                 end
               elsif sql.match?(CREATE_TABLE)
@@ -68,9 +77,11 @@ module RailsAiContext
           end
         end
 
-        TOP_LEVEL = %i[remove_columns add_timestamps rename_index add_check_constraint remove_check_constraint
-                       add_unique_constraint remove_unique_constraint].to_set.freeze
-        DROP_TABLE = /\A\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?((?:[\w."`]+\s*,\s*)*[\w."`]+)(?:\s+(?:(CASCADE)|RESTRICT))?\s*\z/i
+        TOP_LEVEL = %i[remove_columns remove_timestamps add_timestamps rename_index add_check_constraint remove_check_constraint validate_check_constraint
+                       add_unique_constraint remove_unique_constraint change_column_comment change_table_comment
+                       add_exclusion_constraint remove_exclusion_constraint].to_set.freeze
+        ENUM_STATEMENTS = %i[create_enum drop_enum rename_enum add_enum_value rename_enum_value].to_set.freeze
+        DROP_TABLE = /\A\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?((?>#{SqlScan::QUALIFIED_NAME_TEXT})(?:\s*,\s*(?>#{SqlScan::QUALIFIED_NAME_TEXT}))*)(?:\s+(?:(CASCADE)|RESTRICT))?\s*\z/i
         CREATE_TABLE = /\A\s*CREATE\s+(?:UNLOGGED\s+)?TABLE\s/i
 
         private
@@ -82,7 +93,22 @@ module RailsAiContext
           # A squiggly heredoc over several lines parses as one string per line.
           when Prism::InterpolatedStringNode then adjacent_literals(node)
           end
-          sql.split(";") unless sql.nil? || sql == RailsAiContext::Confidence::INFERRED
+          SqlScan.new(sql, family: @adapter.to_s).split(";") unless sql.nil? || sql == RailsAiContext::Confidence::INFERRED
+        end
+
+        # An enum type's statement by the type's name; one naming no type it can read is counted.
+        def enum_statement(node, args)
+          positional = args.reject { |arg| arg.is_a?(Prism::KeywordHashNode) }
+          name = literal_string(positional.first)
+          return { kind: :not_replayed, location: node.location.start_line } unless name
+
+          result = { action: node.name, name: name, options: extract_keyword_options(node), location: node.location.start_line }
+          case node.name
+          when :create_enum then result[:values] = literal_strings(positional[1]) if positional[1].is_a?(Prism::ArrayNode)
+          when :add_enum_value then result[:value] = literal_string(positional[1])
+          when :rename_enum then result[:new_name] = literal_string(positional[1])
+          end
+          result
         end
 
         # A statement naming a table it cannot read is counted, never given another table.
@@ -90,7 +116,7 @@ module RailsAiContext
           table = literal_string(args.first)
           return { kind: :not_replayed, location: node.location.start_line } unless table
 
-          statement(node, node.name, args.drop(1)).merge(table: table)
+          statement(node, node.name == :remove_timestamps ? :remove_columns : node.name, args.drop(1)).merge(table: table)
         end
 
         def statement(node, action, args)
@@ -106,13 +132,18 @@ module RailsAiContext
           when :rename_index then result.merge!(old_name: names[0], new_name: names[1])
           when :change_column
             result.merge!(column: names[0], column_type: names[1], **default_fields(node))
-          when :change_column_null then result.merge!(column: names[0], null: boolean_value(positional[1]))
+          when :change_column_null then result.merge!(column: names[0], **null_fields(positional[1]))
           when :change_column_default
             result[:column] = names[0]
             result.merge!(new_default_fields(node, positional[1]))
           when :add_timestamps then result.merge!(default_fields(node))
-          when :add_check_constraint, :remove_check_constraint then result[:expression] = names[0]
+          when :add_foreign_key, :remove_foreign_key then result[:to_table] = names[0]
+          when :add_check_constraint, :remove_check_constraint, :add_exclusion_constraint, :remove_exclusion_constraint then result[:expression] = names[0]
           when :add_unique_constraint, :remove_unique_constraint then result[:columns] = literal_strings(positional.first) if positional.first
+          when :change_column_comment
+            result[:column] = names[0]
+            result[:comment] = extract_value(positional[1]) if positional[1]
+          when :change_table_comment then result[:comment] = extract_value(positional[0]) if positional[0]
           end
           result
         end

@@ -161,6 +161,20 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
+    # Only true turns a plugin on, so a local value of any other kind turns the committed one off, as doctor says.
+    it "names a local setting that is no boolean as turning the committed plugin off" do
+      Dir.mktmpdir do |root|
+        commit_plugin(root)
+        File.write(File.join(root, ".claude", "settings.local.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => [ "1.0" ] }))
+        surface = surface_class.new
+
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, standalone: true)
+
+        expect(surface.text).to include("your .claude/settings.local.json turns it off: " \
+                                        "`claude plugin enable rails-ai-context@rails-ai-context --scope local` turns it back on")
+      end
+    end
+
     # Local settings win over the committed file, and the install still leaves .mcp.json to the team.
     it "names the local setting that turns the committed plugin off" do
       Dir.mktmpdir do |root|
@@ -307,10 +321,9 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
-    # The plugin serves a folder holding one app, and fails to start in a folder of several.
-    it "writes a workspace's servers only where the folder holds several apps, and says the plugin fails there" do
-      skip "Claude Code keeps each folder's local settings apart on Windows" if Gem.win_platform?
-
+    # The plugin serves a folder holding one app, and each app of a folder of several, so neither gets a server of its own.
+    it "writes no Claude Code server for a workspace whose committed settings turn the plugin on, one app or several" do
+      never_ran
       Dir.mktmpdir do |root|
         commit_plugin(root)
         server = ->(app) { RailsAiContext::McpConfigGenerator::Server.new(name: "rails-ai-context-#{app}", standalone: true, app_path: app) }
@@ -319,24 +332,129 @@ RSpec.describe RailsAiContext::Install::Program do
         expect(File.exist?(File.join(root, ".mcp.json"))).to be(false)
 
         surface = surface_class.new
-        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ])
-        expect(File.exist?(File.join(root, ".mcp.json"))).to be(true)
-        expect(surface.text).to include("Claude Code: .claude/settings.json turns on the rails-ai-context plugin, which serves one app, not a folder " \
-                                        "of them, so it has nothing to serve here: `claude plugin disable rails-ai-context@rails-ai-context " \
-                                        "--scope project` turns it off for this folder")
+        written = described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ])
+        expect(File.exist?(File.join(root, ".mcp.json"))).to be(false)
+        expect(written).to include(held: %i[claude], plugin_off: false)
+        expect(surface.text).to include("Claude Code: no server written into .mcp.json here: .claude/settings.json turns the rails-ai-context " \
+                                        "plugin on, and serves each app here, by the app a call names")
+      end
+    end
 
-        # Outside a repository the folder's local file is its own, which a local disable turns off.
-        File.write(File.join(root, ".claude", "settings.local.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => true }))
+    # After an upgrade the per-app entries an earlier init wrote run beside the router, listing every tool twice.
+    it "names the per-app servers .mcp.json still holds above several apps, and removes them under --prune" do
+      never_ran
+      Dir.mktmpdir do |root|
+        commit_plugin(root)
+        server = ->(app) { RailsAiContext::McpConfigGenerator::Server.new(name: "rails-ai-context-#{app}", standalone: true, app_path: app) }
+        entry = ->(app) { { "command" => "rails-ai-context", "args" => [ "serve", "--app-path", app ] } }
+        mcp_json = File.join(root, ".mcp.json")
+        File.write(mcp_json, JSON.generate("mcpServers" => { "rails-ai-context-a" => entry.("a"), "rails-ai-context-b" => entry.("b"), "mine" => { "command" => "x" } }))
+        servers = [ server.("a"), server.("b") ]
+
+        surface = surface_class.new
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: servers)
+        expect(JSON.parse(File.read(mcp_json))["mcpServers"].keys).to eq(%w[rails-ai-context-a rails-ai-context-b mine])
+        expect(surface.text).to include("and serves each app here, by the app a call names, and .mcp.json still holds `rails-ai-context-a`, " \
+                                        "`rails-ai-context-b`, which run beside it: remove them from .mcp.json, or run init with --prune")
+
+        surface = surface_class.new
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: servers, prune: true)
+        expect(JSON.parse(File.read(mcp_json))["mcpServers"].keys).to eq(%w[mine])
+        expect(surface.text).to include("Removed rails-ai-context-a, rails-ai-context-b from .mcp.json")
+      end
+    end
+
+    # Only an entry the gem wrote is its to remove: a user's, under any name, stays and is named with the file.
+    it "removes under --prune every server the gem wrote, an app's that is gone too, and names each one a user wrote" do
+      never_ran
+      Dir.mktmpdir do |root|
+        commit_plugin(root)
+        server = ->(app) { RailsAiContext::McpConfigGenerator::Server.new(name: "rails-ai-context-#{app}", standalone: true, app_path: app) }
+        mcp_json = File.join(root, ".mcp.json")
+        File.write(mcp_json, JSON.generate("mcpServers" => {
+                                             "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] },
+                                             "rails-ai-context-b" => { "command" => "bundle", "args" => %w[exec rails-ai-context serve --app-path b] },
+                                             "rails-ai-context-gone" => { "command" => "rails-ai-context", "args" => %w[serve --app-path gone] },
+                                             "my-api" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] },
+                                             "rails-ai-context-docker" => { "command" => "docker",
+                                                                            "args" => %w[compose run --rm web rails-ai-context serve --app-path a] },
+                                             "rails-ai-context-env" => { "command" => "rails-ai-context", "args" => %w[serve --app-path b],
+                                                                         "env" => { "RAILS_ENV" => "test" } },
+                                             "mine" => { "command" => "x" }
+                                           }))
+        servers = [ server.("a"), server.("b") ]
+
+        surface = surface_class.new
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: servers)
+        expect(surface.text).to include("or run init with --prune")
+
+        surface = surface_class.new
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: servers, prune: true)
+
+        expect(JSON.parse(File.read(mcp_json))["mcpServers"].keys).to eq(%w[my-api rails-ai-context-docker rails-ai-context-env mine])
+        expect(surface.text).to include("Removed rails-ai-context-a, rails-ai-context-b, rails-ai-context-gone from .mcp.json")
+        expect(surface.text).to include("Left `my-api` in .mcp.json: its name is not one rails-ai-context writes")
+        expect(surface.text).to include("Left `rails-ai-context-docker` in .mcp.json: its command is not one rails-ai-context writes")
+        expect(surface.text).to include("Left `rails-ai-context-env` in .mcp.json: it holds env.RAILS_ENV, which rails-ai-context never writes")
+        expect(surface.text).not_to include("--prune")
+
+        surface = surface_class.new
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: servers)
+        expect(surface.text).to include("still holds `my-api`, `rails-ai-context-docker`, `rails-ai-context-env`, which run beside it: " \
+                                        "remove them from .mcp.json")
+        expect(surface.text).not_to include("--prune")
+      end
+    end
+
+    it "names why --prune left a .mcp.json it cannot write back, and suggests no flag that just failed" do
+      never_ran
+      Dir.mktmpdir do |root|
+        commit_plugin(root)
+        server = ->(app) { RailsAiContext::McpConfigGenerator::Server.new(name: "rails-ai-context-#{app}", standalone: true, app_path: app) }
+        mcp_json = File.join(root, ".mcp.json")
+        commented = %({\n  // mine\n  "mcpServers": { "rails-ai-context-a": { "command": "rails-ai-context", "args": ["serve", "--app-path", "a"] } }\n}\n)
+        File.write(mcp_json, commented)
         surface = surface_class.new
         described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ])
-        expect(surface.text).to include("so it has nothing to serve here: `claude plugin disable rails-ai-context@rails-ai-context --scope local` " \
-                                        "turns it off for this folder")
-
-        # A project disable cannot turn off what the repository's local settings turn on.
-        FileUtils.mkdir_p(File.join(root, ".git"))
+        expect(surface.text).to include("still holds `rails-ai-context-a`, which runs beside it: remove it from .mcp.json")
+        expect(surface.text).not_to include("--prune")
         surface = surface_class.new
-        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ])
-        expect(surface.text).to include("your local settings turn it on for the apps below as well, so start Claude Code in one of them")
+
+        described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ], prune: true)
+
+        expect(File.read(mcp_json)).to eq(commented)
+        expect(surface.text).to include("Could not update .mcp.json: Claude Code cannot read it: it holds comments")
+        expect(surface.text).not_to include("--prune")
+
+        Dir.mktmpdir do |outside|
+          shared = File.join(outside, "mcp.json")
+          File.write(shared, JSON.generate("mcpServers" => { "rails-ai-context-a" => { "command" => "rails-ai-context", "args" => %w[serve --app-path a] } }))
+          File.delete(mcp_json)
+          File.symlink(shared, mcp_json)
+          surface = surface_class.new
+
+          described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ], prune: true)
+
+          expect(JSON.parse(File.read(shared))["mcpServers"].keys).to eq(%w[rails-ai-context-a])
+          expect(surface.text).to include("Could not update .mcp.json:", "symlink")
+          expect(surface.text).to include("still holds `rails-ai-context-a`, which runs beside it: remove it from .mcp.json")
+          expect(surface.text).not_to include("--prune")
+        end
+      end
+    end
+
+    it "names the local file that turns the committed plugin off above several apps" do
+      Dir.mktmpdir do |root|
+        commit_plugin(root)
+        File.write(File.join(root, ".claude", "settings.local.json"), JSON.generate("enabledPlugins" => { "rails-ai-context@rails-ai-context" => false }))
+        server = ->(app) { RailsAiContext::McpConfigGenerator::Server.new(name: "rails-ai-context-#{app}", standalone: true, app_path: app) }
+        surface = surface_class.new
+
+        written = described_class.write_mcp_configs(surface, tools: %i[claude], tool_mode: :mcp, root: root, servers: [ server.("a"), server.("b") ])
+
+        expect(written[:plugin_off]).to be(true)
+        expect(surface.text).to include("turns the rails-ai-context plugin on, and your .claude/settings.local.json turns it off: " \
+                                        "`claude plugin enable rails-ai-context@rails-ai-context --scope local` turns it back on")
       end
     end
   end
@@ -494,6 +612,20 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
+    it "names a file whose markers do not pair up as left, and claims no removal" do
+      Dir.mktmpdir do |root|
+        text = "mine\n<!-- BEGIN rails-ai-context -->\nx\n<!-- BEGIN rails-ai-context -->\n<!-- END rails-ai-context -->\n"
+        File.write(File.join(root, ".cursorrules"), text)
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        expect(surface.lines).to include([ :warn, "Could not remove the generated section from .cursorrules (unpaired rails-ai-context marker, left as it is)" ])
+        expect(surface.text).not_to include("Cursor files removed")
+        expect(File.read(File.join(root, ".cursorrules"))).to eq(text)
+      end
+    end
+
     # A workspace keeps the context files in each app and the MCP entries in
     # itself; a dropped tool's go from both, named from the workspace.
     it "cleans each app's files and the workspace's MCP entries" do
@@ -515,7 +647,7 @@ RSpec.describe RailsAiContext::Install::Program do
                                                        app_roots: [ File.join(root, "a"), File.join(root, "b") ])
 
         expect(surface.text).to include("Removed a/.cursorrules", "Removed b/.cursorrules")
-        expect(surface.text).to include("Removed rails-ai-context from .cursor/mcp.json",
+        expect(surface.text).to include("Removed rails-ai-context-a from .cursor/mcp.json",
                                         "Removed a/.cursor/mcp.json (rails-ai-context was its only server)",
                                         "Removed a/.cursor/")
         expect(JSON.parse(File.read(File.join(root, ".cursor/mcp.json")))["mcpServers"].keys).to eq(%w[mine])
@@ -589,6 +721,38 @@ RSpec.describe RailsAiContext::Install::Program do
 
         expect(surface.lines).to include([ :warn, a_string_including("Could not update a/.cursor/mcp.json: Cursor cannot read it: it holds comments") ])
         expect(surface.text).not_to include("Cursor files removed")
+      end
+    end
+
+    it "claims no removal for a tool whose config kept an entry of the user's that runs the gem" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, ".cursor"))
+        File.write(File.join(root, ".cursor/mcp.json"), JSON.generate("mcpServers" => {
+          "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] },
+          "my-rails" => { "command" => "rails-ai-context", "args" => %w[serve --transport stdio] }
+        }))
+        surface = surface_class.new("y")
+
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        expect(surface.text).to include("Removed rails-ai-context from .cursor/mcp.json", "Left `my-rails` in .cursor/mcp.json")
+        expect(surface.text).not_to include("Cursor files removed")
+      end
+    end
+
+    it "names the user's entries a Codex config keeps when the gem's own entry there cannot be rewritten" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, ".codex"))
+        text = %(mcp_servers.rails-ai-context = { command = "rails-ai-context", args = ["serve"] }\n\n) +
+               %([mcp_servers.my-rails]\ncommand = "rails-ai-context"\nargs = ["serve", "--transport", "stdio"]\n)
+        File.write(File.join(root, ".codex/config.toml"), text)
+        surface = surface_class.new("y")
+
+        described_class.cleanup_removed_tools(surface, previous: %i[claude codex], selected: %i[claude], root: root)
+
+        expect(surface.text).to include("Left `my-rails` in .codex/config.toml", "Could not update .codex/config.toml")
+        expect(surface.text).not_to include("Codex CLI files removed")
+        expect(File.read(File.join(root, ".codex/config.toml"))).to eq(text)
       end
     end
 

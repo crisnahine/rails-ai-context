@@ -92,12 +92,15 @@ module RailsAiContext
       text = (settings["schema_search_path"] || settings["schema_order"]).to_s
       text = '"$user", public' if text.strip.empty?
       user = settings["username"].to_s
-      text.split(",").filter_map do |part|
-        part = part.strip
+      SqlScan.new(text, family: :postgresql).split(",").filter_map do |part|
         next if part.empty? || computed?(part)
-        next ([ user, true ] unless user.empty? || computed?(user)) if part.delete('"') == "$user"
 
-        [ part.start_with?('"') ? part.delete('"') : part.downcase, false ]
+        schema = part.start_with?('"') ? SqlScan.names(part).first : part.downcase
+        next unless schema
+
+        next ([ user, true ] unless user.empty? || computed?(user)) if schema == "$user"
+
+        [ schema, false ]
       end
     end
 

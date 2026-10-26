@@ -17,7 +17,7 @@ module RailsAiContext
     #
     # @return [Hash] complete application context
     def call
-      RunCache.around_app(app) { introspect_all }
+      RunCache.around_app(app) { Redaction.payload_tokens(introspect_all) }
     end
 
     # Every reader names a database's adapter from this section, so a preset without it, or one where it failed,
@@ -29,6 +29,10 @@ module RailsAiContext
       failed = { error: e.message }.tap { |data| portable_errors!(data) }
       warnings = (context[:_warnings] ||= [])
       warnings << { introspector: "multi_database", error: failed[:error] } if warnings.none? { |w| w[:introspector] == "multi_database" }
+    end
+
+    private def log_failure(what, error)
+      RailsAiContext.log_warn "[rails-ai-context] #{what} failed: #{error.message}"
     end
 
     private def introspect_all
@@ -54,10 +58,18 @@ module RailsAiContext
         # eager loading must cost one section, not the whole process (the
         # MCP server would otherwise die mid-session).
         context[name] = { error: e.message }
-        RailsAiContext.log_warn "[rails-ai-context] #{name} introspection failed: #{e.message}"
+        log_failure("#{name} introspection", e)
       end
 
-      Introspectors::ControllerIntrospector.apply_routes(context[:controllers], context[:routes], app.root)
+      begin
+        # On a copy, so a pass that fails part way leaves the section as the introspector wrote it.
+        applied = context[:controllers].deep_dup
+        Introspectors::ControllerIntrospector.apply_routes(applied, context[:routes], app.root)
+        context[:controllers] = applied unless applied.nil?
+      rescue StandardError => e
+        log_failure("controllers route actions", e)
+        routes_failed = { introspector: "controllers", error: e.message }.tap { |data| portable_errors!(data) }
+      end
 
       # Collect warnings for introspectors that failed, so serializers can
       # render them and AI clients know which sections are missing.
@@ -69,6 +81,7 @@ module RailsAiContext
           warnings << { introspector: name.to_s, error: data[:error] }
         end
       end
+      warnings << routes_failed if routes_failed && warnings.none? { |warning| warning[:introspector] == "controllers" }
       context[:_warnings] = warnings if warnings.any?
 
       fill_multi_database(context) unless Payload.section(context, :multi_database)

@@ -350,6 +350,7 @@ config/mongoid.yml config/redis.yml
 *.pem *.key *.p8 *.p12 *.pfx *.jks *.keystore
 **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa
 .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
+.npmrc .yarnrc .bundle/config
 ```
 
 A placeholder whose name ends in `.example`, `.sample`, `.template` or
@@ -395,11 +396,16 @@ which run as the file loads, whole; the body of a method outside `config/`, a
 tool's or a helper's that runs when called, for what it writes. Tests (a `spec/` or `test/` folder at any
 depth, an engine's test app among them), `db/`, `tmp/`, `vendor/bundle/`,
 `vendor/ruby/`, `vendor/cache/`, `vendor/gems/`, an installed copy of the gem, a
-generator's templates, hidden files and links are left out, and
+folder holding `rails-ai-context.gemspec` that is not a link (a checkout of the gem's own source, the
+root included, though the app's own `config/` folder is always read), a generator's templates, hidden files and links are left out, and
 `config/initializers` and `config/environments` are read through a link as
 Rails globs them. The literal values those files write to
-`sensitive_patterns`, `excluded_paths` and `skip_tools` are added to the YAML's;
-a removal is left out. A value it cannot read, such as one built from a
+`sensitive_patterns`, `excluded_paths` and `skip_tools` are added to the YAML's,
+a list joined from literals (`%w[a.yml] + %w[b.yml]`) among them; a removal is
+left out. A booted app keeps the same union: the YAML's entries for those three
+lists and every value the code adds, whichever runs first. Reading a frozen
+constant of `RailsAiContext::Configuration` (`PRESETS`) changes no setting and
+is not refused. A value it cannot read, such as one built from a
 constant or the environment, the configuration handed to other code or
 reached through `send`, a pattern changed in place, or a file that does not
 parse, stops the static tier with an error that names the file and line;
@@ -563,8 +569,9 @@ Everything that leaves your app through this gem - log lines, query rows, enviro
 What gets redacted:
 
 - Passwords, tokens, secrets and API keys, wherever they are named
-- The same in the app's own source a tool or resource shows: a method body, a template, a test file, a scan's code line, a change's diff (where a file on `sensitive_patterns` shows none of its lines)
-- Credentials embedded in URIs (`redis://user:pass@host`)
+- The same in the app's own source a tool or resource shows: a method body, a template, a test file, a scan's code line, a change's diff (where a file on `sensitive_patterns` shows none of its lines). Source text the context records (a turbo frame's `src`, a broadcast's line, a scope body, a callback's block) is filtered when it is read, so every tool, resource and generated file shows the same filtered text
+- Credentials embedded in URIs (`redis://user:pass@host`), and a key written as a URL's user (`https://<token>@github.com/...`)
+- A gem server credential Bundler reads, `BUNDLE_<HOST>`, wherever it is set: an env file, a Dockerfile, Ruby, `.bundle/config` or a `bundle config <host> <credentials>` line
 - Values a logged SQL statement holds for a secret column: compared with it (through `LOWER()`, `CAST()` or a JSON path too), listed for it with `IN` or `BETWEEN`, inserted under it, or bound to a `$1` or `?` placeholder for it. MySQL and MariaDB log every value inline, and `insert_all` and `upsert_all` do on every adapter. A value whose column cannot be told is filtered when the statement names a secret column, and every value of an `INSERT` with no column list is filtered. A secret-named key in JSON a value holds is filtered, its quotes escaped or not. A line with `\'` in it that holds no backquoted name outside its strings is read both as MySQL and as standard SQL. Each string of a JSON log line, a header before it or not, is read as a line of its own; a value under a secret's key is filtered, an array's included, and so are a JSON logger's binds when the statement beside them names a secret column. A line is read on its own, so a value with a line break in it is read a line at a time
 - The values a database error repeats: PostgreSQL's failing row whole, since it names no column, and its duplicate key when the key names a secret; MySQL's and MariaDB's duplicate entry, unless Rails named the index after columns that name no secret (`index_users_on_email`); and the excerpt of the statement a MySQL syntax error quotes, whole. A message cut off is filtered to the end of its line. An error in a language other than English is read as any other line
 - Email addresses in log lines, in any script (`jürgen@example.com`, `anna@münchen.de`)

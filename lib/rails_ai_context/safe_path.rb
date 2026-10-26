@@ -171,6 +171,13 @@ module RailsAiContext
     # does not block it; a path pattern (`.ssh/*`), its exact name or a folder
     # it sits in does.
     def sensitive?(relative)
+      return sensitive_path?(relative) unless defined?(RunCache)
+
+      # A run asks the same path from every walk; the list's identity changes when the patterns do.
+      RunCache.fetch([ :sensitive_path, relative.to_s, compiled_patterns.object_id ]) { sensitive_path?(relative) }
+    end
+
+    def sensitive_path?(relative)
       path = relative.to_s
       return true if path.bytesize > MAX_PATH
 

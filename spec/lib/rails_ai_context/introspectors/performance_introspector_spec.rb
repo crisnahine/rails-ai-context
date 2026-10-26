@@ -399,6 +399,21 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
                               [ "projects", "owner_id" ])
       end
 
+      # A subclass inherits the parent association acts_as_tree defines on its abstract base.
+      it "reads a tree macro an abstract base declares as each subclass's own" do
+        models = {
+          "node.rb" => "class Node < ApplicationRecord\n  self.abstract_class = true\n  acts_as_tree\nend\n",
+          "folder.rb" => "class Folder < Node\nend\n"
+        }
+        missing = missing_for(<<~RUBY, models)
+          create_table "folders" do |t|
+            t.integer "parent_id"
+          end
+        RUBY
+
+        expect(missing.map { |m| [ m[:table], m[:column] ] }).to contain_exactly([ "folders", "parent_id" ])
+      end
+
       it "reads a tree macro as the declaring class's alone where a file declares two models" do
         models = {
           "payment.rb" => "class Payment < ApplicationRecord\n  acts_as_tree\nend\n\nclass PaymentRefund < ApplicationRecord\nend\n"
@@ -685,6 +700,230 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         expect(missing).to contain_exactly(a_hash_including(association: "tokens"))
       end
 
+      # Only `belongs_to :user, counter_cache: true` keeps users.comments_count;
+      # the counter on belongs_to :post keeps posts.comments_count alone.
+      def counters_missing(comment_body)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n  has_many :comments\nend\n")
+          File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n  has_many :comments\nend\n")
+          File.write(File.join(dir, "app", "models", "comment.rb"), "class Comment < ApplicationRecord\n#{comment_body}end\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "users" do |t|
+              t.integer "comments_count", default: 0
+            end
+            create_table "posts" do |t|
+              t.integer "comments_count", default: 0
+            end
+            create_table "comments" do |t|
+              t.integer "post_id"
+              t.integer "user_id"
+            end
+          RUBY
+          return described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache].map { |m| m[:model] }
+        end
+      end
+
+      it "takes only the inverse belongs_to's counter_cache as keeping the column" do
+        expect(counters_missing("  belongs_to :post, counter_cache: true\n  belongs_to :user\n")).to eq(%w[User])
+      end
+
+      it "takes counter_cache: false as no counter" do
+        expect(counters_missing("  belongs_to :post, counter_cache: true\n  belongs_to :user, counter_cache: false\n")).to eq(%w[User])
+      end
+
+      def author_counter_missing(user_body, post_body)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n#{user_body}end\n")
+          File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n#{post_body}end\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "users" do |t|
+              t.integer "posts_count", default: 0
+            end
+            create_table "posts" do |t|
+              t.integer "author_id"
+            end
+          RUBY
+          return described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache].map { |m| m[:suggestion] }
+        end
+      end
+
+      it "finds a custom-named inverse belongs_to by inverse_of" do
+        expect(author_counter_missing("  has_many :posts, foreign_key: :author_id, inverse_of: :author\n",
+                                      "  belongs_to :author, class_name: \"User\", counter_cache: :posts_count\n")).to be_empty
+      end
+
+      it "finds a custom-named inverse belongs_to by its foreign key" do
+        expect(author_counter_missing("  has_many :posts, foreign_key: :author_id\n",
+                                      "  belongs_to :author, class_name: \"User\", counter_cache: true\n")).to be_empty
+      end
+
+      it "finds a custom-named inverse belongs_to by its class name" do
+        expect(author_counter_missing("  has_many :posts\n",
+                                      "  belongs_to :author, class_name: \"User\", counter_cache: true\n")).to be_empty
+      end
+
+      it "takes inverse_of and the foreign key over another belongs_to of the same class" do
+        post = "  belongs_to :editor, class_name: \"User\", counter_cache: true\n  belongs_to :author, class_name: \"User\"\n"
+        expect(author_counter_missing("  has_many :posts, inverse_of: :author\n", post))
+          .to eq([ "Add counter_cache: true to belongs_to :author in Post" ])
+        expect(author_counter_missing("  has_many :posts, foreign_key: :author_id\n", post))
+          .to eq([ "Add counter_cache: true to belongs_to :author in Post" ])
+      end
+
+      # The belongs_to that keeps users.comments_count can sit in a concern or an abstract base the comment model reads.
+      it "takes a counter_cache declared in a concern or in a base as keeping the column" do
+        {
+          "concern" => [ "concerns/postable.rb", "module Postable\n  extend ActiveSupport::Concern\n  included do\n    belongs_to :post, counter_cache: true\n  end\nend\n",
+                         "class Comment < ApplicationRecord\n  include Postable\nend\n" ],
+          "redeclared" => [ "comment_base.rb", "class CommentBase < ApplicationRecord\n  self.abstract_class = true\n  belongs_to :post\nend\n",
+                            "class Comment < CommentBase\n  belongs_to :post, counter_cache: true\nend\n" ],
+          "base" => [ "comment_base.rb", "class CommentBase < ApplicationRecord\n  self.abstract_class = true\n  belongs_to :post, counter_cache: true\nend\n",
+                      "class Comment < CommentBase\nend\n" ]
+        }.each do |label, (path, shared, comment)|
+          Dir.mktmpdir do |dir|
+            FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+            FileUtils.mkdir_p(File.join(dir, "db"))
+            File.write(File.join(dir, "app", "models", path), shared)
+            File.write(File.join(dir, "app", "models", "comment.rb"), comment)
+            File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n  has_many :comments\nend\n")
+            File.write(File.join(dir, "db", "schema.rb"), "create_table \"posts\" do |t|\n  t.integer \"comments_count\", default: 0\nend\ncreate_table \"comments\" do |t|\n  t.integer \"post_id\"\nend\n")
+
+            expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]).to eq([]), label
+          end
+        end
+      end
+
+      # Rails resolves `belongs_to :user` in Admin::Post to Admin::User when the app has one.
+      it "resolves the belongs_to's class from the child's namespace outward" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n  has_many :posts, class_name: \"Admin::Post\"\nend\n")
+          File.write(File.join(dir, "app", "models", "admin", "user.rb"), "module Admin\n  class User < ApplicationRecord\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "admin", "post.rb"), "module Admin\n  class Post < ApplicationRecord\n    belongs_to :user, counter_cache: true\n  end\nend\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "users" do |t|
+              t.integer "posts_count", default: 0
+            end
+            create_table "admin_users" do |t|
+            end
+            create_table "admin_posts" do |t|
+              t.integer "user_id"
+            end
+          RUBY
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing.map { |m| m[:model] }).to eq(%w[User])
+        end
+      end
+
+      it "takes a belongs_to naming an acronym owner in the inflected spelling as that owner's" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "config", "initializers", "inflections.rb"),
+                     "ActiveSupport::Inflector.inflections(:en) { |inflect| inflect.acronym \"HTML\" }\n")
+          File.write(File.join(dir, "app", "models", "html_page.rb"), "class HTMLPage < ApplicationRecord\n  has_many :comments\nend\n")
+          File.write(File.join(dir, "app", "models", "comment.rb"),
+                     "class Comment < ApplicationRecord\n  belongs_to :html_page, counter_cache: true\nend\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "html_pages" do |t|
+              t.integer "comments_count", default: 0
+            end
+            create_table "comments" do |t|
+              t.integer "html_page_id"
+            end
+          RUBY
+
+          expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]).to eq([])
+        end
+      end
+
+      it "takes a belongs_to of the owner's name that no model answers as the owner's" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "admin", "user.rb"), "module Admin\n  class User < ApplicationRecord\n    has_many :posts\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n  belongs_to :user, counter_cache: true\nend\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "users" do |t|
+              t.integer "posts_count", default: 0
+            end
+            create_table "posts" do |t|
+              t.integer "user_id"
+            end
+          RUBY
+
+          expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]).to eq([])
+        end
+      end
+
+      it "names the custom-named inverse belongs_to in the suggestion" do
+        expect(author_counter_missing("  has_many :posts, inverse_of: :author\n", "  belongs_to :author, class_name: \"User\"\n"))
+          .to eq([ "Add counter_cache: true to belongs_to :author in Post" ])
+      end
+
+      it "takes a counter_cache naming another column as not keeping this one" do
+        expect(author_counter_missing("  has_many :posts, inverse_of: :author\n",
+                                      "  belongs_to :author, class_name: \"User\", counter_cache: :other_count\n"))
+          .to eq([ "Add counter_cache: true to belongs_to :author in Post" ])
+        expect(author_counter_missing("  has_many :posts, inverse_of: :author\n",
+                                      "  belongs_to :author, class_name: \"User\", counter_cache: \"posts_count\"\n")).to be_empty
+        expect(author_counter_missing("  has_many :posts, inverse_of: :author\n",
+                                      "  belongs_to :author, class_name: \"User\", counter_cache: \"other_count\"\n")).not_to be_empty
+      end
+
+      # Rails' belongs_to counts into `<child plural>_count` unless counter_cache names a column;
+      # the has_many reads `<its name>_count` unless its own counter_cache names one.
+      def replies_missing(post_body, comment_body, column: "replies_count", rails: nil)
+        Dir.mktmpdir do |dir|
+          allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_return(rails) if rails
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n#{post_body}end\n")
+          File.write(File.join(dir, "app", "models", "comment.rb"), "class Comment < ApplicationRecord\n#{comment_body}end\n")
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "posts" do |t|
+              t.integer "#{column}", default: 0
+            end
+            create_table "comments" do |t|
+              t.integer "post_id"
+            end
+          RUBY
+          return described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache].map { |m| m[:suggestion] }
+        end
+      end
+
+      it "takes counter_cache: true as counting into the child's own plural, not a has_many of another name" do
+        replies = "  has_many :replies, class_name: \"Comment\"\n"
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: true\n"))
+          .to eq([ "Add counter_cache: :replies_count to belongs_to :post in Comment" ])
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: :replies_count\n")).to be_empty
+      end
+
+      it "reads the column a counter_cache hash names, active or not, from Rails 7.2" do
+        replies = "  has_many :replies, class_name: \"Comment\"\n"
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { column: :replies_count }\n")).to be_empty
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { active: false, column: \"replies_count\" }\n")).to be_empty
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { active: false }\n"))
+          .to eq([ "Add counter_cache: :replies_count to belongs_to :post in Comment" ])
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { column: :replies_count }\n", rails: "7.1.6"))
+          .to eq([ "Add counter_cache: :replies_count to belongs_to :post in Comment" ])
+      end
+
+      it "reads the column the has_many's own counter_cache names" do
+        replies = "  has_many :replies, class_name: \"Comment\", counter_cache: :reply_total\n"
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: :reply_total\n", column: "reply_total")).to be_empty
+        expect(replies_missing(replies, "  belongs_to :post\n", column: "reply_total"))
+          .to eq([ "Add counter_cache: :reply_total to belongs_to :post in Comment" ])
+        expect(replies_missing(replies, "  belongs_to :post\n")).to be_empty
+      end
+
       def counter_culture_missing(post_body)
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -822,7 +1061,7 @@ end
           missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
 
           expect(missing).to contain_exactly(
-            a_hash_including(suggestion: "Add counter_cache: true to belongs_to :post in Comment")
+            a_hash_including(suggestion: "Add counter_cache: :remarks_count to belongs_to :post in Comment")
           )
         end
       end
@@ -1028,7 +1267,7 @@ end
       end
     end
 
-    it "reads a second model in a file as a model of its own, with only the modules it includes" do
+    it "reads a second model in a file as a model of its own, with the modules it and its bases include" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "application_record.rb"), "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
@@ -1040,7 +1279,7 @@ end
 
         candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
 
-        expect(candidates).to contain_exactly(a_hash_including(model: "PaymentRefund", associations: %w[notes lines]))
+        expect(candidates).to contain_exactly(a_hash_including(model: "PaymentRefund", associations: %w[events notes lines]))
       end
     end
 
@@ -1942,6 +2181,20 @@ end
       YAML
     end
 
+    it "writes an add_index suggestion that is valid Ruby for a table or column with an odd name" do
+      Dir.mktmpdir do |dir|
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        introspector.context = { models: {} }
+        tables = { 'q"t' => { columns: [ { name: "mt_id" } ], indexes: [] }, "my-table" => { columns: [ { name: "ref_id" }, { name: "owner_type" }, { name: "owner_id" } ], indexes: [] } }
+
+        keys = [ { from: 'q"t', column: "mt_id" }, { from: "my-table", column: "ref_id" }, { from: "my-table", column: "owner_id" } ]
+        suggestions = introspector.send(:detect_missing_fk_indexes, tables, [], keys).map { |finding| finding[:suggestion] }
+
+        expect(suggestions).to include('add_index :"q\\"t", :mt_id', 'add_index :"my-table", :ref_id', 'add_index :"my-table", [:owner_type, :owner_id]')
+        suggestions.each { |code| expect { RubyVM::InstructionSequence.compile(code) }.not_to raise_error }
+      end
+    end
+
     it "checks each database's tables and names the ones it did not read" do
       Dir.mktmpdir do |dir|
         { "config/database.yml" => database_yml,
@@ -1967,6 +2220,33 @@ end
           { name: "reporting", reason: "db/reporting_schema.rb is not on disk" }
         ])
       end
+    end
+  end
+
+  # SchemaReader.for reads the migrations of an app with no dump; the key its remove_foreign_key picked on MySQL is a guess
+  # where MariaDB lists another first.
+  describe "a replayed schema that assumed MySQL's key order" do
+    def result_for(adapter, server: nil)
+      allow(RailsAiContext::DatabaseFamily).to receive(:established_mysql_server).and_return(server)
+      Dir.mktmpdir do |dir|
+        { "config/database.yml" => "#{RailsAiContext.environment_name}:\n  adapter: #{adapter}\n  database: app\n",
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+          "db/migrate/20240101000000_create_posts.rb" =>
+            "class CreatePosts < ActiveRecord::Migration[8.0]\n  def change\n    create_table :users\n    create_table :posts do |t|\n      t.bigint :user_id\n" \
+            "      t.bigint :editor_id\n    end\n    add_foreign_key :posts, :users, name: \"fk_a\"\n    " \
+            "add_foreign_key :posts, :users, column: :editor_id, name: \"fkb\"\n    remove_foreign_key :posts, :users\n  end\nend\n" }
+          .each do |path, content|
+            FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+            File.write(File.join(dir, path), content)
+          end
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call
+      end
+    end
+
+    it "says so, and only where MariaDB would remove another key" do
+      expect(result_for("mysql2")[:assumed_key_order]).to eq("1 table whose remove_foreign_key with no column took the key MySQL lists first (assuming MySQL; MariaDB lists another first)")
+      expect(result_for("mysql2", server: :mariadb)).not_to have_key(:assumed_key_order)
+      expect(result_for("postgresql")).not_to have_key(:assumed_key_order)
     end
   end
 end

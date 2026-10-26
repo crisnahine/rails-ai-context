@@ -340,7 +340,8 @@ module RailsAiContext
         # neither strip the root nor meet the sensitive patterns' slashes.
         # --crlf ends a line before its CRLF, which is every line of a Windows
         # checkout: without it `end$` matched none of them and `\s$` all.
-        cmd = [ "rg", "--no-heading", "--with-filename", "--line-number", "--sort=path", "--path-separator", "/",
+        # --no-config: a RIPGREP_CONFIG_PATH from the user's shell could add --follow or --no-ignore.
+        cmd = [ "rg", "--no-config", "--no-heading", "--with-filename", "--line-number", "--sort=path", "--path-separator", "/",
                 "--crlf", "--max-count", max_results.to_s ]
         # A row is redacted with its whole file, which SafeFile reads up to max_file_size, so a larger
         # file is skipped as the Ruby search skips it.
@@ -375,13 +376,15 @@ module RailsAiContext
 
         cmd << "--" # Prevent pattern from being parsed as flags
         cmd << pattern
-        cmd << search_path
-        # ripgrep enters no linked directory by itself but follows one it is handed.
-        trees = linked_trees(search_path, root, skip_rule(exclude_tests))
-        cmd.concat(trees.map(&:first).reject { |dir| dir == search_path })
+        # Run from the root and named from it: ripgrep matches a --glob with a slash, as excluded_paths
+        # writes a path from the root, against the path as named below its working folder.
+        cmd << (search_path == root ? "." : search_path.delete_prefix("#{root}/"))
+        # ripgrep enters no linked directory by itself but follows one it is handed, named from the root as well.
+        trees = linked_trees(search_path, root, skip_rule(root, exclude_tests))
+        cmd.concat(trees.map(&:first).reject { |dir| dir == search_path }.map { |dir| dir.delete_prefix("#{root}/") })
 
         output, err, status = begin
-          Open3.capture3(*cmd)
+          Open3.capture3(*cmd, chdir: root)
         rescue SystemCallError
           # Windows refuses a command line past 32K characters, and the error
           # repeated the whole line, pattern and all. The Ruby search takes a
@@ -414,7 +417,7 @@ module RailsAiContext
 
         lines.any? do |line|
           path = line.delete_prefix("rg: ")[/\A(.+?): [^:]*\(os error \d+\)\z/, 1]
-          path.nil? || !sensitive_file?(path.delete_prefix("#{root}/"))
+          path.nil? || !sensitive_file?(path.delete_prefix("#{root}/").delete_prefix("./"))
         end
       end
 
@@ -429,7 +432,7 @@ module RailsAiContext
         end
         # ripgrep searches a file it is named whatever its type or ignore files say.
         if File.file?(search_path)
-          scan_file(File.realpath(search_path), spelled_relative(search_path, root), regex, ctx_lines, max_results, results)
+          scan_file(File.realpath(search_path), RailsAiContext::SafePath.spelled_relative(search_path, root), regex, ctx_lines, max_results, results)
           return [ results, search_error ]
         end
         return [ results, search_error ] unless File.directory?(search_path)
@@ -437,7 +440,7 @@ module RailsAiContext
         # Every file ripgrep searches, unless the app narrowed the fallback
         # with search_extensions.
         extensions = file_type ? [ file_type ] : RailsAiContext.configuration.search_extensions&.map(&:to_s)
-        skip = skip_rule(exclude_tests)
+        skip = skip_rule(root, exclude_tests)
         ai_context = ai_context_paths
 
         # ripgrep's walk and ignore files, so both backends search the same
@@ -448,7 +451,7 @@ module RailsAiContext
         real_search = File.realpath(search_path)
         own = RailsAiContext::SafePath.contained?(real_search, File.realpath(root)) ? [ [ nil, real_search, nil ] ] : []
         (own + linked).each do |spelled, start, base|
-          prefix = spelled && spelled_relative(spelled, root)
+          prefix = spelled && RailsAiContext::SafePath.spelled_relative(spelled, root)
           in_tree = prefix ? ->(relative, dir) { skip.call("#{prefix}/#{relative}", dir) } : skip
           RailsAiContext::GitIgnore.for_tree(prefix ? start : root).each_file(start, skip: in_tree) do |file, walked|
             relative = prefix ? "#{prefix}/#{walked}" : walked
@@ -510,12 +513,8 @@ module RailsAiContext
         [ nil, text_response("Path not found: #{echo_input(path)}") ]
       end
 
-      # Read as ripgrep reads its `--glob=!` globs: `docs` at any depth, and
-      # `log` never reaching `logo/`.
-      private_class_method def self.skip_rule(exclude_tests)
-        skipped = RailsAiContext.configuration.excluded_paths + (exclude_tests ? TEST_DIRS : [])
-        skip_rules = RailsAiContext::GitIgnore.parse(skipped.join("\n"))
-        ->(relative, dir) { RailsAiContext::GitIgnore.verdict(skip_rules, relative, dir: dir) == :ignore }
+      private_class_method def self.skip_rule(root, exclude_tests)
+        RailsAiContext::ExcludedPaths.matcher(root, RailsAiContext.configuration.excluded_paths + (exclude_tests ? TEST_DIRS : []))
       end
 
       # The trees a search reads past the root's own, each as [path as spelled,
@@ -553,7 +552,7 @@ module RailsAiContext
         until pending.empty?
           spelled, real = pending.shift
           inside = RailsAiContext::SafePath.contained?(real, real_root)
-          prefix = spelled_relative(spelled, root)
+          prefix = RailsAiContext::SafePath.spelled_relative(spelled, root)
           rule = inside ? skip : ->(relative, dir) { skip.call("#{prefix}/#{relative}", dir) }
           RailsAiContext::GitIgnore.for_tree(inside ? real_root : real).dir_links(real, skip: rule).each do |link|
             target = RailsAiContext::SafePath.linked_dir(link, bound)
@@ -576,18 +575,13 @@ module RailsAiContext
       # name for it, but it is the key.
       private_class_method def self.sensitive_in_tree?(relative, trees, root)
         trees.any? do |spelled, real, base|
-          prefix = spelled_relative(spelled, root)
+          prefix = RailsAiContext::SafePath.spelled_relative(spelled, root)
           next false unless relative == prefix || relative.start_with?("#{prefix}/")
 
           rest = relative.delete_prefix(prefix).delete_prefix("/")
           sensitive_file?([ base, rest ].reject(&:empty?).join("/")) ||
             RailsAiContext::SafePath.in_repository_sensitive?(rest.empty? ? real : File.join(real, rest), root)
         end
-      end
-
-      # A path under the root as the app spells it, whatever links lead there.
-      private_class_method def self.spelled_relative(path, root)
-        RailsAiContext::SafePath.spelled_relative(path, root)
       end
 
       # One file's rows, as ripgrep's -C and --max-count give them: at most
@@ -731,11 +725,11 @@ module RailsAiContext
           next if line.strip == "--" # Skip group separators from -C context output
 
           if (m = line.match(/^(.+?)#{Regexp.escape(MATCH_FIELD_SEPARATOR)}(\d+)#{Regexp.escape(MATCH_FIELD_SEPARATOR)}(.*)$/o))
-            { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
+            { file: m[1].delete_prefix("./").delete_prefix("#{root}/"), line_number: m[2].to_i, content: m[3], match: true }
           elsif (m = line.match(/^([^\t]+)#{Regexp.escape(CONTEXT_FIELD_SEPARATOR)}(\d+)#{Regexp.escape(CONTEXT_FIELD_SEPARATOR)}(.*)$/o))
-            { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: false }
+            { file: m[1].delete_prefix("./").delete_prefix("#{root}/"), line_number: m[2].to_i, content: m[3], match: false }
           elsif (m = line.match(/^(.+?):(\d+):(.*)$/))
-            { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
+            { file: m[1].delete_prefix("./").delete_prefix("#{root}/"), line_number: m[2].to_i, content: m[3], match: true }
           end
         end
       end

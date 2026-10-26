@@ -15,6 +15,8 @@ module RailsAiContext
         # The walk's comments, for a listener that slices source: a fold onto
         # one line would otherwise comment out what follows.
         attr_writer :comments
+        # Whether the app keeps a constant in a file of its own, from a constant name; nil reads the walked file's declarations alone.
+        attr_accessor :app_constant
 
         def initialize
           @results = []
@@ -23,8 +25,8 @@ module RailsAiContext
 
         private
 
-        # A node's source with its comments removed, folded onto one line.
-        # `upto` ends the text at that offset (a call without its block).
+        # A node's source with its comments removed, folded onto one line, its secrets filtered,
+        # since the payload carries it. `upto` ends the text at that offset (a call without its block).
         def one_line_source(node, upto: nil)
           start = node.location.start_offset
           finish = upto || node.location.end_offset
@@ -43,7 +45,12 @@ module RailsAiContext
           cuts.sort_by(&:first).reverse_each do |from, to, replacement|
             text[(from - start)...(to - start)] = replacement.b
           end
-          fold_newlines(text.force_encoding(source.encoding))
+          filtered(fold_newlines(text.force_encoding(source.encoding)))
+        end
+
+        # Source text a record carries into the payload, its secrets filtered.
+        def filtered(text)
+          RailsAiContext::Redaction.source_slice(text)
         end
 
         # A plain multi-line string literal (a SQL fragment) is respelt on one line as `inspect`
@@ -201,6 +208,11 @@ module RailsAiContext
           end
         end
 
+        # A change_column_null's nullability: a boolean literal, or null_nil for the literal nil, which Rails reads by version.
+        def null_fields(node)
+          node.is_a?(Prism::NilNode) ? { null: nil, null_nil: true } : { null: boolean_value(node) }
+        end
+
         # A call's default: for a value no literal carries: its source, and whether it is a proc.
         # key: reads create_table's default for its implicit key.
         def default_fields(node, key: false)
@@ -221,7 +233,7 @@ module RailsAiContext
         # A proc whose body is one string is SQL the dump writes back as `-> { "sql" }`: default_literal holds that string.
         def value_fields(value)
           literal = proc_literal(value)
-          fields = { default_source: literal ? "-> { #{literal.inspect} }" : value && NodeSource.text(value), default_proc: proc_argument?(value) }
+          fields = { default_source: literal ? "-> { #{literal.inspect} }" : value && filtered(NodeSource.text(value)), default_proc: proc_argument?(value) }
           literal ? fields.merge(default_literal: literal) : fields
         end
 
@@ -399,7 +411,11 @@ module RailsAiContext
         def constant_reference(node)
           return unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
 
-          DeclaredConstant.lookup(node.slice, @nesting || [], @declared ||= {})
+          declared = DeclaredConstant.lookup_declared(node.slice, @nesting || [], @declared ||= {})
+          return declared unless @app_constant
+
+          nesting = @nesting || []
+          DeclaredConstant.lookup(node.slice, nesting: nesting, ancestors: DeclaredConstant.ancestors_in(nesting, @declared), exists: ->(name) { name == declared || @app_constant.call(name) }) || declared
         end
 
         # A constant app reads as what it holds; a `.new` one as booted names it: an instance by its class (`AL.new` by the class

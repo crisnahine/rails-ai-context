@@ -152,7 +152,7 @@ module RailsAiContext
         end
 
         def squish(node)
-          node.slice.gsub(/\s+/, " ")
+          filtered(node.slice.gsub(/\s+/, " "))
         end
       end
     end

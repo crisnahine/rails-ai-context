@@ -568,6 +568,33 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener, "visib
     expect(rows(source)).to eq([ [ "kept", :instance, :public ] ])
   end
 
+  # Discourse's `params do ... end` runs the block with class_eval on a new contract class.
+  it "leaves methods in the block of a macro out of the class, whichever class the macro runs it on" do
+    source = <<~RUBY
+      class Configure
+        params do
+          attribute :kind
+          def kind_is_valid; end
+          attr_accessor :extra
+        end
+        included do
+          def hooked; end
+        end
+        class_eval do
+          def evaled; end
+        end
+        def call; end
+      end
+    RUBY
+    expect(rows(source).map(&:first)).to contain_exactly("hooked", "evaled", "call")
+  end
+
+  it "reads a def in instance_eval or instance_exec as a class method, which is what Ruby defines there" do
+    source = "class A\n  instance_eval do\n    def one; end\n  end\n  instance_exec { def two; end }\n  class_eval { def three; end }\nend\n"
+
+    expect(rows(source)).to contain_exactly([ "one", :class, :public ], [ "two", :class, :public ], [ "three", :instance, :public ])
+  end
+
   it "leaves methods in a Struct.new, Data.define, Class.new or Module.new block out of the class" do
     source = <<~RUBY
       class PointHolder < ApplicationRecord

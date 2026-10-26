@@ -91,6 +91,37 @@ RSpec.describe RailsAiContext::Introspectors::ActionPresence do
     end
   end
 
+  # Ruby lists from_top: each include is resolved at its own line, before `include A` makes A::X reachable.
+  context "with a module the chain includes above one that nests a homonym" do
+    let(:homonyms) do
+      app_base.merge("app/controllers/concerns/x.rb" => "module X\n  def from_top; end\nend\n",
+                     "app/controllers/concerns/a.rb" => "module A\n  module X\n    def from_a; end\n  end\nend\n")
+    end
+
+    it "reads the class's own include at its line" do
+      files = homonyms.merge("app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  include X\n  include A\nend\n")
+      chain_for(files) { |chain| expect(chain.names.grep(/\Afrom_/)).to eq([ "from_top" ]) }
+    end
+
+    it "reads an included module's own include at its line" do
+      files = homonyms.merge("app/controllers/concerns/outer.rb" => "module Outer\n  include X\n  include A\nend\n",
+                             "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  include Outer\nend\n")
+      chain_for(files) { |chain| expect(chain.names.grep(/\Afrom_/)).to eq([ "from_top" ]) }
+    end
+
+    it "reads the include of a module nested in its outer's file at its line in that file" do
+      files = homonyms.merge("app/controllers/concerns/shop.rb" => "module Shop\n  module Tools\n    include X\n    include A\n  end\nend\n",
+                             "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  include Shop::Tools\nend\n")
+      chain_for(files) { |chain| expect(chain.names.grep(/\Afrom_/)).to eq([ "from_top" ]) }
+    end
+
+    it "counts a nested module's lines from its file, so an include below another sees it" do
+      files = homonyms.merge("app/controllers/concerns/shop.rb" => "module Shop\n  module Tools\n    include A\n    include X\n  end\nend\n",
+                             "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  include Shop::Tools\nend\n")
+      chain_for(files) { |chain| expect(chain.names.grep(/\Afrom_/)).to eq([ "from_a" ]) }
+    end
+  end
+
   it "counts an action a delegation defines" do
     files = app_base.merge(
       "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  extend Forwardable\n  def_delegators :@service, :run, :stop\n  delegate :ship, to: :@service\n  def index; end\nend\n"

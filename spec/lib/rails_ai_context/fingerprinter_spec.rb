@@ -326,7 +326,7 @@ RSpec.describe RailsAiContext::Fingerprinter do
         File.symlink(outside, File.join(root, ".github/workflows/linked"))
         %w[bin/setup bin/helpers/x.sh .github/workflows/reusable/build.yml].each { |file| File.write(File.join(root, file), "") }
 
-        expect(described_class.manifests(root).sort).to eq(%w[.github/workflows/reusable/build.yml bin/setup])
+        expect(described_class.watched(root).sort).to eq(%w[.github/workflows/reusable/build.yml bin/setup])
       end
     end
 
@@ -338,7 +338,7 @@ RSpec.describe RailsAiContext::Fingerprinter do
         File.write(File.join(outside, "build.yml"), "")
         File.symlink(outside, File.join(root, ".github/workflows"))
 
-        expect(described_class.manifests(root)).not_to include(a_string_starting_with(".github/workflows"))
+        expect(described_class.watched(root)).not_to include(a_string_starting_with(".github/workflows"))
         expect(described_class.manifest_dirs(root)).to be_empty
       end
     end
@@ -360,8 +360,8 @@ RSpec.describe RailsAiContext::Fingerprinter do
         File.write(File.join(root, "ui[v2]/package.json"), "{}\n")
         File.write(File.join(root, "config.ru"), "\n")
 
-        expect(described_class.manifests(root)).to include("ui[v2]/package.json", "config.ru")
-        expect(described_class.manifests(root)).not_to include("./config.ru")
+        expect(described_class.watched(root)).to include("ui[v2]/package.json", "config.ru")
+        expect(described_class.watched(root)).not_to include("./config.ru")
       end
     end
 
@@ -384,6 +384,21 @@ RSpec.describe RailsAiContext::Fingerprinter do
       end
     end
 
+    it "leaves out what a reader's tree skips, and hands only source folders to the watcher" do
+      root = app.root.to_s
+      %w[public/packs/manifest.json public/system/users/000/001/meta.json docs/node_modules/x/package.json].each do |file|
+        FileUtils.mkdir_p(File.dirname(File.join(root, file)))
+      end
+      before = described_class.compute(app)
+      %w[public/packs/manifest.json public/system/users/000/001/meta.json docs/node_modules/x/package.json].each do |file|
+        File.write(File.join(root, file), "{}\n")
+      end
+
+      expect(described_class.compute(app)).to eq(before)
+      expect(described_class.watched_dirs(root)).not_to include(File.join(root, "public"), File.join(root, "docs"))
+      expect(described_class::WATCHED_FILES).not_to include("config/vite.json")
+    end
+
     it "detects a rename that keeps the mtime and the sort position" do
       root = app.root.to_s
       before = described_class.compute(app)
@@ -402,6 +417,125 @@ RSpec.describe RailsAiContext::Fingerprinter do
       end
 
       expect(described_class.compute(app)).to eq(before)
+    end
+  end
+
+  describe "a bundler's build output" do
+    def write_all(root, files)
+      files.each do |file, body|
+        FileUtils.mkdir_p(File.dirname(File.join(root, file)))
+        File.write(File.join(root, file), body)
+      end
+    end
+
+    let(:spec_body) { %({"openapi": "3.0.0"}\n) }
+
+    it "moves neither the fingerprint nor the per-call look, nor reads as an API spec, in the default or a configured folder" do
+      root = app.root.to_s
+      write_all(root, "config/shakapacker.yml" => "default: &default\n  public_output_path: webpack_out\ntest:\n  <<: *default\n  public_output_path: webpack_out_test\n" \
+                                                "production:\n  public_root_path: app/static\n  public_output_path: out\n",
+                      "config/vite.json" => %({"all": {"publicOutputDir": "built_vite"}, "test": {"publicDir": "public", "publicOutputDir": "built_vite_test"}}\n))
+      before = described_class.compute(app)
+      snapshot = described_class::Snapshot.new(root)
+      snapshot.changed?
+
+      outputs = %w[public/packs-test public/vite-dev public/vite-test app/assets/builds public/webpack_out public/webpack_out_test public/built_vite public/built_vite_test]
+      write_all(root, outputs.to_h { |dir| [ File.join(dir, "openapi.json"), spec_body ] }.merge("app/static/out/application.js" => "x\n"))
+
+      expect(described_class.compute(app)).to eq(before)
+      expect(snapshot.changed?).to be(false)
+      openapi = RailsAiContext::Introspectors::ApiIntrospector.new(app).send(:detect_openapi_specs)
+      expect(openapi).to eq([])
+    end
+
+    it "keeps a configured folder outside the app or at the public root in the look" do
+      root = app.root.to_s
+      write_all(root, "config/shakapacker.yml" => "default:\n  public_output_path: \"\"\n", "config/vite.json" => %({"all": {"publicOutputDir": "../../elsewhere"}}\n))
+
+      expect(described_class.build_dirs(root)).to eq([])
+    end
+  end
+
+  describe "the files the readers open" do
+    let(:planted) do
+      {
+        "openapi.json" => %({"openapi": "3.0.0"}\n),
+        "swagger/v1/swagger.yaml" => "openapi: 3.0.1\n",
+        "swagger/v2/swagger.json" => %({"swagger": "2.0"}\n),
+        "public/api/openapi.yml" => "openapi: 3.0.1\n",
+        "docs/api.yml" => "swagger: \"2.0\"\n",
+        "config/vite.json" => %({"all": {"sourceCodeDir": "app/frontend"}}\n),
+        "app/views/posts/show.json.rabl" => "object @post\n",
+        "Dockerfile" => "FROM ruby\n",
+        "package.json" => %({"dependencies": {"react": "18.2.0"}}\n),
+        ".github/workflows/ci.yml" => "on: push\n",
+        "Jenkinsfile" => "pipeline {}\n",
+        "Procfile.dev" => "web: bin/rails server\n",
+        "docker-compose.yml" => "services: {}\n"
+      }.merge(RailsAiContext::Introspectors::DevOpsIntrospector::DEPLOY_MARKERS.keys.to_h { |file| [ file, "\n" ] })
+    end
+
+    # Root-relative, every file under the root a reader opened, checked for or globbed while the block ran.
+    def read_while(root)
+      seen = Set.new
+      %i[read binread open foreach readlines exist? file? size?].each do |name|
+        allow(File).to receive(name).and_wrap_original do |original, *args, **options, &block|
+          seen << File.expand_path(args.first.to_s) if args.first.is_a?(String) || args.first.is_a?(Pathname)
+          original.call(*args, **options, &block)
+        end
+      end
+      %i[glob children].each do |name|
+        allow(Dir).to receive(name).and_wrap_original do |original, *args, **options, &block|
+          base = name == :children ? args.first.to_s : options[:base].to_s
+          record = ->(hit) { seen << File.expand_path(hit.to_s, base.empty? ? Dir.pwd : base) }
+          if block
+            next original.call(*args, **options) do |hit|
+              record.call(hit)
+              block.call(hit)
+            end
+          end
+
+          original.call(*args, **options).tap { |found| Array(found).each(&record) }
+        end
+      end
+      yield
+      RSpec::Mocks.space.proxy_for(File).reset
+      RSpec::Mocks.space.proxy_for(Dir).reset
+      seen.select { |path| path.start_with?("#{root}/") && File.file?(path) }.map { |path| path.delete_prefix("#{root}/") }
+    end
+
+    it "sees an edit to every file a reader opens or checks for, in the snapshot and the fingerprint" do
+      Dir.mktmpdir do |tmp|
+        root = File.join(File.realpath(tmp), "app")
+        FileUtils.cp_r(File.expand_path("../../fixtures/static_app", __dir__), root)
+        planted.each do |file, body|
+          FileUtils.mkdir_p(File.join(root, File.dirname(file)))
+          File.write(File.join(root, file), body)
+        end
+        app = RailsAiContext::StaticApp.new(root)
+        files = read_while(root) do
+          RailsAiContext::Introspector::INTROSPECTOR_MAP.each_value do |klass|
+            next unless klass.answers_statically?
+
+            reader = klass.new(app)
+            klass.static_tier == RailsAiContext::Introspectors::StaticTier::ALTERNATE_SOURCE ? reader.send(:static_call) : reader.call
+          rescue StandardError
+            next
+          end
+        end
+        # The CI check globs .github/workflows/ for the folder alone, so its file is edited below without being seen here.
+        expect(files).to include(*(planted.keys - [ ".github/workflows/ci.yml" ]))
+
+        snapshot = RailsAiContext::Fingerprinter::Snapshot.new(root)
+        snapshot.changed?
+        unseen = (files | planted.keys).sort.reject do |file|
+          mark = described_class.mark(app)
+          File.write(File.join(root, file), "#{File.read(File.join(root, file))}\n")
+          snapshot.changed? && described_class.stale?(app, mark)
+        end
+
+        expect(unseen).to eq([])
+      end
     end
   end
 

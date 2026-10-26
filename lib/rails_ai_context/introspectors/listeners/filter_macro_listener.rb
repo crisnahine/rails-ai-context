@@ -6,6 +6,10 @@ module RailsAiContext
       # ConditionalMacroListener plus `callbacks`: what each positional argument of a filter macro
       # adds, named at the node as the booted tier names the callback it reflects.
       class FilterMacroListener < ConditionalMacroListener
+        def initialize(*target_methods, **options)
+          super(*target_methods, hook_receiver: true, **options)
+        end
+
         def on_call_node_enter(node)
           count = @results.size
           super

@@ -673,7 +673,7 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
 
       expect(described_class.parse(sql)[:tables]["readings"][:foreign_keys]).to eq([
         { from_table: "readings", to_table: "measurements",
-          column: %w[measurement_id measurement_recorded_on], primary_key: %w[id recorded_on] }
+          column: %w[measurement_id measurement_recorded_on], primary_key: %w[id recorded_on], name: "fk_readings_measurements" }
       ])
     end
 
@@ -924,7 +924,7 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(cols["grand"]["msg"][:default]).to eq("child")
     end
 
-    it "reads a parent in another schema or under a quoted name, and lists only the tables it listed before" do
+    it "reads a parent in another schema or under a quoted name, and lists the tables the search path shows" do
       sql = <<~SQL
         CREATE TABLE audit.base (
             id bigint NOT NULL,
@@ -940,9 +940,33 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       SQL
       tables = described_class.parse(sql)[:tables]
 
-      expect(tables.keys).to eq(%w[child])
+      expect(tables.keys).to eq([ "my base", "child" ])
       expect(tables["child"][:columns].map { |c| c[:name] }).to eq(%w[id note tag extra])
       expect(tables["child"]).not_to have_key(:inherits_unresolved)
+    end
+
+    # A bare quoted name is a table like any other, keyed by its real name: my-table, my table, q"t and x.y (a table in public named
+    # with a dot) in tables, x.y the table y of schema x in qualified_tables.
+    it "keys a table whose quoted name holds a hyphen, a space, a quote or a dot, with its keys, indexes and references" do
+      sql = <<~SQL
+        CREATE TABLE public."my-table" (id bigint NOT NULL, note text);
+        CREATE TABLE public."my table" (id bigint NOT NULL);
+        CREATE TABLE public."q""t" (id bigint NOT NULL);
+        CREATE TABLE public."x.y" (id bigint NOT NULL);
+        CREATE TABLE x.y (id bigint NOT NULL);
+        CREATE TABLE public.plain (id bigint NOT NULL, my_table_id bigint);
+        ALTER TABLE ONLY public."my-table" ADD CONSTRAINT "my-table_pkey" PRIMARY KEY (id);
+        ALTER TABLE ONLY public.plain ADD CONSTRAINT fk1 FOREIGN KEY (my_table_id) REFERENCES public."my-table"(id);
+        CREATE INDEX idx_note ON public."my-table" USING btree (note);
+      SQL
+      parsed = described_class.parse(sql)
+
+      expect(parsed[:tables].keys).to eq([ "my-table", "my table", 'q"t', "x.y", "plain" ])
+      expect(parsed[:qualified_tables].keys).to eq([ "x.y" ])
+      expect(parsed[:tables]["q\"t"]).to include(columns: [ include(name: "id") ])
+      expect(parsed[:tables]["plain"][:foreign_keys].first).to include(from_table: "plain")
+      expect(parsed[:tables]["my-table"]).to include(primary_key: "id", indexes: [ include(name: "idx_note") ])
+      expect(parsed[:tables]["plain"][:foreign_keys]).to match([ include(to_table: "my-table", column: "my_table_id") ])
     end
 
     it "names a parent the file does not hold" do
@@ -1091,10 +1115,63 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       SQL
 
       expect(columns(sql, "orders")).to eq(
-        "id" => {}, "total" => { precision: 10, scale: 2 }, "whole" => { precision: 8, scale: 0 },
+        "id" => {}, "total" => { precision: 10, scale: 2 }, "whole" => { precision: 8 },
         "code" => { limit: 20 }, "label" => { collation: "C" }, "seen_at" => { precision: 3 }, "made_at" => {}, "account_id" => {}
       )
       expect(described_class.parse(sql)[:tables]["orders"][:foreign_keys].first).to include(on_delete: "cascade", on_update: "restrict")
+    end
+
+    it "keeps a foreign key's name where it is not Rails' default, from pg_dump, mysqldump and none from SQLite" do
+      default = RailsAiContext::Introspectors::SchemaConventions.foreign_key_name("orders", "account_id")
+      pg = <<~SQL
+        CREATE TABLE public.orders (id bigint NOT NULL, account_id bigint, user_id bigint);
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT #{default} FOREIGN KEY (account_id) REFERENCES public.accounts(id);
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT "Fk_User" FOREIGN KEY (user_id) REFERENCES public.users(id);
+      SQL
+      expect(described_class.parse(pg)[:tables]["orders"][:foreign_keys].map { |fk| fk[:name] }).to eq([ nil, "Fk_User" ])
+      mysql = <<~SQL
+        CREATE TABLE `orders` (
+          `id` bigint NOT NULL AUTO_INCREMENT,
+          `user_id` bigint DEFAULT NULL,
+          PRIMARY KEY (`id`),
+          CONSTRAINT `fk_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+        ) ENGINE=InnoDB;
+      SQL
+      expect(described_class.parse(mysql, dialect: :mysql)[:tables]["orders"][:foreign_keys].map { |fk| fk[:name] }).to eq([ "fk_user" ])
+      sqlite = %(CREATE TABLE IF NOT EXISTS "orders" ("id" integer PRIMARY KEY, "user_id" integer, CONSTRAINT "fk_user" FOREIGN KEY ("user_id") REFERENCES "users" ("id"));\n)
+      expect(described_class.parse(sqlite, dialect: :sqlite)[:tables]["orders"][:foreign_keys].first).not_to have_key(:name)
+    end
+
+    it "reads a foreign key and a check added by ALTER TABLE under a backticked name" do
+      sql = <<~SQL
+        CREATE TABLE `orders` (
+          `id` bigint NOT NULL,
+          `user_id` bigint DEFAULT NULL,
+          `qty` int DEFAULT NULL,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB;
+        ALTER TABLE `orders` ADD CONSTRAINT `fk_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);
+        ALTER TABLE `orders` ADD CONSTRAINT `k_qty` CHECK ((`qty` > 0));
+      SQL
+      table = described_class.parse(sql, dialect: :mysql)[:tables]["orders"]
+      expect(table[:foreign_keys]).to eq([ { from_table: "orders", to_table: "users", column: "user_id", primary_key: "id", name: "fk_user" } ])
+      expect(table[:check_constraints]).to eq([ { name: "k_qty", expression: "`qty` > 0" } ])
+    end
+
+    it "reads a check pg_dump writes apart from its table as NOT VALID" do
+      sql = <<~SQL
+        CREATE TABLE public.p (
+            id bigint NOT NULL,
+            qty integer,
+            CONSTRAINT k_v CHECK ((qty < 100))
+        );
+        ALTER TABLE public.p
+            ADD CONSTRAINT k_nv CHECK ((qty > 0)) NOT VALID;
+      SQL
+      checks = described_class.parse(sql)[:tables]["p"][:check_constraints]
+      expect(checks).to eq([ { name: "k_v", expression: "(qty < 100)" }, { name: "k_nv", expression: "(qty > 0)", validate: false } ])
     end
 
     it "reads pg_dump's DEFERRABLE and NOT VALID on a foreign key" do
@@ -1466,5 +1543,260 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     expect(sqlite).to have_received(:scan).with(described_class::VIRTUAL_TABLE).once
     expect(sqlite).not_to have_received(:scan).with(described_class::CREATE_SCHEMA)
     expect(pg).to have_received(:scan).with(described_class::CREATE_SCHEMA).once
+  end
+
+  # pg_dump 17 for the table Rails 8.0's schema.rb dumps with two exclusion constraints.
+  it "reads an exclusion constraint pg_dump adds by ALTER TABLE" do
+    tables = described_class.parse(<<~SQL)[:tables]
+      CREATE TABLE public.things (
+          id bigint NOT NULL,
+          n integer,
+          during tsrange,
+          room integer
+      );
+      ALTER TABLE ONLY public.things
+          ADD CONSTRAINT excl_n EXCLUDE USING gist (n WITH =);
+      ALTER TABLE ONLY public.things
+          ADD CONSTRAINT no_overlap EXCLUDE USING gist (room WITH =, during WITH &&) WHERE ((room > 0)) DEFERRABLE INITIALLY DEFERRED;
+    SQL
+    expect(tables["things"][:exclusion_constraints]).to eq(
+      [ { name: "excl_n", expression: "n WITH =", using: "gist" },
+          { name: "no_overlap", expression: "room WITH =, during WITH &&", using: "gist", where: "room > 0", deferrable: "deferred" } ]
+    )
+  end
+
+  describe "quotes as each family reads them" do
+    it "keeps a partial index whose condition holds a semicolon inside a string" do
+      indexes = indexes_for(<<~SQL)
+        CREATE INDEX notes_semi ON public.categories USING btree (slug) WHERE ((name)::text <> 'x;y'::text);
+        CREATE INDEX notes_name ON public.categories USING btree (name);
+      SQL
+      expect(indexes.map { |index| index.slice(:name, :where) }).to eq([ { name: "notes_semi", where: "((name)::text <> 'x;y'::text)" }, { name: "notes_name" } ])
+    end
+
+    it "reads a schema, a table's schema, a column, an enum type and an extension whose quoted name has a doubled quote inside it" do
+      parsed = described_class.parse(<<~SQL, search_path: [ 'a"b', "public" ], dialect: :postgresql)
+        CREATE SCHEMA "a""b";
+        CREATE EXTENSION IF NOT EXISTS "ex""t" WITH SCHEMA "a""b";
+        CREATE TYPE public."mo""od" AS ENUM ('a', 'b');
+        CREATE TABLE "a""b".things (
+            id bigint NOT NULL,
+            "c""d" integer,
+            m public."mo""od"
+        );
+        COMMENT ON TABLE "a""b".things IS 'T';
+        COMMENT ON COLUMN "a""b".things."c""d" IS 'C';
+        CREATE INDEX i ON "a""b".things USING btree (id);
+      SQL
+      things = parsed[:tables]["things"]
+      expect(things.slice(:comment, :indexes)).to eq(comment: "T", indexes: [ { name: "i", columns: [ "id" ], unique: false } ])
+      expect(things[:columns].drop(1)).to eq([ { name: 'c"d', null: true, type: "integer", comment: "C" }, { name: "m", null: true, enum_type: 'mo"od', type: "enum" } ])
+      expect(parsed[:extensions]).to eq([ "pg_catalog.plpgsql", 'ex"t' ])
+    end
+
+    it "reads a constraint added by ALTER TABLE whose quoted name has a doubled quote inside it" do
+      pg = described_class.parse(<<~SQL)[:tables]["things"]
+        CREATE TABLE public.things (id bigint NOT NULL, user_id bigint, qty integer, n integer);
+        ALTER TABLE ONLY public.things
+            ADD CONSTRAINT "fk ""u""" FOREIGN KEY (user_id) REFERENCES public.users(id);
+        ALTER TABLE public.things
+            ADD CONSTRAINT "k ""q""" CHECK ((qty > 0)) NOT VALID;
+        ALTER TABLE ONLY public.things
+            ADD CONSTRAINT "u ""q""" UNIQUE (qty);
+        ALTER TABLE ONLY public.things
+            ADD CONSTRAINT "x ""d""" EXCLUDE USING gist (n WITH =);
+      SQL
+      expect(pg[:foreign_keys].map { |fk| fk[:name] }).to eq([ 'fk "u"' ])
+      expect(pg[:check_constraints].map { |check| check[:name] }).to eq([ 'k "q"' ])
+      expect(pg[:unique_constraints].map { |key| key[:name] }).to eq([ 'u "q"' ])
+      expect(pg[:exclusion_constraints].map { |entry| entry[:name] }).to eq([ 'x "d"' ])
+      my = described_class.parse(<<~SQL, dialect: :mysql)[:tables]["orders"]
+        CREATE TABLE `orders` (`id` bigint NOT NULL, `user_id` bigint DEFAULT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB;
+        ALTER TABLE `orders` ADD CONSTRAINT `fk ``u``` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);
+      SQL
+      expect(my[:foreign_keys].map { |fk| fk[:name] }).to eq([ "fk `u`" ])
+    end
+
+    it "reads a name with a doubled quote inside it in a table body, a key, a collation and a sequence default" do
+      lite = described_class.parse(<<~SQL, dialect: :sqlite)[:tables]["posts"]
+        CREATE TABLE "users" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL);
+        CREATE TABLE "posts" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "user_id" integer, "n" integer, "t" varchar COLLATE "no""case", CONSTRAINT "fk ""u""" FOREIGN KEY ("user_id") REFERENCES "users" ("id"), CONSTRAINT "ck ""n""" CHECK (n > 0), CONSTRAINT "uq ""n""" UNIQUE ("n"));
+        CREATE INDEX "ix" ON "posts" ("n" DESC, "t");
+      SQL
+      expect(lite[:foreign_keys]).to eq([ { from_table: "posts", to_table: "users", column: "user_id", primary_key: "id" } ])
+      expect(lite[:check_constraints]).to eq([ { name: 'ck "n"', expression: "n > 0" } ])
+      expect(lite[:columns].find { |c| c[:name] == "t" }[:collation]).to eq('no"case')
+
+      pg = described_class.parse(<<~SQL, dialect: :postgresql, rails_version: "8.1.4")[:tables]["things"]
+        SET statement_timeout = 0;
+        CREATE SEQUENCE public."a""b_seq";
+        CREATE TABLE public.things (
+            id bigint DEFAULT nextval('public."a""b_seq"'::regclass) NOT NULL,
+            "c""d" integer CONSTRAINT "u ""i""" UNIQUE,
+            n integer,
+            e "my ""s".citext,
+            CONSTRAINT "uq ""n""" UNIQUE (n)
+        );
+        DROP EXTENSION IF EXISTS "plpgsql";
+        CREATE INDEX ix ON public.things USING btree ("c""d" DESC, n);
+      SQL
+      expect(pg[:columns].first[:default]).to eq(%(-> { "nextval('\\"a\\"\\"b_seq\\"'::regclass)" }))
+      expect(pg[:unique_constraints].map { |key| [ key[:name], key[:columns] ] }).to eq([ [ 'u "i"', [ 'c"d' ] ], [ 'uq "n"', %w[n] ] ])
+      expect(pg[:indexes].find { |idx| idx[:name] == "ix" }).to include(columns: [ 'c"d', "n" ], order: { 'c"d' => "desc" })
+      expect(pg[:columns].find { |c| c[:name] == "e" }[:type]).to eq("citext")
+
+      my = described_class.parse(<<~SQL, dialect: :mysql)[:tables]["orders"]
+        CREATE TABLE `orders` (
+          `id` bigint NOT NULL,
+          `user_id` bigint DEFAULT NULL,
+          PRIMARY KEY (`id`),
+          CONSTRAINT `fk ``u``` FOREIGN KEY (`user_id`) REFERENCES `us``ers` (`id`),
+          CONSTRAINT `ck ``q``` CHECK ((`user_id` > 0))
+        ) ENGINE=InnoDB;
+      SQL
+      expect(my[:foreign_keys].map { |fk| [ fk[:name], fk[:to_table] ] }).to eq([ [ "fk `u`", "us`ers" ] ])
+      expect(my[:check_constraints].map { |check| check[:name] }).to eq([ "ck `q`" ])
+    end
+
+    # pg_dump 16 of the domains and the table below; Rails 7.0.10 and 8.1.4 dump the table as the expected columns say: a domain
+    # column is its base type with none of its sizes, a default read through the base type and no default for an explicit cast.
+    it "reads a column of a domain as the domain's base type, without its sizes" do
+      parsed = described_class.parse(<<~SQL, dialect: :postgresql)
+        CREATE DOMAIN public.d1 AS text;
+        CREATE DOMAIN public.d2 AS character varying(10);
+        CREATE DOMAIN public.d3 AS numeric(5,2);
+        CREATE DOMAIN public.d4 AS integer;
+        CREATE DOMAIN public.d5 AS timestamp(3) without time zone;
+        CREATE DOMAIN public.d6 AS public.d2;
+        CREATE DOMAIN public.d8 AS integer NOT NULL DEFAULT 7
+        	CONSTRAINT d8_check CHECK ((VALUE > 0));
+        CREATE DOMAIN public."mo""od" AS text;
+        CREATE TABLE public.doms (
+            a public.d1,
+            b public.d1 DEFAULT 'x'::text,
+            c public.d2,
+            d public.d2 DEFAULT 'ab'::character varying,
+            e public.d3,
+            f public.d3 DEFAULT 1.5,
+            g public.d4,
+            h public.d4 DEFAULT 3,
+            i public.d5,
+            j public.d6,
+            k public.d6 DEFAULT 'q'::character varying,
+            m public.d8,
+            n public.d1[],
+            o public."mo""od" DEFAULT ('z'::text)::public."mo""od"
+        );
+      SQL
+
+      columns = parsed[:tables]["doms"][:columns].to_h { |c| [ c[:name], c.except(:name, :null) ] }
+
+      expect(columns).to eq(
+        "a" => { type: "text" }, "b" => { type: "text", default: "x" }, "c" => { type: "string" }, "d" => { type: "string", default: "ab" },
+        "e" => { type: "decimal" }, "f" => { type: "decimal", default: "1.5" }, "g" => { type: "integer" }, "h" => { type: "integer", default: "3" },
+        "i" => { type: "datetime", precision: nil }, "j" => { type: "string" }, "k" => { type: "string", default: "q" }, "m" => { type: "integer" },
+        "n" => { type: "text", array: true }, "o" => { type: "text" }
+      )
+    end
+
+    # Live on PostgreSQL 16, activerecord 7.0.10 to 8.1.4: a column of a domain over integer[] has type :integer and array? false,
+    # and `domain[]` is an array of it; a domain over numeric(10,2)[] is a decimal with no sizes.
+    it "reads a column of a domain over an array as its element, and an array of the domain as an array" do
+      parsed = described_class.parse(<<~SQL, dialect: :postgresql)
+        CREATE DOMAIN public.ints AS integer[];
+        CREATE DOMAIN public.sized AS numeric(10,2)[] NOT NULL;
+        CREATE TABLE public.arr (a public.ints, b public.ints[], c public.sized, d public.sized[]);
+      SQL
+
+      columns = parsed[:tables]["arr"][:columns].to_h { |c| [ c[:name], c.except(:name, :null) ] }
+
+      expect(columns).to eq("a" => { type: "integer" }, "b" => { type: "integer", array: true }, "c" => { type: "decimal" }, "d" => { type: "decimal", array: true })
+    end
+
+    # A table is keyed by its real name, schema.name where the search path does not show it: other."x.y" is other.x.y, schema x's y is x.y.
+    it "keeps a table named with a dot apart from schema.name read the same, and its sequence" do
+      parsed = described_class.parse(<<~SQL, dialect: :postgresql)
+        CREATE SCHEMA x;
+        CREATE SCHEMA other;
+        CREATE SEQUENCE other."x.y_seq";
+        CREATE TABLE x.y (
+            id bigint NOT NULL
+        );
+        CREATE TABLE other."x.y" (
+            id bigint DEFAULT nextval('other."x.y_seq"'::regclass) NOT NULL,
+            owner bigint
+        );
+        ALTER TABLE ONLY other."x.y" ADD CONSTRAINT dot_fk FOREIGN KEY (owner) REFERENCES x.y(id);
+      SQL
+
+      tables = parsed[:qualified_tables]
+      expect(tables.keys.sort).to eq([ "other.x.y", "x.y" ])
+      expect(tables["other.x.y"][:foreign_keys]).to eq([ { from_table: "other.x.y", to_table: "x.y", column: "owner", primary_key: "id", name: "dot_fk" } ])
+      expect(tables["other.x.y"][:columns].first[:default]).to eq(%(-> { "nextval('other.\\"x.y_seq\\"'::regclass)" }))
+    end
+
+    it "keeps an index whose quoted name has a character outside a word, as pg_dump and mysqldump write it" do
+      pg = indexes_for(<<~SQL)
+        CREATE UNIQUE INDEX "idx-c" ON public.categories USING btree (slug);
+        CREATE INDEX "Weird Name" ON public.categories USING btree (name);
+        CREATE INDEX "índice" ON public.categories USING btree (parent_category_id);
+        CREATE INDEX "say ""hi""" ON public.categories USING btree (created_at);
+      SQL
+      expect(pg.map { |index| index.slice(:name, :unique) }).to eq([ { name: "idx-c", unique: true }, { name: "Weird Name", unique: false },
+                                                                    { name: "índice", unique: false }, { name: 'say "hi"', unique: false } ])
+      my = described_class.parse(<<~SQL, dialect: :mysql)[:tables]["things"]
+        CREATE TABLE `things` (
+          `id` bigint NOT NULL AUTO_INCREMENT,
+          `c` varchar(20) DEFAULT NULL,
+          `d` varchar(20) DEFAULT NULL,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `idx-c` (`c`),
+          KEY `d key` (`d`)
+        ) ENGINE=InnoDB;
+      SQL
+      expect(my[:columns].map { |c| c[:name] }).to eq(%w[id c d])
+      expect(my[:indexes].map { |index| index.slice(:name, :columns, :unique) }).to eq([ { name: "idx-c", columns: [ "c" ], unique: true },
+                                                                                         { name: "d key", columns: [ "d" ], unique: false } ])
+    end
+
+    # SHOW CREATE TABLE and mysqldump write a quote inside a string doubled and a backslash escaped.
+    it "reads a MySQL default and comment as the server stores them" do
+      table = described_class.parse(<<~'SQL', dialect: :mysql)[:tables]["q"]
+        CREATE TABLE `q` (
+          `p` varchar(20) DEFAULT 'C:\\temp' COMMENT 'c:\\dir',
+          `b` varchar(20) DEFAULT 'x''y' COMMENT 'the user''s login'
+        ) ENGINE=InnoDB COMMENT='tab''le; \\ x';
+      SQL
+      expect(table[:columns].map { |c| c.slice(:name, :default, :comment) }).to eq([ { name: "p", default: 'C:\temp', comment: 'c:\dir' },
+                                                                                    { name: "b", default: "x'y", comment: "the user's login" } ])
+      expect(table[:comment]).to eq('tab\'le; \ x')
+    end
+
+    it "reads a MySQL string a backslash escapes a quote in, as hand-written DDL spells it" do
+      table = described_class.parse(<<~'SQL', dialect: :mysql)[:tables]["users"]
+        CREATE TABLE users (id bigint PRIMARY KEY, login varchar(20) DEFAULT 'a\'b' COMMENT 'the user\'s (login)',
+          nick varchar(9) DEFAULT 'x\', y', tag varchar(9) DEFAULT 't\' UNIQUE');
+      SQL
+      expect(table[:columns].map { |c| c.slice(:name, :default, :comment) }).to eq([ { name: "id" }, { name: "login", default: "a'b", comment: "the user's (login)" },
+                                                                                    { name: "nick", default: "x', y" }, { name: "tag", default: "t' UNIQUE" } ])
+      expect(table[:indexes]).to eq([])
+      tables = described_class.parse(<<~'SQL', dialect: :mysql)[:tables]
+        CREATE TABLE users (id bigint PRIMARY KEY, login varchar(20) DEFAULT 'it\'s');
+        CREATE TABLE posts (id bigint PRIMARY KEY);
+      SQL
+      expect(tables.keys).to eq(%w[users posts])
+    end
+
+    it "keeps the tables after a span that never closes, reading each from its own start" do
+      tables = described_class.parse(<<~'SQL', dialect: :mysql)[:tables]
+        CREATE TABLE `a` (`id` bigint NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB;
+        CREATE PROCEDURE p() BEGIN SELECT 'C:\'; END;
+        CREATE TABLE `b` (`id` bigint NOT NULL, `note` varchar(9) DEFAULT 'x;y', PRIMARY KEY (`id`)) ENGINE=InnoDB COMMENT='b;c';
+        CREATE TABLE `c` (`id` bigint NOT NULL) ENGINE=InnoDB;
+      SQL
+      expect(tables.keys).to eq(%w[a b c])
+      expect(tables["b"][:columns].last).to include(name: "note", default: "x;y")
+      expect(tables["b"][:comment]).to eq("b;c")
+    end
   end
 end

@@ -54,7 +54,7 @@ module RailsAiContext
         end
 
         def node_source(node)
-          NodeSource.text(node)
+          filtered(NodeSource.text(node))
         rescue
           RailsAiContext::Confidence::INFERRED
         end

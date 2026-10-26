@@ -11,6 +11,9 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
+      READS = (EnvReferences.root_globs + EnvReferences::EXAMPLE_FILES + EnvReferences::CREDENTIALS_EXAMPLES +
+               EnvReferences::DOCKERFILES).freeze
+
       def call
         {
           set: envs_that_are_set,
