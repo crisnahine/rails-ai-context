@@ -19,6 +19,13 @@ RSpec.describe "Claude Code plugin" do
       "BUNDLE_BIN_PATH" => nil, "BUNDLE_LOCKFILE" => nil, "BUNDLER_SETUP" => nil, "BUNDLER_VERSION" => nil, "CLAUDE_PROJECT_DIR" => nil }
   end
 
+  # A child that takes this machine for Windows, after the bundle the suite runs in has loaded.
+  def windows_rubyopt(dir)
+    windows = File.join(dir, "windows.rb")
+    File.write(windows, "def Gem.win_platform?\n  true\nend\n")
+    [ ENV.fetch("RUBYOPT", nil), "-r#{windows}" ].compact.join(" ")
+  end
+
   # The server's own command line, as Claude Code runs it.
   def server_args = JSON.parse(File.read(File.join(plugin, ".mcp.json")))["mcpServers"]["rails-ai-context"]["args"]
 
@@ -342,9 +349,7 @@ RSpec.describe "Claude Code plugin" do
         FileUtils.mkdir_p(File.join(dir, name, "config"))
         File.write(File.join(dir, name, "config", "application.rb"), "")
       end
-      windows = File.join(dir, "windows.rb")
-      File.write(windows, "def Gem.win_platform?\n  true\nend\n")
-      reason = refusal(dir, env: { "RUBYOPT" => "-r#{windows}" })
+      reason = refusal(dir, env: { "RUBYOPT" => windows_rubyopt(dir) })
 
       expect(reason).to include("holds 2 Rails apps (admin/web, shop/web), and on Windows the plugin serves one app per session")
         .and include("each app's tools run as `rails-ai-context --app-path <app> tool <name>`, with <app> one of: admin/web, shop/web.")
@@ -813,9 +818,7 @@ RSpec.describe "Claude Code plugin" do
       Dir.mktmpdir do |dir|
         app(File.join(dir, "work", "shop"))
         app(File.join(dir, "admin"))
-        windows = File.join(dir, "windows.rb")
-        File.write(windows, "def Gem.win_platform?\n  true\nend\n")
-        out, = session_start(dir, env: { "RUBYOPT" => "-r#{windows}" })
+        out, = session_start(dir, env: { "RUBYOPT" => windows_rubyopt(dir) })
 
         expect(out).to end_with("This session's folder holds several Rails apps, and the plugin's server serves none of them here: " \
                                 "run each app's tools as `rails-ai-context --app-path <app> tool <name>` from #{File.realpath(dir)}, " \
