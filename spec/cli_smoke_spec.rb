@@ -2294,6 +2294,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
     # One local disable per project covers each session that runs it, the user's own settings included.
     it "names every project whose sessions run a plugin the user's settings and the app's turn on" do
+      skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
       config = ENV.fetch("CLAUDE_CONFIG_DIR")
       registry = File.join(config, "plugins", "installed_plugins.json")
       Dir.mktmpdir do |dir|

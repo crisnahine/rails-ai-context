@@ -1479,8 +1479,8 @@ RSpec.describe RailsAiContext::Doctor do
         File.write(File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json"), JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ] } }))
 
         expect(check.message).to end_with("lists every tool twice")
-        # The folder above holds this app and another, so a session there runs the plugin for this app too.
-        expect(check.fix).to end_with("or run `claude plugin disable rails-ai-context@rails-ai-context --scope local` here and in ..")
+        # The folder above holds this app and another, so a session there runs the plugin for this app too; on Windows the plugin serves one app per session.
+        expect(check.fix).to end_with("or run `claude plugin disable rails-ai-context@rails-ai-context --scope local`#{" here and in .." unless Gem.win_platform?}")
       ensure
         FileUtils.rm_f([ File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "settings.json"), File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), ".claude.json") ])
       end
@@ -2810,6 +2810,8 @@ RSpec.describe RailsAiContext::Doctor do
 
       # Started in a folder of apps, the plugin serves each of them, so the folder's entry runs a second server.
       it "warns of the folder's entry when the folder holds more apps" do
+        skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
         write("b/config/application.rb", "")
 
         check = workspace_doctor.send(:check_mcp_json)

@@ -25,6 +25,9 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
   def fresh(root = @root) = described_class.new(root, config_dir: @config, claude_json: claude_json, managed: managed)
 
+  # A session in a folder of apps serves them everywhere but Windows, where the plugin serves one app per session.
+  def apps_folder(folder) = Gem.win_platform? ? [] : [ folder ]
+
   def app(dir)
     FileUtils.mkdir_p(File.join(dir, "config"))
     File.write(File.join(dir, "config", "application.rb"), "")
@@ -71,14 +74,14 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
       # A folder of several apps serves each one, by the call's app argument.
       app(File.join(@dir, "admin"))
-      expect(fresh.plugin_sessions).to include(@dir)
+      expect(fresh.plugin_sessions.include?(@dir)).to be(!Gem.win_platform?)
     end
 
     # On Windows the plugin refuses a folder of apps, so a session there serves none of them.
     it "counts no session in a folder of apps on Windows, and still the app's own" do
       write(File.join(@config, "settings.json"), "enabledPlugins" => { "rails-ai-context@mirror" => true })
       app(File.join(@dir, "admin"))
-      expect(fresh.plugin_sessions).to include(@dir, @root)
+      expect(fresh.plugin_sessions).to include(@dir, @root) unless Gem.win_platform?
 
       allow(Gem).to receive(:win_platform?).and_return(true)
       expect(fresh.plugin_sessions).to include(@root)
@@ -406,7 +409,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       expect(settings.plugin?).to be(true)
 
       app(File.join(@dir, "admin"))
-      expect(fresh.plugin?).to be(true)
+      expect(fresh.plugin?).to be(!Gem.win_platform?)
       FileUtils.rm_rf(File.join(@root, "config"))
       expect(fresh.plugin?).to be(false)
     end
@@ -499,7 +502,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
 
       expect(settings.plugin_on_in?(@root)).to be(false)
       expect(settings.plugin_on_in?(@dir)).to be(true)
-      expect(settings.plugin_sessions).to eq([ @dir, File.dirname(@dir) ])
+      expect(settings.plugin_sessions).to eq([ @dir, *apps_folder(File.dirname(@dir)) ])
     end
 
     # Claude Code starts the server while any marketplace's copy is on.
@@ -693,7 +696,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       write(File.join(@config, "settings.json"), plugin(true))
       write(managed, {})
       write(File.join(@root, ".claude", "settings.local.json"), "deniedMcpServers" => [ { "serverName" => "plugin:rails-ai-context:rails-ai-context" } ])
-      expect(fresh.plugin_sessions).to eq([ @dir, File.dirname(@dir) ])
+      expect(fresh.plugin_sessions).to eq([ @dir, *apps_folder(File.dirname(@dir)) ])
       expect(fresh.block_in(@dir)).to be_nil
       expect(fresh.block_in(@root))
         .to have_attributes(rule: :denied, scope: :local, folder: @root, path: File.join(@root, ".claude", "settings.local.json"))
@@ -1077,7 +1080,7 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       write(File.join(@config, "settings.json"), plugin(true))
       write(claude_json, "mcpServers" => { "rails-ai-context" => ours })
 
-      expect(settings.duplicates).to contain_exactly(have_attributes(scope: :user, sessions: [ @root, @dir, File.dirname(@dir) ]))
+      expect(settings.duplicates).to contain_exactly(have_attributes(scope: :user, sessions: [ @root, @dir, *apps_folder(File.dirname(@dir)) ]))
     end
 
     # Claude Code loads every .mcp.json from the folder it started in up to the

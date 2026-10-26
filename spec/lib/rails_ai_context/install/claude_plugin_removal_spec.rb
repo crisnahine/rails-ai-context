@@ -71,6 +71,8 @@ RSpec.describe RailsAiContext::Install::ClaudePluginRemoval do
 
   # A session started above several apps runs the plugin for each of them.
   it "names the folder above several apps among the sessions that run the plugin" do
+    skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
     root = app("work/shop", git: false)
     app("work/blog", git: false)
     installed(id)

@@ -280,6 +280,8 @@ RSpec.describe "Claude Code plugin" do
 
   # Each app's own bundle decides the copy that serves it, as for a single app.
   it "gives no rules above several apps whose bundles lock an older copy, and the rules where one does not" do
+    skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
     Dir.mktmpdir do |dir|
       gems = File.join(dir, "gems")
       install_checkout(gems, RailsAiContext::VERSION)
@@ -784,6 +786,8 @@ RSpec.describe "Claude Code plugin" do
     end
 
     it "prints the rules above the one app a folder holds, and above several with a line naming the app argument" do
+      skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         app(File.join(dir, "work", "shop"))
         expect(session_start(dir).first).to include("Verify before you write")
@@ -859,6 +863,8 @@ RSpec.describe "Claude Code plugin" do
 
       # A call for a section an app turned off fails there, so rule 3 names only what every app serves.
       it "leaves out of rule 3 a section an app turned off" do
+        skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
         Dir.mktmpdir do |dir|
           apps(dir, "skip_tools:\n  - rails_get_gems\n")
           out, status = session_start(dir)
