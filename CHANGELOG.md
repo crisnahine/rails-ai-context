@@ -634,6 +634,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Install
 
+- **An app that never loads Action Controller boots with the gem on Rails 7.1
+  and 7.2.** Before Rails 8.0 every engine's routes are drawn at boot, and the
+  gem's MCP route named a controller whose base class such an app never loads,
+  so the boot stopped with a NameError.
 - **`uninstall`, `--prune` and the switch to the MCP-only setup leave a
   `CLAUDE.md`, `AGENTS.md` or `.cursorrules` whose rails-ai-context markers do
   not pair up as it is, and name it.** Before, they removed everything from the
@@ -689,6 +693,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Plugin
 
+- **A Claude Code settings file, `.claude.json` or `.mcp.json` with comments or
+  a trailing comma reads the same on json 3 as on json 2.** json 3 refuses both
+  unless asked, so the plugin checks read such a file as empty and missed the
+  settings and servers it holds.
 - **The plugin's server answers under a C or unset locale.** It reads a request
   line outside ASCII, runs in a folder named outside ASCII (it crashed and
   turned the plugin off for 15 minutes), answers its own refusal to a non-ASCII
