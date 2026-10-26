@@ -908,9 +908,9 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
 
       it "reads the column a counter_cache hash names, active or not, from Rails 7.2" do
         replies = "  has_many :replies, class_name: \"Comment\"\n"
-        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { column: :replies_count }\n")).to be_empty
-        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { active: false, column: \"replies_count\" }\n")).to be_empty
-        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { active: false }\n"))
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { column: :replies_count }\n", rails: "7.2.0")).to be_empty
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { active: false, column: \"replies_count\" }\n", rails: "7.2.0")).to be_empty
+        expect(replies_missing(replies, "  belongs_to :post, counter_cache: { active: false }\n", rails: "7.2.0"))
           .to eq([ "Add counter_cache: :replies_count to belongs_to :post in Comment" ])
         expect(replies_missing(replies, "  belongs_to :post, counter_cache: { column: :replies_count }\n", rails: "7.1.6"))
           .to eq([ "Add counter_cache: :replies_count to belongs_to :post in Comment" ])
