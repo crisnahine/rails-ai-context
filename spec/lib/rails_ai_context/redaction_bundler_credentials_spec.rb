@@ -571,7 +571,8 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
       ->(size) { "BUNDLE_A__B-" * (size / 12) } => 200_000,
       ->(size) { "BUNDLE_-" * (size / 8) } => 200_000,
       ->(size) { "ENV['BUNDLE_A__B'] = a ||\n" * (size / 24) } => 200_000,
-      ->(size) { "RUN bundle config set a.b \\\n# c\n" * (size / 30) } => 200_000
+      ->(size) { "RUN bundle config set a.b \\\n# c\n" * (size / 30) } => 200_000,
+      ->(size) { "BUNDLE_A__B=<<X " * (size / 16) } => 150_000
     }
     paths = [ "docker-compose.yml", "bin/setup", "config/boot.rb", ".env" ]
     # Eight times the input costs about 8 times the CPU when linear and 64 times when quadratic, on any machine.

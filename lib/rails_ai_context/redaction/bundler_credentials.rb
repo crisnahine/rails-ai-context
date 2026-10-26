@@ -480,8 +480,20 @@ module RailsAiContext
           operands[:first] = nil
         end
 
+        # The [mode, tag] of each heredoc from start on. The line is scanned once: read again from each heredoc's
+        # own start, a line of many cost the square of its length.
         def heredoc_tags(text, start)
-          text.byteslice(start..).scan(HEREDOC_TAG).map { |mode, _, tag| [ mode, tag ] }
+          seen, offsets, pairs = Thread.current[:rails_ai_context_heredoc_tags]
+          unless seen.equal?(text)
+            offsets = []
+            pairs = []
+            text.scan(HEREDOC_TAG) do |mode, _, tag|
+              offsets << Regexp.last_match.begin(0)
+              pairs << [ mode, tag ]
+            end
+            Thread.current[:rails_ai_context_heredoc_tags] = [ text, offsets, pairs ]
+          end
+          pairs[(offsets.bsearch_index { |at| at >= start } || pairs.size)..]
         end
 
         def value_carry(text, operands, context, column)
