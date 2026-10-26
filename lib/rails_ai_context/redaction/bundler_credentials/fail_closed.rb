@@ -182,7 +182,7 @@ module RailsAiContext
 
         # Blocks a Ruby line opens and does not close: `begin`, `case`, `do` and a leading `if`, less each `end`.
         def block_delta(text)
-          code = text.gsub(DOUBLE_STRING, '""').gsub(SINGLE_STRING, "''")
+          code = text.gsub(OPEN_DOUBLE_STRING) { $1 == '"' ? '""' : $& }.gsub(SINGLE_STRING, "''")
           (code.match?(BLOCK_START) ? 1 : 0) + code.scan(BLOCK_OPENER).size - code.scan(/\bend\b/).size
         end
 

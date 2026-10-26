@@ -563,11 +563,14 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
       ->(size) { "RUN bundle config set a.b \\\n# c\n" * (size / 30) } => 200_000
     }
     paths = [ "docker-compose.yml", "bin/setup", "config/boot.rb", ".env" ]
+    # Eight times the input costs about 8 times the CPU when linear and 64 times when quadratic, on any machine.
     shapes.each_with_index do |(shape, size), index|
+      small = shape.call(size / 8)
       line = shape.call(size)
       paths.each do |path|
+        base = cpu_seconds { described_class.redact_source(small, path: path) }
         seconds = cpu_seconds { described_class.redact_source(line, path: path) }
-        expect(seconds).to be < 2.0, "shape #{index} in #{path}"
+        expect(seconds).to be < 24 * [ base, 0.03 ].max, "shape #{index} in #{path}: #{base.round(3)}s then #{seconds.round(3)}s"
       end
     end
   end

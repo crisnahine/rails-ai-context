@@ -68,6 +68,8 @@ module RailsAiContext
       KNOWN_CODE = /(?:ENV|ARGV|Rails|File|Dir|Kernel|Settings|Figaro|Base64|YAML|JSON|credentials|secrets)\b[.\[(]/
       ENV_KEY_TAIL = /ENV(?:\[|\.(?:fetch|dig|key\?|delete)\()[ \t]*\z/
       DOUBLE_STRING = /"(?:[^"\\]|\\.)*+"/
+      # An unclosed quote ends the match at the end of the line, so no later quote rescans the same text.
+      OPEN_DOUBLE_STRING = /"(?:[^"\\]|\\.)*+("|\\?\z)/m
       SINGLE_STRING = /'[^']*+'/
       REF_START = /\$|\#\{|\{\{|\{\w+\}|<%|%\{\w*\}/
       BRACKETS = /[(){}]/
