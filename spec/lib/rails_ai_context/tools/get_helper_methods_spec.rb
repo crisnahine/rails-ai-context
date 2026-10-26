@@ -174,6 +174,7 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       before do
         allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
         allow(described_class).to receive(:cached_context).and_return({})
+        allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_return("7.1.6")
       end
 
       it "counts no reference where the bare name reads the local" do
@@ -192,6 +193,7 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
 
       it "counts the reference on Rails 7.0, which reads no strict locals comment" do
         File.write(File.join(@root, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.0.8)\n    railties (7.0.8)\n\nDEPENDENCIES\n  rails\n")
+        allow(RailsAiContext::Introspectors::RailsVersion).to receive(:of).and_call_original
         previous = RailsAiContext.tier
         RailsAiContext.tier = :static
         text = begin
