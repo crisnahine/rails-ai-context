@@ -658,7 +658,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A generator re-run finds the initializer's configure block by parsing the
   file.** The missing sections go inside it whatever the block parameter is
   called, with a comment after it, in the brace form, or with a heredoc line
-  that starts with `end`, and a CRLF file keeps CRLF. An initializer with code
+  that starts with `end`, and a CRLF file keeps CRLF (on Windows it comes back
+  with LF, as Ruby reads it there). An initializer with code
   after the block, or a guard like `return unless defined?(RailsAiContext)`, no
   longer gets sections outside the block or a second guard. A file that does not
   parse, or has no configure block, is left as it is and named.
