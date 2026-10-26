@@ -1871,6 +1871,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
     # No client waits on its handshake: the router has answered the client's.
     it "boots the app under the typed limit and names no client limit" do
+      skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         env = { "RUBYOPT" => "-r#{failed_boots(dir)}", "RAILS_AI_CONTEXT_BOOT_TIMEOUT" => nil, "RAILS_AI_CONTEXT_PLUGIN" => nil }
         folder = apps_folder(dir)
@@ -1886,6 +1888,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
     # The router starts each child with the Ruby on Claude Code's PATH, so that is where the right Ruby must be active.
     it "tells the client, not the typist, where the pinned Ruby must be active" do
+      skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         env = { "RUBYOPT" => "-r#{failed_boots(dir, 'LoadError.new("cannot load such file -- shop_native_ext")')}", "RAILS_AI_CONTEXT_PLUGIN" => nil }
         folder = apps_folder(dir)

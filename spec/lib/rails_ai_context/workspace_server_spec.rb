@@ -9,6 +9,8 @@ require "rbconfig"
 require "timeout"
 
 RSpec.describe RailsAiContext::WorkspaceServer do
+  before { skip "on Windows the plugin serves one app per session" if Gem.win_platform? }
+
   let(:repo) { File.expand_path("../../..", __dir__) }
 
   around do |example|

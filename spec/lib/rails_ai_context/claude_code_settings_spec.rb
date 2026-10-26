@@ -74,6 +74,17 @@ RSpec.describe RailsAiContext::ClaudeCodeSettings do
       expect(fresh.plugin_sessions).to include(@dir)
     end
 
+    # On Windows the plugin refuses a folder of apps, so a session there serves none of them.
+    it "counts no session in a folder of apps on Windows, and still the app's own" do
+      write(File.join(@config, "settings.json"), "enabledPlugins" => { "rails-ai-context@mirror" => true })
+      app(File.join(@dir, "admin"))
+      expect(fresh.plugin_sessions).to include(@dir, @root)
+
+      allow(Gem).to receive(:win_platform?).and_return(true)
+      expect(fresh.plugin_sessions).to include(@root)
+      expect(fresh.plugin_sessions).not_to include(@dir)
+    end
+
     # The plugin has no version but the commit it came from, so no constraint list matches it.
     it "takes a list of version constraints as off, as Claude Code does" do
       write(File.join(@root, ".claude", "settings.json"), plugin([ ">=5.37.0" ]))

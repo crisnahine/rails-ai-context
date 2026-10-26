@@ -119,7 +119,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an app whose server stops as a tool error with that server's last lines. The
   session-start rules come in that folder too, with a line naming the apps.
   `CLI::AppRoot.target` gives the one answer the server, the hook, `doctor` and
-  the settings reader share.
+  the settings reader share. On Windows the plugin still serves one app per
+  session: started in a folder of apps, its server connects with no tools and
+  names each app and the `--app-path` command that runs its tools.
 - **The plugin's server instructions name the app they serve** and say that
   paths in answers are relative to it. They give the `rails-ai-context
   --app-path <dir> tool <name>` form for another app, and stay under Claude

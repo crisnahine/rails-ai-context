@@ -792,7 +792,8 @@ module RailsAiContext
     def serves_from?(folder)
       @serves.fetch(folder) do
         target = CLI::AppRoot.target(File.expand_path(folder))
-        served = target.kind == :app ? [ target.root ] : target.apps.map(&:root)
+        # On Windows the plugin refuses a folder of apps, so a session there serves none of them.
+        served = target.kind == :app ? [ target.root ] : (Gem.win_platform? ? [] : target.apps.map(&:root))
         @serves[folder] = served.any? { |root| SafePath.canonical(root).b == SafePath.canonical(@root).b }
       end
     rescue SystemCallError, ArgumentError

@@ -351,6 +351,7 @@ class RailsAiContextCLI < Thor
           $stderr.puts reason
           refuse_or_exit!([ reason ])
         end
+        refuse_folder_on_windows!(target) if target.kind == :apps && Gem.win_platform?
         return serve_workspace(target) if target.kind == :apps
       end
 
@@ -1135,6 +1136,17 @@ class RailsAiContextCLI < Thor
       hints = [ (boot_failure_hint if boot_failure_hint && outcome.reason), ("  #{@app_above_hint}" if @app_above_hint && !outcome.reason) ].compact
       hints.each { |line| $stderr.puts line }
       refuse_or_exit!(outcome.messages + hints)
+    end
+
+    # An app's server the router stops can keep running on Windows, so there the plugin serves one app per session.
+    def refuse_folder_on_windows!(target)
+      apps = target.apps.map { |app| app_root.display(app.root, Dir.pwd) }
+      reason = "#{Dir.pwd} holds #{apps.size} Rails apps (#{apps.join(", ")}), and on Windows the plugin serves one app per session: " \
+               "start Claude Code in one of them. Until then, each app's tools run as `rails-ai-context --app-path <app> tool <name>`, " \
+               "with <app> one of: #{apps.join(", ")}. For one session over all of them, use the workspace setup `rails-ai-context init` writes, " \
+               "and turn the plugin off for this folder alone with `claude plugin disable rails-ai-context@rails-ai-context --scope project` run here."
+      $stderr.puts reason
+      refuse_or_exit!([ reason ])
     end
 
     # One server for the plugin's session over a folder of apps: each app's own serve answers its calls.

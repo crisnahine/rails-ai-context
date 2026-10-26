@@ -315,6 +315,8 @@ RSpec.describe "Claude Code plugin" do
   end
 
   it "serves a folder of apps through one server, each tool taking the app" do
+    skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
     Dir.mktmpdir do |dir|
       %w[shop/web admin/web].each do |name|
         FileUtils.cp_r(File.join(repo, "spec", "fixtures", "static_app"), File.join(dir, name).tap { |path| FileUtils.mkdir_p(File.dirname(path)) })
@@ -331,6 +333,21 @@ RSpec.describe "Claude Code plugin" do
       expect(tools.map { |tool| tool.dig("inputSchema", "required") }).to all(include("app"))
       expect(replies[3]["result"]).to include("isError" => false).or(satisfy { |result| !result.key?("isError") })
       expect(replies[3].dig("result", "content", 0, "text")).to include("users"), err
+    end
+  end
+
+  it "refuses a folder of apps on Windows, naming each app and the command that runs its tools" do
+    Dir.mktmpdir do |dir|
+      %w[shop/web admin/web].each do |name|
+        FileUtils.mkdir_p(File.join(dir, name, "config"))
+        File.write(File.join(dir, name, "config", "application.rb"), "")
+      end
+      windows = File.join(dir, "windows.rb")
+      File.write(windows, "def Gem.win_platform?\n  true\nend\n")
+      reason = refusal(dir, env: { "RUBYOPT" => "-r#{windows}" })
+
+      expect(reason).to include("holds 2 Rails apps (admin/web, shop/web), and on Windows the plugin serves one app per session")
+        .and include("each app's tools run as `rails-ai-context --app-path <app> tool <name>`, with <app> one of: admin/web, shop/web.")
     end
   end
 
@@ -789,6 +806,20 @@ RSpec.describe "Claude Code plugin" do
                                   "run each app's tools as `rails-ai-context --app-path <app> tool <name>` from #{File.realpath(dir)}, " \
                                   "with <app> one of: admin, work/shop.\n")
         end
+      end
+    end
+
+    it "names the --app-path form above several apps on Windows, where the server serves one app per session" do
+      Dir.mktmpdir do |dir|
+        app(File.join(dir, "work", "shop"))
+        app(File.join(dir, "admin"))
+        windows = File.join(dir, "windows.rb")
+        File.write(windows, "def Gem.win_platform?\n  true\nend\n")
+        out, = session_start(dir, env: { "RUBYOPT" => "-r#{windows}" })
+
+        expect(out).to end_with("This session's folder holds several Rails apps, and the plugin's server serves none of them here: " \
+                                "run each app's tools as `rails-ai-context --app-path <app> tool <name>` from #{File.realpath(dir)}, " \
+                                "with <app> one of: admin, work/shop.\n")
       end
     end
 

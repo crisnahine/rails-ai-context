@@ -48,7 +48,9 @@ begin
     handoff && !requirement.satisfied_by?(Gem::Version.new(handoff.version)) && app_root.bundle_ready?(handoff.env, app)
   end
   # Above several apps the rules hold for each, and the last line says how a call picks one.
-  several = if RailsAiContextPlugin.routes?
+  # On Windows the server serves one app per session, so a folder of apps gets the note an older gem gets.
+  routed = RailsAiContextPlugin.routes? && !(Gem.win_platform? && app_root.target(start).kind == :apps)
+  several = if routed
     target = app_root.target(start)
     exit if target.kind == :none
     walked = target.resolution.walked
