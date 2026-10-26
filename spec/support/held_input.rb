@@ -10,7 +10,7 @@ module HeldInput
 
   # Returns what the server wrote, once each id asked has a reply or the output ended, with the input closed.
   def self.exchange(input, output, lines, wait: REPLY_WAIT)
-    asked = lines.filter_map { |line| id_of(line, "method") }
+    asked = lines.filter_map { |line| id_of(line, "method") } - lines.filter_map { |line| cancelled_id(line) }
     text = +""
     ended = false
     lock = Mutex.new
@@ -49,6 +49,14 @@ module HeldInput
     input.close
     reader.join
     text
+  end
+
+  # The request a cancel notification names, which the server drops with no reply.
+  def self.cancelled_id(line)
+    message = JSON.parse(line)
+    message.dig("params", "requestId") if message.is_a?(Hash) && message["method"] == "notifications/cancelled" && message["params"].is_a?(Hash)
+  rescue JSON::ParserError
+    nil
   end
 
   # The id a line carries, a request's only where it also names a method.
