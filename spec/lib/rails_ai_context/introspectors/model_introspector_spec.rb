@@ -7533,7 +7533,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     it "lists the inclusion validator `enum ..., validate: true` adds, on both tiers, as that line's" do
       Dir.mktmpdir do |dir|
         introspector = static_app(dir, "Gemfile" => "gem \"rails\"\n",
-                                       "Gemfile.lock" => "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{Rails.version})\n\nDEPENDENCIES\n  rails\n",
+                                       "Gemfile.lock" => "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.6)\n\nDEPENDENCIES\n  rails\n",
                                        "app/models/user.rb" => "class User < ApplicationRecord\n  enum :name, { draft: \"draft\", paid: \"paid\" }, validate: { allow_nil: true }\nend\n")
         model = Class.new(ApplicationRecord) do
           self.table_name = "users"
@@ -7542,7 +7542,9 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         model.define_singleton_method(:name) { "User" }
 
         expected = { kind: "inclusion", attributes: %w[name], options: { in: %w[draft paid], allow_nil: true }, added_by: "enum validate: true" }
-        [ introspector.static_call["User"], introspector.send(:extract_model_details, model) ].each do |record|
+        records = [ introspector.static_call["User"] ]
+        records << introspector.send(:extract_model_details, model) if Gem::Version.new(Rails.version) >= Gem::Version.new("7.1.0.a")
+        records.each do |record|
           expect(record[:validations].map { |v| v.slice(:kind, :attributes, :options, :added_by, :reflection_only) }).to eq([ expected ])
         end
       end
