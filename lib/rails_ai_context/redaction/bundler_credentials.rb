@@ -427,11 +427,18 @@ module RailsAiContext
 
         # What the line leaves for the next one when a name has no value on it.
         def empty_value_carry(text, pos, found, kind)
-          return nil unless pos >= text.bytesize || text.byteslice(pos..).strip == "{"
+          return nil unless pos >= text.bytesize || brace_only?(text, pos)
 
           if found[:key] || found[:xkey] then kind.yaml ? [ :word ] : nil
           elsif found[:name] && found[:op] == ":" && (kind.yaml || kind.json) then [ :nextval, found.begin(:name) ]
           end
+        end
+
+        # Whether only `{` and what strip drops follow pos, read in place: a copy of the rest per name cost the square of the line.
+        def brace_only?(text, pos)
+          scanner = StringScanner.new(text)
+          scanner.pos = pos
+          !scanner.match?(/[\0\s]*+\{[\0\s]*+\z/).nil?
         end
 
         # `{ replacement:, stop:, carry: }` for the value at `start`; replacement is nil when nothing is a secret.
