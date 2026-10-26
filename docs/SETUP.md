@@ -174,7 +174,7 @@ which leaves the committed file as it is.
   repository's root wrote an app's own `.mcp.json`, which sessions started in
   the app read, a `--scope local` install that reaches those sessions runs the
   plugin beside it; `doctor` names the one to turn off.
-- **The gem comes first.** The plugin needs rails-ai-context 5.36.9 or later,
+- **The gem comes first.** The plugin needs rails-ai-context 5.38.0 or later,
   installed for the `ruby` on Claude Code's `PATH` (Ruby 3.1 or later); `gem
   update rails-ai-context` brings an older one up. A shim version manager
   (rbenv, asdf, or mise with its shims on `PATH`) picks that Ruby by the folder
@@ -202,8 +202,7 @@ which leaves the committed file as it is.
   listed as failed in `/mcp`, and Claude Code then skips the server in new
   sessions for about 15 minutes: reconnect it in `/mcp` once the cause is
   fixed. A session gets no rules where the server has no tools for them to
-  name, but for a folder of several apps on a gem older than 5.38.0 or on
-  Windows: there
+  name, but for a folder of several apps on Windows: there
   the rules come with a last line naming the
   `rails-ai-context --app-path <app> tool <name>` commands to run instead.
 - **Install the gem, not its setup, for Claude Code.** Where the app's
