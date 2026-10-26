@@ -172,7 +172,8 @@ RSpec.describe "The constant a written name means, booted and static" do
       "app/controllers/forum/posts_controller.rb" => "module Forum\n  class PostsController < StoreController\n    include Guard\n    def index; end\n  end\nend\n"
     )
 
-    booted = Forum::PostsController._process_action_callbacks.map { |callback| callback.filter.to_s }
+    # An app on load_defaults gives ActionController::Base its forgery protection callbacks.
+    booted = [ Forum::PostsController, ActionController::Base ].map { |klass| klass._process_action_callbacks.map { |callback| callback.filter.to_s } }.reduce(:-)
     expect(booted).to eq(%w[inner_guard])
     expect(static_chain(static, "Forum::PostsController", "index")).to eq(booted)
   end

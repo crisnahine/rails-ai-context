@@ -50,7 +50,10 @@ RSpec.describe "What a class declares, booted and static" do
     RailsAiContext.tier = previous
   end
 
-  def booted_chain(klass) = klass._process_action_callbacks.map { |callback| callback.filter.to_s }
+  # What the app's classes add: an app on load_defaults gives ActionController::Base its forgery protection callbacks.
+  def booted_chain(klass) = filter_names(klass) - filter_names(ActionController::Base)
+
+  def filter_names(klass) = klass._process_action_callbacks.map { |callback| callback.filter.to_s }
 
   let(:store) do
     {
