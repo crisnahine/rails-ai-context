@@ -528,6 +528,8 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
 
   # Each credential start used to scan on to the end of the line, so these cost the square of the line.
   it "reads a line of many credential starts, quotes and parts in linear time", :cpu_timed do
+    skip "a Windows runner times these shapes past the example limit; Linux and macOS time the same scanners" if Gem.win_platform?
+
     shapes = {
       ->(size) { %(BUNDLE_A=") * (size / 10) } => 600_000,
       ->(size) { %(BUNDLE_A: ") * (size / 11) } => 600_000,

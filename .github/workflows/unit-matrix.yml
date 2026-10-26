@@ -104,8 +104,9 @@ jobs:
   os:
     runs-on: ${{ matrix.os }}
     # A spec that waits on a process the platform starts differently would
-    # otherwise hold the runner for GitHub's six-hour default.
-    timeout-minutes: 45
+    # otherwise hold the runner for GitHub's six-hour default. A Windows
+    # runner takes 25 to 45 minutes for the suite, so the bound sits above that.
+    timeout-minutes: 75
     permissions:
       contents: read
     strategy:
