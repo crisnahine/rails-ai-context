@@ -164,7 +164,8 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       pair = { from_table: "rac_people", to_table: "rac_owners", column: %w[rac_owner_id owner_code], primary_key: %w[id code], actual_name: "fk_rails_0123456789" }
       composite = context.tap do |ctx|
         ctx[:rails_version] = "7.0.10"
-        ctx[:schema][:tables]["rac_people"][:foreign_keys].reject! { |fk| Array(fk[:column]).size > 1 }
+        # Rails 7.0 dumps the key it reads one column at a time; those halves are the key this example replaces.
+        ctx[:schema][:tables]["rac_people"][:foreign_keys].reject! { |fk| Array(fk[:column]).map(&:to_s).include?("owner_code") }
         ctx[:schema][:tables]["rac_people"][:foreign_keys] << pair
       end
       allow(described_class).to receive(:cached_context).and_return(composite)
