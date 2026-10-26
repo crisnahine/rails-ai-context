@@ -161,7 +161,7 @@ Auto-registration via Ruby's `inherited` hook:
 Built on the official `mcp` Ruby SDK:
 
 - **Transports**: stdio (default) or HTTP (Streamable HTTP via `MCP::Server::Transports::StreamableHTTPTransport`)
-- **Router** (`WorkspaceServer`, ADR-0012): the plugin's stdio serve in a folder of several apps. It answers the handshake and the lists itself, adds a required `app` argument to every tool, and hands each call to that app's own serve, a `ChildServer` it starts at the app's first call
+- **Router** (`WorkspaceServer`, ADR-0012): the plugin's stdio serve in a folder of several apps, except on Windows, where that serve refuses the folder and names each app's `--app-path` command. It answers the handshake and the lists itself, adds a required `app` argument to every tool, and hands each call to that app's own serve, a `ChildServer` it starts at the app's first call
 - **Proxy** (`ChildServer.proxy`): the plugin's serve in front of an app's bundled copy, passing every line on, so the session stays connected if that copy stops
 - **Tools**: all active tools (builtin + custom − skip_tools)
 - **Resources**: 9 static resources + 5 dynamic VFS resource templates

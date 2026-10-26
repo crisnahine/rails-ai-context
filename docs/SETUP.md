@@ -134,7 +134,10 @@ which leaves the committed file as it is.
   folder, or the one app below it, as every command does. At user scope the
   plugin starts in every project; outside a Rails app its server connects with
   no tools and tells the session why. A monorepo's root whose `bin/rails`
-  boots an app below it serves that app. A folder that holds several apps
+  boots an app below it serves that app. On Windows the plugin serves one app
+  per session: in a folder of several apps its server connects with no tools
+  and names each app and the `--app-path` command that runs its tools.
+  Elsewhere a folder that holds several apps
   serves them all from one server (rails-ai-context 5.38.0 or later): every
   tool takes an `app` argument naming the app, the session-start rules list
   the names, and each app's own server starts at the first call that names
@@ -199,7 +202,8 @@ which leaves the committed file as it is.
   listed as failed in `/mcp`, and Claude Code then skips the server in new
   sessions for about 15 minutes: reconnect it in `/mcp` once the cause is
   fixed. A session gets no rules where the server has no tools for them to
-  name, but for a folder of several apps on a gem older than 5.38.0: there
+  name, but for a folder of several apps on a gem older than 5.38.0 or on
+  Windows: there
   the rules come with a last line naming the
   `rails-ai-context --app-path <app> tool <name>` commands to run instead.
 - **Install the gem, not its setup, for Claude Code.** Where the app's
