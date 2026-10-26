@@ -88,21 +88,34 @@ RSpec.describe "files under sensitive_patterns" do
     expect(walk.call).to include("app/models/vault/base_record.rb")
   end
 
-  it "hides a model file under a pattern on the booted tier too" do
+  def booted_text_under_pattern
     config = RailsAiContext.configuration
     previous = [ RailsAiContext.tier, config.sensitive_patterns ]
     RailsAiContext.tier = :runtime
     config.sensitive_patterns = previous.last + [ "app/models/post.rb" ]
     RailsAiContext::Tools::BaseTool.reset_all_caches!
     tools = RailsAiContext::Tools
-    text = [ tools::GetModelDetails.call(model: "Post"), tools::GetModelDetails.call(detail: "full"), tools::GetCallbacks.call(model: "Post") ]
-           .map { |response| response.content.map { |part| part[:text] }.join("\n") }.join("\n")
-
-    expect(text).not_to include("display_url", "app/models/post.rb", "where(published")
-    expect(text).to include("Comment")
+    [ tools::GetModelDetails.call(model: "Post"), tools::GetModelDetails.call(detail: "full"), tools::GetCallbacks.call(model: "Post") ]
+      .map { |response| response.content.map { |part| part[:text] }.join("\n") }.join("\n")
   ensure
     RailsAiContext.tier, config.sensitive_patterns = previous
     RailsAiContext::Tools::BaseTool.reset_all_caches!
+  end
+
+  it "hides a model file under a pattern on the booted tier too" do
+    text = booted_text_under_pattern
+
+    expect(text).not_to include("display_url", "app/models/post.rb", "where(published")
+    expect(text).to include("Comment")
+  end
+
+  it "hides it when Ruby names no file for the model's constant" do
+    allow(Object).to receive(:const_source_location).and_call_original
+    allow(Object).to receive(:const_source_location).with("Post").and_return([ false, 0 ])
+    text = booted_text_under_pattern
+
+    expect(text).not_to include("display_url", "app/models/post.rb", "where(published")
+    expect(text).to include("Comment")
   end
 
   it "keeps a model listed, unread, when the base it inherits from is under a pattern" do

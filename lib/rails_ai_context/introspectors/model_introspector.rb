@@ -531,7 +531,11 @@ module RailsAiContext
 
       def sensitive_source?(model)
         located = Object.const_source_location(model.name)&.first
-        !!located && PathResolver.sensitive?(app.root, located)
+        return PathResolver.sensitive?(app.root, located) if located.is_a?(String)
+
+        # Ruby 3.1 names no file for a constant it reloaded; the scan of the model files still knows it.
+        @hidden_model_names ||= SourceScan.hidden_model_paths(app.root).to_set(&:path_name)
+        @hidden_model_names.include?(model.name)
       rescue NameError, ArgumentError, TypeError
         false
       end
