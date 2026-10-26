@@ -16,6 +16,14 @@ RSpec.describe RailsAiContext::ConcernPaths, "constant lookup against Ruby" do
     require "zeitwerk"
     require "active_support/concern"
     require "active_support/core_ext/module/concerning"
+    # Zeitwerk before 2.6 lists a directory in the filesystem's order; later ones sort, and the lib reads that order.
+    Zeitwerk::Loader.prepend(Module.new do
+      private def ls(dir)
+        entries = []
+        super(dir) { |*entry| entries << entry }
+        entries.sort_by(&:first).each { |entry| yield(*entry) }
+      end
+    end)
     LOG = []
     $lookup_at = []
     Module.prepend(Module.new do
