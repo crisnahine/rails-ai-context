@@ -415,8 +415,7 @@ module RailsAiContext
       end
 
       def update_existing_initializer(full_path)
-        # Binary, so Windows keeps the CRLF line endings the rewrite matches.
-        existing = File.read(full_path, mode: "rb:UTF-8")
+        existing = File.read(full_path)
         # Wrapped in the guard, a BOM would move into the constant's name and fail the boot.
         bom, existing = RailsAiContext::SafeFile.split_bom(existing)
         if RailsAiContext::UnbootedSettings.writes(existing).nil?

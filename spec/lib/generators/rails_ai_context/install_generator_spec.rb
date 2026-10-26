@@ -344,6 +344,8 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       "CRLF line endings" => "RailsAiContext.configure do |config|\r\n  config.server_name = \"x\"\r\nend\r\n"
     }.each do |shape, source|
       it "puts the sections inside the configure block written with #{shape}" do
+        skip "Windows reads the initializer in text mode, which turns CRLF into LF before the rewrite" if Gem.win_platform? && source.include?("\r\n")
+
         # Byte for byte: Windows reads and writes text mode with CRLF line endings.
         File.binwrite(initializer_path, source)
         said = []
