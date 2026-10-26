@@ -577,9 +577,12 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
       small = shape.call(size / 8)
       line = shape.call(size)
       paths.each do |path|
-        base = cpu_seconds { described_class.redact_source(small, path: path) }
-        seconds = cpu_seconds { described_class.redact_source(line, path: path) }
-        expect(seconds).to be < 24 * [ base, 0.03 ].max, "shape #{index} in #{path}: #{base.round(3)}s then #{seconds.round(3)}s"
+        base = cpu_seconds(gc: false) { described_class.redact_source(small, path: path) }
+        limit = 24 * [ base, 0.03 ].max
+        # A slow moment on a shared runner is not the scan's cost, so a call over the limit runs again; a quadratic one never gets under.
+        tries = [ cpu_seconds(gc: false) { described_class.redact_source(line, path: path) } ]
+        tries << cpu_seconds(gc: false) { described_class.redact_source(line, path: path) } while tries.min >= limit && tries.size < 3
+        expect(tries.min).to be < limit, "shape #{index} in #{path}: #{base.round(3)}s then #{tries.map { |s| s.round(3) }}"
       end
     end
   end

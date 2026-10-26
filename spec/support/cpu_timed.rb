@@ -2,15 +2,21 @@
 
 # A `:cpu_timed` example measures the CPU a call spends, so a loaded machine does not fail it.
 module CpuTimed
-  # Windows has no process CPU clock; the bound is measured on whichever clock times the call.
+  # The calling thread's own clock, so a thread an earlier example left running is not counted. Windows has
+  # no CPU clock; the bound is measured on whichever clock times the call.
   def cpu_clock
-    Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID) ? Process::CLOCK_PROCESS_CPUTIME_ID : Process::CLOCK_MONOTONIC
+    name = %i[CLOCK_THREAD_CPUTIME_ID CLOCK_PROCESS_CPUTIME_ID].find { |clock| Process.const_defined?(clock) }
+    name ? Process.const_get(name) : Process::CLOCK_MONOTONIC
   end
 
-  def cpu_seconds
+  # gc: false keeps collection off for the call, for a ratio that a major GC of the suite's heap would skew.
+  def cpu_seconds(gc: true)
+    was_off = GC.disable unless gc
     started = Process.clock_gettime(cpu_clock)
     yield
     Process.clock_gettime(cpu_clock) - started
+  ensure
+    GC.enable unless gc || was_off
   end
 end
 
