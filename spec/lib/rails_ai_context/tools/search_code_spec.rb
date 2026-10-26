@@ -364,8 +364,11 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
     it "keeps a file whose path below the root holds the root's own spelling" do
+      previous = RailsAiContext.configuration.excluded_paths
       skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
 
+      # On Linux the root is spelled from /tmp, a folder name excluded_paths leaves out at any depth.
+      RailsAiContext.configuration.excluded_paths = previous - %w[tmp]
       with_search_app({}) do |dir|
         nested = File.join(dir, "packs", "billing#{dir}", "models", "invoice.rb")
         FileUtils.mkdir_p(File.dirname(nested))
@@ -374,6 +377,8 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
         expect(rows.map { |r| r[:file] }).to eq([ "packs/billing#{dir}/models/invoice.rb" ])
       end
+    ensure
+      RailsAiContext.configuration.excluded_paths = previous
     end
   end
 
