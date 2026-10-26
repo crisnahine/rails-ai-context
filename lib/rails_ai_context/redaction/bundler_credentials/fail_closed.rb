@@ -86,9 +86,11 @@ module RailsAiContext
           return nil if scanner.eos? || ")]},;.".include?(text.byteslice(scanner.pos, 1))
 
           token = scanner.check(TOKEN)
-          return nil if token && placeholder_token?(token, kind)
+          # A word that fills the bound is judged on part of itself, so it is read as a value.
+          long = token&.bytesize == 256
+          return nil if token && !long && placeholder_token?(token, kind)
 
-          shaped = token ? token.match?(VALUE_SHAPE) : "$`".include?(text.byteslice(scanner.pos, 1))
+          shaped = token ? long || token.match?(VALUE_SHAPE) : "$`".include?(text.byteslice(scanner.pos, 1))
           shaped ? [ scanner.pos, true ] : nil
         end
 

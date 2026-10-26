@@ -517,6 +517,15 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
     expect(described_class.redact_source("hello".encode("UTF-16LE"), path: "bin/setup")).to eq("hello")
   end
 
+  it "filters a value longer than the part of the word after a name that is read to judge it" do
+    long = ("Ab" * 140) + "7k:Pw9T4il"
+    [ "BUNDLE_A__B is #{long}", "BUNDLE_A__B #{long}", "# BUNDLE_A__B to #{long}" ].each do |line|
+      %w[config/boot.rb bin/setup docker-compose.yml].each do |path|
+        expect(described_class.redact_source(line, path: path)).not_to include("Pw9T4il"), "#{path}: #{line[0, 20]}"
+      end
+    end
+  end
+
   # Each credential start used to scan on to the end of the line, so these cost the square of the line.
   it "reads a line of many credential starts, quotes and parts in linear time", :cpu_timed do
     shapes = {
