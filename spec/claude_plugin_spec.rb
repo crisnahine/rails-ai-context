@@ -459,7 +459,9 @@ RSpec.describe "Claude Code plugin" do
       expect(versions).to eq([ floor_version ])
     end
 
-    it "prints the rules in an app and from a folder inside it, and above two apps with the --app-path form" do
+    it "prints the rules in an app and from a folder inside it, and above two apps with the line naming the app argument" do
+      skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         app(File.join(dir, "shop"))
         hook_in = ->(folder) { Open3.capture2e(gemless(gems), Gem.ruby, hook, chdir: folder).first }
@@ -468,7 +470,7 @@ RSpec.describe "Claude Code plugin" do
         expect(hook_in.(File.join(dir, "shop", "app", "models"))).to include("Verify before you write")
 
         app(File.join(dir, "admin"))
-        expect(hook_in.(dir)).to include("Verify before you write").and include("`rails-ai-context --app-path <app> tool <name>`")
+        expect(hook_in.(dir)).to include("Verify before you write").and include("Every rails_* tool takes `app`")
       end
     end
 
@@ -485,11 +487,17 @@ RSpec.describe "Claude Code plugin" do
       end
     end
 
-    it "names where to start Claude Code in a folder of two apps" do
+    it "serves a folder of two apps through one server" do
+      skip "on Windows the plugin serves one app per session" if Gem.win_platform?
+
       Dir.mktmpdir do |dir|
         app(File.join(dir, "shop", "web"))
         app(File.join(dir, "admin", "web"))
-        expect(refusal(dir, gem_home: gems)).to include("holds 2 Rails apps (admin/web, shop/web)")
+        out, err, status = launch(dir, gem_home: gems)
+        replies = out.lines.map { |line| JSON.parse(line) }
+
+        expect(status.exitstatus).to eq(0), err
+        expect(replies.first.dig("result", "instructions")).to include("admin-web (admin/web/), shop-web (shop/web/)")
       end
     end
 
