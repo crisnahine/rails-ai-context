@@ -40,6 +40,40 @@ RSpec.describe "The report line on every tool answer" do
     expect(data["_report"]).to eq(line)
   end
 
+  describe "a retired name, answered from its config section" do
+    let(:mcp_server) { RailsAiContext::Server.new(Rails.application, transport: :stdio).build }
+
+    def mcp_text(name, arguments)
+      reply = mcp_server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: name, arguments: arguments } })
+      reply.dig(:result, :content, 0, :text)
+    end
+
+    it "ends with the line, after the call to make instead" do
+      output = mcp_text("rails_get_gems", {})
+
+      expect(output).to end_with("_#{line}_")
+      expect(output.index("rails_get_config")).to be < output.index(line)
+      expect(output.scan(line).size).to eq(1)
+    end
+
+    it "ends a refusal of its arguments with the line" do
+      expect(mcp_text("rails_get_gems", { "no_such_param" => 1 })).to end_with("_#{line}_")
+    end
+
+    it "ends with the line on the CLI too" do
+      output = RailsAiContext::CLI::ToolRunner.new("get_gems", []).run
+
+      expect(output).to end_with("_#{line}_")
+      expect(output.scan(line).size).to eq(1)
+    end
+  end
+
+  it "ends a CLI refusal of a value the tool does not take" do
+    output = RailsAiContext::CLI::ToolRunner.new("schema", [ "--format", "xml" ]).run
+
+    expect(output).to end_with("_#{line}_")
+  end
+
   it "is left out when the app turns it off" do
     RailsAiContext.configuration.report_issue_line = false
 

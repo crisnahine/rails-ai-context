@@ -426,7 +426,7 @@ module RailsAiContext
 
         arguments = given.transform_keys(&:to_sym).except(:section)
         refusal = Tools::GetConfig.retired_refusal(section, arguments)
-        return refusal.to_h if refusal
+        return Tools::SafeCall.reported(refusal).to_h if refusal
 
         result = call_tool(request.merge(name: "rails_get_config", arguments: arguments.merge(section: section.name)), ...)
         return result if result[:isError]

@@ -15,12 +15,41 @@ module RailsAiContext
     module SafeCall
       # The content with the note ending its first text block, or the content
       # itself when there is no note or no text to end.
+      # The report line stays last.
       def self.noted(content, note)
         first = Array(content).first
         return content unless note && first.is_a?(Hash) && first[:type] == "text"
 
         body = first[:text].to_s
-        [ first.merge(text: body.strip.empty? ? note.lstrip : "#{body}#{note}") ] + content[1..].to_a
+        report = RailsAiContext::Tools::BaseTool.report_banner
+        text = if body.strip.empty? then note.lstrip
+        elsif body.end_with?(report) then "#{body.delete_suffix(report)}#{note}#{report}"
+        else "#{body}#{note}"
+        end
+        [ first.merge(text: text) ] + content[1..].to_a
+      end
+
+      # The answer ending with the report line, once; a JSON answer carries it
+      # under its key instead (json_response), since its body has to parse.
+      def self.reported(response)
+        return response unless RailsAiContext.configuration.report_issue_line && response.respond_to?(:content)
+
+        body = response.content.first&.dig(:text).to_s
+        return response if body.start_with?("{") && body.end_with?("}")
+
+        noted = noted(response.content, RailsAiContext::Tools::BaseTool.report_banner)
+        noted.equal?(response.content) ? response : rebuilt(response, noted, error: response.error?)
+      end
+
+      def self.rebuilt(response, content, error:)
+        # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
+        # reader is still asked for rather than assumed: getting it wrong
+        # turns a good answer into a NoMethodError that SafeCall's own rescue
+        # then reports as a tool failure.
+        extra = { structured_content: response.structured_content }
+        extra[:meta] = response.meta if response.respond_to?(:meta)
+
+        MCP::Tool::Response.new(content, error: error, **extra)
       end
 
       # The parameters tools/list shows, which for rails_get_config leaves out those of a section turned off.
@@ -34,7 +63,7 @@ module RailsAiContext
         # one it does not declare answers with an unknown-keyword ArgumentError
         # and a backtrace, where the CLI names the params the tool takes.
         unknown = unknown_params(kwargs)
-        return with_report(unknown_param_response(unknown)) if unknown.any? && !Thread.current[:rails_ai_context_call]
+        return SafeCall.reported(unknown_param_response(unknown)) if unknown.any? && !Thread.current[:rails_ai_context_call]
         return unknown_param_response(unknown) if unknown.any?
 
         # Held as a local, not a thread-local: the wrapper sees both the value
@@ -57,7 +86,7 @@ module RailsAiContext
         RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
         call = Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
         begin
-          with_report(with_crashes(answer.call, call[:crashed]))
+          SafeCall.reported(with_crashes(answer.call, call[:crashed]))
         ensure
           Thread.current[:rails_ai_context_call] = nil
         end
@@ -102,24 +131,12 @@ module RailsAiContext
       end
 
       # A tool this call ran crashed: the answer is an error, and it says so where its text left the crash out.
-      # The report line ends the answer the client asked for, once; a JSON
-      # answer carries it under its key instead, since its body has to parse.
-      def with_report(response)
-        return response unless RailsAiContext.configuration.report_issue_line
-
-        # json_response's object, which carries the line under its own key.
-        body = response.content.first&.dig(:text).to_s if response.respond_to?(:content)
-        return response if body&.start_with?("{") && body.end_with?("}")
-
-        append_note(response, RailsAiContext::Tools::BaseTool.report_banner)
-      end
-
       def with_crashes(response, crashes)
         return response unless crashes && response.respond_to?(:error?) && !response.error?
 
         text = response.content.first&.dig(:text).to_s
         unsaid = crashes.uniq.reject { |failure| text.include?(failure.lines.first.strip) }
-        rebuilt(response, SafeCall.noted(response.content, ("\n\n#{unsaid.join("\n\n")}" if unsaid.any?)), error: true)
+        SafeCall.rebuilt(response, SafeCall.noted(response.content, ("\n\n#{unsaid.join("\n\n")}" if unsaid.any?)), error: true)
       end
 
       # The tools this call's composed sections left out, kept apart from
@@ -223,18 +240,7 @@ module RailsAiContext
         noted = SafeCall.noted(response.content, note)
         return response if noted.equal?(response.content)
 
-        rebuilt(response, noted, error: response.error?)
-      end
-
-      def rebuilt(response, content, error:)
-        # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
-        # reader is still asked for rather than assumed: getting it wrong
-        # turns a good answer into a NoMethodError that SafeCall's own rescue
-        # then reports as a tool failure.
-        extra = { structured_content: response.structured_content }
-        extra[:meta] = response.meta if response.respond_to?(:meta)
-
-        MCP::Tool::Response.new(content, error: error, **extra)
+        SafeCall.rebuilt(response, noted, error: response.error?)
       end
     end
   end

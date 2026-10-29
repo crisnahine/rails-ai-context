@@ -529,7 +529,7 @@ module RailsAiContext
       # Through the tool's own wrapper when it has one, so the static-tier banner rides along.
       def refusal_response
         text = @refused.join("\n")
-        return tool_class.text_response(text) if tool_class <= Tools::BaseTool
+        return Tools::SafeCall.reported(tool_class.text_response(text)) if tool_class <= Tools::BaseTool
 
         MCP::Tool::Response.new([ { type: "text", text: text } ])
       end
