@@ -234,10 +234,10 @@ RSpec.describe "Cursor MDC compliance" do
       expect(file[:content]).to include("Step-by-step workflows")
     end
 
-    it "MCP tools rule has mandatory language with CLI fallback" do
+    it "MCP tools rule says to use the tools first, with the CLI fallback" do
       file = generated_files["rails-mcp-tools.mdc"]
-      expect(file[:content]).to include("MANDATORY")
-      expect(file[:content]).to include("NEVER read")
+      expect(file[:content]).to include("use them before reading files")
+      expect(file[:content]).to include("Read a file only to edit it")
       expect(file[:content]).to include("rails 'ai:tool[")
     end
   end

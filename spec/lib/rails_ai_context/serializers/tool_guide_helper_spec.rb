@@ -19,11 +19,10 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
   after  { RailsAiContext.configuration.tool_mode = :mcp }
 
   describe "#tool_call" do
-    it "renders MCP + CLI in :mcp mode" do
+    # The MCP client lists the tools; the intro names the command fallback once.
+    it "renders the MCP call alone in :mcp mode" do
       result = helper.tool_call("rails_get_schema(table:\"users\")", "rails 'ai:tool[schema]' table=users")
-      expect(result).to include("MCP:")
-      expect(result).to include("CLI:")
-      expect(result).to include("rails_get_schema")
+      expect(result).to eq("→ `rails_get_schema(table:\"users\")`")
     end
 
     it "renders only CLI in :cli mode" do
@@ -51,9 +50,8 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
   end
 
   describe "#tools_header" do
-    it "includes tool count and mandatory message" do
-      expect(helper.tools_header).to include("Tools (#{RailsAiContext::Server::TOOLS.size})")
-      expect(helper.tools_header).to include("MANDATORY")
+    it "includes the tool count and when to use them, plainly" do
+      expect(helper.tools_header).to eq("## Tools (#{RailsAiContext::Server.exposed_tools.size}): use them before reading files")
     end
   end
 
@@ -124,8 +122,8 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(helper.tools_name_list.join("\n")).to include("`rails_get_schema`")
       expect(helper.served?("rails_get_schema")).to be(false)
       expect(helper.served?("rails_get_model_details")).to be(true)
-      expect(helper.tools_antipatterns_section.join("\n")).to include("use `rails_get_model_details`")
-      expect(helper.tools_antipatterns_section.join("\n")).not_to include("rails_get_schema")
+      expect(helper.tools_rules_section.join("\n")).to include("`rails_get_model_details` resolves concerns")
+      expect(helper.tools_rules_section.join("\n")).not_to include("rails_get_schema")
     end
   end
 
@@ -213,11 +211,11 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
 
     it "sends the stack check to the conventions and gems config sections the app serves" do
       text = helper.tools_anti_hallucination_section.join("\n")
-      expect(text).to include('Check `rails_get_config(section:"conventions")` and `rails_get_config(section:"gems")` BEFORE')
+      expect(text).to include('Check `rails_get_config(section:"conventions")` and `rails_get_config(section:"gems")` before')
 
       saved = RailsAiContext.configuration.skip_tools
       RailsAiContext.configuration.skip_tools = %w[rails_get_conventions]
-      expect(test_class.new.tools_anti_hallucination_section.join("\n")).to include('Check `rails_get_config(section:"gems")` BEFORE')
+      expect(test_class.new.tools_anti_hallucination_section.join("\n")).to include('Check `rails_get_config(section:"gems")` before')
     ensure
       RailsAiContext.configuration.skip_tools = saved
     end
@@ -236,8 +234,8 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       lines = helper.render_tools_guide
       text = lines.join("\n")
       expect(text).to include("Tools (#{RailsAiContext::Server::TOOLS.size})")
-      expect(text).to include("START HERE")
-      expect(text).to include("Common mistakes")
+      expect(text).to include("**Start here**")
+      expect(text).to include("### Rules")
       expect(text).to include("All #{RailsAiContext::Server::TOOLS.size} Tools")
     end
 
@@ -262,8 +260,8 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       text = lines.join("\n")
       expect(text).to include("Tools (#{RailsAiContext::Server::TOOLS.size})")
       expect(text).to include("power tool")
-      expect(text).to include("All #{RailsAiContext::Server::TOOLS.size} tools")
-      # Compact uses name list, not the full table
+      # An MCP client lists the tools itself.
+      expect(text).not_to include("All #{RailsAiContext::Server::TOOLS.size} tools")
       expect(text).not_to include("| MCP |")
       expect(text).not_to include("| CLI |")
     end
@@ -459,10 +457,9 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
   end
 
   describe "#tool_call_inline" do
-    it "returns MCP + CLI in :mcp mode" do
+    it "returns the MCP call alone in :mcp mode" do
       result = helper.tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")
-      expect(result).to include("rails_get_context(model:\"Post\")")
-      expect(result).to include("rails 'ai:tool[context]' model=Post")
+      expect(result).to eq("`rails_get_context(model:\"Post\")`")
     end
 
     it "returns only CLI in :cli mode" do

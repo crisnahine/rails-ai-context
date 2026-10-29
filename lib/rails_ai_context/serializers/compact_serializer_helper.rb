@@ -219,7 +219,6 @@ module RailsAiContext
         test_cmd = detect_test_command
         lines = [ "## Rules" ]
         lines << "- Run `#{test_cmd}` after changes"
-        lines << "- Do NOT re-read files to verify edits - trust your Edit, validate syntax only"
 
         if Payload.section(context, :conventions)
           arch = Payload.architecture(context)

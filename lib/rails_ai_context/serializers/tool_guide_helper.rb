@@ -10,18 +10,10 @@ module RailsAiContext
       # A workflow step that runs a tool. A plain string is a step with none.
       WorkflowStep = Struct.new(:text)
 
-      # Returns the tool invocation example for a given tool call.
-      # MCP: rails_analyze_feature(feature:"post")
-      # CLI: rails 'ai:tool[analyze_feature]' feature=post
+      # A tool call example, in the one form the tool mode uses: the MCP
+      # client lists the tools, and the guide names the command fallback once.
       def tool_call(mcp_call, cli_call)
-        case tool_mode
-        when :cli
-          "→ `#{cli_call}`"
-        when :mcp
-          "→ MCP: `#{mcp_call}`\n→ CLI: `#{cli_call}`"
-        else
-          "→ `#{mcp_call}`"
-        end
+        "→ `#{tool_mode == :cli ? cli_call : mcp_call}`"
       end
 
       def tool_mode
@@ -29,8 +21,7 @@ module RailsAiContext
       end
 
       # A tool named once in prose: its MCP call, or its command where the
-      # app serves no MCP. A pointer in a rules file names the one form to
-      # use; the workflows below show both in :mcp mode.
+      # app serves no MCP.
       def tool_ref(mcp_name, mcp_params = nil, cli_params = nil)
         if tool_mode == :cli
           "`#{cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(mcp_name), cli_params)}`"
@@ -95,25 +86,22 @@ module RailsAiContext
       end
 
       def tools_header
-        "## Tools (#{tool_count}) - MANDATORY, Use Before Read"
+        "## Tools (#{tool_count}): use them before reading files"
       end
 
       def tools_intro
-        case tool_mode
-        when :cli
+        if tool_mode == :cli
           [
-            "This project has #{count_phrase(tool_count, "introspection tool")}. **MANDATORY - use these instead of reading files.**",
-            "They return ground truth from the running app: real schema, real associations, real filters - not guesses.",
-            "Run one with `#{cli_cmd("TOOL_NAME", "param=value")}`. Read files ONLY when you are about to Edit them.",
+            "This project has #{count_phrase(tool_count, "introspection tool")}. They answer from the app itself:",
+            "its real schema, associations and filters, where reading files gives guesses.",
+            "Run one with `#{cli_cmd("TOOL_NAME", "param=value")}`.",
             ""
           ]
         else
           [
-            "This project has #{count_phrase(tool_count, "MCP tool")} via `#{serve_cmd}`.",
-            "**MANDATORY - use these instead of reading files.** They return ground truth from the running app:",
-            "real schema, real associations, real filters - not guesses from file reads.",
-            "Read files ONLY when you are about to Edit them.",
-            "If MCP tools are not connected, use CLI fallback: `#{cli_cmd("TOOL_NAME", "param=value")}`",
+            "This project has #{count_phrase(tool_count, "MCP tool")} via `#{serve_cmd}`. They answer from the app itself:",
+            "its real schema, associations and filters, where reading files gives guesses.",
+            "If the MCP tools are not connected, run the same tools as `#{cli_cmd("TOOL_NAME", "param=value")}`.",
             ""
           ]
         end
@@ -129,9 +117,9 @@ module RailsAiContext
           "data override observed facts in the current project. These 6 rules force",
           "verification at the exact moments hallucination is most likely.",
           "",
-          "1. **Verify before you write.** Never reference a column, association, route, helper, method, class, partial, or gem you have NOT verified in THIS project via a tool call in THIS turn. If it's not verified here, verify it now. Never invent names that \"sound right.\"",
+          "1. **Verify before you write.** Never reference a column, association, route, helper, method, class, partial, or gem you have not verified in this project with a tool call in this turn. If it's not verified here, verify it now. Never invent names that \"sound right.\"",
           "2. **Mark every assumption.** If you must proceed without verification, prefix the relevant output with `[ASSUMPTION]` and state what you're assuming and why. Silent assumptions are forbidden. \"I'd need to check X first\" is a valid and preferred answer.",
-          "3. **Training data describes average Rails. This app isn't average.** When something feels \"obviously\" like standard Rails, query anyway. Factories vs fixtures? Pundit vs CanCan? Devise vs has_secure_password? #{stack_check_text} BEFORE scaffolding anything.",
+          "3. **Training data describes average Rails. This app isn't average.** When something feels \"obviously\" like standard Rails, query anyway. Factories vs fixtures? Pundit vs CanCan? Devise vs has_secure_password? #{stack_check_text} before scaffolding anything.",
           "4. **Check the inheritance chain before every edit.** Before writing a controller action: inherited `before_action` filters and ancestor classes. Before writing a model method: concerns, includes, STI parents. Inheritance is never flat.",
           "5. **Empty tool output is information, not permission.** \"0 callers found,\" \"no validations,\" or a missing model is a signal to investigate or confirm with the user - not a license to proceed on guesses. Follow `_Next:` hints.",
           "6. **Stale context lies. Re-query after writes.** After any edit, tool output from earlier in this turn may be wrong. Re-query the affected tool before the next write.",
@@ -158,7 +146,7 @@ module RailsAiContext
         return [] if names.empty?
 
         lines = [
-          "### detail parameter - ALWAYS start with summary",
+          "### The detail parameter: start with summary",
           "",
           "Tools that take `detail`: #{names.join(", ")}.",
           "",
@@ -172,7 +160,7 @@ module RailsAiContext
         ]
         composites = served_refs("rails_get_context", "rails_analyze_feature")
         if composites.any?
-          lines << "**Do NOT pass `detail` to composite tools** - #{composites.join(" and ")} #{composites.size > 1 ? "do" : "does"} not accept it and will return an error."
+          lines << "**Composite tools take no `detail`** - #{composites.join(" and ")} #{composites.size > 1 ? "refuse" : "refuses"} it."
           lines << ""
         end
         lines
@@ -203,7 +191,7 @@ module RailsAiContext
                      tool_call("rails_onboard(detail:\"standard\")", cli_cmd("onboard", "detail=standard")), "")
         end
         if served?("rails_get_context")
-          lines.push("**#{tool_ref("rails_get_context")} is your power tool** - bundles schema + model + controller + routes + views in ONE call:",
+          lines.push("**#{tool_ref("rails_get_context")} is your power tool** - bundles schema + model + controller + routes + views in one call:",
                      tool_call("rails_get_context(controller:\"#{ex.controller}\", action:\"#{ex.action}\")", cli_cmd("context", "controller=#{ex.controller} action=#{ex.action}")),
                      tool_call("rails_get_context(model:\"#{ex.model}\")", cli_cmd("context", "model=#{ex.model}")),
                      tool_call("rails_get_context(feature:\"#{ex.feature}\")", cli_cmd("context", "feature=#{ex.feature}")), "")
@@ -249,7 +237,7 @@ module RailsAiContext
           "Read the model file, make your edit",
           tool_step("rails_migration_advisor", "action:\"add_column\", table:\"#{ex.table}\", column:\"rating\", type:\"integer\"", "migration_advisor",
                     "action=add_column table=#{ex.table} column=rating type=integer", "if schema change needed"),
-          tool_step("rails_validate", "files:[\"#{ex.model_file}\"], level:\"rails\"", "validate", "files=#{ex.model_file} level=rails", "EVERY time after editing"),
+          tool_step("rails_validate", "files:[\"#{ex.model_file}\"], level:\"rails\"", "validate", "files=#{ex.model_file} level=rails"),
           tool_step("rails_generate_test", "model:\"#{ex.model}\"", "generate_test", "model=#{ex.model}", "generate tests matching project patterns")
         )
         lines += workflow(
@@ -303,41 +291,36 @@ module RailsAiContext
         )
       end
 
-      def tools_antipatterns_section
-        lines = [ "### Common mistakes - avoid these", "" ]
-        lines << "- **Don't read #{schema_dump_path}** - use #{tool_ref("rails_get_schema")}. It adds [indexed]/[unique] hints you'd miss." if served?("rails_get_schema")
-        if served?("rails_get_model_details")
-          lines << "- **Don't read model files for reference** - use #{tool_ref("rails_get_model_details")}. It resolves concerns, inherited methods, and implicit belongs_to validations."
-        end
-        if served?("rails_search_code")
-          lines << "- **Prefer #{tool_ref("rails_search_code")} over Grep** for method tracing and cross-layer search. It excludes sensitive files, supports `#{param_text("match_type", "trace")}`, and paginates."
-        end
-        lines << if served?("rails_get_model_details")
-          "- **Don't call tools without a target** - #{tool_ref("rails_get_model_details", "")} without `#{tool_mode == :cli ? "model=" : "model:"}` returns a paginated list, not an error. Always specify what you want."
-        else
-          "- **Don't call tools without a target** - a lookup without one returns a paginated list, not an error. Always specify what you want."
-        end
-        if served?("rails_validate")
-          lines << "- **Don't skip validation** - run #{tool_ref("rails_validate")} after EVERY edit. It catches syntax errors AND Rails-specific issues (missing partials, bad column refs)."
-        end
-        lines << "- **Don't ignore cross-references** - tool responses include `_Next:` hints suggesting the best follow-up call. Follow them."
-        lines << "- **Don't call `#{param_text("detail", "full")}` first** - start with `summary` to find your target, then drill in. Full responses bury the signal."
-        lines << ""
-      end
-
+      # Each rule once, with its reason: what to read for reference, what to
+      # run after an edit, and how to ask.
       def tools_rules_section
         rules = []
         composites = served_refs("rails_get_context", "rails_analyze_feature")
-        rules << "**Use composite tools first** - #{composites.join(" and ")} before individual tools" if composites.any?
-        rules << "**NEVER read reference files** - #{schema_dump_path}, config/routes.rb, model files, test files - tools are better"
+        rules << "**Composite tools first** - #{composites.join(" and ")} before the single-layer tools" if composites.any?
+        rules << "**Read a file only to edit it** - #{reference_reads}"
         if served?("rails_search_code")
-          rules << "**Prefer #{tool_ref("rails_search_code")}** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups"
+          rules << "**Trace with #{tool_ref("rails_search_code")}** - it skips sensitive files, follows a method with " \
+                   "`#{param_text("match_type", "trace")}` and paginates; plain search is fine for a simple lookup"
         end
-        rules << "**Read files ONLY to Edit them** - not for reference"
-        rules << "**Validate EVERY edit** - #{tool_ref("rails_validate", 'files:[...], level:"rails"', "files=... level=rails")}" if served?("rails_validate")
-        rules << "**Follow _Next:_ hints** - tool responses suggest the best follow-up call"
-        rules << "If MCP tools are not connected, use CLI: `#{cli_cmd("TOOL_NAME", "param=value")}`" unless tool_mode == :cli
+        if served?("rails_validate")
+          rules << "**Run #{tool_ref("rails_validate", 'files:[...], level:"rails"', "files=... level=rails")} after each edit** - " \
+                   "it catches syntax errors and Rails ones (missing partials, bad column references), so there is no need to re-read the file"
+        end
+        rules << "**Name a target** - a lookup without one returns a paginated list, not an error"
+        rules << "**Start with `#{param_text("detail", "summary")}`** to find the target, then drill in; a full answer first buries it"
+        rules << "**Follow _Next:_ hints** - each answer names the best next call"
         [ "### Rules", "", *rules.each_with_index.map { |rule, i| "#{i + 1}. #{rule}" }, "" ]
+      end
+
+      # What answers better than the file, for the tools the app serves.
+      def reference_reads
+        reads = []
+        reads << "#{tool_ref("rails_get_schema")} reads #{schema_dump_path} and marks indexed and unique columns" if served?("rails_get_schema")
+        if served?("rails_get_model_details")
+          reads << "#{tool_ref("rails_get_model_details")} resolves concerns, inherited methods and implicit belongs_to validations"
+        end
+        reads << "#{tool_ref("rails_get_routes")} reads config/routes.rb" if served?("rails_get_routes")
+        reads.any? ? "for reference, #{reads.join("; ")}" : "the tools answer from the app for reference"
       end
 
       def tools_table
@@ -382,29 +365,13 @@ module RailsAiContext
         lines.concat(tools_detail_guidance)
         lines.concat(tools_power_tool_section)
         lines.concat(tools_workflow_section)
-        lines.concat(tools_antipatterns_section)
         lines.concat(tools_rules_section)
         lines.concat(tools_table)
         lines
       end
 
-      # What a tools rule file adds to a root file that carries the guide: the
-      # detail levels and the table. Claude Code loads CLAUDE.md and its rules
-      # on every request, as Copilot does its instructions, so a whole guide in
-      # both put the guide and the protocol in front of the AI twice.
-      def render_tools_reference(root_file)
-        [
-          "## Tools (#{tool_count}) - Reference",
-          "",
-          "How to use them - the protocol, the workflows and the rules - is in #{root_file}. This file is the reference.",
-          "",
-          *tools_detail_guidance,
-          *tools_table
-        ]
-      end
-
-      # Compact tool guide for root files (CLAUDE.md, AGENTS.md) that have line limits.
-      # Includes power tools + workflows + rules + dense tool name list (no table).
+      # The guide a root file carries, loaded in every session: no table, and
+      # the names only in :cli mode, since an MCP client lists the tools itself.
       def render_tools_guide_compact
         lines = []
         lines << tools_header
@@ -413,9 +380,8 @@ module RailsAiContext
         lines.concat(tools_anti_hallucination_section)
         lines.concat(tools_power_tool_section)
         lines.concat(tools_workflow_section)
-        lines.concat(tools_antipatterns_section)
         lines.concat(tools_rules_section)
-        lines.concat(tools_name_list)
+        lines.concat(tools_name_list) if tool_mode == :cli
         lines
       end
 
@@ -427,7 +393,7 @@ module RailsAiContext
           cli ? RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) : tool.tool_name
         end
         lines = [ "### All #{count_phrase(names.size, "tool")}" ]
-        lines << "Run one as `#{cli_cmd("NAME", "param=value")}`, NAME being one of:" if cli
+        lines << "Run one as `#{cli_cmd("NAME", "param=value")}`, `NAME` being one of:" if cli
         lines << "`#{names.join('` `')}`"
         lines << ""
       end
@@ -492,17 +458,9 @@ module RailsAiContext
         @install_form ||= RailsAiContext::InstallMode.form
       end
 
-      # Inline tool call for workflow steps (shorter format).
-      # mcp_name is the full MCP tool name (e.g. "rails_validate", "rails_get_context").
+      # A workflow step's call, in the one form the tool mode uses.
       def tool_call_inline(mcp_name, mcp_params, cli_short, cli_params)
-        case tool_mode
-        when :cli
-          "`#{cli_cmd(cli_short, cli_params)}`"
-        when :mcp
-          "`#{mcp_name}(#{mcp_params})` or `#{cli_cmd(cli_short, cli_params)}`"
-        else
-          "`#{mcp_name}(#{mcp_params})`"
-        end
+        tool_mode == :cli ? "`#{cli_cmd(cli_short, cli_params)}`" : "`#{mcp_name}(#{mcp_params})`"
       end
     end
   end

@@ -25,7 +25,7 @@ RSpec.describe "The tools guide in the root file" do
 
   %i[mcp cli].each do |mode|
     it "shouts nothing in :#{mode} mode" do
-      prose = root_file(mode).gsub(/`[^`]*`/, "").gsub(/\[[A-Z_]+\]/, "")
+      prose = root_file(mode).gsub(/`[^`]*`/, "").gsub(/\[[A-Z_]+[^\]]*\]/, "")
       shouted = prose.scan(/\b[A-Z]{3,}\b/).uniq - acronyms
 
       expect(shouted).to eq([])

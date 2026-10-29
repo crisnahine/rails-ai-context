@@ -39,7 +39,7 @@ module RailsAiContext
         order: 5,
         mcp: "rails_validate(files:[...], level:\"rails\")",
         cli_args: "files=a.rb,b.rb level=rails",
-        summary: "Syntax + semantic validation (run after EVERY edit)"
+        summary: "Syntax + semantic validation (run after each edit)"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)

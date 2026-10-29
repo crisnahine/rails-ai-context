@@ -52,8 +52,8 @@ module RailsAiContext
         lines.concat(overview_lines)
 
         lines << ""
-        lines << "ALWAYS use #{tools_noun} for context - do NOT read reference files directly."
-        lines << "Start with `#{param_text("detail", "summary")}`. Read files ONLY when you will Edit them."
+        lines << "Use #{tools_noun} for context rather than reading reference files."
+        lines << "Start with `#{param_text("detail", "summary")}`, and read a file only to edit it."
 
         lines.join("\n")
       end

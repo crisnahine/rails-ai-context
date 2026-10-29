@@ -84,7 +84,7 @@ RSpec.describe "the tools every generated file names" do
 
       expect(files["app/models/AGENTS.md"]).to include("`rails 'ai:tool[model_details]' model=Name`")
       expect(files[".cursor/rules/rails-controllers.mdc"]).to include("Use `rails 'ai:tool[controllers]' controller=Name` for full detail.")
-      expect(files[".claude/rules/rails-context.md"]).to include("ALWAYS use introspection tools (`rails 'ai:tool[TOOL_NAME]' param=value`)")
+      expect(files[".claude/rules/rails-context.md"]).to include("Use introspection tools (`rails 'ai:tool[TOOL_NAME]' param=value`) for context")
     end
   end
 
@@ -111,7 +111,8 @@ RSpec.describe "the tools every generated file names" do
       count = RailsAiContext::Server.builtin_tools.size - 2 + 1
 
       expect(served_names.size).to eq(count)
-      expect(files["AGENTS.md"]).to include("## Tools (#{count})", "### All #{count} tools", "`rails_get_widgets`")
+      expect(files["AGENTS.md"]).to include("## Tools (#{count})")
+      expect(files[".claude/rules/rails-mcp-tools.md"]).to include("### All #{count} Tools", "`rails_get_widgets`")
       files.each do |path, content|
         expect(content).not_to include("rails_security_scan", "ai:tool[query]"), "#{path} documents a skipped tool"
       end
@@ -161,7 +162,7 @@ RSpec.describe "the tools every generated file names" do
       claude = generated_files["AGENTS.md"]
 
       expect(claude).to include("### Start here\n", "**Modify a model**", "1. `rails_get_model_details(model:",
-                                "**Fix a controller bug:**\n1. `rails_get_controllers(", "### Rules\n\n1. **NEVER read reference files**")
+                                "**Fix a controller bug:**\n1. `rails_get_controllers(", "### Rules\n\n1. **Read a file only to edit it**")
       expect(claude).not_to include("**Trace a method:**", "composite tools", "Validate EVERY edit")
     end
 

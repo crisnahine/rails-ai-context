@@ -136,7 +136,7 @@ module RailsAiContext
           [ "rails_get_edit_context", 'file:"path", near:"keyword"', "file=path near=keyword", "for surgical edit context." ],
           [ "rails_get_view", 'controller:"name"', "controller=name", "for view templates." ],
           [ "rails_get_test_info", 'controller:"Name"', "controller=Name", "for existing controller tests." ],
-          [ "rails_validate", "files:[...]", "files=...", "to check syntax after editing - do NOT re-read files to verify." ]
+          [ "rails_validate", "files:[...]", "files=...", "to check syntax after an edit, rather than re-reading the file." ]
         ))
 
         lines.join("\n")
