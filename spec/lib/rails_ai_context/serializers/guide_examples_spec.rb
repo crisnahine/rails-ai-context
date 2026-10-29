@@ -108,7 +108,7 @@ RSpec.describe RailsAiContext::Serializers::GuideExamples do
   end
 
   describe "in the generated guide" do
-    let(:serializer) { RailsAiContext::Serializers::ClaudeSerializer.new(serializer_context(**library)) }
+    let(:serializer) { RailsAiContext::Serializers::RootFile.new(serializer_context(**library)) }
 
     around do |example|
       RailsAiContext.configuration.context_mode = :compact

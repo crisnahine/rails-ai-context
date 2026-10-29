@@ -30,7 +30,7 @@ RSpec.describe "The static-tier notice in generated files" do
 
   it "the full-mode Claude file says it too" do
     RailsAiContext.configuration.context_mode = :full
-    output = RailsAiContext::Serializers::ClaudeSerializer.new(static_context).call
+    output = RailsAiContext::Serializers::RootFile.new(static_context).call
 
     expect(output.lines.first(12).join).to include(RailsAiContext::Confidence::STATIC)
   ensure

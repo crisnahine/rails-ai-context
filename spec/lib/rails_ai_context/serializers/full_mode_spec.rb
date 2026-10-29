@@ -47,9 +47,7 @@ RSpec.describe "full mode's root files" do
   end
 
   {
-    "CLAUDE.md" => RailsAiContext::Serializers::ClaudeSerializer,
-    "AGENTS.md" => RailsAiContext::Serializers::OpencodeSerializer,
-    ".github/copilot-instructions.md" => RailsAiContext::Serializers::CopilotSerializer
+    "the root file" => RailsAiContext::Serializers::RootFile
   }.each do |file, serializer|
     it "carries the protocol and the tools guide in #{file}" do
       output = serializer.new(context).call
@@ -78,7 +76,7 @@ RSpec.describe "full mode's root files" do
   end
 
   describe "the dump" do
-    subject(:output) { RailsAiContext::Serializers::ClaudeSerializer.new(context).call }
+    subject(:output) { RailsAiContext::Serializers::RootFile.new(context).call }
 
     it "gives each column its default and each table its indexes and foreign keys" do
       expect(output).to include("`published` (boolean, default false)")

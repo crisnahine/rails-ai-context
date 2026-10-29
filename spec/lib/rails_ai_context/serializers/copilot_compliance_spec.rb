@@ -22,7 +22,7 @@ RSpec.describe "Copilot instructions compliance" do
   end
 
   describe "root file (.github/copilot-instructions.md)" do
-    let(:root_content) { RailsAiContext::Serializers::CopilotSerializer.new(context).call }
+    let(:root_content) { RailsAiContext::Serializers::RootFile.new(context).call }
 
     it "does NOT start with YAML frontmatter" do
       expect(root_content).not_to start_with("---"),
@@ -225,7 +225,7 @@ RSpec.describe "Copilot instructions compliance" do
 
         expect(content).to include("- Reference", "is in .github/copilot-instructions.md", "detail parameter", "rails 'ai:tool[")
         expect(content).not_to include("Step-by-step workflows", "Anti-Hallucination Protocol")
-        expect(RailsAiContext::Serializers::CopilotSerializer.new(context).call)
+        expect(RailsAiContext::Serializers::RootFile.new(context).call)
           .to include("Step-by-step workflows", "MANDATORY", "NEVER read")
       end
 

@@ -2,10 +2,10 @@
 
 require "spec_helper"
 
-RSpec.describe RailsAiContext::Serializers::TestCommandDetection do
+RSpec.describe RailsAiContext::Serializers::StackOverviewHelper, "#detect_test_command" do
   let(:test_class) do
     Class.new do
-      include RailsAiContext::Serializers::TestCommandDetection
+      include RailsAiContext::Serializers::StackOverviewHelper
 
       attr_reader :context
 

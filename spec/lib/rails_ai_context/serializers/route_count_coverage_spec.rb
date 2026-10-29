@@ -33,8 +33,7 @@ RSpec.describe "route counts across every surface" do
   # Serializers that return their whole document from #call.
   {
     "MarkdownSerializer" => RailsAiContext::Serializers::MarkdownSerializer,
-    "CopilotSerializer" => RailsAiContext::Serializers::CopilotSerializer,
-    "ClaudeSerializer" => RailsAiContext::Serializers::ClaudeSerializer
+    "RootFile" => RailsAiContext::Serializers::RootFile
   }.each do |name, klass|
     it "#{name} says how much of the table is missing" do
       expect(klass.new(context).call).to include("23 dynamic constructs not expanded")
@@ -77,7 +76,7 @@ RSpec.describe "route counts across every surface" do
   # which names controllers the controller listing never scans; unlabelled,
   # the two numbers read as a contradiction.
   it "labels the controllers a route count is spread across as routed ones" do
-    expect(RailsAiContext::Serializers::ClaudeSerializer.new(context).call)
+    expect(RailsAiContext::Serializers::RootFile.new(context).call)
       .to include("across 1 routed controller")
   end
 
@@ -91,7 +90,7 @@ RSpec.describe "route counts across every surface" do
   # while the rule files loaded beside it said "Routes: 39".
   it "states the count in every file the same way" do
     Dir.mktmpdir do |dir|
-      root_line = RailsAiContext::Serializers::ClaudeSerializer.new(context).call[/^- Routes: .*$/]
+      root_line = RailsAiContext::Serializers::RootFile.new(context).call[/^- Routes: .*$/]
       rule_lines = [
         RailsAiContext::Serializers::ClaudeRulesSerializer,
         RailsAiContext::Serializers::CursorRulesSerializer,

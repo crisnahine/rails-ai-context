@@ -21,7 +21,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
   describe "the Commands section" do
     let(:commands_host) do
       Class.new do
-        include RailsAiContext::Serializers::TestCommandDetection
+        include RailsAiContext::Serializers::StackOverviewHelper
         include RailsAiContext::Serializers::StackOverviewHelper
         include RailsAiContext::Serializers::CompactSerializerHelper
 
@@ -350,7 +350,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
   describe "the stimulus registration rule" do
     def rules(auto)
       ctx = { stimulus: { controllers: [ { name: "hello" } ], auto_registers: auto }, conventions: { patterns: [] } }
-      RailsAiContext::Serializers::ClaudeSerializer.new(ctx).send(:render_footer).join("\n")
+      RailsAiContext::Serializers::RootFile.new(ctx).send(:render_footer).join("\n")
     end
 
     it "promises auto-registration only when the app loads them that way" do

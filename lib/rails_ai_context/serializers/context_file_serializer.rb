@@ -35,8 +35,7 @@ module RailsAiContext
       # asking "does every generated file carry X" reads the same list the
       # generator runs. Codex reuses OpenCode's files.
       ROOT_SERIALIZERS = {
-        json: JsonSerializer, claude: ClaudeSerializer, opencode: OpencodeSerializer,
-        codex: OpencodeSerializer, copilot: CopilotSerializer
+        json: JsonSerializer, claude: RootFile, opencode: RootFile, codex: RootFile, copilot: RootFile
       }.freeze
 
       RULES_SERIALIZERS = {

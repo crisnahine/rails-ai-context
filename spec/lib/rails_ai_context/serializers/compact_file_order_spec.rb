@@ -28,16 +28,8 @@ RSpec.describe "Compact context file section order" do
 
   after { RailsAiContext.configuration.context_mode = @original_mode }
 
-  it "CLAUDE.md" do
-    expect(headings(RailsAiContext::Serializers::ClaudeSerializer.new(context).call)).to eq(expected)
-  end
-
-  it "AGENTS.md" do
-    expect(headings(RailsAiContext::Serializers::OpencodeSerializer.new(context).call)).to eq(expected)
-  end
-
-  it ".github/copilot-instructions.md" do
-    expect(headings(RailsAiContext::Serializers::CopilotSerializer.new(context).call)).to eq(expected)
+  it "the root file" do
+    expect(headings(RailsAiContext::Serializers::RootFile.new(context).call)).to eq(expected)
   end
 
   it ".cursorrules" do

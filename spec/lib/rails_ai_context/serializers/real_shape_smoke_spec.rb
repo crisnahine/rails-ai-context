@@ -11,9 +11,7 @@ RSpec.describe "Serializers against a real introspected context" do
   let(:context) { IntrospectedFixture.context }
 
   [
-    RailsAiContext::Serializers::ClaudeSerializer,
-    RailsAiContext::Serializers::CopilotSerializer,
-    RailsAiContext::Serializers::OpencodeSerializer,
+    RailsAiContext::Serializers::RootFile,
     RailsAiContext::Serializers::MarkdownSerializer,
     RailsAiContext::Serializers::JsonSerializer
   ].each do |klass|

@@ -9,7 +9,6 @@ module RailsAiContext
     # so they close with the tools guide and the protocol the compact files
     # carry, not the data alone.
     class MarkdownSerializer < Base
-      include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper
 
@@ -654,7 +653,7 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # The AI tools' files carry their own (FullSerializerBehavior).
+      # The root file carries its own (RootFile::Full).
       def rules_section
         nil
       end
@@ -671,32 +670,6 @@ module RailsAiContext
       def escape_markdown(text)
         return "" if text.nil?
         text.to_s.gsub(MARKDOWN_SPECIAL_CHARS, '\\\\\1')
-      end
-    end
-
-    # Shared behavior for the full-mode serializers of the AI tools' root
-    # files (FullClaudeSerializer, FullOpencodeSerializer, FullCopilotSerializer).
-    # Provides the behavioral rules section and architecture summary.
-    module FullSerializerBehavior
-      private
-
-      def rules_section
-        rules = []
-        rules << "## Behavioral Rules"
-        rules << ""
-        rules << "When working in this codebase:"
-        rules << "- Follow existing patterns and conventions detected above"
-        rules << "- Use the database schema as the source of truth for column names and types"
-        rules << "- Respect existing associations and validations when modifying models"
-        rules << "- Match the project's architecture style (#{architecture_summary})" if architecture_summary
-        test_cmd = detect_test_command
-        rules << "- Run `#{test_cmd}` after making changes to verify correctness"
-        rules.join("\n")
-      end
-
-      def architecture_summary
-        arch = Payload.architecture(context)
-        arch.any? ? arch.join(", ") : nil
       end
     end
   end

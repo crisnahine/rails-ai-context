@@ -14,10 +14,8 @@ module RailsAiContext
     #     rules written only as .cursor/rules/*.mdc; adding .cursorrules
     #     alongside fixed it.
     class CursorRulesSerializer < Base
-      include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper
-      include CompactSerializerHelper
 
       # Split rule files (.cursor/rules/*.mdc) are fully gem-owned, written
       # as-is with no markers (the gem manages every file in that
@@ -163,15 +161,9 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Legacy .cursorrules fallback. Same content pipeline as CLAUDE.md
-      # (render_compact_rules from CompactSerializerHelper) - both files
-      # give an AI agent the same project context; only the filename /
-      # distribution mechanism differs. Cursor's chat agent reads
-      # .cursorrules unconditionally in every version, so this serves as
-      # the guaranteed fallback while .cursor/rules/*.mdc is the
-      # preferred-when-supported scoped format.
+      # The legacy root file: the bytes every root path gets.
       def render_cursorrules_legacy
-        render_compact_rules
+        RootFile.new(context).call
       end
     end
   end

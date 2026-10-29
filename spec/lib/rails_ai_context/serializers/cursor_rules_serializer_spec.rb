@@ -116,7 +116,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
     Dir.mktmpdir do |dir|
       described_class.new(context).call(dir)
       cursor_content = File.read(File.join(dir, ".cursorrules"))
-      claude_content = RailsAiContext::Serializers::ClaudeSerializer.new(context).call
+      claude_content = RailsAiContext::Serializers::RootFile.new(context).call
 
       # Every major section of CLAUDE.md also appears in .cursorrules,
       # guaranteeing parity across both AI-client targets. Drift between

@@ -455,7 +455,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       allow(described_class).to receive(:cached_context).and_return(ctx)
 
       onboard = described_class.call(detail: "standard").content.first[:text]
-      generated = RailsAiContext::Serializers::ClaudeSerializer.new(ctx).call
+      generated = RailsAiContext::Serializers::RootFile.new(ctx).call
 
       order = ->(text) { models.keys.select { |name| text.include?("**#{name}**") }.sort_by { |name| text.index("**#{name}**") } }
       expect(order.call(onboard)).to eq(order.call(generated).first(7))
@@ -508,7 +508,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       allow(described_class).to receive(:cached_context).and_return(ctx)
 
       onboard = described_class.call(detail: "standard").content.first[:text]
-      generated = RailsAiContext::Serializers::ClaudeSerializer.new(ctx).call
+      generated = RailsAiContext::Serializers::RootFile.new(ctx).call
 
       expect(onboard).to include("**Widget**")
       expect(onboard).not_to include("**Broken**")

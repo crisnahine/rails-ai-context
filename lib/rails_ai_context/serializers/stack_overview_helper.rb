@@ -254,6 +254,10 @@ module RailsAiContext
         result
       end
 
+      def detect_test_command
+        TestFramework.command(Payload.section(context, :tests)&.dig(:framework))
+      end
+
       def project_root
         defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       end

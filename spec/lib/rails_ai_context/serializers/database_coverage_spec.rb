@@ -24,9 +24,7 @@ RSpec.describe "database counts across every generated file" do
   let(:migrations_line) { "- Migrations: 1 total, 0 pending; analytics: 3 total, 1 pending" }
 
   {
-    "CLAUDE.md" => RailsAiContext::Serializers::ClaudeSerializer,
-    "AGENTS.md" => RailsAiContext::Serializers::OpencodeSerializer,
-    ".github/copilot-instructions.md" => RailsAiContext::Serializers::CopilotSerializer
+    "the root file" => RailsAiContext::Serializers::RootFile
   }.each do |file, klass|
     it "#{file} counts every database's tables and migrations" do
       expect(klass.new(context).call).to include(database_line, migrations_line)
