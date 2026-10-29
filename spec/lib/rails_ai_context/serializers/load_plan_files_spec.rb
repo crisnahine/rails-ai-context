@@ -118,6 +118,44 @@ RSpec.describe "Context files for a selection of AI tools" do
     expect(RailsAiContext::Serializers::LoadPlan.new(%i[codex claude]).without("AGENTS.md").root_carries?(:codex)).to be(false)
   end
 
+  # Many repos link one name to the other; an import written through the link
+  # replaced the content it names, and the file imported itself.
+  %w[CLAUDE.md AGENTS.md].each do |linked|
+    it "gives both names the content when #{linked} links to the other" do
+      target = (%w[CLAUDE.md AGENTS.md] - [ linked ]).first
+      File.write(path(target), "# shared\n")
+      File.symlink(target, path(linked))
+
+      run(:claude, :codex)
+
+      expect(block(target)).to include("## Tools (")
+      expect(File.read(path(target))).not_to include("@AGENTS.md")
+    end
+  end
+
+  it "keeps Claude's overview and guide when CLAUDE.md cannot take its import" do
+    File.write(path("CLAUDE.md"), "# mine\n#{marker::BEGIN_MARKER}\nold\n")
+
+    result = run(:claude, :codex)
+
+    expect(result[:not_applicable][path("CLAUDE.md")]).to eq(marker::UNPAIRED)
+    expect(File.read(path(".claude/rules/rails-context.md"))).to include("Overview")
+    expect(File.read(path(".claude/rules/rails-mcp-tools.md"))).to include("Anti-Hallucination Protocol")
+  end
+
+  # A rule the gem owns by name, but a link is someone's own arrangement.
+  it "leaves a linked rule file the run no longer writes" do
+    FileUtils.mkdir_p(path(".claude/rules"))
+    File.write(path("elsewhere.md"), "kept\n")
+    File.symlink("../../elsewhere.md", path(".claude/rules/rails-context.md"))
+
+    result = run(:claude)
+
+    expect(File.read(path("elsewhere.md"))).to eq("kept\n")
+    expect(File.symlink?(path(".claude/rules/rails-context.md"))).to be(true)
+    expect(result[:not_applicable][path(".claude/rules/rails-context.md")]).to eq(RailsAiContext::SafeFile::LINKED)
+  end
+
   # An unset selection means every AI tool, as a run with no format does.
   it "plans a one-tool run against every AI tool when none are recorded" do
     allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)

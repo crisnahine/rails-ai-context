@@ -99,7 +99,7 @@ module RailsAiContext
 
         # The scan decides, so services under a configured extra path show wherever
         # the conventions walk looked.
-        names = [ names_line(service_names, "**Services:** "), names_line(job_names, "**Jobs:** ") ].compact
+        names = [ services_line("**Services:** "), jobs_line("**Jobs:** ") ].compact
 
         # The blank line sets the names apart from a pattern list. With no list
         # above them - the static tier reads no conventions - it left the

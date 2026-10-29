@@ -364,6 +364,13 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         expect(helper.job_names).to eq(%w[ImportJob CleanupWorker])
       end
 
+      it "names the tool that lists them whole when the line is cut" do
+        workers = 40.times.map { |i| { name: "Worker#{i}" } }
+        helper = test_class.new(jobs: { jobs: [], workers: workers })
+
+        expect(helper.jobs_line("- Jobs: ")).to end_with("more (`rails_get_job_pattern`)")
+      end
+
       it "caps a long list in its line and says how many it left out" do
         workers = 40.times.map { |i| { name: "Worker#{i}" } }
         helper = test_class.new(jobs: { jobs: [], workers: workers })

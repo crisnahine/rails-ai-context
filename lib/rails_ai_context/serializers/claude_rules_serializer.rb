@@ -5,6 +5,8 @@ module RailsAiContext
     # Generates .claude/rules/ files for Claude Code auto-discovery.
     # These provide quick-reference lists without bloating CLAUDE.md.
     class ClaudeRulesSerializer < Base
+      TOOLS = [ :claude ].freeze
+
       include StackOverviewHelper
       include ToolGuideHelper
 
@@ -28,17 +30,9 @@ module RailsAiContext
 
       private
 
-      def plan
-        @plan ||= LoadPlan.new([ :claude ])
-      end
-
-      def overview_reason
-        plan.root_carries?(:claude) ? in_root_reason : "nothing to document"
-      end
-
       # The root file states the overview whenever it is written.
       def render_context_overview
-        return nil if plan.root_carries?(:claude)
+        return nil if rooted?
 
         lines = header_lines(:overview, title: "Overview")
         lines.concat(overview_lines)
@@ -235,7 +229,7 @@ module RailsAiContext
       # The guide, where no root file carries it. The tools list themselves:
       # the MCP client lists them, and `tool --list` on the command line.
       def render_mcp_tools_reference
-        plan.root_carries?(:claude) ? nil : render_tools_guide.join("\n")
+        guide_unless_rooted
       end
     end
   end

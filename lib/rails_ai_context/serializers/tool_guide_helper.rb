@@ -20,6 +20,10 @@ module RailsAiContext
         RailsAiContext.configuration.tool_mode
       end
 
+      def mode_label
+        tool_mode == :cli ? "CLI" : "MCP"
+      end
+
       # A tool named once in prose: its MCP call, or its command where the
       # app serves no MCP.
       def tool_ref(mcp_name, mcp_params = nil, cli_params = nil)
@@ -161,7 +165,7 @@ module RailsAiContext
           "",
           "Pass `#{param_text("detail", "summary")}` first. Use the right level:",
           "- **summary** - first call, orient yourself (table list, model names, route overview)",
-          "- **standard** - working detail (columns with types, associations, action source) - DEFAULT",
+          "- **standard** - working detail (columns with types, associations, action source), the default",
           "- **full** - only when you need indexes, foreign keys, code snippets, or complete content",
           "",
           "Pattern: summary to find the target → standard to understand it → full only if needed.",
@@ -266,8 +270,6 @@ module RailsAiContext
                               "rails_diagnose(error:\"NoMethodError: undefined method 'foo' for nil\", file:\"#{ex.model_file}\")",
                               "diagnose", "error=\"NoMethodError: undefined method 'foo' for nil\" file=#{ex.model_file}")
         lines += tool_example("**Review changes before merging:**", "rails_review_changes", "rails_review_changes(ref:\"main\")", "review_changes", "ref=main")
-        lines += tool_example("**Generate tests matching project patterns:**", "rails_generate_test",
-                              "rails_generate_test(model:\"#{ex.model}\")", "generate_test", "model=#{ex.model}")
         return [] if lines.empty?
 
         [ "### Step-by-step workflows (follow this order)", "", *lines ]
@@ -305,8 +307,6 @@ module RailsAiContext
       def tools_rules_section
         rules = []
         rules << "**Read a file only to edit it.** For reference, ask the tool:#{reference_reads}"
-        composites = served_refs("rails_get_context", "rails_analyze_feature")
-        rules << "**Composite tools first** - #{composites.join(" and ")} before the single-layer tools" if composites.any?
         if served?("rails_search_code")
           rules << "**Trace with #{tool_ref("rails_search_code")}** - it skips sensitive files, follows a method with " \
                    "`#{param_text("match_type", "trace")}` and paginates; plain search is fine for a simple lookup"
@@ -317,13 +317,13 @@ module RailsAiContext
         end
         rules << "**Name a target** - a lookup without one returns a paginated list, not an error"
         rules << "**Start with `#{param_text("detail", "summary")}`** to find the target, then drill in; a full answer first buries it"
-        rules << "**Follow _Next:_ hints** - each answer names the best next call"
+        # The protocol's rule 5 says it whenever the protocol is on.
+        rules << "**Follow _Next:_ hints** - each answer names the best next call" unless RailsAiContext.configuration.anti_hallucination_rules
         [ "### Rules", "", *rules.each_with_index.map { |rule, i| "#{i + 1}. #{rule}" }, "" ]
       end
 
       # Each question a file read answers worse, and the call that answers it,
-      # as the tool's own row writes the call. In the eval an agent that read
-      # the model file missed an association a concern declares.
+      # as the tool's own row writes it: a model file hides what its concerns declare.
       REFERENCE_QUESTIONS = [
         [ "rails_get_schema", "a table's columns, indexes and keys" ],
         [ "rails_get_model_details", "a model's associations, validations and scopes, its concerns' included" ],
@@ -413,7 +413,7 @@ module RailsAiContext
         end
         lines = [ "### All #{count_phrase(names.size, "tool")}" ]
         lines << "Run one as `#{cli_cmd("NAME", "param=value")}`, `NAME` being one of:" if cli
-        lines << "`#{names.join('` `')}`"
+        lines.concat(Budget.wrap(names.map { |name| "`#{name}`" }))
         lines << ""
       end
 

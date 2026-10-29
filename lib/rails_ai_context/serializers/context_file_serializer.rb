@@ -54,7 +54,7 @@ module RailsAiContext
       end
 
       # Write context files, skipping unchanged ones.
-      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      # @return [Hash] { written:, skipped:, removed:, trimmed: [paths], not_applicable: { path => reason } }
       def call
         # `.ai-context.json` is the machine artifact, not an AI tool, so no
         # install menu can offer it. A recorded tool selection arrives here as
@@ -85,7 +85,6 @@ module RailsAiContext
         write_plain(File.join(output_dir, JSON_PATH), JsonSerializer.new(context).call, result, output_dir) if formats.include?(:json)
         plan = write_roots(tools, plan, output_dir, result, generate_root)
 
-        # Split rules are always generated regardless of generate_root_files
         generate_split_rules(tools, plan, output_dir, result)
 
         result
@@ -105,11 +104,10 @@ module RailsAiContext
           next result[:not_applicable][filepath] = "root files disabled" unless generate_root
 
           case plan.root(relative)
-          when :content
-            next if write_root(filepath, root_content, output_dir, result)
-
-            plan = plan.without(relative)
-          when :import then write_root(filepath, "@#{plan.content_home}", output_dir, result)
+          when :content, :import
+            # A name linked to the content home is that file: an import written through it would import itself.
+            content = plan.root(relative) == :content || same_file?(filepath, File.join(output_dir, plan.content_home)) ? root_content : "@#{plan.content_home}"
+            plan = plan.without(relative) unless write_root(filepath, content, output_dir, result)
           else SectionMarkerWriter.drop(filepath, root: output_dir, whole: false, result: result)
           end
         end
@@ -122,6 +120,10 @@ module RailsAiContext
         paths = Install::AiTool.all.select { |tool| tools.include?(tool.key) }.map(&:root)
         paths << plan.content_home if paths.any? { |path| plan.root(path) == :import }
         paths.uniq
+      end
+
+      def same_file?(one, other)
+        File.exist?(one) && File.exist?(other) && File.realpath(one) == File.realpath(other)
       end
 
       def root_content

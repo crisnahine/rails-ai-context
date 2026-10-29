@@ -63,19 +63,26 @@ module RailsAiContext
         lines
       end
 
-      # The head, as much of the body as fits the kind's bytes and the line
-      # budget, then the kept sections whole. The body is cut from the bottom,
-      # a cut marked with the note; the head and the kept sections are what a
-      # file is for, so they are never cut. `reserve` is what the writer adds
-      # around the text, a managed block's markers.
+      # The head, as much of the body as fits, then the kept sections whole. The
+      # body is cut from the bottom and the cut marked with the note; `reserve`
+      # is what the writer adds around the text, a managed block's markers.
       def fit(head:, body:, keep:, kind:, note:, max_lines: nil, reserve: 0)
         bytes = BYTES.fetch(kind) - reserve
         whole = [ *head, *body, *keep ]
         return whole.join("\n") if fits?(whole, bytes, max_lines)
 
         tail = keep.empty? ? [] : [ "", *keep ]
-        kept = body.dup
-        kept.pop until kept.empty? || fits?([ *head, *kept, "", note, *tail ], bytes, max_lines)
+        fixed = [ *head, "", note, *tail ]
+        used = fixed.join("\n").bytesize
+        lines = content_lines(fixed)
+        # Each body line kept adds its bytes and one newline, so the cut is one walk down.
+        kept = body.take_while do |line|
+          counted = line.strip.empty? ? 0 : 1
+          next false if used + line.bytesize + 1 > bytes || (max_lines && lines + counted > max_lines)
+
+          used += line.bytesize + 1
+          lines += counted
+        end
         kept = close_cut(kept)
         [ *head, *kept, *("" if kept.any?), note, *tail ].join("\n")
       end

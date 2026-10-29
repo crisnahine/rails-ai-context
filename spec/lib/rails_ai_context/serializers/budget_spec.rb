@@ -55,6 +55,18 @@ RSpec.describe RailsAiContext::Serializers::Budget do
       expect(text).not_to include("- line 400 ")
     end
 
+    # It dropped a line at a time and joined the whole file again each time:
+    # 40,000 lines of a large app's full mode took 22 seconds.
+    it "cuts a long body in one pass" do
+      body = Array.new(40_000) { |i| "- line #{i} #{"x" * 40}" }
+
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      text = described_class.fit(head: [ "# A" ], body: body, keep: [ "## Rules" ], kind: :full, note: "_t_", max_lines: 150)
+
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
+      expect(text.split("\n").count { |l| !l.strip.empty? }).to eq(150)
+    end
+
     it "leaves text under the budget as it is" do
       expect(described_class.fit(head: [ "# A" ], body: [ "b" ], keep: [ "c" ], kind: :root, note: "_t_")).to eq("# A\nb\nc")
     end

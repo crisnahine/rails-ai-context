@@ -7,6 +7,8 @@ module RailsAiContext
     # the tools guide. The root content itself is in AGENTS.md or CLAUDE.md,
     # which Cursor reads on every surface.
     class CursorRulesSerializer < Base
+      TOOLS = [ :cursor ].freeze
+
       include StackOverviewHelper
       include ToolGuideHelper
 
@@ -27,7 +29,7 @@ module RailsAiContext
       def call(output_dir)
         rules_dir = File.join(output_dir, Install::AiTool.find(:cursor).rules_dir)
         result = write_rule_table(rules_dir, RULE_FILES, root: output_dir, tool: :cursor)
-        return result unless plan.root_carries?(:cursor)
+        return result unless rooted?
 
         # Cursor calls .cursorrules legacy and reads the content from the root
         # file the plan picked, so the block an earlier release wrote goes.
@@ -39,26 +41,18 @@ module RailsAiContext
 
       private
 
-      def plan
-        @plan ||= LoadPlan.new([ :cursor ])
-      end
-
-      def overview_reason
-        plan.root_carries?(:cursor) ? in_root_reason : "nothing to document"
-      end
-
       def project_scope
         RuleScope.always("Rails project context for #{context[:app_name]}")
       end
 
       # The agent picks it by its description, so the description names the mode's tools.
       def tools_scope
-        RuleScope.on_request("Rails #{tool_mode == :cli ? "CLI" : "MCP"} tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more")
+        RuleScope.on_request("Rails #{mode_label} tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more")
       end
 
       # The overview, where no root file Cursor reads carries the root content.
       def render_project_rule
-        return nil if plan.root_carries?(:cursor)
+        return nil if rooted?
 
         lines = header_lines(:overview, title: "Overview")
         lines.concat(overview_lines)
@@ -108,7 +102,7 @@ module RailsAiContext
 
       # The guide on request, where no root file Cursor reads carries it.
       def render_mcp_tools_rule
-        plan.root_carries?(:cursor) ? nil : render_tools_guide.join("\n")
+        guide_unless_rooted
       end
     end
   end

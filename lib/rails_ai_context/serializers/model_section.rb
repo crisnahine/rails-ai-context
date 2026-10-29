@@ -28,7 +28,7 @@ module RailsAiContext
       def summary_rows(models)
         shown = Budget.cap(:key_models)
         rows = [ "## Key models (#{models.size} total, most connected first)" ]
-        # An agent took a cut list for the whole one and grepped for the rest.
+        # A cut list reads as the whole one unless it says where the rest is.
         if served?("rails_get_model_details")
           rows << "_A list that ends in ...N more is cut: #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} has it whole._"
         end

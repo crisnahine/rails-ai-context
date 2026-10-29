@@ -5,6 +5,8 @@ module RailsAiContext
     # Generates .github/instructions/*.instructions.md files with applyTo frontmatter
     # for GitHub Copilot path-specific instructions.
     class CopilotInstructionsSerializer < Base
+      TOOLS = [ :copilot ].freeze
+
       include StackOverviewHelper
       include ToolGuideHelper
 
@@ -36,17 +38,9 @@ module RailsAiContext
 
       private
 
-      def plan
-        @plan ||= LoadPlan.new([ :copilot ])
-      end
-
-      def overview_reason
-        plan.root_carries?(:copilot) ? in_root_reason : "nothing to document"
-      end
-
       # copilot-instructions.md states the overview whenever it is written.
       def render_context_instructions
-        return nil if plan.root_carries?(:copilot)
+        return nil if rooted?
 
         lines = header_lines(:overview, title: "Overview")
         lines.concat(overview_lines)
@@ -89,7 +83,7 @@ module RailsAiContext
       end
 
       def tools_name
-        "Rails #{tool_mode == :cli ? "CLI" : "MCP"} Tools"
+        "Rails #{mode_label} Tools"
       end
 
       def tools_scope
@@ -98,7 +92,7 @@ module RailsAiContext
 
       # The guide, where copilot-instructions.md does not carry it.
       def render_mcp_tools_instructions
-        plan.root_carries?(:copilot) ? nil : render_tools_guide.join("\n")
+        guide_unless_rooted
       end
     end
   end

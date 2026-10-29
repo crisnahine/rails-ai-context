@@ -2,14 +2,9 @@
 
 module RailsAiContext
   module Serializers
-    # Which root files a set of AI tools gets and what each holds, so the root
-    # content is written once into a file every chosen tool reads. Cursor reads
-    # CLAUDE.md and AGENTS.md as it reads its own rules, so a copy for each
-    # tool loaded the same content two or three times there.
-    #
-    # #root answers :content (the whole root file), :import (a line pointing a
-    # tool that expands imports at the file with the content) or nil: not
-    # written, and a gem block left there from an earlier run is removed.
+    # Which root files a set of AI tools gets, so the root content is written
+    # once into a file every chosen tool reads. #root answers :content, :import
+    # (a pointer for a tool that expands imports) or nil (not written).
     class LoadPlan
       # unwritable: root files a write refused, which the plan routes around.
       def initialize(tools, root_files: RailsAiContext.configuration.generate_root_files, unwritable: [])

@@ -13,6 +13,8 @@ module RailsAiContext
     # Teams write these by hand too, so one the gem did not generate keeps
     # its text and gets the gem's listing as a marked block.
     class OpencodeRulesSerializer < Base
+      TOOLS = %i[opencode codex].freeze
+
       include StackOverviewHelper
       include ToolGuideHelper
 
@@ -42,14 +44,6 @@ module RailsAiContext
 
       private
 
-      def plan
-        @plan ||= LoadPlan.new([ :opencode ])
-      end
-
-      # The root AGENTS.md states the global filters, services and jobs whenever it is written.
-      def root_carries?
-        plan.root_carries?(:opencode) || plan.root_carries?(:codex)
-      end
 
       # OpenCode reads these beside the code, so they go only into a
       # directory that exists. Under an output_dir that is not the app, the
@@ -98,12 +92,12 @@ module RailsAiContext
           lines.insert(-2, "> #{notice}")
         end
 
-        filters = before_actions_line("**Global before_actions:** ") unless root_carries?
+        filters = before_actions_line("**Global before_actions:** ") unless rooted?
         lines.push(filters, "") if filters
 
         lines.concat(render_compact_controllers_list(app_controllers, with_actions: true))
 
-        names = root_carries? ? [] : [ names_line(service_names, "**Services:** "), names_line(job_names, "**Jobs:** ") ].compact
+        names = rooted? ? [] : [ services_line("**Services:** "), jobs_line("**Jobs:** ") ].compact
         lines.push("", *names) if names.any?
 
         lines.concat(tool_pointers(

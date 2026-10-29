@@ -27,11 +27,8 @@ module RailsAiContext
     # retired_paths are files an earlier release wrote a block into and this one
     # no longer writes: a run takes the block out, and cleanup still knows them.
     #
-    # root is the file the tool's root context goes in when no other file it reads carries
-    # it, and reads the root files it loads at the start of every session on every surface
-    # it has, by default, each with the doc saying so: Serializers::LoadPlan writes the
-    # content once into a file every chosen tool reads. A tool that expands `@path` imports
-    # in a file can be pointed at the content instead of given a copy.
+    # reads are the root files a tool loads at the start of every session on every surface,
+    # each with its source; root is its own. Serializers::LoadPlan reads both.
     #
     # mcp_config[:client] is the program that reads the config, and [:jsonc] whether it reads
     # JSONC - comments and trailing commas - or refuses them, as JSON does. VS Code reads
@@ -74,9 +71,8 @@ module RailsAiContext
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
           owned_dir: ".cursor",
           root: "AGENTS.md",
-          # .cursorrules is legacy, and an @path in a rule is a pointer the agent
-          # reads, never inlined. A release that put the content in .mdc rules alone
-          # had a chat agent miss it, so the content goes in AGENTS.md.
+          # .cursorrules is legacy and Cursor never inlines an @path. Its chat agent has
+          # missed content kept in .mdc rules alone, so the content goes in AGENTS.md.
           reads: [
             Read.new(path: "AGENTS.md", imports: false, source: AGENTS_MD_SOURCE),
             Read.new(path: "CLAUDE.md", imports: false, source: AGENTS_MD_SOURCE)

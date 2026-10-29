@@ -6,6 +6,7 @@ module RailsAiContext
     # Include in any serializer that has a `context` reader and renders a project overview.
     module StackOverviewHelper
       include CountPhrase
+      include ToolGuideHelper
       include ModelSection
       include StackSections
 
@@ -128,7 +129,7 @@ module RailsAiContext
         lines.concat(gems_lines(:overview))
         lines.concat(architecture_lines(:overview))
         lines.concat(full_preset_stack_lines)
-        lines.concat([ names_line(service_names, "- Services: "), names_line(job_names, "- Jobs: ") ].compact)
+        lines.concat([ services_line("- Services: "), jobs_line("- Jobs: ") ].compact)
         if (filters = before_actions_line("**Global before_actions:** "))
           lines.push("", filters)
         end
@@ -191,9 +192,25 @@ module RailsAiContext
         )
       end
 
-      # Why a rule the root file states is not written.
-      def in_root_reason
-        "in the root file"
+      # The run's LoadPlan, or one for this rules serializer's AI tools alone
+      # (its TOOLS) where it runs by itself.
+      def plan
+        @plan ||= LoadPlan.new(self.class::TOOLS)
+      end
+
+      # Whether a root file these AI tools read carries the root content, which
+      # their overview and tools guide rules would state again.
+      def rooted?
+        self.class::TOOLS.any? { |key| plan.root_carries?(key) }
+      end
+
+      def overview_reason
+        rooted? ? "in the root file" : "nothing to document"
+      end
+
+      # The tools guide, for a rules file that stands in for the root file.
+      def guide_unless_rooted
+        rooted? ? nil : render_tools_guide.join("\n")
       end
 
       def scoped(rule, tool)
@@ -277,8 +294,21 @@ module RailsAiContext
       end
 
       # A large app's services take one line of a generated file, not kilobytes of it.
-      def names_line(names, lead)
-        Budget.list(names, cap: Budget.cap(:names), lead: lead) if names.any?
+      # A cut list names the tool that has it whole.
+      def names_line(names, lead, tool = nil)
+        return nil if names.empty?
+
+        pointer = tool && served?(tool) ? " (#{tool_ref(tool)})" : ""
+        line = Budget.list(names, cap: Budget.cap(:names), lead: lead, width: Budget::LINE_WIDTH - pointer.size)
+        line.end_with?(" more") ? line + pointer : line
+      end
+
+      def services_line(lead)
+        names_line(service_names, lead, "rails_get_service_pattern")
+      end
+
+      def jobs_line(lead)
+        names_line(job_names, lead, "rails_get_job_pattern")
       end
 
       # The filters ApplicationController runs on every request, through the

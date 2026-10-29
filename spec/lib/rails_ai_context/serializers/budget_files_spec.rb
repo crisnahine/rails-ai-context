@@ -23,9 +23,9 @@ RSpec.describe "Context files within their budget" do
     big.merge(models: models, schema: big[:schema].merge(tables: tables), controllers: { controllers: controllers })
   end
 
-  def files(root_files:, mode:)
+  def files(root_files:, mode:, tool_mode: :mcp)
     Dir.mktmpdir do |dir|
-      allow(RailsAiContext.configuration).to receive_messages(output_dir_for: dir, generate_root_files: root_files, context_mode: mode)
+      allow(RailsAiContext.configuration).to receive_messages(output_dir_for: dir, generate_root_files: root_files, context_mode: mode, tool_mode: tool_mode)
       %w[app/models app/controllers].each { |sub| FileUtils.mkdir_p(File.join(dir, sub)) }
       written = RailsAiContext::Serializers::ContextFileSerializer.new(context, format: :all).call[:written]
       written.reject { |path| path.end_with?(".json") }.to_h { |path| [ path.delete_prefix("#{dir}/"), File.read(path) ] }
@@ -40,10 +40,10 @@ RSpec.describe "Context files within their budget" do
     end
   end
 
-  [ [ true, :compact ], [ true, :full ], [ false, :compact ] ].each do |root_files, mode|
-    context "with root files #{root_files ? "on" : "off"} in #{mode} mode" do
+  [ [ true, :compact, :mcp ], [ true, :full, :mcp ], [ false, :compact, :mcp ], [ true, :compact, :cli ], [ false, :compact, :cli ] ].each do |root_files, mode, tool_mode|
+    context "with root files #{root_files ? "on" : "off"} in #{mode} #{tool_mode} mode" do
       it "keeps every file within the bytes its kind allows" do
-        over = files(root_files: root_files, mode: mode).filter_map do |path, text|
+        over = files(root_files: root_files, mode: mode, tool_mode: tool_mode).filter_map do |path, text|
           limit = budget::BYTES.fetch(kind(path, mode))
           "#{path}: #{text.bytesize} > #{limit}" if text.bytesize > limit
         end
@@ -54,7 +54,7 @@ RSpec.describe "Context files within their budget" do
       # The protocol's numbered rules are fixed prose; every other line is data
       # or a list, which the width holds to.
       it "keeps every list line within the width" do
-        wide = files(root_files: root_files, mode: mode).flat_map do |path, text|
+        wide = files(root_files: root_files, mode: mode, tool_mode: tool_mode).flat_map do |path, text|
           text.lines.map(&:chomp).reject { |line| line.match?(/\A\d+\. \*\*/) || line.size <= budget::LINE_WIDTH }
               .map { |line| "#{path}: #{line[0, 80]}... (#{line.size})" }
         end
