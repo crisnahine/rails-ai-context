@@ -481,8 +481,8 @@ RSpec.describe RailsAiContext::Serializers::RootFile do
         expect(output).to include("MCP tools")
       end
 
-      it "includes rules section" do
-        expect(output).to include("## Rules")
+      it "includes the conventions section" do
+        expect(output).to include("## Conventions")
       end
 
       context "with introspector warnings" do

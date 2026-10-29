@@ -208,7 +208,7 @@ module RailsAiContext
       def overview_rule
         return nil if rooted?
 
-        [ *header_lines(:overview, title: "Overview"), *overview_lines ].join("\n")
+        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", "Run `#{detect_test_command}` after changes." ].join("\n")
       end
 
       def overview_reason

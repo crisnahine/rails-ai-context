@@ -168,6 +168,18 @@ RSpec.describe "Context files for a selection of AI tools" do
     expect(block("AGENTS.md")).to include("## Tools (")
   end
 
+  # A one-off run for a tool the record does not name left its root file
+  # behind, read beside the next run's copy and never refreshed again.
+  it "keeps planning for a root file the gem's block is still in" do
+    allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+    run(:claude)
+    run(:cursor)
+    run(:claude)
+
+    expect(block("CLAUDE.md")).to eq("@AGENTS.md")
+    expect(block("AGENTS.md")).to include("## Tools (")
+  end
+
   # An unset selection means every AI tool, as a run with no format does.
   it "plans a one-tool run against every AI tool when none are recorded" do
     allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)

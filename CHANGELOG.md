@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names are listed only in CLI mode, where `tool NAME --help` gives a command's
   parameters, since an MCP client lists its tools itself. The six rules of the
   protocol keep their wording minus the capitals, in the plugin's `rules.md` too.
+- **The root file's app conventions are under `## Conventions`,** apart from
+  the tools guide's `### Rules`. The MCP fallback line says `tool --list` lists
+  the tools and `tool NAME --help` gives the parameters. A root file an earlier
+  run wrote for a tool the record does not name stays planned for, so it is
+  kept current instead of read stale beside a second copy.
 - **Each rules file declares one scope** (always, by paths, or on request),
   which one adapter per AI tool writes as `paths:`, `globs:` and `alwaysApply`,
   or `applyTo`.

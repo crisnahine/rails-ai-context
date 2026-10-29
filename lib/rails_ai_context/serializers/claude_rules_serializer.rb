@@ -154,8 +154,7 @@ module RailsAiContext
         end
 
         if tables.size > Budget.cap(:listed_rows)
-          use = " (use #{tool_named("rails_get_schema")})" if served?("rails_get_schema")
-          lines << "#{Budget.more_row(tables.size - Budget.cap(:listed_rows), "table")}#{use}"
+          lines << Budget.more_row(tables.size - Budget.cap(:listed_rows), "table")
         end
 
         lines

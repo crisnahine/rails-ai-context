@@ -114,7 +114,8 @@ module RailsAiContext
           [
             "This project has #{count_phrase(tool_count, "MCP tool")} via `#{serve_cmd}`. They answer from the app itself:",
             "its real schema, associations and filters, where reading files gives guesses.",
-            "If the MCP tools are not connected, run the same tools as `#{cli_cmd("TOOL_NAME", "param=value")}`.",
+            "If the MCP tools are not connected, run the same tools as `#{cli_cmd("TOOL_NAME", "param=value")}`; " \
+              "`#{cli_cmd("--list")}` lists them and `#{cli_cmd("TOOL_NAME", "--help")}` gives the parameters.",
             ""
           ]
         end
@@ -284,9 +285,9 @@ module RailsAiContext
       # as the tool's own row writes it: a model file hides what its concerns declare.
       REFERENCE_QUESTIONS = [
         [ "rails_get_schema", "a table's columns, indexes and keys" ],
-        [ "rails_get_model_details", "a model's associations, validations and scopes, its concerns' included" ],
+        [ "rails_get_model_details", "a model's associations, validations and scopes, including what its concerns add" ],
         [ "rails_get_controllers", "an action's source and the filters it runs" ],
-        [ "rails_get_test_info", "the tests that cover a model or controller" ]
+        [ "rails_get_test_info", "the tests for a model" ]
       ].freeze
 
       def reference_reads

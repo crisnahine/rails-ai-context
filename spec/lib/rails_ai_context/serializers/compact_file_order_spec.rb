@@ -14,7 +14,7 @@ RSpec.describe "Compact context file section order" do
   end
 
   let(:expected) do
-    [ "Stack", "Key models", "Gems", "Architecture", "Commands", "Warnings", "Rules", "Tools" ]
+    [ "Stack", "Key models", "Gems", "Architecture", "Commands", "Warnings", "Conventions", "Tools" ]
   end
 
   def headings(content)

@@ -106,7 +106,7 @@ module RailsAiContext
       end
 
       def render_footer
-        lines = [ "## Rules" ]
+        lines = [ "## Conventions" ]
         lines << "- Run the tests after changes"
 
         stimulus = Payload.section(context, :stimulus)

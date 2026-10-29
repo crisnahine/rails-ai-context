@@ -80,7 +80,7 @@ module RailsAiContext
         # covers the recorded selection too; an unset one means every tool.
         recorded = RailsAiContext.configuration.ai_tools
         selected = recorded.nil? ? Install::AiTool.keys : Array(recorded).map(&:to_sym) & Install::AiTool.keys
-        plan = LoadPlan.new(tools | selected, root_files: generate_root)
+        plan = LoadPlan.new(tools | selected | holding_block(output_dir), root_files: generate_root)
 
         write_plain(File.join(output_dir, JSON_PATH), JsonSerializer.new(context).call, result, output_dir) if formats.include?(:json)
         plan = write_roots(tools, plan, output_dir, result, generate_root)
@@ -119,6 +119,18 @@ module RailsAiContext
         paths = chosen.map(&:root) + chosen.flat_map(&:reads).map(&:path).select { |path| plan.root(path) }
         paths << plan.content_home if paths.any? { |path| plan.root(path) == :import }
         paths.uniq
+      end
+
+      # The AI tools whose root file still holds the gem's block, from a run for
+      # a tool the record does not name: planned for, so that copy stays current
+      # and no tool reads it beside a second one.
+      def holding_block(output_dir)
+        Install::AiTool.all.select do |tool|
+          text = RailsAiContext::SafeFile.read_text(File.join(output_dir, tool.root))
+          text && ManagedBlock.state(text) == :pair
+        rescue SystemCallError
+          false
+        end.map(&:key)
       end
 
       def same_file?(one, other)

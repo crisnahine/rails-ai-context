@@ -55,6 +55,17 @@ RSpec.describe RailsAiContext::Install::Uninstall do
                          [ :ok, "  Removed config/initializers/rails_ai_context.rb" ] ])
   end
 
+  # Cursor, OpenCode and Codex all own AGENTS.md: one file, said once.
+  it "names a file several AI tools share once" do
+    app
+    write(".rails-ai-context.yml", "ai_tools:\n- cursor\n- opencode\n- codex\n")
+    write("AGENTS.md", "# my own notes\n")
+
+    uninstall
+
+    expect(said.count { |_, text| text.include?("AGENTS.md") }).to eq(1)
+  end
+
   it "leaves an app it was never installed in as it is, and says nothing" do
     app
     write(".gitignore", "*.log\n.ai-context.json\n")

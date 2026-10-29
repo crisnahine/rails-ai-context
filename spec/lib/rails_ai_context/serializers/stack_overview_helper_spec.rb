@@ -273,7 +273,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(text).to include("- Database: PostgreSQL - 5 tables")
       expect(text).to include("- Models: 1")
       expect(text).to include("- Routes: 0 app routes across 0 routed controllers (30 total incl. framework)")
-      expect(text).to include("- auth: devise")
+      expect(text).to include("- Gems, auth: devise")
       expect(text).to include("- Service objects pattern (app/services/)")
     end
   end

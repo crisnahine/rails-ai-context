@@ -278,7 +278,7 @@ RSpec.describe RailsAiContext::Serializers::RootFile do
       expect(output).to start_with("# TestApp - AI Context")
       expect(output).not_to include("## Key models")
       expect(output.index("_Cut to fit:")).to be < output.index("## Commands")
-      expect(output).to include("## Rules", "Anti-Hallucination Protocol", "### Rules\n\n1.")
+      expect(output).to include("## Conventions", "Anti-Hallucination Protocol", "### Rules\n\n1.")
     end
   end
 

@@ -31,7 +31,7 @@ module RailsAiContext
         names = ->(list) { list.map { |g| g[:name] } }
         case density
         when :summary then [ "## Gems", *grouped.map { |cat, list| Budget.list(names.(list), lead: "- **#{cat}**: ") }, "" ]
-        when :overview then grouped.map { |cat, list| Budget.list(names.(list), lead: "- #{cat}: ") }
+        when :overview then grouped.map { |cat, list| Budget.list(names.(list), lead: "- Gems, #{cat}: ") }
         when :full
           [ "## Notable Gems", *grouped.sort.flat_map { |cat, list| [ "### #{cat.capitalize}", *list.map { |g| "- **#{g[:name]}** (#{g[:version]}): #{g[:note]}" } ] } ]
         else raise ArgumentError, "no gems density #{density}"

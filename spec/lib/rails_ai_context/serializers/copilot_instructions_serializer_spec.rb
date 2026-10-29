@@ -56,7 +56,7 @@ RSpec.describe RailsAiContext::Serializers::CopilotInstructionsSerializer do
     Dir.mktmpdir do |dir|
       described_class.new(context).call(dir)
       content = File.read(File.join(dir, ".github", "instructions", "rails-context.instructions.md"))
-      categories.each { |cat| expect(content).to include("- #{cat}: #{cat}_gem") }
+      categories.each { |cat| expect(content).to include("- Gems, #{cat}: #{cat}_gem") }
     end
   end
 

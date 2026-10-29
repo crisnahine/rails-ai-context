@@ -56,7 +56,7 @@ RSpec.describe "The tools guide in the root file" do
 
     expect(output).to include("1. **Read a file only to edit it.** For reference, ask the tool:\n" \
                               "   - a table's columns, indexes and keys: `rails_get_schema(table:\"X\")`\n" \
-                              "   - a model's associations, validations and scopes, its concerns' included: `rails_get_model_details(model:\"X\")`")
+                              "   - a model's associations, validations and scopes, including what its concerns add: `rails_get_model_details(model:\"X\")`")
   end
 
   it "lists the commands in :cli mode, where nothing else does" do
