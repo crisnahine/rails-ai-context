@@ -527,9 +527,8 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
   end
 
   # Each credential start used to scan on to the end of the line, so these cost the square of the line.
-  it "reads a line of many credential starts, quotes and parts in linear time", :cpu_timed do
-    skip "a Windows runner times these shapes past the example limit; Linux and macOS time the same scanners" if Gem.win_platform?
-
+  # One example a shape: together they ran near the per-example limit a slow runner sets.
+  describe "a line of many credential starts, quotes and parts" do
     shapes = {
       ->(size) { %(BUNDLE_A=") * (size / 10) } => 600_000,
       ->(size) { %(BUNDLE_A: ") * (size / 11) } => 600_000,
@@ -577,15 +576,19 @@ RSpec.describe RailsAiContext::Redaction, "gem server credentials" do
     paths = [ "docker-compose.yml", "bin/setup", "config/boot.rb", ".env" ]
     # Eight times the input costs about 8 times the CPU when linear and 64 times when quadratic, on any machine.
     shapes.each_with_index do |(shape, size), index|
-      small = shape.call(size / 8)
-      line = shape.call(size)
-      paths.each do |path|
-        base = cpu_seconds(gc: false) { described_class.redact_source(small, path: path) }
-        limit = 24 * [ base, 0.03 ].max
-        # A slow moment on a shared runner is not the scan's cost, so a call over the limit runs again; a quadratic one never gets under.
-        tries = [ cpu_seconds(gc: false) { described_class.redact_source(line, path: path) } ]
-        tries << cpu_seconds(gc: false) { described_class.redact_source(line, path: path) } while tries.min >= limit && tries.size < 3
-        expect(tries.min).to be < limit, "shape #{index} in #{path}: #{base.round(3)}s then #{tries.map { |s| s.round(3) }}"
+      it "reads shape #{index} in linear time", :cpu_timed do
+        skip "a Windows runner times these shapes past the example limit; Linux and macOS time the same scanners" if Gem.win_platform?
+
+        small = shape.call(size / 8)
+        line = shape.call(size)
+        paths.each do |path|
+          base = cpu_seconds(gc: false) { described_class.redact_source(small, path: path) }
+          limit = 24 * [ base, 0.03 ].max
+          # A slow moment on a shared runner is not the scan's cost, so a call over the limit runs again; a quadratic one never gets under.
+          tries = [ cpu_seconds(gc: false) { described_class.redact_source(line, path: path) } ]
+          tries << cpu_seconds(gc: false) { described_class.redact_source(line, path: path) } while tries.min >= limit && tries.size < 3
+          expect(tries.min).to be < limit, "shape #{index} in #{path}: #{base.round(3)}s then #{tries.map { |s| s.round(3) }}"
+        end
       end
     end
   end
