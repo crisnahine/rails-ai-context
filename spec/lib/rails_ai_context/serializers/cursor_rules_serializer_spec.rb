@@ -21,8 +21,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
 
       project_rule = File.read(File.join(dir, ".cursor", "rules", "rails-project.mdc"))
       expect(project_rule).to start_with("---")
-      expect(project_rule).to include("alwaysApply: true")
-      expect(project_rule).to include("MCP tools")
+      expect(project_rule).to include("alwaysApply: true", "- Database:")
     end
   end
 
@@ -63,13 +62,13 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
     end
   end
 
-  it "generates MCP tools rule as agent-requested (alwaysApply false)" do
+  it "generates the MCP tools rule as always applied, standing in for the root file" do
     allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     Dir.mktmpdir do |dir|
       described_class.new(context).call(dir)
 
       tools_rule = File.read(File.join(dir, ".cursor", "rules", "rails-mcp-tools.mdc"))
-      expect(tools_rule).to include("alwaysApply: false")
+      expect(tools_rule).to include("alwaysApply: true")
       expect(tools_rule).to include("Tools (#{RailsAiContext::Server::TOOLS.size})")
       expect(tools_rule).to include("rails_get_schema")
       expect(tools_rule).to include("Step-by-step workflows")

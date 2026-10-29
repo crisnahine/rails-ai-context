@@ -66,6 +66,25 @@ RSpec.describe "The tools guide in the root file" do
     expect(output).not_to include("rails_get_context(")
   end
 
+  # In :cli mode the commands are the reference an agent asks on request.
+  it "says where a command's parameters are in :cli mode" do
+    expect(root_file(:cli)).to include("--help")
+  end
+
+  # With root files off, the overview rule and the guide rule both load in
+  # every session, so the overview carries no rule of its own.
+  it "states each rule once across the always-loaded rules when root files are off" do
+    Dir.mktmpdir do |dir|
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
+      RailsAiContext.configuration.tool_mode = :mcp
+      RailsAiContext::Serializers::ClaudeRulesSerializer.new(context).call(dir)
+      always = %w[rails-context.md rails-mcp-tools.md].map { |name| File.read(File.join(dir, ".claude/rules", name)) }.join
+
+      expect(always.scan(/read a file only/i).size).to eq(1)
+      expect(always.scan(/start with `?detail/i).size).to be <= 1
+    end
+  end
+
   it "names the CLI fallback once in :mcp mode" do
     expect(root_file(:mcp).scan("not connected").size).to eq(1)
   end

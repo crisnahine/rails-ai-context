@@ -11,7 +11,7 @@ module RailsAiContext
 
       RULE_FILES = {
         "rails-context.instructions.md" => {
-          renderer: :render_context_instructions, reason: :overview_reason, name: "Rails Project Overview",
+          renderer: :overview_rule, reason: :overview_reason, name: "Rails Project Overview",
           scope: RuleScope.always("Rails version, database, models, routes, gems, architecture patterns")
         },
         "rails-models.instructions.md" => {
@@ -37,10 +37,6 @@ module RailsAiContext
 
       private
 
-      # copilot-instructions.md states the overview whenever it is written.
-      def render_context_instructions
-        overview_rule("Use #{tools_noun} for detailed data. Start with `#{param_text("detail", "summary")}`.")
-      end
 
       def render_models_instructions
         models = Payload.models(context)

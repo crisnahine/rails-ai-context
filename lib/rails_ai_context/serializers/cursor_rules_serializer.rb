@@ -15,7 +15,7 @@ module RailsAiContext
       # as-is with no markers (the gem manages every file in that
       # directory).
       RULE_FILES = {
-        "rails-project.mdc" => { renderer: :render_project_rule, reason: :overview_reason, scope: :project_scope },
+        "rails-project.mdc" => { renderer: :overview_rule, reason: :overview_reason, scope: :project_scope },
         "rails-models.mdc" => { renderer: :render_models_rule, reason: "no models",
                                 scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
         "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers",
@@ -44,16 +44,11 @@ module RailsAiContext
         RuleScope.always("Rails project context for #{context[:app_name]}")
       end
 
-      # The agent picks it by its description, so the description names the mode's tools.
+      # The guide stands in for the root file, so it loads in every session as the protocol must.
       def tools_scope
-        RuleScope.on_request("Rails #{mode_label} tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more")
+        RuleScope.always("Rails #{mode_label} tools guide - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search and testing")
       end
 
-      # The overview, where no root file Cursor reads carries the root content.
-      def render_project_rule
-        overview_rule("#{tools_noun.upcase_first} available - rails-mcp-tools.mdc has the guide.",
-                      "Start with #{param_text("detail", "summary")}, then drill into specifics.")
-      end
 
       # Auto-attached when working in app/models/
       def render_models_rule

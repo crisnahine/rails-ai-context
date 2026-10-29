@@ -247,7 +247,7 @@ A run removes the files an earlier run wrote that it no longer writes. The CLI a
 | `.claude/rules/rails-schema.md` | Database table listing | Every database's tables, each database under its own heading when the app has more than one. A database of Solid Queue, Solid Cache or Solid Cable tables only, as Rails 8's queue, cache and cable are, is named in the root file instead (`queue: Solid Queue (13 tables)`). Loaded when Claude Code opens a schema dump or a migration. |
 | `.claude/rules/rails-models.md` | Model listing with associations | Loaded when Claude Code opens a file in `app/models/`. |
 | `.claude/rules/rails-context.md` | Project overview | Written only with `generate_root_files` off. Loaded in every session. |
-| `.claude/rules/rails-mcp-tools.md` | Tools guide | Written only with `generate_root_files` off. Loaded in every session: the protocol, the workflows, the rules, the detail levels and the table of every tool. |
+| `.claude/rules/rails-mcp-tools.md` | Tools guide | Written only with `generate_root_files` off. Loaded in every session: the protocol, the workflows and the rules, as the root file carries them. |
 | `.claude/rules/rails-components.md` | View component listing | Written only when the app has view components. Loaded when Claude Code opens a file in `app/components/` or `app/views/components/`. |
 
 ### OpenCode (3 files)

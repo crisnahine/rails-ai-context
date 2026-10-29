@@ -154,9 +154,6 @@ module RailsAiContext
         tool_ref("rails_get_config", %(section:"#{section}"), "section=#{section}")
       end
 
-
-
-
       def tools_power_tool_section
         ex = guide_examples
         lines = []
@@ -304,7 +301,6 @@ module RailsAiContext
         lines.any? ? lines.join : " the tools answer from the app itself."
       end
 
-
       # One row per tool the server serves, in the guide's order: a built-in
       # declares its own, and a custom tool, which declares none, follows
       # with the first sentence of its description.
@@ -316,8 +312,6 @@ module RailsAiContext
         custom = (exposed_tools - builtin.map(&:first)).map { |tool| [ tool, custom_tool_row(tool) ] }
         builtin.sort_by { |_tool, row| row.order } + custom
       end
-
-
 
       # The guide a root file carries, loaded in every session: no table, and
       # the names only in :cli mode, since an MCP client lists the tools itself.
@@ -334,15 +328,14 @@ module RailsAiContext
         lines
       end
 
-      # Dense one-line listing, from the same rows the table uses: the MCP
-      # names, or in :cli mode the names the command takes.
+      # The commands' names, wrapped to the width: in :cli mode nothing else lists them.
       def tools_name_list
         cli = tool_mode == :cli
         names = tool_rows.map do |tool, _row|
           cli ? RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) : tool.tool_name
         end
         lines = [ "### All #{count_phrase(names.size, "tool")}" ]
-        lines << "Run one as `#{cli_cmd("NAME", "param=value")}`, `NAME` being one of:" if cli
+        lines << "Run one as `#{cli_cmd("NAME", "param=value")}`; `#{cli_cmd("NAME", "--help")}` gives its parameters. `NAME` is one of:" if cli
         lines.concat(Budget.wrap(names.map { |name| "`#{name}`" }))
         lines << ""
       end
@@ -359,7 +352,7 @@ module RailsAiContext
       # of its description, which is all a custom MCP::Tool is sure to have.
       def custom_tool_row(tool)
         description = tool.respond_to?(:description_value) ? tool.description_value.to_s : ""
-        summary = description.strip.split(/(?<=\.)\s/).first.to_s.gsub(/\s+/, " ").gsub("|", "\\|")
+        summary = description.strip.split(/(?<=\.)\s/).first.to_s.gsub(/\s+/, " ")
         RailsAiContext::Tools::BaseTool::GuideRow.new(mcp: tool.tool_name, summary: summary.empty? ? "Custom tool" : summary)
       end
 

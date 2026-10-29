@@ -10,7 +10,7 @@ module RailsAiContext
       include StackOverviewHelper
 
       RULE_FILES = {
-        "rails-context.md" => { renderer: :render_context_overview, reason: :overview_reason,
+        "rails-context.md" => { renderer: :overview_rule, reason: :overview_reason,
                                 scope: RuleScope.always("Rails project overview") },
         "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump", scope: :schema_scope },
         "rails-models.md" => { renderer: :render_models_reference, reason: "no models",
@@ -29,11 +29,6 @@ module RailsAiContext
 
       private
 
-      # The root file states the overview whenever it is written.
-      def render_context_overview
-        overview_rule("Use #{tools_noun} for context rather than reading reference files.",
-                      "Start with `#{param_text("detail", "summary")}`, and read a file only to edit it.")
-      end
 
       # Every database's tables, the primary's first. Each gets a heading unless the
       # primary is the only one, since a table name can be in two and a lone other
@@ -160,7 +155,7 @@ module RailsAiContext
 
         if tables.size > Budget.cap(:listed_rows)
           use = " (use #{tool_named("rails_get_schema")})" if served?("rails_get_schema")
-          lines << "- ...#{count_phrase(tables.size - Budget.cap(:listed_rows), "more table")}#{use}"
+          lines << "#{Budget.more_row(tables.size - Budget.cap(:listed_rows), "table")}#{use}"
         end
 
         lines

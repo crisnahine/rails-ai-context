@@ -119,16 +119,14 @@ RSpec.describe "Cursor MDC compliance" do
       end
     end
 
-    it "mcp-tools rule is agent-requested (Type 3)" do
+    # It stands in for the root file, and the protocol loads in every session (ADR-0011).
+    it "mcp-tools rule is always applied (Type 1)" do
       file = generated_files["rails-mcp-tools.mdc"]
       expect(file).not_to be_nil
       fm = parse_frontmatter(file[:content])
-      expect(fm["alwaysApply"]).to be(false),
-        "rails-mcp-tools.mdc should be alwaysApply: false (agent-requested)"
-      expect(fm["description"]).to be_a(String)
+      expect(fm["alwaysApply"]).to be(true)
       expect(fm["description"]).to include("tools")
-      expect(fm).not_to have_key("globs"),
-        "agent-requested rules should not have globs"
+      expect(fm).not_to have_key("globs")
     end
 
     it "auto-attached rules have alwaysApply: false" do
@@ -200,11 +198,6 @@ RSpec.describe "Cursor MDC compliance" do
       file = generated_files["rails-project.mdc"]
       expect(file[:content]).to include("Rails 8.0")
       expect(file[:content]).to include("Ruby 3.4")
-    end
-
-    it "project rule references MCP tools file" do
-      file = generated_files["rails-project.mdc"]
-      expect(file[:content]).to include("rails-mcp-tools.mdc")
     end
 
     it "models rule includes model names" do

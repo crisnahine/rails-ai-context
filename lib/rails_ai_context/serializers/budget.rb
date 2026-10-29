@@ -31,6 +31,11 @@ module RailsAiContext
         ROOT_SECTIONS.flat_map { |name| sections.fetch(name) }
       end
 
+      # The row a cut list ends with.
+      def more_row(count, noun)
+        "- ...#{count} more #{count == 1 ? noun : "#{noun}s"}"
+      end
+
       def cap(name)
         CAPS.fetch(name)
       end

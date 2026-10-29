@@ -66,7 +66,7 @@ This creates:
 - `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
 - `.claude/rules/rails-components.md` - Component rules (loaded when editing `app/components/` or `app/views/components/`, written only when the app has view components)
 - `.claude/rules/rails-context.md` - Project overview (always loaded), written only when `generate_root_files` is off, since the root file states it otherwise
-- `.claude/rules/rails-mcp-tools.md` - Tools guide: the protocol, workflows, rules, detail levels and the table of every tool (always loaded), written only when `generate_root_files` is off
+- `.claude/rules/rails-mcp-tools.md` - Tools guide: the protocol, the workflows and the rules, as the root file carries them (always loaded), written only when `generate_root_files` is off
 
 Keeping your own `CLAUDE.md`? Add `--mcp-only` and only `.mcp.json` is
 written; every context file is left alone. See
@@ -399,7 +399,7 @@ This creates:
 - `.github/instructions/rails-models.instructions.md` - Model rules
 - `.github/instructions/rails-controllers.instructions.md` - Controller rules
 - `.github/instructions/rails-context.instructions.md` - Project overview, written only when `generate_root_files` is off
-- `.github/instructions/rails-mcp-tools.instructions.md` - Tools guide: the protocol, workflows, rules, detail levels and the table of every tool, written only when `generate_root_files` is off
+- `.github/instructions/rails-mcp-tools.instructions.md` - Tools guide: the protocol, the workflows and the rules, as the root file carries them, written only when `generate_root_files` is off
 
 ### Manual MCP config
 

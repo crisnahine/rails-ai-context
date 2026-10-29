@@ -259,7 +259,7 @@ config.context_mode = :compact
 config.claude_max_lines = 100
 ```
 
-Every file already has a byte budget: 12,000 bytes for the compact root file, 24,000 in full mode, 8,000 for a rule file. A file over it loses data from the bottom, and the tools answer the rest. The root file goes no lower than about 70 lines, since its title, rules and tools guide stay whole.
+Every file already has a byte budget: 12,000 bytes for the compact root file, 24,000 in full mode, 8,000 for a rule file and 12,000 for a tools rule that stands in for the root file. A file over it loses data from the bottom, and the tools answer the rest. The root file goes no lower than about 70 lines, since its title, rules and tools guide stay whole.
 
 Turning root files off (`config.generate_root_files = false`) does not shrink what Claude Code and Copilot load: the overview and the whole tools guide move into rules files they load in every session.
 

@@ -163,7 +163,7 @@ module RailsAiContext
             lines << "- #{name} (#{count_phrase(action_count, "action")})"
           end
         end
-        lines << "- ...#{controllers_hash.size - limit} more" if controllers_hash.size > limit
+        lines << Budget.more_row(controllers_hash.size - limit, "controller") if controllers_hash.size > limit
         lines
       end
 
@@ -203,11 +203,12 @@ module RailsAiContext
         self.class::TOOLS.any? { |key| plan.root_carries?(key) }
       end
 
-      # The overview a rules file carries where no root file states it, closed by the tool's own hints.
-      def overview_rule(*hints)
+      # The overview a rules file carries where no root file states it; the
+      # guide rule beside it, loaded in every session too, says how to use the tools.
+      def overview_rule
         return nil if rooted?
 
-        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", *hints ].join("\n")
+        [ *header_lines(:overview, title: "Overview"), *overview_lines ].join("\n")
       end
 
       def overview_reason

@@ -38,14 +38,20 @@ RSpec.describe "What each AI tool loads at session start" do
     roots + always_rules(tool, dir).map { |file| File.read(file) }
   end
 
-  (1..5).flat_map { |n| %i[claude cursor copilot opencode codex].combination(n).to_a }.each do |selection|
-    it "loads the root content once in each of #{selection.join(", ")}" do
+  # With root files off a rules file stands in for the root file, and ADR-0011
+  # keeps the protocol in every session there too.
+  selections = (1..5).flat_map { |n| %i[claude cursor copilot opencode codex].combination(n).to_a }
+  [ true, false ].product(selections).each do |root_files, selection|
+    next if !root_files && (selection & %i[claude cursor copilot]).empty?
+
+    it "loads the root content once in each of #{selection.join(", ")}#{" with root files off" unless root_files}" do
       Dir.mktmpdir do |dir|
-        allow(RailsAiContext.configuration).to receive_messages(output_dir_for: dir, ai_tools: selection)
+        allow(RailsAiContext.configuration).to receive_messages(output_dir_for: dir, ai_tools: selection, generate_root_files: root_files)
         %w[app/models app/controllers].each { |sub| FileUtils.mkdir_p(File.join(dir, sub)) }
         RailsAiContext::Serializers::ContextFileSerializer.new(context, format: selection).call
 
-        tools.select { |tool| selection.include?(tool.key) }.each do |tool|
+        # OpenCode and Codex read no rules file, so with root files off they load the user's own root files only.
+        tools.select { |tool| selection.include?(tool.key) && (root_files || tool.rules_dir) }.each do |tool|
           texts = loaded(tool, dir)
           guides = texts.sum { |text| text.scan("Anti-Hallucination Protocol").size }
 

@@ -36,9 +36,9 @@ module RailsAiContext
           rows << (associations.any? ? Budget.list(associations, lead: "#{lead} - ") : lead)
           rows.concat(extras_rows(data))
         end
-        rows << "- _...#{models.size - shown} more_" if models.size > shown
+        rows << Budget.more_row(models.size - shown, "model") if models.size > shown
         # A cut list reads as the whole one unless it says where the rest is.
-        if served?("rails_get_model_details") && rows.any? { |row| row.match?(/\.\.\.\d+ more_?\z/) }
+        if served?("rails_get_model_details") && rows.any? { |row| row.match?(/\.\.\.\d+ more( \w+)?\z/) }
           rows.insert(1, "_A list that ends in ...N more is cut: #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} has it whole._")
         end
         rows << ""
@@ -57,7 +57,7 @@ module RailsAiContext
           lead = "- **#{name}**#{table}"
           [ associations.any? ? Budget.list(associations, lead: "#{lead} - ") : lead, *extras_rows(data, concerns: true) ]
         end
-        rows << "- ...#{count_phrase(models.size - shown, "more model")}" if models.size > shown
+        rows << Budget.more_row(models.size - shown, "model") if models.size > shown
         rows.concat(tool_pointers([ "rails_get_model_details", 'model:"Name"', "model=Name", "for a model whole, with its concerns and callbacks resolved." ]))
       end
 

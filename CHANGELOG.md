@@ -29,20 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `rails-mcp-tools.instructions.md`. A rules file an earlier run wrote and
   this one does not is removed, and the run reports `Removed: <path>` or
   `Removed the generated block from <path>`. `doctor` counts such a file as
-  out of date.
+  out of date. The tools rule written then carries the root file's guide, loads
+  in every session in Cursor too, and no longer carries a table of every tool.
 - **Every context file has a byte budget.** The compact root file stays within
   12,000 bytes as well as `claude_max_lines`, full mode within 24,000, a rules
-  file within 8,000. A list line is at most 240 characters and ends with
-  `...N more`; the tools answer the rest. These files share the agent's context
+  file within 8,000 and a tools rule that stands in for the root file within
+  12,000. A list line is at most 240 characters and ends with `...N more`; the
+  tools answer the rest, and a cut services or jobs list names the tool that has
+  it whole. A file cut to fit says so where the cut is. These files share the agent's context
   with your own instructions, and Codex reads at most 32 KiB of project docs in
   all.
 - **The root file names its 10 most connected models,** each on one line, and
-  says that a list cut at `...N more` is whole in `rails_get_model_details`.
+  where a list is cut, says it is whole in `rails_get_model_details`.
 - **The tools guide says each thing once and plainly.** Each example is in the
   form the tool mode uses (MCP calls, or commands in CLI mode). There is one
   Rules list, each rule with its reason, and no all-caps emphasis, which Claude
-  Code's docs say makes Claude over-apply a rule. The tool names are listed only
-  in CLI mode, since an MCP client lists its tools itself. The six rules of the
+  Code's docs say makes Claude over-apply a rule. Its first rule maps each
+  question a file read answers worse (a table's columns, a model's associations,
+  an action's filters, a model's tests) to the call that answers it. The tool
+  names are listed only in CLI mode, where `tool NAME --help` gives a command's
+  parameters, since an MCP client lists its tools itself. The six rules of the
   protocol keep their wording minus the capitals, in the plugin's `rules.md` too.
 - **Each rules file declares one scope** (always, by paths, or on request),
   which one adapter per AI tool writes as `paths:`, `globs:` and `alwaysApply`,

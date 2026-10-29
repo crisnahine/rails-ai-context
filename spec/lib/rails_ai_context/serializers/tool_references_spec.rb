@@ -84,7 +84,7 @@ RSpec.describe "the tools every generated file names" do
 
       expect(files["app/models/AGENTS.md"]).to include("`rails 'ai:tool[model_details]' model=Name`")
       expect(files[".cursor/rules/rails-controllers.mdc"]).to include("Use `rails 'ai:tool[controllers]' controller=Name` for full detail.")
-      expect(files[".claude/rules/rails-context.md"]).to include("Use introspection tools (`rails 'ai:tool[TOOL_NAME]' param=value`) for context")
+      expect(files[".claude/rules/rails-mcp-tools.md"]).to include("Run one with `rails 'ai:tool[TOOL_NAME]' param=value`")
     end
   end
 
