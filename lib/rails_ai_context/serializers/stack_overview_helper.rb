@@ -7,6 +7,7 @@ module RailsAiContext
     module StackOverviewHelper
       include CountPhrase
       include ModelSection
+      include StackSections
 
       # One rule file on its way to disk. The reason travels with the path it
       # explains; when it lived in a second hash keyed by the same path, an
@@ -113,12 +114,9 @@ module RailsAiContext
       end
 
       # The project-overview body, between a rule file's own frontmatter and its
-      # own trailing MCP hint.
-      #
-      # The keywords are not settings. They name the facts the .claude/rules
-      # overview leaves out because CLAUDE.md/AGENTS.md already states them;
-      # every other caller takes the whole body.
-      def overview_lines(gems: true, architecture: true, app_dirs: true)
+      # own trailing MCP hint: what the root file states, for a rules file that
+      # stands in for it.
+      def overview_lines
         lines = SectionFacts.static_notice_lines(context)
         lines << SectionFacts.database_line(context)
         lines << SectionFacts.models_line(context)
@@ -127,26 +125,13 @@ module RailsAiContext
           lines << "- Routes: #{RouteCoverage.summary(routes)}"
         end
 
-        if gems
-          Payload.notable_gems(context).group_by { |g| g[:category]&.to_s || "other" }.each do |cat, gem_list|
-            lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"
-          end
-        end
-
-        if architecture && Payload.section(context, :conventions)
-          arch_labels = arch_labels_hash
-          Payload.architecture(context).first(Budget.cap(:architecture)).each { |p| lines << "- #{arch_labels[p] || p}" }
-        end
-
+        lines.concat(gems_lines(:overview))
+        lines.concat(architecture_lines(:overview))
         lines.concat(full_preset_stack_lines)
-
-        if app_dirs
-          lines.concat([ names_line(service_names, "- Services: "), names_line(job_names, "- Jobs: ") ].compact)
+        lines.concat([ names_line(service_names, "- Services: "), names_line(job_names, "- Jobs: ") ].compact)
+        if (filters = before_actions_line("**Global before_actions:** "))
+          lines.push("", filters)
         end
-
-        before_actions = detect_before_actions
-        lines << "" << "**Global before_actions:** #{before_actions.join(', ')}" if before_actions.any?
-
         lines.compact
       end
 

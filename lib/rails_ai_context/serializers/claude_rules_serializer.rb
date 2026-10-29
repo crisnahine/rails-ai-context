@@ -40,12 +40,7 @@ module RailsAiContext
       def render_context_overview
         return nil if plan.root_carries?(:claude)
 
-        lines = [
-          "# #{context[:app_name] || 'Rails App'} - Overview",
-          "",
-          "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
-          ""
-        ]
+        lines = header_lines(:overview, title: "Overview")
         lines.concat(overview_lines)
 
         lines << ""

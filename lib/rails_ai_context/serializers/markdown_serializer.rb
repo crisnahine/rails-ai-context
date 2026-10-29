@@ -53,15 +53,7 @@ module RailsAiContext
       end
 
       def app_overview
-        arch = Payload.architecture(context)
-        patterns = Payload.patterns(context)
-
-        arch_labels = arch_labels_hash
-        pattern_labels = pattern_labels_hash
-
-        lines = []
-        lines << "- **Architecture:** #{arch.map { |a| arch_labels[a] || a }.join(', ')}" if arch.any?
-        lines << "- **Patterns:** #{patterns.map { |p| pattern_labels[p] || p }.join(', ')}" if patterns.any?
+        lines = architecture_lines(:full)
         # The static tier has no conventions, and a heading over nothing reads as a section that failed.
         [ "## Overview", *lines ].join("\n") if lines.any?
       end
@@ -178,15 +170,8 @@ module RailsAiContext
       end
 
       def gems_section
-        notable = Payload.notable_gems(context)
-        return if notable.empty?
-
-        lines = [ "## Notable Gems" ]
-        notable.group_by { |g| g[:category] }.sort.each do |cat, group|
-          lines << "### #{cat.capitalize}"
-          group.each { |g| lines << "- **#{g[:name]}** (#{g[:version]}): #{g[:note]}" }
-        end
-        lines.join("\n")
+        lines = gems_lines(:full)
+        lines.join("\n") if lines.any?
       end
 
       def conventions_section
