@@ -31,7 +31,8 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       end.new
     end
 
-    it "names the app's model test path where it is not the one an agent guesses" do
+    # Naming the paths had agents open the first one without looking; pointing at the tool did not.
+    it "points at the test tool where model tests are not named the way an agent guesses" do
       host = Class.new do
         include RailsAiContext::Serializers::StackOverviewHelper
         include RailsAiContext::Serializers::CompactSerializerHelper
@@ -42,7 +43,8 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       end.new
 
       Dir.mktmpdir do |root|
-        expect(host.commands(root)).to include("- `bundle exec rspec` - run tests; model tests are `spec/models/<model>_spec.rb` or `spec/models/<model>_model_spec.rb`")
+        expect(host.commands(root)).to include("- `bundle exec rspec` - run tests; model test files here are not all named the usual way, " \
+                                             "so find one with `rails_get_test_info(model:\"X\")`, not by its usual path")
         expect(commands_host.commands(root)).to include("- `bundle exec rspec` - run tests")
       end
     end

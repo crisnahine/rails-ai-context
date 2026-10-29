@@ -67,7 +67,7 @@ module RailsAiContext
           counts = suffixes.reverse.to_h { |suffix| [ suffix, names.count { |name| name.end_with?(suffix) } ] }
           counts[suffixes.first] -= counts[suffixes.last]
           used = suffixes.select { |suffix| counts[suffix] * 4 > names.size }
-          return used.map { |suffix| "#{base}/models/<model>#{suffix}" } if used.include?(suffixes.last)
+          return used.include?(suffixes.last) ? used.map { |suffix| "#{base}/models/<model>#{suffix}" } : nil
         end
         nil
       end

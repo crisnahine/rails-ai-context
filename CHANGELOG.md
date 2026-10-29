@@ -14,10 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed, or could do better. It comes once per answer (a composite tool's
   parts leave it out), under a `_report` key in a JSON answer, and costs about
   40 tokens. `config.report_issue_line = false` leaves it out.
-- **The root file names where model tests live when an agent would guess
-  wrong.** An app whose model specs are named `user_model_spec.rb`, alone or
-  beside `user_spec.rb`, gets one more clause on the test command line, so an
-  agent that does not call `rails_get_test_info` still opens the right file.
+- **The root file says when model tests are not named the usual way.** An
+  app where more than a quarter of the model specs are named
+  `user_model_spec.rb` gets one clause on the test command line pointing at
+  `rails_get_test_info`. Agents had guessed `spec/models/user_spec.rb`; naming
+  both paths instead made them open the first without looking.
 
 ### Changed
 

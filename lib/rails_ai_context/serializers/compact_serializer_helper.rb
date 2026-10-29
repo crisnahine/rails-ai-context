@@ -64,7 +64,7 @@ module RailsAiContext
         migrate = AppCommands.migrate(root)
         lines = [ "## Commands" ]
         lines << "- `#{server}` - #{server == 'bin/dev' ? 'start dev server' : 'start the app'}" if server
-        lines << "- `#{detect_test_command}` - run tests#{"; model tests are #{model_test_name}" if model_test_name}"
+        lines << "- `#{detect_test_command}` - run tests#{"; #{model_test_note}" if model_test_note}"
         lines << "- `#{migrate}` - run pending migrations" if migrate
         lines << ""
       end

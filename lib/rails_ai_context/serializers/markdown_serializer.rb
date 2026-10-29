@@ -585,7 +585,7 @@ module RailsAiContext
         rules << "- Use the database schema as the source of truth for column names and types"
         rules << "- Respect existing associations and validations when modifying models"
         rules << "- Run `#{detect_test_command}` after making changes to verify correctness"
-        rules << "- Model tests are named #{model_test_name}" if model_test_name
+        rules << "- #{model_test_note.upcase_first}" if model_test_note
         rules.join("\n")
       end
 

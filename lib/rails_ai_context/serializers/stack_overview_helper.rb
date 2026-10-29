@@ -208,7 +208,7 @@ module RailsAiContext
       def overview_rule
         return nil if rooted?
 
-        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", "Run `#{detect_test_command}` after changes.#{" Model tests are #{model_test_name}." if model_test_name}" ].join("\n")
+        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", "Run `#{detect_test_command}` after changes.#{" #{model_test_note.upcase_first}." if model_test_note}" ].join("\n")
       end
 
       def overview_reason
@@ -281,10 +281,14 @@ module RailsAiContext
         TestFramework.command(Payload.section(context, :tests)&.dig(:framework))
       end
 
-      # Where a model's tests live, when the app names them other than an agent would guess.
-      def model_test_name
+      # Where an app names model tests other than an agent would guess, the tool that finds them.
+      # Naming the paths instead had agents open the first one without looking.
+      def model_test_note
         paths = Payload.section(context, :tests)&.dig(:model_test_paths)
-        paths.map { |path| "`#{path}`" }.join(" or ") if paths.is_a?(Array) && paths.any?
+        return nil unless paths.is_a?(Array) && paths.any? && served?("rails_get_test_info")
+
+        "model test files here are not all named the usual way, so find one with " \
+          "#{tool_ref("rails_get_test_info", 'model:"X"', "model=X")}, not by its usual path"
       end
 
       def project_root

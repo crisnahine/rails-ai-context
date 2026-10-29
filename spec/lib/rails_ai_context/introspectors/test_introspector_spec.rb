@@ -969,6 +969,15 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(model_test_paths).to be_nil
     end
 
+    # The suite listed first is the app's, as everywhere else in this introspector.
+    it "reads spec/ before test/" do
+      write_file("spec/spec_helper.rb")
+      %w[user listing site ticket].each { |name| write_file("spec/models/#{name}_spec.rb") }
+      %w[user listing].each { |name| write_file("test/models/#{name}_model_test.rb") }
+
+      expect(model_test_paths).to be_nil
+    end
+
     it "says nothing without model tests" do
       write_file("spec/requests/users_spec.rb")
 
