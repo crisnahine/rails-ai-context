@@ -1449,6 +1449,7 @@ end
 | `server_version` | String | gem version | MCP server version. Read-only, there is no setter |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md or copilot-instructions.md, and the overview and tools rules are written in their place (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files - set `false` to skip |
+| `report_issue_line` | Boolean | `true` | End every tool answer with one line asking the AI to offer you a GitHub issue when rails-ai-context answered wrong - set `false` to leave it out |
 | `hydration_enabled` | Boolean | `true` | Inject schema hints into controller/view tool responses |
 | `hydration_max_hints` | Integer | `5` | Max schema hints per tool response |
 | `max_file_size` | Integer | `5_000_000` | Per-file read limit for tools (5MB) |

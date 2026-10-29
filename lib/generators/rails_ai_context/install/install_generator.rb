@@ -162,6 +162,10 @@ module RailsAiContext
             # generated context file. Forces AI to verify facts before writing code.
             # Default: true. Set false to skip the protocol entirely.
             # config.anti_hallucination_rules = true
+
+            # Every tool answer ends with one line asking the agent to offer you a
+            # GitHub issue when rails-ai-context answered wrong. Set false to leave it out.
+            # config.report_issue_line = true
         SECTION
         "Models & Filtering" => <<~SECTION,
             # ── Models & Filtering ────────────────────────────────────────────

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.38.2] - 2026-10-29
 
+### Added
+
+- **Every tool answer ends with one line** asking the AI to offer you a GitHub
+  issue when rails-ai-context itself answered wrong, missed something or
+  failed, or could do better. It comes once per answer (a composite tool's
+  parts leave it out), under a `_report` key in a JSON answer, and costs about
+  40 tokens. `config.report_issue_line = false` leaves it out.
+
 ### Changed
 
 - **The root content is written once, into a file every chosen AI tool

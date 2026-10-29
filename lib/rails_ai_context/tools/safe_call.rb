@@ -34,6 +34,7 @@ module RailsAiContext
         # one it does not declare answers with an unknown-keyword ArgumentError
         # and a backtrace, where the CLI names the params the tool takes.
         unknown = unknown_params(kwargs)
+        return with_report(unknown_param_response(unknown)) if unknown.any? && !Thread.current[:rails_ai_context_call]
         return unknown_param_response(unknown) if unknown.any?
 
         # Held as a local, not a thread-local: the wrapper sees both the value
@@ -56,7 +57,7 @@ module RailsAiContext
         RailsAiContext::Tools::BaseTool.refresh_if_files_changed!
         call = Thread.current[:rails_ai_context_call] = { tool: self, params: session_params(kwargs) }
         begin
-          with_crashes(answer.call, call[:crashed])
+          with_report(with_crashes(answer.call, call[:crashed]))
         ensure
           Thread.current[:rails_ai_context_call] = nil
         end
@@ -101,6 +102,17 @@ module RailsAiContext
       end
 
       # A tool this call ran crashed: the answer is an error, and it says so where its text left the crash out.
+      # The report line ends the answer the client asked for, once; a JSON
+      # answer carries it under its key instead, since its body has to parse.
+      def with_report(response)
+        return response unless RailsAiContext.configuration.report_issue_line
+
+        body = response.content.first&.dig(:text).to_s if response.respond_to?(:content)
+        return response if body&.lstrip&.start_with?("{") && (JSON.parse(body).is_a?(Hash) rescue false)
+
+        append_note(response, RailsAiContext::Tools::BaseTool.report_banner)
+      end
+
       def with_crashes(response, crashes)
         return response unless crashes && response.respond_to?(:error?) && !response.error?
 

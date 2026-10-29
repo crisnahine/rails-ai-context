@@ -29,7 +29,7 @@ module RailsAiContext
     # All YAML-supported keys (explicit allowlist for safety)
     YAML_KEYS = %i[
       ai_tools tool_mode preset context_mode context_files generate_root_files claude_max_lines
-      anti_hallucination_rules
+      anti_hallucination_rules report_issue_line
       server_name cache_ttl max_tool_response_chars
       live_reload live_reload_debounce auto_mount http_path http_bind http_port allow_http_in_production
       output_dir skip_tools excluded_models excluded_controllers
@@ -360,6 +360,11 @@ module RailsAiContext
     # AGENTS.md, .claude/rules/, .cursor/rules/, .github/instructions/.
     attr_accessor :anti_hallucination_rules
 
+    # Whether every tool answer ends with one line asking the agent to offer the
+    # user a GitHub issue when rails-ai-context answered wrong, missed something
+    # or failed. Default: true. About 40 tokens an answer; set false to leave it out.
+    attr_accessor :report_issue_line
+
     # File size limits (bytes) - increase for larger projects
     attr_reader :max_file_size            # Per-file read limit for tools (default: 5MB)
     attr_reader :max_test_file_size       # Test file read limit (default: 1MB)
@@ -521,6 +526,7 @@ module RailsAiContext
       @context_files            = true
       @generate_root_files      = true
       @anti_hallucination_rules = true
+      @report_issue_line        = true
       @max_file_size            = 5_000_000
       @max_test_file_size       = 1_000_000
       @max_schema_file_size     = 10_000_000

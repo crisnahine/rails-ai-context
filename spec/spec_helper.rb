@@ -75,6 +75,9 @@ RSpec.configure do |config|
   # reset_cache! would otherwise count the teardown call as its own.
   config.before(:each) { RailsAiContext::Tools::BaseTool.reset_cache! }
 
+  # Specs compare a tool's own answer; report_line_spec turns the line on to test it.
+  config.before(:each) { RailsAiContext.configuration.report_issue_line = false }
+
   # Doctor reads the machine's managed Claude Code settings too.
   config.before(:each) do
     stub_const("RailsAiContext::ClaudeCodeSettings::MANAGED_SETTINGS", File.join(ENV.fetch("CLAUDE_CONFIG_DIR"), "managed", "managed-settings.json"))

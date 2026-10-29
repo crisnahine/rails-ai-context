@@ -13,6 +13,10 @@ module RailsAiContext
     # Inherits from the official MCP::Tool to get schema validation,
     # annotations, and protocol compliance for free.
     class BaseTool < MCP::Tool
+      # What every answer ends with: the agent that reads a wrong answer is the one placed to report it.
+      REPORT_NOTE = "Something wrong, missing or failing in rails-ai-context itself, or an improvement? " \
+                    "Ask the user whether to file it at https://github.com/crisnahine/rails-ai-context/issues"
+
       # ── Auto-registration ────────────────────────────────────────────
       # Every subclass is tracked automatically via inherited.
       # BaseTool itself is abstract - only concrete tools are registered.
@@ -703,6 +707,12 @@ module RailsAiContext
           "Not applicable: this is an API-only app (config.api_only), so #{section_label} does not exist."
         end
 
+        # The line every answer ends with, once: the agent that reads a wrong,
+        # missing or failing answer is the one placed to report it.
+        def report_banner
+          "\n\n---\n_#{REPORT_NOTE}_"
+        end
+
         # One banner per response in static tier: consumers must never
         # mistake static analysis for runtime-confirmed data. Rides the
         # suffix mechanism so it survives truncation.
@@ -1239,6 +1249,7 @@ module RailsAiContext
         # way JsonBudget's own report key is, so a reader tells it from data.
         STATIC_TIER_KEY = "_static_tier"
         STALE_CODE_KEY = "_stale_code"
+        REPORT_KEY = "_report"
 
         # A JSON body has to parse, so it cannot take the markdown banners and
         # cannot be sliced at the response cap: JsonBudget drops whole
@@ -1256,7 +1267,8 @@ module RailsAiContext
         def json_notes(data)
           return data unless data.is_a?(Hash)
 
-          data.merge({ STATIC_TIER_KEY => static_tier_note, STALE_CODE_KEY => stale_code_note }.compact)
+          data.merge({ STATIC_TIER_KEY => static_tier_note, STALE_CODE_KEY => stale_code_note,
+                      REPORT_KEY => (REPORT_NOTE if RailsAiContext.configuration.report_issue_line) }.compact)
         end
 
         # Helper: wrap text in an MCP::Tool::Response flagged as an error
