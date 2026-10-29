@@ -199,7 +199,8 @@ module RailsAiContext
       if result&.errors&.any?
         error = result.errors.find { |e| e.type != :unexpected_token_close_context } || result.errors.first
         line = ERRORS_AT_OPENER ? error.location.start_line : unclosed_line(result.value) || error.location.start_line
-        found.refusals << refusal(relative, line, "this file", nil,
+        # An error at the end of the input sits on the line after a trailing newline.
+        found.refusals << refusal(relative, [ line, source.lines.size ].min, "this file", nil,
                                   "this file does not parse as Ruby (#{error.message}), so the static tier serves nothing until it is fixed.")
       elsif result.nil? || too_deep?(result.value)
         found.refusals << refusal(relative, 1, "this file")
