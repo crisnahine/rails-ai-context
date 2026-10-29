@@ -19,14 +19,18 @@ RSpec.describe "the tools every generated file names" do
     config.tool_mode, config.skip_tools, config.custom_tools = saved
   end
 
-  # path => content of every markdown file one run writes.
+  # path => content of every markdown file a run writes, with the rules only
+  # a run with root files off writes added: those carry the overview and the guide.
   def generated_files
-    Dir.mktmpdir do |dir|
-      allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
-      %w[app/models app/controllers].each { |sub| FileUtils.mkdir_p(File.join(dir, sub)) }
-      written = RailsAiContext::Serializers::ContextFileSerializer.new(context, format: :all).call[:written]
-      written.reject { |path| path.end_with?(".json") }.to_h { |path| [ path.delete_prefix("#{dir}/"), File.read(path) ] }
+    run = lambda do |root_files|
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive_messages(output_dir_for: dir, generate_root_files: root_files)
+        %w[app/models app/controllers].each { |sub| FileUtils.mkdir_p(File.join(dir, sub)) }
+        written = RailsAiContext::Serializers::ContextFileSerializer.new(context, format: :all).call[:written]
+        written.reject { |path| path.end_with?(".json") }.to_h { |path| [ path.delete_prefix("#{dir}/"), File.read(path) ] }
+      end
     end
+    run.(false).merge(run.(true))
   end
 
   def served_names
@@ -107,7 +111,7 @@ RSpec.describe "the tools every generated file names" do
       count = RailsAiContext::Server.builtin_tools.size - 2 + 1
 
       expect(served_names.size).to eq(count)
-      expect(files["CLAUDE.md"]).to include("## Tools (#{count})", "### All #{count} tools", "`rails_get_widgets`")
+      expect(files["AGENTS.md"]).to include("## Tools (#{count})", "### All #{count} tools", "`rails_get_widgets`")
       files.each do |path, content|
         expect(content).not_to include("rails_security_scan", "ai:tool[query]"), "#{path} documents a skipped tool"
       end
@@ -154,7 +158,7 @@ RSpec.describe "the tools every generated file names" do
       RailsAiContext.configuration.tool_mode = :mcp
       RailsAiContext.configuration.skip_tools = skipped
 
-      claude = generated_files["CLAUDE.md"]
+      claude = generated_files["AGENTS.md"]
 
       expect(claude).to include("### Start here\n", "**Modify a model**", "1. `rails_get_model_details(model:",
                                 "**Fix a controller bug:**\n1. `rails_get_controllers(", "### Rules\n\n1. **NEVER read reference files**")

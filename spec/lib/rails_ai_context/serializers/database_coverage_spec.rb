@@ -38,6 +38,7 @@ RSpec.describe "database counts across every generated file" do
     "CopilotInstructionsSerializer" => RailsAiContext::Serializers::CopilotInstructionsSerializer
   }.each do |name, klass|
     it "#{name} counts every database's tables the same way" do
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
       Dir.mktmpdir do |dir|
         written = klass.new(context).call(dir)[:written]
 

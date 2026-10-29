@@ -98,6 +98,19 @@ module RailsAiContext
         result
       end
 
+      # Takes the gem's part out of a file this run no longer writes, and files
+      # what happened under the bucket a context run reports it in.
+      def drop(filepath, root:, whole:, result:)
+        relative = filepath.delete_prefix("#{root.to_s.chomp("/")}/")
+        done = Install::Cleanup.drop(relative, root: root, whole: whole)
+        done[:removed].each { result[:removed] << filepath }
+        done[:trimmed].each { result[:trimmed] << filepath }
+        result[:not_applicable][filepath] = UNPAIRED if done[:unpaired].any?
+        result[:not_applicable][filepath] = RailsAiContext::SafeFile::LINKED if done[:linked].any?
+        result[:not_applicable][filepath] = RailsAiContext::SafeFile::UNWRITABLE if done[:failed].any?
+        result
+      end
+
       # Text in the line endings of the file it goes into. A file checked out
       # on Windows ends its lines in CRLF, and a block in LF beside them
       # mixed the two and left a blank line under END on every run.

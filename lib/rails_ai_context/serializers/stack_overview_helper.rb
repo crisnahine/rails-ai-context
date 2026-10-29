@@ -211,34 +211,54 @@ module RailsAiContext
         RailsAiContext::Tools::GetConventions::PATTERN_LABELS rescue {}
       end
 
-      # Render and write a serializer's whole rule-file table.
+      # Render and write a serializer's whole rule-file table, each file under
+      # the frontmatter its scope takes in this AI tool.
       # @param dir [String] directory the table's relative names hang off
-      # @param table [Hash<String, Hash>] name => { renderer:, reason: }
-      def write_rule_table(dir, table, root:)
+      # @param table [Hash<String, Hash>] name => { renderer:, reason:, scope:, name:, exclude_agent: },
+      #   reason, scope and name a value or the method that answers it
+      def write_rule_table(dir, table, root:, tool:)
         write_rule_files(
           table.map do |name, rule|
-            RuleFile.new(File.join(dir, name), send(rule[:renderer]), rule[:reason])
+            reason = rule[:reason].is_a?(Symbol) ? send(rule[:reason]) : rule[:reason]
+            RuleFile.new(File.join(dir, name), scoped(rule, tool), reason)
           end,
           root: root
         )
       end
 
+      # Why a rule the root file states is not written.
+      def in_root_reason
+        "in the root file"
+      end
+
+      def scoped(rule, tool)
+        body = send(rule[:renderer]) or return nil
+        answer = ->(value) { value.is_a?(Symbol) ? send(value) : value }
+        frontmatter = answer.(rule.fetch(:scope)).frontmatter(tool, name: answer.(rule[:name]), exclude_agent: rule[:exclude_agent])
+        [ *frontmatter, body ].join("\n")
+      end
+
       # Write split-rule files with diff-check and atomic writes.
       # A nil render means the app has nothing to put in that file. It is
       # reported rather than dropped, so a deliberate omission never looks
-      # like a failed generation.
+      # like a failed generation, and one left from an earlier run is removed.
       #
       # A rules directory's names are the gem's own. `shared:` is for names
       # users write by hand too (OpenCode's app/models/AGENTS.md): a file
       # there the gem did not generate whole keeps its text and gets the
       # gem's block, as a root file does.
       # @param entries [Array<RuleFile>]
-      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      # @return [Hash] { written:, skipped:, removed:, trimmed: [paths], not_applicable: { path => reason } }
       def write_rule_files(entries, root:, shared: false)
-        result = { written: [], skipped: [], not_applicable: {} }
+        result = { written: [], skipped: [], not_applicable: {}, removed: [], trimmed: [] }
 
         entries.each do |entry|
-          if entry.content.nil?
+          # A file an earlier run wrote says what is no longer so, or what a
+          # root file this tool reads now says, so it goes.
+          if entry.content.nil? && (File.file?(entry.path) || File.symlink?(entry.path))
+            SectionMarkerWriter.drop(entry.path, root: root, whole: !shared, result: result)
+            next
+          elsif entry.content.nil?
             result[:not_applicable][entry.path] = entry.reason || "nothing to document"
             next
           end

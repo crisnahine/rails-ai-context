@@ -31,13 +31,4 @@ RSpec.describe "Compact context file section order" do
   it "the root file" do
     expect(headings(RailsAiContext::Serializers::RootFile.new(context).call)).to eq(expected)
   end
-
-  it ".cursorrules" do
-    content = Dir.mktmpdir do |dir|
-      RailsAiContext::Serializers::CursorRulesSerializer.new(context).call(dir)
-      File.read(File.join(dir, ".cursorrules"))
-    end
-
-    expect(headings(content)).to eq(expected)
-  end
 end

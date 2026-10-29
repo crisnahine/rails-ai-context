@@ -313,7 +313,7 @@ module RailsAiContext
       # A trailing slash marks a directory, the shape ripgrep wants; the Ruby fallback chomps it.
       private_class_method def self.ai_context_paths
         Install::AiTool.all.flat_map { |t|
-          t.context_paths + [ t.mcp_config[:path], t.owned_dir && "#{t.owned_dir}/" ]
+          t.owned_paths + [ t.mcp_config[:path], t.owned_dir && "#{t.owned_dir}/" ]
         }.compact.uniq + %w[.ai-context.json]
       end
 

@@ -288,6 +288,7 @@ RSpec.describe "the app databases on preset standard" do
                                       "- **legacy**: Its tables are not listed: its database.yml entry turns `database_tasks` off")
     expect(found[:file]).to include("_Its tables are not listed: db/extra_schema.rb is not on disk._\n")
     expect(found[:onboard] + found[:schema]).not_to include("extra_replica")
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     rules = Dir.mktmpdir do |dir|
       RailsAiContext::Serializers::ClaudeRulesSerializer.new(found[:context]).call(dir)
       File.read(File.join(dir, ".claude/rules/rails-schema.md"))
@@ -312,6 +313,7 @@ RSpec.describe "the app databases on preset standard" do
 
   it "names each database's adapter and lists the databases, as preset full does" do
     found = answers("animals_first")
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     rules = Dir.mktmpdir do |dir|
       RailsAiContext::Serializers::ClaudeRulesSerializer.new(found[:context]).call(dir)
       %w[rails-schema rails-context].map { |name| File.read(File.join(dir, ".claude/rules/#{name}.md")) }.join

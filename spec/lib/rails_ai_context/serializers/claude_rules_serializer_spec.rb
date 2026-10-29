@@ -77,6 +77,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
   end
 
   it "generates .claude/rules/ files" do
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)
       expect(result[:written].size).to eq(4)
@@ -111,13 +112,12 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       File.read(File.join(dir, ".claude", "rules", "rails-mcp-tools.md"))
     end
 
-    it "carries the reference CLAUDE.md leaves out, and points to CLAUDE.md for the rest" do
+    it "is not written beside a CLAUDE.md that carries the guide" do
       Dir.mktmpdir do |dir|
-        content = tools_rule(dir)
+        described_class.new(context).call(dir)
 
-        expect(content).to start_with("## Tools (#{RailsAiContext::Server.exposed_tools.size}) - Reference")
-        expect(content).to include("is in CLAUDE.md", "### detail parameter", "| `rails_get_schema(table:\"X\")` |")
-        expect(content).not_to include("Anti-Hallucination Protocol", "Step-by-step workflows")
+        expect(File).not_to exist(File.join(dir, ".claude", "rules", "rails-mcp-tools.md"))
+        expect(File).not_to exist(File.join(dir, ".claude", "rules", "rails-context.md"))
       end
     end
 
@@ -133,11 +133,11 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
   it "skips unchanged files" do
     Dir.mktmpdir do |dir|
       first = described_class.new(context).call(dir)
-      expect(first[:written].size).to eq(4)
+      expect(first[:written].size).to eq(2)
 
       second = described_class.new(context).call(dir)
       expect(second[:written].size).to eq(0)
-      expect(second[:skipped].size).to eq(4)
+      expect(second[:skipped].size).to eq(2)
     end
   end
 
@@ -145,7 +145,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     context[:schema] = { adapter: "postgresql", tables: {} }
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)
-      expect(result[:written].size).to eq(3) # context + models + mcp-tools
+      expect(result[:written].map { |f| File.basename(f) }).to eq([ "rails-models.md" ])
     end
   end
 
@@ -153,7 +153,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     context[:models] = {}
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)
-      expect(result[:written].size).to eq(3) # context + schema + mcp-tools
+      expect(result[:written].map { |f| File.basename(f) }).to eq([ "rails-schema.md" ])
     end
   end
 
@@ -261,6 +261,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
 
     it "does NOT include paths: frontmatter on context rule" do
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
       Dir.mktmpdir do |dir|
         described_class.new(context).call(dir)
         content = File.read(File.join(dir, ".claude", "rules", "rails-context.md"))
@@ -269,6 +270,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
 
     it "does NOT include paths: frontmatter on mcp-tools rule" do
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
       Dir.mktmpdir do |dir|
         described_class.new(context).call(dir)
         content = File.read(File.join(dir, ".claude", "rules", "rails-mcp-tools.md"))
@@ -405,8 +407,10 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       rules = File.join(dir, ".claude", "rules")
 
       expect(result[:not_applicable]).to eq(
+        File.join(rules, "rails-context.md") => "in the root file",
         File.join(rules, "rails-schema.md") => "no schema dump",
         File.join(rules, "rails-models.md") => "no models",
+        File.join(rules, "rails-mcp-tools.md") => "in the root file",
         File.join(rules, "rails-components.md") => "no view components"
       )
       expect(File.exist?(File.join(rules, "rails-models.md"))).to be false

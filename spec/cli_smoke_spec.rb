@@ -2012,7 +2012,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         expect(err).to include("Selected: Claude Code, Cursor", "Selected: Context files only (CLI mode, no MCP server)")
         expect(File.read(File.join(dir, ".rails-ai-context.yml"))).to include("- claude\n- cursor\n", "tool_mode: cli")
         expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true)
-        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(true)
+        expect(File.exist?(File.join(dir, ".cursorrules"))).to be(false)
+        expect(File.read(File.join(dir, "CLAUDE.md"))).to include("@AGENTS.md")
+        expect(File.read(File.join(dir, "AGENTS.md"))).to include("rails-ai-context tool")
         expect(File.exist?(File.join(dir, ".mcp.json"))).to be(false)
       end
     end

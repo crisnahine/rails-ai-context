@@ -9,11 +9,9 @@ RSpec.describe "The static-tier notice in generated files" do
   let(:static_context) { IntrospectedFixture.context.merge(tier: "static") }
   let(:booted_context) { IntrospectedFixture.context.merge(tier: "booted") }
 
-  # Read off the tables the generator dispatches through, so a serializer
-  # added there joins this contract without being typed in here. A local, not
-  # a constant: one assigned inside a describe block lands on Object.
-  root_serializers = (RailsAiContext::Serializers::ContextFileSerializer::ROOT_SERIALIZERS.values.uniq -
-    [ RailsAiContext::Serializers::JsonSerializer ]) + [ RailsAiContext::Serializers::MarkdownSerializer ]
+  # Every root path gets RootFile's bytes. A local, not a constant: one
+  # assigned inside a describe block lands on Object.
+  root_serializers = [ RailsAiContext::Serializers::RootFile, RailsAiContext::Serializers::MarkdownSerializer ]
 
   root_serializers.each do |klass|
     it "#{klass.name.split('::').last} says the answer is static, near the top" do
@@ -44,6 +42,7 @@ RSpec.describe "The static-tier notice in generated files" do
 
   rules_serializers.each do |klass|
     it "#{klass.name.split('::').last} marks the rules file it writes" do
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
       Dir.mktmpdir do |dir|
         result = klass.new(static_context).call(dir)
         overview = result[:written].find { |path| File.read(path).include?("Rails 8.0") }
@@ -55,6 +54,7 @@ RSpec.describe "The static-tier notice in generated files" do
     # Two adjacent non-blank lines are one paragraph, so a notice written
     # under the version line renders as part of it.
     it "#{klass.name.split('::').last} keeps the notice in its own paragraph" do
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
       Dir.mktmpdir do |dir|
         result = klass.new(static_context).call(dir)
         overview = result[:written].find { |path| File.read(path).include?("Rails 8.0") }
@@ -109,20 +109,6 @@ RSpec.describe "The static-tier notice in generated files" do
     end
   end
 
-  # The lists above are read off the tables, so a guard comparing them to the
-  # tables can only ever pass. The one dispatch target no table names is the
-  # fallback, and it is in the list above as a literal: this is what says so.
-  it "renders the format that reaches no table through MarkdownSerializer" do
-    expect(RailsAiContext::Serializers::ContextFileSerializer::ROOT_SERIALIZERS)
-      .not_to have_key(:markdown)
-    expect(root_serializers).to include(RailsAiContext::Serializers::MarkdownSerializer)
-
-    output = RailsAiContext::Serializers::ContextFileSerializer.new(static_context, format: :markdown)
-                                                               .send(:serialize, :markdown)
-
-    expect(output).to include(RailsAiContext::Confidence::STATIC)
-  end
-
   it "the JSON dump carries the tier as a key" do
     output = RailsAiContext::Serializers::JsonSerializer.new(static_context).call
 
@@ -130,6 +116,6 @@ RSpec.describe "The static-tier notice in generated files" do
   end
 
   it "leaves no name of its own on Object" do
-    expect(Object.const_defined?(:ROOT_SERIALIZERS)).to be(false)
+    expect(Object.const_defined?(:root_serializers.to_s.upcase)).to be(false)
   end
 end

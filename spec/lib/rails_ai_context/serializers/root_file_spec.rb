@@ -4,7 +4,8 @@ require "spec_helper"
 
 RSpec.describe RailsAiContext::Serializers::RootFile do
   let(:context) { RailsAiContext.introspect }
-  let(:roots) { %w[CLAUDE.md AGENTS.md .cursorrules .github/copilot-instructions.md] }
+  # Copilot keeps a copy beside AGENTS.md, since most of its surfaces read no other file.
+  let(:roots) { %w[AGENTS.md .github/copilot-instructions.md] }
 
   def managed_block(path)
     text = File.read(path)

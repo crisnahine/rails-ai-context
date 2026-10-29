@@ -12,6 +12,19 @@ RSpec.describe RailsAiContext::Serializers::CopilotInstructionsSerializer do
     )
   end
 
+  # With root files off, the overview and the guide live here; otherwise
+  # copilot-instructions.md states them.
+  before { allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false) }
+
+  it "writes only the scoped files beside a copilot-instructions.md" do
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(true)
+    Dir.mktmpdir do |dir|
+      written = described_class.new(context).call(dir)[:written].map { |f| File.basename(f) }
+
+      expect(written).to eq(%w[rails-models.instructions.md rails-controllers.instructions.md])
+    end
+  end
+
   it "generates .github/instructions/*.instructions.md with applyTo" do
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)

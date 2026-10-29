@@ -488,7 +488,7 @@ module RailsAiContext
     # ── Context file checks ───────────────────────────────────────────
 
     # Each tool's context files and rule directories, root file first.
-    CONTEXT_PATHS = Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_paths ] }.freeze
+    CONTEXT_PATHS = Install::AiTool.all.to_h { |tool| [ tool.key, tool.owned_paths ] }.freeze
 
     # Where each tool's MCP config lives, and how to name it in a report.
     MCP_CONFIG_CHECKS = Install::AiTool.all.to_h { |tool|
@@ -564,7 +564,9 @@ module RailsAiContext
         ensure
           config.output_dir = previous
         end
-        result.slice(:written, :skipped).transform_values do |paths|
+        # A file the run would remove, or take its block out of, changes as a rewrite does.
+        changed = result.values_at(:written, :removed, :trimmed).flatten.compact
+        { written: changed, skipped: result[:skipped] }.transform_values do |paths|
           paths.map { |path| path.delete_prefix("#{scratch}/") } - [ ".ai-context.json" ]
         end
       end
@@ -592,7 +594,9 @@ module RailsAiContext
         return { error: status ? first_error_line(said || "it exited #{status.exitstatus}") : "no answer in #{CONTEXT_RUN_SECONDS} seconds" }
       end
 
-      files = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq.flat_map { |relative| files_under(scratch, relative) }.uniq
+      # The app's files too: one the run removed is in the app and not the copy.
+      files = configured_ai_tools.flat_map { |tool| CONTEXT_PATHS.fetch(tool, []) }.uniq
+        .flat_map { |relative| files_under(scratch, relative) + files_under(output_dir, relative) }.uniq
       written, skipped = files.partition { |relative| !same_file?(File.join(scratch, relative), File.join(output_dir, relative)) }
       { written: written, skipped: skipped }
     rescue SystemCallError => e
@@ -627,7 +631,7 @@ module RailsAiContext
     end
 
     def same_file?(one, other)
-      File.file?(other) && FileUtils.compare_file(one, other)
+      File.file?(one) && File.file?(other) && FileUtils.compare_file(one, other)
     end
 
     # Every context file and rule directory there is, and each directory one

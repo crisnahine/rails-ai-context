@@ -14,6 +14,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
   end
 
   it "generates .cursor/rules/*.mdc files with YAML frontmatter" do
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)
       expect(result[:written]).not_to be_empty
@@ -63,6 +64,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
   end
 
   it "generates MCP tools rule as agent-requested (alwaysApply false)" do
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     Dir.mktmpdir do |dir|
       described_class.new(context).call(dir)
 
@@ -83,107 +85,44 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
     end
   end
 
-  # v5.9.0 regression: real user report during release QA - Cursor chat
-  # agent didn't detect rules written only as .cursor/rules/*.mdc. Writing
-  # .cursorrules alongside (legacy format) fixed it. Ensure both are
-  # produced so neither older Cursor builds nor newer ones miss the rules.
-  it "also writes a legacy .cursorrules at the project root" do
-    Dir.mktmpdir do |dir|
-      result = described_class.new(context).call(dir)
-      cursorrules_path = File.join(dir, ".cursorrules")
-      expect(result[:written]).to include(cursorrules_path)
-      expect(File.exist?(cursorrules_path)).to be true
-
-      content = File.read(cursorrules_path)
-      # Plain text / markdown - no YAML frontmatter - so every Cursor
-      # build reads it verbatim.
-      expect(content).not_to start_with("---")
-      # Must surface the gem's presence + name a couple of the MCP tools
-      # so the chat agent knows to use them rather than guess.
-      expect(content).to include("rails-ai-context")
-      expect(content).to include("rails_get_schema")
-      expect(content).to include("rails_get_routes")
-      expect(content).to include("App")  # app name from context
-    end
-  end
-
-  # .cursorrules and CLAUDE.md share render_compact_rules from
-  # CompactSerializerHelper. They target different AI clients but
-  # deliver the same project context - so when one changes, the other
-  # changes in lockstep. Ship-time invariant: identical core content
-  # between the two files.
-  it ".cursorrules mirrors the CLAUDE.md compact-rules pipeline (shared content)" do
-    Dir.mktmpdir do |dir|
-      described_class.new(context).call(dir)
-      cursor_content = File.read(File.join(dir, ".cursorrules"))
-      claude_content = RailsAiContext::Serializers::RootFile.new(context).call
-
-      # Every major section of CLAUDE.md also appears in .cursorrules,
-      # guaranteeing parity across both AI-client targets. Drift between
-      # them is the class of bug that leaves one agent with stale rules.
-      %w[## Stack ## Key\ models ## Rules ## Architecture].each do |section|
-        next unless claude_content.include?(section)
-        expect(cursor_content).to include(section),
-          ".cursorrules missing section '#{section}' that CLAUDE.md has - shared pipeline drift"
-      end
-    end
-  end
-
-  # Real user concern: pre-existing .cursorrules content must not be
-  # destroyed on first install. The gem now wraps its block in
-  # `<!-- BEGIN/END rails-ai-context -->` markers (same convention as
-  # CLAUDE.md / AGENTS.md / .github/copilot-instructions.md) so user-
-  # added content above or below the gem block survives regeneration.
-  describe ".cursorrules section markers" do
-    it "wraps generated content in BEGIN/END markers so user content is preserved" do
+  # Cursor calls .cursorrules legacy and reads the root content from AGENTS.md.
+  describe ".cursorrules" do
+    it "is not written" do
       Dir.mktmpdir do |dir|
-        described_class.new(context).call(dir)
-        content = File.read(File.join(dir, ".cursorrules"))
-        expect(content).to include("<!-- BEGIN rails-ai-context -->")
-        expect(content).to include("<!-- END rails-ai-context -->")
+        result = described_class.new(context).call(dir)
+
+        expect(File).not_to exist(File.join(dir, ".cursorrules"))
+        expect(result[:written]).not_to include(File.join(dir, ".cursorrules"))
       end
     end
 
-    it "preserves user content above the marker block on first install" do
+    it "loses the block an earlier release wrote and keeps the user's text around it" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, ".cursorrules")
-        user_content = "# My hand-written rules\n- Always use 2-space indent\n- Prefer guard clauses\n"
-        File.write(path, user_content)
+        File.write(path, "# Above the gem\n<!-- BEGIN rails-ai-context -->\nold\n<!-- END rails-ai-context -->\n# Below the gem\n")
 
-        described_class.new(context).call(dir)
+        result = described_class.new(context).call(dir)
 
-        new_content = File.read(path)
-        expect(new_content).to include(user_content),
-          "user-written .cursorrules content was destroyed by the install"
-        expect(new_content).to include("<!-- BEGIN rails-ai-context -->")
+        expect(File.read(path)).to eq("# Above the gem\n# Below the gem\n")
+        expect(result[:trimmed]).to eq([ path ])
       end
     end
 
-    it "preserves user content above and below the markers on regeneration" do
+    it "is left alone when it holds only the user's own rules" do
       Dir.mktmpdir do |dir|
-        # First write - gem creates the marker block.
-        described_class.new(context).call(dir)
         path = File.join(dir, ".cursorrules")
+        File.write(path, "# My hand-written rules\n")
 
-        # User adds content above and below the gem block.
-        gem_block = File.read(path)
-        File.write(path, "# Above the gem\n#{gem_block}\n# Below the gem\n")
+        result = described_class.new(context).call(dir)
 
-        # Regenerate - gem must replace ONLY its own block.
-        described_class.new(context).call(dir)
-
-        final = File.read(path)
-        expect(final).to include("# Above the gem")
-        expect(final).to include("# Below the gem")
-        expect(final).to include("<!-- BEGIN rails-ai-context -->")
-        expect(final).to include("<!-- END rails-ai-context -->")
-        # Marker block appears exactly once.
-        expect(final.scan("<!-- BEGIN rails-ai-context -->").size).to eq(1)
+        expect(File.read(path)).to eq("# My hand-written rules\n")
+        expect(result.values_at(:removed, :trimmed).flatten).to be_empty
       end
     end
   end
 
   it "renders no routes line when the static tier refused routes" do
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     Dir.mktmpdir do |dir|
       refused = context.merge(routes: { unavailable: "requires a booted Rails app" })
       described_class.new(refused).call(dir)
@@ -200,8 +139,10 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       rules = File.join(dir, ".cursor", "rules")
 
       expect(result[:not_applicable]).to eq(
+        File.join(rules, "rails-project.mdc") => "in the root file",
         File.join(rules, "rails-models.mdc") => "no models",
-        File.join(rules, "rails-controllers.mdc") => "no controllers"
+        File.join(rules, "rails-controllers.mdc") => "no controllers",
+        File.join(rules, "rails-mcp-tools.mdc") => "in the root file"
       )
     end
   end

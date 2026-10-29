@@ -6,9 +6,8 @@ require "set"
 
 module RailsAiContext
   module Serializers
-    # Orchestrates writing context files to disk in various formats.
-    # Supports: CLAUDE.md, AGENTS.md, .github/copilot-instructions.md, JSON
-    # Also generates split rule files for AI tools that support them.
+    # Writes the context files of a set of AI tools: the root files the
+    # LoadPlan picks, each tool's rules, and the JSON dump.
     #
     # Root files (CLAUDE.md, etc.) are wrapped in section markers so user content
     # outside the markers is preserved on re-generation. Set config.generate_root_files = false
@@ -16,28 +15,13 @@ module RailsAiContext
     class ContextFileSerializer < Base
       attr_reader :format
 
-      # Formats that produce only split rules (no root file).
-      SPLIT_ONLY_FORMATS = %i[cursor].freeze
+      JSON_PATH = ".ai-context.json"
 
-      # The root file each format writes: an AI tool's first context path,
-      # plus the toolless JSON dump. Derived so a tool's files are declared
-      # once, in Install::AiTool.
-      FORMAT_MAP = Install::AiTool.all
-        .reject { |tool| SPLIT_ONLY_FORMATS.include?(tool.key) }
-        .to_h { |tool| [ tool.key, tool.context_paths.first ] }
-        .merge(json: ".ai-context.json")
-        .freeze
+      ALL_FORMATS = (Install::AiTool.keys + [ :json ]).freeze
 
-      ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
-
-      # Which serializer writes each format's root file, and which writes its
-      # rules directory. Tables rather than two case statements, so a spec
-      # asking "does every generated file carry X" reads the same list the
-      # generator runs. Codex reuses OpenCode's files.
-      ROOT_SERIALIZERS = {
-        json: JsonSerializer, claude: RootFile, opencode: RootFile, codex: RootFile, copilot: RootFile
-      }.freeze
-
+      # Which serializer writes each AI tool's rules. A table rather than a case
+      # statement, so a spec asking "does every generated file carry X" reads
+      # the same list the generator runs. Codex reuses OpenCode's files.
       RULES_SERIALIZERS = {
         claude: ClaudeRulesSerializer, cursor: CursorRulesSerializer,
         opencode: OpencodeRulesSerializer, codex: OpencodeRulesSerializer,
@@ -89,48 +73,48 @@ module RailsAiContext
         # - a different path from a boot that started and failed.
         output_dir = RailsAiContext.configuration.output_dir_for(RailsAiContext.default_app)
         generate_root = RailsAiContext.configuration.generate_root_files
-        result = { written: [], skipped: [], not_applicable: {} }
+        result = { written: [], skipped: [], not_applicable: {}, removed: [], trimmed: [] }
 
-        seen_root_files = Set.new
+        tools = formats & Install::AiTool.keys
+        plan = LoadPlan.new(tools | (Array(RailsAiContext.configuration.ai_tools).map(&:to_sym) & Install::AiTool.keys),
+                            root_files: generate_root)
 
-        formats.each do |fmt|
-          next if SPLIT_ONLY_FORMATS.include?(fmt)
-
-          filename = FORMAT_MAP[fmt]
-
-          # Deduplicate: skip if this root file was already written (e.g. AGENTS.md for both :opencode and :codex)
-          next if seen_root_files.include?(filename)
-          seen_root_files << filename
-
-          filepath = File.join(output_dir, filename)
-
+        write_plain(File.join(output_dir, JSON_PATH), JsonSerializer.new(context).call, result, output_dir) if formats.include?(:json)
+        root_paths(tools, plan).each do |relative|
+          filepath = File.join(output_dir, relative)
           # generate_root_files = false is a deliberate omission, so it is
-          # reported rather than dropped. The JSON dump is no tool's root file.
-          unless generate_root || fmt == :json
-            result[:not_applicable][filepath] = "root files disabled"
-            next
-          end
+          # reported rather than dropped.
+          next result[:not_applicable][filepath] = "root files disabled" unless generate_root
 
-          content = serialize(fmt)
-
-          if fmt == :json
-            write_plain(filepath, content, result, output_dir)
-          else
-            outcome = SectionMarkerWriter.write_with_markers(filepath, content, root: output_dir)
-            SectionMarkerWriter.report(outcome, filepath, result)
+          case plan.root(relative)
+          when :content then write_root(filepath, root_content, output_dir, result)
+          when :import then write_root(filepath, "@#{plan.content_home}", output_dir, result)
+          else SectionMarkerWriter.drop(filepath, root: output_dir, whole: false, result: result)
           end
         end
 
         # Split rules are always generated regardless of generate_root_files
-        generate_split_rules(formats, output_dir, result)
+        generate_split_rules(tools, plan, output_dir, result)
 
         result
       end
 
       private
 
-      def serialize(fmt)
-        (ROOT_SERIALIZERS[fmt] || MarkdownSerializer).new(context).call
+      # These tools' root files, and the file an import among them points at:
+      # CLAUDE.md is empty without its AGENTS.md.
+      def root_paths(tools, plan)
+        paths = Install::AiTool.all.select { |tool| tools.include?(tool.key) }.map(&:root)
+        paths << plan.content_home if paths.any? { |path| plan.root(path) == :import }
+        paths.uniq
+      end
+
+      def root_content
+        @root_content ||= RootFile.new(context).call
+      end
+
+      def write_root(filepath, content, root, result)
+        SectionMarkerWriter.report(SectionMarkerWriter.write_with_markers(filepath, content, root: root), filepath, result)
       end
 
       # JSON and other formats that don't support HTML comments
@@ -160,13 +144,10 @@ module RailsAiContext
         false
       end
 
-      def generate_split_rules(formats, output_dir, result)
-        serializers = formats.filter_map { |fmt| RULES_SERIALIZERS[fmt] }.uniq
-
-        serializers.each do |serializer|
-          rules = serializer.new(context).call(output_dir)
-          result[:written].concat(rules[:written])
-          result[:skipped].concat(rules[:skipped])
+      def generate_split_rules(tools, plan, output_dir, result)
+        tools.filter_map { |key| RULES_SERIALIZERS[key] }.uniq.each do |serializer|
+          rules = serializer.new(context, plan).call(output_dir)
+          %i[written skipped removed trimmed].each { |bucket| result[bucket].concat(rules[bucket] || []) }
           result[:not_applicable].merge!(rules[:not_applicable] || {})
         end
       end

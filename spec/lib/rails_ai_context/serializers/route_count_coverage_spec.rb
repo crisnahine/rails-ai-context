@@ -49,6 +49,7 @@ RSpec.describe "route counts across every surface" do
   }.each do |name, klass|
     it "#{name} says how much of the table is missing" do
       Dir.mktmpdir do |dir|
+      allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
         # Read back the paths the serializer reports rather than globbing:
         # these write into .claude/, .cursor/ and .github/, and a plain glob
         # skips a hidden directory.
@@ -89,6 +90,7 @@ RSpec.describe "route counts across every surface" do
   # CLAUDE.md said "12 app routes across 3 routed controllers (39 total)"
   # while the rule files loaded beside it said "Routes: 39".
   it "states the count in every file the same way" do
+    allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     Dir.mktmpdir do |dir|
       root_line = RailsAiContext::Serializers::RootFile.new(context).call[/^- Routes: .*$/]
       rule_lines = [
@@ -98,7 +100,7 @@ RSpec.describe "route counts across every surface" do
       ].flat_map { |klass| klass.new(context).call(dir)[:written].map { |f| File.read(f)[/^- Routes: .*$/] } }.compact
 
       expect(root_line).to start_with("- Routes: 1 app route across 1 routed controller (94 total incl. framework")
-      expect(rule_lines.size).to eq(4)
+      expect(rule_lines.size).to eq(3)
       expect(rule_lines.uniq).to eq([ root_line ])
     end
   end

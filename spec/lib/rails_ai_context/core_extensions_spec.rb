@@ -95,7 +95,7 @@ RSpec.describe "the ActiveSupport core extensions the gem calls" do
       out, status = cli(@dir, "context")
 
       expect(status.exitstatus).to eq(0), out
-      expect(File.read(File.join(@dir, "CLAUDE.md"))).to include("cache")
+      expect(File.read(File.join(@dir, "AGENTS.md"))).to include("cache")
     end
 
     %w[standard full].each do |detail|

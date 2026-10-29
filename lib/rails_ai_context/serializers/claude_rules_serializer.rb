@@ -9,11 +9,15 @@ module RailsAiContext
       include ToolGuideHelper
 
       RULE_FILES = {
-        "rails-context.md" => { renderer: :render_context_overview, reason: "nothing to document" },
-        "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump" },
-        "rails-models.md" => { renderer: :render_models_reference, reason: "no models" },
-        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: "nothing to document" },
-        "rails-components.md" => { renderer: :render_components_reference, reason: "no view components" }
+        "rails-context.md" => { renderer: :render_context_overview, reason: :overview_reason,
+                                scope: RuleScope.always("Rails project overview") },
+        "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump", scope: :schema_scope },
+        "rails-models.md" => { renderer: :render_models_reference, reason: "no models",
+                               scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
+        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: :overview_reason,
+                                  scope: RuleScope.always("Rails tools guide") },
+        "rails-components.md" => { renderer: :render_components_reference, reason: "no view components",
+                                   scope: RuleScope.paths("app/components/**/*.rb", "app/views/components/**", description: "Components") }
       }.freeze
 
       # Tables per database, or models, a rules file lists; the tools have the rest.
@@ -22,21 +26,30 @@ module RailsAiContext
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES, root: output_dir)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES, root: output_dir, tool: :claude)
       end
 
       private
 
+      def plan
+        @plan ||= LoadPlan.new([ :claude ])
+      end
+
+      def overview_reason
+        plan.root_carries?(:claude) ? in_root_reason : "nothing to document"
+      end
+
+      # The root file states the overview whenever it is written.
       def render_context_overview
+        return nil if plan.root_carries?(:claude)
+
         lines = [
           "# #{context[:app_name] || 'Rails App'} - Overview",
           "",
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
-        # Gems, architecture, services and jobs are already in the root file
-        # (CLAUDE.md/AGENTS.md), so this overview states the rest.
-        lines.concat(overview_lines(gems: false, architecture: false, app_dirs: false))
+        lines.concat(overview_lines)
 
         lines << ""
         lines << "ALWAYS use #{tools_noun} for context - do NOT read reference files directly."
@@ -60,9 +73,7 @@ module RailsAiContext
         databases.reject! { |_, tables| tables.empty? }
         return nil if databases.empty?
 
-        lines = [ "---", "paths:", *schema_rule_paths(secondary).map { |path| "  - \"#{path}\"" }, "---", "" ]
-        lines << "# Database Tables (#{databases.sum { |_, tables| tables.size }})"
-        lines << ""
+        lines = [ "# Database Tables (#{databases.sum { |_, tables| tables.size }})", "" ]
         lines.concat(SectionFacts.static_notice_lines(context))
         live = " Use #{tool_ref("rails_get_schema", 'table:"name"', "table=name")} for live data." if served?("rails_get_schema")
         lines << "_Snapshot - may be stale after migrations.#{live}_"
@@ -75,6 +86,10 @@ module RailsAiContext
         end
 
         lines.join("\n")
+      end
+
+      def schema_scope
+        RuleScope.paths(schema_rule_paths(Payload.app_databases(Payload.section(context, :schema))), description: "Database tables")
       end
 
       # The dumps and migrations the tables are read from, each database's, so
@@ -190,11 +205,6 @@ module RailsAiContext
         return nil if models.empty?
 
         lines = [
-          "---",
-          "paths:",
-          '  - "app/models/**/*.rb"',
-          "---",
-          "",
           "# ActiveRecord Models (#{models.size})",
           ""
         ]
@@ -269,12 +279,6 @@ module RailsAiContext
         return nil if components.empty?
 
         lines = [
-          "---",
-          "paths:",
-          '  - "app/components/**/*.rb"',
-          '  - "app/views/components/**"',
-          "---",
-          "",
           "# Components (#{components.size})",
           ""
         ]
@@ -294,11 +298,10 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Always loaded beside CLAUDE.md, which carries the guide whenever root
-      # files are on; without CLAUDE.md this is the only place for the guide.
+      # The guide, where no root file carries it. The tools list themselves:
+      # the MCP client lists them, and `tool --list` on the command line.
       def render_mcp_tools_reference
-        guide = RailsAiContext.configuration.generate_root_files ? render_tools_reference("CLAUDE.md") : render_tools_guide
-        guide.join("\n")
+        plan.root_carries?(:claude) ? nil : render_tools_guide.join("\n")
       end
     end
   end

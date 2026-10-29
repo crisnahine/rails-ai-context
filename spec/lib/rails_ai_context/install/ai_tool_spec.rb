@@ -42,8 +42,8 @@ RSpec.describe RailsAiContext::Install::AiTool do
       },
       cursor: {
         name: "Cursor",
-        files: ".cursor/rules/ + .cursorrules (legacy fallback)",
-        context_paths: %w[.cursor/rules .cursorrules],
+        files: "AGENTS.md + .cursor/rules/",
+        context_paths: %w[AGENTS.md .cursor/rules],
         mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json, folder_variable: "${workspaceFolder}",
                       client: "Cursor", jsonc: false },
         legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ]

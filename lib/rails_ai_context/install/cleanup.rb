@@ -37,7 +37,7 @@ module RailsAiContext
 
         Array(tools).each do |key|
           tool = AiTool.find(key) or next
-          tool.context_paths.each do |relative|
+          tool.owned_paths.each do |relative|
             next if kept.include?(relative)
 
             if File.directory?(File.join(root.to_s, relative))
@@ -49,6 +49,18 @@ module RailsAiContext
         end
 
         prune_emptied(result, root)
+        result
+      end
+
+      # Takes out a context file a run no longer writes: one the gem owns whole
+      # goes, and a block comes out of a file the user also writes in.
+      #
+      # @param relative [String] path under root
+      # @param whole [Boolean] the gem owns the file outright (a rules directory's)
+      # @return [Hash] an #outcome
+      def drop(relative, root:, whole:)
+        result = outcome
+        whole ? delete(relative, root, result) : remove_generated(relative, root, result, Set.new)
         result
       end
 
@@ -66,7 +78,7 @@ module RailsAiContext
       #   the tools that have any
       def generated(tools:, root:)
         Array(tools).filter_map { |key| AiTool.find(key) }.to_h do |tool|
-          paths = tool.context_paths.flat_map do |relative|
+          paths = tool.owned_paths.flat_map do |relative|
             full = File.join(root.to_s, relative)
             next [] if File.symlink?(full) && (File.directory?(full) || !SafePath.inside?(full, root))
 

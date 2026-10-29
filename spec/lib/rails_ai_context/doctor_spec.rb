@@ -3247,8 +3247,8 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check).to be_nil
 
       generate
-      claude = File.join(@out, "CLAUDE.md")
-      File.write(claude, File.read(claude).sub("rails-ai-context v#{RailsAiContext::VERSION}", "rails-ai-context v5.31.0"))
+      agents = File.join(@out, "AGENTS.md")
+      File.write(agents, File.read(agents).sub("rails-ai-context v#{RailsAiContext::VERSION}", "rails-ai-context v5.31.0"))
       expect(doctor.send(:check_context_freshness).status).to eq(:warn)
     end
 
@@ -3308,13 +3308,23 @@ RSpec.describe RailsAiContext::Doctor do
       expect(contents).to eq(before)
     end
 
-    it "reads a tool's rules directory when it has no root file" do
+    it "reads a tool's rules directory" do
       allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[cursor])
       generate
-      File.delete(File.join(@out, ".cursorrules"))
+      File.delete(File.join(@out, ".cursor/rules/rails-controllers.mdc"))
 
       expect(check.status).to eq(:warn)
-      expect(check.message).to include("#{@out}/.cursorrules is out of date")
+      expect(check.message).to include("#{@out}/.cursor/rules/rails-controllers.mdc is out of date")
+    end
+
+    # A file the run would take out is as stale as one it would rewrite.
+    it "warns about a file a run would remove" do
+      generate
+      FileUtils.mkdir_p(File.join(@out, ".claude/rules"))
+      File.write(File.join(@out, ".claude/rules/rails-context.md"), "old\n")
+
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include("rails-context.md is out of date")
     end
   end
 

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # The three buckets a generate_context run answers with, walked in one
+  # The buckets a generate_context run answers with, walked in one
   # order for every entry point that reports a run. Each surface keeps its
   # own wording and its own stream; only the walk is shared, so a new bucket
   # is one edit here rather than one edit per surface.
@@ -13,11 +13,15 @@ module RailsAiContext
       plain: {
         written: "Written: %s",
         skipped: "Skipped: %s (unchanged)",
+        removed: "Removed: %s",
+        trimmed: "Removed the generated block from %s",
         not_applicable: "Not applicable: %s (%s)"
       }.freeze,
       emoji: {
         written: "✅ %s",
         skipped: "⏭️  %s (unchanged)",
+        removed: "🗑️  %s (removed)",
+        trimmed: "✂️  %s (generated block removed)",
         not_applicable: "➖  %s (%s)"
       }.freeze
     }.freeze
@@ -25,7 +29,7 @@ module RailsAiContext
     # What each bucket means to a surface that paints its output. A fact
     # about the bucket, so it lives beside the wording rather than in a
     # second table the next bucket would have to be added to as well.
-    COLORS = { written: :green, skipped: :yellow, not_applicable: :yellow }.freeze
+    COLORS = { written: :green, skipped: :yellow, removed: :green, trimmed: :green, not_applicable: :yellow }.freeze
 
     module_function
 
@@ -41,11 +45,13 @@ module RailsAiContext
       COLORS.fetch(bucket)
     end
 
-    # @param result [Hash] { written:, skipped:, not_applicable: }
+    # @param result [Hash] { written:, skipped:, removed:, trimmed:, not_applicable: }
     # @return [Array<Array(Symbol, String, String|nil)>] bucket, path, reason
     def entries(result)
       Array(result[:written]).map { |path| [ :written, path, nil ] } +
         Array(result[:skipped]).map { |path| [ :skipped, path, nil ] } +
+        Array(result[:removed]).map { |path| [ :removed, path, nil ] } +
+        Array(result[:trimmed]).map { |path| [ :trimmed, path, nil ] } +
         (result[:not_applicable] || {}).map { |path, reason| [ :not_applicable, path, reason ] }
     end
 

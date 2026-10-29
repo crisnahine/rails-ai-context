@@ -29,7 +29,7 @@ RSpec.describe "AI tool identity ownership" do
 
   it "derives doctor's context files from the table" do
     expect(RailsAiContext::Doctor::CONTEXT_PATHS)
-      .to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.context_paths ] })
+      .to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.owned_paths ] })
   end
 
   it "derives doctor's MCP config paths from the table" do

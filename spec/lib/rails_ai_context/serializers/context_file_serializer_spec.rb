@@ -91,18 +91,16 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
-    it "generates split rules for cursor format AND a legacy .cursorrules fallback" do
-      # v5.9.0: restored .cursorrules alongside .cursor/rules/*.mdc because
-      # Cursor's chat agent didn't detect mdc rules in real user testing.
-      # Both formats coexist - new clients use mdc, older/chat clients use
-      # the legacy single-file format.
+    # A release that wrote Cursor's content into .mdc rules alone had a chat
+    # agent miss it; AGENTS.md is read on every Cursor surface.
+    it "writes Cursor's scoped rules and the AGENTS.md it reads the root content from" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
-        serializer = described_class.new(context, format: :cursor)
-        result = serializer.call
+        result = described_class.new(context, format: :cursor).call
         cursor_rules = result[:written].select { |f| f.include?(".cursor/rules/") }
         expect(cursor_rules).not_to be_empty
-        expect(result[:written].any? { |f| f.end_with?(".cursorrules") }).to be true
+        expect(result[:written]).to include(File.join(dir, "AGENTS.md"))
+        expect(result[:written].any? { |f| f.end_with?(".cursorrules") }).to be false
       end
     end
 
@@ -387,7 +385,7 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
 
         expect(result[:not_applicable].values.uniq).to include("root files disabled")
         left_out = result[:not_applicable].keys.map { |f| File.basename(f) }
-        expect(left_out).to include("CLAUDE.md", "AGENTS.md", ".cursorrules", "copilot-instructions.md")
+        expect(left_out).to include("CLAUDE.md", "AGENTS.md", "copilot-instructions.md")
       end
     end
 

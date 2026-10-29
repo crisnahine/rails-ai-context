@@ -29,7 +29,7 @@ RSpec.describe RailsAiContext::Install::Cleanup do
         File.binwrite(File.join(outside, "rules.md"), MARKED)
         File.symlink(File.join(outside, "rules.md"), File.join(root, ".cursorrules"))
 
-        expect(described_class.generated(tools: %i[claude cursor], root: root)).to eq(claude: [ "CLAUDE.md" ])
+        expect(described_class.generated(tools: %i[claude cursor], root: root)).to eq(claude: [ "CLAUDE.md" ], cursor: [ "AGENTS.md" ])
       end
     end
   end

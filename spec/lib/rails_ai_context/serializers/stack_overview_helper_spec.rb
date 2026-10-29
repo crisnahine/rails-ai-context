@@ -463,11 +463,11 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         path = File.join(root, ".claude", "rules", "rails-context.md")
 
         first = helper.write_rule_files([ rule_file(path, "content") ], root: root)
-        expect(first).to eq(written: [ path ], skipped: [], not_applicable: {})
+        expect(first).to eq(written: [ path ], skipped: [], not_applicable: {}, removed: [], trimmed: [])
         expect(File.read(path)).to eq("content\n")
 
         second = helper.write_rule_files([ rule_file(path, "content") ], root: root)
-        expect(second).to eq(written: [], skipped: [ path ], not_applicable: {})
+        expect(second).to eq(written: [], skipped: [ path ], not_applicable: {}, removed: [], trimmed: [])
       end
     end
 
@@ -493,7 +493,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
 
         result = helper.write_rule_files([ rule_file(path, nil, "no models") ], root: root)
 
-        expect(result).to eq(written: [], skipped: [], not_applicable: { path => "no models" })
+        expect(result).to eq(written: [], skipped: [], not_applicable: { path => "no models" }, removed: [], trimmed: [])
         expect(Dir.exist?(File.join(root, ".claude"))).to be false
       end
     end
@@ -527,15 +527,32 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
           def render_absent = nil
         end
 
+        scope = RailsAiContext::Serializers::RuleScope.paths("app/models/**/*.rb", description: "Models")
         result = klass.new.write_rule_table(
           root,
-          { "present.md" => { renderer: :render_present, reason: "nothing to document" },
-            "absent.md" => { renderer: :render_absent, reason: "no models" } },
-          root: root
+          { "present.md" => { renderer: :render_present, reason: "nothing to document", scope: scope },
+            "absent.md" => { renderer: :render_absent, reason: "no models", scope: scope } },
+          root: root, tool: :claude
         )
 
         expect(result[:written]).to eq([ File.join(root, "present.md") ])
         expect(result[:not_applicable]).to eq(File.join(root, "absent.md") => "no models")
+      end
+    end
+
+    it "puts the frontmatter the scope takes in this AI tool above the body" do
+      Dir.mktmpdir do |root|
+        klass = Class.new do
+          include RailsAiContext::Serializers::StackOverviewHelper
+
+          def render_present = "# Models"
+          def models_scope = RailsAiContext::Serializers::RuleScope.paths("app/models/**/*.rb", description: "Models")
+        end
+
+        klass.new.write_rule_table(root, { "m.mdc" => { renderer: :render_present, reason: "x", scope: :models_scope } },
+                                   root: root, tool: :cursor)
+
+        expect(File.read(File.join(root, "m.mdc"))).to eq(%(---\nglobs:\n  - "app/models/**/*.rb"\nalwaysApply: false\n---\n\n# Models\n))
       end
     end
   end

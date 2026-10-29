@@ -19,11 +19,10 @@ require "spec_helper"
 RSpec.describe "Cursor MDC compliance" do
   let(:context) { serializer_context }
 
-  # Scope the MDC-compliance assertions to files under .cursor/rules/ only.
-  # The serializer ALSO writes .cursorrules at the project root as a legacy
-  # fallback - that file is plain text, not MDC, and is intentionally
-  # outside the frontmatter/extension/<500-lines contract. The legacy file
-  # is covered separately in cursor_rules_serializer_spec.rb.
+  # Every kind of rule: with root files off, the project overview and the
+  # tools guide are rules too.
+  before { allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false) }
+
   let(:generated_files) do
     Dir.mktmpdir do |dir|
       result = RailsAiContext::Serializers::CursorRulesSerializer.new(context).call(dir)

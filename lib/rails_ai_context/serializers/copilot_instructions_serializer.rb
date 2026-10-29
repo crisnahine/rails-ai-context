@@ -9,28 +9,46 @@ module RailsAiContext
       include ToolGuideHelper
 
       RULE_FILES = {
-        "rails-context.instructions.md" => { renderer: :render_context_instructions, reason: "nothing to document" },
-        "rails-models.instructions.md" => { renderer: :render_models_instructions, reason: "no models" },
-        "rails-controllers.instructions.md" => { renderer: :render_controllers_instructions, reason: "no controllers" },
-        "rails-mcp-tools.instructions.md" => { renderer: :render_mcp_tools_instructions, reason: "nothing to document" }
+        "rails-context.instructions.md" => {
+          renderer: :render_context_instructions, reason: :overview_reason, name: "Rails Project Overview",
+          scope: RuleScope.always("Rails version, database, models, routes, gems, architecture patterns")
+        },
+        "rails-models.instructions.md" => {
+          renderer: :render_models_instructions, reason: "no models", name: "Rails Models Reference",
+          scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models - associations, validations, scopes, enums")
+        },
+        "rails-controllers.instructions.md" => {
+          renderer: :render_controllers_instructions, reason: "no controllers", name: "Rails Controllers Reference",
+          scope: RuleScope.paths("app/controllers/**/*.rb", description: "Controllers - actions, filters, strong parameters")
+        },
+        # Code review reads only copilot-instructions.md.
+        "rails-mcp-tools.instructions.md" => {
+          renderer: :render_mcp_tools_instructions, reason: :overview_reason, name: :tools_name,
+          scope: :tools_scope, exclude_agent: "code-review"
+        }
       }.freeze
 
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        write_rule_table(File.join(output_dir, Install::AiTool.find(:copilot).rules_dir), RULE_FILES, root: output_dir)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:copilot).rules_dir), RULE_FILES, root: output_dir, tool: :copilot)
       end
 
       private
 
+      def plan
+        @plan ||= LoadPlan.new([ :copilot ])
+      end
+
+      def overview_reason
+        plan.root_carries?(:copilot) ? in_root_reason : "nothing to document"
+      end
+
+      # copilot-instructions.md states the overview whenever it is written.
       def render_context_instructions
+        return nil if plan.root_carries?(:copilot)
+
         lines = [
-          "---",
-          "applyTo: \"**/*\"",
-          "name: \"Rails Project Overview\"",
-          "description: \"Rails version, database, models, routes, gems, architecture patterns\"",
-          "---",
-          "",
           "# #{context[:app_name] || 'Rails App'} - Overview",
           "",
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
@@ -49,12 +67,6 @@ module RailsAiContext
         return nil unless models.any?
 
         lines = [
-          "---",
-          "applyTo: \"app/models/**/*.rb\"",
-          "name: \"Rails Models Reference\"",
-          "description: \"ActiveRecord models - associations, validations, scopes, enums\"",
-          "---",
-          "",
           "# ActiveRecord Models (#{models.size})",
           ""
         ]
@@ -84,12 +96,6 @@ module RailsAiContext
         return nil if controllers.empty?
 
         lines = [
-          "---",
-          "applyTo: \"app/controllers/**/*.rb\"",
-          "name: \"Rails Controllers Reference\"",
-          "description: \"Controllers - actions, filters, strong parameters\"",
-          "---",
-          "",
           "# Controllers (#{controllers.size})",
           ""
         ]
@@ -101,23 +107,17 @@ module RailsAiContext
         lines.join("\n")
       end
 
+      def tools_name
+        "Rails #{tool_mode == :cli ? "CLI" : "MCP"} Tools"
+      end
+
+      def tools_scope
+        RuleScope.always("#{count_phrase(tool_count, "introspection tool")} - schema, models, routes, controllers, search, testing, validation")
+      end
+
+      # The guide, where copilot-instructions.md does not carry it.
       def render_mcp_tools_instructions
-        lines = [
-          "---",
-          "applyTo: \"**/*\"",
-          "name: \"Rails #{tool_mode == :cli ? "CLI" : "MCP"} Tools\"",
-          "description: \"#{count_phrase(tool_count, "introspection tool")} - schema, models, routes, controllers, search, testing, validation\"",
-          "excludeAgent: \"code-review\"",
-          "---",
-          ""
-        ]
-
-        # Loaded beside copilot-instructions.md, which carries the guide whenever
-        # root files are on; code review reads only that one.
-        root_files = RailsAiContext.configuration.generate_root_files
-        lines.concat(root_files ? render_tools_reference(".github/copilot-instructions.md") : render_tools_guide)
-
-        lines.join("\n")
+        plan.root_carries?(:copilot) ? nil : render_tools_guide.join("\n")
       end
     end
   end

@@ -10,6 +10,8 @@ module RailsAiContext
     RESULT_LINES = {
       written: "Updated: %s",
       skipped: "Unchanged: %s",
+      removed: "Removed: %s",
+      trimmed: "Removed the generated block from %s",
       not_applicable: "Not applicable: %s (%s)"
     }.freeze
 

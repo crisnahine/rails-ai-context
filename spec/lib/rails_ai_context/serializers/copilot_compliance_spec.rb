@@ -166,6 +166,7 @@ RSpec.describe "Copilot instructions compliance" do
 
     describe "agent-specific exclusions" do
       it "MCP tools file excludes code-review agent" do
+        allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
         file = generated_files["rails-mcp-tools.instructions.md"]
         expect(file).not_to be_nil, "MCP tools instruction file not generated"
         fm = parse_frontmatter(file[:content])
@@ -174,6 +175,7 @@ RSpec.describe "Copilot instructions compliance" do
       end
 
       it "context file does NOT exclude any agent" do
+        allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
         file = generated_files["rails-context.instructions.md"]
         expect(file).not_to be_nil
         fm = parse_frontmatter(file[:content])
@@ -192,6 +194,7 @@ RSpec.describe "Copilot instructions compliance" do
 
     describe "content quality" do
       it "context file includes app name" do
+        allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
         file = generated_files["rails-context.instructions.md"]
         expect(file[:content]).to include("TestApp")
       end
@@ -209,6 +212,7 @@ RSpec.describe "Copilot instructions compliance" do
       end
 
       it "lists every registered tool" do
+        allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
         content = generated_files["rails-mcp-tools.instructions.md"][:content]
 
         missing = RailsAiContext::Tools::BaseTool.registered_tools
@@ -218,15 +222,10 @@ RSpec.describe "Copilot instructions compliance" do
         expect(missing).to be_empty, "MCP tools file is missing: #{missing.join(%q(, ))}"
       end
 
-      # Copilot loads copilot-instructions.md beside this file, and that one
-      # carries the workflows and the protocol; the code review reads it alone.
-      it "MCP tools file is the reference the root file points from" do
-        content = generated_files["rails-mcp-tools.instructions.md"][:content]
-
-        expect(content).to include("- Reference", "is in .github/copilot-instructions.md", "detail parameter", "rails 'ai:tool[")
-        expect(content).not_to include("Step-by-step workflows", "Anti-Hallucination Protocol")
-        expect(RailsAiContext::Serializers::RootFile.new(context).call)
-          .to include("Step-by-step workflows", "MANDATORY", "NEVER read")
+      # copilot-instructions.md carries the guide, and the MCP client lists the tools.
+      it "writes no tools file beside copilot-instructions.md" do
+        expect(generated_files).not_to have_key("rails-mcp-tools.instructions.md")
+        expect(generated_files).not_to have_key("rails-context.instructions.md")
       end
 
       context "with root files off" do

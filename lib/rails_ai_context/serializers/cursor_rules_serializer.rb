@@ -2,17 +2,10 @@
 
 module RailsAiContext
   module Serializers
-    # Generates .cursor/rules/*.mdc files (new Cursor MDC format) AND a
-    # .cursorrules legacy fallback at the project root.
-    #
-    # Why both:
-    #   - .cursor/rules/*.mdc is the recommended format for Cursor 0.42+
-    #     with per-file scoping (alwaysApply / globs / description triggers)
-    #   - .cursorrules is still consulted by Cursor's chat agent in many
-    #     versions and is the only format older clients understand. Real
-    #     user report (v5.9.0 release QA): the chat agent didn't detect
-    #     rules written only as .cursor/rules/*.mdc; adding .cursorrules
-    #     alongside fixed it.
+    # Generates .cursor/rules/*.mdc files: the scoped models and controllers
+    # rules, and where no root file carries the root content, the overview and
+    # the tools guide. The root content itself is in AGENTS.md or CLAUDE.md,
+    # which Cursor reads on every surface.
     class CursorRulesSerializer < Base
       include StackOverviewHelper
       include ToolGuideHelper
@@ -21,46 +14,50 @@ module RailsAiContext
       # as-is with no markers (the gem manages every file in that
       # directory).
       RULE_FILES = {
-        "rails-project.mdc" => { renderer: :render_project_rule, reason: "nothing to document" },
-        "rails-models.mdc" => { renderer: :render_models_rule, reason: "no models" },
-        "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers" },
-        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: "nothing to document" }
+        "rails-project.mdc" => { renderer: :render_project_rule, reason: :overview_reason, scope: :project_scope },
+        "rails-models.mdc" => { renderer: :render_models_rule, reason: "no models",
+                                scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
+        "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers",
+                                     scope: RuleScope.paths("app/controllers/**/*.rb", description: "Controllers") },
+        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: :overview_reason, scope: :tools_scope }
       }.freeze
 
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      # @return [Hash] { written:, skipped:, removed:, trimmed: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         rules_dir = File.join(output_dir, Install::AiTool.find(:cursor).rules_dir)
-        result = write_rule_table(rules_dir, RULE_FILES, root: output_dir)
+        result = write_rule_table(rules_dir, RULE_FILES, root: output_dir, tool: :cursor)
+        return result unless plan.root_carries?(:cursor)
 
-        # .cursorrules is at the project root and may pre-date the gem
-        # install (users frequently hand-write .cursorrules before
-        # adopting any tooling). Wrap it in BEGIN/END markers like
-        # CLAUDE.md / AGENTS.md / .github/copilot-instructions.md so
-        # user content above/below the gem-managed block survives every
-        # `rails ai:context` regeneration.
-        cursorrules_path = File.join(output_dir, ".cursorrules")
-        unless RailsAiContext.configuration.generate_root_files
-          result[:not_applicable][cursorrules_path] = "root files disabled"
-          return result
-        end
-
-        SectionMarkerWriter.report(
-          SectionMarkerWriter.write_with_markers(cursorrules_path, render_cursorrules_legacy, root: output_dir),
-          cursorrules_path, result
-        )
+        # Cursor calls .cursorrules legacy and reads the content from the root
+        # file the plan picked, so the block an earlier release wrote goes.
+        SectionMarkerWriter.drop(File.join(output_dir, ".cursorrules"), root: output_dir, whole: false, result: result)
       end
 
       private
 
-      # Always-on project overview rule (<50 lines)
+      def plan
+        @plan ||= LoadPlan.new([ :cursor ])
+      end
+
+      def overview_reason
+        plan.root_carries?(:cursor) ? in_root_reason : "nothing to document"
+      end
+
+      def project_scope
+        RuleScope.always("Rails project context for #{context[:app_name]}")
+      end
+
+      # The agent picks it by its description, so the description names the mode's tools.
+      def tools_scope
+        RuleScope.on_request("Rails #{tool_mode == :cli ? "CLI" : "MCP"} tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more")
+      end
+
+      # The overview, where no root file Cursor reads carries the root content.
       def render_project_rule
+        return nil if plan.root_carries?(:cursor)
+
         lines = [
-          "---",
-          "description: \"Rails project context for #{context[:app_name]}\"",
-          "alwaysApply: true",
-          "---",
-          "",
           "# #{context[:app_name]}",
           "",
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
@@ -81,12 +78,6 @@ module RailsAiContext
         return nil unless models.any?
 
         lines = [
-          "---",
-          "globs:",
-          "  - \"app/models/**/*.rb\"",
-          "alwaysApply: false",
-          "---",
-          "",
           "# Models (#{models.size})",
           ""
         ]
@@ -124,12 +115,6 @@ module RailsAiContext
         return nil if controllers.empty?
 
         lines = [
-          "---",
-          "globs:",
-          "  - \"app/controllers/**/*.rb\"",
-          "alwaysApply: false",
-          "---",
-          "",
           "# Controllers (#{controllers.size})",
           ""
         ]
@@ -145,25 +130,9 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Agent-requested tool reference - loaded on-demand when agent needs tool guidance.
-      # The agent picks it by its description, so the description names the mode's tools.
+      # The guide on request, where no root file Cursor reads carries it.
       def render_mcp_tools_rule
-        lines = [
-          "---",
-          "description: \"Rails #{tool_mode == :cli ? "CLI" : "MCP"} tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more\"",
-          "alwaysApply: false",
-          "---",
-          ""
-        ]
-
-        lines.concat(render_tools_guide)
-
-        lines.join("\n")
-      end
-
-      # The legacy root file: the bytes every root path gets.
-      def render_cursorrules_legacy
-        RootFile.new(context).call
+        plan.root_carries?(:cursor) ? nil : render_tools_guide.join("\n")
       end
     end
   end
