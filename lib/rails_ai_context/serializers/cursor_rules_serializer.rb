@@ -19,7 +19,7 @@ module RailsAiContext
                                 scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
         "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers",
                                      scope: RuleScope.paths("app/controllers/**/*.rb", description: "Controllers") },
-        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: :overview_reason, scope: :tools_scope }
+        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: :overview_reason, scope: :tools_scope, kind: :root }
       }.freeze
 
       # @param output_dir [String] Rails root path
@@ -86,21 +86,7 @@ module RailsAiContext
         lines << MODELS_READING
         lines << ""
 
-        models.keys.sort.first(30).each do |name|
-          data = models[name]
-          if (unread = SectionFacts.unread_row("- #{name}", data))
-            lines << unread
-            next
-          end
-
-          assocs = (data[:associations] || []).size
-          table = SectionFacts.table_note(Payload.section(context, :schema), data) || data[:table_name] || "?"
-          lines << "- #{name} (#{count_phrase(assocs, "association")}, table: #{table})"
-          extras = model_extras_line(data)
-          lines << extras if extras
-        end
-
-        lines << "- ...#{models.size - 30} more" if models.size > 30
+        lines.concat(model_rows(:listing))
         if served?("rails_get_model_details")
           lines << ""
           lines << "Use #{tool_named("rails_get_model_details", "model", "Name")} for full detail."

@@ -80,12 +80,12 @@ RSpec.describe "full mode's root files" do
 
     it "gives each column its default and each table its indexes and foreign keys" do
       expect(output).to include("`published` (boolean, default false)")
-      expect(output).to include("- Indexes: user_id; user_id+slug (unique)", "- Foreign keys: user_id → users")
+      expect(output).to include("- Indexes: user_id, user_id+slug (unique)", "- Foreign keys: user_id → users")
     end
 
     it "states a model's scopes, callbacks, enum values and constants" do
-      expect(output).to include("- Scopes: published", "- Callbacks: before_save set_slug",
-                                "- Enums: status (draft, live)", "- KINDS: news, blog")
+      expect(output).to include("- Scopes: published", "- Callbacks before_save: set_slug",
+                                "- Enum status: draft, live", "- KINDS: news, blog")
     end
 
     it "lists the Stimulus controllers" do

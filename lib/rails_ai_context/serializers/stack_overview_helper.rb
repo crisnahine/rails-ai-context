@@ -6,14 +6,12 @@ module RailsAiContext
     # Include in any serializer that has a `context` reader and renders a project overview.
     module StackOverviewHelper
       include CountPhrase
+      include ModelSection
 
       # One rule file on its way to disk. The reason travels with the path it
       # explains; when it lived in a second hash keyed by the same path, an
       # entry missing from that hash lost its reason silently.
       RuleFile = Struct.new(:path, :content, :reason)
-
-      IN_REPO_ENGINES_SHOWN = 5
-      DATABASES_SHOWN = 3
 
       # The models listings' line on reading, in the tools guide's terms: the
       # tools are the reference, and a file is read to edit it. "Read model
@@ -66,18 +64,15 @@ module RailsAiContext
         # One name per app, however many paths mount it.
         mounted = Payload.mounted_engines(ctx).filter_map { |e| e[:engine] }.tally
         if mounted.any?
-          shown = mounted.first(5).map { |name, paths| paths > 1 ? "#{name} (#{paths} paths)" : name }
-          shown << "...#{mounted.size - 5} more" if mounted.size > 5
-          lines << "- Mounted: #{shown.join(', ')}"
+          lines << Budget.list(mounted.map { |name, paths| paths > 1 ? "#{name} (#{paths} paths)" : name },
+                               cap: Budget.cap(:mounted), lead: "- Mounted: ")
         end
 
         # What routes.rb mounts is not what the repository holds: an in-repo
         # engine is often mounted by its own initializer, or not at all.
         in_repo = Payload.in_repo_engines(ctx).filter_map { |e| e[:name] }
         if in_repo.any?
-          shown = in_repo.first(IN_REPO_ENGINES_SHOWN)
-          shown += [ "...#{in_repo.size - IN_REPO_ENGINES_SHOWN} more" ] if in_repo.size > IN_REPO_ENGINES_SHOWN
-          lines << "- In-repo engines: #{in_repo.size} (#{shown.join(', ')})"
+          lines << "#{Budget.list(in_repo, cap: Budget.cap(:in_repo_engines), lead: "- In-repo engines: #{in_repo.size} (")})"
         end
 
         raw_databases = Payload.section(ctx, :multi_database)&.dig(:databases)
@@ -85,10 +80,11 @@ module RailsAiContext
         if db_list.size > 1
           db_names = db_list.map { |d| d.is_a?(Hash) ? "#{d[:name]}#{Payload.database_mark(d)}" : d }
           # The names it leaves out are counted, as the mounted apps' are.
-          shown = db_names.first(DATABASES_SHOWN)
-          if db_names.size > DATABASES_SHOWN
-            elsewhere = db_list.drop(DATABASES_SHOWN).count { |d| Payload.scope_words(d) }
-            shown << "...#{db_names.size - DATABASES_SHOWN} more#{", #{elsewhere} of them not configured in this environment" if elsewhere > 0}"
+          cap = Budget.cap(:databases)
+          shown = db_names.first(cap)
+          if db_names.size > cap
+            elsewhere = db_list.drop(cap).count { |d| Payload.scope_words(d) }
+            shown << "...#{db_names.size - cap} more#{", #{elsewhere} of them not configured in this environment" if elsewhere > 0}"
           end
           lines << "- Databases: #{db_list.size} (#{shown.join(', ')})"
         end
@@ -139,16 +135,13 @@ module RailsAiContext
 
         if architecture && Payload.section(context, :conventions)
           arch_labels = arch_labels_hash
-          Payload.architecture(context).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
+          Payload.architecture(context).first(Budget.cap(:architecture)).each { |p| lines << "- #{arch_labels[p] || p}" }
         end
 
         lines.concat(full_preset_stack_lines)
 
         if app_dirs
-          services = service_names
-          lines << "- Services: #{services.join(', ')}" if services.any?
-          jobs = job_names
-          lines << "- Jobs: #{jobs.join(', ')}" if jobs.any?
+          lines.concat([ names_line(service_names, "- Services: "), names_line(job_names, "- Jobs: ") ].compact)
         end
 
         before_actions = detect_before_actions
@@ -166,7 +159,8 @@ module RailsAiContext
       # Shared by cursor_rules and copilot_instructions serializers.
       # `with_actions:` names the actions instead of counting them - the
       # depth is the caller's choice, the rendering is not.
-      def render_compact_controllers_list(controllers_hash, limit: 25, with_actions: false)
+      def render_compact_controllers_list(controllers_hash, with_actions: false)
+        limit = Budget.cap(:listed_controllers)
         lines = []
         controllers_hash.keys.sort.first(limit).each do |name|
           info = controllers_hash[name]
@@ -177,9 +171,7 @@ module RailsAiContext
 
           if with_actions
             actions = (info[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
-            line = "- **#{name}**"
-            line += " - #{actions.join(', ')}" unless actions.empty?
-            lines << line
+            lines << (actions.empty? ? "- **#{name}**" : Budget.list(actions, lead: "- **#{name}** - "))
           else
             action_count = info[:actions]&.size || 0
             lines << "- #{name} (#{count_phrase(action_count, "action")})"
@@ -187,19 +179,6 @@ module RailsAiContext
         end
         lines << "- ...#{controllers_hash.size - limit} more" if controllers_hash.size > limit
         lines
-      end
-
-      # Render scopes and constants as a one-line extras summary for a model entry.
-      # Returns "  scopes: a, b | STATUS: draft, active" or nil if no extras exist.
-      # Shared by cursor_rules, opencode_rules, copilot_instructions, compact_serializer_helper.
-      def model_extras_line(data)
-        scopes = data[:scopes] || []
-        constants = data[:constants] || []
-        return nil unless scopes.any? || constants.any?
-        extras = []
-        extras << "scopes: #{scope_names(scopes).join(', ')}" if scopes.any?
-        constants.each { |c| extras << "#{c[:name]}: #{c[:values].join(', ')}" }
-        "  #{extras.join(' | ')}"
       end
 
       # Safely resolve architecture labels from GetConventions tool.
@@ -214,8 +193,9 @@ module RailsAiContext
       # Render and write a serializer's whole rule-file table, each file under
       # the frontmatter its scope takes in this AI tool.
       # @param dir [String] directory the table's relative names hang off
-      # @param table [Hash<String, Hash>] name => { renderer:, reason:, scope:, name:, exclude_agent: },
-      #   reason, scope and name a value or the method that answers it
+      # @param table [Hash<String, Hash>] name => { renderer:, reason:, scope:, name:, exclude_agent:, kind: },
+      #   reason, scope and name a value or the method that answers it, kind the Budget::BYTES one
+      #   (a rule's, or the root file's for a rule that stands in for it)
       def write_rule_table(dir, table, root:, tool:)
         write_rule_files(
           table.map do |name, rule|
@@ -235,7 +215,11 @@ module RailsAiContext
         body = send(rule[:renderer]) or return nil
         answer = ->(value) { value.is_a?(Symbol) ? send(value) : value }
         frontmatter = answer.(rule.fetch(:scope)).frontmatter(tool, name: answer.(rule[:name]), exclude_agent: rule[:exclude_agent])
-        [ *frontmatter, body ].join("\n")
+        Budget.fit(head: frontmatter, body: body.split("\n", -1), keep: [], kind: rule.fetch(:kind, :rule), note: rule_trim_note)
+      end
+
+      def rule_trim_note
+        "_Trimmed to fit. The tools answer the rest._"
       end
 
       # Write split-rule files with diff-check and atomic writes.
@@ -290,10 +274,8 @@ module RailsAiContext
       # a large app's scan takes most of a second, so a run pays for it once.
       def service_names(root = project_root)
         per_run = (SERVICE_NAMES[context] ||= {})
-        per_run[root.to_s] ||= capped(Introspectors::ServiceClasses.names(root)).freeze
+        per_run[root.to_s] ||= Introspectors::ServiceClasses.names(root).freeze
       end
-
-      NAMES_SHOWN = 12
 
       # The jobs and Sidekiq workers the introspector recorded, so this line
       # and rails_get_job_pattern name the same set.
@@ -301,14 +283,12 @@ module RailsAiContext
         jobs = Payload.section(context, :jobs)
         return [] unless jobs
 
-        capped((Array(jobs[:jobs]) + Array(jobs[:workers])).filter_map { |job| job[:name] if job.is_a?(Hash) })
+        (Array(jobs[:jobs]) + Array(jobs[:workers])).filter_map { |job| job[:name] if job.is_a?(Hash) }
       end
 
       # A large app's services take one line of a generated file, not kilobytes of it.
-      def capped(names)
-        return names if names.size <= NAMES_SHOWN
-
-        names.first(NAMES_SHOWN) + [ "...#{names.size - NAMES_SHOWN} more" ]
+      def names_line(names, lead)
+        Budget.list(names, cap: Budget.cap(:names), lead: lead) if names.any?
       end
 
       # The filters ApplicationController runs on every request, through the

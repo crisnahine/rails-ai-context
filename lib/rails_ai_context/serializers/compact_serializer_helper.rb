@@ -2,11 +2,11 @@
 
 module RailsAiContext
   module Serializers
-    # The compact root file and the parts of it .cursorrules shares.
-    # Include in any serializer that has a `context` reader and includes
-    # StackOverviewHelper.
+    # The compact root file's sections. Include in any serializer that has a
+    # `context` reader.
     module CompactSerializerHelper
       include CountPhrase
+      include StackOverviewHelper
       include ToolGuideHelper
 
       private
@@ -63,35 +63,7 @@ module RailsAiContext
       end
 
       def render_key_models
-        models = Payload.models(context)
-        return [] unless models.any?
-
-        max_show = 15
-        lines = [ "## Key models (#{models.size} total, most connected first)" ]
-        ranked = Payload.models_by_connection(models)
-        ranked.first(max_show).each do |name|
-          data = models[name]
-          if (unread = SectionFacts.unread_row("- **#{name}**", data))
-            lines << unread
-            next
-          end
-
-          assoc_count = (data[:associations] || []).size
-          val_count = (data[:validations] || []).size
-          top_assocs = SectionFacts.associations_list(data).join(", ")
-          line = "- **#{name}**"
-          line += " (#{assoc_count}a, #{val_count}v)" if assoc_count > 0 || val_count > 0
-          line += " - #{top_assocs}" if top_assocs && !top_assocs.empty?
-          lines << line
-          extras = model_extras_line(data)
-          lines << extras if extras
-        end
-        if models.size > max_show
-          use = " (use #{tool_named("rails_get_model_details")})" if served?("rails_get_model_details")
-          lines << "- _...#{models.size - max_show} more#{use}_"
-        end
-        lines << ""
-        lines
+        model_rows(:summary)
       end
 
       def render_notable_gems
@@ -127,61 +99,17 @@ module RailsAiContext
         "_Context trimmed. Use #{tools_noun} for full details._"
       end
 
-      # Counts non-blank physical lines. `head` (the title block) and `keep`
-      # (the trailing how-to-behave sections: commands, warnings, rules, the
-      # tools guide and its protocol) are never cut. An over-budget file
-      # loses the data between them, which the tools answer in full, down to
-      # none of it, so a budget smaller than the kept sections leaves just
-      # them: the guide is what makes a compact file worth reading.
+      # The data between the title and the how-to-behave sections is what a
+      # budget cuts: the tools answer it in full, and the guide is what makes a
+      # compact file worth reading. The BEGIN/END markers count against the lines.
       def enforce_max_lines(lines, head: [], keep: [])
-        # The BEGIN/END markers the writer adds count against the budget.
-        max = RailsAiContext.configuration.claude_max_lines - SectionMarkerWriter::MARKER_LINES
-        head = physical(head)
-        body = physical(lines)
-        tail = physical(keep)
-        fixed = content_count(head) + content_count(tail)
-        return (head + body + tail).join("\n") if fixed + content_count(body) <= max
-
-        separator = tail.empty? ? [] : [ "" ]
-        (head + truncate(body, max - 1 - fixed) + separator + tail).join("\n")
+        max_lines = RailsAiContext.configuration.claude_max_lines - SectionMarkerWriter::MARKER_LINES
+        Budget.fit(head: physical(head), body: physical(lines), keep: physical(keep), kind: :root, note: trim_note, max_lines: max_lines,
+                                                                           reserve: SectionMarkerWriter::MARKER_BYTES)
       end
 
       def physical(lines)
         lines.join("\n").split("\n", -1)
-      end
-
-      def content_count(lines)
-        lines.count { |line| !line.strip.empty? }
-      end
-
-      # The first `budget` content lines, with the trim note marking the cut.
-      def truncate(lines, budget)
-        kept = []
-        lines.each do |line|
-          next kept << line if line.strip.empty?
-          break if budget <= 0
-
-          budget -= 1
-          kept << line
-        end
-        # A block cut open renders the note and everything after it as code,
-        # so an unclosed fence goes whole; its `#` lines were never headings.
-        open_at = nil
-        kept.each_with_index { |line, i| open_at = open_at.nil? ? i : nil if fence?(line) }
-        kept = kept[0...open_at] if open_at
-        # A heading whose body was cut claims content that is not there, so it goes too,
-        # nested headings and separators included.
-        kept.pop while kept.any? && (kept.last.strip.empty? || heading?(kept.last))
-        kept << "" if kept.any?
-        kept << trim_note
-      end
-
-      def heading?(line)
-        line.lstrip.start_with?("#")
-      end
-
-      def fence?(line)
-        line.lstrip.start_with?("```", "~~~")
       end
 
       # Architecture / conventions section.
@@ -193,16 +121,12 @@ module RailsAiContext
           arch_labels = arch_labels_hash
           pattern_labels = pattern_labels_hash
           Payload.architecture(context).each { |p| lines << "- #{arch_labels[p] || p}" }
-          Payload.patterns(context).first(8).each { |p| lines << "- #{pattern_labels[p] || p}" }
+          Payload.patterns(context).first(Budget.cap(:patterns)).each { |p| lines << "- #{pattern_labels[p] || p}" }
         end
 
         # The scan decides, so services under a configured extra path show wherever
         # the conventions walk looked.
-        names = []
-        services = service_names
-        names << "**Services:** #{services.join(', ')}" if services.any?
-        jobs = job_names
-        names << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
+        names = [ names_line(service_names, "**Services:** "), names_line(job_names, "**Jobs:** ") ].compact
 
         # The blank line sets the names apart from a pattern list. With no list
         # above them - the static tier reads no conventions - it left the

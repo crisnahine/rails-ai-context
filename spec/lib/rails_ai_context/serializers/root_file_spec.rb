@@ -83,7 +83,7 @@ RSpec.describe RailsAiContext::Serializers::RootFile do
       expect(unknown).not_to include("4 total,")
     end
 
-    it "includes key models capped at 15" do
+    it "includes key models capped at the budget's count" do
       models = 30.times.each_with_object({}) do |i, h|
         h["Model#{i.to_s.rjust(2, '0')}"] = { associations: [], validations: [] }
       end
@@ -95,7 +95,7 @@ RSpec.describe RailsAiContext::Serializers::RootFile do
       }
 
       output = described_class.new(context).call
-      expect(output).to include("...15 more")
+      expect(output).to include("...#{30 - RailsAiContext::Serializers::Budget.cap(:key_models)} more")
     end
 
     # The file said "Key models" and listed the alphabetical first 15, while

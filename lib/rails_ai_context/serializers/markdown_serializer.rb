@@ -21,14 +21,14 @@ module RailsAiContext
       ].freeze
 
       # @return [String] full markdown document
+      # The data sections are what the full budget cuts, from the last one up;
+      # the header, the rules, the guide and the footer stay whole.
       def call
-        sections = [ header, app_overview ]
-        SECTIONS.each { |key| sections << send("#{key}_section") if Payload.section(context, key) }
-        sections << warnings_section if context[:_warnings]&.any?
-        sections << rules_section
-        sections << render_tools_guide_compact.join("\n").rstrip
-        sections << footer
-        sections.compact.join("\n\n")
+        data = SECTIONS.filter_map { |key| send("#{key}_section") if Payload.section(context, key) }
+        keep = [ (warnings_section if context[:_warnings]&.any?), rules_section, render_tools_guide_compact.join("\n").rstrip, footer ].compact
+        lines = ->(sections) { sections.join("\n\n").split("\n", -1) }
+        Budget.fit(head: lines.([ header, app_overview, "" ]), body: lines.(data), keep: [ "", *lines.(keep) ], kind: :full,
+                   note: "_Trimmed to fit. Use #{tools_noun} for the rest._", reserve: SectionMarkerWriter::MARKER_BYTES)
       end
 
       private
@@ -89,7 +89,7 @@ module RailsAiContext
         lines << "_#{note}._" if note
         tables&.each do |name, data|
           lines << "### #{escape_markdown(name)}"
-          lines << ([ (data[:columns] || []).map { |c| column_text(c) }.join(", ") ] + table_key_lines(data)).join("\n")
+          lines << ([ Budget.list((data[:columns] || []).map { |c| column_text(c) }) ] + table_key_lines(data)).join("\n")
         end
         lines.join("\n\n")
       end
@@ -115,8 +115,8 @@ module RailsAiContext
           "#{Introspectors::SchemaConventions.key_text(fk[:column])} → #{fk[:to_table]}"
         end
         lines = []
-        lines << "- Indexes: #{indexes.join('; ')}" if indexes.any?
-        lines << "- Foreign keys: #{foreign_keys.join('; ')}" if foreign_keys.any?
+        lines << Budget.list(indexes, lead: "- Indexes: ") if indexes.any?
+        lines << Budget.list(foreign_keys, lead: "- Foreign keys: ") if foreign_keys.any?
         lines
       end
 
@@ -124,49 +124,7 @@ module RailsAiContext
         models = Payload.models(context)
         return if models.empty?
 
-        lines = [ "## Models (#{models.size})" ]
-        models.each do |name, data|
-          lines << "### #{escape_markdown(name)}"
-          if (unread = SectionFacts.unread_marker(data))
-            lines << "- #{unread}"
-            next
-          end
-
-          assocs = SectionFacts.associations_list(data).join(", ")
-          note = SectionFacts.table_note(Payload.section(context, :schema), data)
-          if note || data[:table_name]
-            lines << "- Table: #{note || "`#{data[:table_name]}`"}"
-          end
-          concerns = ConcernMembership.app_owned(data[:concerns], project_root)
-          lines << "- Concerns: #{concerns.join(', ')}" if concerns.any?
-          lines << "- Associations: #{assocs}" if assocs.present?
-          if data[:validations]&.any?
-            vals = data[:validations].map { |v| [ v[:kind], SectionFacts.validation_target(v) ].reject(&:empty?).join(" ") }.join("; ")
-            lines << "- Validations: #{vals}"
-          end
-          lines.concat(model_detail_lines(data))
-        end
-        lines.join("\n")
-      end
-
-      # What the compact files and the models rule file already state, which
-      # the "everything" file left out.
-      def model_detail_lines(data)
-        lines = []
-        scopes = scope_names(Array(data[:scopes]))
-        lines << "- Scopes: #{scopes.join(', ')}" if scopes.any?
-        callbacks = data[:callbacks].is_a?(Hash) ? data[:callbacks] : {}
-        if callbacks.any?
-          lines << "- Callbacks: #{callbacks.map { |kind, names| "#{kind} #{Array(names).map { |n| callback_name(n) }.join(', ')}" }.join('; ')}"
-        end
-        enums = data[:enums].is_a?(Hash) ? data[:enums] : Array(data[:enums]).to_h { |name| [ name, nil ] }
-        lines << "- Enums: #{enums.map { |name, values| values ? "#{name} (#{SectionFacts.enum_values(values)})" : name }.join('; ')}" if enums.any?
-        Array(data[:constants]).each { |c| lines << "- #{c[:name]}: #{Array(c[:values]).join(', ')}" if c.is_a?(Hash) }
-        lines
-      end
-
-      def callback_name(callback)
-        callback.is_a?(Hash) ? (callback[:method] || callback[:name]).to_s : callback.to_s
+        [ "## Models (#{models.size})", *model_rows(:full) ].join("\n")
       end
 
       def routes_section

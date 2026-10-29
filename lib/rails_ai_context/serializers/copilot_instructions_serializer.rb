@@ -24,7 +24,7 @@ module RailsAiContext
         # Code review reads only copilot-instructions.md.
         "rails-mcp-tools.instructions.md" => {
           renderer: :render_mcp_tools_instructions, reason: :overview_reason, name: :tools_name,
-          scope: :tools_scope, exclude_agent: "code-review"
+          scope: :tools_scope, exclude_agent: "code-review", kind: :root
         }
       }.freeze
 
@@ -74,20 +74,7 @@ module RailsAiContext
         lines << MODELS_READING
         lines << ""
 
-        models.keys.sort.first(30).each do |name|
-          data = models[name]
-          if (unread = SectionFacts.unread_row("- #{name}", data))
-            lines << unread
-            next
-          end
-
-          assocs = (data[:associations] || []).size
-          lines << "- #{name} (#{count_phrase(assocs, "association")})"
-          extras = model_extras_line(data)
-          lines << extras if extras
-        end
-
-        lines << "- ...#{models.size - 30} more" if models.size > 30
+        lines.concat(model_rows(:listing))
         lines.join("\n")
       end
 

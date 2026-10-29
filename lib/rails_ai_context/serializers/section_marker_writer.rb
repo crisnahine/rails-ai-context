@@ -18,6 +18,7 @@ module RailsAiContext
 
       # Both markers are non-blank lines of the managed block, so the compact budget counts them.
       MARKER_LINES = 2
+      MARKER_BYTES = "#{BEGIN_MARKER}\n\n#{END_MARKER}\n".bytesize
 
       # The full-mode header carries the run's own clock, so a run that found
       # nothing new still put a diff in a repo that commits its context files.

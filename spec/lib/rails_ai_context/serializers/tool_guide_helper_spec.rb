@@ -129,7 +129,12 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
 
   describe "the tools #tools_detail_guidance names" do
     let(:taking_detail) { "Tools that take `detail`: " }
-    let(:named_line) { helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) } }
+    # The names wrap over lines of the width; read them back as one.
+    let(:named_line) do
+      lines = helper.tools_detail_guidance
+      start = lines.index { |l| l.start_with?(taking_detail) }
+      lines[start..].take_while { |l| !l.empty? }.join(" ")
+    end
 
     it "names the served tools that take detail and none that do not" do
       expect(named_line).to include("`rails_onboard`", "`rails_get_schema`")
@@ -162,7 +167,8 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(named_line).to include("`rails_get_config`")
 
       RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_api rails_get_env]
-      line = helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
+      lines = helper.tools_detail_guidance
+      line = lines[lines.index { |l| l.start_with?(taking_detail) }..].take_while { |l| !l.empty? }.join(" ")
       expect(line).to include("`rails_onboard`")
       expect(line).not_to include("rails_get_config")
     ensure

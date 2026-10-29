@@ -302,7 +302,7 @@ module RailsAiContext
 
         qualifier = locales_from_files?(i18n_data) ? " from locale files" : ""
         "- I18n: #{CountPhrase.call(locales.size, "locale")}#{qualifier} " \
-          "(#{locales.first(5).join(', ')})#{unread_locale_clause(i18n_data)}"
+          "(#{locales.first(Budget.cap(:locales)).join(', ')})#{unread_locale_clause(i18n_data)}"
       end
 
       # Counts dirs, not files: "N more" beside a locale count reads as N more locales.

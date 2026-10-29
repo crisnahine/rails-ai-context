@@ -54,7 +54,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       described_class.new(serializer_context(models: models)).call(dir)
       content = File.read(File.join(dir, ".claude", "rules", "rails-models.md"))
 
-      expect(content).to include("# ActiveRecord Models (31)", "- Post29 (table: post29s)")
+      expect(content).to include("# ActiveRecord Models (31)", "- **Post29** (table: post29s)")
       expect(content).not_to include("- Post30")
       expect(content.lines.last).to start_with("- ...1 more model")
       expect(content).to include("rails_get_model_details")
@@ -244,9 +244,9 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
         RailsAiContext::Serializers::OpencodeRulesSerializer.new(missing).call(dir)
         RailsAiContext::Serializers::CursorRulesSerializer.new(missing).call(dir)
 
-        expect(File.read(File.join(dir, ".claude", "rules", "rails-models.md"))).to include("- Tag (table `tags` not found)", "- Post (table: posts)")
+        expect(File.read(File.join(dir, ".claude", "rules", "rails-models.md"))).to include("- **Tag** (table `tags` not found)", "- **Post** (table: posts)")
         expect(File.read(File.join(dir, "app", "models", "AGENTS.md"))).to include("- **Tag** (table `tags` not found)")
-        expect(Dir[File.join(dir, ".cursor", "rules", "*")].map { |f| File.read(f) }.join).to include("table: `tags` not found")
+        expect(Dir[File.join(dir, ".cursor", "rules", "*")].map { |f| File.read(f) }.join).to include("- **Tag** (table `tags` not found)")
       end
       expect(RailsAiContext::Serializers::MarkdownSerializer.new(missing).call).to include("- Table: `tags` not found")
     end

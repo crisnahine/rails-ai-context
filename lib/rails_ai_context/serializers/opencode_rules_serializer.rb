@@ -31,7 +31,9 @@ module RailsAiContext
           # A directory the app does not have is reported, not dropped, and
           # nothing renders for it so the directory is never created.
           if Dir.exist?(File.dirname(filepath))
-            RuleFile.new(filepath, send(rule[:renderer]), rule[:reason])
+            content = send(rule[:renderer])
+            content &&= Budget.fit(head: [], body: content.split("\n", -1), keep: [], kind: :rule, note: rule_trim_note)
+            RuleFile.new(filepath, content, rule[:reason])
           else
             RuleFile.new(filepath, nil, missing_directory_reason(File.dirname(relative), output_dir))
           end
@@ -65,26 +67,7 @@ module RailsAiContext
           lines.insert(-2, "> #{notice}")
         end
 
-        models.keys.sort.first(30).each do |name|
-          data = models[name]
-          if (unread = SectionFacts.unread_row("- **#{name}**", data))
-            lines << unread
-            next
-          end
-
-          assocs = SectionFacts.associations_list(data).join(", ")
-          vals = (data[:validations] || []).size
-          note = SectionFacts.table_note(Payload.section(context, :schema), data)
-          line = "- **#{name}**"
-          line += note ? " (table #{note})" : (" (table: #{data[:table_name]})" if data[:table_name]).to_s
-          line += " - #{assocs}" unless assocs.empty?
-          line += " [#{vals}v]" if vals > 0
-          lines << line
-          extras = model_extras_line(data)
-          lines << extras if extras
-        end
-
-        lines << "- _...#{models.size - 30} more_" if models.size > 30
+        lines.concat(model_rows(:listing))
         lines.concat(tool_pointers(
           [ "rails_get_model_details", 'model:"Name"', "model=Name", "for associations, validations, scopes, enums." ],
           [ "rails_get_view", 'controller:"name"', "controller=name", "for view templates." ],
@@ -121,15 +104,10 @@ module RailsAiContext
         before_actions = detect_before_actions
         lines << "**Global before_actions:** #{before_actions.join(', ')}" << "" if before_actions.any?
 
-        lines.concat(render_compact_controllers_list(app_controllers, limit: 25, with_actions: true))
+        lines.concat(render_compact_controllers_list(app_controllers, with_actions: true))
 
-        # List service objects
-        services = service_names
-        lines << "" << "**Services:** #{services.join(', ')}" if services.any?
-
-        # List jobs
-        jobs = job_names
-        lines << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
+        names = [ names_line(service_names, "**Services:** "), names_line(job_names, "**Jobs:** ") ].compact
+        lines.push("", *names) if names.any?
 
         lines.concat(tool_pointers(
           [ "rails_get_controllers", 'controller:"Name", action:"index"', "controller=Name action=index", "for one action's source code." ],

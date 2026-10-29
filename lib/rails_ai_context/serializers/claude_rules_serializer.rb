@@ -14,14 +14,11 @@ module RailsAiContext
         "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump", scope: :schema_scope },
         "rails-models.md" => { renderer: :render_models_reference, reason: "no models",
                                scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
-        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: :overview_reason,
+        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: :overview_reason, kind: :root,
                                   scope: RuleScope.always("Rails tools guide") },
         "rails-components.md" => { renderer: :render_components_reference, reason: "no view components",
                                    scope: RuleScope.paths("app/components/**/*.rb", "app/views/components/**", description: "Components") }
       }.freeze
-
-      # Tables per database, or models, a rules file lists; the tools have the rest.
-      ROWS_SHOWN = 30
 
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
@@ -124,7 +121,7 @@ module RailsAiContext
         # Get enum values from models introspection if available
         models = Payload.models(context)
 
-        tables.keys.sort.first(ROWS_SHOWN).each do |name|
+        tables.keys.sort.first(Budget.cap(:listed_rows)).each do |name|
           data = tables[name]
           columns = data[:columns] || []
           col_count = columns.size
@@ -155,11 +152,9 @@ module RailsAiContext
             end
             entry
           end
-          col_str = col_sample.any? ? " - #{col_sample.join(', ')}" : ""
 
           # Foreign keys
           fks = (data[:foreign_keys] || []).map { |f| "#{Introspectors::SchemaConventions.key_text(f[:column])}→#{f[:to_table]}" }
-          fk_str = fks.any? ? " | FK: #{fks.join(', ')}" : ""
 
           # Key indexes (unique or composite)
           idxs = (data[:indexes] || []).select { |i| i[:unique] || Array(i[:columns]).size > 1 }
@@ -167,22 +162,25 @@ module RailsAiContext
               where = Introspectors::SchemaConventions.where_clause(i[:where])
               i[:unique] ? "#{Array(i[:columns]).join('+')}(unique#{where})" : "#{Array(i[:columns]).join('+')}#{where}"
             end
-          idx_str = idxs.any? ? " | Idx: #{idxs.join(', ')}" : ""
 
-          lines << "- **#{name}** (#{count_phrase(col_count, 'col')})#{col_str}#{fk_str}#{idx_str}"
+          # A line each, so a wide table costs lines of the width, not one line of kilobytes.
+          lead = "- **#{name}** (#{count_phrase(col_count, 'col')})"
+          lines << (col_sample.any? ? Budget.list(col_sample, lead: "#{lead} - ") : lead)
+          lines << Budget.list(fks, lead: "  FK: ") if fks.any?
+          lines << Budget.list(idxs, lead: "  Idx: ") if idxs.any?
 
           # Include enum values if model has them
           model_data = table_model(models, name, database, schema)
           if model_data.is_a?(Hash) && model_data[:enums]&.any?
             model_data[:enums].each do |attr, values|
-              lines << "  #{attr}: #{SectionFacts.enum_values(values)}"
+              lines << Budget.list(SectionFacts.enum_values(values).split(", "), lead: "  #{attr}: ")
             end
           end
         end
 
-        if tables.size > ROWS_SHOWN
+        if tables.size > Budget.cap(:listed_rows)
           use = " (use #{tool_named("rails_get_schema")})" if served?("rails_get_schema")
-          lines << "- ...#{count_phrase(tables.size - ROWS_SHOWN, "more table")}#{use}"
+          lines << "- ...#{count_phrase(tables.size - Budget.cap(:listed_rows), "more table")}#{use}"
         end
 
         lines
@@ -216,59 +214,7 @@ module RailsAiContext
         end
         lines << ""
 
-        models.keys.sort.first(ROWS_SHOWN).each do |name|
-          data = models[name]
-          if (unread = SectionFacts.unread_row("- #{name}", data))
-            lines << unread
-            next
-          end
-
-          assocs = (data[:associations] || []).size
-          vals = (data[:validations] || []).size
-          table = data[:table_name]
-          note = SectionFacts.table_note(Payload.section(context, :schema), data)
-          line = "- #{name}"
-          line += note ? " (table #{note})" : (" (table: #{table})" if table).to_s
-          line += " - #{count_phrase(assocs, "assoc")}, #{count_phrase(vals, "validation")}"
-          lines << line
-
-          # The rules file names only the concerns the app itself defines; a
-          # gem capability module is the gem's story, not a file to read here.
-          concerns = ConcernMembership.app_owned(data[:concerns], project_root)
-          lines << "  concerns: #{concerns.join(', ')}" if concerns.any?
-
-          # Include scopes so agents know available query methods
-          scopes = data[:scopes] || []
-          scope_names = scope_names(scopes)
-          lines << "  scopes: #{scope_names.join(', ')}" if scopes.any?
-
-          # Instance methods - filter Devise/framework internals that add noise
-          devise_noise = %w[after_remembered apply_to_attribute_or_variable clear_reset_password_token
-                            clear_reset_password_token? current_password devise_modules devise_modules?
-                            devise_respond_to_and_will_save_change_to_attribute?]
-          methods = (data[:instance_methods] || [])
-            .reject { |m| m.end_with?("=") || devise_noise.include?(m) }
-            .first(20)
-          lines << "  methods: #{methods.join(', ')}" if methods.any?
-
-          # Include constants (e.g. STATUSES, MODES) so agents know valid values
-          constants = data[:constants] || []
-          constants.each do |c|
-            lines << "  #{c[:name]}: #{c[:values].join(', ')}"
-          end
-
-          # Include enums so agents know valid values
-          enums = data[:enums] || {}
-          enums.each do |attr, values|
-            lines << "  #{attr}: #{SectionFacts.enum_values(values)}"
-          end
-        end
-
-        if models.size > ROWS_SHOWN
-          use = " (use #{tool_named("rails_get_model_details")})" if served?("rails_get_model_details")
-          lines << "- ...#{count_phrase(models.size - ROWS_SHOWN, "more model")}#{use}"
-        end
-
+        lines.concat(model_rows(:listing))
         lines.join("\n")
       end
 

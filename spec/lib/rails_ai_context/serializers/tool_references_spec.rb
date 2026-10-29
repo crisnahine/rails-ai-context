@@ -122,7 +122,7 @@ RSpec.describe "the tools every generated file names" do
       table = generated_files[".claude/rules/rails-mcp-tools.md"]
 
       expect(table).to include("### All #{served_names.size} Tools")
-      expect(table).to include("| `rails_get_widgets` | `rails 'ai:tool[widgets]'` | Lists the app's widgets with their owners. |")
+      expect(table).to include("| `rails_get_widgets` | Lists the app's widgets with their owners. |")
     end
   end
 

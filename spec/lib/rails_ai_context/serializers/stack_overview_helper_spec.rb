@@ -317,15 +317,17 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
     # files print beside a job list that has them, and KnowledgeBaseImporter
     # was dropped for its name alone.
     describe "#service_names" do
-      it "caps a long list the way the jobs line does" do
+      it "names every service, and the line caps them the way the jobs line does" do
         Dir.mktmpdir do |root|
           FileUtils.mkdir_p(File.join(root, "app", "services"))
           40.times { |i| File.write(File.join(root, "app", "services", "s#{i}_service.rb"), "class S#{i}Service; end\n") }
 
-          names = test_class.new({}).service_names(root)
+          helper = test_class.new({})
+          names = helper.service_names(root)
+          line = helper.names_line(names, "- Services: ")
 
-          expect(names.size).to eq(RailsAiContext::Serializers::StackOverviewHelper::NAMES_SHOWN + 1)
-          expect(names.last).to eq("...28 more")
+          expect(names.size).to eq(40)
+          expect(line).to end_with("...#{40 - RailsAiContext::Serializers::Budget.cap(:names)} more")
         end
       end
 
@@ -371,12 +373,11 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         expect(helper.job_names).to eq(%w[ImportJob CleanupWorker])
       end
 
-      it "caps a long list and says how many it left out" do
+      it "caps a long list in its line and says how many it left out" do
         workers = 40.times.map { |i| { name: "Worker#{i}" } }
         helper = test_class.new(jobs: { jobs: [], workers: workers })
 
-        expect(helper.job_names.size).to eq(RailsAiContext::Serializers::StackOverviewHelper::NAMES_SHOWN + 1)
-        expect(helper.job_names.last).to eq("...28 more")
+        expect(helper.names_line(helper.job_names, "- Jobs: ")).to end_with("...#{40 - RailsAiContext::Serializers::Budget.cap(:names)} more")
       end
 
       it "answers nothing when the section never ran" do

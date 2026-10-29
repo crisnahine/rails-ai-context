@@ -148,7 +148,7 @@ module RailsAiContext
         lines = [
           "### The detail parameter: start with summary",
           "",
-          "Tools that take `detail`: #{names.join(", ")}.",
+          *Budget.wrap(names, lead: "Tools that take `detail`: "),
           "",
           "Pass `#{param_text("detail", "summary")}` first. Use the right level:",
           "- **summary** - first call, orient yourself (table list, model names, route overview)",
@@ -324,9 +324,7 @@ module RailsAiContext
       end
 
       def tools_table
-        lines = [ "### All #{tool_count} Tools", "" ]
-        lines.concat(build_tools_table(include_mcp: tool_mode != :cli))
-        lines
+        [ "### All #{tool_count} Tools", "", *build_tools_table ]
       end
 
       # One row per tool the server serves, in the guide's order: a built-in
@@ -341,17 +339,18 @@ module RailsAiContext
         builtin.sort_by { |_tool, row| row.order } + custom
       end
 
-      def build_tools_table(include_mcp:)
-        # For CLI-only tables, `match_type=any` uses `=` (not `:`), so we tweak description.
+      # One row per tool, in the one form the tool mode uses.
+      def build_tools_table
         rows = tool_rows.map do |tool, row|
-          cli = cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name), row.cli_args)
-          if include_mcp
-            "| `#{row.mcp}` | `#{cli}` | #{row.summary} |"
-          else
+          if tool_mode == :cli
+            # A command passes `match_type=any`, where a description shows the MCP form.
+            cli = cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name), row.cli_args)
             "| `#{cli}` | #{row.summary.gsub('match_type:"any"', "match_type=any")} |"
+          else
+            "| `#{row.mcp}` | #{row.summary} |"
           end
         end
-        header = include_mcp ? [ "| MCP | CLI | What it does |", "|-----|-----|-------------|" ] : [ "| CLI | What it does |", "|-----|-------------|" ]
+        header = tool_mode == :cli ? [ "| CLI | What it does |", "|-----|-------------|" ] : [ "| MCP | What it does |", "|-----|-------------|" ]
         header + rows
       end
 
