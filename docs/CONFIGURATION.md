@@ -87,11 +87,11 @@ empty list wrote every tool's files.
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `preset` | Symbol | `:full` | `:full` (40 introspectors) or `:standard` (17 introspectors) |
-| `context_mode` | Symbol | `:compact` | `:compact` (context files capped at ~150 lines) or `:full` (no line cap). Any other value is refused, and so is any other `CONTEXT_MODE` on a rake task |
+| `context_mode` | Symbol | `:compact` | `:compact` (the root file within `claude_max_lines` lines and 12,000 bytes) or `:full` (no line cap, all introspection data within 24,000 bytes). Any other value is refused, and so is any other `CONTEXT_MODE` on a rake task |
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
-| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
+| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md or copilot-instructions.md, and the overview and tools rules are written in their place (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule verification protocol in generated context files |
-| `claude_max_lines` | Integer | `150` | Budget for the non-blank lines of a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, the data sections (Stack, Key models, Gems, Architecture) are cut first, down to none; the title and the Commands, Warnings, Rules and Tools sections are never cut, so they set the smallest file a budget can give (about 110 lines with the anti-hallucination protocol). Must be positive |
+| `claude_max_lines` | Integer | `150` | Budget for the non-blank lines of the compact root file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included, beside its 12,000 bytes. Over budget, the data sections (Stack, Key models, Gems, Architecture) are cut from the bottom, down to none; the title and the Commands, Warnings, Rules and Tools sections are never cut, so they set the smallest file a budget can give (about 70 lines with the anti-hallucination protocol). Must be positive |
 
 ### MCP Server
 
@@ -296,10 +296,12 @@ Lightweight subset for faster generation:
 | AI Tool | Root File | Split Rules | MCP Config |
 |:--------|:----------|:------------|:-----------|
 | Claude Code | `CLAUDE.md` | `.claude/rules/*.md` | `.mcp.json` |
-| Cursor | `.cursorrules` (legacy fallback) | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
+| Cursor | `AGENTS.md` | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
 | GitHub Copilot | `.github/copilot-instructions.md` | `.github/instructions/*.instructions.md` | `.vscode/mcp.json` |
 | OpenCode | `AGENTS.md` | `app/models/AGENTS.md`, `app/controllers/AGENTS.md` | `opencode.json` |
 | Codex CLI | (shares `AGENTS.md`) | (shares OpenCode rules) | `.codex/config.toml` |
+
+The root content is written once, into a file every chosen tool reads: `AGENTS.md` when Cursor, OpenCode or Codex CLI is chosen, with `CLAUDE.md` holding only `@AGENTS.md`, and Copilot's identical copy beside it. With `generate_root_files` off, the Claude Code, Cursor and Copilot rules carry the overview and the tools guide instead. See [Generated Files](GUIDE.md#generated-files).
 
 ---
 

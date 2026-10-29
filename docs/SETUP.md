@@ -61,12 +61,12 @@ rails-ai-context init --tools claude --defaults                     # standalone
 
 This creates:
 - `.mcp.json` - MCP config, read when a session starts in the folder; approve the server once
-- `CLAUDE.md` - Root context file
+- `CLAUDE.md` - Root context file. With Cursor, OpenCode or Codex CLI chosen too, it holds only `@AGENTS.md`, an import Claude Code expands at launch, and `AGENTS.md` carries the content
 - `.claude/rules/rails-schema.md` - Schema rules (loaded when editing a schema dump or a migration of any of the app's databases)
 - `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
-- `.claude/rules/rails-context.md` - General context rules (always loaded)
-- `.claude/rules/rails-mcp-tools.md` - Tool reference: detail levels and the table of every tool (always loaded; the protocol, workflows and rules are in CLAUDE.md, so they are not loaded twice, and here only when `generate_root_files` is off)
 - `.claude/rules/rails-components.md` - Component rules (loaded when editing `app/components/` or `app/views/components/`, written only when the app has view components)
+- `.claude/rules/rails-context.md` - Project overview (always loaded), written only when `generate_root_files` is off, since the root file states it otherwise
+- `.claude/rules/rails-mcp-tools.md` - Tools guide: the protocol, workflows, rules, detail levels and the table of every tool (always loaded), written only when `generate_root_files` is off
 
 Keeping your own `CLAUDE.md`? Add `--mcp-only` and only `.mcp.json` is
 written; every context file is left alone. See
@@ -95,7 +95,7 @@ On Windows the command is `cmd` and `"/c"` goes ahead of the args (`["/c", "bund
 
 The repository is also a Claude Code plugin marketplace. The plugin brings the
 MCP server and, at the start of each session in a Rails app, the six rules the
-context files open with. It writes no context files or MCP config, so it suits
+context files carry. It writes no context files or MCP config, so it suits
 a team that keeps its own `CLAUDE.md`; the install records it in
 `.claude/settings.json`.
 
@@ -348,11 +348,13 @@ rails-ai-context init --tools cursor --defaults                     # standalone
 
 This creates:
 - `.cursor/mcp.json` - MCP config; restart Cursor and turn the server on under MCP in Customize
-- `.cursor/rules/rails-project.mdc` - Project overview (Type 1: alwaysApply)
+- `AGENTS.md` - Root context file. Cursor reads `AGENTS.md` and `CLAUDE.md` as it reads its own always-on rules ([Cursor docs](https://cursor.com/help/customization/rules#how-does-claudemd-work-in-cursor)), on every surface
 - `.cursor/rules/rails-models.mdc` - Model rules (Type 2: glob `app/models/**/*.rb`)
 - `.cursor/rules/rails-controllers.mdc` - Controller rules (Type 2: glob `app/controllers/**/*.rb`)
-- `.cursor/rules/rails-mcp-tools.mdc` - Tool reference (Type 3: agent-requested)
-- `.cursorrules` - **legacy single-file fallback** at the project root. Cursor's chat agent doesn't always detect `.cursor/rules/*.mdc` (reported in v5.9.0 release QA); this file is parsed verbatim by every Cursor build and contains the same compact project context `CLAUDE.md` gets in the default compact mode. It stays compact when `context_mode` is `:full`.
+- `.cursor/rules/rails-project.mdc` - Project overview (Type 1: alwaysApply), written only when `generate_root_files` is off
+- `.cursor/rules/rails-mcp-tools.mdc` - Tools guide (Type 3: agent-requested), written only when `generate_root_files` is off
+
+`.cursorrules` is no longer written: Cursor calls it legacy, and reads the content from `AGENTS.md`. With root files on, a run takes out the block an earlier release wrote in `.cursorrules` and keeps your own lines; a file that held only the block is deleted.
 
 ### Manual MCP config
 
@@ -371,7 +373,7 @@ Create `.cursor/mcp.json`:
 
 ### Agent-requested tool loading
 
-The MCP tools rule uses `alwaysApply: false` with a descriptive `description:` field. Cursor's agent loads it when relevant rather than on every request:
+With `generate_root_files` off, the tools guide rule uses `alwaysApply: false` with a descriptive `description:` field. Cursor's agent loads it when relevant rather than on every request:
 
 ```markdown
 ---
@@ -393,11 +395,11 @@ rails-ai-context init --tools copilot --defaults                     # standalon
 
 This creates:
 - `.vscode/mcp.json` - MCP config (VS Code format), started in a trusted workspace
-- `.github/copilot-instructions.md` - Root instructions
+- `.github/copilot-instructions.md` - Root instructions. Where `AGENTS.md` or `CLAUDE.md` carries the root content too, this is an identical copy: github.com chat, Visual Studio, JetBrains, Xcode and code review read no other file ([GitHub docs](https://docs.github.com/en/copilot/reference/custom-instructions-support)), and Copilot CLI drops identical copies
 - `.github/instructions/rails-models.instructions.md` - Model rules
 - `.github/instructions/rails-controllers.instructions.md` - Controller rules
-- `.github/instructions/rails-context.instructions.md` - Context rules
-- `.github/instructions/rails-mcp-tools.instructions.md` - Tool reference: detail levels and the table of every tool (the protocol and workflows are in copilot-instructions.md, and here only when `generate_root_files` is off)
+- `.github/instructions/rails-context.instructions.md` - Project overview, written only when `generate_root_files` is off
+- `.github/instructions/rails-mcp-tools.instructions.md` - Tools guide: the protocol, workflows, rules, detail levels and the table of every tool, written only when `generate_root_files` is off
 
 ### Manual MCP config
 

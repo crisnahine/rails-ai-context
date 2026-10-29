@@ -65,7 +65,7 @@ Yes. Run `rails-ai-context init` in that folder. It asks once, gives each app it
 
 **Yes, commit these:**
 - `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json` - so teammates get the MCP server after approving it once in their AI tool
-- `CLAUDE.md`, `.claude/rules/`, `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`, `.github/instructions/`, `AGENTS.md` - so AI has context
+- `CLAUDE.md`, `.claude/rules/`, `.cursor/rules/`, `.github/copilot-instructions.md`, `.github/instructions/`, `AGENTS.md` - so AI has context
 - `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` - so config is shared
 
 **Don't commit:**
@@ -133,8 +133,8 @@ PostgreSQL, MySQL (with MariaDB) and SQLite. Each gets database-specific safety 
 
 ### What's `:compact` vs `:full` context mode?
 
-- **`:compact`** (default) - context files capped at ~150 lines. Optimized for AI context windows.
-- **`:full`** - no line cap. All introspection data included.
+- **`:compact`** (default) - the root file stays within 150 non-blank lines (`claude_max_lines`) and 12,000 bytes, and names the 10 most connected models. The tools answer the rest.
+- **`:full`** - no line cap. All introspection data, within 24,000 bytes, cut from the bottom when it does not fit.
 
 ### Can I use YAML config with the Gemfile approach?
 
@@ -142,7 +142,7 @@ Yes. The file is applied first and a `configure` block wins only the keys it ass
 
 ### What's `generate_root_files`?
 
-When `true` (default), generates the root files: CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md. Set to `false` to only generate split rules (.claude/rules/, .cursor/rules/, etc.). `.ai-context.json` is written either way.
+When `true` (default), generates the root files the chosen AI tools read: AGENTS.md, CLAUDE.md and copilot-instructions.md. Set to `false` to only generate split rules (.claude/rules/, .cursor/rules/, etc.), which then carry the project overview and the tools guide too. `.ai-context.json` is written either way.
 
 ---
 
@@ -155,10 +155,12 @@ Depends on your `ai_tools` config. For all tools:
 | AI Tool | Files |
 |:--------|:------|
 | Claude | CLAUDE.md, .claude/rules/*.md |
-| Cursor | .cursor/rules/*.mdc AND .cursorrules (legacy fallback for chat agent) |
+| Cursor | AGENTS.md, .cursor/rules/*.mdc |
 | Copilot | .github/copilot-instructions.md, .github/instructions/*.instructions.md |
 | OpenCode | AGENTS.md, app/models/AGENTS.md, app/controllers/AGENTS.md |
 | Codex | Shares AGENTS.md and OpenCode rules |
+
+The root content is written once, into a file every chosen tool reads. `AGENTS.md` carries it when Cursor, OpenCode or Codex is chosen, and `CLAUDE.md` then holds only `@AGENTS.md`, which Claude Code expands at launch. Copilot keeps an identical copy in `.github/copilot-instructions.md`. `.cursorrules` is no longer written, and a run with root files on takes out the block an earlier release wrote there and keeps your own lines. See [Generated Files](GUIDE.md#generated-files).
 
 ### How do I regenerate context files?
 
@@ -255,12 +257,14 @@ Check that your Rails app boots (`rails runner "puts 'ok'"`) and that schema/mod
 
 ### Context files are too large
 
-Use compact mode (default) or disable root files:
+Use compact mode (default), and lower `claude_max_lines` for a shorter root file:
 
 ```ruby
 config.context_mode = :compact
-config.generate_root_files = false
+config.claude_max_lines = 100
 ```
+
+Every file already has a byte budget ([Generated Files](GUIDE.md#generated-files)). Turning root files off does not shrink what Claude Code and Copilot load: the overview and the whole tools guide move into rules files they load in every session.
 
 ---
 

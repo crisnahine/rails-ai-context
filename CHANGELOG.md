@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The root content is written once, into a file every chosen AI tool
+  reads.** Cursor reads `CLAUDE.md` and `AGENTS.md` as it reads its own
+  always-on rules, and VS Code Copilot attaches both beside
+  `copilot-instructions.md`, so a copy for each tool loaded the same text two
+  or three times in one session. `AGENTS.md` now carries it. `CLAUDE.md` holds
+  only `@AGENTS.md`, which Claude Code expands at launch, unless Claude Code is
+  the only tool chosen. `.github/copilot-instructions.md` stays a whole copy,
+  byte for byte the same as `AGENTS.md`, because most Copilot surfaces read no
+  other file. On a 149-model app the files Claude Code loads at session start
+  went from about 13,400 tokens to about 5,000.
+- **`.cursorrules` is no longer written.** Cursor calls it legacy. A run
+  takes out the block an earlier release wrote and keeps your own lines; a
+  file that held only the block is deleted. Picking Cursor writes `AGENTS.md`.
+- **The overview and tools rules are written only where no root file states
+  them,** that is with `generate_root_files = false`: `.claude/rules/rails-context.md`
+  and `rails-mcp-tools.md`, `.cursor/rules/rails-project.mdc` and
+  `rails-mcp-tools.mdc`, `.github/instructions/rails-context.instructions.md`
+  and `rails-mcp-tools.instructions.md`. A rules file an earlier run wrote and
+  this one does not is removed, and the run reports `Removed: <path>` or
+  `Removed the generated block from <path>`. `doctor` counts such a file as
+  out of date.
+- **Every context file has a byte budget.** The compact root file stays within
+  12,000 bytes as well as `claude_max_lines`, full mode within 24,000, a rules
+  file within 8,000. A list line is at most 240 characters and ends with
+  `...N more`; the tools answer the rest. These files share the agent's context
+  with your own instructions, and Codex reads at most 32 KiB of project docs in
+  all.
+- **The root file names its 10 most connected models,** each on one line, and
+  says that a list cut at `...N more` is whole in `rails_get_model_details`.
+- **The tools guide says each thing once and plainly.** Each example is in the
+  form the tool mode uses (MCP calls, or commands in CLI mode). There is one
+  Rules list, each rule with its reason, and no all-caps emphasis, which Claude
+  Code's docs say makes Claude over-apply a rule. The tool names are listed only
+  in CLI mode, since an MCP client lists its tools itself. The six rules of the
+  protocol keep their wording minus the capitals, in the plugin's `rules.md` too.
+- **Each rules file declares one scope** (always, by paths, or on request),
+  which one adapter per AI tool writes as `paths:`, `globs:` and `alwaysApply`,
+  or `applyTo`.
+
+### Fixed
+
+- **On prism 1, an initializer that does not parse names the right line** for
+  an error that is not about a missing closer (an operator with nothing after
+  it named the `configure` line), and the `if` rather than its `elsif` for a
+  conditional left open.
+
 ## [5.38.1] - 2026-10-29
 
 ### Fixed

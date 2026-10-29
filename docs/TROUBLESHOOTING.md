@@ -252,18 +252,16 @@ If one marker goes missing, or the file holds a second pair, nothing says where 
 
 ### "Generated files are too large"
 
-Use compact mode (default):
+Use compact mode (default), and lower `claude_max_lines` for a shorter root file:
 
 ```ruby
 config.context_mode = :compact
-config.claude_max_lines = 150
+config.claude_max_lines = 100
 ```
 
-Or disable root files and use only split rules:
+Every file already has a byte budget: 12,000 bytes for the compact root file, 24,000 in full mode, 8,000 for a rule file. A file over it loses data from the bottom, and the tools answer the rest. The root file goes no lower than about 70 lines, since its title, rules and tools guide stay whole.
 
-```ruby
-config.generate_root_files = false
-```
+Turning root files off (`config.generate_root_files = false`) does not shrink what Claude Code and Copilot load: the overview and the whole tools guide move into rules files they load in every session.
 
 ---
 

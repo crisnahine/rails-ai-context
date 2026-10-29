@@ -41,7 +41,7 @@ graph TD
         direction LR
         MCP["MCP Server\nstdio / HTTP\nResources\nVFS URIs"]
         CLI["CLI Runner\nRake / Thor\nSame 35 tools\nNo server needed"]
-        S["Serializers\n18 modules\nStatic files\nPer-AI-tool"]
+        S["Serializers\n20 modules\nStatic files\nPer-AI-tool"]
     end
 
     style app fill:#4a9eff,stroke:#2d7ad4,color:#fff
@@ -196,28 +196,30 @@ Result: controller and view tools automatically include relevant schema informat
 
 ### Serializers (`lib/rails_ai_context/serializers/`)
 
-18 modules that format introspection output for different AI tools:
+20 modules that format introspection output for different AI tools:
 
 | Serializer | Output |
 |:-----------|:-------|
-| `ClaudeSerializer` | `CLAUDE.md` |
+| `ContextFileSerializer` | Writes a run's files: the root files the `LoadPlan` picks, each AI tool's rules, and the JSON dump |
+| `LoadPlan` | Which root files the chosen AI tools get and what each holds: the root content, an `@AGENTS.md` import, or nothing, so the content is written once into a file every chosen tool reads (`AiTool#reads`) |
+| `RootFile` | The root context file, the same bytes at every path it lands at (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`): compact, or full through `MarkdownSerializer` |
 | `ClaudeRulesSerializer` | `.claude/rules/*.md` |
-| `CursorRulesSerializer` | `.cursor/rules/*.mdc` AND `.cursorrules` (legacy chat-agent fallback) |
-| `CopilotSerializer` | `.github/copilot-instructions.md` |
+| `CursorRulesSerializer` | `.cursor/rules/*.mdc`, and takes the block an earlier release wrote out of `.cursorrules` |
 | `CopilotInstructionsSerializer` | `.github/instructions/*.instructions.md` |
-| `OpencodeSerializer` | `AGENTS.md` (root) |
-| `OpencodeRulesSerializer` | `app/models/AGENTS.md`, `app/controllers/AGENTS.md` |
+| `OpencodeRulesSerializer` | `app/models/AGENTS.md`, `app/controllers/AGENTS.md` (OpenCode and Codex) |
 | `JsonSerializer` | `.ai-context.json` |
-| `MarkdownSerializer` | Base formatting |
-| `ContextFileSerializer` | Atomic file writes with section markers |
-| `CompactSerializerHelper` | Compact mode (≤150 lines) |
-| `StackOverviewHelper` | Stack overview sections, and the rule-file write path four serializers share |
-| `ToolGuideHelper` | MCP/CLI tool reference sections |
-| `TestCommandDetection` | Test framework detection |
+| `MarkdownSerializer` | The full-mode root file |
+| `CompactSerializerHelper` | The compact root file's sections |
+| `RuleScope` | When a rules file loads (every session, by path, or on request), written as each AI tool's frontmatter |
+| `Budget` | Every size rule: the bytes per kind of file, the 240-character list line, and how many of each list a file names |
+| `ModelSection` | The model list, rendered once at the density its file takes |
+| `StackSections` | The header, gems, architecture and global before_actions, each rendered once at the density its file takes |
+| `StackOverviewHelper` | Stack overview lines, the test command, and the rule-file write path four serializers share |
+| `ToolGuideHelper` | The tools guide, each example in the one form the tool mode uses |
+| `GuideExamples` | The model, controller and files the guide's examples name, the app's own where it has them |
 | `SectionFacts` | The facts every surface states about an app - auth, assets, associations, the filter chain, an unread entry's row, the static-tier notice - each rendered in one place |
-| `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
-| `ContextModeDispatch` | Picks full or compact rendering for a run |
-| `Base` | Holds the context hash a serializer renders |
+| `SectionMarkerWriter` | Writes a managed section into a file the user also owns, and takes one out |
+| `Base` | Holds the context hash a serializer renders, and the run's `LoadPlan` |
 
 ### CLI (`exe/rails-ai-context`, `lib/rails_ai_context/cli/`)
 

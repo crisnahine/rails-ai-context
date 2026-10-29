@@ -14,11 +14,17 @@ Overloaded. Always qualify it; never use "environment" bare in a tool name, an i
 
 ## AI tool
 
-The assistant a user points at their app: claude, cursor, copilot, opencode, codex. What the gem generates for one is its **context files** (`CLAUDE.md`, `.cursor/rules/*.mdc`, and so on).
+The assistant a user points at their app: claude, cursor, copilot, opencode, codex. What the gem generates for one is its **context files**: the root file it reads (`CLAUDE.md` for Claude Code, `AGENTS.md` for Cursor, OpenCode and Codex, `.github/copilot-instructions.md` for Copilot) and its rules (`.claude/rules/`, `.cursor/rules/`, `.github/instructions/`, and `app/models/AGENTS.md` and `app/controllers/AGENTS.md` for OpenCode and Codex).
 
 Avoid "format" for either sense - claude is not a file format, and the word collides with real formatting elsewhere in the code. The public config key `ai_tools` already uses the canonical term.
 
-`Install::AiTool` is the one table of what each means: name, context files, MCP config shape, legacy leftovers. `Install::SelectionRecord` owns which ones the user picked - written to YAML always, and to the initializer line when the caller asks for it and the line is in a shape it can rewrite (an ordinary `ai:context` run refreshes the YAML only), read initializer-first because that is the file a user hand-edits.
+`Install::AiTool` is the one table of what each means: name, context files, the root files it reads (`reads`), MCP config shape, legacy leftovers, and the files an earlier release wrote a block into and this one no longer writes (`retired_paths`: `.cursorrules`). `Install::SelectionRecord` owns which ones the user picked - written to YAML always, and to the initializer line when the caller asks for it and the line is in a shape it can rewrite (an ordinary `ai:context` run refreshes the YAML only), read initializer-first because that is the file a user hand-edits.
+
+**Load plan** - which root files the chosen AI tools get and what each holds, so the root content is written once into a file every chosen tool reads. `AGENTS.md` carries it when Cursor, OpenCode or Codex is chosen, and `CLAUDE.md` then holds only `@AGENTS.md`, an import Claude Code expands at launch; without those three, `CLAUDE.md` carries it. Copilot keeps an identical copy in `.github/copilot-instructions.md`, the only file most of its surfaces read. `Serializers::LoadPlan` decides from each tool's `reads`, and a rules file leaves out what a root file its tool reads already says.
+
+**Rule scope** - when an AI tool loads a rules file: every session, when the agent touches a file one of its paths matches, or when the agent picks it by its description. Each rules file declares one, and `Serializers::RuleScope` writes it as that tool's frontmatter: `paths:` for Claude Code, `alwaysApply` with `globs:` or a description for Cursor, `applyTo` for Copilot. OpenCode needs none, since it loads a nested `AGENTS.md` by its folder.
+
+**Context budget** - how much a context file may hold: 12,000 bytes and `claude_max_lines` non-blank lines for the compact root file, 24,000 bytes in full mode, 8,000 for a rule file, and 240 characters for a list line, which names what fits and counts the rest. It is low on purpose: these files share the agent's context with the user's own instructions, and the tools answer in full. `Serializers::Budget` holds every number. A root file over it loses data sections from the bottom, never its header, rules or tools guide.
 
 ## Path
 
@@ -243,7 +249,7 @@ What an install writes, one of three. Qualify it; "mode" alone names only one of
 
 `tool_mode` is one axis (mcp or cli) and `context_files` the other, so the MCP-only setup is the mcp tool mode without context files, not a third tool mode. `Install::Program::Setup` holds the pair.
 
-**Managed block** - the part of a file the user also writes in (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`) that the gem owns: from its BEGIN marker to its END marker. A file with one BEGIN before one END has one; a file with neither has none; any other layout is unpaired, and every writer and remover leaves it as it is and names it, since nothing says where the block ends. `ManagedBlock` holds the rule.
+**Managed block** - the part of a file the user also writes in (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`) that the gem owns: from its BEGIN marker to its END marker. A file with one BEGIN before one END has one; a file with neither has none; any other layout is unpaired, and every writer and remover leaves it as it is and names it, since nothing says where the block ends. `ManagedBlock` holds the rule.
 
 **Install order** - every install entry (`init`, `init` in a workspace, the generator, the first `rails ai:context`) runs the same steps in one order, `Install::Program.run`: every question first, then the removals the answers asked for, the record of the answers, the MCP configs, `.gitignore`, and the context files. An entry adds only what is its own (booting the app, writing the initializer, the pre-commit hook, whose question is asked with the others) at its place in that order, and its closing words.
 

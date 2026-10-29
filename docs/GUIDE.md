@@ -97,7 +97,7 @@ No Gemfile entry, no initializer, no files in your project besides config and co
 
    ```
    1. Claude Code      -> CLAUDE.md + .claude/rules/
-   2. Cursor           -> .cursor/rules/ + .cursorrules (legacy fallback)
+   2. Cursor           -> AGENTS.md + .cursor/rules/
    3. GitHub Copilot   -> .github/copilot-instructions.md + .github/instructions/
    4. OpenCode         -> AGENTS.md
    5. Codex CLI        -> AGENTS.md + .codex/config.toml
@@ -120,7 +120,7 @@ No Gemfile entry, no initializer, no files in your project besides config and co
 6. **Writes `.rails-ai-context.yml`** with `ai_tools`, `tool_mode` and `context_files`. Only a key whose value changed is rewritten, where it stands; your comments and other keys are kept, and a run that changes no value leaves the file as it was.
 7. **Adds lines to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3) and `.codex/config.toml` (always, because it holds this machine's Ruby paths). A line that is already there is not added again.
 8. **Asks about a pre-commit hook:** `Install a pre-commit hook that checks staged Ruby, ERB and JavaScript files for syntax errors? (y/N)`. Only `y` installs it. The hook runs `bundle exec rails-ai-context tool validate` (`rails-ai-context tool validate` in a standalone install) on the staged `.rb`, `.erb`, `.js`, `.mjs` and `.cjs` files and stops a commit whose files do not parse (JavaScript is parsed by `node`, as [`rails_validate`](TOOLS.md#rails_validate) describes); the Rails-reference checks (`level=rails`) are left to the tool, as Brakeman would slow every commit. An app that cannot boot (an initializer that needs a variable the shell lacks, say) is still checked, from its source, and the hook shows why it did not boot; it shows whatever else the check prints to stderr too, so a check that cannot run says why. Every staged name is read whole, one with characters outside ASCII included; a name holding a comma, which the files list cannot carry, is named and left unchecked. It goes where git runs hooks (`git rev-parse --git-path hooks`), so an app checked out as a submodule, an app inside a monorepo and a repo with `core.hooksPath` set all get it where git will run it. The hook names the apps it covers and validates each one's staged files (deleted ones aside) from inside that app; installing in a second app of the same monorepo adds it to the hook, unless the hook was changed by hand, which it says, and for an app below the top of the repository the question names the repository. A hook an earlier version wrote, and nobody changed since, is brought up to date without asking again: the oldest handed validate the files a commit deletes too, and the commit failed on them, and later ones ran `rails 'ai:tool[validate]'`, which has to boot the app, with its errors thrown away, so an app that could not boot failed every commit with no reason given. Any other hook that runs `rails-ai-context` - one changed by hand, or a team's own that calls it among other checks - is left as it is, with a message. No hook is offered for an app the repository does not track yet (an app under a dotfiles repository at `$HOME`, say), nor into a `core.hooksPath` outside the repository, which every repository using it shares; both say why. No question is asked outside a git repository or when the hook already covers the app. When another `pre-commit` hook exists there it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
-9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask; under `--prune` it deletes them without asking.
+9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask; under `--prune` it deletes them without asking. Files an earlier run wrote that this run no longer writes go without a question, and the output names them: the block in `.cursorrules`, and an overview or tools rule the root file states ([Generated Files](#generated-files)).
 10. **Prints a summary:** the files each selected tool got, the commands to run next, and, in the MCP setup, each tool's next step: the approval or trust step that tool asks for before it starts a project's MCP server (approve the server in Claude Code, turn it on in Cursor, trust the folder in VS Code and Codex CLI, restart OpenCode).
 
 Every question has a flag, so an AI tool or a script can run the install to the end with nobody at the keyboard (the [copy-paste prompts](PROMPTS.md) are built on them):
@@ -173,11 +173,18 @@ The gem has two context modes that control how much data goes into the generated
 rails ai:context
 ```
 
-- CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md ≤150 non-blank
-  lines (`claude_max_lines`). Over budget, the data sections are cut first; the
-  title and the Commands, Warnings, Rules and Tools sections are never cut, so a
-  budget smaller than they are (about 110 lines) leaves just them
-- Files contain a project overview + MCP tool reference
+- The root file (AGENTS.md, CLAUDE.md or copilot-instructions.md) stays within
+  12,000 bytes and `claude_max_lines` (150) non-blank lines. Over budget, the
+  data sections are cut from the bottom; the title and the Commands, Warnings,
+  Rules and Tools sections are never cut, so a budget smaller than they are
+  (about 70 lines) leaves just them
+- It names the 10 most connected models. A list names what fits a 240-character
+  line and ends with "...N more"; the tools answer the rest
+- It holds a project overview and the tools guide. The guide gives each example
+  in the one form the tool mode uses (an MCP call, or a command in `:cli` mode)
+  and has one Rules list with no ALL-CAPS emphasis, since Claude Code's docs say
+  piled-on emphasis makes Claude over-apply a rule. It lists the tool names only
+  in `:cli` mode: an MCP client lists the tools itself
 - AI uses MCP tools for detailed data on-demand
 - **Best for:** all apps, especially large ones (30+ models)
 
@@ -189,21 +196,23 @@ rails ai:context:full
 CONTEXT_MODE=full rails ai:context
 ```
 
-- Dumps everything into the root files CLAUDE.md, AGENTS.md and copilot-instructions.md: every table with its column types, defaults, indexes and foreign keys; every model with its associations, validations, scopes, callbacks, enum values and constants; the app's own routes (the framework's are counted, not listed); Stimulus controllers; and the rest of the introspection. The split rule files and Cursor's files are the same in both modes
-- Each root file ends with the same tools guide and anti-hallucination protocol the compact files carry, so OpenCode and Codex, which read AGENTS.md alone, get them too
+- Puts the whole introspection into the root file: every table with its column types, defaults, indexes and foreign keys; every model with its associations, validations, scopes, callbacks, enum values and constants; the app's own routes (the framework's are counted, not listed); Stimulus controllers; and the rest of the introspection. The rules files are the same in both modes
+- The file stays within 24,000 bytes. A large app's data sections are cut from the bottom, with a note that the tools answer the rest; the header, the rules, the tools guide and the last line are never cut
+- The root file ends with the same tools guide and anti-hallucination protocol the compact file carries, so OpenCode and Codex, which read AGENTS.md alone, get them too
 - A plain `rails ai:context` writes compact files again unless `config.context_mode` is `:full`, so each file's last line names the command that keeps full mode: `CONTEXT_MODE=full rails ai:context`, or for a standalone install `rails-ai-context context`, which reads `context_mode` from `.rails-ai-context.yml`
-- Can produce thousands of lines for large apps
-- **Best for:** small apps (<30 models) where the full dump fits in context
+- **Best for:** small apps (<30 models), whose full dump fits the budget
 
 ### Per-format with mode override
 
 ```bash
-# Full dump for Claude only, compact for everything else
+# Full dump in the root file Claude Code reads
 CONTEXT_MODE=full rails ai:context:claude
 
 # Full dump for Copilot only
 CONTEXT_MODE=full rails ai:context:copilot
 ```
+
+Where `CLAUDE.md` imports `AGENTS.md`, the first command writes the full dump into `AGENTS.md`, which Cursor, OpenCode and Codex read too.
 
 ### Set mode in configuration
 
@@ -220,26 +229,32 @@ end
 
 ## Generated Files
 
-`rails ai:context` generates **20 files** across all AI assistants:
+`rails ai:context` generates **19 files** across all AI assistants. No run writes all of them: the three root files are written while `generate_root_files` is on (the default), and the six overview and tools rules only when it is off, since the root file states them otherwise.
 
-A file whose section has nothing in it is not written. An app with no models gets no `.claude/rules/rails-models.md`, and every surface names the file and the reason so a deliberate omission is not mistaken for a failed run. `rails ai:context` and the installer print `➖  .claude/rules/rails-models.md (no models)`; the CLI and the watcher print `Not applicable: .claude/rules/rails-models.md (no models)`.
+The root content is written once, into a file every chosen AI tool reads. `AGENTS.md` carries it when Cursor, OpenCode or Codex is chosen: Cursor reads `AGENTS.md` and `CLAUDE.md` as it reads its own always-on rules ([Cursor](https://cursor.com/help/customization/rules#how-does-claudemd-work-in-cursor)). `CLAUDE.md` then holds only `@AGENTS.md`, an import Claude Code expands at launch ([Claude Code](https://code.claude.com/docs/en/memory#import-additional-files)); without those three, `CLAUDE.md` carries the content itself. `.github/copilot-instructions.md` gets an identical copy, since github.com chat, Visual Studio, JetBrains, Xcode and code review read no other file ([GitHub](https://docs.github.com/en/copilot/reference/custom-instructions-support)), and Copilot CLI drops identical copies.
+
+Every file has a byte budget: 12,000 bytes for a compact root file, 24,000 in full mode, 8,000 for a rule file, and 12,000 for a tools rule that stands in for the root file. It is low on purpose, since these files share the agent's context with your own instructions, and Codex reads at most 32 KiB of project docs in all. A list names what fits a 240-character line and ends with "...N more"; the tools answer the rest.
+
+A file whose section has nothing in it is not written. An app with no models gets no `.claude/rules/rails-models.md`, and every surface names the file and the reason so a deliberate omission is not mistaken for a failed run. `rails ai:context` and the installer print `➖  .claude/rules/rails-models.md (no models)`; the CLI and the watcher print `Not applicable: .claude/rules/rails-models.md (no models)`. A rule the root file states is named the same way, with the reason `in the root file`.
+
+A run removes the files an earlier run wrote that it no longer writes. The CLI and the watcher print `Removed: PATH`, or `Removed the generated block from PATH` where your own lines stay; `rails ai:context` and the installer mark it `(removed)` or `(generated block removed)`. `doctor` counts a file a run would remove as out of date.
 
 ### Claude Code (6 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `CLAUDE.md` | Main context file | ≤150 lines in compact mode. Claude Code reads this automatically. |
-| `.claude/rules/rails-schema.md` | Database table listing | Every database's tables, each database under its own heading when the app has more than one. A database of Solid Queue, Solid Cache or Solid Cable tables only, as Rails 8's queue, cache and cable are, is named in CLAUDE.md instead (`queue: Solid Queue (13 tables)`). Loaded when Claude Code opens a schema dump or a migration. |
-| `.claude/rules/rails-models.md` | Model listing with associations | Auto-loaded by Claude Code alongside CLAUDE.md. |
-| `.claude/rules/rails-context.md` | Project context and conventions | Auto-loaded by Claude Code alongside CLAUDE.md. |
-| `.claude/rules/rails-mcp-tools.md` | Tool reference | Detail levels and the table of every tool. Loaded beside CLAUDE.md, which carries the protocol, the workflows and the rules, so they are not read twice; with `generate_root_files` off it carries them itself. |
-| `.claude/rules/rails-components.md` | View component listing | Written only when the app has view components. |
+| `CLAUDE.md` | Root context file | Holds only `@AGENTS.md` where `AGENTS.md` carries the root content, and the content itself otherwise. Claude Code reads it at launch. |
+| `.claude/rules/rails-schema.md` | Database table listing | Every database's tables, each database under its own heading when the app has more than one. A database of Solid Queue, Solid Cache or Solid Cable tables only, as Rails 8's queue, cache and cable are, is named in the root file instead (`queue: Solid Queue (13 tables)`). Loaded when Claude Code opens a schema dump or a migration. |
+| `.claude/rules/rails-models.md` | Model listing with associations | Loaded when Claude Code opens a file in `app/models/`. |
+| `.claude/rules/rails-context.md` | Project overview | Written only with `generate_root_files` off. Loaded in every session. |
+| `.claude/rules/rails-mcp-tools.md` | Tools guide | Written only with `generate_root_files` off. Loaded in every session: the protocol, the workflows, the rules, the detail levels and the table of every tool. |
+| `.claude/rules/rails-components.md` | View component listing | Written only when the app has view components. Loaded when Claude Code opens a file in `app/components/` or `app/views/components/`. |
 
 ### OpenCode (3 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `AGENTS.md` | Main context file | Native OpenCode format. ≤150 lines in compact mode. OpenCode also reads CLAUDE.md as fallback. |
+| `AGENTS.md` | Root context file | Carries the root content for OpenCode, Codex and Cursor, and for Claude Code through the import in `CLAUDE.md`. OpenCode reads CLAUDE.md only where there is no AGENTS.md. |
 | `app/models/AGENTS.md` | Model reference | Auto-loaded by OpenCode when reading files in `app/models/`. One you wrote yourself keeps its text, with the listing added between markers. |
 | `app/controllers/AGENTS.md` | Controller reference | Auto-loaded by OpenCode when reading files in `app/controllers/`. One you wrote yourself keeps its text, with the listing added between markers. |
 
@@ -247,21 +262,23 @@ A file whose section has nothing in it is not written. An app with no models get
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `.cursor/rules/rails-project.mdc` | Project overview | `alwaysApply: true` - loaded in every conversation. |
+| `AGENTS.md` | Root context file | The file OpenCode and Codex read too. Cursor reads it, and `CLAUDE.md`, like an always-on rule. |
+| `.cursor/rules/rails-project.mdc` | Project overview | `alwaysApply: true` - loaded in every conversation. Written only with `generate_root_files` off. |
 | `.cursor/rules/rails-models.mdc` | Model reference | `globs: app/models/**/*.rb` - auto-attaches when editing models. |
 | `.cursor/rules/rails-controllers.mdc` | Controller reference | `globs: app/controllers/**/*.rb` - auto-attaches when editing controllers. |
-| `.cursor/rules/rails-mcp-tools.mdc` | MCP tool reference | `alwaysApply: false` - agent-requested when relevant. |
-| `.cursorrules` | Legacy fallback | Read by older Cursor clients. Wrapped in markers, so hand-written content around it survives. |
+| `.cursor/rules/rails-mcp-tools.mdc` | Tools guide | `alwaysApply: false` - agent-requested when relevant. Written only with `generate_root_files` off. |
+
+`.cursorrules` is no longer written: Cursor calls it legacy, and reads the content from `AGENTS.md`. With root files on, a run takes out the block an earlier release wrote there and keeps your own lines; a file that held only the block is deleted. Cleanup and `doctor` still know the file.
 
 ### GitHub Copilot (5 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `.github/copilot-instructions.md` | Repo-wide instructions | ≤`claude_max_lines` (150) non-blank lines in compact mode, markers included. |
+| `.github/copilot-instructions.md` | Root context file | An identical copy where `AGENTS.md` or `CLAUDE.md` carries the root content too, since github.com chat, Visual Studio, JetBrains, Xcode and code review read no other file. |
 | `.github/instructions/rails-models.instructions.md` | Model context | `applyTo: app/models/**/*.rb` - loaded when editing models. |
 | `.github/instructions/rails-controllers.instructions.md` | Controller context | `applyTo: app/controllers/**/*.rb` - loaded when editing controllers. |
-| `.github/instructions/rails-context.instructions.md` | Project context and conventions | `applyTo: **/*` - loaded everywhere. |
-| `.github/instructions/rails-mcp-tools.instructions.md` | Tool reference | `applyTo: **/*` - loaded everywhere. Detail levels and the table; the protocol and workflows are in copilot-instructions.md, or here too with `generate_root_files` off. |
+| `.github/instructions/rails-context.instructions.md` | Project overview | `applyTo: **/*` - loaded everywhere. Written only with `generate_root_files` off. |
+| `.github/instructions/rails-mcp-tools.instructions.md` | Tools guide | `applyTo: **/*` - loaded everywhere but code review. Written only with `generate_root_files` off. |
 
 ### Generic (1 file)
 
@@ -290,19 +307,19 @@ unmarked file was generated with the app running.
 
 | Command | Mode | Format | Description |
 |---------|------|--------|-------------|
-| `rails ai:context` | compact | all | Generate all 20 context files |
+| `rails ai:context` | compact | all | Generate all 19 context files |
 | `rails ai:context:full` | full | all | Generate all files in full mode |
-| `rails ai:context:claude` | compact | Claude | CLAUDE.md + .claude/rules/ |
+| `rails ai:context:claude` | compact | Claude | CLAUDE.md + .claude/rules/, and the AGENTS.md it imports when Cursor, OpenCode or Codex is selected too |
 | `rails ai:context:opencode` | compact | OpenCode | AGENTS.md + per-directory AGENTS.md |
 | `rails ai:context:codex` | compact | Codex | AGENTS.md + per-directory AGENTS.md (same files as OpenCode), and `.codex/config.toml` in MCP mode |
-| `rails ai:context:cursor` | compact | Cursor | .cursor/rules/ |
+| `rails ai:context:cursor` | compact | Cursor | AGENTS.md + .cursor/rules/ |
 | `rails ai:context:copilot` | compact | Copilot | copilot-instructions.md + .github/instructions/ |
 | `rails ai:context:json` | - | JSON | .ai-context.json |
-| `CONTEXT_MODE=full rails ai:context:claude` | full | Claude | Full dump for Claude only |
-| `CONTEXT_MODE=full rails ai:context:opencode` | full | OpenCode | Full dump in AGENTS.md, which Codex reads too |
+| `CONTEXT_MODE=full rails ai:context:claude` | full | Claude | Full dump in the root file Claude Code reads |
+| `CONTEXT_MODE=full rails ai:context:opencode` | full | OpenCode | Full dump in AGENTS.md, which Codex and Cursor read too |
 | `CONTEXT_MODE=full rails ai:context:copilot` | full | Copilot | Full dump for Copilot only |
 
-Cursor's files are the same in both modes, so `CONTEXT_MODE=full` changes nothing for `rails ai:context:cursor`.
+The rules files are the same in both modes, so `CONTEXT_MODE=full` changes only the root file.
 
 Each `rails ai:context:<tool>` adds its tool to the recorded selection and, in MCP mode, writes that tool's MCP config too (`.cursor/mcp.json` for Cursor), since its files tell the AI to call the MCP tools.
 
@@ -430,8 +447,8 @@ if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
 end
 ```
 
-- **`:mcp`** - context files show MCP tool syntax (e.g. `rails_get_schema(table: "users")`). CLI tools still available as fallback.
-- **`:cli`** - context files show CLI syntax (e.g. `rails 'ai:tool[schema]' table=users`). No MCP server required. Every file follows it: the root files, the split rule files and OpenCode's per-directory `AGENTS.md`, whose tools rule files then describe the CLI tools.
+- **`:mcp`** - context files show MCP tool syntax (e.g. `rails_get_schema(table: "users")`), each example in that form alone. The root file names the CLI fallback once and lists no tool names, since the MCP client lists the tools itself.
+- **`:cli`** - context files show CLI syntax (e.g. `rails 'ai:tool[schema]' table=users`). No MCP server required. Every file follows it: the root files, the split rule files and OpenCode's per-directory `AGENTS.md`, whose tools rule files then describe the CLI tools. The root file lists the tool names, since nothing else does.
 
 Every tool count and list in the generated files is the set the server serves: the built-in tools `skip_tools` leaves, plus `custom_tools`. A custom tool gets a row in the tools table with the first sentence of its description. A workflow step, rule or pointer whose tool is skipped is left out, or said without the tool (with `rails_get_context` skipped, the model workflow starts from `rails_get_model_details`), so no file sends the AI to a tool the server does not serve.
 
@@ -1296,7 +1313,7 @@ if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
     # Context mode: :compact (default) or :full
     config.context_mode = :compact
 
-    # Max lines for CLAUDE.md in compact mode
+    # Max non-blank lines for the root file in compact mode
     config.claude_max_lines = 150
 
     # Output directory for context files (default: Rails.root)
@@ -1410,7 +1427,7 @@ end
 | `preset` | Symbol | `:full` | Introspector preset (`:full` or `:standard`) |
 | `introspectors` | Array | 40 (full preset) | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
-| `claude_max_lines` | Integer | `150` | Budget for the non-blank lines of a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, the data sections (Stack, Key models, Gems, Architecture) are cut first, down to none; the title and the Commands, Warnings, Rules and Tools sections are never cut, so they set the smallest file a budget can give (about 110 lines with the anti-hallucination protocol) |
+| `claude_max_lines` | Integer | `150` | Budget for the non-blank lines of the compact root file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included, beside its 12,000 bytes. Over budget, the data sections (Stack, Key models, Gems, Architecture) are cut from the bottom, down to none; the title and the Commands, Warnings, Rules and Tools sections are never cut, so they set the smallest file a budget can give (about 70 lines with the anti-hallucination protocol) |
 | `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |
@@ -1430,7 +1447,7 @@ end
 | `live_reload_debounce` | Float | `1.5` | Debounce interval in seconds for live reload |
 | `server_name` | String | `"rails-ai-context"` | The MCP server name the server announces. When it is left at the default, the `RAILS_AI_CONTEXT_SERVER_NAME` environment variable takes its place for one process, which is how a workspace's entries announce their app |
 | `server_version` | String | gem version | MCP server version. Read-only, there is no setter |
-| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md, .cursorrules or copilot-instructions.md (`.ai-context.json` is still written) |
+| `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only: no CLAUDE.md, AGENTS.md or copilot-instructions.md, and the overview and tools rules are written in their place (`.ai-context.json` is still written) |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files - set `false` to skip |
 | `hydration_enabled` | Boolean | `true` | Inject schema hints into controller/view tool responses |
 | `hydration_max_hints` | Integer | `5` | Max schema hints per tool response |
@@ -1476,7 +1493,7 @@ if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
 end
 ```
 
-The Claude Code, Cursor and Copilot rule sets each keep an app overview file (`rails-context.md`, `rails-project.mdc`, `rails-context.instructions.md`). The Claude Code one leaves out gems, architecture, services and jobs, which it expects in CLAUDE.md. OpenCode and Codex have no overview outside AGENTS.md: their split files hold only the model and controller listings.
+With root files off, the Claude Code, Cursor and Copilot rule sets each get an app overview (`rails-context.md`, `rails-project.mdc`, `rails-context.instructions.md`) and the tools guide (`rails-mcp-tools.md`, `rails-mcp-tools.mdc`, `rails-mcp-tools.instructions.md`) in the root file's place; Cursor loads its guide on request. With root files on, a run removes those six, since the root file states them. OpenCode and Codex have no overview outside AGENTS.md: their split files hold only the model and controller listings.
 
 ---
 
@@ -1562,8 +1579,8 @@ config.introspectors = %i[schema models routes gems auth api]
 **Auto-discovery:** Reads `.mcp.json` when a session starts in the folder, and asks you to approve the `rails-ai-context` server once (`claude mcp reset-project-choices` asks again).
 
 **Context files loaded:**
-- `CLAUDE.md` - read at conversation start
-- `.claude/rules/*.md` - auto-loaded alongside CLAUDE.md (schema, models, and components rules use `paths:` frontmatter for conditional loading)
+- `CLAUDE.md` - read at conversation start. Where it holds `@AGENTS.md`, Claude Code expands the import and reads `AGENTS.md` with it
+- `.claude/rules/*.md` - the schema, models and components rules load when Claude Code opens a file their `paths:` frontmatter matches; the overview and tools rules, written only with `generate_root_files` off, load in every session
 
 **MCP tools:** Available once the server is approved. `/mcp` lists it.
 
@@ -1572,14 +1589,15 @@ config.introspectors = %i[schema models routes gems auth api]
 **Auto-discovery:** Reads `.cursor/mcp.json`. Restart Cursor after the install, and turn `rails-ai-context` on under MCP in Customize if it is off.
 
 **Context files loaded:**
+- `AGENTS.md` and `CLAUDE.md` - read like an always-on rule, so the root content reaches Cursor from `AGENTS.md`
 - `.cursor/rules/*.mdc` - loaded based on `alwaysApply` and `globs` settings
 
 **MDC rule activation modes:**
 | Mode | When it activates |
 |------|-------------------|
-| `alwaysApply: true` | Every conversation (project overview) |
+| `alwaysApply: true` | Every conversation (project overview, root files off) |
 | `globs: ["app/models/**/*.rb"]` | When editing files matching the glob pattern |
-| `alwaysApply: false` + `description` | Agent-requested - loaded when AI decides it's relevant (MCP tools rule) |
+| `alwaysApply: false` + `description` | Agent-requested - loaded when AI decides it's relevant (tools guide, root files off) |
 
 ### OpenCode
 
@@ -1624,7 +1642,7 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 **Auto-discovery:** `.vscode/mcp.json` is auto-generated by the install generator.
 
 **Context files loaded:**
-- `.github/copilot-instructions.md` - repo-wide instructions
+- `.github/copilot-instructions.md` - repo-wide instructions, the root content. github.com chat, Visual Studio, JetBrains, Xcode and code review read no other root file
 - `.github/instructions/*.instructions.md` - path-specific, activated by `applyTo` glob (with `name:` and `description:` frontmatter)
 
 **applyTo patterns:**
@@ -1632,7 +1650,7 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 |---------|-------------------|
 | `app/models/**/*.rb` | Editing model files |
 | `app/controllers/**/*.rb` | Editing controller files |
-| `**/*` | All files (MCP tool reference) |
+| `**/*` | All files (project overview and tools guide, root files off) |
 
 ### Codex CLI
 

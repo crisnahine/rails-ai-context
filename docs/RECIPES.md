@@ -349,7 +349,7 @@ This prevents redundant queries and helps AI maintain conversation context.
 
 ## Migrating from manual AI context
 
-If you've been maintaining a hand-written CLAUDE.md, `.cursorrules`, or similar:
+If you've been maintaining a hand-written CLAUDE.md, AGENTS.md, `.cursorrules`, or similar:
 
 **Step 1: Install**
 
@@ -367,7 +367,7 @@ The gem wraps its generated content in section markers:
 <!-- END rails-ai-context -->
 ```
 
-Add your custom rules **outside** these markers - they're preserved on regeneration. A hand-written `app/models/AGENTS.md` or `app/controllers/AGENTS.md` is kept the same way: your text stays, and the gem's listing goes between the markers above it.
+Add your custom rules **outside** these markers - they're preserved on regeneration. A hand-written `app/models/AGENTS.md` or `app/controllers/AGENTS.md` is kept the same way: your text stays, and the gem's listing goes between the markers above it. The gem no longer writes `.cursorrules`, so a hand-written one stays as it is; Cursor reads the generated content from `AGENTS.md`.
 
 **Step 3: Remove manual maintenance**
 

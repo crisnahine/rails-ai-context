@@ -138,7 +138,7 @@ You catch it, fix it, re-prompt, and something next to it breaks. The tokens are
 | **35 read-only tools** | Schema, models, controllers, routes, views, Stimulus, Turbo, jobs, services, mailers, i18n, gems, config, tests, security, performance and more. Every answer comes from your app. |
 | **Answers it can trust** | Models are read with the Prism parser. A model and each scope carry `[VERIFIED]` or `[INFERRED]` (`[STATIC]` without a boot), so the assistant knows what still needs a runtime check. |
 | **Three ways in** | MCP over stdio, MCP mounted in your app over HTTP, or plain CLI in any terminal. |
-| **Context files per AI tool** | `CLAUDE.md`, Cursor rules, Copilot instructions, `AGENTS.md`, each with the MCP config its tool picks up, and six anti-hallucination rules up top. |
+| **Context files per AI tool** | `CLAUDE.md`, Cursor rules, Copilot instructions, `AGENTS.md`, each with the MCP config its tool picks up, and six anti-hallucination rules. |
 | **Works on apps that won't boot** | Missing ENV vars, no database, a broken initializer: the tools answer from `config/routes.rb`, the schema dump and the source files, and say so. |
 | **Real app shapes** | Packwerk packs, in-repo engines, multi-database dumps, Mongoid, API-only apps, a folder holding several apps. |
 | **Read-only and careful** | SQL runs read-only with a timeout, a row limit and column redaction. Logs are redacted before they leave the process. Secrets files are never served. |
@@ -221,7 +221,7 @@ The legacy `rails://models/{name}` form is still accepted. Plus 9 static resourc
 
 <br>
 
-Each AI tool's main context file (`CLAUDE.md`, `AGENTS.md` for OpenCode and Codex, `.cursorrules` and `.cursor/rules/rails-mcp-tools.mdc` for Cursor, `.github/copilot-instructions.md`) starts with six rules the assistant reads before writing code, in compact and full mode alike. With `generate_root_files` off, `.claude/rules/rails-mcp-tools.md` and `.github/instructions/rails-mcp-tools.instructions.md` carry them instead:
+The root context file carries six rules the assistant reads before writing code, in compact and full mode alike. That file is `AGENTS.md`, which Cursor, OpenCode and Codex read and `CLAUDE.md` imports, or `CLAUDE.md` itself when none of those three is chosen. Copilot reads its own copy in `.github/copilot-instructions.md`. With `generate_root_files` off, the `rails-mcp-tools` rules in `.claude/rules/`, `.cursor/rules/` and `.github/instructions/` carry them instead (Cursor loads its copy on request):
 
 1. Verify before you write. Never reference a column, association, route, helper, method, class, partial or gem that a tool call in this turn did not confirm.
 2. Mark every assumption with `[ASSUMPTION]`. "I'd need to check X first" is a good answer.
