@@ -198,7 +198,8 @@ module RailsAiContext
       result = source && AstCache.parse_string(source)
       if result&.errors&.any?
         error = result.errors.find { |e| e.type != :unexpected_token_close_context } || result.errors.first
-        found.refusals << refusal(relative, unclosed_line(result.value) || error.location.start_line, "this file", nil,
+        line = ERRORS_AT_OPENER ? error.location.start_line : unclosed_line(result.value) || error.location.start_line
+        found.refusals << refusal(relative, line, "this file", nil,
                                   "this file does not parse as Ruby (#{error.message}), so the static tier serves nothing until it is fixed.")
       elsif result.nil? || too_deep?(result.value)
         found.refusals << refusal(relative, 1, "this file")
@@ -211,8 +212,10 @@ module RailsAiContext
       found
     end
 
-    # Prism versions put a missing `end` at the opener or at the end of the input; the tree gives every
-    # version's unclosed node an empty closing, and the innermost one is the literal or block the error names.
+    # prism 2 reports a missing closer at its opener; prism 1 reports it at the end of the input, where
+    # the tree gives each unclosed node an empty closing and the innermost one is what the error names.
+    ERRORS_AT_OPENER = Gem::Version.new(Prism::VERSION) >= Gem::Version.new("2")
+
     def unclosed_line(root)
       stack = [ root ]
       lines = []

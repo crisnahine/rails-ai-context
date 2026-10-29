@@ -28,6 +28,10 @@ jobs:
         include:
           - gem: prism
             version: "1.4.0"
+          # Not a floor: the newest prism major, which the unit matrix never resolves (minitest 6 caps prism below 2).
+          - gem: prism
+            version: "2.1.0"
+            label: prism 2 (2.1.0)
           - gem: mcp
             version: "0.13.0"
           # railties 7.0 is the last line that allows zeitwerk 2.5, and it runs on Ruby 3.1 only.
@@ -36,10 +40,11 @@ jobs:
             rails: "7.0"
             ruby: "3.1"
 
-    name: ${{ matrix.gem }} floor (${{ matrix.version }})
+    name: ${{ matrix.label || format('{0} floor ({1})', matrix.gem, matrix.version) }}
 
     env:
       BUNDLE_GEMFILE: gemfiles/${{ matrix.gem }}_floor.gemfile
+      PRISM_VERSION: ${{ matrix.version }}
       RAILS_VERSION: ${{ matrix.rails || '8.0' }}
 
     steps:

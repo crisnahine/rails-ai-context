@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# The gemspec's prism floor, pinned. Trimmed to what the suite needs so a dev
+# The gemspec's prism floor, pinned (or PRISM_VERSION, which CI also sets to the newest
+# major the gemspec allows). Trimmed to what the suite needs so a dev
 # dependency cannot quietly resolve prism upward and turn the floor claim into
 # a test of whatever version happened to win.
 
@@ -8,6 +9,6 @@ source "https://rubygems.org"
 
 gemspec path: ".."
 
-gem "prism", "= 1.4.0"
+gem "prism", "= #{ENV.fetch("PRISM_VERSION", "1.4.0")}"
 
 eval_gemfile "rails.gemfile"

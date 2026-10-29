@@ -492,6 +492,8 @@ RSpec.describe RailsAiContext::InitializerSettings do
     { "RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\n" => [ 1, block ],
       "RailsAiContext.configure do |config|\n  if ENV[\"X\"]\n    config.ai_tools = %i[claude]\n  end\n\n" => [ 1, block ],
       "Other.configure do |o|\n  o.x = 1\nend\nRailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\n" => [ 4, block ],
+      "RailsAiContext.configure do |config|\n  def name\n    \"x\"\n" => [ 2, "expected an `end` to close the `def` statement" ],
+      "RailsAiContext.configure do |config|\n  if ENV[\"X\"]\n    config.server_name = \"x\"\n" => [ 2, "expected an `end` to close the conditional clause" ],
       "RailsAiContext.configure do |config|\n  config.server_name = \"x\n" => [ 2, "unterminated string meets end of file" ],
       "RailsAiContext.configure do |config|\n  config.server_name = <<~T\n  x\n" => [ 2, "unterminated heredoc; can't find string \"T\" anywhere before EOF" ]
     }.each do |body, (line, said)|

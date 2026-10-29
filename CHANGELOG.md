@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **prism 2 is allowed.** The gemspec now takes `prism >= 1.4, < 3.0`, so an
+  app whose bundle resolves prism 2.x can install this gem. A CI leg runs the
+  suite on prism 2.1.0. An initializer that does not parse still names the
+  line of the unclosed string, heredoc, `def` or `if` under prism 2, which
+  reports a missing closer at its opener.
+
 ## [5.38.0] - 2026-10-27
 
 ### Security

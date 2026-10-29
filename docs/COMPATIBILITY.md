@@ -20,7 +20,7 @@ document is aspirational.
 - **mcp gem:** `>= 0.13, < 2.0`
 - **thor:** `>= 1.2, < 3.0` (1.0 and 1.1 fail to load on Ruby 3.1+: they
   reference `DidYouMean::SPELL_CHECKERS`, which did_you_mean removed)
-- **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
+- **prism:** `>= 1.4, < 3.0` (CI legs pin 1.4.0 and 2.1.0 exactly on Ruby 3.2 and run the suite against each)
 - **concurrent-ruby:** `>= 1.2, < 3.0`
 - **zeitwerk:** `~> 2.5` (2.5 is what railties 7.0 allows; a CI leg pins 2.5.0 on Rails 7.0 and Ruby 3.1)
 - **json:** unconstrained by this gem, but `json >= 3.0` and Rails 7.0 to 8.0 do
