@@ -40,7 +40,9 @@ module RailsAiContext
                         :legacy_paths, :owned_dir, :next_step, :root, :reads, :retired_paths, keyword_init: true)
 
     class AiTool
-      Read = Data.define(:path, :imports, :source)
+      # every_surface: false for a file only some of the tool's surfaces read, which
+      # cannot stand in for the tool's own copy.
+      Read = Data.define(:path, :imports, :source, :every_surface)
 
       AGENTS_MD_SOURCE = "https://cursor.com/help/customization/rules#how-does-claudemd-work-in-cursor"
       ALL = [
@@ -56,7 +58,7 @@ module RailsAiContext
           owned_dir: ".claude",
           root: "CLAUDE.md",
           # A root CLAUDE.md is read in place of AGENTS.md, and expands its imports at launch.
-          reads: [ Read.new(path: "CLAUDE.md", imports: true, source: "https://code.claude.com/docs/en/memory#import-additional-files") ]
+          reads: [ Read.new(path: "CLAUDE.md", imports: true, source: "https://code.claude.com/docs/en/memory#import-additional-files", every_surface: true) ]
         ),
         new(
           number: "2", key: :cursor, name: "Cursor",
@@ -74,8 +76,8 @@ module RailsAiContext
           # .cursorrules is legacy and Cursor never inlines an @path. Its chat agent has
           # missed content kept in .mdc rules alone, so the content goes in AGENTS.md.
           reads: [
-            Read.new(path: "AGENTS.md", imports: false, source: AGENTS_MD_SOURCE),
-            Read.new(path: "CLAUDE.md", imports: false, source: AGENTS_MD_SOURCE)
+            Read.new(path: "AGENTS.md", imports: false, source: AGENTS_MD_SOURCE, every_surface: true),
+            Read.new(path: "CLAUDE.md", imports: false, source: AGENTS_MD_SOURCE, every_surface: true)
           ]
         ),
         new(
@@ -96,7 +98,11 @@ module RailsAiContext
           # alone; AGENTS.md and CLAUDE.md reach only the CLI, VS Code and the cloud agent.
           reads: [
             Read.new(path: ".github/copilot-instructions.md", imports: false,
-                     source: "https://docs.github.com/en/copilot/reference/custom-instructions-support")
+                     source: "https://docs.github.com/en/copilot/reference/custom-instructions-support", every_surface: true),
+            Read.new(path: "AGENTS.md", imports: false, every_surface: false,
+                     source: "https://code.visualstudio.com/docs/agent-customization/custom-instructions#use-an-agentsmd-file"),
+            Read.new(path: "CLAUDE.md", imports: false, every_surface: false,
+                     source: "https://code.visualstudio.com/docs/agent-customization/custom-instructions#use-a-claudemd-file")
           ]
         ),
         new(
@@ -109,7 +115,7 @@ module RailsAiContext
           legacy_paths: [],
           root: "AGENTS.md",
           # CLAUDE.md is read only where there is no AGENTS.md.
-          reads: [ Read.new(path: "AGENTS.md", imports: false, source: "https://opencode.ai/docs/rules/#precedence") ]
+          reads: [ Read.new(path: "AGENTS.md", imports: false, source: "https://opencode.ai/docs/rules/#precedence", every_surface: true) ]
         ),
         new(
           number: "5", key: :codex, name: "Codex CLI",
@@ -120,7 +126,7 @@ module RailsAiContext
           legacy_paths: [],
           owned_dir: ".codex",
           root: "AGENTS.md",
-          reads: [ Read.new(path: "AGENTS.md", imports: false, source: "https://learn.chatgpt.com/docs/agent-configuration/agents-md") ]
+          reads: [ Read.new(path: "AGENTS.md", imports: false, source: "https://learn.chatgpt.com/docs/agent-configuration/agents-md", every_surface: true) ]
         )
       ].freeze
 

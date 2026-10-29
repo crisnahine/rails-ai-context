@@ -7,7 +7,6 @@ module RailsAiContext
     module CompactSerializerHelper
       include CountPhrase
       include StackOverviewHelper
-      include ToolGuideHelper
 
       private
 
@@ -74,11 +73,6 @@ module RailsAiContext
         SectionFacts.warnings(context)
       end
 
-      # Where the cut detail is: the tools, as the mode reaches them.
-      def trim_note
-        "_Context trimmed. Use #{tools_noun} for full details._"
-      end
-
       # The data between the title and the how-to-behave sections is what a
       # budget cuts: the tools answer it in full, and the guide is what makes a
       # compact file worth reading. The BEGIN/END markers count against the lines.
@@ -132,7 +126,8 @@ module RailsAiContext
 
       # The compact root file every root path gets.
       def render_compact_rules
-        data = render_stack_overview + render_key_models + render_notable_gems + render_architecture
+        data = Budget.root_body(stack: render_stack_overview, key_models: render_key_models, gems: render_notable_gems,
+                                architecture: render_architecture)
         instructions = render_commands + render_warnings + render_footer + render_tools_guide_compact
         enforce_max_lines(data, head: render_header, keep: instructions)
       end

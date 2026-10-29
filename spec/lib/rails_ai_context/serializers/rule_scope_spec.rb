@@ -71,6 +71,14 @@ RSpec.describe RailsAiContext::Serializers::RuleScope do
     end
   end
 
+  # Every scoped file the gem writes declares one, in one place.
+  it "is declared by every rules file the gem writes" do
+    serializers = RailsAiContext::Serializers::ContextFileSerializer::RULES_SERIALIZERS.values.uniq
+    undeclared = serializers.flat_map { |klass| klass::RULE_FILES.reject { |_, rule| rule.key?(:scope) }.keys }
+
+    expect(undeclared).to eq([])
+  end
+
   it "quotes a description that holds a double quote" do
     scope = described_class.always(%(Rails "MCP" tools))
     expect(text(scope, :cursor)).to include(%(description: "Rails \\"MCP\\" tools"))

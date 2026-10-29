@@ -80,7 +80,7 @@ if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
 end
 ```
 
-Custom tools appear alongside built-in tools in the MCP server and CLI, and in the tool counts and lists of the generated context files. The tools table gives a custom tool its own row, described by the first sentence of its `description`.
+Custom tools appear alongside built-in tools in the MCP server and CLI, and in the tool counts of the generated context files. In CLI mode the root file's list of commands names them too; in MCP mode the client lists them with their descriptions.
 
 Use the class *name* as a string: classes under `app/` (including
 `app/mcp_tools/`) are not autoloadable while initializers run, so a bare

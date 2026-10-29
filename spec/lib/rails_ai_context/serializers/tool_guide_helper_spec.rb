@@ -91,23 +91,6 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
   end
 
-  describe "#tools_detail_guidance" do
-    it "uses MCP param syntax in :mcp mode" do
-      lines = helper.tools_detail_guidance
-      text = lines.join("\n")
-      expect(text).to include("detail:\"summary\"")
-      expect(text).to include("summary")
-      expect(text).to include("standard")
-      expect(text).to include("full")
-    end
-
-    it "uses CLI param syntax in :cli mode" do
-      RailsAiContext.configuration.tool_mode = :cli
-      lines = helper.tools_detail_guidance
-      expect(lines.join("\n")).to include("detail=summary")
-    end
-  end
-
   describe "a custom tool in a built-in's place" do
     let(:custom) do
       Class.new(MCP::Tool) do
@@ -124,66 +107,6 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(helper.served?("rails_get_model_details")).to be(true)
       expect(helper.tools_rules_section.join("\n")).to include("`rails_get_model_details(model:\"X\")`")
       expect(helper.tools_rules_section.join("\n")).not_to include("rails_get_schema")
-    end
-  end
-
-  describe "the tools #tools_detail_guidance names" do
-    let(:taking_detail) { "Tools that take `detail`: " }
-    # The names wrap over lines of the width; read them back as one.
-    let(:named_line) do
-      lines = helper.tools_detail_guidance
-      start = lines.index { |l| l.start_with?(taking_detail) }
-      lines[start..].take_while { |l| !l.empty? }.join(" ")
-    end
-
-    it "names the served tools that take detail and none that do not" do
-      expect(named_line).to include("`rails_onboard`", "`rails_get_schema`")
-      expect(named_line).not_to include("rails_get_context", "rails_analyze_feature", "rails_search_code")
-    end
-
-    it "leaves out a tool skip_tools turned off" do
-      RailsAiContext.configuration.skip_tools = [ "rails_get_schema" ]
-      expect(named_line).to include("`rails_onboard`")
-      expect(named_line).not_to include("rails_get_schema")
-    ensure
-      RailsAiContext.configuration.skip_tools = []
-    end
-
-    it "names rails_get_config with the sections that read detail" do
-      expect(named_line).to include("`rails_get_config` (sections: frontend, api, env)")
-
-      RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_env]
-      line = helper.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
-      expect(line).to include("`rails_get_config` (section: api)")
-
-      RailsAiContext.configuration.tool_mode = :cli
-      line = test_class.new.tools_detail_guidance.find { |l| l.start_with?(taking_detail) }
-      expect(line).to include("`config` (section: api)")
-    ensure
-      RailsAiContext.configuration.skip_tools = []
-    end
-
-    it "names rails_get_config only while a section that reads detail is on" do
-      expect(named_line).to include("`rails_get_config`")
-
-      RailsAiContext.configuration.skip_tools = %w[rails_get_frontend_stack rails_get_api rails_get_env]
-      lines = helper.tools_detail_guidance
-      line = lines[lines.index { |l| l.start_with?(taking_detail) }..].take_while { |l| !l.empty? }.join(" ")
-      expect(line).to include("`rails_onboard`")
-      expect(line).not_to include("rails_get_config")
-    ensure
-      RailsAiContext.configuration.skip_tools = []
-    end
-
-    it "leaves the detail advice out when no served tool takes detail" do
-      allow(helper).to receive(:exposed_tools).and_return([ RailsAiContext::Tools::GetContext ])
-      expect(helper.tools_detail_guidance).to eq([])
-    end
-
-    it "names them by their command names in :cli mode" do
-      RailsAiContext.configuration.tool_mode = :cli
-      expect(named_line).to include("`onboard`", "`schema`")
-      expect(named_line).not_to include("rails_onboard")
     end
   end
 
@@ -230,31 +153,6 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       original = RailsAiContext.configuration.anti_hallucination_rules
       RailsAiContext.configuration.anti_hallucination_rules = false
       expect(helper.tools_anti_hallucination_section).to eq([])
-    ensure
-      RailsAiContext.configuration.anti_hallucination_rules = original
-    end
-  end
-
-  describe "#render_tools_guide" do
-    it "assembles a complete guide with header, intro, table" do
-      lines = helper.render_tools_guide
-      text = lines.join("\n")
-      expect(text).to include("Tools (#{RailsAiContext::Server::TOOLS.size})")
-      expect(text).to include("**Start here**")
-      expect(text).to include("### Rules")
-      expect(text).to include("All #{RailsAiContext::Server::TOOLS.size} Tools")
-    end
-
-    it "includes the anti-hallucination protocol by default" do
-      text = helper.render_tools_guide.join("\n")
-      expect(text).to include("Anti-Hallucination Protocol")
-    end
-
-    it "omits the protocol when anti_hallucination_rules is false" do
-      original = RailsAiContext.configuration.anti_hallucination_rules
-      RailsAiContext.configuration.anti_hallucination_rules = false
-      text = helper.render_tools_guide.join("\n")
-      expect(text).not_to include("Anti-Hallucination Protocol")
     ensure
       RailsAiContext.configuration.anti_hallucination_rules = original
     end

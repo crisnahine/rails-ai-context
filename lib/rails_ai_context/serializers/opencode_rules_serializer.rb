@@ -16,11 +16,12 @@ module RailsAiContext
       TOOLS = %i[opencode codex].freeze
 
       include StackOverviewHelper
-      include ToolGuideHelper
 
       RULE_FILES = {
-        "app/models/AGENTS.md" => { renderer: :render_models_reference, reason: "no models" },
-        "app/controllers/AGENTS.md" => { renderer: :render_controllers_reference, reason: "no controllers" }
+        "app/models/AGENTS.md" => { renderer: :render_models_reference, reason: "no models",
+                                    scope: RuleScope.paths("app/models/**", description: "ActiveRecord models") },
+        "app/controllers/AGENTS.md" => { renderer: :render_controllers_reference, reason: "no controllers",
+                                         scope: RuleScope.paths("app/controllers/**", description: "Controllers") }
       }.freeze
 
       # @param output_dir [String] Rails root path
@@ -33,7 +34,7 @@ module RailsAiContext
           # A directory the app does not have is reported, not dropped, and
           # nothing renders for it so the directory is never created.
           if Dir.exist?(File.dirname(filepath))
-            RuleFile.new(filepath, fit_rule([], send(rule[:renderer]), :rule), rule[:reason])
+            RuleFile.new(filepath, fit_rule(rule[:scope].frontmatter(:opencode), send(rule[:renderer]), :rule), rule[:reason])
           else
             RuleFile.new(filepath, nil, missing_directory_reason(File.dirname(relative), output_dir))
           end
@@ -43,7 +44,6 @@ module RailsAiContext
       end
 
       private
-
 
       # OpenCode reads these beside the code, so they go only into a
       # directory that exists. Under an output_dir that is not the app, the

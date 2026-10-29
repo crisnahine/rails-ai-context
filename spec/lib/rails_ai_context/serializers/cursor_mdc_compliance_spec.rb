@@ -219,12 +219,13 @@ RSpec.describe "Cursor MDC compliance" do
       expect(file[:content]).to include("PostsController")
     end
 
-    it "lists every registered tool" do
+    it "lists every registered tool in :cli mode, where nothing else does" do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:cli)
       content = generated_files["rails-mcp-tools.mdc"][:content]
 
       missing = RailsAiContext::Tools::BaseTool.registered_tools
-        .map(&:tool_name)
-        .reject { |name| content.include?(name) }
+        .map { |tool| RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) }
+        .reject { |name| content.include?("`#{name}`") }
 
       expect(missing).to be_empty, "MCP tools rule is missing: #{missing.join(%q(, ))}"
     end

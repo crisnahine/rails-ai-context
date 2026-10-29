@@ -8,7 +8,6 @@ module RailsAiContext
       TOOLS = [ :claude ].freeze
 
       include StackOverviewHelper
-      include ToolGuideHelper
 
       RULE_FILES = {
         "rails-context.md" => { renderer: :render_context_overview, reason: :overview_reason,
@@ -16,7 +15,7 @@ module RailsAiContext
         "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump", scope: :schema_scope },
         "rails-models.md" => { renderer: :render_models_reference, reason: "no models",
                                scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
-        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: :overview_reason, kind: :root,
+        "rails-mcp-tools.md" => { renderer: :guide_unless_rooted, reason: :overview_reason, kind: :root,
                                   scope: RuleScope.always("Rails tools guide") },
         "rails-components.md" => { renderer: :render_components_reference, reason: "no view components",
                                    scope: RuleScope.paths("app/components/**/*.rb", "app/views/components/**", description: "Components") }
@@ -32,16 +31,8 @@ module RailsAiContext
 
       # The root file states the overview whenever it is written.
       def render_context_overview
-        return nil if rooted?
-
-        lines = header_lines(:overview, title: "Overview")
-        lines.concat(overview_lines)
-
-        lines << ""
-        lines << "Use #{tools_noun} for context rather than reading reference files."
-        lines << "Start with `#{param_text("detail", "summary")}`, and read a file only to edit it."
-
-        lines.join("\n")
+        overview_rule("Use #{tools_noun} for context rather than reading reference files.",
+                      "Start with `#{param_text("detail", "summary")}`, and read a file only to edit it.")
       end
 
       # Every database's tables, the primary's first. Each gets a heading unless the
@@ -224,12 +215,6 @@ module RailsAiContext
         end
 
         lines.join("\n")
-      end
-
-      # The guide, where no root file carries it. The tools list themselves:
-      # the MCP client lists them, and `tool --list` on the command line.
-      def render_mcp_tools_reference
-        guide_unless_rooted
       end
     end
   end

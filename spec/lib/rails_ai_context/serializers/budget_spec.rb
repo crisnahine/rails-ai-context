@@ -41,6 +41,13 @@ RSpec.describe RailsAiContext::Serializers::Budget do
     end
   end
 
+  # The order the root file's data sections stand in is the order a cut takes them.
+  it "orders the root file's data sections the way a cut keeps them" do
+    body = described_class.root_body(architecture: [ "a" ], gems: [ "g" ], key_models: [ "m" ], stack: [ "s" ])
+
+    expect(body).to eq(%w[s m g a])
+  end
+
   describe ".fit" do
     it "cuts the data from the bottom up to the byte budget and keeps the head and the kept sections whole" do
       head = [ "# App - AI Context", "" ]

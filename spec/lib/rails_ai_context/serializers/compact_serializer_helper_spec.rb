@@ -97,7 +97,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
 
       output = host.cap(lines)
 
-      expect(output).not_to include("_Context trimmed.")
+      expect(output).not_to include("_Cut to fit:")
       expect(content_lines(output)).to eq(50)
     end
 
@@ -107,7 +107,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
 
       output = host.cap([ "line one", "", "line two" ])
 
-      expect(output).to eq("_Context trimmed. Use MCP tools for full details._")
+      expect(output).to eq("_Cut to fit: the MCP tools answer the rest._")
     end
 
     # The loop counts a whitespace-only line as blank, so the tail trim has to
@@ -117,7 +117,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
 
       output = host.cap([ "line one", "   ", "line two", "line three" ])
 
-      expect(output).to eq("line one\n\n_Context trimmed. Use MCP tools for full details._")
+      expect(output).to eq("line one\n\n_Cut to fit: the MCP tools answer the rest._")
     end
 
     it "trims to the budget in content lines when the file runs over" do
@@ -127,7 +127,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       output = host.cap(lines)
 
       expect(content_lines(output)).to eq(10)
-      expect(output).to end_with("_Context trimmed. Use MCP tools for full details._")
+      expect(output).to end_with("_Cut to fit: the MCP tools answer the rest._")
     end
   end
 
@@ -156,7 +156,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       output = host.cap(body, keep: rules)
 
       expect(output).to match(/- rule two\s*\z/)
-      expect(output.index("_Context trimmed.")).to be < output.index("## Rules")
+      expect(output.index("_Cut to fit:")).to be < output.index("## Rules")
     end
 
     it "leaves a file under the budget untouched" do
@@ -165,7 +165,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
 
       output = host.cap(body, keep: rules)
 
-      expect(output).not_to include("_Context trimmed.")
+      expect(output).not_to include("_Cut to fit:")
       expect(output).to include("- Models: 3")
       expect(output).to include("- rule two")
     end
@@ -227,7 +227,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
 
       output = host.cap(body, keep: rules)
 
-      expect(output).to eq("_Context trimmed. Use MCP tools for full details._\n\n## Rules\n- rule one\n- rule two\n")
+      expect(output).to eq("_Cut to fit: the MCP tools answer the rest._\n\n## Rules\n- rule one\n- rule two\n")
     end
 
     # The title and the [STATIC] notice under it say what the file is.

@@ -156,6 +156,18 @@ RSpec.describe "Context files for a selection of AI tools" do
     expect(result[:not_applicable][path(".claude/rules/rails-context.md")]).to eq(RailsAiContext::SafeFile::LINKED)
   end
 
+  # Cursor reads CLAUDE.md too, so a Cursor-only run rewrites the full copy a
+  # Claude-only run left there into the import.
+  it "rewrites a CLAUDE.md a Cursor-only run reads" do
+    allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+    run(:claude)
+    allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor])
+    run(:cursor)
+
+    expect(block("CLAUDE.md")).to eq("@AGENTS.md")
+    expect(block("AGENTS.md")).to include("## Tools (")
+  end
+
   # An unset selection means every AI tool, as a run with no format does.
   it "plans a one-tool run against every AI tool when none are recorded" do
     allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)

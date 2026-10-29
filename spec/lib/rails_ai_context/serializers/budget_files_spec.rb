@@ -51,11 +51,13 @@ RSpec.describe "Context files within their budget" do
         expect(over).to eq([])
       end
 
-      # The protocol's numbered rules are fixed prose; every other line is data
-      # or a list, which the width holds to.
-      it "keeps every list line within the width" do
+      # The protocol's six rules are fixed prose the plugin's session hook
+      # matches word for word, so they stay one line each; every other line is
+      # data or a list, which the width holds to.
+      it "keeps every line within the width but the protocol's six rules" do
+        protocol = /\A[1-6]\. \*\*(Verify before you write|Mark every assumption|Training data describes|Check the inheritance|Empty tool output|Stale context lies)/
         wide = files(root_files: root_files, mode: mode, tool_mode: tool_mode).flat_map do |path, text|
-          text.lines.map(&:chomp).reject { |line| line.match?(/\A\d+\. \*\*/) || line.size <= budget::LINE_WIDTH }
+          text.lines.map(&:chomp).reject { |line| line.match?(protocol) || line.size <= budget::LINE_WIDTH }
               .map { |line| "#{path}: #{line[0, 80]}... (#{line.size})" }
         end
 

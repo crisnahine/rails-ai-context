@@ -103,21 +103,20 @@ module RailsAiContext
           # reported rather than dropped.
           next result[:not_applicable][filepath] = "root files disabled" unless generate_root
 
-          case plan.root(relative)
-          when :content, :import
-            # A name linked to the content home is that file: an import written through it would import itself.
-            content = plan.root(relative) == :content || same_file?(filepath, File.join(output_dir, plan.content_home)) ? root_content : "@#{plan.content_home}"
-            plan = plan.without(relative) unless write_root(filepath, content, output_dir, result)
-          else SectionMarkerWriter.drop(filepath, root: output_dir, whole: false, result: result)
-          end
+          # A name linked to the content home is that file: an import written through it would import itself.
+          content = plan.root(relative) == :content || same_file?(filepath, File.join(output_dir, plan.content_home)) ? root_content : "@#{plan.content_home}"
+          plan = plan.without(relative) unless write_root(filepath, content, output_dir, result)
         end
         plan
       end
 
       # These tools' root files, and the file an import among them points at:
       # CLAUDE.md is empty without its AGENTS.md.
+      # Every planned root file these tools read, a Cursor-only run's CLAUDE.md
+      # among them, so no file they read keeps a second copy from an earlier run.
       def root_paths(tools, plan)
-        paths = Install::AiTool.all.select { |tool| tools.include?(tool.key) }.map(&:root)
+        chosen = Install::AiTool.all.select { |tool| tools.include?(tool.key) }
+        paths = chosen.map(&:root) + chosen.flat_map(&:reads).map(&:path).select { |path| plan.root(path) }
         paths << plan.content_home if paths.any? { |path| plan.root(path) == :import }
         paths.uniq
       end

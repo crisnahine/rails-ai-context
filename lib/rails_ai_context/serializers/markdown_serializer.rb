@@ -10,7 +10,6 @@ module RailsAiContext
     # carry, not the data alone.
     class MarkdownSerializer < Base
       include StackOverviewHelper
-      include ToolGuideHelper
 
       SECTIONS = %i[
         schema models routes jobs gems conventions controllers views stimulus turbo active_storage
@@ -26,7 +25,7 @@ module RailsAiContext
         keep = [ (warnings_section if context[:_warnings]&.any?), rules_section, render_tools_guide_compact.join("\n").rstrip, footer ].compact
         lines = ->(sections) { sections.join("\n\n").split("\n", -1) }
         Budget.fit(head: lines.([ header, app_overview, "" ]), body: lines.(data), keep: [ "", *lines.(keep) ], kind: :full,
-                   note: "_Trimmed to fit. Use #{tools_noun} for the rest._", reserve: SectionMarkerWriter::MARKER_BYTES)
+                   note: trim_note, reserve: SectionMarkerWriter::MARKER_BYTES)
       end
 
       private

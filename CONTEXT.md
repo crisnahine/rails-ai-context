@@ -24,7 +24,7 @@ Avoid "format" for either sense - claude is not a file format, and the word coll
 
 **Rule scope** - when an AI tool loads a rules file: every session, when the agent touches a file one of its paths matches, or when the agent picks it by its description. Each rules file declares one, and `Serializers::RuleScope` writes it as that tool's frontmatter: `paths:` for Claude Code, `alwaysApply` with `globs:` or a description for Cursor, `applyTo` for Copilot. OpenCode needs none, since it loads a nested `AGENTS.md` by its folder.
 
-**Context budget** - how much a context file may hold: 12,000 bytes and `claude_max_lines` non-blank lines for the compact root file, 24,000 bytes in full mode, 8,000 for a rule file, and 240 characters for a list line, which names what fits and counts the rest. It is low on purpose: these files share the agent's context with the user's own instructions, and the tools answer in full. `Serializers::Budget` holds every number. A root file over it loses data sections from the bottom, never its header, rules or tools guide.
+**Context budget** (the docs' byte budget) - how much a context file may hold: 12,000 bytes and `claude_max_lines` non-blank lines for the compact root file, 24,000 bytes in full mode, 8,000 for a rule file and 12,000 for a tools rule that stands in for the root file, and 240 characters for a list line, which names what fits and counts the rest. It is low on purpose: these files share the agent's context with the user's own instructions, and the tools answer in full. `Serializers::Budget` holds every number. A root file over it loses data sections from the bottom, never its header, rules or tools guide.
 
 ## Path
 

@@ -20,7 +20,16 @@ module RailsAiContext
         mounted: 5, in_repo_engines: 5, databases: 3, patterns: 8, architecture: 5, locales: 5
       }.freeze
 
+      # The root file's data sections, kept longest first: a cut takes the last
+      # one first, since the tools answer each of them in full.
+      ROOT_SECTIONS = %i[stack key_models gems architecture].freeze
+
       module_function
+
+      # The data sections' lines in the order a cut keeps them.
+      def root_body(sections)
+        ROOT_SECTIONS.flat_map { |name| sections.fetch(name) }
+      end
 
       def cap(name)
         CAPS.fetch(name)

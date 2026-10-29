@@ -10,7 +10,6 @@ module RailsAiContext
       TOOLS = [ :cursor ].freeze
 
       include StackOverviewHelper
-      include ToolGuideHelper
 
       # Split rule files (.cursor/rules/*.mdc) are fully gem-owned, written
       # as-is with no markers (the gem manages every file in that
@@ -21,7 +20,7 @@ module RailsAiContext
                                 scope: RuleScope.paths("app/models/**/*.rb", description: "ActiveRecord models") },
         "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers",
                                      scope: RuleScope.paths("app/controllers/**/*.rb", description: "Controllers") },
-        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: :overview_reason, scope: :tools_scope, kind: :root }
+        "rails-mcp-tools.mdc" => { renderer: :guide_unless_rooted, reason: :overview_reason, scope: :tools_scope, kind: :root }
       }.freeze
 
       # @param output_dir [String] Rails root path
@@ -52,16 +51,8 @@ module RailsAiContext
 
       # The overview, where no root file Cursor reads carries the root content.
       def render_project_rule
-        return nil if rooted?
-
-        lines = header_lines(:overview, title: "Overview")
-        lines.concat(overview_lines)
-
-        lines << ""
-        lines << "#{tools_noun.upcase_first} available - see rails-mcp-tools.mdc for full reference."
-        lines << "Always call with #{param_text("detail", "summary")} first, then drill into specifics."
-
-        lines.join("\n")
+        overview_rule("#{tools_noun.upcase_first} available - rails-mcp-tools.mdc has the guide.",
+                      "Start with #{param_text("detail", "summary")}, then drill into specifics.")
       end
 
       # Auto-attached when working in app/models/
@@ -98,11 +89,6 @@ module RailsAiContext
         lines.concat(tool_pointers([ "rails_get_controllers", 'controller:"Name"', "controller=Name", "for full detail." ]))
 
         lines.join("\n")
-      end
-
-      # The guide on request, where no root file Cursor reads carries it.
-      def render_mcp_tools_rule
-        guide_unless_rooted
       end
     end
   end

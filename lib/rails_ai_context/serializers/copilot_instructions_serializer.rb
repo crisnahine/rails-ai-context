@@ -8,7 +8,6 @@ module RailsAiContext
       TOOLS = [ :copilot ].freeze
 
       include StackOverviewHelper
-      include ToolGuideHelper
 
       RULE_FILES = {
         "rails-context.instructions.md" => {
@@ -25,7 +24,7 @@ module RailsAiContext
         },
         # Code review reads only copilot-instructions.md.
         "rails-mcp-tools.instructions.md" => {
-          renderer: :render_mcp_tools_instructions, reason: :overview_reason, name: :tools_name,
+          renderer: :guide_unless_rooted, reason: :overview_reason, name: :tools_name,
           scope: :tools_scope, exclude_agent: "code-review", kind: :root
         }
       }.freeze
@@ -40,15 +39,7 @@ module RailsAiContext
 
       # copilot-instructions.md states the overview whenever it is written.
       def render_context_instructions
-        return nil if rooted?
-
-        lines = header_lines(:overview, title: "Overview")
-        lines.concat(overview_lines)
-
-        lines << ""
-        lines << "Use #{tools_noun} for detailed data. Start with `#{param_text("detail", "summary")}`."
-
-        lines.join("\n")
+        overview_rule("Use #{tools_noun} for detailed data. Start with `#{param_text("detail", "summary")}`.")
       end
 
       def render_models_instructions
@@ -88,11 +79,6 @@ module RailsAiContext
 
       def tools_scope
         RuleScope.always("#{count_phrase(tool_count, "introspection tool")} - schema, models, routes, controllers, search, testing, validation")
-      end
-
-      # The guide, where copilot-instructions.md does not carry it.
-      def render_mcp_tools_instructions
-        guide_unless_rooted
       end
     end
   end

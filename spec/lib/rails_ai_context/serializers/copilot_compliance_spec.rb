@@ -211,13 +211,14 @@ RSpec.describe "Copilot instructions compliance" do
         expect(file[:content]).to include("PostsController")
       end
 
-      it "lists every registered tool" do
+      it "lists every registered tool in :cli mode, where nothing else does" do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:cli)
         allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
         content = generated_files["rails-mcp-tools.instructions.md"][:content]
 
         missing = RailsAiContext::Tools::BaseTool.registered_tools
-          .map(&:tool_name)
-          .reject { |name| content.include?(name) }
+          .map { |tool| RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name) }
+          .reject { |name| content.include?("`#{name}`") }
 
         expect(missing).to be_empty, "MCP tools file is missing: #{missing.join(%q(, ))}"
       end

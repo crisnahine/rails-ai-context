@@ -185,8 +185,7 @@ module RailsAiContext
       def write_rule_table(dir, table, root:, tool:)
         write_rule_files(
           table.map do |name, rule|
-            reason = rule[:reason].is_a?(Symbol) ? send(rule[:reason]) : rule[:reason]
-            RuleFile.new(File.join(dir, name), scoped(rule, tool), reason)
+            RuleFile.new(File.join(dir, name), scoped(rule, tool), answer(rule[:reason]))
           end,
           root: root
         )
@@ -204,29 +203,41 @@ module RailsAiContext
         self.class::TOOLS.any? { |key| plan.root_carries?(key) }
       end
 
+      # The overview a rules file carries where no root file states it, closed by the tool's own hints.
+      def overview_rule(*hints)
+        return nil if rooted?
+
+        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", *hints ].join("\n")
+      end
+
       def overview_reason
         rooted? ? "in the root file" : "nothing to document"
       end
 
-      # The tools guide, for a rules file that stands in for the root file.
+      # The root file's guide, for a rules file that stands in for it.
       def guide_unless_rooted
-        rooted? ? nil : render_tools_guide.join("\n")
+        rooted? ? nil : render_tools_guide_compact.join("\n")
       end
 
       def scoped(rule, tool)
         body = send(rule[:renderer]) or return nil
-        answer = ->(value) { value.is_a?(Symbol) ? send(value) : value }
-        frontmatter = answer.(rule.fetch(:scope)).frontmatter(tool, name: answer.(rule[:name]), exclude_agent: rule[:exclude_agent])
+        frontmatter = answer(rule.fetch(:scope)).frontmatter(tool, name: answer(rule[:name]), exclude_agent: rule[:exclude_agent])
         fit_rule(frontmatter, body, rule.fetch(:kind, :rule))
+      end
+
+      # A RULE_FILES value, or the method that answers it.
+      def answer(value)
+        value.is_a?(Symbol) ? send(value) : value
       end
 
       # A rule file's text within the Budget of its kind, or nil for no text.
       def fit_rule(head, body, kind)
-        body && Budget.fit(head: head, body: body.split("\n", -1), keep: [], kind: kind, note: rule_trim_note)
+        body && Budget.fit(head: head, body: body.split("\n", -1), keep: [], kind: kind, note: trim_note)
       end
 
-      def rule_trim_note
-        "_Trimmed to fit. The tools answer the rest._"
+      # What a file cut to its budget says where the cut is: the tools answer the rest.
+      def trim_note
+        "_Cut to fit: the #{tools_noun} answer the rest._"
       end
 
       # Write split-rule files with diff-check and atomic writes.

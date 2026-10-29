@@ -154,47 +154,8 @@ module RailsAiContext
         tool_ref("rails_get_config", %(section:"#{section}"), "section=#{section}")
       end
 
-      def tools_detail_guidance
-        names = detail_tool_names
-        return [] if names.empty?
 
-        lines = [
-          "### The detail parameter: start with summary",
-          "",
-          *Budget.wrap(names, lead: "Tools that take `detail`: "),
-          "",
-          "Pass `#{param_text("detail", "summary")}` first. Use the right level:",
-          "- **summary** - first call, orient yourself (table list, model names, route overview)",
-          "- **standard** - working detail (columns with types, associations, action source), the default",
-          "- **full** - only when you need indexes, foreign keys, code snippets, or complete content",
-          "",
-          "Pattern: summary to find the target → standard to understand it → full only if needed.",
-          ""
-        ]
-        composites = served_refs("rails_get_context", "rails_analyze_feature")
-        if composites.any?
-          lines << "**Composite tools take no `detail`** - #{composites.join(" and ")} #{composites.size > 1 ? "refuse" : "refuses"} it."
-          lines << ""
-        end
-        lines
-      end
 
-      def detail_tool_names
-        taking = exposed_tools.select { |tool| tool.input_schema_value.to_h.dig(:properties, :detail, :enum) == RailsAiContext::DetailLevel::ALL }
-        taking.map do |tool|
-          name = RailsAiContext::Server.tool_label(tool)
-          name = RailsAiContext::CLI::ToolRunner.short_name(name) if tool_mode == :cli
-          "`#{name}`#{detail_sections_note(tool)}"
-        end
-      end
-
-      # rails_get_config reads `detail` in some sections, and its default one answers that it does not.
-      def detail_sections_note(tool)
-        return nil unless tool.equal?(RailsAiContext::Tools::GetConfig)
-
-        names = tool.sections_on.select { |section| section.params.include?(:detail) }.map(&:name)
-        " (section#{"s" if names.size > 1}: #{names.join(", ")})"
-      end
 
       def tools_power_tool_section
         ex = guide_examples
@@ -343,9 +304,6 @@ module RailsAiContext
         lines.any? ? lines.join : " the tools answer from the app itself."
       end
 
-      def tools_table
-        [ "### All #{tool_count} Tools", "", *build_tools_table ]
-      end
 
       # One row per tool the server serves, in the guide's order: a built-in
       # declares its own, and a custom tool, which declares none, follows
@@ -359,35 +317,7 @@ module RailsAiContext
         builtin.sort_by { |_tool, row| row.order } + custom
       end
 
-      # One row per tool, in the one form the tool mode uses.
-      def build_tools_table
-        rows = tool_rows.map do |tool, row|
-          if tool_mode == :cli
-            # A command passes `match_type=any`, where a description shows the MCP form.
-            cli = cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name), row.cli_args)
-            "| `#{cli}` | #{row.summary.gsub('match_type:"any"', "match_type=any")} |"
-          else
-            "| `#{row.mcp}` | #{row.summary} |"
-          end
-        end
-        header = tool_mode == :cli ? [ "| CLI | What it does |", "|-----|-------------|" ] : [ "| MCP | What it does |", "|-----|-------------|" ]
-        header + rows
-      end
 
-      # Full tool guide section - used by split rules files (.claude/rules/, .cursor/rules/, etc.)
-      def render_tools_guide
-        lines = []
-        lines << tools_header
-        lines << ""
-        lines.concat(tools_intro)
-        lines.concat(tools_anti_hallucination_section)
-        lines.concat(tools_detail_guidance)
-        lines.concat(tools_power_tool_section)
-        lines.concat(tools_workflow_section)
-        lines.concat(tools_rules_section)
-        lines.concat(tools_table)
-        lines
-      end
 
       # The guide a root file carries, loaded in every session: no table, and
       # the names only in :cli mode, since an MCP client lists the tools itself.

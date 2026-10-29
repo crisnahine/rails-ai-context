@@ -487,7 +487,7 @@ module RailsAiContext
 
     # ── Context file checks ───────────────────────────────────────────
 
-    # Each tool's context files and rule directories, root file first.
+    # Each tool's context files and rule directories, and the files it no longer writes.
     CONTEXT_PATHS = Install::AiTool.all.to_h { |tool| [ tool.key, tool.owned_paths ] }.freeze
 
     # Where each tool's MCP config lives, and how to name it in a report.

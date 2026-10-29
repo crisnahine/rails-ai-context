@@ -7,9 +7,6 @@ module RailsAiContext
     # models (one row per model), :full for the full-mode document. Every line
     # fits Budget::LINE_WIDTH, so a model with a hundred associations costs a
     # line, and rails_get_model_details answers the rest.
-    #
-    # Include where ToolGuideHelper and StackOverviewHelper are, for the tool
-    # pointers and the app's own concerns.
     module ModelSection
       def model_rows(density)
         models = Payload.models(context)
@@ -28,10 +25,6 @@ module RailsAiContext
       def summary_rows(models)
         shown = Budget.cap(:key_models)
         rows = [ "## Key models (#{models.size} total, most connected first)" ]
-        # A cut list reads as the whole one unless it says where the rest is.
-        if served?("rails_get_model_details")
-          rows << "_A list that ends in ...N more is cut: #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} has it whole._"
-        end
         Payload.models_by_connection(models).first(shown).each do |name|
           data = models[name]
           next rows << SectionFacts.unread_row("- **#{name}**", data) if SectionFacts.unread_marker(data)
@@ -44,6 +37,10 @@ module RailsAiContext
           rows.concat(extras_rows(data))
         end
         rows << "- _...#{models.size - shown} more_" if models.size > shown
+        # A cut list reads as the whole one unless it says where the rest is.
+        if served?("rails_get_model_details") && rows.any? { |row| row.match?(/\.\.\.\d+ more_?\z/) }
+          rows.insert(1, "_A list that ends in ...N more is cut: #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} has it whole._")
+        end
         rows << ""
       end
 

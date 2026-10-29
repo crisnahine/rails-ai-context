@@ -112,17 +112,16 @@ RSpec.describe "the tools every generated file names" do
 
       expect(served_names.size).to eq(count)
       expect(files["AGENTS.md"]).to include("## Tools (#{count})")
-      expect(files[".claude/rules/rails-mcp-tools.md"]).to include("### All #{count} Tools", "`rails_get_widgets`")
+      expect(files[".claude/rules/rails-mcp-tools.md"]).to include("## Tools (#{count})")
       files.each do |path, content|
         expect(content).not_to include("rails_security_scan", "ai:tool[query]"), "#{path} documents a skipped tool"
       end
     end
 
-    it "gives the custom tool a row of its own in the table" do
-      table = generated_files[".claude/rules/rails-mcp-tools.md"]
+    it "names the custom tool among the commands in :cli mode" do
+      RailsAiContext.configuration.tool_mode = :cli
 
-      expect(table).to include("### All #{served_names.size} Tools")
-      expect(table).to include("| `rails_get_widgets` | Lists the app's widgets with their owners. |")
+      expect(generated_files["AGENTS.md"]).to include("### All #{served_names.size} tools", "`widgets`")
     end
   end
 

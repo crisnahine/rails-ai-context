@@ -32,8 +32,7 @@ module RailsAiContext
       # Whether a root file this tool reads carries the root content, so its
       # rules leave out what that file states.
       def root_carries?(key)
-        tool = Install::AiTool.find(key)
-        tool.reads.any? { |read| @kinds.key?(read.path) }
+        Install::AiTool.find(key).reads.any? { |read| read.every_surface && @kinds.key?(read.path) }
       end
 
       private
@@ -42,7 +41,7 @@ module RailsAiContext
       # is where the content goes, and a later one is written only for the
       # tools nothing chosen so far reaches.
       def plan
-        reach = Install::AiTool.all.flat_map(&:reads).map(&:path).tally
+        reach = Install::AiTool.all.flat_map(&:reads).select(&:every_surface).map(&:path).tally
         candidates = (@tools.map(&:root).uniq - @unwritable).sort_by.with_index { |path, i| [ -reach.fetch(path, 0), i ] }
         covered = []
         candidates.each_with_object({}) do |path, kinds|
@@ -56,8 +55,9 @@ module RailsAiContext
         end
       end
 
+      # A file only some of a tool's surfaces read covers none of it.
       def reading(tool, path)
-        tool.reads.find { |read| read.path == path }
+        tool.reads.find { |read| read.path == path && read.every_surface }
       end
     end
   end

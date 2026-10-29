@@ -125,7 +125,9 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
 
       Dir.mktmpdir do |dir|
-        expect(tools_rule(dir)).to include("Anti-Hallucination Protocol", "Step-by-step workflows", "| `rails_get_schema(table:\"X\")` |")
+        # The root file's guide; the MCP client lists the tools and their parameters.
+        expect(tools_rule(dir)).to include("Anti-Hallucination Protocol", "Step-by-step workflows", "`rails_get_schema(table:\"X\")`")
+        expect(tools_rule(dir)).not_to include("| MCP |")
       end
     end
   end

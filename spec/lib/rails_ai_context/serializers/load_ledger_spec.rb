@@ -26,8 +26,9 @@ RSpec.describe "What each AI tool loads at session start" do
     end
   end
 
-  def loaded(tool, dir)
-    roots = tool.reads.filter_map do |read|
+  # every: true for what all of the tool's surfaces load; false for its widest one.
+  def loaded(tool, dir, every: true)
+    roots = tool.reads.select { |read| read.every_surface || !every }.filter_map do |read|
       file = File.join(dir, read.path)
       next unless File.exist?(file)
 
@@ -50,6 +51,11 @@ RSpec.describe "What each AI tool loads at session start" do
 
           expect(guides).to eq(1), "#{tool.key} loads the guide #{guides} times"
           expect(texts.sum(&:bytesize)).to be <= budget + 200, "#{tool.key} loads #{texts.sum(&:bytesize)} bytes"
+
+          # VS Code Copilot also attaches AGENTS.md and CLAUDE.md, beside the copy
+          # every other Copilot surface needs: two copies at most, never three.
+          widest = loaded(tool, dir, every: false).sum { |text| text.scan("Anti-Hallucination Protocol").size }
+          expect(widest).to be <= 2, "#{tool.key}'s widest surface loads the guide #{widest} times"
         end
       end
     end

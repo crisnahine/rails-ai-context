@@ -263,7 +263,7 @@ RSpec.describe RailsAiContext::Serializers::RootFile do
 
         block = File.read(path).lines
         expect(block.first).to start_with("<!-- BEGIN rails-ai-context -->")
-        expect(block.join).to include("_Context trimmed.")
+        expect(block.join).to include("_Cut to fit:")
         expect(block.grep_v(/\A\s*\z/).size).to be <= budget
       end
     end
@@ -277,7 +277,7 @@ RSpec.describe RailsAiContext::Serializers::RootFile do
 
       expect(output).to start_with("# TestApp - AI Context")
       expect(output).not_to include("## Key models")
-      expect(output.index("_Context trimmed.")).to be < output.index("## Commands")
+      expect(output.index("_Cut to fit:")).to be < output.index("## Commands")
       expect(output).to include("## Rules", "Anti-Hallucination Protocol", "### Rules\n\n1.")
     end
   end
