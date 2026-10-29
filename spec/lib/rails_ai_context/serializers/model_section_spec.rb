@@ -46,6 +46,11 @@ RSpec.describe RailsAiContext::Serializers::ModelSection do
     expect(rows.join("\n")).to include("...590 more")
   end
 
+  # The eval saw an agent answer from a cut association list and miss one.
+  it "says a cut list is whole in the model tool" do
+    expect(renderer.model_rows(:summary)[1]).to eq("_A list that ends in ...N more is cut: `rails_get_model_details(model:\"Name\")` has it whole._")
+  end
+
   # The share a model list takes is set by the caps, not by the app.
   it "costs the root file a bounded number of bytes whatever the app's size" do
     bytes = renderer.model_rows(:summary).join("\n").bytesize
