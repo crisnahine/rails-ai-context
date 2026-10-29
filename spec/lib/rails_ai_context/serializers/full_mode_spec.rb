@@ -80,7 +80,7 @@ RSpec.describe "full mode's root files" do
 
     it "gives each column its default and each table its indexes and foreign keys" do
       expect(output).to include("`published` (boolean, default false)")
-      expect(output).to include("- Indexes: user_id, user_id+slug (unique)", "- Foreign keys: user_id → users")
+      expect(output).to include("- Indexes: user_id; user_id+slug (unique)", "- Foreign keys: user_id → users")
     end
 
     it "states a model's scopes, callbacks, enum values and constants" do

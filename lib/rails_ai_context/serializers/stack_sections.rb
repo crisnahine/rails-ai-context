@@ -36,11 +36,11 @@ module RailsAiContext
       def architecture_lines(density)
         return [] unless Payload.section(context, :conventions)
 
-        arch = Payload.architecture(context).map { |a| arch_labels_hash[a] || a }
+        arch = Payload.architecture(context).map { |a| arch_labels_hash[a] || a }.first(Budget.cap(:architecture))
         patterns = Payload.patterns(context).map { |p| pattern_labels_hash[p] || p }
         case density
         when :summary then [ *arch, *patterns.first(Budget.cap(:patterns)) ].map { |label| "- #{label}" }
-        when :overview then arch.first(Budget.cap(:architecture)).map { |label| "- #{label}" }
+        when :overview then arch.map { |label| "- #{label}" }
         when :full
           [ (Budget.list(arch, lead: "- **Architecture:** ") if arch.any?), (Budget.list(patterns, lead: "- **Patterns:** ") if patterns.any?) ].compact
         else raise ArgumentError, "no architecture density #{density}"

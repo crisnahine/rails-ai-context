@@ -11,11 +11,18 @@ module RailsAiContext
     # tool that expands imports at the file with the content) or nil: not
     # written, and a gem block left there from an earlier run is removed.
     class LoadPlan
-      def initialize(tools, root_files: RailsAiContext.configuration.generate_root_files)
+      # unwritable: root files a write refused, which the plan routes around.
+      def initialize(tools, root_files: RailsAiContext.configuration.generate_root_files, unwritable: [])
         keys = Array(tools).map(&:to_sym)
         @tools = Install::AiTool.all.select { |tool| keys.include?(tool.key) }
         @root_files = root_files
+        @unwritable = unwritable
         @kinds = root_files ? plan : {}
+      end
+
+      # The plan once this root file is known to refuse its block.
+      def without(path)
+        LoadPlan.new(@tools.map(&:key), root_files: @root_files, unwritable: @unwritable + [ path ])
       end
 
       def root(path)
@@ -30,7 +37,8 @@ module RailsAiContext
       # Whether a root file this tool reads carries the root content, so its
       # rules leave out what that file states.
       def root_carries?(key)
-        @root_files && @tools.any? { |tool| tool.key == key }
+        tool = Install::AiTool.find(key)
+        tool.reads.any? { |read| @kinds.key?(read.path) }
       end
 
       private
@@ -40,7 +48,7 @@ module RailsAiContext
       # tools nothing chosen so far reaches.
       def plan
         reach = Install::AiTool.all.flat_map(&:reads).map(&:path).tally
-        candidates = @tools.map(&:root).uniq.sort_by.with_index { |path, i| [ -reach.fetch(path, 0), i ] }
+        candidates = (@tools.map(&:root).uniq - @unwritable).sort_by.with_index { |path, i| [ -reach.fetch(path, 0), i ] }
         covered = []
         candidates.each_with_object({}) do |path, kinds|
           readers = @tools.select { |tool| reading(tool, path) }

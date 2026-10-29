@@ -62,14 +62,16 @@ RSpec.describe RailsAiContext::Serializers::ModelSection do
   it "lists a rules file's models one row each, alphabetically, and counts the rest" do
     rows = renderer.model_rows(:listing)
 
-    expect(rows.first).to start_with("- **Model1** (table: model1s) - has_many :things_1_1")
-    expect(rows.last).to start_with("- ...570 more models")
+    expect(rows.first).to start_with("- **Model1** (table: model1s) - has_many :things_1_1, has_many :things_1_2, ")
+    expect(rows).to include("- ...570 more models")
+    expect(rows.last).to eq("Use `rails_get_model_details(model:\"Name\")` for a model whole, with its concerns and callbacks resolved.")
   end
 
   it "writes the same summary into the root file" do
     root = RailsAiContext::Serializers::RootFile.new(context).call
 
     expect(root).to include(renderer.model_rows(:summary).first(3).join("\n"))
+    expect(root).to include("- **Model1** (100 associations, 1 validation) - has_many :things_1_1, has_many :things_1_2")
   end
 
   it "writes the same rows into every rules file's model list" do

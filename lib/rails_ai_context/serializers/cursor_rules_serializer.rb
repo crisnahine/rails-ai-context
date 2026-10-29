@@ -31,7 +31,10 @@ module RailsAiContext
 
         # Cursor calls .cursorrules legacy and reads the content from the root
         # file the plan picked, so the block an earlier release wrote goes.
-        SectionMarkerWriter.drop(File.join(output_dir, ".cursorrules"), root: output_dir, whole: false, result: result)
+        Install::AiTool.find(:cursor).retired_paths.each do |relative|
+          SectionMarkerWriter.drop(File.join(output_dir, relative), root: output_dir, whole: false, result: result)
+        end
+        result
       end
 
       private
@@ -82,7 +85,6 @@ module RailsAiContext
         lines << ""
 
         lines.concat(model_rows(:listing))
-        lines.concat(tool_pointers([ "rails_get_model_details", 'model:"Name"', "model=Name", "for full detail." ]))
 
         lines.join("\n")
       end

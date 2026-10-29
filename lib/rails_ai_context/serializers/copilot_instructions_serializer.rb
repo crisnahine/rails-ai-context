@@ -29,7 +29,7 @@ module RailsAiContext
       }.freeze
 
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      # @return [Hash] { written:, skipped:, removed:, trimmed: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         write_rule_table(File.join(output_dir, Install::AiTool.find(:copilot).rules_dir), RULE_FILES, root: output_dir, tool: :copilot)
       end

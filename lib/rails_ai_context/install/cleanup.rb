@@ -58,9 +58,14 @@ module RailsAiContext
       # @param relative [String] path under root
       # @param whole [Boolean] the gem owns the file outright (a rules directory's)
       # @return [Hash] an #outcome
+      # A link is left as it is: it can lead to a file this run just wrote.
       def drop(relative, root:, whole:)
         result = outcome
-        whole ? delete(relative, root, result) : remove_generated(relative, root, result, Set.new)
+        if File.symlink?(File.join(root.to_s, relative))
+          result[:linked] << relative
+        else
+          whole ? delete(relative, root, result) : remove_generated(relative, root, result, Set.new)
+        end
         result
       end
 

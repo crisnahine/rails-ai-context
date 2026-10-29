@@ -512,7 +512,9 @@ RSpec.describe RailsAiContext::InitializerSettings do
   # elsif, which shares its if's end, took the if's place.
   it "names the line of an error that is not about a closer, and an if's line over its elsif" do
     { "RailsAiContext.configure do |config|\n  x = 1 +\n" => 2,
-      "RailsAiContext.configure do |config|\n  if a\n    1\n  elsif b\n    2\n" => 2 }.each do |body, line|
+      "RailsAiContext.configure do |config|\n  if a\n    1\n  elsif b\n    2\n" => 2,
+      "RailsAiContext.configure do |config|\n  if a\n    1\n  else\n    2\n" => 2,
+      "RailsAiContext.configure do |config|\n  unless a\n    1\n  else\n    2\n" => 2 }.each do |body, line|
       write("config/initializers/rails_ai_context.rb", body)
 
       expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /\Aconfig\/initializers\/rails_ai_context\.rb:#{line}: this file does not parse as Ruby/)

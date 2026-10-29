@@ -144,11 +144,21 @@ module RailsAiContext
       # The validator class a `validates_with` names, else the attributes; never a bare "on ".
       # An enum's values as a reader names them; computed ones as their source.
       def enum_values(values)
+        enum_names(values).join(", ")
+      end
+
+      def enum_names(values)
         case values
-        when Hash then values.keys.join(", ")
-        when String then "`#{values}` (computed)"
-        else Array(values).join(", ")
+        when Hash then values.keys.map(&:to_s)
+        when String then [ "`#{values}` (computed)" ]
+        else Array(values).map(&:to_s)
         end
+      end
+
+      MARKDOWN_SPECIAL_CHARS = /([\\`*_{\}\[\]()+\-#.!~|])/
+
+      def escape_markdown(text)
+        text.to_s.gsub(MARKDOWN_SPECIAL_CHARS, '\\\\\1')
       end
 
       def validation_target(validation)

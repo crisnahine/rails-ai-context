@@ -73,7 +73,7 @@ module RailsAiContext
         # engine is often mounted by its own initializer, or not at all.
         in_repo = Payload.in_repo_engines(ctx).filter_map { |e| e[:name] }
         if in_repo.any?
-          lines << "#{Budget.list(in_repo, cap: Budget.cap(:in_repo_engines), lead: "- In-repo engines: #{in_repo.size} (")})"
+          lines << "#{Budget.list(in_repo, cap: Budget.cap(:in_repo_engines), lead: "- In-repo engines: #{in_repo.size} (", width: Budget::LINE_WIDTH - 1)})"
         end
 
         raw_databases = Payload.section(ctx, :multi_database)&.dig(:databases)
@@ -200,7 +200,12 @@ module RailsAiContext
         body = send(rule[:renderer]) or return nil
         answer = ->(value) { value.is_a?(Symbol) ? send(value) : value }
         frontmatter = answer.(rule.fetch(:scope)).frontmatter(tool, name: answer.(rule[:name]), exclude_agent: rule[:exclude_agent])
-        Budget.fit(head: frontmatter, body: body.split("\n", -1), keep: [], kind: rule.fetch(:kind, :rule), note: rule_trim_note)
+        fit_rule(frontmatter, body, rule.fetch(:kind, :rule))
+      end
+
+      # A rule file's text within the Budget of its kind, or nil for no text.
+      def fit_rule(head, body, kind)
+        body && Budget.fit(head: head, body: body.split("\n", -1), keep: [], kind: kind, note: rule_trim_note)
       end
 
       def rule_trim_note

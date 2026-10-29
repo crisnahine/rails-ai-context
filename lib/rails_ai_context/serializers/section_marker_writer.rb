@@ -8,8 +8,8 @@ module RailsAiContext
     # markers so user-added content OUTSIDE the markers survives regeneration.
     #
     # Used by ContextFileSerializer (for CLAUDE.md, AGENTS.md, .github/copilot-
-    # instructions.md), CursorRulesSerializer (for .cursorrules) and, for a
-    # per-directory AGENTS.md the user wrote, OpencodeRulesSerializer. Same
+    # instructions.md) and, for a per-directory AGENTS.md the user wrote,
+    # OpencodeRulesSerializer. Same
     # marker contract everywhere - a user can hand-write content above or below
     # the gem-managed block and it'll persist across `rails ai:context` runs.
     module SectionMarkerWriter

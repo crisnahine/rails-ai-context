@@ -351,7 +351,7 @@ module RailsAiContext
     # `generate_root_files`, which still writes the split rule files.
     attr_accessor :context_files
 
-    # Whether to generate root-level context files (CLAUDE.md, AGENTS.md, .cursorrules,
+    # Whether to generate root-level context files (CLAUDE.md, AGENTS.md,
     # copilot-instructions.md). When false, only split rule files and .ai-context.json are written.
     attr_accessor :generate_root_files
 

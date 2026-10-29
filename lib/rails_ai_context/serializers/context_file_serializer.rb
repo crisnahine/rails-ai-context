@@ -76,22 +76,14 @@ module RailsAiContext
         result = { written: [], skipped: [], not_applicable: {}, removed: [], trimmed: [] }
 
         tools = formats & Install::AiTool.keys
-        plan = LoadPlan.new(tools | (Array(RailsAiContext.configuration.ai_tools).map(&:to_sym) & Install::AiTool.keys),
-                            root_files: generate_root)
+        # The files a tool reads depend on what else the app has, so the plan
+        # covers the recorded selection too; an unset one means every tool.
+        recorded = RailsAiContext.configuration.ai_tools
+        selected = recorded.nil? ? Install::AiTool.keys : Array(recorded).map(&:to_sym) & Install::AiTool.keys
+        plan = LoadPlan.new(tools | selected, root_files: generate_root)
 
         write_plain(File.join(output_dir, JSON_PATH), JsonSerializer.new(context).call, result, output_dir) if formats.include?(:json)
-        root_paths(tools, plan).each do |relative|
-          filepath = File.join(output_dir, relative)
-          # generate_root_files = false is a deliberate omission, so it is
-          # reported rather than dropped.
-          next result[:not_applicable][filepath] = "root files disabled" unless generate_root
-
-          case plan.root(relative)
-          when :content then write_root(filepath, root_content, output_dir, result)
-          when :import then write_root(filepath, "@#{plan.content_home}", output_dir, result)
-          else SectionMarkerWriter.drop(filepath, root: output_dir, whole: false, result: result)
-          end
-        end
+        plan = write_roots(tools, plan, output_dir, result, generate_root)
 
         # Split rules are always generated regardless of generate_root_files
         generate_split_rules(tools, plan, output_dir, result)
@@ -100,6 +92,29 @@ module RailsAiContext
       end
 
       private
+
+      # The content files first: one that refuses its block (unpaired markers,
+      # a link out, no permission) leaves the plan, so an import never names it
+      # and a tool that read it gets the content elsewhere.
+      # @return [LoadPlan] the plan the rules are written by
+      def write_roots(tools, plan, output_dir, result, generate_root)
+        root_paths(tools, plan).sort_by { |path| plan.root(path) == :content ? 0 : 1 }.each do |relative|
+          filepath = File.join(output_dir, relative)
+          # generate_root_files = false is a deliberate omission, so it is
+          # reported rather than dropped.
+          next result[:not_applicable][filepath] = "root files disabled" unless generate_root
+
+          case plan.root(relative)
+          when :content
+            next if write_root(filepath, root_content, output_dir, result)
+
+            plan = plan.without(relative)
+          when :import then write_root(filepath, "@#{plan.content_home}", output_dir, result)
+          else SectionMarkerWriter.drop(filepath, root: output_dir, whole: false, result: result)
+          end
+        end
+        plan
+      end
 
       # These tools' root files, and the file an import among them points at:
       # CLAUDE.md is empty without its AGENTS.md.
@@ -113,8 +128,11 @@ module RailsAiContext
         @root_content ||= RootFile.new(context).call
       end
 
+      # @return [Boolean] whether the file holds the content now
       def write_root(filepath, content, root, result)
-        SectionMarkerWriter.report(SectionMarkerWriter.write_with_markers(filepath, content, root: root), filepath, result)
+        outcome = SectionMarkerWriter.write_with_markers(filepath, content, root: root)
+        SectionMarkerWriter.report(outcome, filepath, result)
+        %i[written skipped].include?(outcome)
       end
 
       # JSON and other formats that don't support HTML comments

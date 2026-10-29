@@ -72,7 +72,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       described_class.new(ctx).call(dir)
       content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
 
-      expect(content).to include("FK: author_id→authors, (user_id, user_day)→users")
+      expect(content).to include("FK: author_id→authors; (user_id, user_day)→users")
     end
   end
 

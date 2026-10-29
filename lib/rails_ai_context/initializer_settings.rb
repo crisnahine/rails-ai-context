@@ -223,15 +223,15 @@ module RailsAiContext
       error.type.to_s.match?(/_term(_|\z)/)
     end
 
-    # An elsif shares its if's end, so prism 1 gives it the empty closing too; the if is the opener.
+    # An elsif or an else shares its if's end, so prism 1 gives it the empty closing too; the if is the opener.
     def unclosed_line(root)
       stack = [ root ]
       lines = []
       until stack.empty?
         node = stack.pop
         closing = (node.closing_loc if node.respond_to?(:closing_loc)) || (node.end_keyword_loc if node.respond_to?(:end_keyword_loc))
-        elsif_node = node.respond_to?(:if_keyword_loc) && node.if_keyword_loc&.slice == "elsif"
-        lines << node.location.start_line if closing&.length&.zero? && !elsif_node
+        branch = node.is_a?(Prism::ElseNode) || (node.respond_to?(:if_keyword_loc) && node.if_keyword_loc&.slice == "elsif")
+        lines << node.location.start_line if closing&.length&.zero? && !branch
         stack.concat(node.compact_child_nodes)
       end
       lines.max

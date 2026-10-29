@@ -25,7 +25,7 @@ RSpec.describe RailsAiContext::Serializers::StackSections do
     end
 
     it "renders the architecture at #{density}" do
-      expect(renderer.architecture_lines(density).join("\n")).to match(/Service objects|service_objects/i)
+      expect(renderer.architecture_lines(density).join("\n")).to include(RailsAiContext::Tools::GetConventions::ARCH_LABELS.fetch("service_objects"))
     end
   end
 
@@ -39,6 +39,11 @@ RSpec.describe RailsAiContext::Serializers::StackSections do
 
   describe "the root file" do
     let(:root_file) { RailsAiContext::Serializers::RootFile.new(context).call }
+
+    # The Architecture section names the patterns; the Rules repeated them.
+    it "names the architecture in its section alone" do
+      expect(root_file.scan(/service objects/i).size).to eq(1)
+    end
 
     it "names the test command once" do
       expect(root_file.scan("bundle exec rspec").size).to eq(1)

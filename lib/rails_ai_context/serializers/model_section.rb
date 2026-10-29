@@ -43,7 +43,7 @@ module RailsAiContext
           rows << (associations.any? ? Budget.list(associations, lead: "#{lead} - ") : lead)
           rows.concat(extras_rows(data))
         end
-        rows << "- _...#{models.size - shown} more#{more_models_pointer}_" if models.size > shown
+        rows << "- _...#{models.size - shown} more_" if models.size > shown
         rows << ""
       end
 
@@ -60,12 +60,12 @@ module RailsAiContext
           lead = "- **#{name}**#{table}"
           [ associations.any? ? Budget.list(associations, lead: "#{lead} - ") : lead, *extras_rows(data, concerns: true) ]
         end
-        rows << "- ...#{count_phrase(models.size - shown, "more model")}#{more_models_pointer}" if models.size > shown
-        rows
+        rows << "- ...#{count_phrase(models.size - shown, "more model")}" if models.size > shown
+        rows.concat(tool_pointers([ "rails_get_model_details", 'model:"Name"', "model=Name", "for a model whole, with its concerns and callbacks resolved." ]))
       end
 
       def full_rows(name, data)
-        rows = [ "### #{name}" ]
+        rows = [ "### #{SectionFacts.escape_markdown(name)}" ]
         return rows << "- #{SectionFacts.unread_marker(data)}" if SectionFacts.unread_marker(data)
 
         note = SectionFacts.table_note(Payload.section(context, :schema), data)
@@ -82,7 +82,7 @@ module RailsAiContext
         rows << Budget.list(scopes, lead: "- Scopes: ") if scopes.any?
         callbacks = data[:callbacks].is_a?(Hash) ? data[:callbacks] : {}
         callbacks.each do |kind, names|
-          rows << Budget.list(Array(names).map { |n| n.is_a?(Hash) ? (n[:method] || n[:name]).to_s : n.to_s }, lead: "- Callbacks #{kind}: ")
+          rows << Budget.list(Array(names).map { |n| n.is_a?(Hash) ? (n[:method] || n[:name]).to_s : n.to_s }, lead: "- Callbacks #{kind}: ", separator: "; ")
         end
         rows.concat(value_rows(data, "- ", label: "Enum "))
       end
@@ -102,13 +102,9 @@ module RailsAiContext
       def value_rows(data, indent, label: "")
         enums = data[:enums].is_a?(Hash) ? data[:enums] : Array(data[:enums]).to_h { |enum| [ enum, nil ] }
         rows = enums.map do |attr, values|
-          values ? Budget.list(SectionFacts.enum_values(values).split(", "), lead: "#{indent}#{label}#{attr}: ") : "#{indent}#{label}#{attr}"
+          values ? Budget.list(SectionFacts.enum_names(values), lead: "#{indent}#{label}#{attr}: ") : "#{indent}#{label}#{attr}"
         end
         rows + Array(data[:constants]).grep(Hash).map { |c| Budget.list(Array(c[:values]), lead: "#{indent}#{c[:name]}: ") }
-      end
-
-      def more_models_pointer
-        " (use #{tool_named("rails_get_model_details")})" if served?("rails_get_model_details")
       end
     end
   end

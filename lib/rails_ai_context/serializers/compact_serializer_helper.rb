@@ -92,7 +92,6 @@ module RailsAiContext
         lines.join("\n").split("\n", -1)
       end
 
-      # Architecture / conventions section.
       # The architecture and pattern lines need the booted conventions; the
       # services and jobs lines are read from files, so every tier has them.
       def render_architecture
@@ -112,19 +111,9 @@ module RailsAiContext
         [ "## Architecture", *lines, "" ]
       end
 
-      # Footer rules section.
       def render_footer
         lines = [ "## Rules" ]
         lines << "- Run the tests after changes"
-
-        if Payload.section(context, :conventions)
-          arch = Payload.architecture(context)
-          lines << "- Follow #{arch.join(' + ')} architecture" if arch.any?
-          patterns = Payload.patterns(context)
-          lines << "- Use service objects for business logic" if patterns.include?("service_objects")
-          lines << "- Use form objects for complex forms" if patterns.include?("form_objects")
-          lines << "- Use query objects for complex queries" if patterns.include?("query_objects")
-        end
 
         stimulus = Payload.section(context, :stimulus)
         if Payload.stimulus_controllers(context).any? || stimulus&.dig(:total_controllers)&.positive?
@@ -135,13 +124,13 @@ module RailsAiContext
           end
         end
 
-        lines << before_actions_line("- Global before_actions: ") if detect_before_actions.any?
+        lines.concat([ before_actions_line("- Global before_actions: ") ].compact)
 
         lines << ""
         lines
       end
 
-      # The compact pipeline behind CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md.
+      # The compact root file every root path gets.
       def render_compact_rules
         data = render_stack_overview + render_key_models + render_notable_gems + render_architecture
         instructions = render_commands + render_warnings + render_footer + render_tools_guide_compact

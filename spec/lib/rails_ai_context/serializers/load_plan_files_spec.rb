@@ -84,6 +84,58 @@ RSpec.describe "Context files for a selection of AI tools" do
     expect(result[:removed]).to include(path(".claude/rules/rails-context.md"), path(".claude/rules/rails-mcp-tools.md"))
   end
 
+  # A link is somebody's own arrangement: taking the block out through one
+  # emptied the AGENTS.md this run had just written.
+  it "leaves a .cursorrules that links to AGENTS.md alone, and AGENTS.md whole" do
+    File.write(path("AGENTS.md"), "# my agents\n")
+    File.symlink("AGENTS.md", path(".cursorrules"))
+
+    result = run(:claude, :cursor)
+
+    expect(block("AGENTS.md")).to include("## Tools (")
+    expect(result[:trimmed]).to eq([])
+    expect(result[:not_applicable][path(".cursorrules")]).to eq(RailsAiContext::SafeFile::LINKED)
+  end
+
+  # The import is only as good as the file it names.
+  it "gives CLAUDE.md the content when AGENTS.md cannot take its block, which Cursor reads too" do
+    File.write(path("AGENTS.md"), "# mine\n#{marker::BEGIN_MARKER}\nold\n")
+
+    result = run(:claude, :cursor)
+
+    expect(block("CLAUDE.md")).to include("## Tools (")
+    expect(result[:not_applicable][path("AGENTS.md")]).to eq(marker::UNPAIRED)
+  end
+
+  # Codex reads AGENTS.md alone, so with it refused its rules carry the overview.
+  it "keeps a tool's own overview when the only root file it reads refused" do
+    File.write(path("AGENTS.md"), "# mine\n#{marker::BEGIN_MARKER}\nold\n")
+    FileUtils.mkdir_p(path("app/controllers"))
+
+    run(:codex, :claude)
+
+    expect(block("CLAUDE.md")).to include("## Tools (")
+    expect(RailsAiContext::Serializers::LoadPlan.new(%i[codex claude]).without("AGENTS.md").root_carries?(:codex)).to be(false)
+  end
+
+  # An unset selection means every AI tool, as a run with no format does.
+  it "plans a one-tool run against every AI tool when none are recorded" do
+    allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
+    run(:claude)
+
+    expect(block("CLAUDE.md")).to eq("@AGENTS.md")
+    expect(block("AGENTS.md")).to include("## Tools (")
+  end
+
+  # The root AGENTS.md OpenCode always reads states the filters, services and jobs.
+  it "leaves the root file's facts out of app/controllers/AGENTS.md" do
+    FileUtils.mkdir_p(path("app/controllers"))
+    allow_any_instance_of(RailsAiContext::Serializers::OpencodeRulesSerializer).to receive(:service_names).and_return(%w[PaymentService])
+    run(:opencode)
+
+    expect(File.read(path("app/controllers/AGENTS.md"))).not_to include("**Services:**", "**Global before_actions:**")
+  end
+
   it "keeps the overview and the guide in the rules when root files are off" do
     allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
     run(:claude, :copilot)

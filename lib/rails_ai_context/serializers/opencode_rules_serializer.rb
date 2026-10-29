@@ -22,7 +22,7 @@ module RailsAiContext
       }.freeze
 
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      # @return [Hash] { written:, skipped:, removed:, trimmed: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         # The split targets after the root file, per the table's convention.
         entries = Install::AiTool.find(:opencode).context_paths.drop(1).map do |relative|
@@ -31,9 +31,7 @@ module RailsAiContext
           # A directory the app does not have is reported, not dropped, and
           # nothing renders for it so the directory is never created.
           if Dir.exist?(File.dirname(filepath))
-            content = send(rule[:renderer])
-            content &&= Budget.fit(head: [], body: content.split("\n", -1), keep: [], kind: :rule, note: rule_trim_note)
-            RuleFile.new(filepath, content, rule[:reason])
+            RuleFile.new(filepath, fit_rule([], send(rule[:renderer]), :rule), rule[:reason])
           else
             RuleFile.new(filepath, nil, missing_directory_reason(File.dirname(relative), output_dir))
           end
@@ -43,6 +41,15 @@ module RailsAiContext
       end
 
       private
+
+      def plan
+        @plan ||= LoadPlan.new([ :opencode ])
+      end
+
+      # The root AGENTS.md states the global filters, services and jobs whenever it is written.
+      def root_carries?
+        plan.root_carries?(:opencode) || plan.root_carries?(:codex)
+      end
 
       # OpenCode reads these beside the code, so they go only into a
       # directory that exists. Under an output_dir that is not the app, the
@@ -69,7 +76,6 @@ module RailsAiContext
 
         lines.concat(model_rows(:listing))
         lines.concat(tool_pointers(
-          [ "rails_get_model_details", 'model:"Name"', "model=Name", "for associations, validations, scopes, enums." ],
           [ "rails_get_view", 'controller:"name"', "controller=name", "for view templates." ],
           [ "rails_get_test_info", 'model:"Name"', "model=Name", "for existing model tests." ]
         ))
@@ -92,13 +98,12 @@ module RailsAiContext
           lines.insert(-2, "> #{notice}")
         end
 
-        # ApplicationController before_actions
-        before_actions = detect_before_actions
-        lines << "**Global before_actions:** #{before_actions.join(', ')}" << "" if before_actions.any?
+        filters = before_actions_line("**Global before_actions:** ") unless root_carries?
+        lines.push(filters, "") if filters
 
         lines.concat(render_compact_controllers_list(app_controllers, with_actions: true))
 
-        names = [ names_line(service_names, "**Services:** "), names_line(job_names, "**Jobs:** ") ].compact
+        names = root_carries? ? [] : [ names_line(service_names, "**Services:** "), names_line(job_names, "**Jobs:** ") ].compact
         lines.push("", *names) if names.any?
 
         lines.concat(tool_pointers(

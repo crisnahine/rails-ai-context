@@ -16,7 +16,7 @@ module RailsAiContext
 
       # How many of a list a file names before it counts the rest.
       CAPS = {
-        key_models: 10, listed_rows: 30, listed_controllers: 25, names: 12, methods: 20,
+        key_models: 10, listed_rows: 30, listed_controllers: 25, names: 12,
         mounted: 5, in_repo_engines: 5, databases: 3, patterns: 8, architecture: 5, locales: 5
       }.freeze
 
@@ -28,14 +28,15 @@ module RailsAiContext
 
       # The items that fit one line after `lead`, at most `cap` of them, then
       # how many more there are.
-      def list(items, cap: nil, lead: "", width: LINE_WIDTH)
+      # `separator` is "; " where an item holds a comma itself, as a composite key does.
+      def list(items, cap: nil, lead: "", width: LINE_WIDTH, separator: ", ")
         items = Array(items).map(&:to_s)
         shown = []
         items.each_with_index do |item, i|
           break if cap && i >= cap
 
           rest = items.size - i - 1
-          candidate = lead + [ *shown, item ].join(", ") + (rest.positive? ? ", ...#{rest} more" : "")
+          candidate = lead + [ *shown, item ].join(separator) + (rest.positive? ? "#{separator}...#{rest} more" : "")
           break if candidate.size > width
 
           shown << item
@@ -43,7 +44,7 @@ module RailsAiContext
         return "#{lead}...#{items.size} more" if shown.empty? && items.any?
 
         left = items.size - shown.size
-        lead + [ *shown, ("...#{left} more" if left.positive?) ].compact.join(", ")
+        lead + [ *shown, ("...#{left} more" if left.positive?) ].compact.join(separator)
       end
 
       # A list that has to stay whole, over as many lines of the width as it

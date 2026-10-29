@@ -21,7 +21,7 @@ module RailsAiContext
       }.freeze
 
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      # @return [Hash] { written:, skipped:, removed:, trimmed: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES, root: output_dir, tool: :claude)
       end
@@ -161,14 +161,14 @@ module RailsAiContext
           # A line each, so a wide table costs lines of the width, not one line of kilobytes.
           lead = "- **#{name}** (#{count_phrase(col_count, 'col')})"
           lines << (col_sample.any? ? Budget.list(col_sample, lead: "#{lead} - ") : lead)
-          lines << Budget.list(fks, lead: "  FK: ") if fks.any?
-          lines << Budget.list(idxs, lead: "  Idx: ") if idxs.any?
+          lines << Budget.list(fks, lead: "  FK: ", separator: "; ") if fks.any?
+          lines << Budget.list(idxs, lead: "  Idx: ", separator: "; ") if idxs.any?
 
           # Include enum values if model has them
           model_data = table_model(models, name, database, schema)
           if model_data.is_a?(Hash) && model_data[:enums]&.any?
             model_data[:enums].each do |attr, values|
-              lines << Budget.list(SectionFacts.enum_values(values).split(", "), lead: "  #{attr}: ")
+              lines << Budget.list(SectionFacts.enum_names(values), lead: "  #{attr}: ")
             end
           end
         end
@@ -203,7 +203,6 @@ module RailsAiContext
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
         lines.concat(model_rows(:listing))
-        lines.concat(tool_pointers([ "rails_get_model_details", 'model:"Name"', "model=Name", "for live data with resolved concerns and callbacks." ]))
         lines.join("\n")
       end
 

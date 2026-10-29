@@ -12,17 +12,15 @@ module RailsAiContext
       include StackOverviewHelper
       include ToolGuideHelper
 
-      MARKDOWN_SPECIAL_CHARS = /([\\`*_{\}\[\]()+\-#.!~|])/
-
       SECTIONS = %i[
         schema models routes jobs gems conventions controllers views stimulus turbo active_storage
         action_text i18n config assets auth api tests rake_tasks devops action_mailbox
         migrations seeds middleware engines multi_database
       ].freeze
 
-      # @return [String] full markdown document
       # The data sections are what the full budget cuts, from the last one up;
       # the header, the rules, the guide and the footer stay whole.
+      # @return [String] full markdown document
       def call
         data = SECTIONS.filter_map { |key| send("#{key}_section") if Payload.section(context, key) }
         keep = [ (warnings_section if context[:_warnings]&.any?), rules_section, render_tools_guide_compact.join("\n").rstrip, footer ].compact
@@ -107,8 +105,8 @@ module RailsAiContext
           "#{Introspectors::SchemaConventions.key_text(fk[:column])} → #{fk[:to_table]}"
         end
         lines = []
-        lines << Budget.list(indexes, lead: "- Indexes: ") if indexes.any?
-        lines << Budget.list(foreign_keys, lead: "- Foreign keys: ") if foreign_keys.any?
+        lines << Budget.list(indexes, lead: "- Indexes: ", separator: "; ") if indexes.any?
+        lines << Budget.list(foreign_keys, lead: "- Foreign keys: ", separator: "; ") if foreign_keys.any?
         lines
       end
 
@@ -596,9 +594,13 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # The root file carries its own (RootFile::Full).
       def rules_section
-        nil
+        rules = [ "## Behavioral Rules", "", "When working in this codebase:" ]
+        rules << "- Follow existing patterns and conventions detected above"
+        rules << "- Use the database schema as the source of truth for column names and types"
+        rules << "- Respect existing associations and validations when modifying models"
+        rules << "- Run `#{detect_test_command}` after making changes to verify correctness"
+        rules.join("\n")
       end
 
       # A plain `rails ai:context` regenerates in compact mode unless the
@@ -611,8 +613,7 @@ module RailsAiContext
       end
 
       def escape_markdown(text)
-        return "" if text.nil?
-        text.to_s.gsub(MARKDOWN_SPECIAL_CHARS, '\\\\\1')
+        SectionFacts.escape_markdown(text)
       end
     end
   end
