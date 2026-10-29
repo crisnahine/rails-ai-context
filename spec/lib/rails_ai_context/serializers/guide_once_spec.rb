@@ -49,6 +49,16 @@ RSpec.describe "The tools guide in the root file" do
     expect(output).not_to match(/^### All \d+ tools/)
   end
 
+  # The eval saw an agent read the model file and miss an association a
+  # concern declares, and read db/schema.rb once the rule named no tool for it.
+  it "maps each reference question to the call that answers it" do
+    output = root_file(:mcp)
+
+    expect(output).to include("1. **Read a file only to edit it.** For reference, ask the tool:\n" \
+                              "   - a table's columns, indexes and keys: `rails_get_schema(table:\"X\")`\n" \
+                              "   - a model's associations, validations and scopes, its concerns' included: `rails_get_model_details(model:\"X\")`")
+  end
+
   it "lists the commands in :cli mode, where nothing else does" do
     output = root_file(:cli)
 

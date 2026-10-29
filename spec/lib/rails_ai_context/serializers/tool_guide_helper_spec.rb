@@ -122,7 +122,7 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       expect(helper.tools_name_list.join("\n")).to include("`rails_get_schema`")
       expect(helper.served?("rails_get_schema")).to be(false)
       expect(helper.served?("rails_get_model_details")).to be(true)
-      expect(helper.tools_rules_section.join("\n")).to include("`rails_get_model_details` resolves concerns")
+      expect(helper.tools_rules_section.join("\n")).to include("`rails_get_model_details(model:\"X\")`")
       expect(helper.tools_rules_section.join("\n")).not_to include("rails_get_schema")
     end
   end

@@ -304,9 +304,9 @@ module RailsAiContext
       # run after an edit, and how to ask.
       def tools_rules_section
         rules = []
+        rules << "**Read a file only to edit it.** For reference, ask the tool:#{reference_reads}"
         composites = served_refs("rails_get_context", "rails_analyze_feature")
         rules << "**Composite tools first** - #{composites.join(" and ")} before the single-layer tools" if composites.any?
-        rules << "**Read a file only to edit it** - #{reference_reads}"
         if served?("rails_search_code")
           rules << "**Trace with #{tool_ref("rails_search_code")}** - it skips sensitive files, follows a method with " \
                    "`#{param_text("match_type", "trace")}` and paginates; plain search is fine for a simple lookup"
@@ -321,15 +321,26 @@ module RailsAiContext
         [ "### Rules", "", *rules.each_with_index.map { |rule, i| "#{i + 1}. #{rule}" }, "" ]
       end
 
-      # What answers better than the file, for the tools the app serves.
+      # Each question a file read answers worse, and the call that answers it,
+      # as the tool's own row writes the call. In the eval an agent that read
+      # the model file missed an association a concern declares.
+      REFERENCE_QUESTIONS = [
+        [ "rails_get_schema", "a table's columns, indexes and keys" ],
+        [ "rails_get_model_details", "a model's associations, validations and scopes, its concerns' included" ],
+        [ "rails_get_controllers", "an action's source and the filters it runs" ],
+        [ "rails_get_test_info", "the tests that cover a model or controller" ]
+      ].freeze
+
       def reference_reads
-        reads = []
-        reads << "#{tool_ref("rails_get_schema")} reads #{schema_dump_path} and marks indexed and unique columns" if served?("rails_get_schema")
-        if served?("rails_get_model_details")
-          reads << "#{tool_ref("rails_get_model_details")} resolves concerns, inherited methods and implicit belongs_to validations"
+        rows = tool_rows.to_h { |tool, row| [ tool.tool_name, row ] }
+        lines = REFERENCE_QUESTIONS.filter_map do |name, question|
+          row = rows[name]
+          next unless row && served?(name)
+
+          call = tool_mode == :cli ? cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(name), row.cli_args) : row.mcp
+          "\n   - #{question}: `#{call}`"
         end
-        reads << "#{tool_ref("rails_get_routes")} reads config/routes.rb" if served?("rails_get_routes")
-        reads.any? ? "for reference, #{reads.join("; ")}" : "the tools answer from the app for reference"
+        lines.any? ? lines.join : " the tools answer from the app itself."
       end
 
       def tools_table

@@ -138,9 +138,11 @@ RSpec.describe "the tools every generated file names" do
       content.scan(/\b#{Regexp.escape(name)}\b|ai:tool\[#{short}\]|rails-ai-context tool #{short}\b/)
     end
 
-    # Each run of numbered lines, as the numbers it carries.
+    # Each run of numbered lines, as the numbers it carries; an indented
+    # sub-item continues the run it sits in.
     def numbered_runs(content)
-      content.lines.map { |line| line[/\A(\d+)\. /, 1]&.to_i }.chunk_while { |a, b| a && b }.select(&:first)
+      content.lines.reject { |line| line.start_with?("   - ") }.map { |line| line[/\A(\d+)\. /, 1]&.to_i }
+             .chunk_while { |a, b| a && b }.select(&:first)
     end
 
     %i[mcp cli].each do |mode|
@@ -162,7 +164,7 @@ RSpec.describe "the tools every generated file names" do
       claude = generated_files["AGENTS.md"]
 
       expect(claude).to include("### Start here\n", "**Modify a model**", "1. `rails_get_model_details(model:",
-                                "**Fix a controller bug:**\n1. `rails_get_controllers(", "### Rules\n\n1. **Read a file only to edit it**")
+                                "**Fix a controller bug:**\n1. `rails_get_controllers(", "### Rules\n\n1. **Read a file only to edit it.**")
       expect(claude).not_to include("**Trace a method:**", "composite tools", "Validate EVERY edit")
     end
 
