@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "json"
-
 module RailsAiContext
   module Tools
     # Last-resort rescue for tool execution, prepended to every registered
@@ -109,8 +107,9 @@ module RailsAiContext
       def with_report(response)
         return response unless RailsAiContext.configuration.report_issue_line
 
+        # json_response's object, which carries the line under its own key.
         body = response.content.first&.dig(:text).to_s if response.respond_to?(:content)
-        return response if body&.lstrip&.start_with?("{") && (JSON.parse(body).is_a?(Hash) rescue false)
+        return response if body&.start_with?("{") && body.end_with?("}")
 
         append_note(response, RailsAiContext::Tools::BaseTool.report_banner)
       end

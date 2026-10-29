@@ -31,6 +31,22 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       end.new
     end
 
+    it "names the app's model test path where it is not the one an agent guesses" do
+      host = Class.new do
+        include RailsAiContext::Serializers::StackOverviewHelper
+        include RailsAiContext::Serializers::CompactSerializerHelper
+
+        def context = { tests: { framework: "rspec", model_test_paths: %w[spec/models/<model>_spec.rb spec/models/<model>_model_spec.rb] } }
+
+        def commands(root) = send(:render_commands, root)
+      end.new
+
+      Dir.mktmpdir do |root|
+        expect(host.commands(root)).to include("- `bundle exec rspec` - run tests; model tests are `spec/models/<model>_spec.rb` or `spec/models/<model>_model_spec.rb`")
+        expect(commands_host.commands(root)).to include("- `bundle exec rspec` - run tests")
+      end
+    end
+
     it "names only the commands the app has" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "bin"))

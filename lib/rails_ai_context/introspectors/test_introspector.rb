@@ -49,11 +49,28 @@ module RailsAiContext
           factory_traits: detect_factory_traits,
           test_count_by_category: detect_test_count_by_category,
           shared_examples: detect_shared_examples,
-          database_cleaner: detect_database_cleaner
+          database_cleaner: detect_database_cleaner,
+          model_test_paths: detect_model_test_paths
         }
       end
 
       private
+
+      # Where model tests live, when it is not only the conventional path an agent guesses:
+      # each naming that more than a quarter of them use.
+      def detect_model_test_paths
+        %w[spec test].each do |base|
+          names = Dir.glob(File.join("**", test_file_glob(base)), base: File.join(suite_root, base, "models"))
+          next if names.empty?
+
+          suffixes = RailsAiContext::TestFramework::SUFFIXES[:model].fetch(base)
+          counts = suffixes.reverse.to_h { |suffix| [ suffix, names.count { |name| name.end_with?(suffix) } ] }
+          counts[suffixes.first] -= counts[suffixes.last]
+          used = suffixes.select { |suffix| counts[suffix] * 4 > names.size }
+          return used.map { |suffix| "#{base}/models/<model>#{suffix}" } if used.include?(suffixes.last)
+        end
+        nil
+      end
 
       def detect_framework
         RailsAiContext::TestFramework.for(suite_root)

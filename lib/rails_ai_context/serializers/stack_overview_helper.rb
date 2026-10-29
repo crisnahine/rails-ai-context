@@ -208,7 +208,7 @@ module RailsAiContext
       def overview_rule
         return nil if rooted?
 
-        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", "Run `#{detect_test_command}` after changes." ].join("\n")
+        [ *header_lines(:overview, title: "Overview"), *overview_lines, "", "Run `#{detect_test_command}` after changes.#{" Model tests are #{model_test_name}." if model_test_name}" ].join("\n")
       end
 
       def overview_reason
@@ -279,6 +279,12 @@ module RailsAiContext
 
       def detect_test_command
         TestFramework.command(Payload.section(context, :tests)&.dig(:framework))
+      end
+
+      # Where a model's tests live, when the app names them other than an agent would guess.
+      def model_test_name
+        paths = Payload.section(context, :tests)&.dig(:model_test_paths)
+        paths.map { |path| "`#{path}`" }.join(" or ") if paths.is_a?(Array) && paths.any?
       end
 
       def project_root

@@ -924,4 +924,55 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(described_class.new(double("app", root: @root)).call[:framework]).to eq("minitest")
     end
   end
+
+  # An agent that skips the tool guesses spec/models/user_spec.rb; an app may name them user_model_spec.rb.
+  describe "the model test paths, when the app does not follow the convention" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write_file(relative)
+      path = File.join(@root, relative)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "# test")
+    end
+
+    def model_test_paths
+      described_class.new(double("app", root: @root)).call[:model_test_paths]
+    end
+
+    it "names the pattern most model specs use" do
+      write_file("spec/spec_helper.rb")
+      %w[user listing site].each { |name| write_file("spec/models/#{name}_model_spec.rb") }
+      write_file("spec/models/odd_spec.rb")
+
+      expect(model_test_paths).to eq(%w[spec/models/<model>_model_spec.rb])
+    end
+
+    it "names both when the app uses both" do
+      write_file("spec/spec_helper.rb")
+      %w[user listing].each { |name| write_file("spec/models/#{name}_model_spec.rb") }
+      %w[site ticket].each { |name| write_file("spec/models/#{name}_spec.rb") }
+
+      expect(model_test_paths).to eq(%w[spec/models/<model>_spec.rb spec/models/<model>_model_spec.rb])
+    end
+
+    it "names the minitest pattern the same way" do
+      %w[user listing].each { |name| write_file("test/models/#{name}_model_test.rb") }
+
+      expect(model_test_paths).to eq(%w[test/models/<model>_model_test.rb])
+    end
+
+    it "says nothing when the app follows the convention" do
+      write_file("spec/spec_helper.rb")
+      %w[user listing site ticket].each { |name| write_file("spec/models/#{name}_spec.rb") }
+      write_file("spec/models/odd_model_spec.rb")
+
+      expect(model_test_paths).to be_nil
+    end
+
+    it "says nothing without model tests" do
+      write_file("spec/requests/users_spec.rb")
+
+      expect(model_test_paths).to be_nil
+    end
+  end
 end
