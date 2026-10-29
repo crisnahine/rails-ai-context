@@ -198,7 +198,7 @@ module RailsAiContext
       result = source && AstCache.parse_string(source)
       if result&.errors&.any?
         error = result.errors.find { |e| e.type != :unexpected_token_close_context } || result.errors.first
-        line = ERRORS_AT_OPENER ? error.location.start_line : unclosed_line(result.value) || error.location.start_line
+        line = (unclosed_line(result.value) if !ERRORS_AT_OPENER && missing_closer?(error)) || error.location.start_line
         # An error at the end of the input sits on the line after a trailing newline.
         found.refusals << refusal(relative, [ line, source.lines.size ].min, "this file", nil,
                                   "this file does not parse as Ruby (#{error.message}), so the static tier serves nothing until it is fixed.")
@@ -217,13 +217,21 @@ module RailsAiContext
     # the tree gives each unclosed node an empty closing and the innermost one is what the error names.
     ERRORS_AT_OPENER = Gem::Version.new(Prism::VERSION) >= Gem::Version.new("2")
 
+    # The errors about a closer the input ends without (case_term, argument_term_paren and so on);
+    # any other error, an operator with nothing after it, is at its own line.
+    def missing_closer?(error)
+      error.type.to_s.match?(/_term(_|\z)/)
+    end
+
+    # An elsif shares its if's end, so prism 1 gives it the empty closing too; the if is the opener.
     def unclosed_line(root)
       stack = [ root ]
       lines = []
       until stack.empty?
         node = stack.pop
         closing = (node.closing_loc if node.respond_to?(:closing_loc)) || (node.end_keyword_loc if node.respond_to?(:end_keyword_loc))
-        lines << node.location.start_line if closing&.length&.zero?
+        elsif_node = node.respond_to?(:if_keyword_loc) && node.if_keyword_loc&.slice == "elsif"
+        lines << node.location.start_line if closing&.length&.zero? && !elsif_node
         stack.concat(node.compact_child_nodes)
       end
       lines.max

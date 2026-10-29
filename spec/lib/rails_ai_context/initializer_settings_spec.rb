@@ -507,6 +507,18 @@ RSpec.describe RailsAiContext::InitializerSettings do
     end
   end
 
+  # Prism 1 gives every unclosed node a zero-length closer: an error about
+  # something else took the line of the block left open around it, and an
+  # elsif, which shares its if's end, took the if's place.
+  it "names the line of an error that is not about a closer, and an if's line over its elsif" do
+    { "RailsAiContext.configure do |config|\n  x = 1 +\n" => 2,
+      "RailsAiContext.configure do |config|\n  if a\n    1\n  elsif b\n    2\n" => 2 }.each do |body, line|
+      write("config/initializers/rails_ai_context.rb", body)
+
+      expect { apply }.to raise_error(RailsAiContext::ConfigurationError, /\Aconfig\/initializers\/rails_ai_context\.rb:#{line}: this file does not parse as Ruby/)
+    end
+  end
+
   it "refuses a file too large to read whole when it names the gem, and passes over one that does not" do
     stub_const("RailsAiContext::UnbootedSettings::MAX_SOURCE", 100)
     write("config/initializers/big.rb", "# #{'x' * 200}\n")
