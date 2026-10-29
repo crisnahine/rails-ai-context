@@ -77,14 +77,6 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # "Use <tool> for ..." lines under a blank one, for the tools the server serves.
-      def tool_pointers(*pointers)
-        served = pointers.select { |name, *| served?(name) }
-        return [] if served.empty?
-
-        [ "", *served.map { |name, mcp_params, cli_params, purpose| "Use #{tool_ref(name, mcp_params, cli_params)} #{purpose}" } ]
-      end
-
       def render_controllers_reference
         app_controllers = Payload.app_controllers(context)
         return nil if app_controllers.empty?

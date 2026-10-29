@@ -80,6 +80,15 @@ module RailsAiContext
         @served_tool_names.include?(mcp_name) && exposed_tools.include?(RailsAiContext::Tools::BaseTool.tool_class(mcp_name))
       end
 
+      # "Use <tool> for ..." lines under a blank one, for the tools the server
+      # serves: each pointer is [mcp_name, mcp_params, cli_params, purpose].
+      def tool_pointers(*pointers)
+        served = pointers.select { |name, *| served?(name) }
+        return [] if served.empty?
+
+        [ "", *served.map { |name, mcp_params, cli_params, purpose| "Use #{tool_ref(name, mcp_params, cli_params)} #{purpose}" } ]
+      end
+
       # The named tools the server serves, each as tool_ref gives it.
       def served_refs(*mcp_names)
         mcp_names.select { |name| served?(name) }.map { |name| tool_ref(name) }

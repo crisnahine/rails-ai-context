@@ -56,7 +56,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
 
       expect(content).to include("# ActiveRecord Models (31)", "- **Post29** (table: post29s)")
       expect(content).not_to include("- Post30")
-      expect(content.lines.last).to start_with("- ...1 more model")
+      expect(content).to include("- ...1 more model")
       expect(content).to include("rails_get_model_details")
     end
   end

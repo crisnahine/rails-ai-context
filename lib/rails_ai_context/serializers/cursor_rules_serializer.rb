@@ -82,10 +82,7 @@ module RailsAiContext
         lines << ""
 
         lines.concat(model_rows(:listing))
-        if served?("rails_get_model_details")
-          lines << ""
-          lines << "Use #{tool_named("rails_get_model_details", "model", "Name")} for full detail."
-        end
+        lines.concat(tool_pointers([ "rails_get_model_details", 'model:"Name"', "model=Name", "for full detail." ]))
 
         lines.join("\n")
       end
@@ -102,11 +99,7 @@ module RailsAiContext
         lines.concat(SectionFacts.static_notice_lines(context))
 
         lines.concat(render_compact_controllers_list(controllers))
-
-        if served?("rails_get_controllers")
-          lines << ""
-          lines << "Use #{tool_named("rails_get_controllers", "controller", "Name")} for full detail."
-        end
+        lines.concat(tool_pointers([ "rails_get_controllers", 'controller:"Name"', "controller=Name", "for full detail." ]))
 
         lines.join("\n")
       end

@@ -202,14 +202,8 @@ module RailsAiContext
           ""
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
-        lines << if served?("rails_get_model_details")
-          "_Quick reference - use #{tool_ref("rails_get_model_details", 'model:"Name"', "model=Name")} for live data with resolved concerns and callbacks._"
-        else
-          "_Quick reference._"
-        end
-        lines << ""
-
         lines.concat(model_rows(:listing))
+        lines.concat(tool_pointers([ "rails_get_model_details", 'model:"Name"', "model=Name", "for live data with resolved concerns and callbacks." ]))
         lines.join("\n")
       end
 
@@ -225,7 +219,7 @@ module RailsAiContext
         ]
         lines.concat(SectionFacts.static_notice_lines(context))
         lines << "ViewComponent and Phlex components available for reuse."
-        lines << "Use #{tool_ref("rails_get_component_catalog", 'component:"Name"', "component=Name")} for full details." if served?("rails_get_component_catalog")
+        lines.concat(tool_pointers([ "rails_get_component_catalog", 'component:"Name"', "component=Name", "for full detail." ]))
         lines << ""
 
         components.each do |c|
