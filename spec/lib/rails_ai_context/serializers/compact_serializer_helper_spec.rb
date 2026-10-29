@@ -135,7 +135,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
   # them is what the MCP tools can answer in full. One app sat exactly on the
   # budget, so one added Stack line dropped the last rule off four files.
   describe "#enforce_max_lines with a kept tail" do
-    let(:rules) { [ "## Rules", "- rule one", "- rule two", "" ] }
+    let(:rules) { [ "## Conventions", "- rule one", "- rule two", "" ] }
 
     it "cuts a data line and keeps the trailing rules whole" do
       with_budget(6)
@@ -156,7 +156,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
       output = host.cap(body, keep: rules)
 
       expect(output).to match(/- rule two\s*\z/)
-      expect(output.index("_Cut to fit:")).to be < output.index("## Rules")
+      expect(output.index("_Cut to fit:")).to be < output.index("## Conventions")
     end
 
     it "leaves a file under the budget untouched" do
@@ -227,7 +227,7 @@ RSpec.describe RailsAiContext::Serializers::CompactSerializerHelper do
 
       output = host.cap(body, keep: rules)
 
-      expect(output).to eq("_Cut to fit: the MCP tools answer the rest._\n\n## Rules\n- rule one\n- rule two\n")
+      expect(output).to eq("_Cut to fit: the MCP tools answer the rest._\n\n## Conventions\n- rule one\n- rule two\n")
     end
 
     # The title and the [STATIC] notice under it say what the file is.

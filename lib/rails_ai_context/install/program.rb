@@ -431,6 +431,8 @@ module RailsAiContext
               outcome[bucket].concat(paths.map { |path| shown(surface, File.join(app_root.to_s, path), root) })
             end
           end
+          # Whether this tool took anything out, before a shared file named by an earlier tool is dropped from its report.
+          took = outcome[:removed].any? || outcome[:trimmed].any?
           outcome.each_value { |paths| paths.reject! { |path| named.include?(path) } }
           outcome.each_value { |paths| named.merge(paths) }
           outcome[:removed].each { |path| surface.say "  Removed #{path}", :ok }
@@ -448,7 +450,7 @@ module RailsAiContext
             remove_mcp_entries(surface, [ key ], root: root, dir: dir, http_entries: http_entries, left: left, kept: kept).size
           end
 
-          gone = outcome[:removed].any? || outcome[:trimmed].any? || cleaned.positive?
+          gone = took || cleaned.positive?
           done = gone && outcome[:failed].empty? && outcome[:unpaired].empty? && left.empty? && kept.size == held && !shared
           surface.say "  #{tool.name} files removed", :ok if tool && done
           gone

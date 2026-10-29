@@ -52,13 +52,13 @@ RSpec.describe RailsAiContext::Serializers::Budget do
     it "cuts the data from the bottom up to the byte budget and keeps the head and the kept sections whole" do
       head = [ "# App - AI Context", "" ]
       body = (1..400).map { |i| "- line #{i} #{"x" * 40}" }
-      keep = [ "## Rules", "- keep me" ]
+      keep = [ "## Conventions", "- keep me" ]
 
       text = described_class.fit(head: head, body: body, keep: keep, kind: :root, note: "_trimmed_")
 
       expect(text.bytesize).to be <= described_class::BYTES.fetch(:root)
       expect(text).to start_with("# App - AI Context")
-      expect(text).to include("- line 1 ", "_trimmed_", "## Rules\n- keep me")
+      expect(text).to include("- line 1 ", "_trimmed_", "## Conventions\n- keep me")
       expect(text).not_to include("- line 400 ")
     end
 
@@ -68,7 +68,7 @@ RSpec.describe RailsAiContext::Serializers::Budget do
       body = Array.new(40_000) { |i| "- line #{i} #{"x" * 40}" }
 
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      text = described_class.fit(head: [ "# A" ], body: body, keep: [ "## Rules" ], kind: :full, note: "_t_", max_lines: 150)
+      text = described_class.fit(head: [ "# A" ], body: body, keep: [ "## Conventions" ], kind: :full, note: "_t_", max_lines: 150)
 
       expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
       expect(text.split("\n").count { |l| !l.strip.empty? }).to eq(150)

@@ -180,6 +180,18 @@ RSpec.describe "Context files for a selection of AI tools" do
     expect(block("AGENTS.md")).to include("## Tools (")
   end
 
+  # A pair of markers pasted into the user's own AGENTS.md is not a block the
+  # gem wrote, so it makes no AI tool's files.
+  it "takes no pasted pair of markers for a block an earlier run wrote" do
+    allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+    File.write(path("AGENTS.md"), "# Team notes\n#{marker::BEGIN_MARKER}\npasted\n#{marker::END_MARKER}\n")
+
+    run(:claude)
+
+    expect(block("CLAUDE.md")).to include("## Tools (")
+    expect(File.read(path("AGENTS.md"))).to include("pasted")
+  end
+
   # An unset selection means every AI tool, as a run with no format does.
   it "plans a one-tool run against every AI tool when none are recorded" do
     allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
