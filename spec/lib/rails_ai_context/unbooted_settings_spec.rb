@@ -149,7 +149,7 @@ RSpec.describe RailsAiContext::UnbootedSettings do
   describe "a literal for every key the YAML takes" do
     literals = {
       ai_tools: "%i[codex]", tool_mode: ":cli", context_mode: ":full", context_files: "false", generate_root_files: "false",
-      claude_max_lines: "99", anti_hallucination_rules: "false", server_name: '"probe"', cache_ttl: "7",
+      claude_max_lines: "99", anti_hallucination_rules: "false", report_issue_line: "false", server_name: '"probe"', cache_ttl: "7",
       max_tool_response_chars: "12_345", live_reload: "false", live_reload_debounce: "2.5", auto_mount: "true",
       http_path: '"/probe"', http_bind: '"0.0.0.0"', http_port: "7123", allow_http_in_production: "true",
       output_dir: '"tmp/probe"', excluded_models: "%w[Secret]", excluded_controllers: "%w[AdminController]",

@@ -480,7 +480,7 @@ RSpec.describe "Claude Code plugin" do
         app(dir)
         hook_in = -> { Open3.capture2e(gemless(gems), Gem.ruby, hook, chdir: dir).first }
         File.write(File.join(dir, ".rails-ai-context.yml"), "skip_tools: [rails_get_gems]\n")
-        expect(hook_in.()).to include(%(Check `rails_get_config(section:"conventions")` BEFORE))
+        expect(hook_in.()).to include(%(Check `rails_get_config(section:"conventions")` before))
 
         File.write(File.join(dir, ".rails-ai-context.yml"), "anti_hallucination_rules: false\n")
         expect(hook_in.()).to eq("")

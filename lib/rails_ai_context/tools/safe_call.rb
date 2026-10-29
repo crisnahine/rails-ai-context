@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module RailsAiContext
   module Tools
     # Last-resort rescue for tool execution, prepended to every registered

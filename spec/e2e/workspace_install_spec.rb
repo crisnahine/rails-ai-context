@@ -109,7 +109,8 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
     it "writes each app's config and context files in the app, and none in the folder" do
       [ @shop, @admin ].each do |app|
         expect(File.exist?(File.join(app.app_path, ".rails-ai-context.yml"))).to be(true), app.app_path
-        expect(File.read(File.join(app.app_path, "CLAUDE.md"))).to include("Post")
+        expect(File.read(File.join(app.app_path, "CLAUDE.md"))).to include("@AGENTS.md")
+        expect(File.read(File.join(app.app_path, "AGENTS.md"))).to include("Post")
         expect(File.exist?(File.join(app.app_path, ".mcp.json"))).to be(false)
       end
       expect(File.exist?(workspace_file("CLAUDE.md"))).to be(false)

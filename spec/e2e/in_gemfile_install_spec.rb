@@ -62,18 +62,14 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(File.exist?(init_path)).to be(true)
     end
 
-    it "writes both .cursor/rules/*.mdc AND the legacy .cursorrules (Cursor chat-agent fallback)" do
-      # v5.9.0: restored legacy .cursorrules because Cursor's chat agent
-      # didn't detect rules written only as .cursor/rules/*.mdc. See
-      # cursor_rules_serializer.rb for the full rationale.
-      cursorrules_path = File.join(@builder.app_path, ".cursorrules")
-      mdc_project_path = File.join(@builder.app_path, ".cursor", "rules", "rails-project.mdc")
-      expect(File.exist?(cursorrules_path)).to be(true), ".cursorrules (legacy) must be generated"
-      expect(File.exist?(mdc_project_path)).to be(true), ".cursor/rules/rails-project.mdc must be generated"
-
-      # Legacy file must be plain text, not MDC - older Cursor parses verbatim
-      expect(File.read(cursorrules_path)).not_to start_with("---")
-      expect(File.read(cursorrules_path)).to include("rails_get_schema")
+    # Cursor reads AGENTS.md like its own always-on rules and calls .cursorrules
+    # legacy; a chat agent once missed content kept in .mdc rules alone.
+    it "gives Cursor the root content in AGENTS.md, its scoped .mdc rules, and no .cursorrules" do
+      agents = File.join(@builder.app_path, "AGENTS.md")
+      expect(File.read(agents)).to include("rails_get_schema")
+      expect(Dir.glob(File.join(@builder.app_path, ".cursor", "rules", "*.mdc"))).not_to be_empty
+      expect(File.exist?(File.join(@builder.app_path, ".cursorrules"))).to be(false)
+      expect(File.exist?(File.join(@builder.app_path, ".cursor", "rules", "rails-project.mdc"))).to be(false)
     end
 
     it "re-running the generator is idempotent (no duplicate entries)" do
