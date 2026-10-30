@@ -20,6 +20,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/`. The README leads with a figure of real answers in place of the
   GIFs, which are gone with `demo/`. The packaged gem gains the two files the
   README now links: `CODE_OF_CONDUCT.md` and ADR 0002.
+- **Cursor's tools guide rule is always applied.** With `generate_root_files`
+  off, `.cursor/rules/rails-mcp-tools.mdc` stands in for the root file, so its
+  frontmatter is now `alwaysApply: true` with a `description`, like the
+  project overview, in place of a rule the agent loaded only on request.
+- **A new `opencode.json` starts with `"$schema": "https://opencode.ai/config.json"`**,
+  the line OpenCode adds itself to a config it loads without one. An existing
+  `opencode.json` gets none added, and removing the gem's entry deletes an
+  `opencode.json` left holding only that line.
+- **The Codex setup docs say why the first step of a new session can lack the
+  rails tools.** Codex waits about one second
+  (`mcp_optional_startup_grace_ms`) for a server still starting, so the first
+  step of a session, `codex exec` above all, can run while the app boots.
+  `required = true` in the server's table (Codex 0.100 or later) makes Codex
+  wait. The install does not write it.
+
+### Fixed
+
+- **The Cursor CLI starts the server under rvm and chruby.** It starts a
+  server with only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM` and `USER`, so
+  `bundle` or `rails-ai-context` found no gems and the server never started.
+  The `.cursor/mcp.json` entries now run the command through a one-line
+  `ruby -e` launcher, which sets `GEM_PATH` from the gem folders on `PATH`
+  when the client passed neither `GEM_PATH` nor `GEM_HOME`, keeping RubyGems'
+  own folders, and changes nothing when it passed either. `.github/mcp.json`
+  gets the same launcher: Copilot CLI 1.0.105 passes the whole environment,
+  but GitHub's docs say only `PATH` is passed. The install recognizes the
+  launcher as its own, so a re-run keeps the entry current and removal takes
+  it; the Cursor editor asks once to turn the rewritten entry back on.
+  Windows entries get no launcher.
+- **Windows entries start through `cmd /d /c`.** `/d` skips the registry's
+  AutoRun commands, whose output, a `chcp` line for one, would reach the
+  client ahead of the server's first message. An entry an earlier release
+  wrote with `cmd /c` stays the gem's, and the next install rewrites it.
+- **Copilot CLI finds the server.** It reads
+  `.github/mcp.json` (and `.mcp.json`), never `.vscode/mcp.json`, so choosing
+  `copilot` now writes `.github/mcp.json` too: `mcpServers`, each entry with
+  `command`, `args`, an optional `env` and `"tools": ["*"]`. A `tools` list
+  you narrowed there is kept. In a folder of apps its entries use bare
+  relative paths, since Copilot CLI expands no variable naming the folder.
+  Copilot CLI loads it only in a folder you trust, and `copilot mcp list`
+  shows it. Removal and uninstall take the entry out of both files, and
+  `rails ai:doctor` checks the new one as "GitHub Copilot CLI". Copilot in
+  JetBrains IDEs reads that file only under `servers` and starts a server in
+  the IDE's own folder, so it takes the entry `rails-ai-context mcp-entry`
+  prints.
+- **Codex no longer starts the server with this machine's saved Ruby
+  environment.** `.codex/config.toml` held the `PATH`, `GEM_HOME` and the
+  rest from the install, which a Ruby switch left stale. The gem's table now
+  lists `env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION",
+  "BUNDLE_PATH"]`, which Codex passes from the shell it started in beside the
+  `PATH` it always keeps, and `startup_timeout_sec = 30.0`, since Codex waited
+  only 10 s for a server before 0.120 and the server boots the app first. A
+  timeout you set is kept and none is added beside it, and a removal still
+  takes the table, since the timeout configures only the gem's server.
+  `env_vars` names you added are merged into the list. The next install or context run replaces a table an earlier release
+  wrote. The install no longer adds `.codex/config.toml` to `.gitignore`,
+  since the file is committed like the other MCP configs, and takes out the
+  line an earlier release added. `rails ai:doctor` drops the
+  "Codex env snapshot" check and no longer counts the Codex config as a file
+  never to commit; its MCP config check warns about an entry that still holds
+  a saved environment and fails it when the saved `PATH` no longer reaches the
+  command.
+- **Cursor's entries in a folder of apps start.** They named each app from
+  `${workspaceFolder}`, which the Cursor CLI passes to the server as literal
+  text. They are now written like Claude Code's, `rails-ai-context serve
+  --app-path shop` with a relative `BUNDLE_GEMFILE`: the CLI starts the
+  server in the folder it runs in, and the editor in the project's folder.
+  VS Code keeps `${workspaceFolder}`. An entry an earlier release wrote is
+  still read, and the next `init` in the folder rewrites it.
 
 ## [5.38.2] - 2026-10-29
 

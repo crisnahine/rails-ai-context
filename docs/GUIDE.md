@@ -115,10 +115,10 @@ No Gemfile entry, no initializer, no files in your project besides config and co
    ```
 
    Choices 1 and 3 set `tool_mode` to `:mcp`, choice 2 sets it to `:cli`. Choice 3 also sets `context_files` to `false`. Any other answer takes the default.
-4. **Writes the MCP config for each selected tool** (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`). Skipped for choice 2, which instead lists any config that still starts `rails-ai-context` and asks `Remove rails-ai-context from them? (y/N)`: CLI mode starts no MCP server. A yes takes out only the gem's entries, as step 2 does. With choice 3 it lists instead the context files an earlier setup generated, which nothing refreshes once the install writes no context files, and asks `Remove the generated parts? Lines you wrote stay. (y/N)`; a yes removes them the way step 2 does, and `.ai-context.json` with them. An existing file is merged: only the `rails-ai-context` entry is added or updated, and keys in it the gem never writes stay. An entry under that name whose command the gem did not write (one that starts the server through Docker) is kept as it is, with a note. One that does not parse as JSON, or holds comments a rewrite would drop, is left as it is, with a warning that names the entry to add by hand. Each file is read as its client reads it. VS Code's and OpenCode's take JSONC, comments and trailing commas (read under json 2.9 or later); Claude Code reads `.mcp.json` as plain JSON, and Cursor's `.cursor/mcp.json` is held to plain JSON too, so a comment or a trailing comma in either is reported as one the client cannot read, and the file left as it is. In `.codex/config.toml` the server's table is found however its name is quoted, and replaced where it stands; an entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, since a table added beside it would declare the server twice, which Codex refuses.
+4. **Writes the MCP config for each selected tool** (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json` and `.github/mcp.json`, `opencode.json`, `.codex/config.toml`). Skipped for choice 2, which instead lists any config that still starts `rails-ai-context` and asks `Remove rails-ai-context from them? (y/N)`: CLI mode starts no MCP server. A yes takes out only the gem's entries, as step 2 does. With choice 3 it lists instead the context files an earlier setup generated, which nothing refreshes once the install writes no context files, and asks `Remove the generated parts? Lines you wrote stay. (y/N)`; a yes removes them the way step 2 does, and `.ai-context.json` with them. An existing file is merged: only the `rails-ai-context` entry is added or updated, and keys in it the gem never writes stay. An entry under that name whose command the gem did not write (one that starts the server through Docker) is kept as it is, with a note. One that does not parse as JSON, or holds comments a rewrite would drop, is left as it is, with a warning that names the entry to add by hand. Each file is read as its client reads it. VS Code's and OpenCode's take JSONC, comments and trailing commas (read under json 2.9 or later); Claude Code reads `.mcp.json` as plain JSON, and Cursor's `.cursor/mcp.json` is held to plain JSON too, so a comment or a trailing comma in either is reported as one the client cannot read, and the file left as it is. In `.codex/config.toml` the server's table is found however its name is quoted, and replaced where it stands; an entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, since a table added beside it would declare the server twice, which Codex refuses.
 5. **Creates or updates `config/initializers/rails_ai_context.rb`.** A new file gets your three answers as live lines (`config.ai_tools`, `config.tool_mode`, `config.context_files`) and every other option commented out at its default, wrapped in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`; it passes the omakase Rubocop a new Rails app runs. In an existing file it rewrites those three lines where the value changed - keeping the line's indentation and any note of your own after it - appends any config section the file lacks, adds the guard if it is missing, and leaves the rest alone.
 6. **Writes `.rails-ai-context.yml`** with `ai_tools`, `tool_mode` and `context_files`. Only a key whose value changed is rewritten, where it stands; your comments and other keys are kept, and a run that changes no value leaves the file as it was.
-7. **Adds lines to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3) and `.codex/config.toml` (always, because it holds this machine's Ruby paths). A line that is already there is not added again.
+7. **Adds a line to `.gitignore`**, if the file exists: `.ai-context.json` (not for choice 3). A line that is already there is not added again. `.codex/config.toml` is no longer added: it holds nothing machine-specific and is committed like the other MCP configs, so the line an earlier release added is taken out.
 8. **Asks about a pre-commit hook:** `Install a pre-commit hook that checks staged Ruby, ERB and JavaScript files for syntax errors? (y/N)`. Only `y` installs it. The hook runs `bundle exec rails-ai-context tool validate` (`rails-ai-context tool validate` in a standalone install) on the staged `.rb`, `.erb`, `.js`, `.mjs` and `.cjs` files and stops a commit whose files do not parse (JavaScript is parsed by `node`, as [`rails_validate`](TOOLS.md#rails_validate) describes); the Rails-reference checks (`level=rails`) are left to the tool, as Brakeman would slow every commit. An app that cannot boot (an initializer that needs a variable the shell lacks, say) is still checked, from its source, and the hook shows why it did not boot; it shows whatever else the check prints to stderr too, so a check that cannot run says why. Every staged name is read whole, one with characters outside ASCII included; a name holding a comma, which the files list cannot carry, is named and left unchecked. It goes where git runs hooks (`git rev-parse --git-path hooks`), so an app checked out as a submodule, an app inside a monorepo and a repo with `core.hooksPath` set all get it where git will run it. The hook names the apps it covers and validates each one's staged files (deleted ones aside) from inside that app; installing in a second app of the same monorepo adds it to the hook, unless the hook was changed by hand, which it says, and for an app below the top of the repository the question names the repository. A hook an earlier version wrote, and nobody changed since, is brought up to date without asking again: the oldest handed validate the files a commit deletes too, and the commit failed on them, and later ones ran `rails 'ai:tool[validate]'`, which has to boot the app, with its errors thrown away, so an app that could not boot failed every commit with no reason given. Any other hook that runs `rails-ai-context` - one changed by hand, or a team's own that calls it among other checks - is left as it is, with a message. No hook is offered for an app the repository does not track yet (an app under a dotfiles repository at `$HOME`, say), nor into a `core.hooksPath` outside the repository, which every repository using it shares; both say why. No question is asked outside a git repository or when the hook already covers the app. When another `pre-commit` hook exists there it prints `Skipped pre-commit hook (existing hook found - add manually)` and moves on.
 9. **Generates the context files** for the selected tools. Skipped for choice 3. If files that v5.0.0 stopped generating are still there (`.claude/rules/rails-ui-patterns.md`, `.claude/rules/rails-accessibility.md`, `.cursor/rules/rails-ui-patterns.mdc`, `.github/instructions/rails-ui-patterns.instructions.md`), it lists them first and asks `Delete them? [y/N]:`. Without a terminal, or under `--defaults`, it prints the `rm` command and does not ask; under `--prune` it deletes them without asking. Files an earlier run wrote that this run no longer writes go without a question, and the output names them: the block in `.cursorrules`, and an overview or tools rule the root file states ([Generated Files](#generated-files)).
 10. **Prints a summary:** the files each selected tool got, the commands to run next, and, in the MCP setup, each tool's next step: the approval or trust step that tool asks for before it starts a project's MCP server (approve the server in Claude Code, turn it on in Cursor, trust the folder in VS Code and Codex CLI, restart OpenCode).
@@ -266,7 +266,7 @@ A run removes the files an earlier run wrote that it no longer writes. The CLI a
 | `.cursor/rules/rails-project.mdc` | Project overview | `alwaysApply: true` - loaded in every conversation. Written only with `generate_root_files` off. |
 | `.cursor/rules/rails-models.mdc` | Model reference | `globs: app/models/**/*.rb` - auto-attaches when editing models. |
 | `.cursor/rules/rails-controllers.mdc` | Controller reference | `globs: app/controllers/**/*.rb` - auto-attaches when editing controllers. |
-| `.cursor/rules/rails-mcp-tools.mdc` | Tools guide | `alwaysApply: false` - agent-requested when relevant. Written only with `generate_root_files` off. |
+| `.cursor/rules/rails-mcp-tools.mdc` | Tools guide | `alwaysApply: true` - loaded in every conversation. Written only with `generate_root_files` off. |
 
 `.cursorrules` is no longer written: Cursor calls it legacy, and reads the content from `AGENTS.md`. With root files on, a run takes out the block an earlier release wrote there and keeps your own lines; a file that held only the block is deleted. Cleanup and `doctor` still know the file.
 
@@ -1164,13 +1164,14 @@ The install generator (or `rails-ai-context init`) creates per-tool MCP config f
 |---------|------------|----------|--------|
 | Claude Code | `.mcp.json` | `mcpServers` | JSON |
 | Cursor | `.cursor/mcp.json` | `mcpServers` | JSON |
-| GitHub Copilot | `.vscode/mcp.json` | `servers` | JSON |
+| GitHub Copilot (VS Code) | `.vscode/mcp.json` | `servers` | JSON |
+| GitHub Copilot CLI | `.github/mcp.json` | `mcpServers` | JSON |
 | OpenCode | `opencode.json` | `mcp` | JSON |
 | Codex CLI | `.codex/config.toml` | `[mcp_servers]` | TOML |
 
 Each file is merge-safe - only the `rails-ai-context` entries are managed, other servers are preserved. When the gem is not in the app's `Gemfile.lock` (standalone install) the entry runs `rails-ai-context serve` with no `bundle exec`.
 
-On Windows every entry starts the server through `cmd /c`: `"command": "cmd", "args": ["/c", "bundle", "exec", "rails-ai-context", "serve"]` (OpenCode: `"command": ["cmd", "/c", ...]`; Codex: `command = "cmd"`). A gem's executables there are batch files (`bundle.bat`, `rails-ai-context.bat`), which Claude Code, Codex and the other clients that start a server without a shell do not run. An entry written on Windows does not start on macOS or Linux, and one written there may not start on Windows: `doctor` names either, and running the install again rewrites it for the machine it runs on. A team on both keeps the MCP configs out of git, or runs the install on each machine.
+On Windows every entry starts the server through `cmd /d /c`: `"command": "cmd", "args": ["/d", "/c", "bundle", "exec", "rails-ai-context", "serve"]` (OpenCode: `"command": ["cmd", "/d", "/c", ...]`; Codex: `command = "cmd"`). A gem's executables there are batch files (`bundle.bat`, `rails-ai-context.bat`), which Claude Code, Codex and the other clients that start a server without a shell do not run, and `/d` keeps the registry's AutoRun commands from printing ahead of the server's first message. An entry written on Windows does not start on macOS or Linux, and one written there may not start on Windows: `doctor` names either, and running the install again rewrites it for the machine it runs on. A team on both keeps the MCP configs out of git, or runs the install on each machine.
 
 A folder of apps gets one entry per app instead, `rails-ai-context-<app folder>`, each pointed at its app with `--app-path` and announcing its app first through `RAILS_AI_CONTEXT_SERVER_NAME`; see [`init`](CLI.md#init-standalone-only) for the shape each AI tool gets.
 
@@ -1191,13 +1192,11 @@ A folder of apps gets one entry per app instead, `rails-ai-context-<app folder>`
 [mcp_servers.rails-ai-context]
 command = "bundle"
 args = ["exec", "rails-ai-context", "serve"]
-
-[mcp_servers.rails-ai-context.env]
-PATH = "/home/user/.rbenv/shims:/usr/local/bin:/usr/bin"
-GEM_HOME = "/home/user/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0"
+env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH"]
+startup_timeout_sec = 30.0
 ```
 
-> **Why the `[env]` section?** Codex CLI `env_clear()`s the process before spawning MCP servers, stripping Ruby version manager paths. The install generator snapshots your current Ruby environment (PATH, GEM\_HOME, GEM\_PATH, GEM\_ROOT, RUBY\_VERSION, BUNDLE\_PATH) so the MCP server can find gems regardless of version manager (rbenv, rvm, asdf, mise, chruby, or system Ruby).
+> **Why `env_vars`?** Codex starts an MCP server with a cleared environment that still keeps `PATH`, `HOME` and a few more. `env_vars` passes the other variables a Ruby setup needs from the shell Codex was started in: rvm and chruby set them beside `PATH`; rbenv, asdf and mise need only `PATH`. `startup_timeout_sec` covers the app's boot, since Codex waited only 10 s for a server before 0.120. A Codex table an earlier release wrote with this machine's `PATH` and `GEM_HOME` saved in an `env` table is replaced the next time the install runs.
 
 Each AI tool finds its own config file when it opens the project, then holds the server back until you approve it once: approve it in Claude Code, turn it on in Cursor, trust the folder in VS Code and Codex CLI, restart OpenCode. The install's summary names the step for each tool you picked ([AI tool setup](SETUP.md#verify-mcp-is-connected)).
 
@@ -1212,8 +1211,8 @@ claude mcp add rails-ai-context -- bundle exec rails ai:serve
 # Standalone
 claude mcp add rails-ai-context -- rails-ai-context serve
 
-# On Windows, through cmd /c
-claude mcp add rails-ai-context -- cmd /c bundle exec rails-ai-context serve
+# On Windows, through cmd /d /c
+claude mcp add rails-ai-context -- cmd /d /c bundle exec rails-ai-context serve
 ```
 
 ### Claude Desktop
@@ -1232,7 +1231,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails-ai-context", "serve"]` with `"command": "rails-ai-context"` / `"args": ["serve"]`. On Windows, start either through `cmd /c`: `"command": "cmd"`, with `"/c"` ahead of the rest of the args.
+Or for standalone: replace `"command": "bundle"` / `"args": ["exec", "rails-ai-context", "serve"]` with `"command": "rails-ai-context"` / `"args": ["serve"]`. On Windows, start either through `cmd /d /c`: `"command": "cmd"`, with `"/d", "/c"` ahead of the rest of the args.
 
 ### Cursor
 
@@ -1493,7 +1492,7 @@ if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
 end
 ```
 
-With root files off, the Claude Code, Cursor and Copilot rule sets each get an app overview (`rails-context.md`, `rails-project.mdc`, `rails-context.instructions.md`) and the tools guide (`rails-mcp-tools.md`, `rails-mcp-tools.mdc`, `rails-mcp-tools.instructions.md`) in the root file's place; Cursor loads its guide on request. With root files on, a run removes those six, since the root file states them. OpenCode and Codex have no overview outside AGENTS.md: their split files hold only the model and controller listings.
+With root files off, the Claude Code, Cursor and Copilot rule sets each get an app overview (`rails-context.md`, `rails-project.mdc`, `rails-context.instructions.md`) and the tools guide (`rails-mcp-tools.md`, `rails-mcp-tools.mdc`, `rails-mcp-tools.instructions.md`) in the root file's place, each loaded in every session. With root files on, a run removes those six, since the root file states them. OpenCode and Codex have no overview outside AGENTS.md: their split files hold only the model and controller listings.
 
 ---
 
@@ -1586,7 +1585,7 @@ config.introspectors = %i[schema models routes gems auth api]
 
 ### Cursor
 
-**Auto-discovery:** Reads `.cursor/mcp.json`. Restart Cursor after the install, and turn `rails-ai-context` on under MCP in Customize if it is off.
+**Auto-discovery:** Reads `.cursor/mcp.json`. Restart Cursor after the install, and turn `rails-ai-context` on under MCP in Customize if it is off. The entry starts the server through a one-line `ruby -e` launcher, because the Cursor CLI passes a server no `GEM_PATH`, which rvm and chruby need ([why](SETUP.md#why-the-installs-entry-starts-with-ruby--e)).
 
 **Context files loaded:**
 - `AGENTS.md` and `CLAUDE.md` - read like an always-on rule, so the root content reaches Cursor from `AGENTS.md`
@@ -1596,9 +1595,8 @@ config.introspectors = %i[schema models routes gems auth api]
 
 | Mode | When it activates |
 |------|-------------------|
-| `alwaysApply: true` | Every conversation (project overview, root files off) |
+| `alwaysApply: true` | Every conversation (project overview and tools guide, root files off) |
 | `globs: ["app/models/**/*.rb"]` | When editing files matching the glob pattern |
-| `alwaysApply: false` + `description` | Agent-requested - loaded when AI decides it's relevant (tools guide, root files off) |
 
 ### OpenCode
 
@@ -1640,7 +1638,7 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 
 ### GitHub Copilot
 
-**Auto-discovery:** `.vscode/mcp.json` is auto-generated by the install generator.
+**Auto-discovery:** `.vscode/mcp.json` (VS Code) and `.github/mcp.json` (Copilot CLI, which never reads the VS Code file) are auto-generated by the install generator. Copilot in JetBrains IDEs takes its entry from `rails-ai-context mcp-entry` ([Other MCP clients](SETUP.md#other-mcp-clients)). Copilot CLI loads `.github/mcp.json` only in a folder you trust; `copilot mcp list` shows the server.
 
 **Context files loaded:**
 - `.github/copilot-instructions.md` - repo-wide instructions, the root content. github.com chat, Visual Studio, JetBrains, Xcode and code review read no other root file
@@ -1656,7 +1654,7 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 
 ### Codex CLI
 
-**Auto-discovery:** `.codex/config.toml` is auto-generated by the install generator, including an `[env]` subsection that snapshots your Ruby environment for sandbox compatibility.
+**Auto-discovery:** `.codex/config.toml` is auto-generated by the install generator, with an `env_vars` list that passes your shell's Ruby variables to the server. In a new session the first step can run before the rails tools are up, since Codex waits about one second for a server still starting; `required = true` in the table makes it wait ([AI tool setup](SETUP.md#the-first-step-of-a-new-session)).
 
 **Context files loaded:**
 - `AGENTS.md` - project overview + MCP tool guide (shared with OpenCode)
@@ -1713,8 +1711,7 @@ Runs the checks below and reports an AI readiness score (0-100). A check that do
 | Migrations | Migration files exist, counted over every database the app migrates, and in an engine's `test/dummy` the engine's own |
 | Context files | Generated context files exist where `config.output_dir` puts them, and a context run would leave them as they are. A file a run would rewrite, because an older version of the gem wrote it or the app changed under it, is named; a file that is only older than the code is not. In an engine's dummy app the install at the engine's root is read, and its own context command runs there, into a copy. No row on an MCP-only install |
 | Initializer guard | Shown only when `config/initializers/rails_ai_context.rb` has no guard, or guards on `defined?(RailsAiContext)` alone |
-| MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when a config runs that binary in an app whose bundle carries the gem. The command is looked up, never run. Skipped in CLI-only mode |
-| Codex env snapshot | The `PATH` saved in `.codex/config.toml` (the app's, or a folder of apps' above it) still reaches each server's command, and a saved `GEM_HOME`, and every directory on a saved `GEM_PATH`, still exists - one missing from `GEM_PATH` passes when the shell's own `GEM_PATH` names it too, since RubyGems passes over it and the install would save it again. Only when Codex is selected |
+| MCP configs | Each selected tool's MCP config file exists, parses, and holds a rails-ai-context server whose command can start: `bundle exec` only where the app's lockfile carries the gem and the bundle's copy has its executable, the `rails-ai-context` binary only where it is on PATH, and a warning when a config runs that binary in an app whose bundle carries the gem. A Codex entry that still starts with the Ruby environment an earlier release saved warns, and fails when that saved `PATH` no longer reaches its command (fix: run the install). The command is looked up, never run. Skipped in CLI-only mode |
 | MCP server | MCP server can be built, with an `mcp` gem this gem supports (warns, as the boot does, when the app's bundle pins one outside that range) |
 | Introspector health | Every configured introspector returns data |
 | Preset coverage | The preset covers the features the app has |
@@ -1723,7 +1720,7 @@ Runs the checks below and reports an AI readiness score (0-100). A check that do
 | Brakeman | Brakeman is available for `rails_security_scan` (optional): in the app's bundle, or installed on the machine, where the scan runs the gem's own script as a process of its own. Doctor runs that script's `--version` the way the scan runs it, and warns, with what it printed, when it does not answer |
 | Live reload | `listen` gem installed (optional, enables MCP live reload) |
 | MCP stdio hygiene | On a standalone install, or where a config starts the `rails-ai-context` binary itself, gem activation prints nothing on stdout |
-| Secrets in .gitignore | Secret files that exist are gitignored and not committed: `config/master.key`, `config/credentials/*.key`, every `.env` file, `config/application.yml`, the Codex config and SSH and cloud credentials (fails when one is not ignored, or is committed: the fix is `git rm --cached` and rotating it). `config/database.yml`, `cable.yml`, `storage.yml` and the like warn only when they hold a password, token or key as a literal value. The encrypted `credentials.yml.enc` is committed by design and never reported. Inside a git repository git answers, so a rule in a `.gitignore` above the app (a monorepo's), in `.git/info/exclude` or in the global excludes counts; outside one the app's `.gitignore` is read |
+| Secrets in .gitignore | Secret files that exist are gitignored and not committed: `config/master.key`, `config/credentials/*.key`, every `.env` file, `config/application.yml` and SSH and cloud credentials (fails when one is not ignored, or is committed: the fix is `git rm --cached` and rotating it). `config/database.yml`, `cable.yml`, `storage.yml` and the like warn only when they hold a password, token or key as a literal value. The encrypted `credentials.yml.enc` is committed by design and never reported. Inside a git repository git answers, so a rule in a `.gitignore` above the app (a monorepo's), in `.git/info/exclude` or in the global excludes counts; outside one the app's `.gitignore` is read |
 | MCP HTTP endpoint | `allow_http_in_production` is off, so the mounted engine and `auto_mount` refuse outside development and test; on, it warns, and with `auto_mount` it fails |
 | Schema file size | The schema file is under 80% of `max_schema_file_size` |
 | View aggregation size | `app/views` templates total under 80% of `max_view_total_size` |
@@ -1843,7 +1840,7 @@ Works in:
 ### MCP server not detected by your AI tool
 
 1. Run `rails ai:doctor` - it checks per-tool MCP config files
-2. Verify the correct config file exists for your tool (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`) in the folder the tool opened: the app, or the folder of apps `init` set up
+2. Verify the correct config file exists for your tool (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.github/mcp.json`, `opencode.json`, `.codex/config.toml`) in the folder the tool opened: the app, or the folder of apps `init` set up
 3. Re-run install (`rails generate rails_ai_context:install` or `rails-ai-context init`) to regenerate configs
 4. Restart your AI tool
 

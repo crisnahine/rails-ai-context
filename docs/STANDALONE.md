@@ -134,11 +134,11 @@ Standalone mode works with all Ruby version managers:
 | chruby | Yes |
 | System Ruby | Yes |
 
-### Codex CLI env snapshot
+### Codex CLI environment
 
-Codex CLI is special - it `env_clear()`s the process before spawning MCP servers. The install generator snapshots your Ruby environment variables (PATH, GEM_HOME, GEM_PATH, GEM_ROOT, RUBY_VERSION, BUNDLE_PATH) into `.codex/config.toml` so Codex can find Ruby and gems.
+Codex starts an MCP server with a cleared environment that still keeps `PATH` and a few more. The `.codex/config.toml` entry lists `env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH"]`, which Codex passes from the shell it was started in, so Codex finds Ruby and gems under any version manager. Nothing machine-specific is saved, so switching Ruby needs no new install.
 
-If you switch Ruby versions, re-run `rails-ai-context init` to update the snapshot.
+A config an earlier release wrote saved this machine's `PATH` and `GEM_HOME` instead. `rails ai:doctor` warns about one, and re-running `rails-ai-context init` replaces it.
 
 ## Updating
 

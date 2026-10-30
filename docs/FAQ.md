@@ -64,13 +64,12 @@ Yes. Run `rails-ai-context init` in that folder. It asks once, gives each app it
 ### Do I need to commit the generated files?
 
 **Yes, commit these:**
-- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json` - so teammates get the MCP server after approving it once in their AI tool
+- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.github/mcp.json`, `opencode.json`, `.codex/config.toml` - so teammates get the MCP server after approving it once in their AI tool
 - `CLAUDE.md`, `.claude/rules/`, `.cursor/rules/`, `.github/copilot-instructions.md`, `.github/instructions/`, `AGENTS.md` - so AI has context
 - `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` - so config is shared
 
 **Don't commit:**
 - `.ai-context.json` - auto-added to .gitignore by the install generator
-- `.codex/config.toml` - it embeds this machine's Ruby PATH and GEM_HOME, so install adds it to .gitignore too and `rails ai:doctor` fails when it is not ignored
 
 ### Can I use only the MCP server?
 

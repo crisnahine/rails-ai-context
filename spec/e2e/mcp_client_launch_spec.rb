@@ -55,7 +55,7 @@ end
 # names with child_process.spawn(command, args, { cwd, env }) and no shell:
 # the command has to be one the OS starts by itself. On Windows a binstub is
 # a .bat file, which needs a shell, so the configs start the server through
-# `cmd /c` there. This starts each install's server exactly that way, says
+# `cmd /d /c` there. This starts each install's server exactly that way, says
 # `initialize`, reads the answer to it, and ends the session as a client
 # does, by closing the server's stdin.
 RSpec.describe "E2E: the server an app's .mcp.json names, started as Claude Code starts it", type: :e2e do
@@ -83,7 +83,7 @@ RSpec.describe "E2E: the server an app's .mcp.json names, started as Claude Code
 
   # The form the entry must have where it runs, from the platform itself:
   # the gem's own switch is stubbed in this process by spec_helper.
-  def expected_argv(argv) = Gem.win_platform? ? [ "cmd", "/c", *argv ] : argv
+  def expected_argv(argv) = Gem.win_platform? ? [ "cmd", "/d", "/c", *argv ] : argv
 
   {
     in_gemfile: %w[bundle exec rails-ai-context serve],

@@ -298,7 +298,7 @@ Lightweight subset for faster generation:
 |:--------|:----------|:------------|:-----------|
 | Claude Code | `CLAUDE.md` | `.claude/rules/*.md` | `.mcp.json` |
 | Cursor | `AGENTS.md` | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
-| GitHub Copilot | `.github/copilot-instructions.md` | `.github/instructions/*.instructions.md` | `.vscode/mcp.json` |
+| GitHub Copilot | `.github/copilot-instructions.md` | `.github/instructions/*.instructions.md` | `.vscode/mcp.json` (VS Code), `.github/mcp.json` (Copilot CLI) |
 | OpenCode | `AGENTS.md` | `app/models/AGENTS.md`, `app/controllers/AGENTS.md` | `opencode.json` |
 | Codex CLI | (shares `AGENTS.md`) | (shares OpenCode rules) | `.codex/config.toml` |
 

@@ -395,293 +395,6 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
-  describe "#check_codex_env_staleness" do
-    # A real file in a real app folder: the check reads it the way the
-    # generator does, bytes and all.
-    around do |example|
-      Dir.mktmpdir do |dir|
-        @root = File.realpath(dir)
-        FileUtils.mkdir_p(File.join(@root, "app", "models"))
-        File.write(File.join(@root, "app", "models", "widget.rb"), "class Widget\nend\n")
-        example.run
-      end
-    end
-
-    subject(:check) { described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_codex_env_staleness) }
-
-    def write_toml(content)
-      FileUtils.mkdir_p(File.join(@root, ".codex"))
-      File.binwrite(File.join(@root, ".codex/config.toml"), content)
-    end
-
-    # A PATH or GEM_PATH as the platform joins one: `;` on Windows, where
-    # `:` is in every absolute path.
-    def path_list(*dirs) = dirs.join(File::PATH_SEPARATOR)
-
-    context "when codex is not in ai_tools" do
-      before do
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude cursor])
-        write_toml(%([mcp_servers.rails-ai-context.env]\nGEM_HOME = "/nonexistent/gems"\n))
-      end
-
-      it "returns nil (skipped)" do
-        expect(check).to be_nil
-      end
-    end
-
-    context "when codex is in ai_tools" do
-      before do
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude codex])
-      end
-
-      context "when .codex/config.toml does not exist" do
-        it "returns nil (skipped)" do
-          expect(check).to be_nil
-        end
-      end
-
-      context "when .codex/config.toml exists but has no env section" do
-        before do
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context]
-            command = "bundle"
-            args = ["exec", "rails", "ai:serve"]
-          TOML
-        end
-
-        it "returns nil (skipped)" do
-          expect(check).to be_nil
-        end
-      end
-
-      # rbenv and asdf save a PATH and nothing else, so the PATH is what
-      # says whether the snapshot still starts the server.
-      context "when the snapshot holds a PATH only" do
-        let(:bin) { bin_dir_with("rails-ai-context") }
-
-        after { FileUtils.rm_rf(bin) }
-
-        def write_snapshot(path)
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context]
-            command = "rails-ai-context"
-            args = ["serve"]
-
-            [mcp_servers.rails-ai-context.env]
-            PATH = "#{path}"
-          TOML
-        end
-
-        it "passes while that PATH reaches the command" do
-          write_snapshot(path_list("/nonexistent/ruby/9.9.9/bin", bin))
-
-          expect(check.status).to eq(:pass)
-          expect(check.message).to eq("Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`")
-        end
-
-        it "fails when it no longer does, naming the directory that is gone" do
-          write_snapshot(path_list("/nonexistent/ruby/9.9.9/bin", bin_dir_with))
-
-          expect(check.status).to eq(:fail)
-          expect(check.message).to eq("Codex MCP env snapshot in .codex/config.toml is stale - the PATH saved for rails-ai-context " \
-                                      "no longer reaches `rails-ai-context` (/nonexistent/ruby/9.9.9/bin is gone)")
-          expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}`")
-        end
-      end
-
-      context "when GEM_HOME directory exists on disk" do
-        let(:gem_home) { Dir.mktmpdir("gem_home_test") }
-        let(:bin) { bin_dir_with("bundle") }
-
-        after { FileUtils.rm_rf([ gem_home, bin ]) }
-
-        before do
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context]
-            command = "bundle"
-            args = ["exec", "rails", "ai:serve"]
-
-            [mcp_servers.rails-ai-context.env]
-            GEM_HOME = "#{gem_home}"
-            PATH = "#{bin}"
-          TOML
-        end
-
-        it "returns a pass check" do
-          expect(check.status).to eq(:pass)
-          expect(check.name).to eq("Codex env snapshot")
-          expect(check.message).to include(gem_home)
-        end
-      end
-
-      context "when GEM_HOME directory no longer exists" do
-        let(:stale_gem_home) { "/nonexistent/path/to/gems/3.3.0" }
-        let(:bin) { bin_dir_with("bundle") }
-
-        after { FileUtils.rm_rf(bin) }
-
-        before do
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context]
-            command = "bundle"
-            args = ["exec", "rails", "ai:serve"]
-
-            [mcp_servers.rails-ai-context.env]
-            GEM_HOME = "#{stale_gem_home}"
-            PATH = "#{bin}"
-          TOML
-        end
-
-        it "returns a warn check with stale GEM_HOME path" do
-          expect(check.status).to eq(:warn)
-          expect(check.name).to eq("Codex env snapshot")
-          expect(check.message).to include("stale")
-          expect(check.message).to include(stale_gem_home)
-          expect(check.fix).to include("install")
-        end
-
-        it "names only the command this install has" do
-          allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
-          expect(check.fix).to eq("Run `rails-ai-context init`")
-
-          allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
-          expect(described_class.new(RailsAiContext::StaticApp.new(@root)).send(:check_codex_env_staleness).fix)
-            .to eq("Run `rails generate rails_ai_context:install`")
-        end
-      end
-
-      # The generator saves GEM_PATH beside GEM_HOME, and a directory on it
-      # goes stale the same way.
-      context "with a GEM_PATH saved" do
-        let(:gems) { Dir.mktmpdir("gem_path_test") }
-        let(:bin) { bin_dir_with("rails-ai-context") }
-
-        after { FileUtils.rm_rf([ gems, bin ]) }
-
-        def write_gem_path(value)
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context]
-            command = "rails-ai-context"
-            args = ["serve"]
-
-            [mcp_servers.rails-ai-context.env]
-            PATH = "#{bin}"
-            GEM_PATH = "#{value}"
-          TOML
-        end
-
-        # The GEM_PATH init would save now: this shell's, before Bundler.
-        def shell_gem_path(value)
-          allow(Bundler).to receive(:original_env).and_return(Bundler.original_env.merge("GEM_PATH" => value).compact)
-        end
-
-        it "warns when a directory on it no longer exists" do
-          shell_gem_path(gems)
-          write_gem_path(path_list("/nonexistent/ruby/3.3.5/gems", gems))
-
-          expect(check).to have_attributes(status: :warn,
-                                           message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/ruby/3.3.5/gems, which no longer exists")
-        end
-
-        # RubyGems passes over a GEM_PATH directory that is not there, and init
-        # saves this shell's GEM_PATH again: a warning on it was one the fix
-        # could never clear.
-        it "passes over a missing directory this shell's GEM_PATH names too" do
-          shell_gem_path(path_list("/nonexistent/.gem/ruby/3.3.0", gems))
-          write_gem_path(path_list("/nonexistent/.gem/ruby/3.3.0", gems))
-
-          expect(check).to have_attributes(status: :pass,
-                                           message: "Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`")
-        end
-
-        it "still warns about a missing directory this shell no longer names" do
-          shell_gem_path(nil)
-          write_gem_path(path_list("/nonexistent/.gem/ruby/3.3.0", gems))
-
-          expect(check).to have_attributes(status: :warn,
-                                           message: "Codex MCP env snapshot is stale - GEM_PATH names /nonexistent/.gem/ruby/3.3.0, which no longer exists")
-        end
-
-        it "passes when every directory on it exists" do
-          write_gem_path(gems)
-
-          expect(check).to have_attributes(status: :pass,
-                                           message: "Codex env snapshot in .codex/config.toml is current: its PATH reaches `rails-ai-context`, " \
-                                                    "and every directory on its GEM_PATH exists")
-        end
-      end
-
-      context "when env section is followed by another TOML section" do
-        let(:gem_home) { Dir.mktmpdir("gem_home_boundary") }
-
-        after { FileUtils.rm_rf(gem_home) }
-
-        before do
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context]
-            command = "bundle"
-            args = ["exec", "rails", "ai:serve"]
-
-            [mcp_servers.rails-ai-context.env]
-            GEM_HOME = "#{gem_home}"
-
-            [mcp_servers.other-tool]
-            command = "other"
-          TOML
-        end
-
-        it "correctly parses the env section and returns pass" do
-          expect(check.status).to eq(:pass)
-          expect(check.message).to include(gem_home)
-        end
-      end
-
-      # A Windows GEM_HOME is written with its backslashes escaped.
-      context "when GEM_HOME holds TOML escapes" do
-        before do
-          write_toml(%([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\n\n) +
-                     %([mcp_servers.rails-ai-context.env]\nGEM_HOME = "C:\\\\Ruby33\\\\lib"\n))
-        end
-
-        it "names the path the snapshot holds" do
-          expect(check.message).to include("GEM_HOME C:\\Ruby33\\lib no longer exists")
-        end
-      end
-
-      # The file is shared by every app in a workspace; a byte outside ASCII
-      # in a comment or a PATH must not stop the check in a C locale.
-      context "when the file holds bytes outside ASCII" do
-        before do
-          write_toml("# caf\xC3\xA9 \xFF\n[mcp_servers.rails-ai-context]\ncommand = \"rails-ai-context\"\nargs = [\"serve\"]\n\n" \
-                     "[mcp_servers.rails-ai-context.env]\nGEM_HOME = \"/nonexistent/gems\"\n".b)
-        end
-
-        it "still reads the snapshot" do
-          expect(check.message).to include("/nonexistent/gems")
-        end
-      end
-
-      # A hand-made entry under the gem's prefix that runs something else
-      # is somebody's own, and its environment is theirs.
-      context "when a section only shares the gem's name" do
-        before do
-          write_toml(<<~TOML)
-            [mcp_servers.rails-ai-context-prod]
-            command = "npx"
-            args = ["mcp-remote", "https://prod.example/mcp"]
-
-            [mcp_servers.rails-ai-context-prod.env]
-            GEM_HOME = "/nonexistent/prod/gems"
-          TOML
-        end
-
-        it "is not read" do
-          expect(check).to be_nil
-        end
-      end
-    end
-  end
-
   describe "#check_settings_read" do
     it "names each line the settings reader could not follow, and says nothing when it followed them all" do
       Dir.mktmpdir do |dir|
@@ -860,11 +573,10 @@ RSpec.describe RailsAiContext::Doctor do
     let(:doctor) { described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)) }
 
     it "reads PATH from the environment as it was before Bundler, by Windows' name for it there" do
-      allow(Bundler).to receive(:original_env).and_return("Path" => "C:/Ruby34/bin", "Gem_Path" => "/gems")
+      allow(Bundler).to receive(:original_env).and_return("Path" => "C:/Ruby34/bin")
       allow(Gem).to receive(:win_platform?).and_return(true)
 
       expect(doctor.send(:client_path)).to eq("C:/Ruby34/bin")
-      expect(doctor.send(:current_gem_path)).to eq([ "/gems" ])
     end
 
     it "takes a name only as it is spelled, where names are case-sensitive" do
@@ -928,6 +640,8 @@ RSpec.describe RailsAiContext::Doctor do
           allow(RailsAiContext.configuration).to receive(:ai_tools).and_return([ tool ])
           relative = RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.fetch(tool)[:path]
           write(relative, text) if text
+          siblings = RailsAiContext::Install::AiTool.mcp_config_keys([ tool ]) - [ tool ]
+          RailsAiContext::McpConfigGenerator.new(tools: siblings, output_dir: @root, standalone: true).call if siblings.any?
           full = File.join(@root, relative)
           verdict = app_doctor.send(:install_verdict, tool, full)
           expect(verdict).to have_attributes(expected.slice(:action, :readable))
@@ -1407,7 +1121,7 @@ RSpec.describe RailsAiContext::Doctor do
         FileUtils.mkdir_p(managed_dir)
         File.write(File.join(managed_dir, "managed-mcp.json"), JSON.generate("mcpServers" => {}))
 
-        expect(check.fix).to include(JSON.generate("rails-ai-context" => { "command" => "cmd", "args" => %w[/c rails-ai-context serve] }))
+        expect(check.fix).to include(JSON.generate("rails-ai-context" => { "command" => "cmd", "args" => %w[/d /c rails-ai-context serve] }))
       ensure
         FileUtils.rm_rf(managed_dir)
       end
@@ -1878,9 +1592,10 @@ RSpec.describe RailsAiContext::Doctor do
 
       it "aggregates all failures into a single check" do
         expect(check.status).to eq(:warn)
-        expect(check.message).to include("2 of 3")
+        expect(check.message).to include("3 of 4")
         expect(check.message).to include(".cursor/mcp.json")
         expect(check.message).to include(".vscode/mcp.json")
+        expect(check.message).to include(".github/mcp.json (GitHub Copilot CLI)")
         expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
       end
     end
@@ -1908,10 +1623,40 @@ RSpec.describe RailsAiContext::Doctor do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
         write(".vscode/mcp.json", %({\n  "servers": {\n    "rails-ai-context": { "command": "bundle", ) +
                                   %("args": ["exec", "rails-ai-context", "serve",], },\n  },\n}\n))
+        write(".github/mcp.json", server(bundled))
       end
 
       it "reads it as VS Code does, and passes it" do
         expect(check.status).to eq(:pass)
+      end
+    end
+
+    # The gem writes Cursor's entry through the GEM_PATH launcher, which is no Windows `cmd` line.
+    context "when Cursor's entry starts through the GEM_PATH launcher" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[cursor])
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+        allow(app_doctor).to receive(:client_path).and_return(bin_dir_with("rails-ai-context"))
+        RailsAiContext::McpConfigGenerator.new(tools: %i[cursor], output_dir: @root, standalone: true).call
+      end
+
+      it "passes it" do
+        expect(check).to have_attributes(status: :pass, message: "1 of 1 MCP config valid")
+      end
+    end
+
+    # Copilot CLI reads .github/mcp.json, never VS Code's file.
+    context "when Copilot's VS Code config is there and its CLI one is not" do
+      before do
+        allow(RailsAiContext.configuration).to receive(:tool_mode).and_return(:mcp)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+        write(".vscode/mcp.json", JSON.generate("servers" => { "rails-ai-context" => { "command" => "bundle", "args" => bundled.drop(1) } }))
+      end
+
+      it "names .github/mcp.json, with the install as the fix" do
+        expect(check).to have_attributes(status: :warn, message: "1 of 2 MCP configs needs attention: .github/mcp.json (GitHub Copilot CLI)",
+                                         fix: "Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
       end
     end
 
@@ -1921,13 +1666,14 @@ RSpec.describe RailsAiContext::Doctor do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(nil)
         %w[.mcp.json .cursor/mcp.json].each { |path| write(path, server(bundled)) }
         write(".vscode/mcp.json", JSON.generate("servers" => { "rails-ai-context" => { "command" => "bundle", "args" => bundled.drop(1) } }))
+        write(".github/mcp.json", server(bundled))
         write("opencode.json", JSON.generate("mcp" => { "rails-ai-context" => { "type" => "local", "command" => bundled } }))
         write(".codex/config.toml", %([mcp_servers.rails-ai-context]\ncommand = "bundle"\nargs = ["exec", "rails-ai-context", "serve"]\n))
       end
 
-      it "checks all 5 tools and returns pass" do
+      it "checks every tool's configs and returns pass" do
         expect(check.status).to eq(:pass)
-        expect(check.message).to include("5 of 5")
+        expect(check.message).to include("6 of 6")
       end
     end
 
@@ -2102,7 +1848,7 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    # On Windows the install starts the server through `cmd /c`: a gem's
+    # On Windows the install starts the server through `cmd /d /c`: a gem's
     # executable there is a .bat file, which a client starting its server
     # without a shell may not run. `bundle` sits beside its .bat so the
     # lookup finds it on every platform these examples run on.
@@ -2124,7 +1870,13 @@ RSpec.describe RailsAiContext::Doctor do
 
       after { FileUtils.rm_rf(batch_bin) }
 
-      it "passes an entry that starts the command through cmd /c" do
+      it "passes an entry that starts the command through cmd /d /c" do
+        write(".mcp.json", server(%w[cmd /d /c] + bundled))
+
+        expect(check.status).to eq(:pass)
+      end
+
+      it "passes an earlier release's entry, which starts it through cmd /c" do
         write(".mcp.json", server(%w[cmd /c] + bundled))
 
         expect(check.status).to eq(:pass)
@@ -2155,12 +1907,12 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:pass)
       end
 
-      it "fails an entry wrapped in cmd /c on any other platform, where there is no cmd" do
+      it "fails an entry wrapped in cmd /d /c on any other platform, where there is no cmd" do
         allow(RailsAiContext::McpConfigGenerator).to receive(:windows_shell?).and_return(false)
-        write(".mcp.json", server(%w[cmd /c] + bundled))
+        write(".mcp.json", server(%w[cmd /d /c] + bundled))
 
         expect(check.status).to eq(:fail)
-        expect(check.message).to include("`bundle exec rails-ai-context serve` cannot start - it runs through `cmd /c`, " \
+        expect(check.message).to include("`bundle exec rails-ai-context serve` cannot start - it runs through `cmd`, " \
                                          "Windows' shell, which is not here")
       end
     end
@@ -2203,8 +1955,9 @@ RSpec.describe RailsAiContext::Doctor do
       it "names comments as the problem, as the install does" do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
         write(".vscode/mcp.json", %({\n  // the gem's\n  "servers": {"rails-ai-context": {"command": "bundle"} "other": {}}\n}))
+        write(".github/mcp.json", server(bundled))
 
-        expect(check.message).to eq("1 of 1 MCP config needs attention: .vscode/mcp.json (GitHub Copilot): " \
+        expect(check.message).to eq("1 of 2 MCP configs needs attention: .vscode/mcp.json (GitHub Copilot): " \
                                     "#{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}")
       end
 
@@ -2249,11 +2002,12 @@ RSpec.describe RailsAiContext::Doctor do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
         write(".mcp.json", "[1, 2]")
         write(".vscode/mcp.json", %({"servers": ["x"]}))
+        write(".github/mcp.json", server(bundled))
       end
 
       it "reports both, as the install would refuse them" do
         expect(check.status).to eq(:fail)
-        expect(check.message).to include("2 of 2")
+        expect(check.message).to include("2 of 3")
         expect(check.fix).to eq('Make .mcp.json a JSON object and make "servers" in .vscode/mcp.json an object, ' \
                                 "then run `rails generate rails_ai_context:install`")
         expect(fresh_doctor.run[:checks].map(&:message).join)
@@ -2267,12 +2021,13 @@ RSpec.describe RailsAiContext::Doctor do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude copilot])
         write(".mcp.json", "\uFEFF\n")
         write(".vscode/mcp.json", %(\uFEFF{"servers": {"rails-ai-context": {"command": "bundle", "args": ["exec", "rails-ai-context", "serve"]}}}))
+        write(".github/mcp.json", server(bundled))
       end
 
       # init fills an empty file, so init is the fix.
       it "asks init to fill the empty one and reads the other" do
         expect(check.status).to eq(:warn)
-        expect(check.message).to include("1 of 2", ".mcp.json")
+        expect(check.message).to include("1 of 3", ".mcp.json")
         expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
       end
     end
@@ -2308,11 +2063,12 @@ RSpec.describe RailsAiContext::Doctor do
       it "names the entry to add by hand to a commented config that holds none of the gem's, as the install does" do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot opencode])
         write(".vscode/mcp.json", %({\n  // GitHub's server\n  "servers": { "github": { "url": "https://api.example/mcp" } }\n}\n))
+        write(".github/mcp.json", server(bare))
         write("opencode.json", %({\n  /* the team's model */\n  "model": "x"\n}\n))
 
         vscode = %({"servers":{"rails-ai-context":{"command":"rails-ai-context","args":["serve"]}}})
         opencode = %({"mcp":{"rails-ai-context":{"type":"local","command":["rails-ai-context","serve"]}}})
-        expect(check).to have_attributes(status: :warn, message: "2 of 2 MCP configs need attention: .vscode/mcp.json (GitHub Copilot), " \
+        expect(check).to have_attributes(status: :warn, message: "2 of 3 MCP configs need attention: .vscode/mcp.json (GitHub Copilot), " \
                                                                  "opencode.json (OpenCode): holds no rails-ai-context server")
         expect(check.fix).to eq("Add #{vscode} to .vscode/mcp.json by hand: #{RailsAiContext::McpConfigGenerator::COMMENTS_PROBLEM}, " \
                                 "so the install leaves it as it is; Add #{opencode} to opencode.json by hand: " \
@@ -2326,6 +2082,7 @@ RSpec.describe RailsAiContext::Doctor do
         write("Gemfile", %(gem "rails"\n))
         write("Gemfile.lock", lockfile("rails"))
         write(".vscode/mcp.json", %({\n  // ours\n  "servers": { "rails-ai-context": { "command": "bundle", "args": ["exec", "rails-ai-context", "serve"] } }\n}\n))
+        write(".github/mcp.json", server(bare))
 
         expect(check.status).to eq(:fail)
         expect(check.message).to end_with("`bundle exec rails-ai-context serve` cannot start - Gemfile.lock has no rails-ai-context")
@@ -2358,14 +2115,14 @@ RSpec.describe RailsAiContext::Doctor do
         expect(install_reason(:codex)).to include("Write it as a [mcp_servers.rails-ai-context] table by hand")
       end
 
-      it "names the same edit for a stale snapshot in such an entry" do
+      it "names the same edit for such an entry whose PATH an earlier release saved no longer reaches its command" do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
         write(".codex/config.toml", %([mcp_servers]\nrails-ai-context = { command = "rails-ai-context", args = ["serve"], ) +
                                     %(env = { PATH = "/nonexistent/ruby/9.9.9/bin" } }\n))
 
-        staleness = app_doctor.send(:check_codex_env_staleness)
-        expect(staleness.status).to eq(:fail)
-        expect(staleness.fix).to start_with("Write it as a [mcp_servers.rails-ai-context] table by hand, or delete it and run `rails-ai-context init`")
+        expect(check.status).to eq(:fail)
+        expect(check.message).to end_with("`rails-ai-context serve` cannot start - `rails-ai-context` is not on the PATH its env sets")
+        expect(check.fix).to start_with("Write it as a [mcp_servers.rails-ai-context] table by hand, or delete it and run `rails-ai-context init`")
       end
     end
   end
@@ -2533,10 +2290,11 @@ RSpec.describe RailsAiContext::Doctor do
       write(".vscode/mcp.json", %({\n  // the folder's servers\n  "servers": {\n    "rails-ai-context-a": { "command": "bundle", ) +
                                 %("args": ["exec", "rails-ai-context", "serve", "--app-path", "${workspaceFolder}/a"], ) +
                                 %("env": { "BUNDLE_GEMFILE": "${workspaceFolder}/a/Gemfile" } }\n  }\n}\n))
+      servers = RailsAiContext::Install::Workspace.apps(@work, [ app_root ]).map(&:server)
+      RailsAiContext::McpConfigGenerator.new(tools: [ :copilot_cli ], output_dir: @work, tool_mode: :mcp, servers: servers).call
 
       check = workspace_doctor.send(:check_mcp_json)
 
-      servers = RailsAiContext::Install::Workspace.apps(@work, [ app_root ]).map(&:server)
       init = RailsAiContext::McpConfigGenerator.new(tools: [ :copilot ], output_dir: @work, tool_mode: :mcp, servers: servers).call
       entry = init[:reasons].values.first[/Add (\{.*\}) to it by hand\z/, 1]
       expect(entry).to include(%("rails-ai-context-a":{"command":"rails-ai-context"))
@@ -2849,12 +2607,27 @@ RSpec.describe RailsAiContext::Doctor do
     it "names a config of the gem's above it that does not parse" do
       allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
       write(".vscode/mcp.json", %({"servers": {"rails-ai-context-a": {"command": "rails-ai-context"}))
+      servers = RailsAiContext::Install::Workspace.apps(@work, [ app_root ]).map(&:server)
+      RailsAiContext::McpConfigGenerator.new(tools: [ :copilot_cli ], output_dir: @work, tool_mode: :mcp, servers: servers).call
 
       check = workspace_doctor.send(:check_mcp_json)
 
       expect(check.status).to eq(:fail)
       expect(check.message).to include(".vscode/mcp.json")
       expect(check.fix).to eq("Make ../.vscode/mcp.json valid JSON holding an object, then run `rails-ai-context init` in the folder that holds it")
+    end
+
+    # Beside the folder's VS Code config, where `init` in the folder writes it, and not in the app.
+    it "sends a missing .github/mcp.json to the folder whose VS Code config serves this app" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[copilot])
+      servers = RailsAiContext::Install::Workspace.apps(@work, [ app_root ]).map(&:server)
+      RailsAiContext::McpConfigGenerator.new(tools: [ :copilot ], output_dir: @work, tool_mode: :mcp, servers: servers).call
+      File.delete(File.join(@work, ".github/mcp.json"))
+
+      check = workspace_doctor.send(:check_mcp_json)
+
+      expect(check.message).to end_with(".github/mcp.json (GitHub Copilot CLI)")
+      expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.github/mcp.json to fix")
     end
 
     it "passes over a config above it that names no server of the gem's" do
@@ -2867,33 +2640,28 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check.fix).to eq("Run `#{RailsAiContext::InstallMode.command(:install)}` to fix")
     end
 
-    it "checks the Codex env snapshot of every server the gem wrote there" do
-      Dir.mktmpdir("gem_home") do |gem_home|
-        write(".codex/config.toml", <<~TOML)
-          [mcp_servers.rails-ai-context-a]
-          command = "rails-ai-context"
-          args = ["serve", "--app-path", "a"]
+    # The install now writes env_vars in place of what earlier releases saved, which a Ruby switch left stale.
+    it "warns about the Ruby setup an earlier release saved into the workspace's Codex entry" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
+      allow(workspace_doctor).to receive(:client_path).and_return(bin_dir_with("rails-ai-context"))
+      write(".codex/config.toml", <<~TOML)
+        [mcp_servers.rails-ai-context-a]
+        command = "rails-ai-context"
+        args = ["serve", "--app-path", "a"]
 
-          [mcp_servers.rails-ai-context-a.env]
-          GEM_HOME = "#{gem_home}"
+        [mcp_servers.rails-ai-context-a.env]
+        GEM_HOME = "/nonexistent/gems/3.3.0"
+      TOML
 
-          [mcp_servers.rails-ai-context-b]
-          command = "rails-ai-context"
-          args = ["serve", "--app-path", "b"]
+      check = workspace_doctor.send(:check_mcp_json)
 
-          [mcp_servers.rails-ai-context-b.env]
-          GEM_HOME = "/nonexistent/gems/3.3.0"
-        TOML
-
-        check = workspace_doctor.send(:check_codex_env_staleness)
-
-        expect(check.status).to eq(:warn)
-        expect(check.message).to include("/nonexistent/gems/3.3.0")
-      end
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include("`rails-ai-context serve` starts with the GEM_HOME an earlier release saved from this machine")
+      expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.codex/config.toml to fix")
     end
 
-    # The workspace's snapshot is what Codex starts this app's server with.
     it "fails when the PATH a workspace entry saved no longer reaches its command" do
+      allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[codex])
       write(".codex/config.toml", <<~TOML)
         [mcp_servers.rails-ai-context-a]
         command = "rails-ai-context"
@@ -2903,11 +2671,11 @@ RSpec.describe RailsAiContext::Doctor do
         PATH = "/nonexistent/ruby/9.9.9/bin"
       TOML
 
-      check = workspace_doctor.send(:check_codex_env_staleness)
+      check = workspace_doctor.send(:check_mcp_json)
 
       expect(check.status).to eq(:fail)
-      expect(check.message).to include("the PATH saved for rails-ai-context-a no longer reaches `rails-ai-context`")
-      expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.codex/config.toml")
+      expect(check.message).to include("`rails-ai-context serve` cannot start - `rails-ai-context` is not on the PATH its env sets")
+      expect(check.fix).to eq("Run `rails-ai-context init` in the folder that holds ../.codex/config.toml to fix")
     end
   end
 
@@ -3080,16 +2848,10 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    # The Codex config carries this machine's PATH and GEM_HOME, which is why
-    # install gitignores it; the check never asked whether that survived.
-    it "reports the Codex config as unignored, and passes once .gitignore covers it" do
+    # The Codex config names the Ruby setup it passes, holding nothing of this machine's, so it is committed like the rest.
+    it "does not count the Codex config among the files never to commit" do
       app_with(".codex/config.toml" => "[mcp_servers.rails-ai-context]\n", ".gitignore" => "log/\n") do |dir|
-        check = gitignore_check_for(dir)
-        expect(check.status).to eq(:fail)
-        expect(check.message).to include(".codex/config.toml")
-
-        File.write(File.join(dir, ".gitignore"), ".codex/config.toml\n")
-        expect(gitignore_check_for(dir).status).to eq(:pass)
+        expect(gitignore_check_for(dir).message).not_to include(".codex/config.toml")
       end
     end
 

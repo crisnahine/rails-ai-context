@@ -829,12 +829,6 @@ module RailsAiContext
         show_more_tools
         committed = [ ("context files" if context_files?), ("MCP configs" if tool_mode == :mcp && (@selected_formats - Array(@held)).any?) ].compact
         say "Commit the #{committed.join(' and ')} so your team benefits!", :green if committed.any?
-        # Only where a Codex config was written, and only while a commit
-        # would still take it along.
-        if tool_mode == :mcp && @selected_formats.include?(:codex) &&
-           !RailsAiContext::Install::Program.codex_config_ignored?(install_root)
-          say "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)", :green
-        end
       end
 
       no_tasks do

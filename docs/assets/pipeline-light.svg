@@ -48,7 +48,7 @@
 <circle cx="471" cy="358" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="362" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">5</text>
 <text x="492" y="356"><tspan font-weight="600" fill="#1f2328">Its own configuration:</tspan> an initializer and</text>
 <text x="492" y="374">.rails-ai-context.yml in a Gemfile install, the YAML file</text>
-<text x="492" y="392">alone standalone, and two .gitignore lines.</text>
+<text x="492" y="392">alone standalone, and a .gitignore line.</text>
 <circle cx="471" cy="426" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="430" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">6</text>
 <text x="492" y="424"><tspan font-weight="600" fill="#1f2328">Nothing you wrote.</tspan> Your lines around its markers stay,</text>
 <text x="492" y="442">and uninstall takes back only what it wrote.</text>

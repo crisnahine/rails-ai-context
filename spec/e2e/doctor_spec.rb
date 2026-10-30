@@ -15,7 +15,7 @@ RSpec.describe "E2E: doctor", type: :e2e do
 
         expect(result.success?).to be(true), result.to_s
         expect(result.stdout).not_to include("[FAIL]")
-        expect(result.stdout).to include("MCP configs: 5 of 5 MCP configs valid")
+        expect(result.stdout).to include("MCP configs: 6 of 6 MCP configs valid")
         expect(result.stdout).to match(/Context files: .* up to date/)
       end
     end

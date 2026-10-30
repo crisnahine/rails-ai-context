@@ -14,11 +14,12 @@ Checked against each tool's documentation and source in October 2026:
 | Codex CLI (`.codex/config.toml`) | its session directory | no; a `cwd` key, itself relative to the session directory |
 | OpenCode (`opencode.json`) | the folder it was opened in | no; a `cwd` key only from v1.17.4, and older versions reject unknown keys |
 | VS Code (`.vscode/mcp.json`) | the workspace folder | `${workspaceFolder}` |
-| Cursor (`.cursor/mcp.json`) | undocumented; users report `/` or `~` | `${workspaceFolder}`, the folder holding `.cursor/` |
+| Cursor (`.cursor/mcp.json`) | the editor (3.27): the project's folder; the `agent` CLI (2026.10.22): the folder it runs in | no; the `agent` CLI passes `${workspaceFolder}` to the server as literal text |
+| Copilot CLI (`.github/mcp.json`) | the folder it runs in (not documented; Claude Code's `.mcp.json` entries rely on the same) | no |
 
 ## Decision
 
-- `--app-path` and an in-Gemfile app's `BUNDLE_GEMFILE` are written relative to the workspace. Where the tool names its config's folder (Cursor, VS Code: `AiTool`'s `folder_variable`), they start from that name; elsewhere they are bare relative paths, which those tools resolve against the folder they were started in. An absolute path would hold only on the machine that wrote it.
+- `--app-path` and an in-Gemfile app's `BUNDLE_GEMFILE` are written relative to the workspace. Where every client of the config expands a name for its folder (VS Code: `AiTool`'s `folder_variable`), they start from that name; elsewhere they are bare relative paths, which those tools resolve against the folder they were started in. An absolute path would hold only on the machine that wrote it. Cursor's entries started from `${workspaceFolder}` until the `agent` CLI was found to pass it on unexpanded; an entry written that way is still read as the gem's and is rewritten by the next `init`.
 - Each app keeps its own install form: the bare binary for a standalone app, `bundle exec` for an in-Gemfile one, decided from that app's own Gemfile.lock (or its Gemfile, before the bundle is installed) rather than the process's bundle.
 - A re-run writes the current set: an entry under a name the gem gives an app in the folder (its folder name or its path, never a numbered one) is dropped when that app's folder is gone, or when a twin's arrival renamed it. A folder this machine lacks reads as gone: the gem cannot tell an app removed from one never checked out. An entry counts as the gem's by its name and by running `rails-ai-context serve`, or, under the bare name every version has written, by running a command at all; an entry with no command (an HTTP one), a second entry named by hand for an app, a numbered one (as likely made by hand), one naming its app through a variable the tool expands, and one naming an app outside the folder are left as somebody's own. So is one of the gem's that starts its server in a form the gem does not write (through Docker), which the write names in its note.
 - An in-Gemfile app's `BUNDLE_GEMFILE` names the Gemfile its bundle reads: its own, by the name it has in the app even when it links elsewhere, since Bundler names the lockfile after the path it is given; else the one its `config/boot.rb` names, which is how a monorepo's apps share one bundle; else the one `bundle exec` run inside the app would find. With none of these the entry names none.
@@ -27,7 +28,7 @@ Checked against each tool's documentation and source in October 2026:
 
 ## Consequences
 
-The entries work when the tool is started in the workspace folder, which is the setup they are written for. A tool started inside one of the apps that still reads the workspace's config (Claude Code, Codex, OpenCode) starts each server there, where a relative path misses. The binary then names the folder the path was written for instead of guessing a different app; an in-Gemfile entry fails earlier, in Bundler, before the gem runs. An app opened on its own gets its own config from `init` run inside it.
+The entries work when the tool is started in the workspace folder, which is the setup they are written for. A tool started inside one of the apps that still reads the workspace's config (Claude Code, Codex, OpenCode, Copilot CLI) starts each server there, where a relative path misses. The binary then names the folder the path was written for instead of guessing a different app; an in-Gemfile entry fails earlier, in Bundler, before the gem runs. An app opened on its own gets its own config from `init` run inside it.
 
 Every server in a workspace runs under the Ruby the tool resolves in the workspace folder, which a version manager picks by that folder, not by the app. `init` warns when an app declares another; a standalone app that cannot boot under it answers from the static tier, and an in-Gemfile entry may not start.
 
@@ -36,4 +37,4 @@ Every server in a workspace runs under the Ruby the tool resolves in the workspa
 - **Absolute paths**: correct on one machine, wrong in every clone.
 - **A `cwd` key per entry**: Claude Code has none, OpenCode's breaks its older versions, and Codex's is relative to the same directory a bare path already is.
 - **Walking up for a relative `--app-path` that misses**: it would make the binary's `--app-path` mean different things in different directories, and would still leave `bundle exec` entries failing before the gem runs.
-- **Re-launching an in-Gemfile app's server from inside the app** (the global binary resolving the app, then `exec`ing `bundle exec` there): it fixes the Ruby choice, but needs the binary installed outside every bundle, cannot `exec` in place on Windows, and fights Codex's environment snapshot, which pins the Ruby `init` ran under.
+- **Re-launching an in-Gemfile app's server from inside the app** (the global binary resolving the app, then `exec`ing `bundle exec` there): it fixes the Ruby choice, but needs the binary installed outside every bundle, and cannot `exec` in place on Windows.

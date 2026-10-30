@@ -29,7 +29,7 @@ RSpec.describe "E2E: zero-config install", type: :e2e do
 
     it "does NOT generate per-AI-client config files (no init run)" do
       # Zero-config path deliberately skips init - config files should be absent.
-      %w[.mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json .codex/config.toml].each do |relative|
+      %w[.mcp.json .cursor/mcp.json .vscode/mcp.json .github/mcp.json opencode.json .codex/config.toml].each do |relative|
         path = File.join(@builder.app_path, relative)
         expect(File.exist?(path)).to be(false), "expected #{relative} to NOT exist in zero-config mode"
       end

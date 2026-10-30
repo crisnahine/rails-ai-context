@@ -1165,12 +1165,12 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(summary).not_to include("To add more AI tools later")
     end
 
-    it "asks to gitignore the Codex config only while a commit would take it" do
+    # The Codex config holds nothing machine-specific, so it is committed with the rest.
+    it "asks nobody to keep the Codex config out of commits" do
       generator.instance_variable_set(:@selected_formats, %i[codex])
       File.write(File.join(tmpdir, ".gitignore"), "")
-      expect(summary).to include("add it to .gitignore")
 
-      File.write(File.join(tmpdir, ".gitignore"), ".codex/config.toml\n")
+      expect(summary).to include("Commit the context files and MCP configs")
       expect(summary).not_to include("add it to .gitignore")
     end
 
@@ -1263,14 +1263,14 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(File.exist?(gitignore_path)).to be(false)
     end
 
-    it "gets both .ai-context.json and .codex/config.toml when it exists" do
+    it "gets .ai-context.json, and not the Codex config, when it exists" do
       File.write(gitignore_path, "*.log\n")
 
       install
 
       content = File.read(gitignore_path)
       expect(content).to include(".ai-context.json")
-      expect(content).to include(".codex/config.toml")
+      expect(content).not_to include(".codex/config.toml")
     end
 
     it "does not get entries that are already present twice" do

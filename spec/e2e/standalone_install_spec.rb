@@ -29,7 +29,7 @@ RSpec.describe "E2E: standalone install", type: :e2e do
     end
 
     it "generates per-AI-client MCP config files (same as in-Gemfile path)" do
-      %w[.mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json .codex/config.toml].each do |relative|
+      %w[.mcp.json .cursor/mcp.json .vscode/mcp.json .github/mcp.json opencode.json .codex/config.toml].each do |relative|
         path = File.join(@builder.app_path, relative)
         expect(File.exist?(path)).to be(true), "expected #{relative} to be generated"
       end

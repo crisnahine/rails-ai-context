@@ -32,6 +32,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
         ".mcp.json"           => :json,   # Claude
         ".cursor/mcp.json"    => :json,   # Cursor
         ".vscode/mcp.json"    => :json,   # Copilot
+        ".github/mcp.json"    => :json,   # Copilot CLI
         "opencode.json"       => :json,   # OpenCode
         ".codex/config.toml"  => :toml    # Codex
       }

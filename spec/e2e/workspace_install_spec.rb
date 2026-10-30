@@ -91,11 +91,11 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
       expect(File.read(workspace_file(".codex/config.toml"))).to include("[mcp_servers.rails-ai-context-shop]")
     end
 
-    # On Windows each entry starts its command through `cmd /c`, which runs
+    # On Windows each entry starts its command through `cmd /d /c`, which runs
     # the batch file a gem's executable is there.
     def entry_argv(entry)
       argv = [ entry["command"], *entry["args"] ]
-      Gem.win_platform? ? argv.drop(2).tap { expect(argv.first(2)).to eq(%w[cmd /c]) } : argv
+      Gem.win_platform? ? argv.drop(3).tap { expect(argv.first(3)).to eq(%w[cmd /d /c]) } : argv
     end
 
     it "gives each app the command form of its own install" do
@@ -145,14 +145,13 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
       end
     end
 
-    # Cursor expands ${workspaceFolder} and does not promise a working
-    # directory; users report the filesystem root.
-    it "serves both apps from Cursor's config whatever the working directory" do
+    # Cursor's editor starts a project's server in the project's folder, and its `agent` CLI in the folder it runs
+    # in, with ${workspaceFolder} left as written; the entries name each app from there.
+    it "serves both apps from Cursor's config, started in the folder" do
       json_servers(".cursor/mcp.json", "mcpServers").each_value do |entry|
-        expand = ->(value) { value.gsub("${workspaceFolder}", @workspace) }
-        env = shell_env.merge((entry["env"] || {}).transform_values(&expand))
+        expect(entry.to_json).not_to include("${")
 
-        with_server(env: env, command: [ entry["command"], *entry["args"].map(&expand) ], chdir: "/") do |client|
+        with_server(env: shell_env.merge(entry["env"] || {}), command: [ entry["command"], *entry["args"] ], chdir: @workspace) do |client|
           client.initialize!
           expect(schema_text(client)).to include("posts")
         end
@@ -226,6 +225,6 @@ RSpec.describe "E2E: workspace of apps", type: :e2e do
     out, err, = Open3.capture3(@admin.env, "bundle", "exec", "rails-ai-context", "doctor", chdir: @admin.app_path)
 
     expect("#{out}\n#{err}").not_to include("No .mcp.json for MCP auto-discovery")
-    expect(out).to match(/MCP configs.*5 of 5 MCP configs valid/), "#{out}\n#{err}"
+    expect(out).to match(/MCP configs.*6 of 6 MCP configs valid/), "#{out}\n#{err}"
   end
 end

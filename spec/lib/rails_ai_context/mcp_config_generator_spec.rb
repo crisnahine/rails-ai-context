@@ -104,14 +104,14 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           expect(File.exist?(path)).to be true
           content = JSON.parse(File.read(path))
           expect(content).to have_key("mcpServers")
-          expect(content["mcpServers"]["rails-ai-context"]["command"]).to eq("bundle")
+          expect(content["mcpServers"]["rails-ai-context"]).to eq("command" => "ruby", "args" => [ "-e", described_class::LAUNCHER, "bundle", "exec", "rails-ai-context", "serve" ])
         end
       end
 
       it "generates .vscode/mcp.json for :copilot with servers key" do
         Dir.mktmpdir do |dir|
           result = described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp).call
-          expect(result[:written].size).to eq(1)
+          expect(result[:written]).to eq([ File.join(dir, ".vscode", "mcp.json"), File.join(dir, ".github", "mcp.json") ])
 
           path = File.join(dir, ".vscode", "mcp.json")
           expect(File.exist?(path)).to be true
@@ -140,20 +140,175 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
-      it "generates .codex/config.toml for :codex as TOML with env snapshot" do
+      # The Cursor CLI, and Copilot CLI by its docs, start a server with PATH but no GEM_PATH, which rvm and chruby
+      # need; the launcher puts the gem folders PATH holds back in GEM_PATH before it starts the command.
+      it "starts Cursor's and Copilot CLI's servers through the GEM_PATH launcher, and no other tool's" do
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: tools, output_dir: dir, standalone: true).call
+
+          launched = { "command" => "ruby", "args" => [ "-e", described_class::LAUNCHER, "rails-ai-context", "serve" ] }
+          expect(JSON.parse(File.read(File.join(dir, ".cursor/mcp.json")))["mcpServers"]["rails-ai-context"]).to eq(launched)
+          expect(JSON.parse(File.read(File.join(dir, ".github/mcp.json")))["mcpServers"]["rails-ai-context"]).to eq(launched.merge("tools" => [ "*" ]))
+          expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"]["command"]).to eq("rails-ai-context")
+          expect(JSON.parse(File.read(File.join(dir, ".vscode/mcp.json")))["servers"]["rails-ai-context"]["command"]).to eq("rails-ai-context")
+          expect(File.read(File.join(dir, ".codex/config.toml"))).to include(%(command = "rails-ai-context"\n))
+        end
+      end
+
+      # As the Cursor CLI starts it: no GEM_PATH or GEM_HOME, and a gem folder's bin on PATH, as rvm and chruby leave it.
+      it "puts the gem folders on PATH into GEM_PATH, keeping RubyGems' own, and leaves one the client passed" do
+        Dir.mktmpdir do |dir|
+          gems = File.join(File.realpath(dir), "gems")
+          FileUtils.mkdir_p([ File.join(gems, "bin"), File.join(gems, "specifications") ])
+          path = [ File.join(gems, "bin"), RbConfig::CONFIG["bindir"] ].join(File::PATH_SEPARATOR)
+          print_gem_path = [ RbConfig.ruby, "-e", "print ENV['GEM_PATH'].to_s" ]
+          run = ->(env) { Open3.capture2({ "PATH" => path }.merge(env), RbConfig.ruby, "-e", described_class::LAUNCHER, *print_gem_path, unsetenv_others: true).first }
+
+          expect(run.({})).to eq("#{gems}#{File::PATH_SEPARATOR}")
+          expect(run.({ "GEM_PATH" => "/given" })).to eq("/given")
+        end
+      end
+
+      it "keeps a launcher entry current and takes it on removal, and leaves a ruby -e of someone else's" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, ".cursor/mcp.json")
+          described_class.new(tools: [ :cursor ], output_dir: dir, standalone: true).call
+
+          expect(described_class.new(tools: [ :cursor ], output_dir: dir, standalone: true).call[:skipped]).to eq([ path ])
+          expect(described_class.remove(tools: [ :cursor ], output_dir: dir)).to eq([ path ])
+
+          [ [ "ruby", "exec(*ARGV)" ], [ "/usr/bin/ruby", described_class::LAUNCHER ] ].each do |command, code|
+            File.write(path, JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => command, "args" => [ "-e", code, "rails-ai-context", "serve" ] } }))
+            expect(described_class.remove(tools: [ :cursor ], output_dir: dir)).to eq([]), command
+          end
+        end
+      end
+
+      # Configs hold the launcher as text, and that text is how a later release knows the entry for the gem's.
+      it "takes an entry holding the launcher as this release writes it, which a changed launcher must still read" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, ".cursor/mcp.json")
+          FileUtils.mkdir_p(File.dirname(path))
+          launcher = 'dirs = ENV["PATH"].to_s.split(File::PATH_SEPARATOR).map { |dir| File.dirname(dir) }' \
+                     '.select { |dir| File.directory?(File.join(dir, "specifications")) }.uniq; ' \
+                     'ENV["GEM_PATH"] = [*dirs, ""].join(File::PATH_SEPARATOR) if dirs.any? && ENV["GEM_PATH"].to_s.empty? && ' \
+                     'ENV["GEM_HOME"].to_s.empty?; exec(*ARGV)'
+          File.write(path, JSON.generate("mcpServers" => { "rails-ai-context" => { "command" => "ruby", "args" => [ "-e", launcher, "rails-ai-context", "serve" ] } }))
+
+          expect(described_class.remove(tools: [ :cursor ], output_dir: dir)).to eq([ path ])
+        end
+      end
+
+      # Copilot CLI reads .github/mcp.json, never VS Code's file.
+      it "writes Copilot's server into .github/mcp.json beside .vscode/mcp.json, and removal takes both" do
+        Dir.mktmpdir do |dir|
+          result = described_class.new(tools: [ :copilot ], output_dir: dir, standalone: true).call
+
+          paths = [ File.join(dir, ".vscode/mcp.json"), File.join(dir, ".github/mcp.json") ]
+          expect(result[:written]).to eq(paths)
+          expect(JSON.parse(File.read(paths.last))).to eq("mcpServers" => { "rails-ai-context" => {
+            "command" => "ruby", "args" => [ "-e", described_class::LAUNCHER, "rails-ai-context", "serve" ], "tools" => [ "*" ]
+          } })
+          expect(described_class.remove(tools: [ :copilot ], output_dir: dir)).to eq(paths)
+          expect(paths.map { |path| File.exist?(path) }).to eq([ false, false ])
+        end
+      end
+
+      it "keeps the tools list a user narrowed in .github/mcp.json" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".github"))
+          File.write(File.join(dir, ".github/mcp.json"), JSON.generate("mcpServers" => {
+            "rails-ai-context" => { "command" => "rails-ai-context", "args" => [ "serve" ], "tools" => [ "rails_get_schema" ] }
+          }))
+
+          described_class.new(tools: [ :copilot ], output_dir: dir, standalone: true).call
+          result = described_class.new(tools: [ :copilot ], output_dir: dir, standalone: true).call
+
+          expect(result[:skipped]).to include(File.join(dir, ".github/mcp.json"))
+          entry = JSON.parse(File.read(File.join(dir, ".github/mcp.json"))).dig("mcpServers", "rails-ai-context")
+          expect(entry).to eq("command" => "ruby", "args" => [ "-e", described_class::LAUNCHER, "rails-ai-context", "serve" ], "tools" => [ "rails_get_schema" ])
+        end
+      end
+
+      # OpenCode adds the line itself to a file it loads; one the user wrote without it is theirs to keep that way.
+      it "adds no $schema to an opencode.json it merges into" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, "opencode.json"), JSON.generate("theme" => "dark"))
+
+          described_class.new(tools: [ :opencode ], output_dir: dir, tool_mode: :mcp).call
+
+          expect(JSON.parse(File.read(File.join(dir, "opencode.json"))).keys).to eq(%w[theme mcp])
+        end
+      end
+
+      # Codex keeps PATH when it clears the environment, and env_vars passes the rest of the Ruby setup by name, so
+      # nothing of this machine's lands in the file.
+      it "generates .codex/config.toml for :codex as TOML naming the Ruby environment it passes through" do
         Dir.mktmpdir do |dir|
           result = described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
           expect(result[:written].size).to eq(1)
 
-          path = File.join(dir, ".codex", "config.toml")
-          expect(File.exist?(path)).to be true
+          content = File.read(File.join(dir, ".codex", "config.toml"))
+          expect(content).to include(%(env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH"]\n))
+          expect(content).not_to include("[mcp_servers.rails-ai-context.env]", "PATH = ", ENV.fetch("HOME"))
+        end
+      end
+
+      # The timeout configures only the gem's server, so it holds the table back from no removal.
+      it "keeps a startup timeout the user set, adds none beside it, and removal still takes the table" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, ".codex/config.toml")
+          { "startup_timeout_sec = 90" => "startup_timeout_sec", "startup_timeout_ms = 45000" => "startup_timeout_" }.each do |line, key|
+            FileUtils.mkdir_p(File.join(dir, ".codex"))
+            File.write(path, %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\n#{line}\n))
+
+            described_class.new(tools: [ :codex ], output_dir: dir, standalone: true).call
+
+            content = File.read(path)
+            expect(content).to include("\n#{line}\n")
+            expect(content.scan(key).size).to eq(1), line
+            expect(described_class.remove(tools: [ :codex ], output_dir: dir)).to eq([ path ]), line
+            expect(File.exist?(path) ? File.read(path) : "").not_to include("[mcp_servers.rails-ai-context]")
+          end
+        end
+      end
+
+      it "merges the names the user's env_vars lists into the one it writes, and removal leaves that entry" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          path = File.join(dir, ".codex/config.toml")
+          File.write(path, %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\nenv_vars = ["GEM_HOME", "MY_TOKEN", { name = "CI", source = "local" }]\n))
+
+          described_class.new(tools: [ :codex ], output_dir: dir, standalone: true).call
+          described_class.new(tools: [ :codex ], output_dir: dir, standalone: true).call
+
           content = File.read(path)
-          expect(content).to include("[mcp_servers.rails-ai-context]")
-          expect(content).to include('command = "bundle"')
-          expect(content).to include('args = ["exec", "rails-ai-context", "serve"]')
-          # Env section captures PATH for Codex sandbox compatibility
-          expect(content).to include("[mcp_servers.rails-ai-context.env]")
-          expect(content).to include("PATH = ")
+          expect(content).to include(%(env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH", "MY_TOKEN", { name = "CI", source = "local" }]\n))
+          expect(content.scan("env_vars").size).to eq(1)
+          expect(described_class.remove(tools: [ :codex ], output_dir: dir)).to eq([])
+        end
+      end
+
+      # A table item names where Codex reads the variable, so the user's form of one of the gem's names wins.
+      it "keeps the user's own form of a name the gem lists" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          path = File.join(dir, ".codex/config.toml")
+          File.write(path, %([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\nargs = ["serve"]\nenv_vars = ["FOO", { name = "GEM_HOME", source = "local" }]\n))
+
+          described_class.new(tools: [ :codex ], output_dir: dir, standalone: true).call
+
+          expect(File.read(path)).to include(%(env_vars = [{ name = "GEM_HOME", source = "local" }, "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH", "FOO"]\n))
+          expect(described_class.remove(tools: [ :codex ], output_dir: dir)).to eq([])
+        end
+      end
+
+      it "takes the table it wrote, env_vars and startup timeout included, on removal" do
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: [ :codex ], output_dir: dir, standalone: true).call
+
+          expect(described_class.remove(tools: [ :codex ], output_dir: dir)).to eq([ File.join(dir, ".codex/config.toml") ])
+          expect(File.exist?(File.join(dir, ".codex/config.toml"))).to be false
         end
       end
 
@@ -184,10 +339,24 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
             }
           JSON
 
+          launched = <<~JSON.chomp.gsub("\n", "\n    ")
+            {
+              "command": "ruby",
+              "args": [
+                "-e",
+                #{JSON.generate(described_class::LAUNCHER)},
+                "bundle",
+                "exec",
+                "rails-ai-context",
+                "serve"
+              ]
+            }
+          JSON
+
           expect(File.read(File.join(dir, ".cursor", "mcp.json"))).to eq(<<~JSON)
             {
               "mcpServers": {
-                "rails-ai-context": #{json_entry}
+                "rails-ai-context": #{launched}
               }
             }
           JSON
@@ -200,8 +369,30 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
             }
           JSON
 
+          expect(File.read(File.join(dir, ".github", "mcp.json"))).to eq(<<~JSON)
+            {
+              "mcpServers": {
+                "rails-ai-context": {
+                  "command": "ruby",
+                  "args": [
+                    "-e",
+                    #{JSON.generate(described_class::LAUNCHER)},
+                    "bundle",
+                    "exec",
+                    "rails-ai-context",
+                    "serve"
+                  ],
+                  "tools": [
+                    "*"
+                  ]
+                }
+              }
+            }
+          JSON
+
           expect(File.read(File.join(dir, "opencode.json"))).to eq(<<~JSON)
             {
+              "$schema": "https://opencode.ai/config.json",
               "mcp": {
                 "rails-ai-context": {
                   "type": "local",
@@ -216,23 +407,25 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
             }
           JSON
 
-          toml = File.read(File.join(dir, ".codex", "config.toml"))
-          expect(toml.split("\n\n").first).to eq(<<~TOML.chomp)
+          expect(File.read(File.join(dir, ".codex", "config.toml"))).to eq(<<~TOML)
             [mcp_servers.rails-ai-context]
             command = "bundle"
             args = ["exec", "rails-ai-context", "serve"]
+            env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH"]
+            startup_timeout_sec = 30.0
           TOML
         end
       end
 
-      it "generates all 5 configs when all tools selected" do
+      it "generates all 6 configs when all tools selected" do
         Dir.mktmpdir do |dir|
           result = described_class.new(tools: tools, output_dir: dir, tool_mode: :mcp).call
-          expect(result[:written].size).to eq(5)
+          expect(result[:written].size).to eq(6)
 
           expect(File.exist?(File.join(dir, ".mcp.json"))).to be true
           expect(File.exist?(File.join(dir, ".cursor", "mcp.json"))).to be true
           expect(File.exist?(File.join(dir, ".vscode", "mcp.json"))).to be true
+          expect(File.exist?(File.join(dir, ".github", "mcp.json"))).to be true
           expect(File.exist?(File.join(dir, "opencode.json"))).to be true
           expect(File.exist?(File.join(dir, ".codex", "config.toml"))).to be true
         end
@@ -312,12 +505,12 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           File.write(path, %({\n  "servers": {\n    "github": { "command": "gh-mcp", "args": ["--stdio",], },\n  },\n}\n))
           write = -> { described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp, standalone: true).call }
 
-          expect(write.call[:written]).to eq([ path ])
+          expect(write.call[:written]).to eq([ path, File.join(dir, ".github/mcp.json") ])
           expect(JSON.parse(File.read(path))["servers"].keys).to eq(%w[github rails-ai-context])
 
           File.write(path, %({\n  "servers": {\n    "github": { "command": "gh-mcp", },\n    ) +
                            %("rails-ai-context": { "command": "rails-ai-context", "args": ["serve",], },\n  },\n}\n))
-          expect(write.call[:skipped]).to eq([ path ])
+          expect(write.call[:skipped]).to eq([ path, File.join(dir, ".github/mcp.json") ])
         end
       end
 
@@ -374,7 +567,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           File.write(path, current)
           result = described_class.new(tools: [ :copilot ], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
-          expect(result[:skipped]).to eq([ path ])
+          expect(result[:skipped]).to eq([ path, File.join(dir, ".github/mcp.json") ])
           expect(File.read(path)).to eq(current)
         end
       end
@@ -389,7 +582,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           result = described_class.new(tools: %i[claude copilot], output_dir: dir, tool_mode: :mcp, standalone: true).call
 
-          expect(result[:written].size).to eq(2)
+          expect(result[:written].size).to eq(3)
           expect(JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"].keys).to eq(%w[rails-ai-context])
           vscode = File.read(File.join(dir, ".vscode/mcp.json"))
           expect(vscode).to start_with("\uFEFF{")
@@ -785,19 +978,22 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           "env" => { "BUNDLE_GEMFILE" => "group/b/Gemfile" }
         )
 
-        # Cursor does not promise a working directory; it and VS Code name
-        # the folder their config sits in.
-        cursor = JSON.parse(File.read(File.join(dir, ".cursor/mcp.json")))["mcpServers"]
+        # Cursor starts a project's server in its folder too, and its CLI passes ${workspaceFolder} on unexpanded;
+        # Copilot CLI expands no variable naming the folder, and starts a server where it runs. Both go through the launcher.
+        launched = claude.transform_values { |entry| entry.merge("command" => "ruby", "args" => [ "-e", described_class::LAUNCHER, entry["command"], *entry["args"] ]) }
+        expect(JSON.parse(File.read(File.join(dir, ".cursor/mcp.json")))["mcpServers"]).to eq(launched)
+        github = JSON.parse(File.read(File.join(dir, ".github/mcp.json")))["mcpServers"]
+        expect(github.transform_values { |entry| entry.except("tools") }).to eq(launched)
+
+        # VS Code names the folder its config sits in.
         vscode = JSON.parse(File.read(File.join(dir, ".vscode/mcp.json")))["servers"]
-        [ cursor, vscode ].each do |entries|
-          expect(entries["rails-ai-context-a"]).to eq(
-            "command" => "rails-ai-context", "args" => [ "serve", "--app-path", "${workspaceFolder}/a" ]
-          )
-          expect(entries["rails-ai-context-b"]).to eq(
-            "command" => "bundle", "args" => [ "exec", "rails-ai-context", "serve", "--app-path", "${workspaceFolder}/group/b" ],
-            "env" => { "BUNDLE_GEMFILE" => "${workspaceFolder}/group/b/Gemfile" }
-          )
-        end
+        expect(vscode["rails-ai-context-a"]).to eq(
+          "command" => "rails-ai-context", "args" => [ "serve", "--app-path", "${workspaceFolder}/a" ]
+        )
+        expect(vscode["rails-ai-context-b"]).to eq(
+          "command" => "bundle", "args" => [ "exec", "rails-ai-context", "serve", "--app-path", "${workspaceFolder}/group/b" ],
+          "env" => { "BUNDLE_GEMFILE" => "${workspaceFolder}/group/b/Gemfile" }
+        )
 
         opencode = JSON.parse(File.read(File.join(dir, "opencode.json")))["mcp"]
         expect(opencode["rails-ai-context-b"]).to eq(
@@ -821,7 +1017,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         generate(dir)
         result = generate(dir)
         expect(result[:written]).to be_empty
-        expect(result[:skipped].size).to eq(5)
+        expect(result[:skipped].size).to eq(6)
       end
     end
 
@@ -949,7 +1145,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           .to eq(%w[rails-ai-context-readonly rails-ai-context-a rails-ai-context-b])
       end
 
-      it "reads a stale entry's app through the tool's name for its folder" do
+      it "reads a stale entry's app through the name an earlier release wrote for the folder" do
         FileUtils.mkdir_p(File.join(@dir, ".cursor"))
         File.write(File.join(@dir, ".cursor/mcp.json"), JSON.generate("mcpServers" => {
           "rails-ai-context-gone" => entry("gone", folder: "${workspaceFolder}"),
@@ -1208,11 +1404,12 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
     # Ruby's inspect writes `\#{` and `\e`, neither of which TOML accepts.
     it "writes values as TOML basic strings" do
       Dir.mktmpdir do |dir|
-        stub_const("ENV", ENV.to_h.merge("GEM_HOME" => %(/x/\#{y}/"q"/\e)))
+        server = described_class::Server.new(name: "rails-ai-context-x", standalone: false, app_path: "x",
+                                             gemfile: %(x/\#{y}/"q"/\e/Gemfile), announce: "x-rails-ai-context")
 
-        described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
+        described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp, servers: [ server ]).call
 
-        expect(codex(dir)).to include(%(GEM_HOME = "/x/\#{y}/\\"q\\"/\\u001b"))
+        expect(codex(dir)).to include(%(BUNDLE_GEMFILE = "x/\#{y}/\\"q\\"/\\u001b/Gemfile"))
       end
     end
 
@@ -1280,7 +1477,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
         write_server(dir)
 
-        expect(codex(dir).scan("[mcp_servers.").size).to eq(2) # the server and its env
+        expect(codex(dir).scan("[mcp_servers.").size).to eq(1)
         expect(codex(dir)).to start_with(%([mcp_servers.rails-ai-context]\ncommand = "rails-ai-context"\n))
       end
     end
@@ -1532,6 +1729,29 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
     end
 
+    # OpenCode writes its "$schema" into any config it loads without one, so a file holding only that has no config.
+    it "deletes an opencode.json that holds nothing but OpenCode's $schema once the entry goes" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "opencode.json")
+        File.write(path, %({\n  "$schema": "https://opencode.ai/config.json",\n  "mcp": {"rails-ai-context": {"type": "local", "command": ["rails-ai-context", "serve"]}}\n}\n))
+
+        expect(described_class.remove(tools: [ :opencode ], output_dir: dir)).to eq([ path ])
+        expect(File.exist?(path)).to be false
+      end
+    end
+
+    it "keeps an opencode.json whose own keys remain beside the $schema" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "opencode.json")
+        File.write(path, JSON.generate("$schema" => "https://opencode.ai/config.json", "theme" => "dark",
+                                       "mcp" => { "rails-ai-context" => { "type" => "local", "command" => %w[rails-ai-context serve] } }))
+
+        described_class.remove(tools: [ :opencode ], output_dir: dir)
+
+        expect(JSON.parse(File.read(path))).to eq("$schema" => "https://opencode.ai/config.json", "theme" => "dark")
+      end
+    end
+
     # The write goes through SafeFile.atomic_write; a spy is the only way to
     # see the helper itself, so this pins the end state it guarantees.
     it "leaves no temp file behind and writes the trimmed config" do
@@ -1647,7 +1867,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           [mcp_servers.rails-ai-context-c]
           command = "rails-ai-context"
           args = ["serve", "--app-path", "c"]
-          startup_timeout_sec = 30
+          tool_timeout_sec = 30
 
           [mcp_servers.mine]
           command = "bundle"
@@ -1658,7 +1878,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         described_class.remove(tools: [ :codex ], output_dir: dir, report: ->(*args) { reported << args })
 
         expect(File.read(path)).not_to include("rails-ai-context-a]")
-        expect(File.read(path)).to include("[mcp_servers.rails-ai-context]", "RAILS_ENV", "startup_timeout_sec", "[mcp_servers.mine]")
+        expect(File.read(path)).to include("[mcp_servers.rails-ai-context]", "RAILS_ENV", "tool_timeout_sec", "[mcp_servers.mine]")
         expect(reported).to eq([ [ path, %w[rails-ai-context-a], {
                                  "rails-ai-context" => "its command is not one rails-ai-context writes",
                                  "rails-ai-context-b" => "it holds keys of its own, which rails-ai-context never writes",

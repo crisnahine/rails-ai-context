@@ -855,7 +855,7 @@ RSpec.describe RailsAiContext::Install::Program do
       Dir.mktmpdir do |root|
         system("git", "init", "-q", root, out: File::NULL, err: File::NULL)
         File.write(File.join(root, ".gitignore"), "log/\n")
-        File.write(File.join(root, ".git", "info", "exclude"), ".ai-context.json\n.codex/config.toml\n")
+        File.write(File.join(root, ".git", "info", "exclude"), ".ai-context.json\n")
 
         surface = surface_class.new
         described_class.mark_gitignore(surface, root: root)
@@ -865,7 +865,8 @@ RSpec.describe RailsAiContext::Install::Program do
       end
     end
 
-    it "appends the two entries once and says nothing the second time" do
+    # The Codex config holds nothing of this machine's, so it is committed with the rest.
+    it "appends the JSON cache once and says nothing the second time" do
       Dir.mktmpdir do |root|
         File.write(File.join(root, ".gitignore"), "log/\n")
 
@@ -873,7 +874,7 @@ RSpec.describe RailsAiContext::Install::Program do
         described_class.mark_gitignore(surface, root: root)
         content = File.read(File.join(root, ".gitignore"))
         expect(content).to include(".ai-context.json")
-        expect(content).to include(".codex/config.toml")
+        expect(content).not_to include(".codex/config.toml")
         expect(surface.text).to include("Updated .gitignore")
 
         again = surface_class.new
@@ -906,21 +907,32 @@ RSpec.describe RailsAiContext::Install::Program do
         described_class.mark_gitignore(surface_class.new, root: root)
 
         expect(File.symlink?(File.join(root, ".gitignore"))).to be(true)
-        expect(File.read(File.join(root, "shared.gitignore"))).to start_with("log/\n").and include(".codex/config.toml")
+        expect(File.read(File.join(root, "shared.gitignore"))).to start_with("log/\n").and include(".ai-context.json")
       end
     end
 
     # Only the `:json` context format writes .ai-context.json, so an
     # MCP-only app never produces one.
+    # The Codex config holds nothing machine-specific now, so the line an earlier release added stops keeping it out of commits.
+    it "takes out the Codex config's line an earlier release added, and keeps the rest" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".gitignore"), "log/\n\n# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)\n.codex/config.toml\n")
+
+        surface = surface_class.new
+        described_class.mark_gitignore(surface, root: root, context_files: false)
+
+        expect(File.read(File.join(root, ".gitignore"))).to eq("log/\n")
+        expect(surface.text).to include("Updated .gitignore")
+      end
+    end
+
     it "leaves the JSON cache out when no context files are written" do
       Dir.mktmpdir do |root|
         File.write(File.join(root, ".gitignore"), "log/\n")
 
         described_class.mark_gitignore(surface_class.new, root: root, context_files: false)
 
-        content = File.read(File.join(root, ".gitignore"))
-        expect(content).not_to include(".ai-context.json")
-        expect(content).to include(".codex/config.toml")
+        expect(File.read(File.join(root, ".gitignore"))).to eq("log/\n")
       end
     end
   end
@@ -1048,7 +1060,8 @@ RSpec.describe RailsAiContext::Install::Program do
     it "names the folder each tool is started in where it is not this one" do
       expect(described_class.next_steps(%i[claude copilot codex], place: "in shop")).to eq([
         "Claude Code: start a new Claude Code session in shop and approve each rails-ai-context server when it asks; /mcp lists them",
-        "GitHub Copilot: open shop in VS Code as a trusted workspace and send a Copilot Chat message; MCP: List Servers in the Command Palette shows rails-ai-context",
+        "GitHub Copilot: open shop in VS Code as a trusted workspace and send a Copilot Chat message; MCP: List Servers in the Command Palette shows rails-ai-context. " \
+        "Copilot CLI reads .github/mcp.json once you trust shop; `copilot mcp list` shows it",
         "Codex CLI: trust shop when Codex CLI asks (it skips the project config of an untrusted one), then start a new codex session in shop; /mcp lists rails-ai-context"
       ])
     end

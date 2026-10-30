@@ -89,7 +89,7 @@ If you need to configure manually, create `.mcp.json`:
 
 This is what the generator writes for an in-Gemfile install. A standalone install has no `bundle exec`: the command is `rails-ai-context` and the args are `["serve"]`. The same goes for the other tools below.
 
-On Windows the command is `cmd` and `"/c"` goes ahead of the args (`["/c", "bundle", "exec", "rails-ai-context", "serve"]`): a gem's executables there are batch files, which a client that starts its server without a shell does not run. The generator writes that form on Windows, and `doctor` names an entry written for the other platform; see [GUIDE.md](GUIDE.md#mcp-server-setup) for teams on both.
+On Windows the command is `cmd` and `"/d", "/c"` go ahead of the args (`["/d", "/c", "bundle", "exec", "rails-ai-context", "serve"]`): a gem's executables there are batch files, which a client that starts its server without a shell does not run. The generator writes that form on Windows, and `doctor` names an entry written for the other platform; see [GUIDE.md](GUIDE.md#mcp-server-setup) for teams on both.
 
 ### As a plugin
 
@@ -279,7 +279,7 @@ which leaves the committed file as it is.
   `CLAUDE.md` gained the rules (from `init`, `context` or a pull), until
   `/clear` or a compaction.
 - **Windows works the same.** The server starts `ruby` without a shell, so it
-  needs no `cmd /c`.
+  needs no `cmd` wrapper.
 - **One allowlist entry lasts.** The server's command line names no plugin
   folder, so no update changes it, and under an `allowedMcpServers` list this
   entry admits it (`doctor` names it where it is missing). It admits any plugin
@@ -352,7 +352,7 @@ This creates:
 - `.cursor/rules/rails-models.mdc` - Model rules (Type 2: glob `app/models/**/*.rb`)
 - `.cursor/rules/rails-controllers.mdc` - Controller rules (Type 2: glob `app/controllers/**/*.rb`)
 - `.cursor/rules/rails-project.mdc` - Project overview (Type 1: alwaysApply), written only when `generate_root_files` is off
-- `.cursor/rules/rails-mcp-tools.mdc` - Tools guide (Type 3: agent-requested), written only when `generate_root_files` is off
+- `.cursor/rules/rails-mcp-tools.mdc` - Tools guide (Type 1: alwaysApply), written only when `generate_root_files` is off
 
 `.cursorrules` is no longer written: Cursor calls it legacy, and reads the content from `AGENTS.md`. With root files on, a run takes out the block an earlier release wrote in `.cursorrules` and keeps your own lines; a file that held only the block is deleted.
 
@@ -371,14 +371,18 @@ Create `.cursor/mcp.json`:
 }
 ```
 
-### Agent-requested tool loading
+### Why the install's entry starts with `ruby -e`
 
-With `generate_root_files` off, the tools guide rule uses `alwaysApply: false` with a descriptive `description:` field. Cursor's agent loads it when relevant rather than on every request:
+The Cursor CLI (`agent`) starts a server with only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM` and `USER`. rvm and chruby also need `GEM_PATH`, so `bundle` or `rails-ai-context` cannot find their gems there and the server never starts. The install writes the command behind a one-line Ruby launcher: `"command": "ruby"`, `"args": ["-e", "<launcher>", "bundle", "exec", "rails-ai-context", "serve"]`. When the client passed no `GEM_PATH` or `GEM_HOME`, the launcher sets `GEM_PATH` from the gem folders whose `bin` is on `PATH` (rvm and chruby put them there), keeps RubyGems' own folders, and starts the command. When the client passed either one, it starts the command unchanged. The plain entry above is enough where the client passes your shell's environment; with rvm or chruby in the CLI, let the install write the entry.
+
+### Tools guide rule
+
+With `generate_root_files` off, the tools guide rule stands in for the root file, so it is always applied, like the project overview:
 
 ```markdown
 ---
-description: "Rails MCP tools reference - 35 tools for schema, models, routes, controllers, search, testing, and more"
-alwaysApply: false
+description: "Rails MCP tools guide - 35 tools for schema, models, routes, controllers, search and testing"
+alwaysApply: true
 ---
 ```
 
@@ -395,6 +399,7 @@ rails-ai-context init --tools copilot --defaults                     # standalon
 
 This creates:
 - `.vscode/mcp.json` - MCP config (VS Code format), started in a trusted workspace
+- `.github/mcp.json` - MCP config for Copilot CLI, which reads it (and `.mcp.json`) and never `.vscode/mcp.json`. Copilot CLI loads it only in a folder you trust; `copilot mcp list` shows the server
 - `.github/copilot-instructions.md` - Root instructions. Where `AGENTS.md` or `CLAUDE.md` carries the root content too, this is an identical copy: github.com chat, Visual Studio, JetBrains, Xcode and code review read no other file ([GitHub docs](https://docs.github.com/en/copilot/reference/custom-instructions-support)), and Copilot CLI drops identical copies
 - `.github/instructions/rails-models.instructions.md` - Model rules
 - `.github/instructions/rails-controllers.instructions.md` - Controller rules
@@ -415,6 +420,24 @@ Create `.vscode/mcp.json` (note: `servers` key, not `mcpServers`):
   }
 }
 ```
+
+VS Code reads `.vscode/mcp.json`. Copilot CLI reads `.github/mcp.json`, which takes `mcpServers` and a `tools` list:
+
+```json
+{
+  "mcpServers": {
+    "rails-ai-context": {
+      "command": "bundle",
+      "args": ["exec", "rails-ai-context", "serve"],
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+The install keeps a `tools` list you narrowed there. Its entry starts the command through the same `ruby -e` launcher as Cursor's (see [Cursor](#why-the-installs-entry-starts-with-ruby--e)). Copilot CLI 1.0.105 passes a server your whole environment, so there the launcher changes nothing, but GitHub's docs say only `PATH` is passed.
+
+Copilot in JetBrains IDEs reads `.github/mcp.json` only under `servers`, and starts a server in the IDE's own folder, where the install's entries find no app. Give it the entry [`rails-ai-context mcp-entry`](#other-mcp-clients) prints, which starts from any folder: in Copilot Chat's agent mode, click the tools icon, then **Add MCP Tools**, and put the entry under `servers` in the `mcp.json` that opens.
 
 ### Frontmatter for agent discovery
 
@@ -474,7 +497,7 @@ rails-ai-context init --tools codex --defaults                     # standalone
 ```
 
 This creates:
-- `.codex/config.toml` - MCP config (TOML format) with Ruby environment snapshot. Codex reads a project's config only once you trust the project, which it asks the first time you start it there
+- `.codex/config.toml` - MCP config (TOML format), committed like the other MCP configs. Codex reads a project's config only once you trust the project, which it asks the first time you start it there
 - Shares `AGENTS.md` and OpenCode rules files
 
 ### Manual MCP config
@@ -485,24 +508,21 @@ Create `.codex/config.toml`:
 [mcp_servers.rails-ai-context]
 command = "bundle"
 args = ["exec", "rails-ai-context", "serve"]
-
-[mcp_servers.rails-ai-context.env]
-PATH = "/Users/you/.rbenv/shims:/usr/local/bin:/usr/bin"
-GEM_HOME = "/Users/you/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0"
-GEM_PATH = "/Users/you/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0"
+env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH"]
+startup_timeout_sec = 30.0
 ```
 
-### Why the env section?
+### Why `env_vars`?
 
-Codex CLI `env_clear()`s the process before spawning MCP servers. Without the env section, Ruby/Bundler can't find gems. The install generator snapshots your current Ruby environment variables automatically - works with rbenv, rvm, asdf, mise, chruby, and system Ruby.
+Codex starts an MCP server with a cleared environment that still keeps `PATH`, `HOME`, `SHELL`, `USER`, `LANG`, `TMPDIR` and a few more. `env_vars` names more variables to pass from the shell Codex was started in: rvm and chruby set these beside `PATH`, while rbenv, asdf and mise need only `PATH`. Nothing in the file is machine-specific, so a switch of Ruby needs no new install. Names you add to `env_vars` are merged into the one list.
 
-### Checking for stale env
+`startup_timeout_sec = 30.0` is there because Codex waited only 10 s for a server to start before 0.120, and the server boots the app first, for up to 20 s. A `startup_timeout_sec` or `startup_timeout_ms` you set is kept, and none is added beside it.
 
-```bash
-rails ai:doctor  # Includes check_codex_env_staleness
-```
+An earlier release saved this machine's `PATH`, `GEM_HOME`, `GEM_PATH`, `GEM_ROOT`, `RUBY_VERSION` and `BUNDLE_PATH` into an `[mcp_servers.rails-ai-context.env]` table. Running the install again (or a context run that rewrites MCP configs) replaces that table and drops them. Until then `rails ai:doctor` warns about the saved values, and fails the entry when the saved `PATH` no longer reaches its command. The install also takes out the `.codex/config.toml` line an earlier install added to `.gitignore`, so the file is committed like the other MCP configs.
 
-doctor fails a snapshot whose `PATH` no longer reaches the server's command (the Ruby it names was upgraded or removed; rbenv and asdf save a `PATH` and nothing else), and warns about a saved `GEM_HOME` that is gone, or a directory on a saved `GEM_PATH` that is gone and that your shell's `GEM_PATH` no longer names (RubyGems passes over a missing one, so one the shell still names is no change of Ruby). If you change Ruby versions, re-run the install generator (`rails-ai-context init` for a standalone install, in the folder of apps for a workspace's config) to update the env snapshot.
+### The first step of a new session
+
+Codex waits only about one second (`mcp_optional_startup_grace_ms`, default 1000) for a server still starting when it builds a step's tool list. So the first step of a new session, `codex exec` above all, can run without the rails tools while the app boots; later steps have them. To make Codex wait, add `required = true` to the `[mcp_servers.rails-ai-context]` table (Codex 0.100 or later). Then `codex exec` also exits with an error when the server cannot start. The install does not write it.
 
 ---
 
@@ -512,10 +532,10 @@ When your AI tool opens a folder that holds several apps (`work/shop`, `work/adm
 
 | AI tool | Entry for `work/shop` |
 |---------|-----------------------|
-| Claude Code, Codex CLI, OpenCode | `rails-ai-context serve --app-path shop`, with `RAILS_AI_CONTEXT_SERVER_NAME=shop-rails-ai-context` |
-| Cursor, GitHub Copilot (VS Code) | the same, with `--app-path ${workspaceFolder}/shop` |
+| Claude Code, Codex CLI, OpenCode, Cursor, Copilot CLI (`.github/mcp.json`) | `rails-ai-context serve --app-path shop`, with `RAILS_AI_CONTEXT_SERVER_NAME=shop-rails-ai-context` |
+| GitHub Copilot in VS Code (`.vscode/mcp.json`) | the same, with `--app-path ${workspaceFolder}/shop` |
 
-A monorepo's root whose `bin/rails` boots an app below it is set up the same way, as a folder holding that one app: its `.mcp.json` names the app by `--app-path`, since a session started at the root reads that file. Claude Code, Codex and OpenCode start a server in the folder they were launched in, so start them in `work/`. The [Claude Code plugin](#as-a-plugin) needs none of these entries: started in `work/`, its one server serves every app there, by the `app` each call names. Cursor and VS Code expand `${workspaceFolder}` to the folder their config sits in. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming the Gemfile that app's bundle reads (its own, or a monorepo's shared one), spelled the same way. `RAILS_AI_CONTEXT_SERVER_NAME` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
+A monorepo's root whose `bin/rails` boots an app below it is set up the same way, as a folder holding that one app: its `.mcp.json` names the app by `--app-path`, since a session started at the root reads that file. Claude Code, Codex, OpenCode, Copilot CLI and the Cursor CLI start a server in the folder they were launched in, so start them in `work/`; the Cursor editor starts it in the project's folder. The [Claude Code plugin](#as-a-plugin) needs none of these entries: started in `work/`, its one server serves every app there, by the `app` each call names. Only VS Code expands `${workspaceFolder}`, to the folder its config sits in; the Cursor CLI passes it on as literal text. A Cursor entry an earlier release wrote with `${workspaceFolder}` is still read, and the next `init` in the folder rewrites it. An in-Gemfile app's entry runs `bundle exec` with `BUNDLE_GEMFILE` naming the Gemfile that app's bundle reads (its own, or a monorepo's shared one), spelled the same way. `RAILS_AI_CONTEXT_SERVER_NAME` makes each server announce its app first: VS Code names every tool after that name and keeps 13 characters of it. The full shape is in the [CLI reference](CLI.md#init-standalone-only), and [ADR-0005](adr/0005-workspace-mcp-entries.md) records why.
 
 ---
 
@@ -585,7 +605,7 @@ rails-ai-context mcp-entry               # standalone install
 bundle exec rails-ai-context mcp-entry   # in the Gemfile
 ```
 
-Merge the printed `rails-ai-context` entry into the client's config under the key it uses for servers (`mcpServers` for most; Claude Desktop keeps it in `claude_desktop_config.json`). Run it again after the app moves or its Ruby changes. The [Another MCP client](PROMPTS.md#another-mcp-client) prompt does this for you.
+Merge the printed `rails-ai-context` entry into the client's config under the key it uses for servers (`mcpServers` for most, `servers` for Copilot in JetBrains; Claude Desktop keeps it in `claude_desktop_config.json`). Run it again after the app moves or its Ruby changes. The [Another MCP client](PROMPTS.md#another-mcp-client) prompt does this for you.
 
 ---
 
@@ -598,6 +618,7 @@ Each AI tool holds a project's MCP server back until you take one step in the to
 | Claude Code | Start a new `claude` session in the app's folder and approve `rails-ai-context` when it asks. To be asked again about a server you declined: `claude mcp reset-project-choices` | `/mcp` in the session, or `claude mcp list` |
 | Cursor | Restart Cursor, then turn `rails-ai-context` on under MCP in Customize if it is off. Cursor asks before each tool call unless you allow it | Output panel (Cmd+Shift+U), "MCP Logs" |
 | GitHub Copilot (VS Code) | Open the folder as a trusted workspace: a restricted one starts no workspace MCP server. VS Code starts the server when you send a Copilot Chat message | Command Palette, "MCP: List Servers", then the server's "Show Output" |
+| GitHub Copilot CLI | Trust the folder when Copilot CLI asks: it loads `.github/mcp.json` only in a trusted folder | `copilot mcp list` |
 | OpenCode | Restart OpenCode in the app's folder | `opencode mcp list` |
 | Codex CLI | Trust the project when Codex asks: Codex skips the `.codex/config.toml` of a project you have not trusted, and warns that it did. Then start a new `codex` session | `/mcp` in the session, or `codex mcp list` |
 

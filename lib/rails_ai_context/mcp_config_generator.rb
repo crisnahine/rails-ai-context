@@ -25,6 +25,7 @@ module RailsAiContext
   # (a folder of apps, Install::Workspace) carry one per app, each named
   # rails-ai-context-<app> and pointed at its app with --app-path.
   class McpConfigGenerator
+    # Keyed by AI tool, and by its own key for a config another client of the tool reads: each `tool` below is such a key.
     TOOL_CONFIGS = Install::AiTool.mcp_configs_by_key.freeze
 
     SERVER_NAME = "rails-ai-context"
@@ -43,8 +44,17 @@ module RailsAiContext
     # On Windows a gem's executables are .bat files (rails-ai-context.bat,
     # bundle.bat), which a client that starts its server without a shell -
     # Node's child_process.spawn in Claude Code, Codex's Rust Command - does
-    # not run. cmd.exe is a program every client starts, and it runs them.
-    WINDOWS_SHELL = %w[cmd /c].freeze
+    # not run. cmd.exe is a program every client starts, and it runs them; /d
+    # skips the registry's AutoRun commands, whose output would reach the
+    # client before the server's first message.
+    WINDOWS_SHELL = %w[cmd /d /c].freeze
+
+    # Run as `ruby -e LAUNCHER <command...>` where a client passes PATH but no GEM_PATH (the Cursor CLI): rvm and chruby put
+    # each gem folder's bin on PATH, the empty last entry keeps RubyGems' own, and a GEM_PATH or GEM_HOME passed stays.
+    LAUNCHER = 'dirs = ENV["PATH"].to_s.split(File::PATH_SEPARATOR).map { |dir| File.dirname(dir) }' \
+               '.select { |dir| File.directory?(File.join(dir, "specifications")) }.uniq; ' \
+               'ENV["GEM_PATH"] = [*dirs, ""].join(File::PATH_SEPARATOR) if dirs.any? && ENV["GEM_PATH"].to_s.empty? && ' \
+               'ENV["GEM_HOME"].to_s.empty?; exec(*ARGV)'
 
     # One server entry. app_path and gemfile are relative to the folder the
     # config sits in, because the file may be committed and an absolute path
@@ -60,10 +70,10 @@ module RailsAiContext
       # In-Gemfile installs go through the CLI binary because it quarantines
       # app boot output away from stdout starting before Bundler.require; the
       # rake task can only quarantine from the environment task onward.
-      def argv(folder = nil)
+      def argv(folder = nil, launcher: false)
         argv = standalone ? %w[rails-ai-context serve] : %w[bundle exec rails-ai-context serve]
         argv = [ *argv, "--app-path", anchored(app_path, folder) ] if app_path
-        McpConfigGenerator.platform_argv(argv)
+        McpConfigGenerator.platform_argv(argv, launcher: launcher)
       end
 
       # bundle exec looks for a Gemfile from where it starts, upward, and a
@@ -97,7 +107,7 @@ module RailsAiContext
     # @param servers [Array<Server>, nil] the entries to write; nil writes the
     #   app's own single server, in the install mode `standalone` names.
     def initialize(tools:, output_dir:, standalone: nil, tool_mode: :mcp, servers: nil)
-      @tools = Array(tools).map(&:to_sym)
+      @tools = Install::AiTool.mcp_config_keys(tools)
       @output_dir = output_dir.to_s
       @tool_mode = tool_mode
       @servers = servers || [
@@ -162,7 +172,7 @@ module RailsAiContext
       config = TOOL_CONFIGS.fetch(tool.to_sym)
       verdict = config[:format] == :codex_toml ? toml_verdict(path) : json_verdict(path, config, json_entries(config))
       verdict.existing = verdict.existing&.map do |entry|
-        entry.merge(app: self.class.entry_app_root(entry[:argv], config[:folder_variable], @output_dir) || @output_dir)
+        entry.merge(app: self.class.entry_app_root(entry[:argv], self.class.folder_name(config), @output_dir) || @output_dir)
       end
       verdict
     end
@@ -482,6 +492,11 @@ module RailsAiContext
       end
     end
 
+    # How a config's entries name the folder it sits in, as the gem writes them now or an earlier release did.
+    def self.folder_name(config)
+      config[:folder_variable] || config[:legacy_folder_variable]
+    end
+
     # The directory an entry's --app-path names, read the way its tool reads
     # it: the tool's name for its config's folder is that folder, and a bare
     # relative path starts there too. Any other variable (${HOME},
@@ -510,23 +525,41 @@ module RailsAiContext
     end
 
     # Whether this platform's clients start a gem's executable only through
-    # `cmd /c`: Windows', where it is a .bat file.
+    # `cmd /d /c`: Windows', where it is a .bat file.
     def self.windows_shell?
       Gem.win_platform?
     end
 
-    # The command line as the platform's clients can start it.
-    def self.platform_argv(argv)
-      windows_shell? ? [ *WINDOWS_SHELL, *argv ] : argv
+    # The command line as the platform's clients can start it, through the launcher where a client of the config
+    # can drop GEM_PATH. Windows has neither rvm nor chruby, and cmd.exe would read the launcher's code.
+    def self.platform_argv(argv, launcher: false)
+      return [ *WINDOWS_SHELL, *argv ] if windows_shell?
+
+      launcher ? [ "ruby", "-e", LAUNCHER, *argv ] : argv
     end
 
-    # The command line an entry runs, inside a `cmd /c` it was given on
-    # Windows (`cmd`, `cmd.exe`, `C:\Windows\System32\cmd.exe`).
+    # The command line an entry runs, inside a `cmd /d /c` it was given on Windows (`cmd`, `cmd.exe`,
+    # `C:\Windows\System32\cmd.exe`, or an earlier release's `cmd /c`) or the gem's launcher as the gem writes it.
     def self.unwrapped_argv(argv)
       argv = Array(argv).map(&:to_s)
-      return argv unless argv.size > 2 && File.basename(argv[0].tr("\\", "/"), ".*").casecmp?("cmd") && argv[1].casecmp?("/c")
+      at = windows_command_at(argv)
+      return argv[at..] if at
+      return argv[3..] if argv.size > 3 && argv[0] == "ruby" && argv[1] == "-e" && argv[2] == LAUNCHER
 
-      argv[2..]
+      argv
+    end
+
+    # Whether a command line runs inside the `cmd /d /c` the gem writes on Windows, or the `cmd /c` it wrote before.
+    def self.windows_wrapped?(argv)
+      !windows_command_at(Array(argv).map(&:to_s)).nil?
+    end
+
+    # Where the command a Windows `cmd /c` or `cmd /d /c` runs starts in its command line; nil for any other.
+    private_class_method def self.windows_command_at(argv)
+      return nil unless argv.size > 2 && File.basename(argv[0].tr("\\", "/"), ".*").casecmp?("cmd")
+      return 2 if argv[1].casecmp?("/c")
+
+      3 if argv.size > 3 && argv[1].casecmp?("/d") && argv[2].casecmp?("/c")
     end
 
     # A JSON entry's command line: OpenCode's command array, or command plus args.
@@ -556,7 +589,7 @@ module RailsAiContext
     # The env vars the gem writes into an entry; any other is the user's.
     WRITTEN_ENV = [ "BUNDLE_GEMFILE", SERVER_NAME_ENV ].freeze
 
-    # Whether a command line is one the gem writes, inside a Windows `cmd /c` or not.
+    # Whether a command line is one the gem writes, inside a Windows `cmd` or not.
     def self.written_argv?(argv)
       argv = unwrapped_argv(argv)
       form = WRITTEN_ARGV.find { |written| argv.first(written.size) == written } or return false
@@ -583,6 +616,8 @@ module RailsAiContext
       env_key = config.fetch(:env_key, "env")
       env = entry[env_key]
       written = config[:format] == :opencode_json ? %w[type command] : %w[command args]
+      # Whatever value a user gave them: they configure only the gem's server, which a removal takes.
+      written += config.fetch(:entry_defaults, {}).keys
       written += [ env_key ] if env.is_a?(Hash)
       entry.keys - written + (env.is_a?(Hash) ? env.keys - WRITTEN_ENV : []).map { |key| "#{env_key}.#{key}" }
     end
@@ -734,12 +769,12 @@ module RailsAiContext
     # environment `environment`; the other JSON tools take command plus args
     # and `env`, with type left off - stdio is inferred from command.
     def json_entry(server, config)
-      argv = server.argv(config[:folder_variable])
+      argv = server.argv(config[:folder_variable], launcher: config[:launcher])
       env = server.env(config[:folder_variable])
       opencode = config[:format] == :opencode_json
       entry = opencode ? { "type" => "local", "command" => argv } : { "command" => argv.first, "args" => argv[1..] }
       entry[config.fetch(:env_key, "env")] = env unless env.empty?
-      entry
+      entry.merge(config.fetch(:entry_defaults, {}))
     end
 
     # --- JSON merge logic ---
@@ -749,9 +784,12 @@ module RailsAiContext
       # The entry added by hand would sit in a file JSON still cannot read.
       return refused(problem) { |file| "Save #{file} as UTF-8" } if problem
 
-      # An empty file holds nothing to lose.
+      # An empty file holds nothing to lose. A new one starts with the "$schema" its client would add on first load.
       empty = text.nil? || text.strip.empty?
-      data = empty ? {} : self.class.parse_json_text(text, config)
+      data = if !empty then self.class.parse_json_text(text, config)
+      elsif config[:schema] then { "$schema" => config[:schema] }
+      else {}
+      end
       return refused("it is JSON but not an object") { |file| "Make #{file} a JSON object" } unless data.is_a?(Hash)
 
       root_key = config[:root_key]
@@ -763,7 +801,7 @@ module RailsAiContext
 
       ours = servers.filter_map do |name, entry|
         argv = self.class.json_argv(entry)
-        [ name, self.class.entry_app_root(argv, config[:folder_variable], @output_dir) ] if self.class.own_entry?(name, argv)
+        [ name, self.class.entry_app_root(argv, self.class.folder_name(config), @output_dir) ] if self.class.own_entry?(name, argv)
       end
       # An entry under one of this write's names that is not the gem's - the
       # HTTP one SETUP.md describes - or that starts the gem's server some way
@@ -774,8 +812,7 @@ module RailsAiContext
       kept = entries.keys.select { |name| servers.key?(name) && handmade.call(name) }
       note = kept_note(kept + held, kept.select { |name| self.class.http_entry?(name, servers[name]) },
                        kept.select { |name| self.class.own_entry?(name, self.class.json_argv(servers[name])) } + held)
-      env_key = config.fetch(:env_key, "env")
-      entries = entries.except(*kept).to_h { |name, entry| [ name, merged_entry(servers[name], entry, env_key) ] }
+      entries = entries.except(*kept).to_h { |name, entry| [ name, merged_entry(servers[name], entry, config) ] }
       if text && stale.empty? && entries.all? { |name, entry| servers[name] == entry }
         return Verdict.new(action: :keep, readable: true, note: note, existing: existing)
       end
@@ -805,13 +842,15 @@ module RailsAiContext
     end
 
     # The gem's entry over the one there: the keys and env vars the gem
-    # writes come from the new entry, every other stays as it was.
-    def merged_entry(existing, entry, env_key)
+    # writes come from the new entry, every other stays as it was, and so do
+    # the config's entry_defaults a user set.
+    def merged_entry(existing, entry, config)
       return entry unless existing.is_a?(Hash)
 
+      env_key = config.fetch(:env_key, "env")
       env = existing[env_key].is_a?(Hash) ? existing[env_key].except(*WRITTEN_ENV) : {}
       env = env.merge(entry.fetch(env_key, {}))
-      merged = entry.merge(existing.except(*entry.keys, env_key))
+      merged = entry.merge(existing.slice(*config.fetch(:entry_defaults, {}).keys)).merge(existing.except(*entry.keys, env_key))
       env.empty? ? merged : merged.merge(env_key => env)
     end
 
@@ -974,18 +1013,17 @@ module RailsAiContext
 
     # The gem's table for a server, holding what `kept` (toml_kept) carries
     # over from the table it replaces.
-    def toml_section(server, kept = { pairs: [], env_lines: [], env: {}, tables: [] })
+    def toml_section(server, kept = { pairs: [], env_lines: [], env: {}, tables: [], env_vars: [], timeout: [] })
       argv = server.argv
       lines = [ "[mcp_servers.#{server.name}]" ]
       lines << "command = #{toml_string(argv.first)}"
       lines << "args = [#{argv[1..].map { |arg| toml_string(arg) }.join(', ')}]"
       lines.concat(kept[:pairs])
+      names = RUBY_ENV_NAMES.map { |name| kept[:env_vars].find { |item| item.is_a?(Hash) && item["name"] == name } || name }
+      lines << "env_vars = [#{(names + (kept[:env_vars] - names)).map { |item| toml_item(item) }.join(', ')}]"
+      lines << "startup_timeout_sec = #{STARTUP_TIMEOUT}" if kept[:timeout].empty?
 
-      # Codex CLI env_clear()s the process environment. Capture the current
-      # Ruby environment so the MCP server can find gems regardless of version
-      # manager (rbenv, rvm, asdf, mise, or system Ruby).
-      env = ruby_env_snapshot.merge(server.env)
-      env_lines = env.map { |key, value| "#{toml_key(key)} = #{toml_string(value)}" } + kept[:env_lines] +
+      env_lines = server.env.map { |key, value| "#{toml_key(key)} = #{toml_string(value)}" } + kept[:env_lines] +
                   kept[:env].map { |key, value| "#{toml_key(key)} = #{toml_string(value)}" }
       unless env_lines.empty?
         lines << ""
@@ -1013,7 +1051,7 @@ module RailsAiContext
       body = lambda do |from, to, written|
         (from..to).filter_map do |index|
           statement = own.find { |pair| pair.kind == :pair && (pair.first..pair.last).cover?(index) }
-          next if statement ? written.call(statement.path) : lines[index].strip.empty?
+          next if statement ? written.call(statement) : lines[index].strip.empty?
           next if statement && index != statement.first
 
           statement ? text.call(statement.first, statement.last) : text.call(index, index)
@@ -1022,8 +1060,19 @@ module RailsAiContext
 
       main = headers.first
       main_last = headers[1] ? headers[1].first - 1 : range.end - 1
-      pairs = body.call(main.first + 1, main_last, ->(path) { path.nil? || %w[command args env].include?(path[2]) })
-      gem_env = RUBY_ENV_KEYS + WRITTEN_ENV
+      own_key = ->(statement, key) { statement.kind == :pair && statement.path == [ Toml::SERVERS, name, key ] }
+      # The timeout the gem writes is its own; one the user set is theirs, and the gem then writes none beside it.
+      gem_timeout = ->(statement) { own_key.(statement, "startup_timeout_sec") && statement.value.sub(/#.*/m, "").strip == STARTUP_TIMEOUT }
+      pairs = body.call(main.first + 1, main_last, lambda do |statement|
+        statement.path.nil? || %w[command args env env_vars].include?(statement.path[2]) || gem_timeout.(statement)
+      end)
+      timeout = own.select { |statement| %w[startup_timeout_sec startup_timeout_ms].any? { |key| own_key.(statement, key) } && !gem_timeout.(statement) }
+                   .map { |statement| text.call(statement.first, statement.last) }
+      listed = own.find { |statement| own_key.(statement, "env_vars") }
+      # The user's items but the gem's bare names; a table naming one of those says where Codex reads it, and stays.
+      env_vars = Array(listed && Toml.value(listed.value)).select { |item| item.is_a?(String) || item.is_a?(Hash) }
+        .reject { |item| RUBY_ENV_NAMES.include?(item) }.uniq
+      gem_env = SAVED_ENV_KEYS + WRITTEN_ENV
       env_lines = []
       in_table = []
       tables = []
@@ -1032,7 +1081,7 @@ module RailsAiContext
 
         from, to = region.call(header, at)
         if header.path == env_path
-          env_lines.concat(body.call(from + 1, to, ->(path) { path&.size == 4 && gem_env.include?(path[3]) }))
+          env_lines.concat(body.call(from + 1, to, ->(statement) { statement.path&.size == 4 && gem_env.include?(statement.path[3]) }))
           in_table.concat(own.select { |pair| pair.kind == :pair && pair.path&.size == 4 && (from..to).cover?(pair.first) }.map { |pair| pair.path[3] })
         else
           tables << text.call(from, to)
@@ -1040,7 +1089,11 @@ module RailsAiContext
       end
       env = Toml.entry_data(own.select { |statement| statement.path&.first(2) == [ Toml::SERVERS, name ] })["env"]
       env = env.is_a?(Hash) ? env.select { |_, value| value.is_a?(String) } : {}
-      { pairs: pairs, env_lines: env_lines, env: env.except(*gem_env, *in_table), tables: tables }
+      env = env.except(*gem_env, *in_table)
+      # own: whether it holds what the gem never writes, which keeps the table from a removal. A user's timeout
+      # configures only the gem's server, as a user's tools list does in a JSON entry.
+      { pairs: pairs, env_lines: env_lines, env: env, tables: tables, env_vars: env_vars, timeout: timeout,
+        own: [ pairs - timeout, env_lines, env, tables, env_vars ].any? { |part| !part.empty? } }
     end
 
     # A TOML basic string. JSON's string escapes are a subset of TOML's, where
@@ -1055,13 +1108,24 @@ module RailsAiContext
       key.to_s.match?(/\A#{Toml::BARE_KEY}\z/) ? key.to_s : toml_string(key)
     end
 
-    # Snapshot environment variables needed for Ruby/Bundler to work.
-    # Only captures vars that are actually set - works with any version manager.
-    RUBY_ENV_KEYS = %w[PATH GEM_HOME GEM_PATH GEM_ROOT RUBY_VERSION BUNDLE_PATH].freeze
+    # An env_vars item: a name, or a table naming one with where to read it.
+    def toml_item(item)
+      return toml_string(item) unless item.is_a?(Hash)
 
-    def ruby_env_snapshot
-      ENV.slice(*RUBY_ENV_KEYS).reject { |_, value| value.empty? }
+      "{ #{item.map { |key, value| "#{toml_key(key)} = #{toml_string(value)}" }.join(', ')} }"
     end
+
+    # Codex starts a server with only PATH, HOME, SHELL, USER, LANG, TMPDIR and a few more of its own environment;
+    # env_vars passes these too, which rvm and chruby set beside PATH, from the shell Codex started in.
+    RUBY_ENV_NAMES = %w[GEM_HOME GEM_PATH GEM_ROOT RUBY_VERSION BUNDLE_PATH].freeze
+
+    # What releases before env_vars saved into the env table from the installing machine, which a rewrite drops.
+    # `mcp-entry` still prints them, for a client the gem writes no config for.
+    SAVED_ENV_KEYS = [ "PATH", *RUBY_ENV_NAMES ].freeze
+
+    # Codex waited 10 s for a server's start before 0.120, and the server boots the app first for up to
+    # BootManager::STDIO_TIMEOUT (20 s). Written as TOML's float, the type Codex reads it as.
+    STARTUP_TIMEOUT = "30.0"
 
     # --- Which config serves an app ---
 
@@ -1157,7 +1221,7 @@ module RailsAiContext
 
     # The app every server of ours in one config file names.
     def self.app_roots_in(path, tool, dir)
-      folder = TOOL_CONFIGS.fetch(tool.to_sym)[:folder_variable]
+      folder = folder_name(TOOL_CONFIGS.fetch(tool.to_sym))
       named_entries(path, tool).filter_map { |entry| entry_app_root(entry[:argv], folder, dir) if entry[:own] }
     rescue SystemCallError, IOError, JSON::ParserError, UnreadableError
       []
@@ -1184,7 +1248,7 @@ module RailsAiContext
     def self.remove(tools:, output_dir:, warn: nil, http_entries: false, report: nil)
       warn ||= ->(path, reason) { RailsAiContext.log_warn("[rails-ai-context] could not update #{path}: #{reason}") }
       cleaned = []
-      Array(tools).map(&:to_sym).each do |tool|
+      Install::AiTool.mcp_config_keys(tools).each do |tool|
         config = TOOL_CONFIGS[tool]
         next unless config
 
@@ -1243,8 +1307,8 @@ module RailsAiContext
         own.each { |name| servers.delete(name) }
         data.delete(root_key) if servers.empty?
 
-        # A link stays, and the file it names is what loses the entries.
-        if data.empty? && !File.symlink?(path)
+        # A link stays, and the file it names is what loses the entries. The "$schema" its client writes into it is no config.
+        if (data.empty? || data == { "$schema" => config[:schema] }) && !File.symlink?(path)
           RailsAiContext::SafeFile.delete(path, root: root)
         else
           RailsAiContext::SafeFile.atomic_write(path, bom + JSON.pretty_generate(data) + "\n", root: root)
@@ -1266,7 +1330,7 @@ module RailsAiContext
       # another way, which is no entry Codex can start.
       servers = Toml.servers(lines, found) { true }
       added = Toml.own_sections(lines, found).to_h do |range, name|
-        [ name, toml_kept(lines, range, found, name).values.any? { |part| !part.empty? } ]
+        [ name, toml_kept(lines, range, found, name)[:own] ]
       end
       kept = servers.to_h { |server| [ server.name, kept_reason(server.name, server.argv, added[server.name] ? "keys of its own" : nil) ] }.compact
       gone = []

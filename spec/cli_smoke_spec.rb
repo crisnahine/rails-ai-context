@@ -12,9 +12,9 @@ require "json"
 RSpec.describe "CLI smoke: every tool executes", type: :smoke do
   # The binary runs in a child here, which spec_helper's stub of
   # McpConfigGenerator.windows_shell? does not reach: on Windows the configs
-  # it writes start the server through `cmd /c`, as its clients need there.
+  # it writes start the server through `cmd /d /c`, as its clients need there.
   def served(*argv)
-    Gem.win_platform? ? [ "cmd", "/c", *argv ] : argv
+    Gem.win_platform? ? [ "cmd", "/d", "/c", *argv ] : argv
   end
 
   # An MCP config entry for that command line, as the child writes it.
@@ -1000,7 +1000,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
     # What a client sees: the entry it was given starts a server, from the
     # folder the client was opened at, for the app the entry names. It is
-    # started as the entry says - through `cmd /c` on Windows - with this
+    # started as the entry says - through `cmd /d /c` on Windows - with this
     # checkout's binary where the entry names the installed one.
     it "writes entries that serve their app from the folder" do
       Dir.mktmpdir do |dir|
@@ -1047,10 +1047,11 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         work = File.join(dir, "work")
         rails_app(File.join(work, "a"))
         FileUtils.mkdir_p(File.join(work, "web"))
-        File.write(File.join(work, ".gitignore"), "node_modules\n")
+        # The folder's .gitignore holds the line an earlier release added for its Codex config, which init takes out.
+        File.write(File.join(work, ".gitignore"), "node_modules\n\n# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)\n.codex/config.toml\n")
         File.write(File.join(work, "a", ".gitignore"), "/tmp\n")
 
-        _out, err, status = init(work, "1\n3\n")
+        _out, err, status = init(work, "1\n1\n")
 
         expect(status.exitstatus).to eq(0), err
         expect(err).to include("Created/Updated .mcp.json\n", "Updated a/.gitignore\n", "Updated .gitignore\n")
@@ -1058,9 +1059,9 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         rails_app(File.join(work, "b"))
         File.write(File.join(work, "b", ".gitignore"), "/tmp\n")
-        File.write(File.join(work, ".gitignore"), "node_modules\n")
+        File.write(File.join(work, ".gitignore"), "node_modules\n\n# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)\n.codex/config.toml\n")
 
-        _out, err, = init(dir, "1\n3\n", "--app-path", "work")
+        _out, err, = init(dir, "1\n1\n", "--app-path", "work")
 
         expect(err).to include("Updated work/b/.gitignore\n", "Updated work/.gitignore\n", "Created/Updated work/.mcp.json\n")
       end
@@ -1071,7 +1072,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         rails_app(File.join(dir, "work", "a"))
         File.write(File.join(dir, "work", "a", ".gitignore"), "/tmp\n")
 
-        _out, err, status = init(dir, "1\n3\n", "--app-path", "./work")
+        _out, err, status = init(dir, "1\n1\n", "--app-path", "./work")
 
         expect(status.exitstatus).to eq(0), err
         expect(err).to include("Created ./work/a/.rails-ai-context.yml\n", "Updated ./work/a/.gitignore\n")
@@ -1629,10 +1630,10 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
-    # Codex's config copies PATH and the gem variables out of the process,
-    # and init writes it after the boot, whose Bundler.setup puts the app's
-    # bundle into them.
-    it "writes Codex's environment as the binary was started in, not as the app's boot left it" do
+    # init writes Codex's config after the boot, whose Bundler.setup puts the
+    # app's bundle into PATH and the gem variables; the config names the
+    # variables Codex passes from its shell and holds none of their values.
+    it "writes no value of the environment into Codex's config, as the binary was started in or as the boot left it" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
@@ -1650,8 +1651,8 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
 
         expect(status.exitstatus).to eq(0), err
         codex = File.read(File.join(dir, ".codex", "config.toml"))
-        expect(codex).not_to include("/the/bundle")
-        expect(codex).to include(%(PATH = #{JSON.generate(ENV.fetch("PATH"))}))
+        expect(codex).not_to include("/the/bundle", "PATH =", "GEM_HOME =")
+        expect(codex).to include(%(env_vars = ["GEM_HOME", "GEM_PATH", "GEM_ROOT", "RUBY_VERSION", "BUNDLE_PATH"]))
       end
     end
 

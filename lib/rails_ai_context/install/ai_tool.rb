@@ -18,8 +18,9 @@ module RailsAiContext
     # rules the user writes by hand, so cleanup removes these names and nothing else.
     #
     # mcp_config[:folder_variable] is how the tool's config names the folder it sits in, where
-    # it has a name for it: a workspace entry's app path starts from that name. The others get
-    # a bare relative path, which they resolve against the folder they were started in.
+    # every client of it expands that name: a workspace entry's app path starts from it. The others
+    # get a bare relative path, which they resolve against the folder they start the server in.
+    # [:legacy_folder_variable] is the name an earlier release wrote, still read in an entry it left.
     #
     # next_step is what the user does in the tool before it starts a project's MCP server: each
     # tool holds one back behind its own approval or trust step.
@@ -36,8 +37,11 @@ module RailsAiContext
     # commas allowed; OpenCode reads opencode.json with jsonc-parser, trailing commas allowed.
     # Claude Code reads .mcp.json with JSON.parse. Cursor's is held to JSON as well, the form
     # every reader takes: nothing shows its reader takes JSONC.
+    #
+    # other_client_mcp_configs are configs other clients of the tool read, each under its own key. A config's
+    # entry_defaults are keys its entry holds beyond the command, kept as a user set them.
     AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :rule_files, :mcp_config,
-                        :legacy_paths, :owned_dir, :next_step, :root, :reads, :retired_paths, keyword_init: true)
+                        :legacy_paths, :owned_dir, :next_step, :root, :reads, :retired_paths, :other_client_mcp_configs, keyword_init: true)
 
     class AiTool
       # every_surface: false for a file only some of the tool's surfaces read, which
@@ -67,8 +71,10 @@ module RailsAiContext
           retired_paths: %w[.cursorrules],
           rules_dir: ".cursor/rules",
           rule_files: %w[rails-project.mdc rails-models.mdc rails-controllers.mdc rails-mcp-tools.mdc],
+          # The editor starts a project's server in the project's folder, and the `agent` CLI in the folder it
+          # runs in, passing ${workspaceFolder} on as it is written.
           mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json,
-                        folder_variable: "${workspaceFolder}", client: "Cursor", jsonc: false },
+                        legacy_folder_variable: "${workspaceFolder}", client: "Cursor", jsonc: false, launcher: true },
           next_step: "restart Cursor, then turn rails-ai-context on under MCP in Customize if it is off; the MCP Logs output panel shows it starting",
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ],
           owned_dir: ".cursor",
@@ -91,7 +97,14 @@ module RailsAiContext
           ],
           mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json,
                         folder_variable: "${workspaceFolder}", client: "VS Code", jsonc: true },
-          next_step: "open this folder in VS Code as a trusted workspace and send a Copilot Chat message; MCP: List Servers in the Command Palette shows rails-ai-context",
+          # Copilot CLI reads .github/mcp.json under mcpServers, never VS Code's file. It requires `tools` and expands no
+          # folder variable; GitHub documents only PATH as passed to a server, so the entry gets the launcher.
+          other_client_mcp_configs: [
+            { key: :copilot_cli, name: "GitHub Copilot CLI", path: ".github/mcp.json", root_key: "mcpServers", format: :mcp_json,
+              client: "Copilot CLI", jsonc: false, entry_defaults: { "tools" => [ "*" ] }, launcher: true }
+          ],
+          next_step: "open this folder in VS Code as a trusted workspace and send a Copilot Chat message; MCP: List Servers in the Command Palette shows rails-ai-context. " \
+                     "Copilot CLI reads .github/mcp.json once you trust this folder; `copilot mcp list` shows it",
           legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ],
           root: ".github/copilot-instructions.md",
           # github.com chat, Visual Studio, JetBrains, Xcode and code review read this one
@@ -110,7 +123,7 @@ module RailsAiContext
           files: "AGENTS.md",
           context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
           mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true,
-                        env_key: "environment" },
+                        env_key: "environment", schema: "https://opencode.ai/config.json" },
           next_step: "restart OpenCode in this folder; opencode mcp list shows rails-ai-context",
           legacy_paths: [],
           root: "AGENTS.md",
@@ -158,7 +171,12 @@ module RailsAiContext
         end
 
         def mcp_configs_by_key
-          ALL.to_h { |tool| [ tool.key, tool.mcp_config ] }
+          ALL.flat_map { |tool| tool.mcp_configs.to_a }.to_h
+        end
+
+        # The keys of the MCP configs the given AI tools read; a config's own key stays itself.
+        def mcp_config_keys(keys)
+          Array(keys).flat_map { |key| find(key)&.mcp_configs&.keys || [ key.to_sym ] }.uniq
         end
 
         def legacy_files
@@ -166,10 +184,19 @@ module RailsAiContext
         end
       end
 
+      # Each MCP config the tool's clients read, by its key: the tool's own first.
+      def mcp_configs
+        { key => mcp_config }.merge(Array(other_client_mcp_configs).to_h { |config| [ config[:key], config.except(:key) ] })
+      end
+
+      def mcp_config_paths
+        mcp_configs.values.map { |config| config[:path] }
+      end
+
       # What `rails ai:context:<key>` writes for the tool: its files without
-      # its MCP config, which only the install writes.
+      # its MCP configs, which only the install writes.
       def context_files
-        files.split(" + ").reject { |file| file == mcp_config[:path] }.join(" + ")
+        files.split(" + ").reject { |file| mcp_config_paths.include?(file) }.join(" + ")
       end
     end
   end

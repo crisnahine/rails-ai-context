@@ -29,7 +29,6 @@ module RailsAiContext
       check_initializer_guard
       check_settings_read
       check_mcp_json
-      check_codex_env_staleness
       check_mcp_buildable
       check_introspector_health
       check_preset_coverage
@@ -491,10 +490,12 @@ module RailsAiContext
     CONTEXT_PATHS = Install::AiTool.all.to_h { |tool| [ tool.key, tool.owned_paths ] }.freeze
 
     # Where each tool's MCP config lives, and how to name it in a report.
-    MCP_CONFIG_CHECKS = Install::AiTool.all.to_h { |tool|
-      path = tool.mcp_config[:path]
-      [ tool.key, { path: path, name: tool.name, label: "#{path} (#{tool.name})", folder_variable: tool.mcp_config[:folder_variable] }.freeze ]
-    }.freeze
+    MCP_CONFIG_CHECKS = Install::AiTool.all.flat_map { |tool|
+      tool.mcp_configs.map do |key, config|
+        name = config[:name] || tool.name
+        [ key, { path: config[:path], name: name, label: "#{config[:path]} (#{name})", folder_variable: McpConfigGenerator.folder_name(config) }.freeze ]
+      end
+    }.to_h.freeze
     private_constant :MCP_CONFIG_CHECKS
 
     def self.mcp_config_checks = MCP_CONFIG_CHECKS
@@ -761,9 +762,9 @@ module RailsAiContext
         return [ [ :claude, false ], *(self.class.mcp_config_checks.keys - %i[claude]).map { |tool| [ tool, true ] } ]
       end
 
-      tools = configured_ai_tools & self.class.mcp_config_checks.keys
-      tools |= %i[claude] if plugin
-      (tools.empty? ? %i[claude] : tools).map { |tool| [ tool, false ] }
+      keys = Install::AiTool.mcp_config_keys(configured_ai_tools) & self.class.mcp_config_checks.keys
+      keys |= %i[claude] if plugin
+      (keys.empty? ? %i[claude] : keys).map { |key| [ key, false ] }
     end
 
     CLAUDE_PLUGIN_LABEL = "the rails-ai-context plugin (Claude Code)"
@@ -777,10 +778,10 @@ module RailsAiContext
     # optional one with nothing of the gem's in it.
     def mcp_config_verdict(tool, optional: false)
       cfg = self.class.mcp_config_checks[tool]
-      install_fix = "Run #{install_job(:install)} to fix"
       # An app in a workspace is served from the folder above it, whose
       # config, if it cannot be read, is the one to fix.
       full_path = mcp_config_path(tool)
+      install_fix = "Run #{install_command(full_path)} to fix"
       label = "#{typed_path(full_path)} (#{cfg[:name]})"
       plugin = tool == :claude && claude_code.plugin_chosen?
       # A session started in the config's folder is the one this config serves.
@@ -929,8 +930,22 @@ module RailsAiContext
     end
 
     def mcp_config_path(tool)
-      McpConfigGenerator.serving_config(install_root, tool) || McpConfigGenerator.unreadable_config_above(install_root, tool) ||
-        File.join(install_root, self.class.mcp_config_checks[tool][:path])
+      found_config_path(tool) || File.join(sibling_config_folder(tool) || install_root, self.class.mcp_config_checks[tool][:path])
+    end
+
+    # The config that serves this app, or one above it that cannot be read.
+    def found_config_path(tool)
+      McpConfigGenerator.serving_config(install_root, tool) || McpConfigGenerator.unreadable_config_above(install_root, tool)
+    end
+
+    # The workspace folder where another config of the same AI tool serves this app (VS Code's, for Copilot CLI's).
+    def sibling_config_folder(tool)
+      owner = Install::AiTool.all.find { |ai_tool| ai_tool.mcp_configs.key?(tool) } or return nil
+      (owner.mcp_configs.keys - [ tool ]).each do |other|
+        path = found_config_path(other)
+        return mcp_config_folder(other, path) if path && workspace_config?(path)
+      end
+      nil
     end
 
     def claude_code
@@ -1314,17 +1329,19 @@ module RailsAiContext
       argv = McpConfigGenerator.unwrapped_argv(entry[:argv])
       line = "`#{argv.take_while { |arg| !arg.start_with?("--app-path") }.join(' ')}`"
       rerun = by_hand || "Run #{install_command(config_path)} to fix"
-      # Codex sets the PATH its env snapshot holds, which the snapshot check reads.
-      path, where = entry_path_variable(entry, tool)
+      path, where = entry_path_variable(entry)
       found = path.nil? || executable_on?(argv.first.to_s, path, folder)
+      # A Ruby setup an earlier release saved into a Codex entry, which a Ruby switch leaves stale.
+      saved = tool == :codex && McpConfigGenerator.written_argv?(entry[:argv]) ? McpConfigGenerator::SAVED_ENV_KEYS & entry[:env].keys : []
       # A command named by its path is no PATH lookup, so no install puts it there.
       qualified = argv.first.to_s.include?("/") || (Gem.win_platform? && argv.first.to_s.include?("\\"))
       missing = "#{line} cannot start - `#{argv.first}` #{qualified ? "is not an executable file" : "is not on #{where}"}"
       # A config is committed, and one written on the other platform starts
       # the server the way that platform's clients need.
-      if Array(entry[:argv]).size != argv.size && !McpConfigGenerator.windows_shell?
-        return [ :fail, "#{line} cannot start - it runs through `cmd /c`, Windows' shell, which is not here", rerun ]
+      if McpConfigGenerator.windows_wrapped?(entry[:argv]) && !McpConfigGenerator.windows_shell?
+        return [ :fail, "#{line} cannot start - it runs through `cmd`, Windows' shell, which is not here", rerun ]
       end
+      return [ :fail, missing, rerun ] if saved.any? && !found
       if bare_batch?(entry, argv, path, folder)
         return [ :warn, "#{line} may not start - `#{argv.first}` is a batch file, which a client that starts its server " \
                         "without a shell does not run", rerun ]
@@ -1355,17 +1372,20 @@ module RailsAiContext
       elsif !found
         return [ :fail, missing, rerun ]
       end
+      if saved.any?
+        return [ :warn, "#{line} starts with the #{saved.join(', ')} an earlier release saved from this machine, " \
+                        "which a Ruby switch leaves stale", rerun ]
+      end
       nil
     end
 
     # The PATH an entry's server is started with, and how to name it: its
     # own env's when it sets one, else the client's. nil when it cannot be
-    # read here: a variable the tool expands, or a Codex snapshot, which
-    # check_codex_env_staleness reads.
-    def entry_path_variable(entry, tool)
+    # read here: a variable the tool expands.
+    def entry_path_variable(entry)
       set = entry[:env]["PATH"]
       return [ client_path, "PATH" ] if set.nil?
-      return [ nil, "the PATH its env sets" ] if tool == :codex || set.include?("$")
+      return [ nil, "the PATH its env sets" ] if set.include?("$")
 
       [ set, "the PATH its env sets" ]
     end
@@ -1386,7 +1406,7 @@ module RailsAiContext
       env.find { |key, _| key.casecmp?(name) }&.last
     end
 
-    # Whether, on Windows, an entry runs a batch file without the `cmd /c`
+    # Whether, on Windows, an entry runs a batch file without the `cmd /d /c`
     # the install starts one through: a gem's executable there is a .bat
     # file, which a client starting its server without a shell may not run
     # at all. PATH is the one the server gets, a Codex snapshot's included.
@@ -1471,84 +1491,6 @@ module RailsAiContext
     # A config above the install's root: a workspace's.
     def workspace_config?(config_path)
       Install::Program.relative_to(config_path, install_root).start_with?("../")
-    end
-
-    def check_codex_env_staleness
-      return nil if install_config.tool_mode == :cli
-
-      ai_tools = configured_ai_tools
-      return nil unless ai_tools.include?(:codex)
-
-      # The app's own config (an engine's, at its root), or the workspace's above it.
-      toml_path = McpConfigGenerator.serving_config(install_root, :codex)
-      return nil unless toml_path && File.exist?(toml_path)
-
-      # Every server the gem wrote carries a snapshot: the app's own, and each
-      # app's in a workspace. Read the way the generator reads the file, so a
-      # section is the gem's by the same rule and any byte reads in any locale.
-      verdict = install_verdict(:codex, toml_path)
-      snapshots = Array(verdict.existing).select do |entry|
-        entry[:own] && entry[:env].values_at("PATH", "GEM_HOME", "GEM_PATH").any?
-      end
-      return nil if snapshots.empty?
-
-      shown = typed_path(toml_path)
-      # The install writes a fresh snapshot, unless it leaves the file, or
-      # the gem's entry in it, as it is: then the edit by hand comes first.
-      fix = verdict.action == :refuse ? "#{toml_by_hand(verdict, toml_path)}: #{verdict.reason}" : "Run #{install_command(toml_path)}"
-      unreached = snapshots.filter_map { |entry| unreached_command(entry, mcp_config_folder(:codex, toml_path)) }
-      if unreached.any?
-        said = unreached.group_by { |_, command, gone| [ command, gone ] }.map do |(command, gone), group|
-          "the PATH saved for #{group.map(&:first).join(' and ')} no longer reaches `#{command}`#{" (#{gone} is gone)" if gone}"
-        end
-        return Check.new(name: "Codex env snapshot", status: :fail,
-          message: "Codex MCP env snapshot in #{shown} is stale - #{said.join('; ')}", fix: fix)
-      end
-
-      # A GEM_HOME the snapshot names that is gone (e.g. Ruby upgraded) is stale
-      # whatever the version manager: no string format assumptions.
-      gem_homes = snapshots.filter_map { |entry| entry[:env]["GEM_HOME"] }.uniq
-      if (gone = gem_homes.find { |dir| !Dir.exist?(dir) })
-        return Check.new(name: "Codex env snapshot", status: :warn,
-          message: "Codex MCP env snapshot is stale - GEM_HOME #{gone} no longer exists", fix: fix)
-      end
-
-      # So is a directory its GEM_PATH lists, which the generator saves too -
-      # unless this environment's GEM_PATH lists it as well: RubyGems passes
-      # over a directory that is not there, and init would save it again.
-      gem_path = snapshots.flat_map { |entry| entry[:env]["GEM_PATH"].to_s.split(File::PATH_SEPARATOR) }.reject(&:empty?).uniq
-      missing = gem_path.reject { |dir| Dir.exist?(dir) }
-      if (gone = (missing - current_gem_path).first)
-        return Check.new(name: "Codex env snapshot", status: :warn,
-          message: "Codex MCP env snapshot is stale - GEM_PATH names #{gone}, which no longer exists", fix: fix)
-      end
-
-      reached = snapshots.filter_map { |entry| McpConfigGenerator.unwrapped_argv(entry[:argv]).first if entry[:env]["PATH"] }.uniq
-      found = []
-      found << "its PATH reaches #{reached.map { |command| "`#{command}`" }.join(', ')}" if reached.any?
-      found << "GEM_HOME (#{gem_homes.first}) exists" if gem_homes.any?
-      found << "every directory on its GEM_PATH exists" if gem_path.any? && missing.empty?
-      sentence = found.size > 2 ? "#{found[0..-2].join(', ')}, and #{found.last}" : found.join(", and ")
-      Check.new(name: "Codex env snapshot", status: :pass,
-        message: "Codex env snapshot in #{shown} is current#{": #{sentence}" if found.any?}", fix: nil)
-    end
-
-    # The GEM_PATH this environment has, before Bundler changed it: what init
-    # would save in a snapshot now.
-    def current_gem_path
-      original_variable("GEM_PATH").to_s.split(File::PATH_SEPARATOR).reject(&:empty?)
-    end
-
-    # Codex starts a server with the PATH its snapshot saved in place of its
-    # own, and rbenv or asdf save nothing else, so a Ruby that has moved shows
-    # as a command that PATH no longer reaches. The first gone directory on it
-    # is usually that Ruby's. [server name, command, gone directory] or nil.
-    def unreached_command(entry, folder)
-      path = entry[:env]["PATH"] or return nil
-      command = McpConfigGenerator.unwrapped_argv(entry[:argv]).first.to_s
-      return nil if executable_on?(command, path, folder)
-
-      [ entry[:name], command, path.split(File::PATH_SEPARATOR).find { |dir| !dir.empty? && !Dir.exist?(File.expand_path(dir, folder)) } ]
     end
 
     def check_mcp_buildable
@@ -1913,7 +1855,7 @@ module RailsAiContext
     # Secret by what they are, so no app commits them on purpose. Rails'
     # own .gitignore leaves out every .env file and every key.
     NEVER_COMMIT = %w[
-      .env .env.* config/master.key config/credentials/*.key config/application.yml .codex/config.toml
+      .env .env.* config/master.key config/credentials/*.key config/application.yml
       .netrc .pgpass .aws/credentials **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa .ssh/*
     ].freeze
 
@@ -1955,8 +1897,7 @@ module RailsAiContext
       patterns.any? { |pattern| SafePath.compile_pattern(pattern).match(file, basename, file.downcase, basename.downcase) }
     end
 
-    # Every file the tools refuse to read (the one sensitive-pattern list), plus the Codex
-    # config our own install writes with this machine's PATH and GEM_HOME. Excluded
+    # Every file the tools refuse to read (the one sensitive-pattern list). Excluded
     # directories (node_modules, vendor, tmp) are not walked.
     def present_sensitive_files
       root = app.root.to_s
@@ -1969,7 +1910,7 @@ module RailsAiContext
           Find.prune if excluded.call(relative, true) || File.symlink?(path)
           next
         end
-        found << relative if SafePath.sensitive?(relative) || relative == ".codex/config.toml"
+        found << relative if SafePath.sensitive?(relative)
       end
       found.sort
     rescue SystemCallError

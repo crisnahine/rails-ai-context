@@ -83,7 +83,7 @@ ls -la .mcp.json .cursor/ .vscode/ .github/
 2. Check the config file exists:
    - Claude Code: `.mcp.json`
    - Cursor: `.cursor/mcp.json`
-   - Copilot: `.vscode/mcp.json`
+   - Copilot: `.vscode/mcp.json` (VS Code), `.github/mcp.json` (Copilot CLI)
    - OpenCode: `opencode.json`
    - Codex: `.codex/config.toml`
 
@@ -112,11 +112,15 @@ Claude Code reads `.mcp.json` with a plain JSON parser, and loads no server from
 
 Codex refuses a `config.toml` that declares a server twice. An earlier install could write a second `[mcp_servers.rails-ai-context]` table beside the server spelled another way: a quoted name (`[mcp_servers."rails-ai-context"]`), an inline table under `[mcp_servers]`, or dotted keys. `doctor` names such a file. Two tables are merged into one when the install runs again; for an inline table or dotted keys, delete one of the two by hand.
 
-The install now finds the server however its name is quoted and replaces its table where it stands. An entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, as is a file whose `mcp_servers` is one inline table: write it as a `[mcp_servers.rails-ai-context]` table, or delete it, and the next run keeps it current. `doctor` gives that same edit for any problem in such an entry that only a rewrite fixes, a stale env snapshot included.
+The install now finds the server however its name is quoted and replaces its table where it stands. An entry of the gem's written as an inline table or with dotted keys is left as it is, with a warning, as is a file whose `mcp_servers` is one inline table: write it as a `[mcp_servers.rails-ai-context]` table, or delete it, and the next run keeps it current. `doctor` gives that same edit for any problem in such an entry that only a rewrite fixes, such as the Ruby setup an earlier release saved into it.
 
 ### Codex: "stream did not contain valid UTF-8"
 
 Codex reads `config.toml` as TOML, which is UTF-8, and loads nothing from a file holding a byte that is not - one in a comment included. The install still writes its table into such a file, keeping every byte around it, and says `Codex CLI cannot read it: it is not UTF-8, which TOML is`; `doctor` fails it in the same words. Save the file as UTF-8.
+
+### Cursor CLI: "can't find gem rails-ai-context" or "Could not find ... in locally installed gems"
+
+The Cursor CLI starts a server with only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM` and `USER`, so with rvm or chruby, which also need `GEM_PATH` or `GEM_HOME`, neither `rails-ai-context` nor `bundle exec` finds the gems. Any client that drops those variables does the same. The install writes `.cursor/mcp.json` and `.github/mcp.json` through a one-line `ruby -e` launcher that sets `GEM_PATH` from the gem folders on `PATH` first. An entry written by an earlier release, or by hand, has no launcher: run the install again to rewrite it.
 
 ### "MCP server fails to start"
 
@@ -125,8 +129,9 @@ Codex reads `config.toml` as TOML, which is UTF-8, and loads nothing from a file
 - `rails-ai-context is not currently included in the bundle`: the config runs `bundle exec rails-ai-context serve`, but the gem left the app's Gemfile. A standalone install runs `rails-ai-context serve`: run `rails-ai-context init` to rewrite the configs.
 - The config runs `rails-ai-context serve` while the app's Gemfile.lock carries the gem: it needs a copy installed outside the bundle as well, which hands the run to the bundle's. Run `rails generate rails_ai_context:install` to write `bundle exec rails-ai-context serve`.
 - `can't find executable rails-ai-context for gem rails-ai-context`: the bundle's copy of the gem lists no executable, as a `path:` copy of 5.32.2 or earlier outside a git checkout does. Point the Gemfile at a git checkout or a release.
-- On Windows, a config that runs `bundle` or `rails-ai-context` itself rather than through `cmd /c`: those are batch files there, which Claude Code, Codex and the other clients that start a server without a shell do not run (`doctor` warns about it). Run the install again; on Windows it writes `cmd /c bundle exec rails-ai-context serve`.
-- On macOS or Linux, a config that runs `cmd /c ...`: it was written on Windows, and there is no `cmd` here (`doctor` fails it). Run the install again on this machine, and keep the MCP configs out of git if the team works on both.
+- On Windows, a config that runs `bundle` or `rails-ai-context` itself, without `cmd /d /c`: those are batch files there, which Claude Code, Codex and the other clients that start a server without a shell do not run (`doctor` warns about it). Run the install again; on Windows it writes `cmd /d /c bundle exec rails-ai-context serve`.
+- On Windows, a VS Code entry in a folder of apps whose path holds `&`, `^`, `|`, `<`, `>`, `(` or `)` and no space: VS Code passes `${workspaceFolder}` to cmd unquoted, and cmd reads those characters as its own. Move the folder to a path without them.
+- On macOS or Linux, a config that runs `cmd /d /c ...` or `cmd /c ...`: it was written on Windows, and there is no `cmd` here (`doctor` fails it). Run the install again on this machine, and keep the MCP configs out of git if the team works on both.
 - The Claude Code plugin's server connects with no tools: it tells the session why (no gem for its Ruby, an older one, a Ruby too old, no app, or an app the gem cannot serve) and what to run; `claude --debug` shows the same line as its stderr. With a gem older than 5.38.0 a folder of several apps gets this too; from 5.38.0 the server serves each of them.
 - The Claude Code plugin started in a folder of several apps answers a call with "`app` names the Rails app to answer for, one of: ...": every tool takes `app`, the app's name from that list, which the session-start rules also give. A call whose app's server stops answers with that server's last lines, the same lines `claude --debug` shows; fix what they name, and the app's next call starts its server again. A call to a tool that app's own server does not have names the app and its rails-ai-context version, and one whose Ruby has no copy of the gem names that Ruby and the `gem install` to run with it.
 - The Claude Code plugin's server is listed as failed in `/mcp`, and `claude --debug` shows a `Bundler::GemNotFound` trace in its stderr: Claude Code was started from `bundle exec`, or from a shell holding the `RUBYOPT` or `BUNDLER_SETUP` it sets, for a bundle not installed for the plugin's Ruby, which fails before the plugin runs. Start Claude Code outside `bundle exec`, or unset those two where a shell profile sets them. After a failed start Claude Code skips the server in new sessions for about 15 minutes, so reconnect it in `/mcp` once the cause is fixed.
@@ -139,7 +144,7 @@ which rails-ai-context
 ruby -v
 ```
 
-For Codex CLI specifically, the env section in `.codex/config.toml` must match your current Ruby environment. Re-run install if you changed Ruby versions.
+For Codex CLI, start `codex` from a shell where `ruby -v` gives the app's Ruby: the server gets `PATH` and the `env_vars` names in `.codex/config.toml` from that shell. A config an earlier release wrote, with this machine's `PATH` saved in its `env` table, goes stale after a Ruby switch; re-run install to replace it.
 
 ### Answers say "Boot did not finish within 20s"
 
