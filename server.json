@@ -3,6 +3,7 @@
   "name": "io.github.crisnahine/rails-ai-context",
   "title": "Rails AI Context",
   "description": "35 MCP tools give AI agents live Rails schema, routes, models, and conventions.",
+  "websiteUrl": "https://crisnahine.github.io/rails-ai-context/",
   "repository": {
     "url": "https://github.com/crisnahine/rails-ai-context",
     "source": "github"
