@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `docs.html`. `.github/workflows/pages.yml` builds it on a pull
   request and deploys it from `main`, which replaces the Jekyll build of
   `docs/`. The README leads with a figure of real answers in place of the
-  GIFs, which are gone with `demo/`.
+  GIFs, which are gone with `demo/`. The packaged gem gains the two files the
+  README now links: `CODE_OF_CONDUCT.md` and ADR 0002.
 
 ## [5.38.2] - 2026-10-29
 

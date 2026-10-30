@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "tmpdir"
+require "yaml"
 
 load File.expand_path("../scripts/site.rb", __dir__)
 
@@ -60,11 +61,11 @@ RSpec.describe "the website build" do
 
   it "lists every registered tool once, under the category the tools reference files it in" do
     groups = Site.tools(File.read(File.join(root, "docs", "TOOLS.md")))
-    names = groups.flat_map { |_, _, rows| rows.map(&:first) }
+    names = groups.flat_map { |_, rows| rows.map(&:first) }
 
     expect(names.sort).to eq(RailsAiContext::Tools::BaseTool.registered_tools.map(&:tool_name).map(&:to_s).sort)
     expect(names.uniq.size).to eq(names.size)
-    expect(groups.flat_map { |_, _, rows| rows.map(&:last) }).to all(match(/\S/))
+    expect(groups.flat_map { |_, rows| rows.map(&:last) }).to all(match(/\S/))
   end
 
   it "refuses a tools reference that files a tool the registry lacks, or leaves one unfiled" do
@@ -74,13 +75,29 @@ RSpec.describe "the website build" do
     expect { Site.tools(doc.sub("`search_code`, ", "")) }.to raise_error(RuntimeError, /under no category: rails_search_code/)
   end
 
-  it "counts what the registry and the introspector map hold" do
+  it "counts what the registry, the introspector map and the configuration hold" do
     counts = Site.counts
 
     expect(counts["tools"]).to eq(RailsAiContext::Tools::BaseTool.registered_tools.size.to_s)
     expect(counts["introspectors"]).to eq(RailsAiContext::Introspector::INTROSPECTOR_MAP.size.to_s)
     expect(counts["staticIntrospectors"].to_i).to be_between(1, counts["introspectors"].to_i - 1)
+    expect(counts["standardPreset"]).to eq(RailsAiContext::Configuration::PRESETS[:standard].size.to_s)
+    expect(counts["maxChars"]).to match(/\A\d{1,3}(,\d{3})*\z/)
+    expect(counts["maxChars"].delete(",").to_i).to eq(RailsAiContext::Configuration.new.max_tool_response_chars)
+    expect(counts["rootBudget"].delete(",").to_i).to eq(RailsAiContext::Serializers::Budget::BYTES[:root])
     expect(counts["version"]).to eq(RailsAiContext::VERSION)
+  end
+
+  it "states in the README the counts the code holds" do
+    readme = File.read(File.join(root, "README.md"))
+    counts = Site.counts
+    matrix = YAML.load_file(File.join(root, ".github", "workflows", "unit-matrix.yml")).dig("jobs", "test", "strategy", "matrix")
+    pairs = matrix["ruby"].size * matrix["rails"].size - matrix["exclude"].size
+
+    expect(readme).to include("#{counts['introspectors']} introspectors", "#{counts['staticIntrospectors']} of the #{counts['introspectors']} introspectors")
+    expect(readme).to include("`:full` runs all #{counts['introspectors']} and `:standard` runs #{counts['standardPreset']}")
+    expect(readme).to include("#{pairs} Ruby and Rails pairs", "`max_tool_response_chars`, #{counts['maxChars']}", "#{counts['rootBudget']} bytes")
+    expect(readme.scan(/\b(\d+) introspectors\b/).flatten.uniq).to eq([ counts["introspectors"] ])
   end
 
   it "draws the plate from the model answer's own lines, with a key number on each kind of fact" do
@@ -92,9 +109,11 @@ RSpec.describe "the website build" do
     expect(rows).to include(a_string_starting_with("... "))
   end
 
-  it "refuses a model answer that lost a section the plate's key explains" do
-    expect { Site.plate(answers.fetch("model_details")["text"].sub("## Scopes", "## Named scopes")) }
-      .to raise_error(RuntimeError, /no line matching/)
+  it "refuses a model answer that lost a section the plate's key explains, or whose section is empty" do
+    text = answers.fetch("model_details")["text"]
+
+    expect { Site.plate(text.sub("## Scopes", "## Named scopes")) }.to raise_error(RuntimeError, /no line matching/)
+    expect { Site.plate(text.sub(/## Scopes\n(- .*\n)+/, "## Scopes\n\n")) }.to raise_error(RuntimeError, /Scopes section holds no list item/)
   end
 
   it "spells a heading's id as GitHub does, so a link written for the repository lands" do
@@ -112,13 +131,13 @@ RSpec.describe "the website build" do
 
     expect(tops.map { |page| page[:source] }).to eq(Site::DOC_ORDER.map { |name| "docs/#{name}.md" })
     expect(tops.map { |page| page[:out] }).to include("docs.html", "TOOLS.html")
-    expect(pages.map { |page| page[:out] }).to include(a_string_starting_with("adr/"))
+    expect(pages.map { |page| page[:out] }).to include("RELEASING.html", a_string_starting_with("adr/"), a_string_starting_with("agents/"))
     expect(tops.map { |page| page[:title] }).to all(match(/\S/))
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "docs"))
       Site::DOC_ORDER.each { |name| File.write(File.join(dir, "docs", "#{name}.md"), "# #{name}\n") }
       File.write(File.join(dir, "docs", "NEW.md"), "# New\n")
-      expect { Site.doc_pages(root: dir) }.to raise_error(RuntimeError, /docs\/NEW\.md is not placed/)
+      expect { Site.doc_pages(root: dir) }.to raise_error(RuntimeError, /docs\/NEW\.md is neither placed/)
     end
   end
 
@@ -209,7 +228,33 @@ RSpec.describe "the website build" do
     expect(recorded["trace"]["text"]).to include("app/services/article_publisher.rb")
   end
 
-  it "refuses an answer the binary could not give" do
+  it "refuses an answer the binary could not give, and one that names nothing the app has" do
     expect { Site.record_answers(calls: { "x" => %w[no_such_tool] }) }.to raise_error(RuntimeError, /failed with status/)
+    expect { Site.record_answers(calls: { "x" => %w[controllers --controller admin/nope] }) }.to raise_error(RuntimeError, /answered a refusal.*not found/m)
+    expect(Site.refused?("# Trace: `x`\n\n_No definition found for `def x`_\n")).to be(true)
+    expect(Site.refused?("[UNAVAILABLE: requires a booted Rails app]")).to be(true)
+    expect(Site.refused?("## Table: users\n")).to be(false)
+  end
+
+  # The README's "A closer look" quotes the gem's own answers, trimmed, and its
+  # first table quotes one line each. A line the gem no longer prints fails here.
+  it "quotes in the README only lines the gem prints for the sample app" do
+    require "shellwords"
+    readme = File.read(File.join(root, "README.md"))
+    closer = readme[/^## A closer look\n(.*?)^## The tools/m, 1]
+    blocks = Site.fenced_blocks("## X\n\n#{closer}", "X").map { |block| block[:body].lines(chomp: true) }
+    commands = blocks.filter_map { |lines| lines.first[/\A\$ rails-ai-context --app-path site\/sample_app tool (.+?) --no-boot\z/, 1] }
+    calls = commands.each_with_index.to_h { |args, i| [ "readme#{i}", Shellwords.split(args) ] }
+    calls.merge!("user" => %w[model_details --model User], "articles" => %w[controllers --controller articles], "tests" => %w[test_info], "routes" => %w[routes])
+    recorded = Site.record_answers(calls: calls).values.map { |answer| answer["text"] }
+    quoted = blocks.flat_map { |lines| lines.drop(lines.first.start_with?("$ ") ? 1 : 0) }.reject(&:empty?)
+    table = readme[/^\| When \| What the assistant gets \| A real line from an answer \|\n\|.*?\n((?:\|.*\n)+)/, 1]
+    cells = table.lines.map { |row| row.split(" | ").last.delete_suffix(" |\n").strip }
+
+    expect(commands.size).to be >= 4
+    expect(cells.size).to be >= 6
+    (quoted + cells.flat_map { |cell| cell.split(" · ") }).each do |line|
+      expect(recorded.any? { |text| text.include?(line) }).to be(true), "the gem prints no line holding: #{line}"
+    end
   end
 end

@@ -51,8 +51,18 @@ module Site
     "COMPATIBILITY" => "Compatibility", "TROUBLESHOOTING" => "Troubleshooting", "FAQ" => "FAQ"
   }.freeze
   DOC_ORDER = DOC_NAV.keys.freeze
-  # Read in the repository alone: the release checklist is for maintainers.
+  # Rendered at their old URLs and left out of the navigation: the release
+  # checklist is for maintainers.
   DOC_UNLISTED = %w[RELEASING].freeze
+  # Folders under docs/ whose pages render unlisted too.
+  DOC_DIRS = %w[adr agents].freeze
+
+  # The elements a rendered docs page may hold. Anything else is a placeholder that lost its backticks.
+  HTML_ELEMENTS = %w[
+    a abbr article aside b blockquote br code col colgroup dd del details div dl dt em figcaption figure
+    h1 h2 h3 h4 h5 h6 hr i img input ins kbd li ol p picture pre section small source span strong sub summary
+    sup table tbody td tfoot th thead tr u ul var
+  ].freeze
 
   # The hero plate: a few sections of the model answer, kept as the tool
   # printed them. A key number marks the lines the caption explains, and a
@@ -64,13 +74,6 @@ module Site
     [ 4, /\A## Validations/, 2 ],
     [ 5, /\A## Scopes/, 2 ],
     [ 6, /\A_Next:/, 0 ]
-  ].freeze
-
-  # The elements a rendered docs page may hold. Anything else is a placeholder that lost its backticks.
-  HTML_ELEMENTS = %w[
-    a abbr article aside b blockquote br code col colgroup dd del details div dl dt em figcaption figure
-    h1 h2 h3 h4 h5 h6 hr i img ins kbd li ol p picture pre section small source span strong sub summary
-    sup table tbody td tfoot th thead tr u ul var
   ].freeze
 
   MERMAID_LOADER = <<~HTML
@@ -94,6 +97,10 @@ module Site
     CGI.escapeHTML(text.to_s)
   end
 
+  def read(file, root: ROOT)
+    File.read(File.join(root, file))
+  end
+
   # The fenced code blocks under the first heading spelled `heading`, up to the
   # next heading of its level or above, each with the info string it opened
   # with. A `#` line inside a fence is the block's, not a heading.
@@ -101,18 +108,18 @@ module Site
     blocks = []
     level = nil
     fence = nil
-    open = nil
+    block = nil
     text.each_line(chomp: true) do |line|
       if fence
         if line.strip.start_with?(fence) && line.strip.delete(fence[0]).empty?
-          blocks << { lang: open[:lang], body: open[:body].join("\n") } if level
+          blocks << { lang: block[:lang], body: block[:body].join("\n") } if level
           fence = nil
         elsif level
-          open[:body] << line
+          block[:body] << line
         end
       elsif (opened = line.match(/\A {0,3}(`{3,}|~{3,})(.*)\z/))
         fence = opened[1]
-        open = { lang: opened[2].strip, body: [] }
+        block = { lang: opened[2].strip, body: [] }
       elsif (head = line.match(/\A(\#{1,6}) (.*)\z/))
         break if level && head[1].length <= level
 
@@ -140,6 +147,12 @@ module Site
     end
   end
 
+  # A tool answers a name it cannot find with exit status 0, so the text decides too.
+  def refused?(text)
+    first = text.lines.map(&:strip).find { |line| !line.empty? }.to_s
+    first.match?(/\bnot found\b|\AError\b|\A\[UNAVAILABLE/i) || text.include?("_No definition found")
+  end
+
   # Each answer the page shows, recorded by running the gem's own binary on the
   # sample app in the static tier, as it answers an app that cannot boot.
   def record_answers(root: ROOT, app: SAMPLE_APP, calls: CALLS)
@@ -148,6 +161,7 @@ module Site
       out, err, status = Open3.capture3({ "RAILS_AI_CONTEXT_NO_UPDATE_CHECK" => "1" }, *command, chdir: root)
       raise "#{command.join(' ')} failed with status #{status.exitstatus}:\n#{err}" unless status.success?
       raise "#{command.join(' ')} printed nothing" if out.strip.empty?
+      raise "#{command.join(' ')} answered a refusal, which the page must not show:\n#{out.lines.first(3).join}" if refused?(out)
 
       [ key, { "command" => "rails-ai-context --app-path #{app} tool #{args.join(' ')} --no-boot", "text" => out.rstrip } ]
     end
@@ -164,6 +178,8 @@ module Site
       next if keep.zero?
 
       items = lines[(at + 1)..].take_while { |line| line.start_with?("- ") }
+      raise "the model answer's #{lines[at]} section holds no list item, so the plate would show an empty heading" if items.empty?
+
       items.first(keep).each { |line| rows << [ nil, line ] }
       rows << [ nil, "... #{items.size - keep} more" ] if items.size > keep
     end
@@ -188,10 +204,8 @@ module Site
     table = tools_doc[/^## Quick navigation\n+((?:\|.*\n)+)/, 1] or raise "docs/TOOLS.md has no Quick navigation table"
     filed = table.lines.drop(2).map do |line|
       cells = line.split("|").map(&:strip).reject(&:empty?)
-      link = cells[0].to_s.match(/\A\[(.+)\]\((#.+)\)\z/) or raise "docs/TOOLS.md's Quick navigation row is not a linked category: #{line.strip}"
-      label, anchor = link.captures
-      names = cells[1].scan(/`(\w+)`/).flatten.map { |name| "rails_#{name}" }
-      [ label, anchor, names ]
+      link = cells[0].to_s.match(/\A\[(.+)\]\(#.+\)\z/) or raise "docs/TOOLS.md's Quick navigation row is not a linked category: #{line.strip}"
+      [ link[1], cells[1].scan(/`(\w+)`/).flatten.map { |name| "rails_#{name}" } ]
     end
     unknown = filed.flat_map(&:last) - registry.keys
     raise "docs/TOOLS.md files tools the registry does not have: #{unknown.join(', ')}" unless unknown.empty?
@@ -199,8 +213,8 @@ module Site
     unfiled = registry.keys - filed.flat_map(&:last)
     raise "docs/TOOLS.md files these tools under no category: #{unfiled.join(', ')}" unless unfiled.empty?
 
-    filed.map do |label, anchor, names|
-      [ label, anchor, names.map { |name| [ name, RailsAiContext::CLI::ToolRunner.short_name(name), registry[name].guide_row.summary ] } ]
+    filed.map do |label, names|
+      [ label, names.map { |name| [ name, RailsAiContext::CLI::ToolRunner.short_name(name), registry[name].guide_row.summary ] } ]
     end
   end
 
@@ -210,7 +224,7 @@ module Site
   end
 
   def tools_markup(tools_doc)
-    tools(tools_doc).map do |label, _anchor, rows|
+    tools(tools_doc).map do |label, rows|
       items = rows.map do |name, short, summary|
         "<li><a href=\"TOOLS.html##{escape(name)}\"><code>#{escape(short)}</code></a><span>#{summary_markup(summary)}</span></li>"
       end
@@ -218,6 +232,11 @@ module Site
     end.join("\n")
   end
 
+  def thousands(number)
+    number.to_s.reverse.scan(/\d{1,3}/).join(",").reverse
+  end
+
+  # The numbers the page states, each read from where the code keeps it.
   def counts
     load_gem
     map = RailsAiContext::Introspector::INTROSPECTOR_MAP
@@ -225,6 +244,9 @@ module Site
       "tools" => RailsAiContext::Tools::BaseTool.registered_tools.size.to_s,
       "introspectors" => map.size.to_s,
       "staticIntrospectors" => map.values.count { |klass| klass.static_tier != RailsAiContext::Introspectors::StaticTier::RUNTIME_ONLY }.to_s,
+      "standardPreset" => RailsAiContext::Configuration::PRESETS.fetch(:standard).size.to_s,
+      "maxChars" => thousands(RailsAiContext::Configuration.new.max_tool_response_chars),
+      "rootBudget" => thousands(RailsAiContext::Serializers::Budget::BYTES.fetch(:root)),
       "version" => RailsAiContext::VERSION
     }
   end
@@ -248,15 +270,22 @@ module Site
     end
   end
 
-  def render_markdown(markdown)
+  # With block HTML parsed, kramdown files <summary> as a block it never sees
+  # closed and swallows the rest of the page into it; its content is a line of text.
+  def load_markdown
+    return if defined?(@markdown_loaded) && @markdown_loaded
+
     require "kramdown"
     require "kramdown-parser-gfm"
     require "rouge"
-    # With block HTML parsed, kramdown files <summary> as a block it never
-    # sees closed and swallows the rest of the page into it; its content is a
-    # line of text. Its typography is off too: a `--app-path` outside backticks
-    # would come out with a dash no shell accepts.
     Kramdown::Parser::Html::Constants::HTML_CONTENT_MODEL["summary"] = :span
+    @markdown_loaded = true
+  end
+
+  def render_markdown(markdown)
+    load_markdown
+    # Kramdown's typography is off: a `--app-path` outside backticks would
+    # come out with a dash no shell accepts.
     document = Kramdown::Document.new(
       markdown,
       input: "GFM", hard_wrap: false, auto_ids: false, parse_block_html: true,
@@ -278,24 +307,25 @@ module Site
     end
   end
 
-  # Every page the site renders from docs/: where it comes from, where it goes, and its title.
+  # Every page the site renders from docs/: the listed ones first, in the
+  # navigation's order, then the unlisted ones and the folders' pages.
   def doc_pages(root: ROOT)
     top = Dir[File.join(root, "docs", "*.md")].map { |path| File.basename(path, ".md") }
     missing = DOC_ORDER - top
     raise "docs/ has no page for #{missing.join(', ')}, which the navigation lists" unless missing.empty?
 
     unplaced = top - DOC_ORDER - DOC_UNLISTED
-    raise "docs/#{unplaced.join('.md, docs/')}.md is not placed in the navigation (Site::DOC_ORDER)" unless unplaced.empty?
+    raise "docs/#{unplaced.join('.md, docs/')}.md is neither placed in the navigation (Site::DOC_NAV) nor left out of it (Site::DOC_UNLISTED)" unless unplaced.empty?
 
-    pages = DOC_ORDER.map { |name| page_for("docs/#{name}.md", root) }
-    pages + Dir[File.join(root, "docs", "adr", "*.md")].sort.map { |path| page_for(Pathname(path).relative_path_from(Pathname(root)).to_s, root) }
+    folders = DOC_DIRS.flat_map { |dir| Dir[File.join(root, "docs", dir, "*.md")].sort.map { |path| Pathname(path).relative_path_from(Pathname(root)).to_s } }
+    ((DOC_ORDER + DOC_UNLISTED).map { |name| "docs/#{name}.md" } + folders).map { |source| page_for(source, root) }
   end
 
   def page_for(source, root)
-    text = File.read(File.join(root, source))
+    text = read(source, root: root).sub(/\A---\n.*?\n---\n/m, "")
     title = text[/^# (.+)$/, 1].to_s.gsub(/[`*]/, "").strip
     out = source == "docs/index.md" ? "docs.html" : source.delete_prefix("docs/").sub(/\.md\z/, ".html")
-    { source: source, out: out, title: title.empty? ? File.basename(source, ".md") : title }
+    { source: source, out: out, title: title.empty? ? File.basename(source, ".md") : title, text: text }
   end
 
   # A relative link in a doc, as the site serves it: another doc becomes its
@@ -320,11 +350,12 @@ module Site
   end
 
   def render_doc(page, pages, template, values, root: ROOT, commit:)
-    text = File.read(File.join(root, page[:source])).sub(/\A---\n.*?\n---\n/m, "")
+    text = page[:text]
     content = rewrite_links(render_markdown(text), pages, from: page, commit: commit)
     prefix = Pathname(".").relative_path_from(Pathname(page[:out]).dirname).to_s
     prefix = prefix == "." ? "" : "#{prefix}/"
-    nav = pages.first(DOC_ORDER.size).zip(DOC_NAV.values).map do |entry, label|
+    nav = DOC_NAV.map do |name, label|
+      entry = pages.find { |candidate| candidate[:source] == "docs/#{name}.md" }
       current = entry == page ? ' aria-current="page"' : ""
       "<li><a href=\"#{prefix}#{entry[:out]}\"#{current}>#{escape(label)}</a></li>"
     end.join("\n")
@@ -338,7 +369,7 @@ module Site
       "root" => prefix,
       "source" => escape(page[:source]),
       "sourceUrl" => "#{REPO}/blob/#{commit}/#{page[:source]}"
-    ), ->(file) { File.read(File.join(root, file)) })
+    ), ->(file) { read(file, root: root) })
   end
 
   # Write the site to `out`: the landing page filled in, each docs page
@@ -351,7 +382,7 @@ module Site
 
       FileUtils.rm_rf(out)
     end
-    read = ->(file) { File.read(File.join(root, file)) }
+    reader = ->(file) { read(file, root: root) }
     values = counts.merge("commit" => escape(commit), "commitShort" => escape(commit[0, 7]), "repo" => REPO,
                           "sampleApp" => "#{REPO}/tree/#{commit}/#{SAMPLE_APP}")
     answers.each do |key, answer|
@@ -362,16 +393,16 @@ module Site
     raise "no answer recorded for #{missing.join(', ')}" unless missing.empty?
 
     values["plate"] = plate(answers.fetch("model_details")["text"])
-    values["toolList"] = tools_markup(read.call("docs/TOOLS.md"))
+    values["toolList"] = tools_markup(reader.call("docs/TOOLS.md"))
 
     FileUtils.mkdir_p(out)
     File.write(File.join(out, MARK), "")
     File.write(File.join(out, ".nojekyll"), "")
     written = [ "index.html" ]
-    File.write(File.join(out, "index.html"), fill(read.call("site/index.html"), values, read))
+    File.write(File.join(out, "index.html"), fill(reader.call("site/index.html"), values, reader))
 
     pages = doc_pages(root: root)
-    template = read.call("site/docs.html")
+    template = reader.call("site/docs.html")
     pages.each do |page|
       FileUtils.mkdir_p(File.join(out, File.dirname(page[:out])))
       File.write(File.join(out, page[:out]), render_doc(page, pages, template, values, root: root, commit: commit))

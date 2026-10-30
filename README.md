@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo-light.svg" alt="rails-ai-context: ground truth for your coding agent" width="480">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/logo-light.svg" alt="rails-ai-context: ground truth for your coding agent" width="480">
   </picture>
 </p>
 
@@ -35,8 +35,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/session-dark.svg">
-    <img src="docs/assets/session-light.svg" alt="One session with rails-ai-context, each line from a real answer recorded against the sample app in this repository. It asks about a table: the users table's role column is an integer, not null, default 0, and index_users_on_email is unique. Before it calls an association: User has_many articles, dependent destroy, foreign key author_id. Before it writes an action: the before filter authenticate_user! comes from ApplicationController and is skipped on index and show. Before it writes a test: rspec, factories in spec/factories, 3 files, with the traits in_review and published. It traces a method: 4 call sites, among them article_publisher.rb, a service, with the line return false unless @article.publishable?. When the app cannot boot: a STATIC line says the answer serves static analysis and runtime-only data is marked UNAVAILABLE. Over MCP in Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, or as rails-ai-context tool NAME in any terminal." width="860">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/session-dark.svg">
+    <img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/session-light.svg" alt="One session with rails-ai-context, each line from a real answer recorded against the sample app in this repository. It asks about a table: the users table's role column is an integer, not null, default 0, and index_users_on_email is unique. Before it calls an association: User has_many articles, dependent destroy, foreign key author_id. Before it writes an action: the before filter authenticate_user! comes from ApplicationController and is skipped on index and show. Before it writes a test: rspec, factories in spec/factories, 3 files, with the traits in_review and published. It traces a method: 4 call sites, among them article_publisher.rb, a service, with the line return false unless @article.publishable?. When the app cannot boot: a STATIC line says the answer serves static analysis and runtime-only data is marked UNAVAILABLE. Over MCP in Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, or as rails-ai-context tool NAME in any terminal." width="860">
   </picture>
 </p>
 
@@ -74,8 +74,8 @@ hint for the next call.
 | Before it calls an association | Associations with their options, validations including the implicit ones, enums, scopes, callbacks, concerns | `has_many` **articles** dependent: destroy (foreign_key: :author_id, inverse_of: :author) |
 | Before it writes an action | The actions, every filter with where it was inherited from, strong parameters, the layout | `before` **authenticate_user!** _(from ApplicationController)_ (skipped on: index, show) |
 | Before it writes a test | The framework, where the factories or fixtures live, their traits, a template in the app's style | **Factories:** spec/factories (3 files) |
-| It traces a method | The definition and source, what it calls, every caller grouped by file and kind, the tests | app/services/article_publisher.rb (Service), 11: return false unless @article.publishable? |
-| When the app cannot boot | The same tools, from `config/routes.rb`, the schema dump and the source, saying so | [STATIC] Static mode. Serving static analysis; runtime-only data is marked [UNAVAILABLE] |
+| It traces a method | The definition and source, what it calls, every caller grouped by file and kind, the tests | app/services/article_publisher.rb (Service) · 11: return false unless @article.publishable? |
+| When the app cannot boot | The same tools, from `config/routes.rb`, the schema dump and the source, saying so | [STATIC] Static mode (static mode requested with --no-boot). Serving static analysis; runtime-only data is marked [UNAVAILABLE]. |
 
 Each line comes from [the sample app in this repository](https://github.com/crisnahine/rails-ai-context/tree/main/site/sample_app), a blog with Devise, an admin
 namespace, a JSON API, a Sidekiq job and a FactoryBot suite. The website records the whole answers
@@ -356,8 +356,8 @@ static resources, such as `rails://schema` and `rails://routes`.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/pipeline-dark.svg">
-    <img src="docs/assets/pipeline-light.svg" alt="Two columns. What a tool call does: the call arrives over MCP or from the command line, the registry resolves it among 35 auto-registered tools, 40 introspectors read the app with live reflection when it boots and from the routes file, the schema dump and the source when it does not, Prism parses each file once into a cache keyed by content and one walk feeds every listener, each record is tagged VERIFIED, INFERRED or STATIC and the result is cached with a fingerprint of the app, and the answer is composed with schema hints, a cut at the response budget, a tier line and, for most tools, a hint for the next call. What the install writes: the MCP config each chosen tool reads, one root context file, AGENTS.md when Cursor, OpenCode or Codex is chosen and CLAUDE.md otherwise, with a copy for Copilot, rules that load where they apply, six anti-hallucination rules, its own configuration, and nothing you wrote." width="860">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/pipeline-dark.svg">
+    <img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/pipeline-light.svg" alt="Two columns. What a tool call does: the call arrives over MCP or from the command line, the registry resolves it among 35 auto-registered tools, 40 introspectors read the app with live reflection when it boots and from the routes file, the schema dump and the source when it does not, Prism parses each file once into a cache keyed by content and one walk feeds every listener, each record is tagged VERIFIED, INFERRED or STATIC and the result is cached with a fingerprint of the app, and the answer is composed with schema hints, a cut at the response budget, a tier line and, for most tools, a hint for the next call. What the install writes: the MCP config each chosen tool reads, one root context file, AGENTS.md when Cursor, OpenCode or Codex is chosen and CLAUDE.md otherwise, with a copy for Copilot, rules that load where they apply, six anti-hallucination rules, its own configuration, and nothing you wrote." width="860">
   </picture>
 </p>
 
