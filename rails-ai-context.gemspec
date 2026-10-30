@@ -28,7 +28,7 @@ Gem::Specification.new do |spec|
   spec.metadata["homepage_uri"]      = spec.homepage
   spec.metadata["source_code_uri"]   = "#{spec.homepage}/tree/main"
   spec.metadata["changelog_uri"]     = "#{spec.homepage}/blob/main/CHANGELOG.md"
-  spec.metadata["documentation_uri"] = "#{spec.homepage}#readme"
+  spec.metadata["documentation_uri"] = "https://crisnahine.github.io/rails-ai-context/docs.html"
   spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
   spec.metadata["funding_uri"]       = "https://github.com/sponsors/crisnahine"
   spec.metadata["rubygems_mfa_required"] = "true"

@@ -26,6 +26,7 @@ module Site
   SOURCE = File.join(ROOT, "site")
   SAMPLE_APP = "site/sample_app"
   REPO = "https://github.com/crisnahine/rails-ai-context"
+  SITE = "https://crisnahine.github.io/rails-ai-context"
   # Left in a build so a later one knows the directory is its own to replace; Pages serves no dot file.
   MARK = ".rails-ai-context-site"
 
@@ -56,6 +57,8 @@ module Site
   DOC_UNLISTED = %w[RELEASING].freeze
   # Folders under docs/ whose pages render unlisted too.
   DOC_DIRS = %w[adr agents].freeze
+  # Maintainer notes: rendered, but left out of the sitemap and llms.txt.
+  DOC_UNINDEXED = %r{\Adocs/(?:agents/|RELEASING\.md\z)}
 
   # The elements a rendered docs page may hold. Anything else is a placeholder that lost its backticks.
   HTML_ELEMENTS = %w[
@@ -359,10 +362,10 @@ module Site
       current = entry == page ? ' aria-current="page"' : ""
       "<li><a href=\"#{prefix}#{entry[:out]}\"#{current}>#{escape(label)}</a></li>"
     end.join("\n")
-    description = text.lines.map(&:strip).find { |line| line.match?(/\A\*\*.+\*\*\z/) }.to_s.delete("*")
     fill(template, values.merge(
       "title" => escape(page[:title]),
-      "description" => escape(description.empty? ? "#{page[:title]}: rails-ai-context documentation." : description),
+      "description" => escape(description(page) || "#{page[:title]}: rails-ai-context documentation."),
+      "pageUrl" => "#{SITE}/#{page[:out]}",
       "content" => content,
       "docsNav" => nav,
       "mermaid" => content.include?('class="language-mermaid"') ? MERMAID_LOADER : "",
@@ -370,6 +373,38 @@ module Site
       "source" => escape(page[:source]),
       "sourceUrl" => "#{REPO}/blob/#{commit}/#{page[:source]}"
     ), ->(file) { read(file, root: root) })
+  end
+
+  # A page's first line set wholly in bold, if it has one.
+  def description(page)
+    page[:text].lines.map(&:strip).find { |text| text.match?(/\A\*\*.+\*\*\z/) }&.delete("*")
+  end
+
+  def sitemap(pages)
+    urls = [ "#{SITE}/" ] + pages.map { |page| "#{SITE}/#{page[:out]}" }
+    entries = urls.map { |url| "  <url><loc>#{escape(url)}</loc></url>" }
+    %(<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n#{entries.join("\n")}\n</urlset>\n)
+  end
+
+  # The index https://llmstxt.org describes: what the gem is, then every docs page with the line it opens with.
+  def llms_txt(pages, values)
+    link = ->(page) { "- [#{page[:title]}](#{SITE}/#{page[:out]})#{": #{description(page)}" if description(page)}" }
+    listed, unlisted = pages.partition { |page| page[:source].count("/") == 1 }
+    <<~TEXT
+      # rails-ai-context
+
+      > A Ruby gem that lets AI coding agents (Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI) ask a Rails app about itself: #{values['tools']} read-only tools answer from the schema, models, routes, controllers and views, over MCP or the command line, and still answer when the app cannot boot. Version #{values['version']}, MIT licensed.
+
+      Install without a Gemfile change: `gem install rails-ai-context`, then `rails-ai-context init --tools claude --defaults` in the app's folder (`--tools` takes claude, cursor, copilot, opencode, codex or all). Source: #{REPO}
+
+      ## Docs
+
+      #{listed.map(&link).join("\n")}
+
+      ## Optional
+
+      #{unlisted.map(&link).join("\n")}
+    TEXT
   end
 
   # Write the site to `out`: the landing page filled in, each docs page
@@ -383,7 +418,7 @@ module Site
       FileUtils.rm_rf(out)
     end
     reader = ->(file) { read(file, root: root) }
-    values = counts.merge("commit" => escape(commit), "commitShort" => escape(commit[0, 7]), "repo" => REPO,
+    values = counts.merge("siteUrl" => SITE, "commit" => escape(commit), "commitShort" => escape(commit[0, 7]), "repo" => REPO,
                           "sampleApp" => "#{REPO}/tree/#{commit}/#{SAMPLE_APP}")
     answers.each do |key, answer|
       values["answer_#{key}"] = escape(answer["text"])
@@ -408,6 +443,10 @@ module Site
       File.write(File.join(out, page[:out]), render_doc(page, pages, template, values, root: root, commit: commit))
       written << page[:out]
     end
+    indexed = pages.reject { |page| page[:source].match?(DOC_UNINDEXED) }
+    File.write(File.join(out, "sitemap.xml"), sitemap(indexed))
+    File.write(File.join(out, "llms.txt"), llms_txt(indexed, values))
+    written.push("sitemap.xml", "llms.txt")
 
     # The page's own files: the stylesheet, the script, and nothing a build
     # left behind (a dot file, the sample app, the two templates).

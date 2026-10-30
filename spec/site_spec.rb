@@ -190,6 +190,16 @@ RSpec.describe "the website build" do
       expect(local.uniq).to all(satisfy { |path| File.exist?(path) })
       expect(File.exist?(File.join(out, "sample_app"))).to be(false)
       expect(File.read(File.join(out, "TOOLS.html"))).to include('id="rails_get_schema"')
+      expect(File.read(File.join(out, "TOOLS.html"))).to include(%(<link rel="canonical" href="#{Site::SITE}/TOOLS.html">))
+
+      # Search engines and AI assistants get every public page, and none of the maintainer notes.
+      sitemap = File.read(File.join(out, "sitemap.xml"))
+      llms = File.read(File.join(out, "llms.txt"))
+      expect(written).to include("sitemap.xml", "llms.txt")
+      expect(sitemap).to include("<loc>#{Site::SITE}/</loc>", "<loc>#{Site::SITE}/TOOLS.html</loc>", "/adr/0001-")
+      expect(llms).to include("[Quickstart](#{Site::SITE}/QUICKSTART.html): ", "#{RailsAiContext::Tools::BaseTool.registered_tools.size} read-only tools")
+      expect(sitemap + llms).not_to match(%r{/agents/|RELEASING})
+      expect(JSON.parse(page[%r{<script type="application/ld\+json">(.*?)</script>}m, 1])).to include("version" => RailsAiContext::VERSION)
 
       # A second build replaces the first, which it wrote.
       Site.build(out: out, answers: answers.merge("routes" => { "command" => "x", "text" => "second" }), commit: commit)
