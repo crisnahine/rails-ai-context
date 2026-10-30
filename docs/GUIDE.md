@@ -1251,7 +1251,6 @@ Read from `.cursor/mcp.json` once you turn the server on. Or add manually:
 ```
 
 For standalone: use `"command": "rails-ai-context"` / `"args": ["serve"]` instead.
-```
 
 ### HTTP transport
 

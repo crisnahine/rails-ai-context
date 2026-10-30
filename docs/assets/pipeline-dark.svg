@@ -27,15 +27,15 @@
 <circle cx="31" cy="372" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="31" y="376" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">6</text>
 <text x="52" y="370"><tspan font-weight="600" fill="#e6edf3">The answer is composed:</tspan> schema hints for the models</text>
 <text x="52" y="388">it touches, a cut at the response budget, a tier line,</text>
-<text x="52" y="406">and a hint for the next call.</text>
+<text x="52" y="406">and, for most tools, a hint for the next call.</text>
 <circle cx="471" cy="68" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="471" y="72" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">1</text>
 <text x="492" y="66"><tspan font-weight="600" fill="#e6edf3">The MCP config</tspan> each chosen tool reads: .mcp.json,</text>
 <text x="492" y="84">.cursor/mcp.json, .vscode/mcp.json, opencode.json or</text>
 <text x="492" y="102">.codex/config.toml, merged into one that exists.</text>
 <circle cx="471" cy="136" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="471" y="140" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">2</text>
-<text x="492" y="134"><tspan font-weight="600" fill="#e6edf3">One root context file.</tspan> AGENTS.md carries the overview</text>
-<text x="492" y="152">and the tools guide; CLAUDE.md imports it; Copilot gets</text>
-<text x="492" y="170">its own copy.</text>
+<text x="492" y="134"><tspan font-weight="600" fill="#e6edf3">One root context file:</tspan> AGENTS.md when Cursor, OpenCode</text>
+<text x="492" y="152">or Codex is chosen, which CLAUDE.md imports; otherwise</text>
+<text x="492" y="170">CLAUDE.md. Copilot gets its own copy.</text>
 <circle cx="471" cy="204" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="471" y="208" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">3</text>
 <text x="492" y="202"><tspan font-weight="600" fill="#e6edf3">Rules that load where they apply:</tspan> the schema when</text>
 <text x="492" y="220">a migration is open, the models under app/models, the</text>
@@ -46,10 +46,11 @@
 <text x="492" y="306">it feels standard, check the inheritance chain, treat</text>
 <text x="492" y="324">empty output as a signal, re-query after writes.</text>
 <circle cx="471" cy="358" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="471" y="362" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">5</text>
-<text x="492" y="356"><tspan font-weight="600" fill="#e6edf3">Its own configuration:</tspan> an initializer in a Gemfile</text>
-<text x="492" y="374">install, .rails-ai-context.yml standalone, two .gitignore lines.</text>
-<circle cx="471" cy="408" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="471" y="412" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">6</text>
-<text x="492" y="406"><tspan font-weight="600" fill="#e6edf3">Nothing you wrote.</tspan> Your lines around its markers stay,</text>
-<text x="492" y="424">and uninstall takes back only what it wrote.</text>
+<text x="492" y="356"><tspan font-weight="600" fill="#e6edf3">Its own configuration:</tspan> an initializer and</text>
+<text x="492" y="374">.rails-ai-context.yml in a Gemfile install, the YAML file</text>
+<text x="492" y="392">alone standalone, and two .gitignore lines.</text>
+<circle cx="471" cy="426" r="10" fill="#0d1117" stroke="#ff6e80" stroke-width="1.5"/><text x="471" y="430" text-anchor="middle" font-size="11" font-weight="700" fill="#ff6e80">6</text>
+<text x="492" y="424"><tspan font-weight="600" fill="#e6edf3">Nothing you wrote.</tspan> Your lines around its markers stay,</text>
+<text x="492" y="442">and uninstall takes back only what it wrote.</text>
 </g>
 </svg>

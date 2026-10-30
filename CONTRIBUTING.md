@@ -155,8 +155,7 @@ docs page `Site::DOC_NAV` does not place, or a tool call that fails stops the bu
 touches `site/`, `docs/` or the script, and deploys it from `main`, where the repository's Pages source
 has to be GitHub Actions.
 
-The sample app is a fixture, not a running app: it has no `config/environment.rb`, so every tool reads
-it without booting. A change to it changes the answers on the page, and the README quotes some of
+The sample app is a fixture with no `config/environment.rb`, so every tool reads it without booting. A change to it changes the answers on the page, and the README quotes some of
 them, so check both.
 
 ## Reporting Bugs

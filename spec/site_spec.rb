@@ -92,6 +92,11 @@ RSpec.describe "the website build" do
     expect(rows).to include(a_string_starting_with("... "))
   end
 
+  it "refuses a model answer that lost a section the plate's key explains" do
+    expect { Site.plate(answers.fetch("model_details")["text"].sub("## Scopes", "## Named scopes")) }
+      .to raise_error(RuntimeError, /no line matching/)
+  end
+
   it "spells a heading's id as GitHub does, so a link written for the repository lands" do
     seen = Hash.new(0)
 
@@ -119,11 +124,11 @@ RSpec.describe "the website build" do
 
   it "rewrites a doc's links: another doc becomes its page, a file in the repository points at the built commit" do
     pages = [ { source: "docs/CLI.md", out: "CLI.html" }, { source: "docs/TOOLS.md", out: "TOOLS.html" }, { source: "docs/adr/0001-x.md", out: "adr/0001-x.html" } ]
-    html = '<a href="TOOLS.md#rails_query">a</a> <a href="adr/0001-x.md">b</a> <a href="../README.md">c</a> <a href="#here">d</a> <a href="https://example.com/x.md">e</a>'
+    html = '<a href="TOOLS.md#rails_query">a</a> <a href="adr/0001-x.md">b</a> <a href="../README.md">c</a> <a href="#here">d</a> <a href="https://example.com/x.md">e</a> <img src="assets/x.png">'
     from_adr = '<a href="../CLI.md">f</a>'
 
     expect(Site.rewrite_links(html, pages, from: pages[0], commit: commit)).to eq(
-      "<a href=\"TOOLS.html#rails_query\">a</a> <a href=\"adr/0001-x.html\">b</a> <a href=\"#{Site::REPO}/blob/#{commit}/README.md\">c</a> <a href=\"#here\">d</a> <a href=\"https://example.com/x.md\">e</a>"
+      "<a href=\"TOOLS.html#rails_query\">a</a> <a href=\"adr/0001-x.html\">b</a> <a href=\"#{Site::REPO}/blob/#{commit}/README.md\">c</a> <a href=\"#here\">d</a> <a href=\"https://example.com/x.md\">e</a> <img src=\"#{Site::REPO}/raw/#{commit}/docs/assets/x.png\">"
     )
     expect(Site.rewrite_links(from_adr, pages, from: pages[2], commit: commit)).to eq('<a href="../CLI.html">f</a>')
   end
@@ -132,6 +137,13 @@ RSpec.describe "the website build" do
     html = Site.render_markdown("# T\n\n> [!NOTE]\n> Mind this.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```ruby\nputs 1\n```\n")
 
     expect(html).to include('<h1 id="t">T</h1>', '<blockquote class="alert alert-note"><p><strong class="alert-title">Note</strong>', "<table>", 'class="language-ruby highlighter-rouge"')
+  end
+
+  it "renders a details block with a bare summary, whose closing tag kramdown would otherwise swallow", skip: no_markdown do
+    html = Site.render_markdown("<details>\n<summary>Example output</summary>\n\n| a |\n|---|\n| 1 |\n\n</details>\n\nAfter.\n")
+
+    expect(html).to include("<summary>Example output</summary>", "<table>", "</details>", "<p>After.</p>")
+    expect(html).not_to include("&lt;/summary&gt;", "&lt;/details&gt;")
   end
 
   it "builds the page filled in, every docs page, and every local file the pages name", skip: no_markdown do

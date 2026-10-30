@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list and the counts from the registry, and the answers it shows, recorded by
   running the gem's own binary against the sample app in `site/sample_app`;
   every page under `docs/` is rendered beside it with the same layout, at the
-  same URLs as before. `.github/workflows/pages.yml` builds it on a pull
+  same URLs as before, except the docs index, which moves from the site root
+  to `docs.html`. `.github/workflows/pages.yml` builds it on a pull
   request and deploys it from `main`, which replaces the Jekyll build of
   `docs/`. The README leads with a figure of real answers in place of the
   GIFs, which are gone with `demo/`.

@@ -2,25 +2,22 @@ name: Pages
 
 # The website: site/ filled in by scripts/site.rb from the commit it is built
 # at, the answers it shows recorded by running the gem against site/sample_app,
-# and every docs/ page rendered beside it. A pull request that touches the
-# site builds it and publishes nothing. The repository's Pages source has to be
-# "GitHub Actions" for the deploy job to publish.
+# and every docs/ page rendered beside it. Every pull request builds it and
+# publishes nothing, since a change to the gem changes the answers on the
+# page. The repository's Pages source has to be "GitHub Actions" for the
+# deploy job to publish.
 on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - "site/**"
-      - "docs/**"
-      - "scripts/site.rb"
-      - ".github/workflows/pages.yml"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# One deploy at a time, and a newer push waits for it rather than cutting it
-# off half published. A pull request's build is superseded by its next push.
+# One deploy at a time, and a newer push waits for it to finish publishing.
+# A pull request's build is superseded by its next push.
 concurrency:
   group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -38,6 +35,11 @@ jobs:
         with:
           ruby-version: "3.4"
           bundler-cache: true
+
+      # The trace answer on the page should be the one most users get, and
+      # search_code takes the ripgrep path where there is one.
+      - name: Ensure ripgrep
+        run: command -v rg || sudo apt-get install -y ripgrep
 
       # Runs the gem's own binary against the sample app for each answer the
       # page shows, then writes the page, the docs and the assets into _site.

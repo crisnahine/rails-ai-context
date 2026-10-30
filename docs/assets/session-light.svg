@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="860" height="528" viewBox="0 0 860 528" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Noto Sans&quot;, Helvetica, Arial, sans-serif">
-<text x="0" y="18" font-size="13" fill="#59636e">One session with rails-ai-context: each line is from a real answer, recorded against the sample app in this repository</text>
+<text x="0" y="18" font-size="13" fill="#59636e">One session with rails-ai-context: every fact is from a real answer, recorded against the sample app in this repository</text>
 <line x1="18" y1="58" x2="18" y2="410" stroke="#d1d9e0" stroke-width="2"/>
 <circle cx="18" cy="60" r="6" fill="#ffffff" stroke="#b4132c" stroke-width="2.5"/>
 <text x="40" y="65" font-size="14" font-weight="600" fill="#1f2328">It asks about a table</text>
@@ -28,10 +28,10 @@
 <text x="262" y="333" xml:space="preserve" font-size="11.5" font-family="ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, monospace" fill="#1f2328"><tspan fill="#b4132c">4 sites</tspan>  article_publisher.rb (Service)  return false unless @article.publishable?</text>
 <circle cx="18" cy="390" r="6" fill="#ffffff" stroke="#b4132c" stroke-width="2.5"/>
 <text x="40" y="395" font-size="14" font-weight="600" fill="#1f2328">When the app cannot boot</text>
-<text x="40" y="414" font-size="11.5" fill="#59636e">every tool, from the source files</text>
+<text x="40" y="414" font-size="11.5" fill="#59636e">the same tools, from the source files</text>
 <rect x="250" y="374" width="609" height="40" rx="6" fill="#f6f8fa" stroke="#d1d9e0"/>
 <text x="262" y="399" xml:space="preserve" font-size="11.5" font-family="ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, monospace" fill="#1f2328"><tspan fill="#b4132c">[STATIC]</tspan>  Serving static analysis; runtime-only data is marked [UNAVAILABLE].</text>
 <rect x="0.5" y="446" width="859" height="66" rx="8" fill="#fbe6e9"/>
 <text x="18" y="473" font-size="13" fill="#1f2328"><tspan font-weight="600">Over MCP</tspan>  in Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, or as rails-ai-context tool NAME in any terminal.</text>
-<text x="18" y="495" font-size="13" fill="#1f2328">Every answer says which tier it came from, tags what it read from a literal and what it inferred, and ends with a hint for the next call.</text>
+<text x="18" y="495" font-size="13" fill="#1f2328">Every answer says which tier it came from, tags what it read from a literal and what it inferred, and most end with a hint for the next call.</text>
 </svg>

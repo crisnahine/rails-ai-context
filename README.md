@@ -65,8 +65,8 @@ scaffolds FactoryBot into a fixture suite, and misses the `before_action` a pare
 catch it, fix it, re-prompt, and something next to it breaks.
 
 rails-ai-context gives the assistant 35 tools that read the app itself, over MCP from the AI tool or
-from the command line. Every answer is read from the app, says how sure it is, and ends with a hint for
-the next call.
+from the command line. Every answer is read from the app and says how sure it is, and most end with a
+hint for the next call.
 
 | When | What the assistant gets | A real line from an answer |
 |---|---|---|
@@ -74,7 +74,7 @@ the next call.
 | Before it calls an association | Associations with their options, validations including the implicit ones, enums, scopes, callbacks, concerns | `has_many` **articles** dependent: destroy (foreign_key: :author_id, inverse_of: :author) |
 | Before it writes an action | The actions, every filter with where it was inherited from, strong parameters, the layout | `before` **authenticate_user!** _(from ApplicationController)_ (skipped on: index, show) |
 | Before it writes a test | The framework, where the factories or fixtures live, their traits, a template in the app's style | **Factories:** spec/factories (3 files) |
-| It traces a method | The definition and source, what it calls, every caller grouped by file and kind, the tests | app/services/article_publisher.rb (Service) → 11: return false unless @article.publishable? |
+| It traces a method | The definition and source, what it calls, every caller grouped by file and kind, the tests | app/services/article_publisher.rb (Service), 11: return false unless @article.publishable? |
 | When the app cannot boot | The same tools, from `config/routes.rb`, the schema dump and the source, saying so | [STATIC] Static mode. Serving static analysis; runtime-only data is marked [UNAVAILABLE] |
 
 Each line comes from [the sample app in this repository](https://github.com/crisnahine/rails-ai-context/tree/main/site/sample_app), a blog with Devise, an admin
@@ -119,11 +119,15 @@ rails-ai-context init --tools claude --defaults
 ```
 
 As a Claude Code plugin, which adds the MCP server and gives each session the six rules, and writes no
-context files. It runs the installed gem, so install that first:
+context files. It runs the installed gem, so install that first, and run it in the app's folder:
 
 ```bash
+gem install rails-ai-context
 claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project
 ```
+
+Commit the `.claude/settings.json` it writes; the install generator and `init` then leave Claude Code's
+`.mcp.json` to the plugin ([details](docs/SETUP.md#as-a-plugin)).
 
 `--tools` takes `claude`, `cursor`, `copilot`, `opencode`, `codex` or `all`. Without `--defaults` the
 generator asks which AI tools you use and what to write. Re-running is safe: it keeps what you have,
@@ -149,8 +153,9 @@ Ruby in Docker, another MCP client.
 
 ## A closer look
 
-Every block below is the gem's own output for the sample app, read without booting it, trimmed where
-it says so. The website shows each one whole, recorded at the commit it was built from.
+Every block below is the gem's own output for the sample app, read without booting it, trimmed: the
+tier line and the report line that end every answer are cut, and each note names what else is. The
+website shows each answer whole, recorded at the commit it was built from.
 
 ### The schema, with the model on it
 
@@ -178,8 +183,9 @@ $ rails-ai-context --app-path site/sample_app tool schema --table users --no-boo
 _Next: `rails_get_model_details(model:"User")` for associations, validations, scopes._
 ```
 
-Trimmed to seven of its twelve columns. With the app booted, the columns come from the database
-connection; here they come from `db/schema.rb`, and `db/structure.sql` or the migrations would do.
+Trimmed to seven of its twelve columns and two of its three indexes. With the app booted, the columns
+come from the database connection; here they come from `db/schema.rb`, and `db/structure.sql` or the
+migrations would do.
 
 ### Before it calls an association
 
@@ -221,8 +227,9 @@ $ rails-ai-context --app-path site/sample_app tool model_details --model Article
 
 The model is read with the Prism parser. A scope with a literal body is `[VERIFIED]`, one built at
 runtime is `[INFERRED]`, and in the static tier every record is capped at `[STATIC]`, since no record
-can claim more than the tier that carries it. The columns section is trimmed out above; the `published`
-scope comes from the `Publishable` concern, and the answer says which concern brought which methods.
+can claim more than the tier that carries it. The columns, the primary key, the static-tier note on
+associations, the instance methods and the next-call hint are trimmed out above. The `published` scope
+is declared in the `Publishable` concern, and the Concerns section lists the methods each concern brings.
 
 ### Before it writes an action
 
@@ -245,12 +252,12 @@ $ rails-ai-context --app-path site/sample_app tool controllers --controller admi
 ```
 
 Every filter that applies, with where it was inherited from, so the assistant never misses the
-`authenticate_user!` two classes up. The schema hints for the models the controller touches follow in
-the full answer.
+`authenticate_user!` two classes up. The schema hints for the models the controller touches, and the
+next-call hints, follow in the full answer.
 
 ### Tracing a method
 
-```text
+````text
 $ rails-ai-context --app-path site/sample_app tool search_code --pattern 'publishable?' --match_type trace --no-boot
 # Trace: `publishable?`
 
@@ -274,7 +281,7 @@ $ rails-ai-context --app-path site/sample_app tool search_code --pattern 'publis
 
 ## Tested by (1 reference)
 - `spec/models/article_spec.rb` (1 reference)
-```
+````
 
 One call in place of a file-by-file search: the definition, what it calls, its siblings, every caller
 grouped by file and labelled by kind, with the route a controller caller answers, and the tests. The
@@ -309,7 +316,7 @@ none of those three is chosen; Copilot reads its own copy in `.github/copilot-in
 2. Mark every assumption with `[ASSUMPTION]`. "I'd need to check X first" is a good answer.
 3. Training data describes average Rails. This app isn't average. When something feels obviously standard, query anyway.
 4. Check the inheritance chain before every edit: inherited filters, concerns, includes, STI parents.
-5. Empty tool output is information. "0 callers found" means investigate, it does not mean proceed.
+5. Empty tool output is information. "0 callers found" means investigate, or ask.
 6. Stale context lies. Re-query after writes.
 
 On by default. Turn off with `config.anti_hallucination_rules = false` if you prefer your own. In an
@@ -350,7 +357,7 @@ static resources, such as `rails://schema` and `rails://routes`.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/pipeline-dark.svg">
-    <img src="docs/assets/pipeline-light.svg" alt="Two columns. What a tool call does: the call arrives over MCP or from the command line, the registry resolves it among 35 auto-registered tools, 40 introspectors read the app with live reflection when it boots and from the routes file, the schema dump and the source when it does not, Prism parses each file once into a cache keyed by content and one walk feeds every listener, each record is tagged VERIFIED, INFERRED or STATIC and the result is cached with a fingerprint of the app, and the answer is composed with schema hints, a cut at the response budget, a tier line and a hint for the next call. What the install writes: the MCP config each chosen tool reads, one root context file that AGENTS.md carries and CLAUDE.md imports with a copy for Copilot, rules that load where they apply, six anti-hallucination rules, its own configuration, and nothing you wrote." width="860">
+    <img src="docs/assets/pipeline-light.svg" alt="Two columns. What a tool call does: the call arrives over MCP or from the command line, the registry resolves it among 35 auto-registered tools, 40 introspectors read the app with live reflection when it boots and from the routes file, the schema dump and the source when it does not, Prism parses each file once into a cache keyed by content and one walk feeds every listener, each record is tagged VERIFIED, INFERRED or STATIC and the result is cached with a fingerprint of the app, and the answer is composed with schema hints, a cut at the response budget, a tier line and a hint for the next call. What the install writes: the MCP config each chosen tool reads, one root context file, AGENTS.md when Cursor, OpenCode or Codex is chosen and CLAUDE.md otherwise, with a copy for Copilot, rules that load where they apply, six anti-hallucination rules, its own configuration, and nothing you wrote." width="860">
   </picture>
 </p>
 
@@ -366,7 +373,8 @@ runtime. Introspection is cached with a fingerprint of the app's files, so an ed
 on the next call without a restart.
 
 A tool composes its answer from that context, hydrates it with schema hints for the models it
-touches, cuts it at the response budget, and ends it with a tier line and a hint for the next call.
+touches, cuts it at the response budget, and ends it with a tier line and, for most tools, a hint for
+the next call.
 Three transports reach the same registry: MCP over stdio, MCP over HTTP mounted inside the app, and
 the command line with no server at all.
 
@@ -378,8 +386,8 @@ the AST, and [the ADRs](https://github.com/crisnahine/rails-ai-context/tree/main
 
 It is free and MIT licensed. What you pay is tokens, and only when the assistant asks:
 
-- **A tool answer** is a few hundred to a few thousand tokens, sized by its `detail` level and cut at
-  `max_tool_response_chars`. Start with `summary` and drill down.
+- **A tool answer** is sized by its `detail` level and cut at `max_tool_response_chars`, 200,000
+  characters by default. Start with `summary` and drill down.
 - **The root context file** is held to 12,000 bytes in its default compact mode, and a rule file to
   8,000, since they share the agent's context with your own instructions.
 - **The last line of every answer**, which asks the assistant to offer you an issue when the gem itself
@@ -573,7 +581,7 @@ cd rails-ai-context
 bundle install
 bundle exec rspec              # the suite, on an in-memory SQLite app under spec/internal
 bundle exec rubocop --parallel # rubocop-rails-omakase style
-bundle exec rake e2e           # fresh Rails apps per install path; minutes, needs PostgreSQL for one spec
+bundle exec rake e2e           # fresh Rails apps per install path; minutes; TEST_POSTGRES=1 adds a PostgreSQL spec
 ```
 
 The website is `site/`, filled in by `scripts/site.rb` from the repository: the install prompt from

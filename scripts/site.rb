@@ -151,7 +151,7 @@ module Site
     rows = []
     PLATE.each do |key, pattern, keep|
       at = lines.index { |line| line.match?(pattern) }
-      next if at.nil?
+      raise "the model answer has no line matching #{pattern.inspect}, which the plate's key explains" if at.nil?
 
       rows << [ key, lines[at] ]
       next if keep.zero?
@@ -244,8 +244,10 @@ module Site
     require "kramdown"
     require "kramdown-parser-gfm"
     require "rouge"
+    # With block HTML parsed, kramdown reads a bare <summary> as a block it
+    # never sees closed and swallows the rest of the page into it.
     document = Kramdown::Document.new(
-      markdown,
+      markdown.gsub(/<summary>/i, '<summary markdown="span">'),
       input: "GFM", hard_wrap: false, auto_ids: false, parse_block_html: true,
       syntax_highlighter: "rouge", syntax_highlighter_opts: { css_class: "highlight", formatter: code_formatter }
     )
@@ -279,7 +281,8 @@ module Site
   end
 
   # A relative link in a doc, as the site serves it: another doc becomes its
-  # page, and anything else points into the repository at the built commit.
+  # page, and anything else points into the repository at the built commit,
+  # the file itself for an image and the page around it for a link.
   def rewrite_links(html, pages, from:, commit:)
     here = Pathname(from[:out]).dirname
     html.gsub(/\b(href|src)="([^"]+)"/) do
@@ -289,7 +292,11 @@ module Site
       path, anchor = target.split("#", 2)
       resolved = (Pathname(from[:source]).dirname + CGI.unescapeHTML(path)).cleanpath.to_s
       page = pages.find { |candidate| candidate[:source] == resolved }
-      url = page ? Pathname(page[:out]).relative_path_from(here).to_s : "#{REPO}/blob/#{commit}/#{resolved}"
+      url = if page
+        Pathname(page[:out]).relative_path_from(here).to_s
+      else
+        "#{REPO}/#{attr == 'src' ? 'raw' : 'blob'}/#{commit}/#{resolved}"
+      end
       "#{attr}=\"#{url}#{anchor ? "##{anchor}" : ''}\""
     end
   end
@@ -353,10 +360,13 @@ module Site
       written << page[:out]
     end
 
-    Dir.children(SOURCE).each do |name|
-      next if %w[index.html docs.html sample_app].include?(name)
+    # The page's own files: the stylesheet, the script, and nothing a build
+    # left behind (a dot file, the sample app, the two templates).
+    Dir.children(File.join(root, "site")).sort.each do |name|
+      path = File.join(root, "site", name)
+      next if name.start_with?(".") || %w[index.html docs.html].include?(name) || !File.file?(path)
 
-      FileUtils.cp(File.join(SOURCE, name), File.join(out, name))
+      FileUtils.cp(path, File.join(out, name))
       written << name
     end
     %w[icon.svg logo-light.svg logo-dark.svg social-preview.png].each do |name|
@@ -374,7 +384,10 @@ if $PROGRAM_NAME == __FILE__
   end
   begin
     answers = Site.record_answers
-    commit = Open3.capture2("git", "-C", Site::ROOT, "rev-parse", "HEAD").first.strip
+    commit, status = Open3.capture2("git", "-C", Site::ROOT, "rev-parse", "HEAD")
+    raise "git rev-parse HEAD failed, so the page cannot say what it was built from" unless status.success? && commit.strip.match?(/\A\h{40}\z/)
+
+    commit = commit.strip
     out = File.expand_path(ARGV[0])
     written = Site.build(out: out, answers: answers, commit: commit)
     puts "wrote the site to #{out}: #{written.size} files at #{commit[0, 7]}, #{answers.size} answers recorded from #{Site::SAMPLE_APP}"

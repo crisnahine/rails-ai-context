@@ -79,7 +79,7 @@
         <a class="btn btn-primary" href="#install">Install in one paste</a>
         <a class="btn" href="#answers">See what it answers</a>
       </div>
-      <div class="term" aria-label="The two commands that install rails-ai-context for Claude Code">
+      <div class="term" role="group" aria-label="The two commands that install rails-ai-context for Claude Code">
         <pre><code><span class="p">$</span> bundle add rails-ai-context --group development
 <span class="p">$</span> bin/rails generate rails_ai_context:install --tools claude --defaults</code></pre>
         <button class="copy" type="button" data-copy="bundle add rails-ai-context --group development&#10;bin/rails generate rails_ai_context:install --tools claude --defaults">Copy</button>
@@ -205,7 +205,7 @@
       </div>
     </div>
 
-    <p class="aside reveal"><strong>Every answer ends the same way.</strong> A tier line names where the facts came from, sections that need a booted app say <code>[UNAVAILABLE]</code> and why, and a hint names the next call. The last line asks the assistant to offer you an issue when rails-ai-context itself answered wrong.</p>
+    <p class="aside reveal"><strong>Every answer ends the same way.</strong> A tier line names where the facts came from, sections that need a booted app say <code>[UNAVAILABLE]</code> and why, and most answers name the next call in a hint. The last line asks the assistant to offer you an issue when rails-ai-context itself answered wrong.</p>
   </div>
 </section>
 
@@ -247,10 +247,10 @@
         <h3>What the install writes</h3>
         <ol>
           <li><strong>The MCP config</strong> each chosen tool reads: <code>.mcp.json</code>, <code>.cursor/mcp.json</code>, <code>.vscode/mcp.json</code>, <code>opencode.json</code> or <code>.codex/config.toml</code>, merged into one that exists.</li>
-          <li><strong>One root context file.</strong> <code>AGENTS.md</code> carries the project overview and the tools guide for Cursor, OpenCode and Codex; <code>CLAUDE.md</code> imports it; Copilot gets its own copy.</li>
+          <li><strong>One root context file.</strong> <code>AGENTS.md</code> carries the project overview and the tools guide when Cursor, OpenCode or Codex is chosen, and <code>CLAUDE.md</code> imports it; otherwise <code>CLAUDE.md</code> carries it. Copilot gets its own copy.</li>
           <li><strong>Rules that load where they apply:</strong> the schema when a migration is open, the models under <code>app/models</code>, the controllers under <code>app/controllers</code>, in each tool's own format.</li>
           <li><strong>Six anti-hallucination rules</strong> in the root file: verify before you write, mark every assumption, query even when it feels standard, check the inheritance chain, treat empty output as a signal, re-query after writes.</li>
-          <li><strong>Its own configuration:</strong> an initializer in a Gemfile install, <code>.rails-ai-context.yml</code> standalone, and two <code>.gitignore</code> lines.</li>
+          <li><strong>Its own configuration:</strong> an initializer and <code>.rails-ai-context.yml</code> in a Gemfile install, the YAML file alone standalone, and two <code>.gitignore</code> lines.</li>
           <li><strong>Nothing you wrote.</strong> Your lines around its markers stay, and <code>uninstall</code> takes back only what it wrote.</li>
         </ol>
       </div>
@@ -258,14 +258,14 @@
 
     <figure class="anatomy reveal" aria-labelledby="anatomy-cap">
       <div class="plate-head"><span>Plate 2</span><span id="anatomy-cap">The anatomy of a tag</span></div>
-      <p class="claim"><code>- <span class="k">`published`</span> → where(status: :published) <span class="k">[VERIFIED]</span></code></p>
+      <p class="claim"><code>- <span class="k">`active`</span> → where(active: true) <span class="k">[VERIFIED]</span></code></p>
       <dl class="claim-key">
         <div><dt><span class="tag tag-ok">[VERIFIED]</span></dt><dd>read from a literal in the source, so the assistant can rely on it</dd></div>
         <div><dt><span class="tag tag-warn">[INFERRED]</span></dt><dd>built from an expression at runtime, so it needs a check before it is relied on</dd></div>
         <div><dt><span class="tag tag-warn">[STATIC]</span></dt><dd>read without booting the app; a record in this tier is capped here</dd></div>
-        <div><dt><span class="tag tag-off">[UNAVAILABLE]</span></dt><dd>needs a booted app, and the answer says why it did not boot</dd></div>
+        <div><dt><span class="tag tag-off">[UNAVAILABLE]</span></dt><dd>the source is not there: a section that needs a booted app, or data this app does not have, and the answer says which</dd></div>
       </dl>
-      <p class="anatomy-note">{{staticIntrospectors}} of the {{introspectors}} introspectors answer without a booted app: each declares whether it reads files only, needs live reflection, or answers from another source such as the schema dump. What a tier can say is a declaration, so an answer never guesses at what it could not read. The design is in <a href="ARCHITECTURE.html">the architecture page</a> and the tiers in <a href="COMPATIBILITY.html#operating-tiers">the compatibility page</a>.</p>
+      <p class="anatomy-note">The line above is a scope as a booted app answers it; in the answers recorded on this page the same kind of line ends in <code>[STATIC]</code>. {{staticIntrospectors}} of the {{introspectors}} introspectors answer without a booted app: each declares whether it reads files only, needs live reflection, or answers from another source such as the schema dump. What a tier can say is a declaration, so an answer never guesses at what it could not read. The design is in <a href="ARCHITECTURE.html">the architecture page</a> and the tiers in <a href="COMPATIBILITY.html#operating-tiers">the compatibility page</a>.</p>
     </figure>
   </div>
 </section>
@@ -278,7 +278,7 @@
       <p class="lede">Open your AI tool at the root of your Rails app and paste this. It installs the gem, sets up the tool you are in, checks the result and tells you the one step left.</p>
     </header>
 
-    <div class="term prompt reveal" aria-label="The install prompt to paste into an AI tool">
+    <div class="term prompt reveal" role="group" aria-label="The install prompt to paste into an AI tool">
       <pre><code>{{block docs/PROMPTS.md "Install (recommended)" 0}}</code></pre>
       <button class="copy" type="button">Copy</button>
     </div>
@@ -289,7 +289,7 @@
         <dl class="cmds">
           <div><dt><code>bundle add</code></dt><dd><code>bundle add rails-ai-context --group development</code>, then <code>bin/rails generate rails_ai_context:install --tools claude --defaults</code>. The generator asks which AI tools you use and what to write; the flags answer for it.</dd></div>
           <div><dt><code>gem install</code></dt><dd><code>gem install rails-ai-context</code>, then <code>rails-ai-context init --tools claude --defaults</code> in the app. The Gemfile stays as it is.</dd></div>
-          <div><dt><code>claude plugin</code></dt><dd><code>claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project</code> adds the MCP server to Claude Code and gives each session the six rules. It runs the installed gem.</dd></div>
+          <div><dt><code>claude plugin</code></dt><dd><code>gem install rails-ai-context</code>, then <code>claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project</code> in the app's folder. It adds the MCP server to Claude Code, gives each session the six rules, writes no context files, and runs the installed gem.</dd></div>
           <div><dt><code>--tools</code></dt><dd><code>claude</code>, <code>cursor</code>, <code>copilot</code>, <code>opencode</code>, <code>codex</code> or <code>all</code>. Add <code>--cli</code> for context files only, or <code>--mcp-only</code> for the MCP config only.</dd></div>
         </dl>
       </div>
@@ -314,7 +314,7 @@
       <div>
         <h3>What it needs</h3>
         <ul class="ticks">
-          <li>Ruby 3.1 or newer and Rails 7.0 to 8.1. CI runs the suite on 17 Ruby and Rails pairs, on Linux, macOS and Windows.</li>
+          <li>Ruby 3.1 or newer and Rails 7.0 to 8.1. CI runs the suite on 17 Ruby and Rails pairs on Linux, plus macOS and Windows legs.</li>
           <li>Optional: <code>brakeman</code> for <code>security_scan</code>, <code>listen</code> for <code>watch</code>, <code>ripgrep</code> for a faster <code>search_code</code>.</li>
           <li>A booted app for <code>query</code>, <code>runtime_info</code> and <code>doctor</code>. Everything else also answers from the source.</li>
         </ul>
@@ -354,7 +354,7 @@ rails-ai-context uninstall                                                 # sta
       <li><strong>It never writes to your app or your database.</strong> Every tool is read-only. <code>query</code> runs inside a read-only transaction with a timeout, a row limit and column redaction, and refuses anything that is not a read.</li>
       <li><strong>Without a boot, it says less.</strong> {{staticIntrospectors}} of {{introspectors}} introspectors answer from the source; the rest say <code>[UNAVAILABLE]</code>. An association a gem adds at boot is not listed, and routes that engines draw are not counted.</li>
       <li><strong>Rails 9 is not supported.</strong> The gemspec caps <code>railties</code> below 9.0, and the standalone binary warns when it boots one.</li>
-      <li><strong>It is a reader, not a reviewer.</strong> The assistant still decides what to do with the facts. The six rules in the root file ask it to verify before writing; nothing enforces that.</li>
+      <li><strong>It only reads.</strong> The assistant still decides what to do with the facts. The six rules in the root file ask it to verify before writing; nothing enforces that.</li>
       <li><strong>On Windows</strong> the MCP configs start the server through <code>cmd /c</code>, and <code>query</code> on SQLite runs without its time limit, since there is no <code>fork</code>.</li>
     </ul>
   </div>
@@ -372,7 +372,7 @@ rails-ai-context uninstall                                                 # sta
       <details><summary>What if my app cannot boot?</summary><p>The tools answer from <code>config/routes.rb</code>, the schema dump and the source files, every answer says so, and sections that need a running app say <code>[UNAVAILABLE]</code> with the boot error. <code>--no-boot</code> asks for that tier outright. The answers on this page were all recorded that way.</p></details>
       <details><summary>What does it write into my repository?</summary><p>The MCP config for each AI tool you picked, one root context file with a copy for Copilot, rules files per tool, its own config and two <code>.gitignore</code> lines. A re-run keeps your lines and adds what is missing; <code>uninstall</code> takes back only what it wrote. A team that wants no AI files in the repo can skip the install: the tools work with none of it.</p></details>
       <details><summary>Which AI tools?</summary><p>Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI get context files and MCP config written for them. Any other MCP client, such as Claude Desktop, Windsurf, Zed or a JetBrains IDE, gets an entry from <code>rails-ai-context mcp-entry</code>. A tool with no MCP at all gets the CLI setup, where the context files name the shell commands.</p></details>
-      <details><summary>What does it cost?</summary><p>It is free and MIT licensed. What you pay is tokens, and only when the assistant asks: a tool answer is a few hundred to a few thousand tokens, sized by its <code>detail</code> level and cut at a budget. The root context file is held to 12,000 bytes in its default compact mode. The line that offers to file an issue costs about 40 tokens an answer and can be turned off.</p></details>
+      <details><summary>What does it cost?</summary><p>It is free and MIT licensed. What you pay is tokens, and only when the assistant asks: a tool answer is sized by its <code>detail</code> level and cut at <code>max_tool_response_chars</code>, 200,000 characters by default. The root context file is held to 12,000 bytes in its default compact mode. The line that offers to file an issue costs about 40 tokens an answer and can be turned off.</p></details>
     </div>
   </div>
 </section>
