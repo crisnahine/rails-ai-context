@@ -1,0 +1,73 @@
+name: Pages
+
+# The website: site/ filled in by scripts/site.rb from the commit it is built
+# at, the answers it shows recorded by running the gem against site/sample_app,
+# and every docs/ page rendered beside it. A pull request that touches the
+# site builds it and publishes nothing. The repository's Pages source has to be
+# "GitHub Actions" for the deploy job to publish.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "scripts/site.rb"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and a newer push waits for it rather than cutting it
+# off half published. A pull request's build is superseded by its next push.
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      # Runs the gem's own binary against the sample app for each answer the
+      # page shows, then writes the page, the docs and the assets into _site.
+      # A placeholder nothing fills or a tool call that fails stops it.
+      - name: Build the site
+        env:
+          RAILS_AI_CONTEXT_NO_UPDATE_CHECK: "1"
+        run: bundle exec ruby scripts/site.rb _site
+
+      - name: Upload the site
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  # Holds the only write token in this workflow and runs nothing but the
+  # deploy action: the job that installed gems and ran the tools is done.
+  deploy:
+    name: Deploy
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

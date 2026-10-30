@@ -6,6 +6,7 @@ AllCops:
   NewCops: enable
   Exclude:
     - "spec/fixtures/**/*"
+    - "site/sample_app/**/*"
     - "vendor/**/*"
 
 Style/Documentation:

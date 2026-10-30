@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="132" viewBox="0 0 640 132" role="img" aria-labelledby="tl dl">
+  <title id="tl">rails-ai-context</title>
+  <desc id="dl">A rounded tile in a crimson to orange gradient holding a white database cylinder with a check mark, beside the words rails-ai-context and the line ground truth for your coding agent.</desc>
+  <defs>
+    <linearGradient id="gl" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e11d48"/>
+      <stop offset="0.55" stop-color="#be123c"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="10" width="112" height="112" rx="30" fill="url(#gl)"/>
+  <rect x="9" y="11" width="110" height="110" rx="29" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+  <g fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="60" cy="44" rx="24" ry="9"/>
+    <path d="M36 44 V86 A24 9 0 0 0 84 86 V44"/>
+    <path d="M36 58 A24 9 0 0 0 84 58" stroke-opacity="0.75"/>
+    <path d="M36 72 A24 9 0 0 0 84 72" stroke-opacity="0.75"/>
+  </g>
+  <circle cx="90" cy="90" r="16" fill="#ffffff"/>
+  <path d="M82.5 90.5 L87.5 95.5 L98 84.5" fill="none" stroke="#be123c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="146" y="78" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="54" font-weight="750" letter-spacing="-2" fill="#1b1917">rails-ai-context</text>
+  <text x="149" y="108" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" letter-spacing="0.5" fill="#55504b">ground truth for your coding agent</text>
+</svg>

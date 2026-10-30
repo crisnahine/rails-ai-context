@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="470" viewBox="0 0 860 470" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Noto Sans&quot;, Helvetica, Arial, sans-serif">
+<rect x="0.5" y="0.5" width="419" height="469" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<rect x="440.5" y="0.5" width="419" height="469" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="20" y="32" font-size="15" font-weight="600" fill="#1f2328">What a tool call does</text>
+<text x="460" y="32" font-size="15" font-weight="600" fill="#1f2328">What the install writes</text>
+<line x1="20" y1="44" x2="400" y2="44" stroke="#d1d9e0"/>
+<line x1="460" y1="44" x2="840" y2="44" stroke="#d1d9e0"/>
+<g font-size="12.5" fill="#59636e">
+<circle cx="31" cy="68" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="31" y="72" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">1</text>
+<text x="52" y="66"><tspan font-weight="600" fill="#1f2328">The call arrives</tspan> over MCP from the AI tool, or from</text>
+<text x="52" y="84">rails-ai-context tool NAME in a terminal.</text>
+<circle cx="31" cy="118" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="31" y="122" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">2</text>
+<text x="52" y="116"><tspan font-weight="600" fill="#1f2328">The registry resolves it:</tspan> 35 tools, auto-registered,</text>
+<text x="52" y="134">and schema, get_schema and rails_get_schema are one.</text>
+<circle cx="31" cy="168" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="31" y="172" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">3</text>
+<text x="52" y="166"><tspan font-weight="600" fill="#1f2328">40 introspectors read the app.</tspan> Booted: live reflection,</text>
+<text x="52" y="184">the connection, the routes Rails drew. Not booted: the</text>
+<text x="52" y="202">routes file, the schema dump and the source, and it says so.</text>
+<circle cx="31" cy="236" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="31" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">4</text>
+<text x="52" y="234"><tspan font-weight="600" fill="#1f2328">Prism parses each file once</tspan> into a cache keyed by</text>
+<text x="52" y="252">content, and one walk feeds every listener: associations,</text>
+<text x="52" y="270">validations, scopes, callbacks, strong parameters.</text>
+<circle cx="31" cy="304" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="31" y="308" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">5</text>
+<text x="52" y="302"><tspan font-weight="600" fill="#1f2328">Each record is tagged</tspan> [VERIFIED], [INFERRED] or</text>
+<text x="52" y="320">[STATIC], and the result is cached with a fingerprint of</text>
+<text x="52" y="338">the app, so an edit is seen on the next call.</text>
+<circle cx="31" cy="372" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="31" y="376" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">6</text>
+<text x="52" y="370"><tspan font-weight="600" fill="#1f2328">The answer is composed:</tspan> schema hints for the models</text>
+<text x="52" y="388">it touches, a cut at the response budget, a tier line,</text>
+<text x="52" y="406">and a hint for the next call.</text>
+<circle cx="471" cy="68" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="72" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">1</text>
+<text x="492" y="66"><tspan font-weight="600" fill="#1f2328">The MCP config</tspan> each chosen tool reads: .mcp.json,</text>
+<text x="492" y="84">.cursor/mcp.json, .vscode/mcp.json, opencode.json or</text>
+<text x="492" y="102">.codex/config.toml, merged into one that exists.</text>
+<circle cx="471" cy="136" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="140" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">2</text>
+<text x="492" y="134"><tspan font-weight="600" fill="#1f2328">One root context file.</tspan> AGENTS.md carries the overview</text>
+<text x="492" y="152">and the tools guide; CLAUDE.md imports it; Copilot gets</text>
+<text x="492" y="170">its own copy.</text>
+<circle cx="471" cy="204" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="208" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">3</text>
+<text x="492" y="202"><tspan font-weight="600" fill="#1f2328">Rules that load where they apply:</tspan> the schema when</text>
+<text x="492" y="220">a migration is open, the models under app/models, the</text>
+<text x="492" y="238">controllers under app/controllers, in each tool's format.</text>
+<circle cx="471" cy="272" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="276" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">4</text>
+<text x="492" y="270"><tspan font-weight="600" fill="#1f2328">Six anti-hallucination rules</tspan> in the root file: verify</text>
+<text x="492" y="288">before you write, mark every assumption, query even when</text>
+<text x="492" y="306">it feels standard, check the inheritance chain, treat</text>
+<text x="492" y="324">empty output as a signal, re-query after writes.</text>
+<circle cx="471" cy="358" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="362" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">5</text>
+<text x="492" y="356"><tspan font-weight="600" fill="#1f2328">Its own configuration:</tspan> an initializer in a Gemfile</text>
+<text x="492" y="374">install, .rails-ai-context.yml standalone, two .gitignore lines.</text>
+<circle cx="471" cy="408" r="10" fill="#ffffff" stroke="#b4132c" stroke-width="1.5"/><text x="471" y="412" text-anchor="middle" font-size="11" font-weight="700" fill="#b4132c">6</text>
+<text x="492" y="406"><tspan font-weight="600" fill="#1f2328">Nothing you wrote.</tspan> Your lines around its markers stay,</text>
+<text x="492" y="424">and uninstall takes back only what it wrote.</text>
+</g>
+</svg>

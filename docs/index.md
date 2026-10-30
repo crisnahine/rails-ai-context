@@ -1,55 +1,49 @@
----
-title: Home
----
+# rails-ai-context documentation
 
-# rails-ai-context Documentation
+**35 read-only tools that give your AI coding assistant live access to your Rails app.**
 
-**35 MCP tools that give AI agents live access to your Rails app.**
+Works with Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, over MCP or the command line.
+[The website](https://crisnahine.github.io/rails-ai-context/) is the short tour; the pages below are
+the reference.
 
-Works with Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI.
+## Getting started
 
----
-
-## Getting Started
-
-| Guide | Description |
-|:------|:------------|
+| Guide | What it covers |
+|:------|:---------------|
 | **[Copy-paste prompts](PROMPTS.md)** | Paste one into your AI tool and it installs, changes, removes or uses the gem |
-| **[Quickstart](QUICKSTART.md)** | Get running in 5 minutes |
-| **[AI Tool Setup](SETUP.md)** | Claude, Cursor, Copilot, OpenCode, Codex |
-| **[Standalone Mode](STANDALONE.md)** | Use without Gemfile entry |
+| **[Quickstart](QUICKSTART.md)** | Up and running in 5 minutes |
+| **[AI tool setup](SETUP.md)** | Claude Code, Cursor, Copilot, OpenCode, Codex CLI, the HTTP transport, other MCP clients |
+| **[Standalone mode](STANDALONE.md)** | Use without a Gemfile entry |
 
 ## Reference
 
-| Guide | Description |
-|:------|:------------|
-| **[Tools Reference](TOOLS.md)** | All 35 tools with every parameter |
-| **[Configuration](CONFIGURATION.md)** | 40+ config options with defaults |
-| **[CLI Reference](CLI.md)** | Commands and argument syntax |
-| **[Introspectors](INTROSPECTORS.md)** | All 40 introspectors and AST engine |
+| Guide | What it covers |
+|:------|:---------------|
+| **[Tools reference](TOOLS.md)** | All 35 tools with every parameter |
+| **[Configuration](CONFIGURATION.md)** | Every option with its default |
+| **[CLI reference](CLI.md)** | Commands, flags and argument syntax |
+| **[Introspectors](INTROSPECTORS.md)** | All 40 introspectors and the AST engine |
+| **[Complete guide](GUIDE.md)** | Every command, parameter and option in one file |
 
 ## Learn
 
-| Guide | Description |
-|:------|:------------|
-| **[Recipes](RECIPES.md)** | Real-world workflows and examples |
-| **[Custom Tools](CUSTOM_TOOLS.md)** | Build and test your own MCP tools |
+| Guide | What it covers |
+|:------|:---------------|
+| **[Recipes](RECIPES.md)** | Real workflows, end to end |
+| **[Custom tools](CUSTOM_TOOLS.md)** | Build and test your own tools |
 | **[Architecture](ARCHITECTURE.md)** | System design and internals |
 | **[FAQ](FAQ.md)** | Frequently asked questions |
 
-## Safety & Support
+## Safety and support
 
-| Guide | Description |
-|:------|:------------|
-| **[Security](SECURITY.md)** | 4-layer SQL safety and file blocking |
-| **[Troubleshooting](TROUBLESHOOTING.md)** | Common issues and fixes |
+| Guide | What it covers |
+|:------|:---------------|
+| **[Security model](SECURITY.md)** | SQL safety layers and file blocking |
+| **[Compatibility](COMPATIBILITY.md)** | Supported versions, operating tiers, app shape matrix |
+| **[Troubleshooting](TROUBLESHOOTING.md)** | Common problems and fixes |
 
-## Complete Reference
-
-| Guide | Description |
-|:------|:------------|
-| **[Full Guide](GUIDE.md)** | Everything in one file |
+The decisions behind the design, each with its reason, are in [docs/adr](https://github.com/crisnahine/rails-ai-context/tree/main/docs/adr).
 
 ---
 
-[GitHub Repository](https://github.com/crisnahine/rails-ai-context) · [RubyGems](https://rubygems.org/gems/rails-ai-context) · [MCP Registry](https://registry.modelcontextprotocol.io)
+[GitHub repository](https://github.com/crisnahine/rails-ai-context) · [RubyGems](https://rubygems.org/gems/rails-ai-context) · [Changelog](../CHANGELOG.md) · [MCP Registry](https://registry.modelcontextprotocol.io)

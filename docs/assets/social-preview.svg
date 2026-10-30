@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="0.25" cy="0" r="1.1">
+      <stop offset="0" stop-color="#2a1216"/>
+      <stop offset="1" stop-color="#0d0a0b"/>
+    </radialGradient>
+    <linearGradient id="gs" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e11d48"/>
+      <stop offset="0.55" stop-color="#be123c"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <g transform="translate(108 160) scale(1.6)">
+    <rect width="112" height="112" rx="30" fill="url(#gs)"/>
+    <rect x="1" y="1" width="110" height="110" rx="29" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+    <g fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse cx="52" cy="34" rx="24" ry="9"/>
+      <path d="M28 34 V76 A24 9 0 0 0 76 76 V34"/>
+      <path d="M28 48 A24 9 0 0 0 76 48" stroke-opacity="0.75"/>
+      <path d="M28 62 A24 9 0 0 0 76 62" stroke-opacity="0.75"/>
+    </g>
+    <circle cx="82" cy="80" r="16" fill="#ffffff"/>
+    <path d="M74.5 80.5 L79.5 85.5 L90 74.5" fill="none" stroke="#be123c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="332" y="252" font-size="92" font-weight="700" letter-spacing="-3" fill="#f8f5f2">rails-ai-context</text>
+  <text x="338" y="312" font-size="30" font-family="Menlo, monospace" fill="#b3a9a2">ground truth for your coding agent</text>
+  <text x="105" y="446" font-size="34" font-weight="500" fill="#ece6e1">Your coding agent guesses your Rails app. Let it ask.</text>
+  <text x="105" y="494" font-size="34" font-weight="500" fill="#ece6e1">Schema, models, routes, controllers and views, read from the app itself.</text>
+  <text x="105" y="566" font-size="24" font-family="Menlo, monospace" fill="#ff8a98">read-only tools over MCP or the command line · answers when the app cannot boot</text>
+</svg>

@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rails-ai-context: your coding agent guesses your Rails app. Let it ask.</title>
+<meta name="description" content="A Ruby gem that turns your Rails app into the source of truth for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI: read-only tools answer from the schema, the models, the routes, the controllers and the views, over MCP or in any terminal, and still answer when the app cannot boot.">
+<link rel="canonical" href="https://crisnahine.github.io/rails-ai-context/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="rails-ai-context: ground truth for your coding agent">
+<meta property="og:description" content="Your coding agent guesses your Rails app. Let it ask. Schema, models, routes, controllers and views, read from the app itself, over MCP or the command line.">
+<meta property="og:url" content="https://crisnahine.github.io/rails-ai-context/">
+<meta property="og:image" content="https://crisnahine.github.io/rails-ai-context/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="The rails-ai-context logo beside the line: Your coding agent guesses your Rails app. Let it ask.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfbf9">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121010">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script>
+  try {
+    const theme = localStorage.getItem("rails-ai-context-theme");
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  } catch {}
+</script>
+<script type="module" src="main.mjs"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="#top">
+      <svg class="brand-mark" viewBox="0 0 112 112" width="28" height="28" aria-hidden="true">
+        <defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e11d48"/><stop offset="0.55" stop-color="#be123c"/><stop offset="1" stop-color="#f97316"/></linearGradient></defs>
+        <rect width="112" height="112" rx="30" fill="url(#brand-g)"/>
+        <g fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="52" cy="34" rx="24" ry="9"/><path d="M28 34 V76 A24 9 0 0 0 76 76 V34"/><path d="M28 48 A24 9 0 0 0 76 48" stroke-opacity="0.75"/><path d="M28 62 A24 9 0 0 0 76 62" stroke-opacity="0.75"/></g>
+        <circle cx="82" cy="80" r="16" fill="#fff"/><path d="M74.5 80.5 L79.5 85.5 L90 74.5" fill="none" stroke="#be123c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>rails-ai-context</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <button class="menu" type="button" aria-expanded="false" aria-controls="nav-list">Menu</button>
+      <ul id="nav-list">
+        <li><a href="#answers">What it answers</a></li>
+        <li><a href="#tools">Tools</a></li>
+        <li><a href="#works">How it works</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#limits">Limits</a></li>
+        <li><a href="docs.html">Docs</a></li>
+      </ul>
+    </nav>
+    <div class="nav-actions">
+      <button class="theme" type="button" aria-label="Switch to the dark theme" title="Switch theme">
+        <svg class="i-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z"/></svg>
+      </button>
+      <a class="btn btn-small" href="{{repo}}">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">Ruby gem · MCP server · CLI · MIT · <span class="as-is">v{{version}}</span></p>
+      <h1>Your coding agent guesses your Rails app. Let it ask.</h1>
+      <p class="lede">rails-ai-context turns your Rails app into the source of truth for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI: {{tools}} read-only tools answer from the schema, the models, the routes, the controllers and the views, over MCP or in any terminal.</p>
+      <p class="lede-2">Every answer is read from the app, says how sure it is, and still comes when the app cannot boot.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#install">Install in one paste</a>
+        <a class="btn" href="#answers">See what it answers</a>
+      </div>
+      <div class="term" aria-label="The two commands that install rails-ai-context for Claude Code">
+        <pre><code><span class="p">$</span> bundle add rails-ai-context --group development
+<span class="p">$</span> bin/rails generate rails_ai_context:install --tools claude --defaults</code></pre>
+        <button class="copy" type="button" data-copy="bundle add rails-ai-context --group development&#10;bin/rails generate rails_ai_context:install --tools claude --defaults">Copy</button>
+      </div>
+    </div>
+
+    <figure class="plate reveal">
+      <div class="plate-head"><span>Plate 1</span><span>One answer, as the assistant reads it</span></div>
+      <pre class="plate-body"><code>{{plate}}</code></pre>
+      <ol class="plate-key">
+        <li>The model and the tier the answer came from. <code>[STATIC]</code> here, since the sample app is read without booting.</li>
+        <li>Its columns: from <code>db/schema.rb</code> in this tier, from the database connection when the app boots.</li>
+        <li>Each association as the source declares it, with its class and its foreign key.</li>
+        <li>Validations, the one a <code>belongs_to</code> adds on its own included.</li>
+        <li>Scopes with their bodies, each carrying how sure the reader is of it.</li>
+        <li>A hint for the next call, so the assistant asks the right tool next.</li>
+      </ol>
+      <figcaption><code>Article</code> in <a href="{{sampleApp}}">the sample app</a>, answered by rails-ai-context {{version}} at <code>{{commitShort}}</code> while this page was built, trimmed to one line per kind of fact. <a href="#answers">The whole answer is below.</a></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section why" id="why" aria-labelledby="why-h">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">The problem</p>
+      <h2 id="why-h">The facts are in your app. The assistant writes from memory.</h2>
+      <p class="lede">An assistant writing Rails code knows what an average Rails app looks like. Yours has its own columns, associations, filters and test setup, and it starts every session with none of that. You catch the guess, fix it, re-prompt, and something next to it breaks.</p>
+    </header>
+    <div class="compare reveal">
+      <div class="head">You ask it to</div><div class="head">Without</div><div class="head">With rails-ai-context</div>
+      <div class="ask">Add a <code>subscription_tier</code> column to users</div><div class="without">Writes the migration, duplicates a column that exists</div><div class="with">Reads the live schema, sees <code>subscription_status</code>, asks before migrating</div>
+      <div class="ask">Call <code>user.posts</code> in a controller</div><div class="without">Guesses the name; <code>NoMethodError</code> at runtime</div><div class="with">Resolves the real association from the model</div>
+      <div class="ask">Write tests for a new model</div><div class="without">Scaffolds with FactoryBot in a fixture suite</div><div class="with">Reads the test setup and matches it</div>
+      <div class="ask">Fix a failing create action</div><div class="without">Misses the <code>authenticate_user!</code> a parent controller adds</div><div class="with">Gets the inherited filters beside the action</div>
+      <div class="ask">Trace where <code>publishable?</code> is used</div><div class="without">Reads six files in sequence, still misses a caller</div><div class="with">One call: definition, callers by file, tests</div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt" id="answers" aria-labelledby="answers-h">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">What it answers</p>
+      <h2 id="answers-h">The assistant asks. The app answers.</h2>
+      <p class="lede">Each answer below was recorded while this page was built, by running the gem at <code>{{commitShort}}</code> against <a href="{{sampleApp}}">the sample app in this repository</a>: a blog with Devise, an admin namespace, a JSON API, a Sidekiq job and a FactoryBot suite. It was read without booting, which is the tier an app with a missing credential or a broken initializer gets.</p>
+    </header>
+
+    <div class="steps" data-tabs>
+      <nav class="step-list" aria-label="Moments in a session">
+        <a href="#panel-onboard" data-tab><span class="step-n">1</span><span class="step-t"><strong>It meets the app</strong><small>onboard</small></span></a>
+        <a href="#panel-schema" data-tab><span class="step-n">2</span><span class="step-t"><strong>It asks about a table</strong><small>get_schema</small></span></a>
+        <a href="#panel-model" data-tab><span class="step-n">3</span><span class="step-t"><strong>Before it calls an association</strong><small>get_model_details</small></span></a>
+        <a href="#panel-controller" data-tab><span class="step-n">4</span><span class="step-t"><strong>Before it writes an action</strong><small>get_controllers</small></span></a>
+        <a href="#panel-tests" data-tab><span class="step-n">5</span><span class="step-t"><strong>Before it writes a test</strong><small>get_test_info</small></span></a>
+        <a href="#panel-trace" data-tab><span class="step-n">6</span><span class="step-t"><strong>It traces a method</strong><small>search_code, trace</small></span></a>
+        <a href="#panel-routes" data-tab><span class="step-n">7</span><span class="step-t"><strong>It reads the routes</strong><small>get_routes</small></span></a>
+      </nav>
+
+      <div class="step-panels">
+        <article class="panel" id="panel-onboard">
+          <h3>It meets the app: a walkthrough in one call</h3>
+          <p>The stack, the gems that matter, the models and how they connect, the routed controllers, the jobs, the mailers, the frontend and how tests are set up. The context files the install writes carry a compact version of this, so the first turn of a session starts here.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_onboard}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_onboard}}</p>
+          </figure>
+        </article>
+
+        <article class="panel" id="panel-schema">
+          <h3>It asks about a table</h3>
+          <p>Columns with their types, nullability and defaults, the indexes, and which model sits on the table. With the app booted the answer comes from the database connection; without it, from <code>db/schema.rb</code>, <code>db/structure.sql</code> or the migrations.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_schema}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_schema}}</p>
+          </figure>
+        </article>
+
+        <article class="panel" id="panel-model">
+          <h3>Before it calls an association</h3>
+          <p>The model is read with the Prism parser: associations with their options, validations including the implicit ones, enums, scopes with their bodies, callbacks in order, the concerns it includes and the methods they bring. A scope with a literal body is <code>[VERIFIED]</code>, one built at runtime is <code>[INFERRED]</code>, and in this tier every record is capped at <code>[STATIC]</code>.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_model_details}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_model_details}}</p>
+          </figure>
+        </article>
+
+        <article class="panel" id="panel-controller">
+          <h3>Before it writes an action</h3>
+          <p>The actions, every filter that applies with where it was inherited from, the strong parameters, the layout, and schema hints for the models the controller touches. The admin controller below gets <code>authenticate_user!</code> from <code>ApplicationController</code> and <code>require_admin</code> from its own base class.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_controllers}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_controllers}}</p>
+          </figure>
+        </article>
+
+        <article class="panel" id="panel-tests">
+          <h3>Before it writes a test</h3>
+          <p>The framework, where the factories or fixtures live, the traits they define, and a template in the app's own style, so a new test matches the suite instead of the assistant's habits.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_test_info}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_test_info}}</p>
+          </figure>
+        </article>
+
+        <article class="panel" id="panel-trace">
+          <h3>It traces a method</h3>
+          <p><code>search_code</code> with <code>match_type: trace</code> returns the definition and its source, what it calls, its siblings, every caller grouped by file and labelled by kind, and the tests that reference it. One call in place of a file-by-file search.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_trace}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_trace}}</p>
+          </figure>
+        </article>
+
+        <article class="panel" id="panel-routes">
+          <h3>It reads the routes</h3>
+          <p>Verbs, paths, actions and route helpers, grouped by controller with the filters that apply to each. Read from <code>config/routes.rb</code> here, so the answer says what it cannot count without booting: the routes engines and gems draw, and the <code>devise_for</code> line it did not expand.</p>
+          <figure>
+            <pre class="code scroll wrap-lines"><code>{{answer_routes}}</code></pre>
+            <p class="cmd"><span class="p">$</span> {{command_routes}}</p>
+          </figure>
+        </article>
+      </div>
+    </div>
+
+    <p class="aside reveal"><strong>Every answer ends the same way.</strong> A tier line names where the facts came from, sections that need a booted app say <code>[UNAVAILABLE]</code> and why, and a hint names the next call. The last line asks the assistant to offer you an issue when rails-ai-context itself answered wrong.</p>
+  </div>
+</section>
+
+<section class="section" id="tools" aria-labelledby="tools-h">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">{{tools}} tools</p>
+      <h2 id="tools-h">Read-only, and all of them answer from your app</h2>
+      <p class="lede">Over MCP each name carries a <code>rails_</code> prefix, as in <code>rails_get_schema</code>. From the command line the short name works: <code>rails-ai-context tool schema --table users</code>. About half take <code>detail=summary|standard|full</code>.</p>
+    </header>
+    <div class="tools reveal">
+{{toolList}}
+    </div>
+    <p class="tools-note reveal">The list, the names and the one-line summaries are read from the tool registry when this page is built, and the categories from <a href="TOOLS.html">the tools reference</a>, which has every parameter. MCP clients can also read five resource templates and nine static resources, such as <code>rails-ai-context://models/{name}</code> and <code>rails://schema</code>.</p>
+  </div>
+</section>
+
+<section class="section section-alt" id="works" aria-labelledby="works-h">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">How it works</p>
+      <h2 id="works-h">Read once, tagged, handed over</h2>
+      <p class="lede">{{introspectors}} introspectors read the app, one per kind of fact. {{tools}} tools compose their answers. The install writes the files each AI tool reads, so the assistant knows the tools exist and how to ask.</p>
+    </header>
+
+    <div class="flow reveal">
+      <div class="flow-col">
+        <h3>What a tool call does</h3>
+        <ol>
+          <li><strong>The call arrives</strong> over MCP from the AI tool, or from <code>rails-ai-context tool NAME</code> in a terminal, or from <code>bin/rails 'ai:tool[NAME]'</code>.</li>
+          <li><strong>The registry resolves it.</strong> Every tool is auto-registered when its class loads, and the CLI accepts <code>schema</code>, <code>get_schema</code> and <code>rails_get_schema</code> alike.</li>
+          <li><strong>The introspectors read the app.</strong> With the app booted: live reflection, the database connection and the routes Rails drew. Without it: <code>config/routes.rb</code>, the schema dump and the source files, with the answer saying so.</li>
+          <li><strong>Prism parses each file once</strong> into a cache keyed by the file's content, and a single walk feeds every listener: associations, validations, scopes, callbacks, strong parameters.</li>
+          <li><strong>Each record is tagged</strong> by how it was read, and the introspection is cached with a fingerprint of the app, so an edit to a model is seen on the next call.</li>
+          <li><strong>The answer is composed:</strong> schema hints for the models it touches, a cut at the response budget, a tier line, a next-call hint.</li>
+        </ol>
+      </div>
+      <div class="flow-col">
+        <h3>What the install writes</h3>
+        <ol>
+          <li><strong>The MCP config</strong> each chosen tool reads: <code>.mcp.json</code>, <code>.cursor/mcp.json</code>, <code>.vscode/mcp.json</code>, <code>opencode.json</code> or <code>.codex/config.toml</code>, merged into one that exists.</li>
+          <li><strong>One root context file.</strong> <code>AGENTS.md</code> carries the project overview and the tools guide for Cursor, OpenCode and Codex; <code>CLAUDE.md</code> imports it; Copilot gets its own copy.</li>
+          <li><strong>Rules that load where they apply:</strong> the schema when a migration is open, the models under <code>app/models</code>, the controllers under <code>app/controllers</code>, in each tool's own format.</li>
+          <li><strong>Six anti-hallucination rules</strong> in the root file: verify before you write, mark every assumption, query even when it feels standard, check the inheritance chain, treat empty output as a signal, re-query after writes.</li>
+          <li><strong>Its own configuration:</strong> an initializer in a Gemfile install, <code>.rails-ai-context.yml</code> standalone, and two <code>.gitignore</code> lines.</li>
+          <li><strong>Nothing you wrote.</strong> Your lines around its markers stay, and <code>uninstall</code> takes back only what it wrote.</li>
+        </ol>
+      </div>
+    </div>
+
+    <figure class="anatomy reveal" aria-labelledby="anatomy-cap">
+      <div class="plate-head"><span>Plate 2</span><span id="anatomy-cap">The anatomy of a tag</span></div>
+      <p class="claim"><code>- <span class="k">`published`</span> → where(status: :published) <span class="k">[VERIFIED]</span></code></p>
+      <dl class="claim-key">
+        <div><dt><span class="tag tag-ok">[VERIFIED]</span></dt><dd>read from a literal in the source, so the assistant can rely on it</dd></div>
+        <div><dt><span class="tag tag-warn">[INFERRED]</span></dt><dd>built from an expression at runtime, so it needs a check before it is relied on</dd></div>
+        <div><dt><span class="tag tag-warn">[STATIC]</span></dt><dd>read without booting the app; a record in this tier is capped here</dd></div>
+        <div><dt><span class="tag tag-off">[UNAVAILABLE]</span></dt><dd>needs a booted app, and the answer says why it did not boot</dd></div>
+      </dl>
+      <p class="anatomy-note">{{staticIntrospectors}} of the {{introspectors}} introspectors answer without a booted app: each declares whether it reads files only, needs live reflection, or answers from another source such as the schema dump. What a tier can say is a declaration, so an answer never guesses at what it could not read. The design is in <a href="ARCHITECTURE.html">the architecture page</a> and the tiers in <a href="COMPATIBILITY.html#operating-tiers">the compatibility page</a>.</p>
+    </figure>
+  </div>
+</section>
+
+<section class="section" id="install" aria-labelledby="install-h">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">Quick start</p>
+      <h2 id="install-h">Install in one paste</h2>
+      <p class="lede">Open your AI tool at the root of your Rails app and paste this. It installs the gem, sets up the tool you are in, checks the result and tells you the one step left.</p>
+    </header>
+
+    <div class="term prompt reveal" aria-label="The install prompt to paste into an AI tool">
+      <pre><code>{{block docs/PROMPTS.md "Install (recommended)" 0}}</code></pre>
+      <button class="copy" type="button">Copy</button>
+    </div>
+
+    <div class="install-more reveal">
+      <div>
+        <h3>Or type it yourself</h3>
+        <dl class="cmds">
+          <div><dt><code>bundle add</code></dt><dd><code>bundle add rails-ai-context --group development</code>, then <code>bin/rails generate rails_ai_context:install --tools claude --defaults</code>. The generator asks which AI tools you use and what to write; the flags answer for it.</dd></div>
+          <div><dt><code>gem install</code></dt><dd><code>gem install rails-ai-context</code>, then <code>rails-ai-context init --tools claude --defaults</code> in the app. The Gemfile stays as it is.</dd></div>
+          <div><dt><code>claude plugin</code></dt><dd><code>claude plugin install rails-ai-context --marketplace crisnahine/rails-ai-context --scope project</code> adds the MCP server to Claude Code and gives each session the six rules. It runs the installed gem.</dd></div>
+          <div><dt><code>--tools</code></dt><dd><code>claude</code>, <code>cursor</code>, <code>copilot</code>, <code>opencode</code>, <code>codex</code> or <code>all</code>. Add <code>--cli</code> for context files only, or <code>--mcp-only</code> for the MCP config only.</dd></div>
+        </dl>
+      </div>
+      <div>
+        <h3>Then one step in your AI tool</h3>
+        <p>Every AI tool holds a new project MCP server back until you say yes. The install prints the step for each tool you picked.</p>
+        <table class="clients">
+          <thead><tr><th scope="col">Tool</th><th scope="col">The step</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Claude Code</th><td>New session in the app's folder, approve <code>rails-ai-context</code>. Check with <code>/mcp</code>.</td></tr>
+            <tr><th scope="row">Cursor</th><td>Restart, turn it on under MCP in Customize.</td></tr>
+            <tr><th scope="row">GitHub Copilot</th><td>Trust the workspace, send a chat message. Check with "MCP: List Servers".</td></tr>
+            <tr><th scope="row">OpenCode</th><td>Restart in the app's folder. Check with <code>opencode mcp list</code>.</td></tr>
+            <tr><th scope="row">Codex CLI</th><td>Trust the project, start a new session. Check with <code>/mcp</code>.</td></tr>
+          </tbody>
+        </table>
+        <p class="tools-note">Then ask something only your app knows, such as "what columns does the users table have?", and watch it call <code>rails_get_schema</code>.</p>
+      </div>
+    </div>
+
+    <div class="install-more reveal">
+      <div>
+        <h3>What it needs</h3>
+        <ul class="ticks">
+          <li>Ruby 3.1 or newer and Rails 7.0 to 8.1. CI runs the suite on 17 Ruby and Rails pairs, on Linux, macOS and Windows.</li>
+          <li>Optional: <code>brakeman</code> for <code>security_scan</code>, <code>listen</code> for <code>watch</code>, <code>ripgrep</code> for a faster <code>search_code</code>.</li>
+          <li>A booted app for <code>query</code>, <code>runtime_info</code> and <code>doctor</code>. Everything else also answers from the source.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Three ways in</h3>
+        <ul class="ticks">
+          <li><strong>MCP over stdio</strong>, the default: each AI tool's config starts <code>bundle exec rails-ai-context serve</code>.</li>
+          <li><strong>MCP over HTTP</strong>, mounted inside the app at <code>/mcp</code> where it inherits your routing and auth, and refused outside development and test unless you turn it on.</li>
+          <li><strong>The command line</strong>, with no server at all: <code>rails-ai-context tool NAME</code> in any terminal, or the same tools as rake tasks.</li>
+        </ul>
+      </div>
+    </div>
+
+    <details class="more reveal">
+      <summary>Every other setup has a prompt</summary>
+      <p>No Gemfile change, CLI only, MCP only, a whole team, a folder of apps, nothing committed, MCP over HTTP, Ruby in Docker, another MCP client such as Claude Desktop, Windsurf or Zed. Each prompt gives every install answer as a flag, so it never stalls on a question. They are in <a href="PROMPTS.html">the copy-paste prompts</a>, with prompts to change, upgrade, fix and uninstall the setup.</p>
+    </details>
+
+    <details class="more reveal">
+      <summary>Uninstall</summary>
+      <div class="term"><pre><code>bundle exec rails-ai-context uninstall &amp;&amp; bundle remove rails-ai-context   # in the Gemfile
+rails-ai-context uninstall                                                 # standalone</code></pre><button class="copy" type="button">Copy</button></div>
+      <p>It removes the context files, the MCP entries, its config, its <code>.gitignore</code> lines and its pre-commit hook, and keeps what you wrote: your lines in <code>CLAUDE.md</code>, other servers in an MCP config, a hook you edited.</p>
+    </details>
+  </div>
+</section>
+
+<section class="section section-alt" id="limits" aria-labelledby="limits-h">
+  <div class="wrap limits-grid">
+    <header class="section-head reveal">
+      <p class="eyebrow">Limits</p>
+      <h2 id="limits-h">What it will not do</h2>
+      <p class="lede">Read this before deciding.</p>
+    </header>
+    <ul class="limits reveal">
+      <li><strong>It never writes to your app or your database.</strong> Every tool is read-only. <code>query</code> runs inside a read-only transaction with a timeout, a row limit and column redaction, and refuses anything that is not a read.</li>
+      <li><strong>Without a boot, it says less.</strong> {{staticIntrospectors}} of {{introspectors}} introspectors answer from the source; the rest say <code>[UNAVAILABLE]</code>. An association a gem adds at boot is not listed, and routes that engines draw are not counted.</li>
+      <li><strong>Rails 9 is not supported.</strong> The gemspec caps <code>railties</code> below 9.0, and the standalone binary warns when it boots one.</li>
+      <li><strong>It is a reader, not a reviewer.</strong> The assistant still decides what to do with the facts. The six rules in the root file ask it to verify before writing; nothing enforces that.</li>
+      <li><strong>On Windows</strong> the MCP configs start the server through <code>cmd /c</code>, and <code>query</code> on SQLite runs without its time limit, since there is no <code>fork</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" id="faq" aria-labelledby="faq-h">
+  <div class="wrap narrow">
+    <header class="section-head reveal">
+      <p class="eyebrow">Questions</p>
+      <h2 id="faq-h">Questions you should ask first</h2>
+    </header>
+    <div class="faq reveal">
+      <details><summary>Does it send my code anywhere?</summary><p>No. The tools run on your machine, in your app's process or in a child of it. Two things go online: <code>search_docs</code> fetches Rails guides from GitHub when called with <code>fetch: true</code>, and the standalone binary asks rubygems.org for the latest version at most once a day, sending nothing about the app. <code>RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1</code> turns that off.</p></details>
+      <details><summary>Can it read my secrets?</summary><p>Files that hold them are never served: <code>.env</code>, <code>config/master.key</code>, <code>credentials.yml.enc</code>, <code>config/database.yml</code>, keys and certificates, and more, on a list you can extend. Logs are redacted before they leave the process, <code>get_config</code> shows credential key names without values, and <code>query</code> never returns an encrypted column.</p></details>
+      <details><summary>What if my app cannot boot?</summary><p>The tools answer from <code>config/routes.rb</code>, the schema dump and the source files, every answer says so, and sections that need a running app say <code>[UNAVAILABLE]</code> with the boot error. <code>--no-boot</code> asks for that tier outright. The answers on this page were all recorded that way.</p></details>
+      <details><summary>What does it write into my repository?</summary><p>The MCP config for each AI tool you picked, one root context file with a copy for Copilot, rules files per tool, its own config and two <code>.gitignore</code> lines. A re-run keeps your lines and adds what is missing; <code>uninstall</code> takes back only what it wrote. A team that wants no AI files in the repo can skip the install: the tools work with none of it.</p></details>
+      <details><summary>Which AI tools?</summary><p>Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI get context files and MCP config written for them. Any other MCP client, such as Claude Desktop, Windsurf, Zed or a JetBrains IDE, gets an entry from <code>rails-ai-context mcp-entry</code>. A tool with no MCP at all gets the CLI setup, where the context files name the shell commands.</p></details>
+      <details><summary>What does it cost?</summary><p>It is free and MIT licensed. What you pay is tokens, and only when the assistant asks: a tool answer is a few hundred to a few thousand tokens, sized by its <code>detail</code> level and cut at a budget. The root context file is held to 12,000 bytes in its default compact mode. The line that offers to file an issue costs about 40 tokens an answer and can be turned off.</p></details>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <p class="brand-line"><strong>rails-ai-context</strong> <span>ground truth for your coding agent</span></p>
+      <p class="fine">Built from <a href="{{repo}}/tree/{{commit}}"><code>{{commitShort}}</code></a>, gem version {{version}}. MIT licensed.</p>
+    </div>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <ul>
+        <li><a href="{{repo}}">Repository</a></li>
+        <li><a href="https://rubygems.org/gems/rails-ai-context">RubyGems</a></li>
+        <li><a href="{{repo}}/releases">Releases</a></li>
+        <li><a href="{{repo}}/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a href="{{repo}}/issues">Issues</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Documentation">
+      <h2>Docs</h2>
+      <ul>
+        <li><a href="docs.html">All pages</a></li>
+        <li><a href="QUICKSTART.html">Quickstart</a></li>
+        <li><a href="TOOLS.html">Tools reference</a></li>
+        <li><a href="PROMPTS.html">Copy-paste prompts</a></li>
+        <li><a href="ARCHITECTURE.html">Architecture</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Policies">
+      <h2>Policies</h2>
+      <ul>
+        <li><a href="{{repo}}/blob/main/CONTRIBUTING.md">Contributing</a></li>
+        <li><a href="{{repo}}/blob/main/SECURITY.md">Security</a></li>
+        <li><a href="{{repo}}/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+        <li><a href="{{repo}}/blob/main/LICENSE">License</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+
+<div class="sr" aria-live="polite" id="announce"></div>
+</body>
+</html>
