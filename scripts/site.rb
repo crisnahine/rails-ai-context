@@ -366,6 +366,7 @@ module Site
       "title" => escape(page[:title]),
       "description" => escape(description(page) || "#{page[:title]}: rails-ai-context documentation."),
       "pageUrl" => "#{SITE}/#{page[:out]}",
+      "robots" => page[:source].match?(DOC_UNINDEXED) ? %(<meta name="robots" content="noindex">\n) : "",
       "content" => content,
       "docsNav" => nav,
       "mermaid" => content.include?('class="language-mermaid"') ? MERMAID_LOADER : "",
@@ -388,7 +389,10 @@ module Site
 
   # The index https://llmstxt.org describes: what the gem is, then every docs page with the line it opens with.
   def llms_txt(pages, values)
-    link = ->(page) { "- [#{page[:title]}](#{SITE}/#{page[:out]})#{": #{description(page)}" if description(page)}" }
+    link = lambda do |page|
+      line = "- [#{page[:title].gsub(/[\[\]]/) { |bracket| "\\#{bracket}" }}](#{SITE}/#{page[:out]})"
+      description(page) ? "#{line}: #{description(page)}" : line
+    end
     listed, unlisted = pages.partition { |page| page[:source].count("/") == 1 }
     <<~TEXT
       # rails-ai-context

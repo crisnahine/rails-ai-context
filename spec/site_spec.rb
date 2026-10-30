@@ -199,6 +199,8 @@ RSpec.describe "the website build" do
       expect(sitemap).to include("<loc>#{Site::SITE}/</loc>", "<loc>#{Site::SITE}/TOOLS.html</loc>", "/adr/0001-")
       expect(llms).to include("[Quickstart](#{Site::SITE}/QUICKSTART.html): ", "#{RailsAiContext::Tools::BaseTool.registered_tools.size} read-only tools")
       expect(sitemap + llms).not_to match(%r{/agents/|RELEASING})
+      expect(File.read(File.join(out, "RELEASING.html"))).to include('<meta name="robots" content="noindex">')
+      expect(File.read(File.join(out, "TOOLS.html"))).not_to include("noindex")
       expect(JSON.parse(page[%r{<script type="application/ld\+json">(.*?)</script>}m, 1])).to include("version" => RailsAiContext::VERSION)
 
       # A second build replaces the first, which it wrote.
