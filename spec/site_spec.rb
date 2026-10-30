@@ -139,11 +139,20 @@ RSpec.describe "the website build" do
     expect(html).to include('<h1 id="t">T</h1>', '<blockquote class="alert alert-note"><p><strong class="alert-title">Note</strong>', "<table>", 'class="language-ruby highlighter-rouge"')
   end
 
-  it "renders a details block with a bare summary, whose closing tag kramdown would otherwise swallow", skip: no_markdown do
-    html = Site.render_markdown("<details>\n<summary>Example output</summary>\n\n| a |\n|---|\n| 1 |\n\n</details>\n\nAfter.\n")
+  it "keeps a flag's dashes and straight quotes, which kramdown would otherwise set as typography", skip: no_markdown do
+    expect(Site.render_markdown(%(Run --prune with "x" and 'y'... done\n))).to include(%(Run --prune with "x" and 'y'... done))
+  end
 
-    expect(html).to include("<summary>Example output</summary>", "<table>", "</details>", "<p>After.</p>")
+  it "renders a details block whose summary kramdown would otherwise swallow the page into", skip: no_markdown do
+    html = Site.render_markdown("<details>\n<summary class=\"x\">Example <b>output</b></summary>\n\n| a |\n|---|\n| 1 |\n\n</details>\n\nAfter `<summary>`.\n")
+
+    expect(html).to include('<summary class="x">Example <b>output</b></summary>', "<table>", "</details>", "<p>After <code>&lt;summary&gt;</code>.</p>")
     expect(html).not_to include("&lt;/summary&gt;", "&lt;/details&gt;")
+  end
+
+  it "refuses a placeholder written as a tag outside backticks, which a browser would hide", skip: no_markdown do
+    expect { Site.render_markdown("The <name> database stopped.\n") }.to raise_error(RuntimeError, /<name>.*backticks/)
+    expect(Site.render_markdown("The `<name>` database stopped.\n")).to include("<code>&lt;name&gt;</code>")
   end
 
   it "builds the page filled in, every docs page, and every local file the pages name", skip: no_markdown do
@@ -157,7 +166,7 @@ RSpec.describe "the website build" do
       end
 
       expect(written).to include("index.html", "docs.html", "TOOLS.html", "style.css", "main.mjs", "icon.svg", "social-preview.png")
-      expect(page).to include(commit, RailsAiContext::VERSION, "rails_get_schema".sub("rails_get_", ""))
+      expect(page).to include(commit, RailsAiContext::VERSION, '<a href="TOOLS.html#rails_get_schema"><code>schema</code></a>')
       expect(page).to include(CGI.escapeHTML(answers["routes"]["text"]))
       expect(local.uniq).to all(satisfy { |path| File.exist?(path) })
       expect(File.exist?(File.join(out, "sample_app"))).to be(false)

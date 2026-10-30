@@ -292,8 +292,8 @@ grouped by file and labelled by kind, with the route a controller caller answers
 The app-reading commands try a full boot for live reflection. When the boot fails, from a missing
 environment variable, an unreachable service or a broken initializer, they answer from the static
 tier instead of dying: routes from `config/routes.rb`, the schema from `db/schema.rb`,
-`db/structure.sql` or the migrations, models and controllers from their source. Every answer ends
-with a tier line, a section that needs a booted app says `[UNAVAILABLE]` with the reason, and
+`db/structure.sql` or the migrations, models and controllers from their source. Every answer carries
+a tier line, a section that needs a booted app says `[UNAVAILABLE]` with the reason, and
 `--no-boot` asks for that tier outright:
 
 ```text
@@ -357,7 +357,7 @@ static resources, such as `rails://schema` and `rails://routes`.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/pipeline-dark.svg">
-    <img src="docs/assets/pipeline-light.svg" alt="Two columns. What a tool call does: the call arrives over MCP or from the command line, the registry resolves it among 35 auto-registered tools, 40 introspectors read the app with live reflection when it boots and from the routes file, the schema dump and the source when it does not, Prism parses each file once into a cache keyed by content and one walk feeds every listener, each record is tagged VERIFIED, INFERRED or STATIC and the result is cached with a fingerprint of the app, and the answer is composed with schema hints, a cut at the response budget, a tier line and a hint for the next call. What the install writes: the MCP config each chosen tool reads, one root context file, AGENTS.md when Cursor, OpenCode or Codex is chosen and CLAUDE.md otherwise, with a copy for Copilot, rules that load where they apply, six anti-hallucination rules, its own configuration, and nothing you wrote." width="860">
+    <img src="docs/assets/pipeline-light.svg" alt="Two columns. What a tool call does: the call arrives over MCP or from the command line, the registry resolves it among 35 auto-registered tools, 40 introspectors read the app with live reflection when it boots and from the routes file, the schema dump and the source when it does not, Prism parses each file once into a cache keyed by content and one walk feeds every listener, each record is tagged VERIFIED, INFERRED or STATIC and the result is cached with a fingerprint of the app, and the answer is composed with schema hints, a cut at the response budget, a tier line and, for most tools, a hint for the next call. What the install writes: the MCP config each chosen tool reads, one root context file, AGENTS.md when Cursor, OpenCode or Codex is chosen and CLAUDE.md otherwise, with a copy for Copilot, rules that load where they apply, six anti-hallucination rules, its own configuration, and nothing you wrote." width="860">
   </picture>
 </p>
 
@@ -427,15 +427,16 @@ where the context files name the shell commands.
 
 ## What it will not do
 
-- **Write to your app or your database.** It reads. The assistant still decides what to do with the
-  facts, and the six rules ask it to verify before writing; nothing enforces that.
+- **Write to your app or your database from a tool.** Every tool reads. The assistant still decides
+  what to do with the facts, and the six rules ask it to verify before writing; nothing enforces that.
 - **Say more than it read.** Without a boot, 32 of 40 introspectors answer and the rest say
   `[UNAVAILABLE]`. `query`, `runtime_info` and `doctor` need a booted app, and `query` a database.
 - **Support Rails 9.** The gemspec caps `railties` below 9.0, and the standalone binary warns when it
   boots one. [Compatibility](docs/COMPATIBILITY.md) has the CI matrix: 17 Ruby and Rails pairs on
   Linux, plus macOS and Windows legs.
-- **Fork on Windows.** `query` on SQLite runs without its time limit there, and the MCP configs start
-  the server through `cmd /c`, since a gem's executables on Windows are batch files.
+- **Time-limit `query` on SQLite under Windows.** There is no `fork` there, so that query runs without
+  its limit, and the MCP configs start the server through `cmd /c`, since a gem's executables on
+  Windows are batch files.
 
 ## Install options and configuration
 
@@ -487,8 +488,9 @@ The binary finds the app the way `bin/rails` does, so it runs from any subdirect
 the app-reading commands: `--app-path PATH` to target another directory, `--environment ENV` to set
 `RAILS_ENV`, and `--no-boot` to answer from source. The full list is in the [CLI reference](docs/CLI.md).
 
-Configuration lives in an initializer in a Gemfile install, and in `.rails-ai-context.yml` with the
-same keys standalone. Every option with its default is in [Configuration](docs/CONFIGURATION.md):
+A Gemfile install writes an initializer and `.rails-ai-context.yml`; a standalone install writes the
+YAML file alone, with the same keys. Every option with its default is in
+[Configuration](docs/CONFIGURATION.md):
 
 ```ruby
 # config/initializers/rails_ai_context.rb
@@ -593,8 +595,7 @@ bundle exec ruby scripts/site.rb _site
 python3 -m http.server 8000 -d _site
 ```
 
-`.github/workflows/pages.yml` builds it on a pull request that touches the site or the docs, and
-deploys it from `main`. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout of `lib/`, how to add an
+`.github/workflows/pages.yml` builds it on every pull request and deploys it from `main`. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout of `lib/`, how to add an
 introspector, a tool or a Prism listener, and how to run the specs against real database servers.
 
 ## Contributing and security

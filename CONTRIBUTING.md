@@ -151,9 +151,9 @@ Any static file server will do, and a server it has to be: a browser loads no mo
 `file://` page. The script writes only into a new directory or one it wrote before. A placeholder
 nothing fills, a heading a quoted block has lost, a tool `docs/TOOLS.md` files under no category, a
 docs page `Site::DOC_NAV` does not place, or a tool call that fails stops the build, and
-`spec/site_spec.rb` names which. `.github/workflows/pages.yml` builds the site on a pull request that
-touches `site/`, `docs/` or the script, and deploys it from `main`, where the repository's Pages source
-has to be GitHub Actions.
+`spec/site_spec.rb` names which. `.github/workflows/pages.yml` builds the site on every pull request,
+since a change to the gem changes the answers on the page, and deploys it from `main`, where the
+repository's Pages source has to be GitHub Actions.
 
 The sample app is a fixture with no `config/environment.rb`, so every tool reads it without booting. A change to it changes the answers on the page, and the README quotes some of
 them, so check both.

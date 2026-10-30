@@ -136,7 +136,7 @@ Composite context: schema + model + controller + routes + views for a resource. 
 
 A model, controller or feature keyword the app does not have is answered as not found, with the closest name where there is one. An `action` the controller does not have is answered "Action 'nope' not found in PostsController. Available: create, destroy, ...", also when `skip_tools` lists `rails_get_controllers`. With `rails_analyze_feature` turned off, a `feature` keyword that only model names hold is answered with them: "The model names that hold 'comment': Comment." An include whose tool `skip_tools` turns off is answered by saying so, and that tool does not run.
 
-An unexpected failure is an error response that starts "Tool rails_get_context failed:". A crash inside one section is an error response too: `isError` over MCP and exit 1 on the CLI. The text keeps every section, and the crashed one reads "Tool <name> failed: <Class>: <message>". A section that answers an error for another reason, such as a refusal or a failed Brakeman run, stays a section of an ordinary answer. `rails_diagnose` and `rails_review_changes` answer a crashed section the same way.
+An unexpected failure is an error response that starts "Tool rails_get_context failed:". A crash inside one section is an error response too: `isError` over MCP and exit 1 on the CLI. The text keeps every section, and the crashed one reads "Tool `<name>` failed: `<Class>`: `<message>`". A section that answers an error for another reason, such as a refusal or a failed Brakeman run, stays a section of an ordinary answer. `rails_diagnose` and `rails_review_changes` answer a crashed section the same way.
 
 ### `rails_onboard`
 
@@ -780,9 +780,9 @@ On MySQL and MariaDB the text checks read a backslash in a string both ways, and
 - A top-level entry of `config/database.yml` that code connects to by name (`establish_connection(:reporting)`) is an environment to Rails, so `database` does not take its name: the answer lists every database the app has, as in "No database named reporting. This app has: primary, cache, queue".
 - One that only a committed dump names is answered as such.
 - On the static tier the whole tool is unavailable, with or without `database`.
-- A SQLite database whose file is not there is an error, with or without `database`. The message starts "The <name> database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.
+- A SQLite database whose file is not there is an error, with or without `database`. The message starts "The `<name>` database does not exist yet" and names `bin/rails db:prepare`, and nothing is created. A `file:` URI is checked at the path inside it.
 - A SQLite database other than the primary that lives in memory (`:memory:`, or a `file:` URI with `mode=memory`) is refused by name. It exists only inside the process that created it, and a new connection would open an empty one.
-- A database whose columns cannot be read is not queried. The answer is "The columns of the <name> database could not be read, so its secret columns cannot be told and no query runs on it."
+- A database whose columns cannot be read is not queried. The answer is "The columns of the `<name>` database could not be read, so its secret columns cannot be told and no query runs on it."
 - When a statement or an `explain: true` fails on a table this database does not have and another database's schema holds it, the answer names that database and the `database` value to use. The pointer is built from the schema dumps, so a table on a database with no dump gets none.
 
 Each database other than the primary is reached through a connection handler of its own for the length of the call, so the app's own connection pools are left as they are and two calls at once never share a connection.

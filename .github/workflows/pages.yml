@@ -16,11 +16,12 @@ on:
 permissions:
   contents: read
 
-# One deploy at a time, and a newer push waits for it to finish publishing.
-# A pull request's build is superseded by its next push.
+# One run per ref at a time: a main deploy is never cancelled and shares its
+# group with nothing a run on another branch could queue behind, and a pull
+# request's build is superseded by its next push.
 concurrency:
-  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:

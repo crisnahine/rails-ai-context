@@ -54,8 +54,8 @@ module Site
   # Read in the repository alone: the release checklist is for maintainers.
   DOC_UNLISTED = %w[RELEASING].freeze
 
-  # The hero plate: one line per kind of fact in the model answer, kept as the
-  # tool printed it. A key number marks the lines the caption explains, and a
+  # The hero plate: a few sections of the model answer, kept as the tool
+  # printed them. A key number marks the lines the caption explains, and a
   # count keeps that many of the list items under a heading.
   PLATE = [
     [ 1, /\A# /, 0 ],
@@ -64,6 +64,13 @@ module Site
     [ 4, /\A## Validations/, 2 ],
     [ 5, /\A## Scopes/, 2 ],
     [ 6, /\A_Next:/, 0 ]
+  ].freeze
+
+  # The elements a rendered docs page may hold. Anything else is a placeholder that lost its backticks.
+  HTML_ELEMENTS = %w[
+    a abbr article aside b blockquote br code col colgroup dd del details div dl dt em figcaption figure
+    h1 h2 h3 h4 h5 h6 hr i img ins kbd li ol p picture pre section small source span strong sub summary
+    sup table tbody td tfoot th thead tr u ul var
   ].freeze
 
   MERMAID_LOADER = <<~HTML
@@ -181,7 +188,8 @@ module Site
     table = tools_doc[/^## Quick navigation\n+((?:\|.*\n)+)/, 1] or raise "docs/TOOLS.md has no Quick navigation table"
     filed = table.lines.drop(2).map do |line|
       cells = line.split("|").map(&:strip).reject(&:empty?)
-      label, anchor = cells[0].match(/\A\[(.+)\]\((#.+)\)\z/).captures
+      link = cells[0].to_s.match(/\A\[(.+)\]\((#.+)\)\z/) or raise "docs/TOOLS.md's Quick navigation row is not a linked category: #{line.strip}"
+      label, anchor = link.captures
       names = cells[1].scan(/`(\w+)`/).flatten.map { |name| "rails_#{name}" }
       [ label, anchor, names ]
     end
@@ -244,14 +252,24 @@ module Site
     require "kramdown"
     require "kramdown-parser-gfm"
     require "rouge"
-    # With block HTML parsed, kramdown reads a bare <summary> as a block it
-    # never sees closed and swallows the rest of the page into it.
+    # With block HTML parsed, kramdown files <summary> as a block it never
+    # sees closed and swallows the rest of the page into it; its content is a
+    # line of text. Its typography is off too: a `--app-path` outside backticks
+    # would come out with a dash no shell accepts.
+    Kramdown::Parser::Html::Constants::HTML_CONTENT_MODEL["summary"] = :span
     document = Kramdown::Document.new(
-      markdown.gsub(/<summary>/i, '<summary markdown="span">'),
+      markdown,
       input: "GFM", hard_wrap: false, auto_ids: false, parse_block_html: true,
+      smart_quotes: %w[apos apos quot quot],
+      typographic_symbols: { hellip: "...", mdash: "---", ndash: "--", laquo: "&lt;&lt;", raquo: "&gt;&gt;", laquo_space: "&lt;&lt; ", raquo_space: " &gt;&gt;" },
       syntax_highlighter: "rouge", syntax_highlighter_opts: { css_class: "highlight", formatter: code_formatter }
     )
     html = document.to_html
+    # A placeholder written as <name> outside backticks reaches the page as a
+    # tag the browser hides, and the sentence loses its word.
+    unknown = html.scan(/<([A-Za-z][\w-]*)[\s>]/).flatten.map(&:downcase).uniq - HTML_ELEMENTS
+    raise "the page would carry a tag browsers do not know, which hides its text: #{unknown.map { |tag| "<#{tag}>" }.join(', ')}; write it in backticks" unless unknown.empty?
+
     seen = Hash.new(0)
     html = html.gsub(%r{<h([1-6])>(.*?)</h\1>}m) { "<h#{$1} id=\"#{slug($2, seen)}\">#{$2}</h#{$1}>" }
     html.gsub(%r{<blockquote>\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(?:<br />)?\s*}) do
@@ -383,15 +401,15 @@ if $PROGRAM_NAME == __FILE__
     exit 2
   end
   begin
-    answers = Site.record_answers
     commit, status = Open3.capture2("git", "-C", Site::ROOT, "rev-parse", "HEAD")
     raise "git rev-parse HEAD failed, so the page cannot say what it was built from" unless status.success? && commit.strip.match?(/\A\h{40}\z/)
 
     commit = commit.strip
+    answers = Site.record_answers
     out = File.expand_path(ARGV[0])
     written = Site.build(out: out, answers: answers, commit: commit)
     puts "wrote the site to #{out}: #{written.size} files at #{commit[0, 7]}, #{answers.size} answers recorded from #{Site::SAMPLE_APP}"
-  rescue RuntimeError => e
+  rescue StandardError => e
     warn "site: #{e.message}"
     exit 1
   end

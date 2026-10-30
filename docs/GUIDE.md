@@ -1593,6 +1593,7 @@ config.introspectors = %i[schema models routes gems auth api]
 - `.cursor/rules/*.mdc` - loaded based on `alwaysApply` and `globs` settings
 
 **MDC rule activation modes:**
+
 | Mode | When it activates |
 |------|-------------------|
 | `alwaysApply: true` | Every conversation (project overview, root files off) |
@@ -1646,6 +1647,7 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 - `.github/instructions/*.instructions.md` - path-specific, activated by `applyTo` glob (with `name:` and `description:` frontmatter)
 
 **applyTo patterns:**
+
 | Pattern | When it activates |
 |---------|-------------------|
 | `app/models/**/*.rb` | Editing model files |

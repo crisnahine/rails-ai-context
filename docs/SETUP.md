@@ -308,12 +308,12 @@ which leaves the committed file as it is.
   session. Run `gem cleanup` only after that: a running server loads its files
   as it needs them, so once its copy is gone, a call that needs a file it has
   not loaded yet answers with a request to reconnect it.
-- **Removing it** from one app is `claude plugin disable
-  rails-ai-context@rails-ai-context --scope local` run there, which wins over
-  your own and the committed settings for every session the local setting
-  reaches ("Where it runs"). Taking an install out is `claude plugin uninstall
-  rails-ai-context@rails-ai-context --scope <scope>`, with the scope it went in
-  at, run in the folder it was installed from: once for a user install, once
+- **Removing it** from one app is
+  `claude plugin disable rails-ai-context@rails-ai-context --scope local` run
+  there, which wins over your own and the committed settings for every session
+  the local setting reaches ("Where it runs"). Taking an install out is
+  `claude plugin uninstall rails-ai-context@rails-ai-context --scope <scope>`,
+  with the scope it went in at, run in the folder it was installed from: once for a user install, once
   per project for a project or local one. A marketplace added from a local
   folder or file runs the plugin with no install, so there only the disable
   turns it off. The gem's `uninstall` leaves Claude Code's

@@ -380,7 +380,7 @@ A function called by a quoted name (`"upper"('x')`, `` `sleep`(0) ``) is refused
 
 On MySQL and MariaDB `EXPLAIN FOR CONNECTION` shows the plan of the statement another session is running, so it is refused. `EXPLAIN` of a statement of your own runs.
 
-### "The columns of the <name> database could not be read"
+### "The columns of the `<name>` database could not be read"
 
 The secret column rule reads the database's columns before any query runs. When that read fails and, for the primary, the cached schema holds no tables either, no query runs on that database. The read is a few statements whatever the number of tables, six at most, so an account that cannot read the catalogue cannot use `rails_query`.
 
@@ -392,7 +392,7 @@ Another connection holds a lock on the SQLite database, such as a write transact
 
 On SQLite `rails_query` runs a statement in a process of its own, which it ends at `query_timeout`. That process cannot see what the app's own connection alone holds. So the statement runs on the app's connection, with this note, on an in-memory database, on a platform without `fork`, inside an open transaction, and when it needs a table, a function, a module, a collation or an encryption key only that connection has. While the connection holds a temp object or an attachment, it runs there too when it names a temp object, the `temp` schema, `sqlite_temp_master` or an attached database, or calls a pragma function (`pragma_table_info(...)`, `pragma_table_list` and the rest) or `dbstat`. A name is matched anywhere in the statement, in any letter case and inside a string too. A statement that returns rows slowly still ends a few rows after `query_timeout`. One long step cannot be ended there.
 
-### "The reads rails_query makes before a statement ... took the whole <N> second timeout"
+### "The reads rails_query makes before a statement ... took the whole `<N>` second timeout"
 
 Before a statement runs, `rails_query` reads the columns of the schema and, on PostgreSQL, the statement's plan. Those reads share one `query_timeout`, and here they used all of it, so the statement was not run. A table another session has locked is the usual cause. Run the query again when the lock is gone, or raise `config.query_timeout`. "The statement ran, and the read that traces its result columns ..." is the same limit met after the statement: its rows are not shown.
 
@@ -452,7 +452,7 @@ The file is read from the app root, once, at boot, and an initializer does not r
 
 1. You are inside the app, or passed `--app-path`. A command run from a subdirectory reads the config of the app root it walks up to, and names it on stderr.
 2. The key is one the gem knows. An unknown key warns on stderr and is ignored.
-3. The file holds `key: value` settings. A file that holds a bare string, a list or a number is ignored with "WARNING: <path>: the file holds no `key: value` settings. Ignored."
+3. The file holds `key: value` settings. A file that holds a bare string, a list or a number is ignored with "WARNING: `<path>`: the file holds no `key: value` settings. Ignored."
 4. The file is readable and parses. Corrupted YAML degrades gracefully with a warning.
 
 ---
