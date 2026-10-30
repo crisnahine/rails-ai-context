@@ -63,8 +63,8 @@ end
 RSpec.describe "rails-ai-context.gemspec" do
   let(:spec) { Gem::Specification.load(File.expand_path("../../../rails-ai-context.gemspec", __dir__)) }
 
-  it "leaves the README demos and the CI gemfiles out of the packaged gem" do
-    expect(spec.files.grep(%r{\A(demo|gemfiles)/})).to be_empty
+  it "leaves the CI gemfiles, the website and its build out of the packaged gem" do
+    expect(spec.files.grep(%r{\A(gemfiles|site|scripts)/})).to be_empty
   end
 
   # A tool that indexes an app's bundle reads AGENTS.md or CLAUDE.md in a gem's directory as instructions about that app.
@@ -83,12 +83,14 @@ RSpec.describe "rails-ai-context.gemspec" do
     expect(spec.files).to include(*links_from_package(File.expand_path("../../..", __dir__)))
   end
 
-  # Each relative link of a packaged Markdown file, as a path from the repository root.
+  # Each relative link or image of a packaged Markdown file, as a path from the
+  # repository root. A packaged README is read where its images are not.
   def links_from_package(root)
     spec.files.grep(/\.md\z/).flat_map do |doc|
-      File.read(File.join(root, doc)).scan(/\]\(((?!https?:|mailto:|#)[^)#\s]+)/).flatten.map do |link|
-        File.expand_path(link, File.join(root, File.dirname(doc))).delete_prefix("#{root}/")
-      end
+      text = File.read(File.join(root, doc))
+      links = text.scan(/\]\(((?!https?:|mailto:|#)[^)#\s]+)/).flatten
+      links += text.scan(/\b(?:src|srcset|href)="((?!https?:|mailto:|#)[^"#\s]+)"/).flatten
+      links.map { |link| File.expand_path(link, File.join(root, File.dirname(doc))).delete_prefix("#{root}/") }
     end.uniq
   end
 

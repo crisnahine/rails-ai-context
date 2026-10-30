@@ -69,7 +69,9 @@ Gem::Specification.new do |spec|
     # What a user of the gem runs or reads, and the files those docs link to;
     # assistant files (AGENTS.md, CLAUDE.md) would read as instructions about the app that bundles it.
     linked = %w[
+      CODE_OF_CONDUCT.md
       CONTRIBUTING.md
+      docs/adr/0002-static-tier-declared-not-detected.md
       docs/adr/0005-workspace-mcp-entries.md
       docs/adr/0006-strong-params-resolve-as-ruby-runs.md
       docs/adr/0007-every-install-question-has-a-flag.md

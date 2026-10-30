@@ -1,0 +1,16 @@
+<%= form_with model: article do |f| %>
+  <% if article.errors.any? %>
+    <ul>
+      <% article.errors.full_messages.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  <% end %>
+  <%= f.label :title %>
+  <%= f.text_field :title %>
+  <%= f.label :body %>
+  <%= f.text_area :body %>
+  <%= f.label :status %>
+  <%= f.select :status, Article.statuses.keys.map { |s| [ s.humanize, s ] } %>
+  <%= f.submit %>
+<% end %>

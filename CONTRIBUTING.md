@@ -134,6 +134,30 @@ Adding or removing a fixture model means changing that spec in the same commit.
 `docs/RELEASING.md` is the checklist. The tag publishes, not the merge, and the
 release gate wants a green E2E run for the tagged commit before it will start.
 
+## The website
+
+`site/` is the page at <https://crisnahine.github.io/rails-ai-context/>, and `scripts/site.rb` fills it
+in from the repository: the install prompt from `docs/PROMPTS.md`, the tool list and the counts from the
+registry and the introspector map, every page under `docs/` rendered with the same layout, and the
+answers it shows recorded by running the gem's own binary against `site/sample_app` in the static tier.
+Change the words in `site/index.html` and the facts where they live. To see it before pushing:
+
+```bash
+bundle exec ruby scripts/site.rb _site
+python3 -m http.server 8000 -d _site
+```
+
+Any static file server will do, and a server it has to be: a browser loads no module script from a
+`file://` page. The script writes only into a new directory or one it wrote before. A placeholder
+nothing fills, a heading a quoted block has lost, a tool `docs/TOOLS.md` files under no category, a
+docs page `Site::DOC_NAV` does not place, or a tool call that fails stops the build, and
+`spec/site_spec.rb` names which. `.github/workflows/pages.yml` builds the site on every pull request,
+since a change to the gem changes the answers on the page, and deploys it from `main`, where the
+repository's Pages source has to be GitHub Actions.
+
+The sample app is a fixture with no `config/environment.rb`, so every tool reads it without booting. A change to it changes the answers on the page, and the README quotes some of
+them, so check both.
+
 ## Reporting Bugs
 
 Open an issue at https://github.com/crisnahine/rails-ai-context/issues with:

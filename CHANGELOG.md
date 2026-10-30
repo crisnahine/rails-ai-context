@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The website is built from the repository.** `scripts/site.rb` fills in
+  `site/index.html` with the install prompt from `docs/PROMPTS.md`, the tool
+  list and the counts from the registry, and the answers it shows, recorded by
+  running the gem's own binary against the sample app in `site/sample_app`;
+  every page under `docs/` is rendered beside it with the same layout, at the
+  same URLs as before, except the docs index, which moves from the site root
+  to `docs.html`. `.github/workflows/pages.yml` builds it on a pull
+  request and deploys it from `main`, which replaces the Jekyll build of
+  `docs/`. The README leads with a figure of real answers in place of the
+  GIFs, which are gone with `demo/`. The packaged gem gains the two files the
+  README now links: `CODE_OF_CONDUCT.md` and ADR 0002.
+
 ## [5.38.2] - 2026-10-29
 
 ### Added

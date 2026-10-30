@@ -1,0 +1,21 @@
+<% content_for :title, @article.title %>
+<article>
+  <h1><%= @article.title %></h1>
+  <p><%= @article.author.display_name %> · <%= published_on(@article) %></p>
+  <%= simple_format @article.body %>
+</article>
+
+<section>
+  <h2><%= t(".comments") %> (<%= t(".comment_count", count: @article.comments_count) %>)</h2>
+  <%= turbo_frame_tag "comments" do %>
+    <%= render @comments %>
+  <% end %>
+
+  <% if user_signed_in? %>
+    <%= form_with model: [ @article, @comment ], data: { controller: "comment-form", comment_form_max_value: 2000 } do |f| %>
+      <%= f.text_area :body, data: { comment_form_target: "body", action: "input->comment-form#update" } %>
+      <p data-comment-form-target="counter"></p>
+      <%= f.submit t("comments.form.submit"), data: { comment_form_target: "submit" } %>
+    <% end %>
+  <% end %>
+</section>

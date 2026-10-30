@@ -1,0 +1,18 @@
+en:
+  articles:
+    index:
+      title: "Latest articles"
+      empty: "Nothing published yet."
+    show:
+      comments: "Comments"
+      comment_count:
+        one: "1 comment"
+        other: "%{count} comments"
+  comments:
+    form:
+      submit: "Post comment"
+  admin:
+    articles:
+      publish:
+        queued: "Publishing %{title}"
+        not_ready: "%{title} is not ready to publish"

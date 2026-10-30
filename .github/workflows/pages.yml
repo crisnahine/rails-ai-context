@@ -1,0 +1,76 @@
+name: Pages
+
+# The website: site/ filled in by scripts/site.rb from the commit it is built
+# at, the answers it shows recorded by running the gem against site/sample_app,
+# and every docs/ page rendered beside it. Every pull request builds it and
+# publishes nothing, since a change to the gem changes the answers on the
+# page. The repository's Pages source has to be "GitHub Actions" for the
+# deploy job to publish.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref at a time: a main deploy is never cancelled and shares its
+# group with nothing a run on another branch could queue behind, and a pull
+# request's build is superseded by its next push.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      # The trace answer on the page should be the one most users get, and
+      # search_code takes the ripgrep path where there is one.
+      - name: Ensure ripgrep
+        run: command -v rg || sudo apt-get install -y ripgrep
+
+      # Runs the gem's own binary against the sample app for each answer the
+      # page shows, then writes the page, the docs and the assets into _site.
+      # A placeholder nothing fills or a tool call that fails stops it.
+      - name: Build the site
+        env:
+          RAILS_AI_CONTEXT_NO_UPDATE_CHECK: "1"
+        run: bundle exec ruby scripts/site.rb _site
+
+      - name: Upload the site
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  # Holds the only write token in this workflow and runs nothing but the
+  # deploy action: the job that installed gems and ran the tools is done.
+  deploy:
+    name: Deploy
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
