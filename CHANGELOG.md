@@ -28,13 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commented-out loop names, and read `local_assigns` and `defined?` only from
   Ruby. `formats:` and `partial:` inside a string value, a jbuilder line's
   trailing comment and a Turbo Stream builder named in a comment no longer
-  move a render site. `rails_get_view` prints the form builders and
-  components the views section counted, which it never printed before.
+  move a render site. `rails_get_view` prints the form builders (with
+  counts) and components the views it lists use, which it never printed
+  before.
   `rails_get_helper_methods` lists every module an `include` names
   (`include A, B`, `include Rails.application.routes.url_helpers`) and none a
   heredoc holds.
 - **Turbo** (`rails_get_turbo_map`). A frame, stream action or Drive
-  attribute inside an ERB comment is not counted. A frame's `src:` and a
+  attribute inside an ERB comment, or a Ruby comment in a code tag, is not
+  counted. A frame's `src:` and a
   subscription's parts on the next line of a wrapped call are read, so the
   stream wiring stops warning about a mismatch that is not there. A
   permanent element's id comes from its `id` attribute, never `data-id`, and
@@ -60,16 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Validate** (`rails_validate`, rails level). A route or helper inside a
   heredoc or `=begin` block no longer silences a missing-route warning, and
   every line of a multi-line `helper_method` counts. A controller set through
-  `data: { controller: }` is checked. An email address in a string is no
-  ivar, and a comparison is no assignment. A commented broadcast or
-  subscription is not checked. The memory warning reads the call: a scope or
-  association chain (`Post.active.map`, `current_user.posts.each`) warns, and
-  a chain over `params`, a string, a literal, or a call that takes arguments
-  (`JSON.parse(body).map`, `Dir.glob(x).map`) does not.
+  `data: { controller: }` is checked, and one in an HTML comment is not. An
+  email address in a string is no ivar, and a comparison is no assignment. A
+  commented broadcast or subscription is not checked. The memory warning
+  reads the call: a scope or association chain (`Post.active.map`,
+  `current_user.posts.each`) warns, and a chain over `params`, a string, a
+  literal, or a call that takes arguments (`JSON.parse(body).map`,
+  `Dir.glob(x).map`) does not.
 - **analyze_feature.** Tag-helper `data: { controller: }` is read, ERB inside
-  `data-controller` gives no names, the test count reads `it(...)`,
-  `specify` and `it { }` one-liners and skips heredoc text, and every
-  `ENV.fetch` form is listed.
+  `data-controller` gives no names and an HTML-commented one gives none, the
+  test count reads `it(...)`, `specify` and `it { }` one-liners and skips
+  heredoc text, and every `ENV.fetch` form is listed.
 - **Conventions and test info** (`rails_get_config(section:"conventions")`,
   `rails_get_test_info`). The create action ends at its own `end` inside a
   namespace module, and commented code adds no permission check, rescue,
@@ -96,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config and data files.** The credentials example is read as YAML, so a
   block scalar adds no key and nested keys keep their full path; one that is
   not YAML is read line by line, by indentation. A
-  `=begin` block sets no default locale. Shards come from the database list,
+  `=begin` block sets no default locale. `::ENV[...]`, `::ENV.fetch` and
+  `ENV["X"] ||=` count as ENV reads. Shards come from the database list,
   in the guide's layout too, and `shard_count:` is no shard. A computed puma
   setting reads as unknown, while `ENV[...] || 2` keeps its default. A
   commented health route is no health check, an `ENV.fetch` default names the
