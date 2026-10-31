@@ -429,6 +429,12 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
 
         expect(stimulus_warnings(template)).to eq([ %(data-controller="ghost" - Stimulus controller not found) ])
       end
+
+      it "checks no controller an HTML comment holds, and still checks a tag helper's that ERB inside one runs" do
+        template = %(<!-- <div data-controller="legacy-chart"></div> -->\n<!-- <%= tag.div data: { controller: "live" } %> -->\n)
+
+        expect(stimulus_warnings(template)).to eq([ %(data-controller="live" - Stimulus controller not found) ])
+      end
     end
 
     context "a model that broadcasts to a Turbo Stream channel" do

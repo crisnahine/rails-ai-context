@@ -504,6 +504,8 @@ RSpec.describe RailsAiContext::Tools::GetView do
           FileUtils.mkdir_p(File.join(root, "app/views/posts"))
           File.write(File.join(root, "app/views/posts/new.html.erb"), %(<%= form_with model: @post do |f| %><% end %>\n<%= render AlertComponent.new %>\n))
           File.write(File.join(root, "app/views/posts/edit.html.erb"), %(<%= form_with model: @post do |f| %><% end %>\n))
+          FileUtils.mkdir_p(File.join(root, "app/views/comments"))
+          File.write(File.join(root, "app/views/comments/index.html.erb"), %(<%= form_for @comment do |f| %><% end %>\n<p>none</p>\n))
           @root = root
           example.run
         end
@@ -522,6 +524,20 @@ RSpec.describe RailsAiContext::Tools::GetView do
         text = described_class.call(controller: "posts").content.first[:text]
 
         expect(text).to include("**Form builders:** form_with (2)\n")
+        expect(text).to include("**ViewComponents:** AlertComponent\n")
+      end
+
+      it "counts only the views a controller filter lists" do
+        text = described_class.call(controller: "comments").content.first[:text]
+
+        expect(text).to include("**Form builders:** form_for (1)\n")
+        expect(text).not_to include("form_with", "ViewComponents")
+      end
+
+      it "counts every view when nothing filters the list" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**Form builders:** form_with (2), form_for (1)\n")
         expect(text).to include("**ViewComponents:** AlertComponent\n")
       end
     end

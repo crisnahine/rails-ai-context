@@ -915,6 +915,13 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(partials_in("teaser.html.erb", source)).to eq([ "products/row" ])
     end
 
+    it "reads a partial a call inside a hash renders, and one a hash a variable holds names" do
+      source = %(<%= tag.div id: "modal", data: { html: render_to_string(partial: "articles/form") } %>\n) +
+               %(<% opts = { partial: "comments/comment", collection: @comments } %><%= render opts %>\n)
+
+      expect(partials_in("modal.html.erb", source)).to include("articles/form", "comments/comment")
+    end
+
     it "keeps reading past an escaped quote in an argument" do
       expect(partials_in("escaped.html.erb", %{<%= render(object: "a \\" (b", partial: "real") %>\n})).to eq([ "real" ])
     end

@@ -145,10 +145,7 @@ module RailsAiContext
           all_dirs = view_groups(templates, partials)
           lines = views_header_lines(templates, partials, layouts, controller: controller)
 
-          # Form builders and component usage from views introspector
-          views = RailsAiContext::Payload.section(cached_context, :views) || {}
-          form_builders = views[:form_builders_detected]
-          component_usage = views[:component_usage]
+          form_builders, component_usage = form_helpers_and_components(controller, templates.keys + partials.keys, sources)
           if form_builders&.any?
             lines << "**Form builders:** #{form_builders.map { |name, count| "#{name} (#{count})" }.join(', ')}" << ""
           end
@@ -284,6 +281,19 @@ module RailsAiContext
 
       # Layouts sit outside the template and partial maps, so a heading naming
       # only those two numbers never added up to the files under app/views.
+      # The views section counts the whole app; a controller filter lists fewer views, so those are counted.
+      private_class_method def self.form_helpers_and_components(controller, names, sources)
+        unless controller
+          views = RailsAiContext::Payload.section(cached_context, :views) || {}
+          return [ views[:form_builders_detected], views[:component_usage] ]
+        end
+
+        reader = Introspectors::ViewIntrospector
+        counts = Hash.new(0)
+        names.each { |name| reader.form_builders_in(name, sources[name]).each { |helper, count| counts[helper] += count } }
+        [ reader.ranked(counts), names.flat_map { |name| reader.components_in(name, sources[name]) }.uniq.sort ]
+      end
+
       private_class_method def self.views_header_lines(templates, partials, layouts, controller: nil)
         parts = [ count_phrase(templates.size, "template"), count_phrase(partials.size, "partial") ]
         parts << count_phrase(layouts.size, "layout") if layouts.any?

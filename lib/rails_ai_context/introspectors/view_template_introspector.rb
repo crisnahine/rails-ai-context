@@ -108,7 +108,7 @@ module RailsAiContext
 
       # The markup and the Ruby in its tags read apart; a name an ERB tag writes into the attribute is left out.
       def self.template_stimulus_refs(source)
-        markup = source.gsub(RailsAiContext::ErbSource::TAG, "<%%>")
+        markup = without_html_comments(source).gsub(RailsAiContext::ErbSource::TAG, "<%%>")
         (stimulus_refs(markup) + stimulus_refs(RailsAiContext::ErbSource.tag_bodies(source))).reject { |name| name.include?("<%") }.uniq
       end
 
@@ -440,14 +440,14 @@ module RailsAiContext
         end
         # A render call's own arguments were read above, where a `partial:`
         # key nested in its locals is no partial of its own.
-        code = hashes = nil
+        code = nil
         content.to_enum(:scan, RenderCalls::PARTIAL_ARG).each do
           match = Regexp.last_match
           next if spans.any? { |span| span.cover?(match.begin(0)) }
 
           code ||= ruby_code(content, path)
           next if code[match.begin(0)] == " "
-          next if (hashes ||= RailsAiContext::Brackets.hash_literal_ranges(code)).any? { |range| range.cover?(match.begin(0)) }
+          next if RenderCalls.nested_hash_key?(code, match.begin(0))
 
           refs << match[2] if match[2].match?(RenderCalls::PARTIAL_NAME)
         end

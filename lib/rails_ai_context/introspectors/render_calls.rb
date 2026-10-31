@@ -109,6 +109,27 @@ module RailsAiContext
         path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS) ? :ruby : :markup
       end
 
+      CLOSERS = { ")" => "(", "]" => "[", "}" => "{" }.freeze
+
+      # Whether the key at `at` belongs to a hash that is another key's value (`data: { partial: }`), never a
+      # render's option. `code` is `code_text` output, whose blanked strings and comments hold no brackets.
+      def self.nested_hash_key?(code, at)
+        depth = 0
+        (at - 1).downto(0) do |i|
+          char = code[i]
+          if CLOSERS.key?(char)
+            depth += 1
+          elsif CLOSERS.value?(char)
+            next depth -= 1 if depth.positive?
+            return false unless char == "{" && RailsAiContext::Brackets.operand_start?(code, i)
+
+            before = code[0...i].rstrip
+            return !before.end_with?("::") && (before.end_with?(":") || before.end_with?("=>"))
+          end
+        end
+        false
+      end
+
       # The template with what Ruby never runs blanked, every offset kept: ERB through `ErbSource.masked`, parsing only
       # the tags that hold `word`, a Ruby template whole. HAML and Slim stay whole, and so does Ruby that cannot be read.
       def self.code_text(content, kind, word)

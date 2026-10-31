@@ -653,6 +653,30 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
       expect(text_for("reviews/review")).not_to include("archived.turbo_stream.erb")
     end
+
+    it "keeps a render whose partial sits in a hash literal or in a call inside one" do
+      FileUtils.mkdir_p(File.join(@root, "app/controllers"))
+      File.write(File.join(@root, "app/controllers/reviews_controller.rb"), <<~RUBY)
+        class ReviewsController < ApplicationController
+          def show
+            render json: { html: render_to_string(partial: "reviews/review", locals: { review: @review }) }
+          end
+
+          def preview
+            render({ partial: "reviews/review", locals: { review: @review } })
+          end
+
+          def card
+            opts = { partial: "reviews/review", locals: { review: @review } }
+            render opts
+          end
+        end
+      RUBY
+
+      text = text_for("reviews/review")
+
+      expect(text.scan(/reviews_controller\.rb:\d+/).uniq).to contain_exactly("reviews_controller.rb:3", "reviews_controller.rb:7", "reviews_controller.rb:11")
+    end
   end
 
   # RenderingHelper#render: after a positional name the hash that follows is

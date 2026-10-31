@@ -539,7 +539,7 @@ module RailsAiContext
       private_class_method def self.partial_arg_sites(content, relative, names, skip_spans: [], code: false)
         lines = content.lines
         sites = []
-        blocks = hashes = nil
+        blocks = nil
         reader = Introspectors::RenderCalls
         kind = reader.template_kind(content, relative)
         ruby_code = reader.code_text(content, kind, /partial/) unless kind == :markup
@@ -549,7 +549,7 @@ module RailsAiContext
           next unless names.include?(match[2])
           next if skip_spans.any? { |from, to| at >= from && at < to }
           next if ruby_code && ruby_code[at] == " "
-          next if ruby_code && (hashes ||= RailsAiContext::Brackets.hash_literal_ranges(ruby_code)).any? { |range| range.cover?(at) }
+          next if ruby_code && reader.nested_hash_key?(ruby_code, at)
 
           # The line the call starts on, which a trailing comma carries onto this one.
           start = content[0...at].count("\n")
