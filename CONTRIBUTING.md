@@ -72,6 +72,7 @@ The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI executi
 - Target Ruby 3.1 (the gem's floor). Ruby 3.2+ features (`Data.define`, `Regexp` `timeout:`, etc.) need a runtime-guarded fallback so 3.1 keeps working
 - Support Rails 7.0 through 8.1. Guard Rails 7.1+ APIs with `respond_to?`/`defined?` so introspectors degrade cleanly on 7.0
 - Every introspector returns a Hash. Let a failure raise: the loop in `Introspector#call` records it as `{ error: msg }` and warns, so no introspector wraps its own errors
+- Read Ruby source with Prism or a listener. A regex kept over Ruby runs on `RubySource.code_only` or `RubySource.without_comments` text, so a comment, a string or a heredoc cannot match (the AST-vs-regex rule in `docs/INTROSPECTORS.md`)
 - MCP tools return `MCP::Tool::Response` objects
 - All tools must be prefixed with `rails_` and annotated as read-only
 

@@ -99,7 +99,7 @@ Redaction treats a value under a secret-named key as a secret unless it is clear
 
 ### `rails_get_edit_context`
 
-Method-aware code extraction with surrounding class context. Every line returned passes through redaction, so in a file no pattern names a string literal under a secret-named key (8+ characters, unless it is clearly not a credential: a message, URL, path, placeholder, version, date, header, env or parameter name, or a translation) or in a known credential format (vendor tokens, JWTs, a PEM or PGP private key) reads as `[FILTERED]`; code, ENV lookups, ERB and placeholders are never rewritten, so the text stays usable as the text to replace. `near` is looked for in the lines as they are returned, so text only a filtered value holds is not found, and the context line names the enclosing class and method from those lines too.
+Method-aware code extraction with surrounding class context. Every line returned passes through redaction, so in a file no pattern names a string literal under a secret-named key (8+ characters, unless it is clearly not a credential: a message, URL, path, placeholder, version, date, header, env or parameter name, or a translation) or in a known credential format (vendor tokens, JWTs, a PEM or PGP private key) reads as `[FILTERED]`; code, ENV lookups, ERB and placeholders are never rewritten, so the text stays usable as the text to replace. `near` is looked for in the lines as they are returned, so text only a filtered value holds is not found, and the context line names the enclosing method from those lines too, beside the class or module the match sits in (a `class << self` body counts as its class's).
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -332,7 +332,7 @@ searches every route, so `controller:"devise/sessions"` or
 
 ### `rails_get_view`
 
-View templates with instance variables, Turbo frames, Stimulus controllers, partial locals. Includes schema hints for detected ivars. A template directly under `app/views` is grouped as `(app/views root)`, which `path:` reaches and `controller:` does not.
+View templates with instance variables, Turbo frames, Stimulus controllers, partial locals. Includes schema hints for detected ivars. At `standard` detail the listing opens with the form builders the views call, each with its count (`form_with (2)`), and the ViewComponents they render, from the `views` introspector of the default `full` preset. In an ERB or Ruby template (Phlex, jbuilder) only the Ruby it runs counts, so a render or a helper call inside a comment, a string or page text is not listed. A template directly under `app/views` is grouped as `(app/views root)`, which `path:` reaches and `controller:` does not.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -823,7 +823,7 @@ Log correlation reads the last megabyte of the current environment's log, the wi
 
 PR/commit review with per-file context and warnings.
 
-A removed validation is a `validates` line the diff takes out when no line it adds validates the same attribute; an edited `validates` line is not one.
+A removed validation is a `validates` line the diff takes out, or moves into a comment, a heredoc or an `=begin` block, when no line it adds validates the same attribute; an edited `validates` line is not one.
 
 A changed migration lists the tables it affects: the table each schema method takes first (`add_column`, `remove_columns`, `rename_index`, `add_foreign_key`, ...), every table `drop_table` drops, a renamed table's new name, and for `create_join_table` and `drop_join_table` the join table, named as Rails names it, and the two tables it joins. The first two are shown with the columns the schema has now.
 
