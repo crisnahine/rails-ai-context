@@ -21,11 +21,9 @@ module RailsAiContext
       # Releases before v5.14.0 wrote the JSON cache's note with a Unicode dash.
       EARLIER_GITIGNORE_NOTES = { Program::JSON_CACHE => "# rails-ai-context (JSON cache \u2014 markdown files should be committed)" }.freeze
 
-      # A path mark_gitignore appended, with its comment and the blank line
-      # above. In bytes, as .gitignore is read: a note may hold a non-ASCII dash.
-      GITIGNORE_ENTRY = Regexp.union((Program::GITIGNORE_NOTES.to_a + EARLIER_GITIGNORE_NOTES.to_a).map do |path, note|
-        Regexp.new("(?:^\\r?\\n)?^#{Regexp.escape(note.b)}\\r?\\n#{Regexp.escape(path)}(?:\\r?\\n|\\z)".b)
-      end)
+      # A path mark_gitignore appended, or an earlier release did, with its comment and the blank line above.
+      GITIGNORE_ENTRY = Program.gitignore_entry(Program::GITIGNORE_NOTES.to_a + EARLIER_GITIGNORE_NOTES.to_a +
+                                                Program::RETIRED_GITIGNORE_NOTES.to_a)
 
       # `app_roots:` as for Program.cleanup_removed_tools: a folder of apps
       # keeps its MCP configs in `root` and the rest in each app. `kept`

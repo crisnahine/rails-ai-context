@@ -75,7 +75,7 @@ release waits for all of them.
 
 On Windows:
 
-- The MCP configs start the server through `cmd /c`, since a gem's
+- The MCP configs start the server through `cmd /d /c`, since a gem's
   executables there are batch files that a client starting its server
   without a shell does not run. See [GUIDE.md](GUIDE.md#mcp-server-setup)
   for teams on both Windows and macOS or Linux.
@@ -593,8 +593,9 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   engines and gems draw into the app's table are read only with the app booted.
 - **A folder of apps is served from the folder.** `init` run in a folder of
   apps writes entries that name each app relative to that folder, because
-  Claude Code, Codex and OpenCode start a server in the folder they were
-  launched in, and Cursor and VS Code expand `${workspaceFolder}`. A tool
+  Claude Code, Codex, OpenCode, Copilot CLI and Cursor start a server in the
+  folder they were launched in (the Cursor editor, in the project's folder),
+  and only VS Code expands `${workspaceFolder}`. A tool
   launched inside one of the apps still reads the folder's config above it,
   and its servers then start where the relative path misses. Every server in
   the folder also runs under the Ruby the version manager picks in the folder,

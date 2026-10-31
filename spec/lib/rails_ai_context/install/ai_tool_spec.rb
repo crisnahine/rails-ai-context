@@ -44,8 +44,8 @@ RSpec.describe RailsAiContext::Install::AiTool do
         name: "Cursor",
         files: "AGENTS.md + .cursor/rules/",
         context_paths: %w[AGENTS.md .cursor/rules],
-        mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json, folder_variable: "${workspaceFolder}",
-                      client: "Cursor", jsonc: false },
+        mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json, legacy_folder_variable: "${workspaceFolder}",
+                      client: "Cursor", jsonc: false, launcher: true },
         legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ]
       },
       copilot: {
@@ -61,7 +61,7 @@ RSpec.describe RailsAiContext::Install::AiTool do
         files: "AGENTS.md",
         context_paths: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
         mcp_config: { path: "opencode.json", root_key: "mcp", format: :opencode_json, client: "OpenCode", jsonc: true,
-                      env_key: "environment" },
+                      env_key: "environment", schema: "https://opencode.ai/config.json" },
         legacy_paths: []
       },
       codex: {
@@ -121,6 +121,14 @@ RSpec.describe RailsAiContext::Install::AiTool do
     it "feeds the MCP config table" do
       expect(RailsAiContext::McpConfigGenerator::TOOL_CONFIGS)
         .to eq(described_class.mcp_configs_by_key)
+    end
+
+    # VS Code reads .vscode/mcp.json; Copilot CLI reads .github/mcp.json and never VS Code's file.
+    it "gives GitHub Copilot a config per client family, and expands a tool to its configs' keys" do
+      expect(described_class.find(:copilot).mcp_configs.keys).to eq(%i[copilot copilot_cli])
+      expect(described_class.mcp_configs_by_key[:copilot_cli]).to include(path: ".github/mcp.json", root_key: "mcpServers", entry_defaults: { "tools" => [ "*" ] })
+      expect(described_class.mcp_config_keys(%i[copilot codex])).to eq(%i[copilot copilot_cli codex])
+      expect(described_class.mcp_config_keys(%i[copilot_cli])).to eq(%i[copilot_cli])
     end
 
     it "feeds the legacy cleanup list" do

@@ -35,7 +35,7 @@ RSpec.describe "AI tool identity ownership" do
   it "derives doctor's MCP config paths from the table" do
     paths = RailsAiContext::Doctor.send(:mcp_config_checks).transform_values { |c| c[:path] }
 
-    expect(paths).to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.mcp_config[:path] ] })
+    expect(paths).to eq(RailsAiContext::Install::AiTool.mcp_configs_by_key.transform_values { |c| c[:path] })
   end
 
   it "builds doctor's MCP config table once, frozen" do

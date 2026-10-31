@@ -144,7 +144,7 @@ each tool you picked:
 
 | Claude Code | Cursor | GitHub Copilot | OpenCode | Codex CLI |
 |:---|:---|:---|:---|:---|
-| New session in the app's folder, approve `rails-ai-context`. Check with `/mcp` | Restart, turn it on under MCP in Customize | Trust the workspace, send a chat message. Check with "MCP: List Servers" | Restart in the app's folder. Check with `opencode mcp list` | Trust the project, start a new session. Check with `/mcp` |
+| New session in the app's folder, approve `rails-ai-context`. Check with `/mcp` | Restart, turn it on under MCP in Customize | Trust the workspace, send a chat message. Check with "MCP: List Servers". Copilot CLI: trust the folder, check with `copilot mcp list` | Restart in the app's folder. Check with `opencode mcp list` | Trust the project, start a new session. Check with `/mcp` |
 
 Then ask something only your app knows, such as *"what columns does the users table have?"*, and watch
 it call `rails_get_schema` instead of guessing. [Every other setup has a prompt](docs/PROMPTS.md): no
@@ -412,7 +412,7 @@ redacts secret columns, and on PostgreSQL plans the statement first and refuses 
 secret column by another name.
 
 **What does it write into my repository?** The MCP config for each AI tool you picked, one root
-context file with a copy for Copilot, rules files per tool, its own config and two `.gitignore` lines.
+context file with a copy for Copilot, rules files per tool, its own config and a `.gitignore` line.
 A re-run keeps your lines and adds what is missing; `uninstall` takes back only what it wrote. A team
 that wants no AI files in the repo can skip the install: the tools work with none of it.
 
@@ -422,8 +422,8 @@ Outside development and test it refuses every request with a 403 unless you set
 
 **Which AI tools?** Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI get context files and
 MCP config written for them. Any other MCP client, such as Claude Desktop, Windsurf, Zed or a JetBrains
-IDE, gets an entry from `rails-ai-context mcp-entry`. A tool with no MCP at all gets the CLI setup,
-where the context files name the shell commands.
+IDE (Copilot or AI Assistant), gets an entry from `rails-ai-context mcp-entry`. A tool with no MCP at all
+gets the CLI setup, where the context files name the shell commands.
 
 ## What it will not do
 
@@ -435,7 +435,7 @@ where the context files name the shell commands.
   boots one. [Compatibility](docs/COMPATIBILITY.md) has the CI matrix: 17 Ruby and Rails pairs on
   Linux, plus macOS and Windows legs.
 - **Time-limit `query` on SQLite under Windows.** There is no `fork` there, so that query runs without
-  its limit, and the MCP configs start the server through `cmd /c`, since a gem's executables on
+  its limit, and the MCP configs start the server through `cmd /d /c`, since a gem's executables on
   Windows are batch files.
 
 ## Install options and configuration
@@ -450,7 +450,7 @@ Three setups, picked at install time with a flag, or afterwards with the
 | **MCP only** | MCP config only | `--mcp-only` | Teams that keep their own `CLAUDE.md` / `AGENTS.md` |
 
 **MCP over stdio** is the default. Each AI tool gets its own config file (`.mcp.json`,
-`.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`) that starts
+`.cursor/mcp.json`, `.vscode/mcp.json` and `.github/mcp.json`, `opencode.json`, `.codex/config.toml`) that starts
 `bundle exec rails-ai-context serve`, or `rails-ai-context serve` standalone. **MCP over HTTP** mounts
 the server inside your app:
 

@@ -94,21 +94,22 @@ RSpec.describe "E2E: the app a command reads", type: :e2e do
     end
 
     it "writes the app's config, MCP configs and context files into the app" do
-      %w[.rails-ai-context.yml .mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json .codex/config.toml
-         CLAUDE.md].each do |relative|
+      %w[.rails-ai-context.yml .mcp.json .cursor/mcp.json .vscode/mcp.json .github/mcp.json opencode.json
+         .codex/config.toml CLAUDE.md].each do |relative|
         expect(File.exist?(app_file(relative))).to be(true), "#{relative} missing from the app\n#{@init}"
       end
       expect(JSON.parse(File.read(app_file(".mcp.json"))).dig("mcpServers", "rails-ai-context")).to be_a(Hash)
     end
 
-    it "adds the gem's lines to the app's .gitignore" do
+    it "adds the gem's line to the app's .gitignore, and none for the Codex config, which is committed" do
       gitignore = File.read(app_file(".gitignore"))
 
-      expect(gitignore).to include(".codex/config.toml").and include(".ai-context.json")
+      expect(gitignore).to include(".ai-context.json")
+      expect(gitignore).not_to include(".codex/config.toml")
     end
 
     it "writes nothing into the folder it was typed in" do
-      %w[.rails-ai-context.yml .mcp.json .cursor .vscode opencode.json .codex CLAUDE.md AGENTS.md].each do |relative|
+      %w[.rails-ai-context.yml .mcp.json .cursor .vscode .github opencode.json .codex CLAUDE.md AGENTS.md].each do |relative|
         expect(File.exist?(File.join(@parent, relative))).to be(false), "#{relative} written into the folder\n#{@init}"
       end
       expect(File.read(File.join(@parent, ".gitignore"))).to eq("node_modules/\n")

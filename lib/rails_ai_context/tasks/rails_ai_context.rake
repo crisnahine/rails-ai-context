@@ -342,12 +342,6 @@ module RailsAiContext::RakeTasks
       puts ""
       mcp = RailsAiContext.configuration.tool_mode == :mcp
       puts mcp ? "Done! Commit the context files and MCP configs so your team benefits." : "Done! Commit these files so your team benefits."
-      # Only where a Codex config was written, and only while a commit would
-      # still take it along.
-      if mcp && Array(ai_tools || RailsAiContext.configuration.ai_tools).include?(:codex) &&
-         !RailsAiContext::Install::Program.codex_config_ignored?(Rails.root)
-        puts "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)"
-      end
       puts "Change AI tools: #{ai_tools_record_hint}"
     end
 

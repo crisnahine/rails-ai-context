@@ -376,7 +376,7 @@ Search also excludes generated AI context files to prevent circular references:
 ```
 CLAUDE.md, .claude/, .mcp.json
 .cursor/, .cursorrules
-.github/copilot-instructions.md, .github/instructions/, .vscode/mcp.json
+.github/copilot-instructions.md, .github/instructions/, .vscode/mcp.json, .github/mcp.json
 AGENTS.md, opencode.json
 .codex/
 .ai-context.json

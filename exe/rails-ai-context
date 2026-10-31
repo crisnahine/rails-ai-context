@@ -615,7 +615,7 @@ class RailsAiContextCLI < Thor
       else
         [ Gem.bin_path("bundler", "bundle"), "exec", "rails-ai-context", "serve" ]
       end
-      env = STARTING_ENV.slice(*::RailsAiContext::McpConfigGenerator::RUBY_ENV_KEYS).reject { |_, value| value.empty? }
+      env = STARTING_ENV.slice(*::RailsAiContext::McpConfigGenerator::SAVED_ENV_KEYS).reject { |_, value| value.empty? }
       env["BUNDLE_GEMFILE"] = File.join(root, "Gemfile") unless standalone
 
       entry = { "command" => RbConfig.ruby, "args" => [ *argv, "--app-path", root ], "env" => env }
@@ -909,7 +909,7 @@ class RailsAiContextCLI < Thor
         files = context_files ? "#{tool.files_label(mcp: false)} in each app" : "no context files"
         # A committed plugin serves where no server was written, and the app's own .mcp.json its own sessions.
         if tool_mode == :mcp
-          served = held.include?(tool.key) ? plugin_label(plugin_off) : "#{tool.mcp_config[:path]} #{where}"
+          served = held.include?(tool.key) ? plugin_label(plugin_off) : "#{tool.mcp_config_paths.join(' and ')} #{where}"
           own = configured.one? && held.include?(tool.key) && ::RailsAiContext::Install::Program.app_mcp_json(dir, configured.first.root)
           served += ", and #{configured.first.path}/.mcp.json for sessions started in #{configured.first.path}" if own
           files = "#{served}; #{files}"

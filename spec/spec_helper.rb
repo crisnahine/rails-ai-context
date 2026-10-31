@@ -99,7 +99,7 @@ RSpec.configure do |config|
     RailsAiContext::CodeReloader::LOADED_CODE[:mutex].synchronize { RailsAiContext::CodeReloader::LOADED_CODE[:files] = nil }
   end
 
-  # On Windows the MCP configs start the server through `cmd /c`. The specs
+  # On Windows the MCP configs start the server through `cmd /d /c`. The specs
   # that write and read configs expect the command line every other platform
   # writes, wherever they run; the Windows form has examples of its own
   # (mcp_config_generator_windows_spec.rb), which turn this back on.

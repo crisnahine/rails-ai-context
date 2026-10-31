@@ -183,7 +183,7 @@ module RailsAiContext
         end
         install.held = written[:held] || []
         install.plugin_off = written[:plugin_off]
-        # The folder's own .gitignore, when it has one: its Codex config embeds this machine's PATH and GEM_HOME too.
+        # The folder's own .gitignore, where an earlier release kept its Codex config out of commits.
         mark_gitignore(surface, root: root, context_files: false)
         yield(:context, install) if block_given?
         install
@@ -487,15 +487,18 @@ module RailsAiContext
       #
       # @return [Array<Symbol>] the tools whose configs are to lose the entry
       def ask_mcp_removal(surface, root:, prune: false)
-        held = AiTool.all.select do |tool|
-          path = File.join(root.to_s, tool.mcp_config[:path])
+        starting = lambda do |config|
+          path = File.join(root.to_s, config[:path])
           File.file?(path) && File.binread(path).include?(RailsAiContext::McpConfigGenerator::SERVER_NAME)
         end
+        held = AiTool.all.select { |tool| tool.mcp_configs.values.any?(&starting) }
         return [] if held.empty?
 
         surface.say ""
         surface.say "CLI mode starts no MCP server, but these configs still start rails-ai-context:", :emph
-        held.each { |tool| surface.say "  #{shown(surface, File.join(root.to_s, tool.mcp_config[:path]), root)}" }
+        held.flat_map { |tool| tool.mcp_configs.values.select(&starting) }.each do |config|
+          surface.say "  #{shown(surface, File.join(root.to_s, config[:path]), root)}"
+        end
         return held.map(&:key) if prune
 
         surface.say ""
@@ -610,9 +613,21 @@ module RailsAiContext
       # Each path mark_gitignore appends to .gitignore, with the comment above
       # it. Uninstall takes out exactly these lines.
       GITIGNORE_NOTES = {
-        JSON_CACHE => "# rails-ai-context (JSON cache - markdown files should be committed)",
+        JSON_CACHE => "# rails-ai-context (JSON cache - markdown files should be committed)"
+      }.freeze
+
+      # Lines an earlier release appended, which an install takes out: the Codex config holds nothing machine-specific.
+      RETIRED_GITIGNORE_NOTES = {
         ".codex/config.toml" => "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
       }.freeze
+
+      # Each path with its note as appended, and the blank line above. In bytes, as .gitignore is read: a note
+      # may hold a non-ASCII dash.
+      def gitignore_entry(notes)
+        Regexp.union(notes.map do |path, note|
+          Regexp.new("(?:^\\r?\\n)?^#{Regexp.escape(note.b)}\\r?\\n#{Regexp.escape(path)}(?:\\r?\\n|\\z)".b)
+        end)
+      end
 
       # `context_files: false` never produces a .ai-context.json, so there is
       # nothing to ignore.
@@ -621,21 +636,22 @@ module RailsAiContext
         return unless File.exist?(gitignore)
 
         content = File.binread(gitignore)
+        kept = content.gsub(gitignore_entry(RETIRED_GITIGNORE_NOTES), "")
         lines = []
         GITIGNORE_NOTES.each do |path, note|
-          next if content.include?(path) || (path == JSON_CACHE && !context_files) || excluded_privately?(root, path)
+          next if kept.include?(path) || (path == JSON_CACHE && !context_files) || excluded_privately?(root, path)
 
           lines << "" << note << path
         end
-        return if lines.empty?
+        return if lines.empty? && kept == content
 
-        SafeFile.atomic_write(gitignore, content + lines.map { |line| "#{line}\n" }.join, root: root)
+        SafeFile.atomic_write(gitignore, kept + lines.map { |line| "#{line}\n" }.join, root: root)
         surface.say "Updated #{shown(surface, gitignore, root)}", :ok
       rescue SafeFile::LinkedOut
         surface.say "Left #{shown(surface, gitignore, root)} as it is - #{SafeFile::LINKED}", :warn
       rescue SystemCallError, IOError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write .gitignore: #{e.message}"
-        surface.say "Could not update #{shown(surface, gitignore, root)} - add .ai-context.json and .codex/config.toml by hand", :warn
+        surface.say "Could not update #{shown(surface, gitignore, root)} - add .ai-context.json by hand", :warn
       end
 
       # One next step per selected tool, in the menu's order, for its MCP server to start. In the folder at
@@ -773,20 +789,6 @@ module RailsAiContext
       def prunable_file?(path, root)
         !RailsAiContext::McpConfigGenerator.json_comments?(File.read(path)) && RailsAiContext::SafeFile.write_refusal(path, root: root).nil?
       rescue SystemCallError, IOError
-        false
-      end
-
-      # Whether a commit would leave the Codex config out, which it must: it
-      # holds this machine's PATH and GEM_HOME. Git answers, since the line
-      # can sit in any .gitignore or in info/exclude; outside a repository
-      # the app's .gitignore does.
-      def codex_config_ignored?(root)
-        _out, status = Open3.capture2e("git", "check-ignore", "-q", "--", ".codex/config.toml", chdir: root.to_s)
-        return status.exitstatus.zero? if [ 0, 1 ].include?(status.exitstatus)
-
-        gitignore = File.join(root.to_s, ".gitignore")
-        File.exist?(gitignore) && File.read(gitignore).include?(".codex/config.toml")
-      rescue SystemCallError
         false
       end
 

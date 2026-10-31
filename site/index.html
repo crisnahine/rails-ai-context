@@ -253,11 +253,11 @@
       <div class="flow-col">
         <h3>What the install writes</h3>
         <ol>
-          <li><strong>The MCP config</strong> each chosen tool reads: <code>.mcp.json</code>, <code>.cursor/mcp.json</code>, <code>.vscode/mcp.json</code>, <code>opencode.json</code> or <code>.codex/config.toml</code>, merged into one that exists.</li>
+          <li><strong>The MCP config</strong> each chosen tool reads: <code>.mcp.json</code>, <code>.cursor/mcp.json</code>, <code>.vscode/mcp.json</code> and <code>.github/mcp.json</code>, <code>opencode.json</code> or <code>.codex/config.toml</code>, merged into one that exists.</li>
           <li><strong>One root context file.</strong> <code>AGENTS.md</code> carries the project overview and the tools guide when Cursor, OpenCode or Codex is chosen, and <code>CLAUDE.md</code> imports it; otherwise <code>CLAUDE.md</code> carries it. Copilot gets its own copy.</li>
           <li><strong>Rules that load where they apply:</strong> the schema when a migration is open, the models under <code>app/models</code>, the controllers under <code>app/controllers</code>, in each tool's own format.</li>
           <li><strong>Six anti-hallucination rules</strong> in the root file: verify before you write, mark every assumption, query even when it feels standard, check the inheritance chain, treat empty output as a signal, re-query after writes.</li>
-          <li><strong>Its own configuration:</strong> an initializer and <code>.rails-ai-context.yml</code> in a Gemfile install, the YAML file alone standalone, and two <code>.gitignore</code> lines.</li>
+          <li><strong>Its own configuration:</strong> an initializer and <code>.rails-ai-context.yml</code> in a Gemfile install, the YAML file alone standalone, and a <code>.gitignore</code> line.</li>
           <li><strong>Nothing you wrote.</strong> Your lines around its markers stay, and <code>uninstall</code> takes back only what it wrote.</li>
         </ol>
       </div>
@@ -308,7 +308,7 @@
           <tbody>
             <tr><th scope="row">Claude Code</th><td>New session in the app's folder, approve <code>rails-ai-context</code>. Check with <code>/mcp</code>.</td></tr>
             <tr><th scope="row">Cursor</th><td>Restart, turn it on under MCP in Customize.</td></tr>
-            <tr><th scope="row">GitHub Copilot</th><td>Trust the workspace, send a chat message. Check with "MCP: List Servers".</td></tr>
+            <tr><th scope="row">GitHub Copilot</th><td>Trust the workspace, send a chat message. Check with "MCP: List Servers". Copilot CLI: trust the folder, check with <code>copilot mcp list</code>.</td></tr>
             <tr><th scope="row">OpenCode</th><td>Restart in the app's folder. Check with <code>opencode mcp list</code>.</td></tr>
             <tr><th scope="row">Codex CLI</th><td>Trust the project, start a new session. Check with <code>/mcp</code>.</td></tr>
           </tbody>
@@ -361,7 +361,7 @@ rails-ai-context uninstall                                                 # sta
       <li><strong>No tool writes to your app or your database.</strong> Every tool reads. <code>query</code> runs inside a read-only transaction with a timeout, a row limit and column redaction, and refuses anything that is not a read. The assistant still decides what to do with the facts. The six rules in the root file ask it to verify before writing; nothing enforces that.</li>
       <li><strong>Without a boot, it says less.</strong> {{staticIntrospectors}} of {{introspectors}} introspectors answer from the source; the rest say <code>[UNAVAILABLE]</code>. An association a gem adds at boot is not listed, and routes that engines draw are not counted.</li>
       <li><strong>Rails 9 is not supported.</strong> The gemspec caps <code>railties</code> below 9.0, and the standalone binary warns when it boots one.</li>
-      <li><strong>On Windows</strong> the MCP configs start the server through <code>cmd /c</code>, and <code>query</code> on SQLite runs without its time limit, since there is no <code>fork</code>.</li>
+      <li><strong>On Windows</strong> the MCP configs start the server through <code>cmd /d /c</code>, and <code>query</code> on SQLite runs without its time limit, since there is no <code>fork</code>.</li>
     </ul>
   </div>
 </section>
@@ -376,8 +376,8 @@ rails-ai-context uninstall                                                 # sta
       <details><summary>Does it send my code anywhere?</summary><p>No. The tools run on your machine, in your app's process or in a child of it. Two things go online: <code>search_docs</code> fetches Rails guides from GitHub when called with <code>fetch: true</code>, and the standalone binary asks rubygems.org for the latest version at most once a day, sending nothing about the app. <code>RAILS_AI_CONTEXT_NO_UPDATE_CHECK=1</code> turns that off.</p></details>
       <details><summary>Can it read my secrets?</summary><p>Files that hold them are never served: <code>.env</code>, <code>config/master.key</code>, <code>credentials.yml.enc</code>, <code>config/database.yml</code>, keys and certificates, and more, on a list you can extend. Logs are redacted before they leave the process, <code>get_config</code> shows credential key names without values, and <code>query</code> never returns an encrypted column.</p></details>
       <details><summary>What if my app cannot boot?</summary><p>The tools answer from <code>config/routes.rb</code>, the schema dump and the source files, every answer says so, and sections that need a running app say <code>[UNAVAILABLE]</code> with the reason. <code>--no-boot</code> asks for that tier outright. The answers on this page were all recorded that way.</p></details>
-      <details><summary>What does it write into my repository?</summary><p>The MCP config for each AI tool you picked, one root context file with a copy for Copilot, rules files per tool, its own config and two <code>.gitignore</code> lines. A re-run keeps your lines and adds what is missing; <code>uninstall</code> takes back only what it wrote. A team that wants no AI files in the repo can skip the install: the tools work with none of it.</p></details>
-      <details><summary>Which AI tools?</summary><p>Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI get context files and MCP config written for them. Any other MCP client, such as Claude Desktop, Windsurf, Zed or a JetBrains IDE, gets an entry from <code>rails-ai-context mcp-entry</code>. A tool with no MCP at all gets the CLI setup, where the context files name the shell commands.</p></details>
+      <details><summary>What does it write into my repository?</summary><p>The MCP config for each AI tool you picked, one root context file with a copy for Copilot, rules files per tool, its own config and a <code>.gitignore</code> line. A re-run keeps your lines and adds what is missing; <code>uninstall</code> takes back only what it wrote. A team that wants no AI files in the repo can skip the install: the tools work with none of it.</p></details>
+      <details><summary>Which AI tools?</summary><p>Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI get context files and MCP config written for them. Any other MCP client, such as Claude Desktop, Windsurf, Zed or a JetBrains IDE (Copilot or AI Assistant), gets an entry from <code>rails-ai-context mcp-entry</code>. A tool with no MCP at all gets the CLI setup, where the context files name the shell commands.</p></details>
       <details><summary>What does it cost?</summary><p>It is free and MIT licensed. What you pay is tokens, and only when the assistant asks: a tool answer is sized by its <code>detail</code> level and cut at <code>max_tool_response_chars</code>, {{maxChars}} characters by default. The root context file is held to {{rootBudget}} bytes in its default compact mode. The line that offers to file an issue costs about 40 tokens an answer and can be turned off.</p></details>
     </div>
   </div>

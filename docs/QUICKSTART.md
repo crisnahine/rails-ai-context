@@ -79,7 +79,7 @@ The install generator created:
 
 | File | Purpose |
 |:-----|:--------|
-| `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` / `opencode.json` / `.codex/config.toml` | Each AI tool finds its config when it opens the project, then asks you to approve the server once |
+| `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` / `.github/mcp.json` / `opencode.json` / `.codex/config.toml` | Each AI tool finds its config when it opens the project, then asks you to approve the server once |
 | `CLAUDE.md` + `.claude/rules/` / `AGENTS.md` + `.cursor/rules/` / `.github/copilot-instructions.md` + `.github/instructions/` | Static context rules your AI reads |
 | `.ai-context.json` | The same context as JSON (added to `.gitignore`) |
 | `config/initializers/rails_ai_context.rb` | All configuration options |
