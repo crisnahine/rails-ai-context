@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing comment and a Turbo Stream builder named in a comment no longer
   move a render site. `rails_get_view` prints the form builders and
   components the views section counted, which it never printed before.
+  `rails_get_helper_methods` lists every module an `include` names
+  (`include A, B`, `include Rails.application.routes.url_helpers`) and none a
+  heredoc holds.
 - **Turbo** (`rails_get_turbo_map`). A frame, stream action or Drive
   attribute inside an ERB comment is not counted. A frame's `src:` and a
   subscription's parts on the next line of a wrapped call are read, so the
@@ -51,14 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and filters written as `private def`. A file that declares another class
   first no longer lends that class's method. The class a method belongs to
   respects nesting and `class << self`, so `class Error < StandardError; end`
-  on the line above no longer names it.
+  on the line above no longer names it. An action's Side Effects lines are
+  redacted as its source listing is, so a key passed to the receiver reads
+  `[FILTERED]`.
 - **Validate** (`rails_validate`, rails level). A route or helper inside a
   heredoc or `=begin` block no longer silences a missing-route warning, and
   every line of a multi-line `helper_method` counts. A controller set through
   `data: { controller: }` is checked. An email address in a string is no
   ivar, and a comparison is no assignment. A commented broadcast or
-  subscription is not checked. The memory warning skips chains over
-  `params`, strings and literals, such as `params.keys.map`.
+  subscription is not checked. The memory warning reads the call: a scope or
+  association chain (`Post.active.map`, `current_user.posts.each`) warns, and
+  a chain over `params`, a string, a literal, or a call that takes arguments
+  (`JSON.parse(body).map`, `Dir.glob(x).map`) does not.
 - **analyze_feature.** Tag-helper `data: { controller: }` is read, ERB inside
   `data-controller` gives no names, the test count reads `it(...)`,
   `specify` and `it { }` one-liners and skips heredoc text, and every
@@ -83,11 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include` words and `.success` calls count for nothing, and heredoc text
   adds no guard clause. `queue_as proc { }.call` is a computed queue, not a
   Proc. A mailer whose parent is the app's own mailer base is listed. A
-  whenever runner names the job it enqueues, or no class so its command
-  shows. A rescue modifier rescues StandardError, and a service named only
+  whenever runner names the job it enqueues or performs
+  (`ReportJob.new.perform`), or no class so its command shows. A rescue modifier rescues StandardError, and a service named only
   in a comment has no caller there.
 - **Config and data files.** The credentials example is read as YAML, so a
-  block scalar adds no key and nested keys keep their full path. A
+  block scalar adds no key and nested keys keep their full path; one that is
+  not YAML is read line by line, by indentation. A
   `=begin` block sets no default locale. Shards come from the database list,
   in the guide's layout too, and `shard_count:` is no shard. A computed puma
   setting reads as unknown, while `ENV[...] || 2` keeps its default. A
@@ -100,12 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paren-less `create :post` counts, a `def` inside a heredoc names no sign-in
   helper, a string in an inclusion list is a value, and a `%r{}` format is
   read like `/.../`. `diagnose` takes no receiver from a string.
-  `:null => false` gets the NOT NULL warning. A validation moved into a
+  `:null => false` and `{ null: false }` get the NOT NULL warning. A
+  validation moved into a
   heredoc or wrapped in `=begin` is reported as removed.
 - **Install and boot.** `::RailsAiContext.configure` is the gem's call, a
   heredoc line is not, and a guard that is only a comment or closes before
-  the call does not count; a bare guard with a note after it is upgraded.
-  The generator leaves heredoc text alone and keeps every magic comment
+  the call does not count, in doctor and in the install alike: the install
+  wraps a call no guard covers, and upgrades a bare guard with a note after
+  it. The generator leaves heredoc text alone and keeps every magic comment
   above the guard it adds. The static tier reads heredoc escapes and `%W`
   and `%I` lists. The CLI finds the app a Rails 5.1 engine's `bin/rails`
   names through `__FILE__`, and a Rails 4.2 or 5.0 engine's `test/dummy` or
