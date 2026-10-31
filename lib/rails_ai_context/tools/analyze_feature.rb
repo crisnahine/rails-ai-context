@@ -38,6 +38,8 @@ module RailsAiContext
       MAX_SCAN_FILES = 500
       # The callers named under each service; rails_get_service_pattern(service:) lists more.
       CALLERS_SHOWN = 5
+      # Receiverless calls that define an example; `def test_*` defines a Minitest one.
+      TEST_CALLS = %i[test it specify].freeze
 
       AUTH_GEM_NAMES = %w[devise omniauth rodauth sorcery clearance authlogic warden jwt].freeze
 
@@ -377,7 +379,7 @@ module RailsAiContext
             source = RailsAiContext::SafeFile.read(path) or next
             line_count = source.lines.size
             partials = rendered_partials(source, path)
-            stimulus = source.scan(/data-controller=["']([^"']+)["']/).flat_map { |m| m.first.split }
+            stimulus = Introspectors::ViewTemplateIntrospector.template_stimulus_refs(source)
             detail = "- `#{relative}` (#{count_phrase(line_count, "line")})"
             detail += " renders: #{partials.join(', ')}" if partials.any?
             detail += " stimulus: #{stimulus.join(', ')}" if stimulus.any?
@@ -466,15 +468,22 @@ module RailsAiContext
           found.first(MAX_SCAN_FILES).each do |path|
             relative = Pathname.new(path).relative_path_from(Pathname.new(real_root)).to_s
             source = RailsAiContext::SafeFile.read(path) or next
-            test_count = source.each_line.count do |line|
-              line.match?(/^\s*(?:test|it|specify)\s+["']/) || line.match?(/^\s*def\s+test_/)
-            end
-            lines << "- `#{relative}` (#{count_phrase(test_count, "test")})"
+            lines << "- `#{relative}` (#{count_phrase(test_count(source), "test")})"
           end
           lines << ""
           all
         rescue => e
           RailsAiContext.debug_fail(e, [], label: "discover_tests")
+        end
+
+        def test_count(source)
+          Introspectors::AstWalk.each(AstCache.parse_string(source).value).count do |node|
+            case node
+            when Prism::CallNode then node.receiver.nil? && TEST_CALLS.include?(node.name) && !(node.arguments || node.block).nil?
+            when Prism::DefNode then node.receiver.nil? && node.name.start_with?("test_")
+            else false
+            end
+          end
         end
 
         # --- Test coverage gaps ---
@@ -657,9 +666,7 @@ module RailsAiContext
             truncated ||= matched.size > MAX_SCAN_FILES
             matched.first(MAX_SCAN_FILES).each do |path|
               source = RailsAiContext::SafeFile.read(path) or next
-              source.scan(/ENV\[["']([^"']+)["']\]|ENV\.fetch\(["']([^"']+)["']\)/).each do |m|
-                env_vars << (m[0] || m[1])
-              end
+              Introspectors::EnvReferences.references(source).each { |ref| env_vars << ref[:name] }
             end
           end
           return if env_vars.empty?

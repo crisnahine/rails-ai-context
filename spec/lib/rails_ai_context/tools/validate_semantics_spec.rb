@@ -77,14 +77,14 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       ERB
     end
 
-    def warnings_for(app: nil)
+    def warnings_for(app: nil, files: {})
       Dir.mktmpdir do |root|
         {
           "app/helpers/application_helper.rb" => "module ApplicationHelper\n  def avatar_url(user) = user.to_s\n  private def back_path = \"/\"\nend\n",
           "app/controllers/application_controller.rb" => "class ApplicationController < ActionController::Base\n  helper_method :current_section_path, :signed_in?\nend\n",
           "config/routes.rb" => "Rails.application.routes.draw do\n  resources :posts\n  direct(:docs) { \"https://docs.example.com\" }\nend\n",
           "app/views/posts/show.html.erb" => view
-        }.each do |relative, body|
+        }.merge(files).each do |relative, body|
           FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
           File.write(File.join(root, relative), body)
         end
@@ -129,6 +129,55 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       app = double(routes: double(url_helpers: Module.new), reload_routes_unless_loaded: true)
 
       expect(warnings_for(app: app)).to include("rails_blob_url - route helper not found")
+    end
+
+    it "reads no direct route out of a heredoc or a =begin block in the routes file" do
+      routes = <<~RUBY
+        Rails.application.routes.draw do
+          resources :posts
+          NOTE = <<~TEXT
+            direct :legacy
+          TEXT
+        =begin
+          direct :retired
+        =end
+        end
+      RUBY
+      view = %(<%= link_to "Legacy", legacy_url %>\n<%= link_to "Retired", retired_path %>\n)
+
+      text = warnings_for(files: { "config/routes.rb" => routes, "app/views/posts/show.html.erb" => view })
+
+      expect(text).to include("legacy_url - route helper not found").and include("retired_path - route helper not found")
+    end
+
+    it "passes over every helper a helper_method call spread over lines hands the views" do
+      controller = "class ApplicationController < ActionController::Base\n  helper_method :current_section_path,\n                :next_section_path\nend\n"
+      view = %(<%= link_to "Next", next_section_path %>\n<%= link_to "Bogus", bogus_things_path %>\n)
+
+      text = warnings_for(files: { "app/controllers/application_controller.rb" => controller, "app/views/posts/show.html.erb" => view })
+
+      expect(text).not_to include("next_section_path")
+      expect(text).to include("bogus_things_path - route helper not found")
+    end
+
+    it "reads no helper method out of a heredoc or a =begin block in app/helpers" do
+      helper = <<~RUBY
+        module ApplicationHelper
+          def avatar_url(user) = user.to_s
+          USAGE = <<~TEXT
+            def fake_path
+          TEXT
+        =begin
+          def old_path
+        =end
+        end
+      RUBY
+      view = %(<%= image_tag avatar_url(@user) %>\n<%= link_to "Fake", fake_path %>\n<%= link_to "Old", old_path %>\n)
+
+      text = warnings_for(files: { "app/helpers/application_helper.rb" => helper, "app/views/posts/show.html.erb" => view })
+
+      expect(text).not_to include("avatar_url")
+      expect(text).to include("fake_path - route helper not found").and include("old_path - route helper not found")
     end
   end
 
@@ -352,6 +401,68 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     it "asks for no .turbo_stream.erb template beside a view that subscribes with turbo_stream_from" do
       with_app_file("app/views/widgets/show.html.erb", "<%= turbo_stream_from @widget %>\n<h1>Widget</h1>\n") do |file, path|
         expect(described_class.check_rails_semantics(file, path).join).not_to include("turbo_stream")
+      end
+    end
+
+    context "a view naming Stimulus controllers" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: {} }, schema: { tables: {} }, models: {},
+          stimulus: { controllers: [ { name: "comment_form" } ] }
+        })
+      end
+
+      def stimulus_warnings(template)
+        with_app_file("app/views/widgets/show.html.erb", template) do |file, path|
+          described_class.check_rails_semantics(file, path).grep(/Stimulus/)
+        end
+      end
+
+      it "checks a controller a tag helper's data hash sets, as Rails renders it to data-controller" do
+        template = %(<%= tag.div data: { controller: "ghost" } %>\n<%= form_with model: @widget, data: { controller: "comment-form" } do |f| %><% end %>\n)
+
+        expect(stimulus_warnings(template)).to eq([ %(data-controller="ghost" - Stimulus controller not found) ])
+      end
+
+      it "checks the literal names of a data-controller and nothing an ERB tag in it writes or comments out" do
+        template = %(<div data-controller="ghost <%= extra %>"></div>\n<%# <div data-controller="retired"></div> %>\n)
+
+        expect(stimulus_warnings(template)).to eq([ %(data-controller="ghost" - Stimulus controller not found) ])
+      end
+    end
+
+    context "a model that broadcasts to a Turbo Stream channel" do
+      def broadcast_warnings(model, views = {})
+        Dir.mktmpdir do |root|
+          { "app/models/article.rb" => model, "app/views/articles/index.html.erb" => "<h1>Articles</h1>\n" }.merge(views).each do |relative, body|
+            FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+            File.write(File.join(root, relative), body)
+          end
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+          file = "app/models/article.rb"
+          return described_class.check_rails_semantics(file, File.join(root, file)).grep(/broadcast/)
+        end
+      end
+
+      it "checks no broadcast a comment names" do
+        model = <<~RUBY
+          class Article < ApplicationRecord
+            # broadcast_replace_to("old_channel") was removed
+            def announce
+              broadcast_replace_to("live_feed")
+            end
+          end
+        RUBY
+
+        expect(broadcast_warnings(model)).to eq([ %(broadcast to "live_feed" - no matching turbo_stream_from found in views) ])
+      end
+
+      it "counts no subscription an ERB comment holds" do
+        model = "class Article < ApplicationRecord\n  def announce\n    broadcast_replace_to(\"live_feed\")\n    broadcast_append_to(\"side_feed\")\n  end\nend\n"
+        view = %(<%# turbo_stream_from "live_feed" %>\n<%= turbo_stream_from "side_feed" %>\n)
+
+        expect(broadcast_warnings(model, "app/views/articles/index.html.erb" => view))
+          .to eq([ %(broadcast to "live_feed" - no matching turbo_stream_from found in views) ])
       end
     end
 
@@ -614,6 +725,31 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         expect(warnings_for("<%= @real %>\n")).to include("@real used in view but not set in WidgetsController")
       end
 
+      it "reads no ivar out of a string in a tag" do
+        text = warnings_for(%(<%= mail_to "editors@example.com" %>\n<%= "Email @support" %>\n<%= "Hi \#{@real}" %>\n))
+
+        expect(text).not_to include("@example")
+        expect(text).not_to include("@support")
+        expect(text).to include("@real used in view but not set in WidgetsController")
+      end
+
+      it "counts no comparison in the controller as setting the ivar" do
+        File.write(File.join(@root, "app/controllers/widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def show
+              head :gone if @widget == :retired
+              redirect_to root_path unless @draft_notice != nil
+              @title = "Widget"
+            end
+          end
+        RUBY
+
+        text = warnings_for("<%= @widget %> <%= @draft_notice %> <%= @title %>\n")
+
+        expect(text).to include("@widget used in view but not set").and include("@draft_notice used in view but not set")
+        expect(text).not_to include("@title")
+      end
+
       # Only app/views/layouts/ holds the app's layouts; admin/layouts/ is a LayoutsController's views.
       it "checks the views of a controller named layouts, and still skips the layouts folder" do
         FileUtils.mkdir_p(File.join(@root, "app/controllers/admin"))
@@ -834,6 +970,56 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       with_app_file("app/controllers/widgets_controller.rb", source) do |file, path|
         warnings = described_class.check_rails_semantics(file, path)
         expect(warnings.join).to include("may load all records into memory")
+      end
+    end
+
+    it "flags no chain a heredoc's text holds" do
+      source = <<~RUBY
+        class WidgetsController < ApplicationController
+          def index
+            @report = <<~SQL
+              SELECT name FROM widgets
+              .users.map { }
+            SQL
+          end
+        end
+      RUBY
+
+      with_app_file("app/controllers/widgets_controller.rb", source) do |file, path|
+        expect(described_class.check_rails_semantics(file, path).join).not_to include("may load all records")
+      end
+    end
+
+    it "flags an association chain off a record or a helper call" do
+      source = <<~RUBY
+        class ArticlesController < ApplicationController
+          def index
+            @titles = current_user.articles.map { |a| a.title }
+            @by_id = @article.comments.each_with_object({}) { |c, h| h[c.id] = c }
+          end
+        end
+      RUBY
+
+      with_app_file("app/controllers/articles_controller.rb", source) do |file, path|
+        expect(described_class.check_rails_semantics(file, path).grep(/may load all records/).map { |w| w[/\Aline \d+/] })
+          .to eq([ "line 3", "line 4" ])
+      end
+    end
+
+    it "flags a scope chain, not one over params or a string" do
+      source = <<~RUBY
+        class WidgetsController < ApplicationController
+          def index
+            @keys = params.keys.map { |k| k.to_s }
+            @tags = params[:tags].to_s.split.map(&:strip)
+            @names = Admin::Widget.active.map(&:name)
+          end
+        end
+      RUBY
+
+      with_app_file("app/controllers/widgets_controller.rb", source) do |file, path|
+        expect(described_class.check_rails_semantics(file, path).grep(/may load all records/))
+          .to eq([ "line 5: scope chain followed by .map may load all records into memory - consider .pluck or SQL" ])
       end
     end
   end
