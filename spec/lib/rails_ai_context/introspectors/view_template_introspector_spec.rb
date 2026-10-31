@@ -413,6 +413,26 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     end
   end
 
+  describe ".phlex_view?" do
+    it "is false when the class and view_template appear only in comments" do
+      expect(described_class.phlex_view?("app/views/posts/x.rb", "# class A < B\n# def view_template\n")).to be(false)
+    end
+  end
+
+  describe ".extract_phlex_component_renders" do
+    it "reads no component out of a comment" do
+      expect(described_class.extract_phlex_component_renders("# render OldComponent.new\nrender NewComponent.new\n")).to eq(%w[NewComponent])
+    end
+  end
+
+  describe ".extract_phlex_helper_calls" do
+    it "reads no helper out of a comment or a string the view prints" do
+      source = %(# uses link_to later\nh1 { "Edit tag" }\nplain dom_id(@post)\n)
+
+      expect(described_class.extract_phlex_helper_calls(source)).to eq(%w[dom_id])
+    end
+  end
+
   describe ".ivars_in" do
     it "reads the ivars a template uses" do
       expect(described_class.ivars_in("<%= @post.title %> <%= @user %>")).to eq(%w[post user])
@@ -421,6 +441,17 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     it "reads a code tag whose first line is a Ruby comment" do
       expect(described_class.ivars_in("<%\n  # the list\n  items = @posts.select(&:published?)\n%>")).to eq(%w[posts])
       expect(described_class.ivars_in("<% # note\n @x.each do |y| %>")).to eq(%w[x])
+    end
+
+    it "reads no ivar out of a Ruby comment inside a code tag" do
+      expect(described_class.ivars_in("<% x = 1 # @ghost %>", path: "a.html.erb")).to eq([])
+      expect(described_class.ivars_in("<%\n  # @legacy = 1\n%>", path: "a.html.erb")).to eq([])
+    end
+
+    it "reads no ivar out of a comment in a Ruby view" do
+      template = "class Show < Phlex::HTML\n  # uses @label\n  def view_template = h1 { @post.title } # and @other\nend\n"
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.rb")).to eq(%w[post])
     end
 
     it "drops the locals ERB sets itself" do
@@ -671,6 +702,20 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
         expect(stimulus).to contain_exactly("hello")
       end
     end
+
+    it "does not read url_for's controller: inside a data hash as a Stimulus controller" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/widgets"))
+        File.write(File.join(root, "app/views/widgets/index.html.erb"),
+                   %(<%= link_to "x", "#", data: { turbo_frame: "f", url: url_for(controller: "users") } %>\n) +
+                   %(<%= tag.div data: { url: url_for(controller: "posts"), controller: "hello" } %>\n))
+        app = double("app", root: Pathname.new(root))
+
+        stimulus = described_class.new(app).call[:templates]["widgets/index.html.erb"][:stimulus]
+
+        expect(stimulus).to contain_exactly("hello")
+      end
+    end
   end
 
   describe "a comment in the markup" do
@@ -713,6 +758,71 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
         expect(entry[:ivars]).to eq([])
       end
     end
+
+    # ERB inside an HTML comment still runs, so its render still happens.
+    it "reads no Stimulus controller out of an HTML comment, and still reads the ERB inside it" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/edit.html.erb"),
+                   %(<!-- <div data-controller="ghost"></div> <%= render "admin/kept" %> -->\n<div data-controller="real"></div>\n))
+
+        entry = templates_in(root)["admin/edit.html.erb"]
+
+        expect(entry[:stimulus]).to eq([ "real" ])
+        expect(entry[:partials]).to eq([ "admin/kept" ])
+      end
+    end
+
+    it "reads no slot out of a Ruby comment inside a code tag" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/card.html.erb"), %(<% # renders_one :header %>\n<% renders_many :items %>\n))
+
+        expect(templates_in(root)["admin/card.html.erb"][:slots]).to eq([ "items" ])
+      end
+    end
+
+    it "reads no partial key out of a Ruby comment inside a code tag" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/list.html.erb"), %(<% x = 1 # render partial: "old" %>\n<%= render "admin/new" %>\n))
+
+        expect(templates_in(root)["admin/list.html.erb"][:partials]).to eq([ "admin/new" ])
+      end
+    end
+
+    it "reads no component render out of a Ruby comment in a Phlex view" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/show.rb"),
+                   "class Views::Admin::Show < Views::Base\n  def view_template\n    # render OldComponent.new\n    render NewComponent.new\n  end\nend\n")
+
+        expect(templates_in(root)["admin/show.rb"][:partials]).to eq([ "NewComponent" ])
+      end
+    end
+  end
+
+  describe "a partial's fields and helpers" do
+    def partial_entry(source)
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+        File.write(File.join(root, "app/views/posts/_card.html.erb"), source)
+        return described_class.new(double("app", root: Pathname.new(root))).call[:partials]["posts/_card.html.erb"]
+      end
+    end
+
+    # ERB inside an HTML comment still runs; the comment's own text and page prose do not.
+    it "reads model fields only from the Ruby the partial runs" do
+      source = %(<!-- @user.legacy_field -->\n<p>Ping @support.desk</p>\n<!-- <%= @post.headline %> -->\n<%= @post.title %>\n)
+
+      expect(partial_entry(source)[:fields]).to contain_exactly("headline", "title")
+    end
+
+    it "reads helper calls only from the Ruby the partial runs, not its strings" do
+      source = %(<!-- render_badge -->\n<%= t(".format_hint") %>\n<!-- <%= format_price(1) %> -->\n<%= render_avatar(@user) %>\n)
+
+      expect(partial_entry(source)[:helpers]).to contain_exactly("format_price", "render_avatar")
+    end
   end
 
   describe ".stimulus_identifiers reading action descriptors" do
@@ -740,6 +850,22 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
 
     it "reads no identifier out of prose with a hash in it" do
       expect(described_class.stimulus_identifiers(%(<p>Issue #42 and C# code</p>))).to eq([])
+    end
+
+    it "reads a heredoc line that starts with # in a Ruby view" do
+      source = %(HTML = <<~H\n  # <div data-controller="chart"></div>\nH\n)
+
+      expect(described_class.stimulus_identifiers(source, ruby: true)).to eq([ "chart" ])
+    end
+
+    it "reads a controller helper's identifier only where Ruby calls the helper" do
+      markup = %(<% hint = "call body_controller('ghost')" %>\n<% content_controller "real" %>\n)
+      ruby = %(class Page\n  HINT = "content_controller('ghost')"\n  def call = body_controller("real")\nend\n)
+
+      expect(described_class.stimulus_identifiers(markup)).to eq([ "real" ])
+      expect(described_class.stimulus_identifiers(%(<%= a %><%= b %><%= c %><%= d %><% content_controller "late" %>))).to eq([ "late" ])
+      expect(described_class.stimulus_identifiers(%(<p>content_controller("text")</p><% x = 1 %>))).to eq([])
+      expect(described_class.stimulus_identifiers(ruby, ruby: true)).to eq([ "real" ])
     end
   end
 
@@ -780,6 +906,13 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       source = %(<%= render(ModalComponent.new(template: "big")) %>\n<%= render "form", locals: { template: "edit", partial: "y" } %>\n)
 
       expect(partials_in("nested.html.erb", source)).to contain_exactly("form", "ModalComponent")
+    end
+
+    it "reads no partial out of a key in another helper's hash argument" do
+      source = %(<%= link_to "Teaser", teaser_path, data: { partial: "teaser" } %>\n) +
+               %(<% @products.each { |product| %><%= turbo_stream.replace product, partial: "products/row" %><% } %>\n)
+
+      expect(partials_in("teaser.html.erb", source)).to eq([ "products/row" ])
     end
 
     it "keeps reading past an escaped quote in an argument" do

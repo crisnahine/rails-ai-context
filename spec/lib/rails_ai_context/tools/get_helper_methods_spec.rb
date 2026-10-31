@@ -206,6 +206,24 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    context "when a view names a helper only in a Ruby comment inside a code tag" do
+      it "counts no reference from that view" do
+        Dir.mktmpdir("helper-comment") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+          FileUtils.mkdir_p(File.join(root, "app/helpers"))
+          File.write(File.join(root, "app/helpers/application_helper.rb"), "module ApplicationHelper\n  def status_badge(article) = article\nend\n")
+          File.write(File.join(root, "app/views/posts/show.html.erb"), "<% # status_badge(article) %>\n<%\n  # status_badge(@post)\n%>\n")
+          File.write(File.join(root, "app/views/posts/index.html.erb"), "<%= status_badge(@post) %>\n")
+          allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(root))
+          allow(described_class).to receive(:cached_context).and_return({})
+
+          text = described_class.call(helper: "ApplicationHelper", detail: "full").content.first[:text]
+
+          expect(text.lines.map(&:chomp)).to include("- `status_badge` used in: posts/index.html.erb")
+        end
+      end
+    end
+
     context "when a template lives in a view path the app appends" do
       around do |example|
         Dir.mktmpdir("helper-overlay") do |dir|
@@ -404,6 +422,31 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
           expect(text).to include("- `visible(name)`")
           expect(text).not_to include("example_usage")
         end
+      end
+    end
+
+    context "with the modules a helper includes" do
+      def includes_of(source)
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app", "helpers"))
+          File.write(File.join(root, "app", "helpers", "docs_helper.rb"), source)
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          text = described_class.call(helper: "DocsHelper").content.first[:text]
+          return text[/## Includes\n(.*?)(?:\n\n|\z)/m, 1].to_s.lines.map(&:chomp)
+        end
+      end
+
+      it "lists no include written inside a heredoc" do
+        source = "module DocsHelper\n  DOC = <<~T\n    include Fake\n  T\n  include Real\n\n  def visible; end\nend\n"
+
+        expect(includes_of(source)).to eq([ "- Real" ])
+      end
+
+      it "lists every module one include names, as written" do
+        source = "module DocsHelper\n  include A::SanitizeHelper, A::TextHelper\n\n  def visible; end\nend\n"
+
+        expect(includes_of(source)).to eq([ "- A::SanitizeHelper", "- A::TextHelper" ])
       end
     end
 

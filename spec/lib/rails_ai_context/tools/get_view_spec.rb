@@ -467,6 +467,65 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    context "with turbo frames and streams named in comments and strings" do
+      around do |example|
+        Dir.mktmpdir("view-turbo") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+          File.write(File.join(root, "app/views/posts/show.html.erb"), <<~ERB)
+            <%# turbo_stream_from "old_stream" %>
+            <%# turbo_frame_tag "old_frame" %>
+            <% note = "turbo_frame_tag 'ghost_frame'" %>
+            <% x = 1 # turbo_stream_from "gone_stream" %>
+            <%= turbo_frame_tag "post" do %><% end %>
+          ERB
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        app = RailsAiContext::StaticApp.new(@root)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: RailsAiContext::Introspectors::ViewTemplateIntrospector.new(app).call
+        )
+      end
+
+      it "lists only the frames and streams the template's Ruby opens" do
+        text = described_class.call(controller: "posts").content.first[:text]
+
+        expect(text).to include("- **posts/show.html.erb** (5 lines) - turbo: frame:post\n")
+      end
+    end
+
+    context "with form helpers and components the views section counted" do
+      around do |example|
+        Dir.mktmpdir("view-builders") do |root|
+          FileUtils.mkdir_p(File.join(root, "app/views/posts"))
+          File.write(File.join(root, "app/views/posts/new.html.erb"), %(<%= form_with model: @post do |f| %><% end %>\n<%= render AlertComponent.new %>\n))
+          File.write(File.join(root, "app/views/posts/edit.html.erb"), %(<%= form_with model: @post do |f| %><% end %>\n))
+          @root = root
+          example.run
+        end
+      end
+
+      before do
+        app = RailsAiContext::StaticApp.new(@root)
+        allow(described_class).to receive(:rails_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: RailsAiContext::Introspectors::ViewTemplateIntrospector.new(app).call,
+          views: RailsAiContext::Introspectors::ViewIntrospector.new(app).call
+        )
+      end
+
+      it "names each form helper with its count, and each component" do
+        text = described_class.call(controller: "posts").content.first[:text]
+
+        expect(text).to include("**Form builders:** form_with (2)\n")
+        expect(text).to include("**ViewComponents:** AlertComponent\n")
+      end
+    end
+
     # An agent edits the view from this text, so it is the file as written.
     context "with a view read by path that holds an icon and repeated classes" do
       let(:source) do

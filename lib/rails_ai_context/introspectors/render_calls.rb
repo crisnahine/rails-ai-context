@@ -43,6 +43,7 @@ module RailsAiContext
       # captures a bare local receiver (none for an @ivar, a Constant or a chain), its dot and `_for`.
       # Regex, as every reader here, since ERB, HAML, Slim and Phlex share it.
       FORM_BUILDER_CALL = /(?:(?:(?:(?<![\w.:@])([a-z_]\w*))?(\.))?(?<![\w:])(?:simple_)?fields(_for)?|(?<![\w.:])(?:simple_form_for|form_with|form_for))(?=[(\s])(?!\s*[.=])/
+      FORM_BUILDER_WORD = /fields|form_with|form_for/
 
       # A render call's ERB-free arguments on one line, as IMPLICIT_RENDER reads them.
       def self.render_line(args)
@@ -53,8 +54,10 @@ module RailsAiContext
       # parentheses, or the rest of the line and every line a trailing comma continues onto,
       # up to the ERB tag's `%>`.
       def self.render_calls(content, path: nil)
+        return [] unless content.match?(RENDER_CALL)
+
         kind = template_kind(content, path)
-        content.to_enum(:scan, RENDER_CALL).map do
+        code_text(content, kind, RENDER_CALL).to_enum(:scan, RENDER_CALL).map do
           at = Regexp.last_match.end(0)
           rest = call_text(content[at..], kind)
           open = rest[/\A\s*\(/]
@@ -106,6 +109,18 @@ module RailsAiContext
         path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS) ? :ruby : :markup
       end
 
+      # The template with what Ruby never runs blanked, every offset kept: ERB through `ErbSource.masked`, parsing only
+      # the tags that hold `word`, a Ruby template whole. HAML and Slim stay whole, and so does Ruby that cannot be read.
+      def self.code_text(content, kind, word)
+        case kind
+        when :erb then RailsAiContext::ErbSource.masked(content, only: word)
+        when :ruby then RailsAiContext::RubySource.code_only(content)
+        else content
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, content, label: "RenderCalls.code_text")
+      end
+
       def self.call_text(text, kind)
         case kind
         when :erb then text[0...(text.index("%>") || text.length)]
@@ -143,9 +158,11 @@ module RailsAiContext
       # a handed-in local's `fields` (a record's too), default_form_builder: "form"; `(f).fields`, `g = @f`, `[f].each do |g|`:
       # none. Read block scope, callers and the controller when an app shows one of these.
       def self.form_builders(content, path: nil)
+        return {} unless content.match?(FORM_BUILDER_WORD)
+
         locals = nil
         kind = template_kind(content, path)
-        content.to_enum(:scan, FORM_BUILDER_CALL).each_with_object({}) do |_, builders|
+        code_text(content, kind, FORM_BUILDER_WORD).to_enum(:scan, FORM_BUILDER_CALL).each_with_object({}) do |_, builders|
           match = Regexp.last_match
           source = match[1]
           # FormBuilder alone defines `fields`: its receiver is a known builder, a local handed in or one assigned

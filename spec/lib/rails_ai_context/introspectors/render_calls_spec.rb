@@ -76,6 +76,19 @@ RSpec.describe RailsAiContext::Introspectors::RenderCalls do
       expect(names(%(<%= render "posts/row", layout: "posts/frame", spacer_template: "posts/spacer" %>))).to eq(%w[posts/row])
       expect(names(%(<%= render partial: "posts/row", locals: { layout: "posts/frame" } %>))).to eq(%w[posts/row])
     end
+
+    it "reads no render inside a Ruby string or a Ruby comment" do
+      content = %(<% msg = "please render 'ghost'" %>\n<% x = 1 # render "commented" %>\n<%= render "posts/row" %>\n)
+
+      expect(names(content)).to eq(%w[posts/row])
+    end
+
+    it "reads no render written as text outside an ERB tag" do
+      content = %(<p>To edit, render "comments/form" below.</p>\n<%= render "comments/list" %>\n)
+
+      expect(names(content)).to eq(%w[comments/list])
+      expect(described_class.render_calls(content, path: "a.html.erb").size).to eq(1)
+    end
   end
 
   describe ".partial_names" do
@@ -147,6 +160,13 @@ RSpec.describe RailsAiContext::Introspectors::RenderCalls do
         .to eq("f" => "form")
       expect(described_class.form_builders(%(<%= f.fields_for(\n  :comments\n) do |cf| %>))).to eq("cf" => "form")
       expect(described_class.form_builders(%(<%= form_with(\n  model: @post\n).then do |x| %>))).to eq({})
+    end
+
+    it "reads no builder off a helper named inside a Ruby string or a Ruby comment" do
+      [
+        %(<% hint = "use fields_for :comments do |comment|" %>\n<%= render comment %>),
+        %(<% x = 1 # form_with model: @post do |f| %>\n<%= render f %>)
+      ].each { |content| expect(described_class.form_builders(content)).to eq({}), content }
     end
 
     it "reads an unclosed paren no further than the helper's own tag or continued lines" do

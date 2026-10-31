@@ -146,10 +146,11 @@ module RailsAiContext
           lines = views_header_lines(templates, partials, layouts, controller: controller)
 
           # Form builders and component usage from views introspector
-          form_builders = data[:form_builders_detected]
-          component_usage = data[:component_usage]
+          views = RailsAiContext::Payload.section(cached_context, :views) || {}
+          form_builders = views[:form_builders_detected]
+          component_usage = views[:component_usage]
           if form_builders&.any?
-            lines << "**Form builders:** #{form_builders.join(', ')}" << ""
+            lines << "**Form builders:** #{form_builders.map { |name, count| "#{name} (#{count})" }.join(', ')}" << ""
           end
           if component_usage&.any?
             lines << "**ViewComponents:** #{component_usage.first(10).join(', ')}" << ""
@@ -409,13 +410,20 @@ module RailsAiContext
 
         ivars = Introspectors::ViewTemplateIntrospector.ivars_in(content, path: relative_path)
 
-        # Turbo Frame IDs and turbo_stream_from channels
+        # Turbo Frame IDs and turbo_stream_from channels, from calls the template's Ruby makes
+        ruby, code = Introspectors::ViewIntrospector.template_ruby(relative_path, content)
+        calls = lambda do |pattern|
+          ruby.to_enum(:scan, pattern).filter_map do
+            match = Regexp.last_match
+            match[1] unless code[match.begin(0)] == " "
+          end
+        end
         turbo = []
-        content.scan(/turbo_frame_tag\s+["']([^"']+)["']/).each { |m| turbo << "frame:#{m[0]}" }
-        content.scan(/turbo_frame_tag\s+:(\w+)/).each { |m| turbo << "frame:#{m[0]}" }
-        content.scan(/turbo_stream_from\s+["']([^"']+)["']/).each { |m| turbo << "stream:#{m[0]}" }
-        content.scan(/turbo_stream_from\s+([^,\s]+)/).each do |m|
-          val = m[0].strip
+        calls.(/turbo_frame_tag\s+["']([^"']+)["']/).each { |id| turbo << "frame:#{id}" }
+        calls.(/turbo_frame_tag\s+:(\w+)/).each { |id| turbo << "frame:#{id}" }
+        calls.(/turbo_stream_from\s+["']([^"']+)["']/).each { |name| turbo << "stream:#{name}" }
+        calls.(/turbo_stream_from\s+([^,\s]+)/).each do |arg|
+          val = arg.strip
           turbo << "stream:#{val}" unless val.start_with?('"') || val.start_with?("'") || turbo.any? { |t| t.include?(val) }
         end
 

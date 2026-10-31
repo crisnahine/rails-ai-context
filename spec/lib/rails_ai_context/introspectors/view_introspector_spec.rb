@@ -189,6 +189,41 @@ RSpec.describe RailsAiContext::Introspectors::ViewIntrospector do
     end
   end
 
+  describe "the form helpers and components views use" do
+    def introspect(files)
+      Dir.mktmpdir do |root|
+        files.each do |relative, body|
+          path = File.join(root, "app/views", relative)
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, body)
+        end
+        return described_class.new(RailsAiContext::StaticApp.new(root)).call
+      end
+    end
+
+    it "counts no form helper inside an ERB comment, a Ruby comment or a string" do
+      source = <<~ERB
+        <%# old: simple_form_for @post do |f| %>
+        <% x = 1 # form_for @post do |f| %>
+        <% hint = "semantic_form_for @post" %>
+        <%= form_with model: @post do |f| %><% end %>
+      ERB
+
+      expect(introspect("posts/new.html.erb" => source)[:form_builders_detected]).to eq("form_with" => 1)
+    end
+
+    it "counts no component rendered inside an ERB comment, a Ruby comment or a string" do
+      source = <<~ERB
+        <%# render OldComponent.new %>
+        <% # render LegacyComponent.new %>
+        <% note = "render GhostComponent.new" %>
+        <%= render AlertComponent.new(message: "Hi") %>
+      ERB
+
+      expect(introspect("posts/show.html.erb" => source)[:component_usage]).to eq([ "AlertComponent" ])
+    end
+  end
+
   # `layout "admin/application"` renders layouts/admin/application, so a
   # layout in a subfolder is named by its path under layouts/ and never merges
   # with the top-level one of the same file name.
@@ -228,6 +263,12 @@ RSpec.describe RailsAiContext::Introspectors::ViewIntrospector do
       ERB
 
       expect(yields_for("application.html.erb", source)).to eq([ "right_side", "head", "(main)" ])
+    end
+
+    it "reads no yield or content_for inside a Ruby string or a Ruby comment" do
+      source = %(<%= yield %>\n<% t = "yield :ghost_slot" %>\n<% x = 1 # content_for :old_slot %>\n)
+
+      expect(yields_for("application.html.erb", source)).to eq([ "(main)" ])
     end
 
     it "does not read a content_for that sets content as one the layout yields" do

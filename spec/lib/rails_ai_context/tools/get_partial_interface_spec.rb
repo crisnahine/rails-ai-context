@@ -633,6 +633,26 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("- `app/views/api/v1/invoices/index.json.jbuilder:1` - locals: invoice")
       expect(text).to include("- `app/views/api/v1/invoices/show.json.jbuilder:1` - locals: invoice")
     end
+
+    it "reads no partial named only in a Ruby comment, in a model or a jbuilder view" do
+      File.write(File.join(@root, "app/models/notice.rb"), <<~RUBY)
+        class Notice < ApplicationRecord
+          # after_create_commit { broadcast_prepend_to "notices", partial: "notifications/notification" }
+        end
+      RUBY
+      File.write(File.join(@root, "app/views/api/v1/invoices/legacy.json.jbuilder"),
+                 %(# json.partial! "api/v1/invoices/invoice", invoice: @invoice\njson.id 1\n))
+
+      expect(text_for("notifications/notification")).not_to include("notice.rb")
+      expect(text_for("api/v1/invoices/invoice")).not_to include("legacy.json.jbuilder")
+    end
+
+    it "reads no partial named in an ERB comment or as a key of another helper's hash" do
+      File.write(File.join(@root, "app/views/reviews/archived.turbo_stream.erb"),
+                 %(<%# turbo_stream.append "reviews", partial: "reviews/review" %>\n<%= link_to "x", "#", data: { partial: "reviews/review" } %>\n))
+
+      expect(text_for("reviews/review")).not_to include("archived.turbo_stream.erb")
+    end
   end
 
   # RenderingHelper#render: after a positional name the hash that follows is
@@ -795,9 +815,24 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("`app/views/posts/card.json.jbuilder:5` - locals: extra, card, card_counter, card_iteration\n")
     end
 
+    it "reads a jbuilder call's own method, never one named in its trailing comment" do
+      File.write(File.join(@root, "app/views/posts/cards.json.jbuilder"),
+                 %(json.cards @posts, partial: "posts/post", as: :post # replaced json.partial!\n))
+
+      text = described_class.call(partial: "posts/_post.json.jbuilder").content.first[:text]
+
+      expect(text).to include("- `app/views/posts/cards.json.jbuilder:1` - locals: post\n")
+    end
+
     # The blog's posts/form claimed the render of comments/form in posts/show.
     it "reads a name with a directory as that directory's partial" do
       expect(sites_and_locals("posts/form")).to eq([ %w[app/views/posts/new.html.erb:1], %w[post] ])
+      expect(sites_and_locals("comments/form").first).to eq(%w[app/views/posts/show.html.erb:1])
+    end
+
+    it "credits a render only to the partial it names, never to a string another option holds" do
+      File.write(File.join(@root, "app/views/comments/index.html.erb"), %(<%= render "comments/form_fields", label: "form" %>\n))
+
       expect(sites_and_locals("comments/form").first).to eq(%w[app/views/posts/show.html.erb:1])
     end
 
@@ -874,6 +909,36 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
 
       expect(html).to eq(%w[app/views/posts/feed.html.erb:1])
       expect(json).to eq(%w[app/views/posts/feed.html.erb:2 app/views/posts/feed.html.erb:3])
+    end
+
+    it "reads no `formats:` out of a string the call passes" do
+      File.write(File.join(@root, "app/views/posts/notes.html.erb"),
+                 %(<%= render partial: "posts/post", locals: { post: @post }, title: "formats: [:json] only" %>\n))
+
+      expect(sites_and_locals("posts/post").first.grep(/notes/)).to eq(%w[app/views/posts/notes.html.erb:1])
+      expect(sites_and_locals("posts/_post.json.jbuilder").first.grep(/notes/)).to eq([])
+    end
+
+    it "reads no `partial:` out of a string beside a name given first, so `formats:` stays a local" do
+      File.write(File.join(@root, "app/views/posts/hints.html.erb"),
+                 %(<%= render "posts/post", post: @post, hint: "partial: 'posts/post'", formats: [:json] %>\n))
+
+      expect(sites_and_locals("posts/post").first.grep(/hints/)).to eq(%w[app/views/posts/hints.html.erb:1])
+      expect(sites_and_locals("posts/_post.json.jbuilder").first.grep(/hints/)).to eq([])
+    end
+
+    it "leaves a controller's render to the request when a Turbo Stream builder is only named in a comment" do
+      FileUtils.mkdir_p(File.join(@root, "app/controllers"))
+      File.write(File.join(@root, "app/controllers/cards_controller.rb"), <<~RUBY)
+        class CardsController < ApplicationController
+          def show
+            render partial: "posts/post", locals: { post: Post.first } # replaces turbo_stream.append
+          end
+        end
+      RUBY
+
+      expect(sites_and_locals("posts/post").first.grep(/cards_controller/)).to eq(%w[app/controllers/cards_controller.rb:3])
+      expect(sites_and_locals("posts/_post.json.jbuilder").first.grep(/cards_controller/)).to eq(%w[app/controllers/cards_controller.rb:3])
     end
   end
 
@@ -1151,6 +1216,51 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
           expect(described_class.send(:api_only_note, "views", dir: "app/views")).to be_nil
         end
       end
+    end
+  end
+
+  # ERB sends text, HTML comments and `<%#` comments to the page; only the tags' Ruby runs.
+  describe "the Ruby a partial's template runs" do
+    around do |example|
+      Dir.mktmpdir("partial-template-ruby") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/views/articles"))
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    def locals_of(name, source)
+      File.write(File.join(@root, "app/views/articles/_#{name}.html.erb"), source)
+      described_class.call(partial: "articles/#{name}").content.first[:text][/## Local Variables\n(.*?)(?:\n\n|\z)/m, 1]
+    end
+
+    it "keeps a local named like a block parameter of a commented-out loop" do
+      expect(locals_of("row", "<%# @articles.each do |row| %>\n<%= row.title %>\n")).to eq("- **row** - calls: title")
+    end
+
+    it "reads no variable the template assigns itself as a local" do
+      expect(locals_of("total", "<% total = items.size %>\n<p><%= total %> <%= total.to_s %></p>\n<%= items.first %>\n"))
+        .to eq("- **items** - calls: first, size")
+    end
+
+    it "reads a local_assigns key only from Ruby, never from an HTML comment" do
+      expect(locals_of("guard", "<!-- local_assigns[:ghost] local_assigns.fetch(:phantom) -->\n<%= local_assigns.fetch(:tone, :plain) %>\n<%= user.name %>\n"))
+        .to eq("- **tone**\n- **user** - calls: name")
+    end
+
+    it "reads a defined? guard only from Ruby, never from page text or a string" do
+      expect(locals_of("defined", %(<p>Guard with defined?(ghost) first</p>\n<% if defined?(compact) %><%= "defined?(phantom)" %><% end %>\n)))
+        .to eq("- **compact**")
+    end
+
+    it "credits a local only with calls its Ruby makes, never one in a comment, a string or page text" do
+      source = %(<%# article.author.name was shown here %>\n<p>See article.summary</p>\n<p><%= t("article.byline") %> <%= article.title %></p>\n)
+      expect(locals_of("byline", source)).to eq("- **article** - calls: title")
     end
   end
 
