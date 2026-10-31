@@ -532,25 +532,46 @@ module RailsAiContext
           node.is_a?(Prism::CallNode) && node.name == :included && node.receiver.nil? && node.block.is_a?(Prism::BlockNode)
         end
         calls = blocks.flat_map { |node| Introspectors::SourceIntrospector.calls_outside_methods(node.block).values.flatten }
+        modifiers = modifiers_by_statement(blocks)
         calls.select { |call| call.name.to_s.match?(CONCERN_MACRO) }
              .sort_by { |call| call.location.start_offset }
-             .filter_map { |call| macro_line(call) }
+             .filter_map { |call| macro_line(call, modifiers) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "parse_concern_macros")
       end
 
-      # The call on one line: a block that spans lines shows its opening only.
-      private_class_method def self.macro_line(call)
+      # `validates :x if cond` declares only when cond holds: each statement keyed to the modifier wrapping it.
+      private_class_method def self.modifiers_by_statement(blocks)
+        nodes = blocks.flat_map { |node| Introspectors::AstWalk.each(node.block).to_a }
+        nodes.each_with_object({}.compare_by_identity) do |node, found|
+          next unless node.is_a?(Prism::IfNode) || node.is_a?(Prism::UnlessNode)
+
+          statement = node.statements&.body&.first
+          found[statement] = node if statement && statement.location.start_offset < node.predicate.location.start_offset
+        end
+      end
+
+      # The call on one line: a block that spans lines shows its opening only,
+      # and its closing too when a modifier condition follows that.
+      private_class_method def self.macro_line(call, modifiers)
         parts = Array(call.arguments&.arguments).map(&:slice)
         block = call.block
         parts << block.slice if block.is_a?(Prism::BlockArgumentNode)
         text = parts.join(", ")
         if block.is_a?(Prism::BlockNode)
           opening = block.location.start_line == block.location.end_line ? block.slice : block.slice.lines.first
+          opening = "#{opening.strip} ... #{block.closing_loc.slice}" if modifiers.key?(call) && opening != block.slice
           text = "#{text} #{opening}"
         end
-        text = text.gsub(/\s*\n\s*/, " ").strip
-        "#{call.name} #{text}" unless text.empty?
+        return if text.strip.empty?
+
+        node = call
+        while (modifier = modifiers[node])
+          keyword = modifier.is_a?(Prism::IfNode) ? "if" : "unless"
+          text = "#{text} #{keyword} #{modifier.predicate.slice}"
+          node = modifier
+        end
+        "#{call.name} #{text.gsub(/\s*\n\s*/, " ").strip}"
       end
 
       # The listener knows every callback macro Rails has, so the section no

@@ -1074,6 +1074,29 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         expect(text).to include("## Environment Dependencies\n- `ARTICLE_LIMIT`\n- `NEW_KEY`\n\n")
       end
     end
+
+    it "lists a read through ::ENV or an index op-assign, and not a plain write" do
+      Dir.mktmpdir("rac_env") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "services"))
+        File.write(File.join(tmp, "app", "services", "article_setup.rb"), <<~RUBY)
+          class ArticleSetup
+            def self.call
+              ENV["ARTICLE_A"] ||= "x"
+              ENV["ARTICLE_B"] += ":y"
+              ENV["ARTICLE_W"] = "1"
+              # ::ENV["ARTICLE_C"]
+              [ ::ENV["ARTICLE_I"], ::ENV.fetch("ARTICLE_L") ]
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "article").content.first[:text]
+
+        expect(text).to include("## Environment Dependencies\n- `ARTICLE_A`\n- `ARTICLE_B`\n- `ARTICLE_I`\n- `ARTICLE_L`\n\n")
+      end
+    end
   end
 
   # spec/models/postmark_event_spec.rb tests PostmarkEvent, and user_mailer_spec.rb a mailer.

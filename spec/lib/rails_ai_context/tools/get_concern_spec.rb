@@ -249,6 +249,31 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("## Macros & DSL\n- has_many :posts, dependent: :destroy\n")
       end
 
+      it "shows a macro under a modifier if or unless with its condition" do
+        File.write(File.join(model_concerns_dir, "publishable.rb"), <<~RUBY)
+          module Publishable
+            extend ActiveSupport::Concern
+
+            included do
+              validates :body, length: { minimum: 200 } if Rails.env.production?
+              has_many :drafts,
+                dependent: :destroy unless Rails.env.test?
+              before_save do
+                self.slug = title.parameterize
+              end if Rails.env.production?
+            end
+          end
+        RUBY
+        described_class.reset_cache!
+
+        text = described_class.call(name: "Publishable").content.first[:text]
+
+        expect(text).to include("## Macros & DSL\n" \
+          "- validates :body, length: { minimum: 200 } if Rails.env.production?\n" \
+          "- has_many :drafts, dependent: :destroy unless Rails.env.test?\n" \
+          "- before_save do ... end if Rails.env.production?\n")
+      end
+
       it "shows the macros of an included block written with braces" do
         File.write(File.join(model_concerns_dir, "sluggable.rb"), <<~RUBY)
           module Sluggable
