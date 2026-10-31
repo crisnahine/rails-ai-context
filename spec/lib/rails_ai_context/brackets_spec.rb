@@ -52,6 +52,14 @@ RSpec.describe RailsAiContext::Brackets do
       expect(described_class.span("(%r{a)}, b) x", 0, comments: :ruby)).to eq("(%r{a)}, b)")
     end
 
+    it "reads a Ruby string's interpolation as code, a quoted bracket or # inside it included" do
+      text = 'render("a", label: "#{"#"}#{x.id}", compact: true) rest'
+      nested = '(partial: "x", locals: { title: "#{ "(#{"}"})" }" }) rest'
+
+      expect(described_class.span(text, text.index("("), comments: :ruby)).to eq('("a", label: "#{"#"}#{x.id}", compact: true)')
+      expect(described_class.span(nested, 0, comments: :ruby)).to eq('(partial: "x", locals: { title: "#{ "(#{"}"})" }" })')
+    end
+
     it "is nil when the bracket never closes, or the index is not a bracket" do
       expect(described_class.span("( a ( b )", 0)).to be_nil
       expect(described_class.span("abc", 0)).to be_nil
@@ -68,6 +76,15 @@ RSpec.describe RailsAiContext::Brackets do
     it "keeps text whose group a call or more text follows" do
       expect(described_class.unwrap(%({ a: 1 }.merge(b: 2)))).to eq(%({ a: 1 }.merge(b: 2)))
       expect(described_class.unwrap(%("posts/post", post: @post))).to eq(%("posts/post", post: @post))
+    end
+  end
+
+  describe ".without_comments" do
+    it "blanks every JavaScript comment to spaces, keeping strings, newlines and offsets" do
+      text = %(a = "// kept" // gone\nb = { c: 1 /* gone } */ }\n/* two\nlines */ d)
+
+      expect(described_class.without_comments(text, comments: :js))
+        .to eq(%(a = "// kept"        \nb = { c: 1              }\n      \n         d))
     end
   end
 

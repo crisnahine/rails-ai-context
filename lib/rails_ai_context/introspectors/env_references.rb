@@ -29,6 +29,22 @@ module RailsAiContext
 
       module_function
 
+      # The ENV constant, bare or as `::ENV`.
+      def env_constant?(node)
+        (node.is_a?(Prism::ConstantReadNode) || (node.is_a?(Prism::ConstantPathNode) && node.parent.nil?)) && node.name == :ENV
+      end
+
+      # What `ENV.fetch("X", default)` or `ENV.fetch("X") { default }` falls back to, as a node; nil for any other call.
+      def fetch_default(call)
+        return unless call.is_a?(Prism::CallNode) && call.name == :fetch && env_constant?(call.receiver)
+
+        args = call.arguments&.arguments || []
+        return args[1] if args.size == 2
+
+        body = call.block.body if call.block.is_a?(Prism::BlockNode)
+        body.body.first if args.size == 1 && body.is_a?(Prism::StatementsNode) && body.body.size == 1
+      end
+
       # Yields each file's realpath and source as it reads them, so a caller
       # scanning the same files for something else reads each one once.
       # @return [Hash{String => Array<Hash>}] realpath => the references in it

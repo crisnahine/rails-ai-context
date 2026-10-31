@@ -20,6 +20,7 @@ module RailsAiContext
     RUBY_CHAR = /\G\?(?:\\.|[^\s\w])(?![\w])/
     RUBY_PERCENT = /\G%[qQwWiIrs]?([(\[{<|!\/])/
     MODIFIER = /\A(?:if|unless|while|until|rescue)\b/
+    LITERAL_START = %r{["'`/#?%]}
 
     module_function
 
@@ -40,7 +41,7 @@ module RailsAiContext
 
     # The text from the bracket at `open` through the one that closes it,
     # skipping strings, comments and the language's literals; nil when it never closes.
-    # ponytail: no heredocs, and a quote or slash inside `#{...}` interpolation ends the literal early; a real parser if that bites.
+    # ponytail: no heredocs, and `#{...}` is read as code only in double-quoted and backtick Ruby strings, not in percent or regex literals, nor a JS `${...}`; a real parser if that bites.
     def span(text, open, comments: nil)
       return nil unless OPENERS.include?(text[open])
 
@@ -65,6 +66,18 @@ module RailsAiContext
       nil
     end
 
+    # `text` with each comment blanked to spaces, newlines kept, so every offset still points at the source.
+    def without_comments(text, comments:)
+      out = text.dup
+      i = 0
+      while (i = text.index(LITERAL_START, i))
+        length, kind = literal_at(text, i, comments)
+        out[i, length] = text[i, length].gsub(/[^\n]/, " ") if kind == :comment
+        i += length || 1
+      end
+      out
+    end
+
     # The inside of the group `text` opens with, when nothing but a trailing
     # modifier (`... if x`) follows it; otherwise `text` as it is.
     def unwrap(text, comments: :ruby)
@@ -78,7 +91,7 @@ module RailsAiContext
     # The length and kind of a string, comment or other literal starting at i, or nil.
     def literal_at(text, i, comments)
       char = text[i]
-      return [ string_length(text, i), :string ] if QUOTES.include?(char)
+      return [ string_length(text, i, comments), :string ] if QUOTES.include?(char)
 
       if comments && (match = text.match(COMMENTS[comments], i)) && match.begin(0) == i
         return [ match[0].length, :comment ]
@@ -95,15 +108,49 @@ module RailsAiContext
       [ char == "%" ? percent_length(text, i, match) : match[0].length, :literal ]
     end
 
-    def string_length(text, i)
+    def string_length(text, i, comments = nil)
+      return interpolated_length(text, i) if comments == :ruby && text[i] != "'"
+
       match = text[i..][STRING]
       match ? match.length : text.length - i
+    end
+
+    # A double-quoted or backtick Ruby string, each `#{...}` in it read as code.
+    def interpolated_length(text, i)
+      quote = text[i]
+      j = i + 1
+      while j < text.length
+        char = text[j]
+        if char == "\\"
+          j += 2
+        elsif char == quote
+          return j - i + 1
+        elsif char == "#" && text[j + 1] == "{"
+          group = span(text, j + 1, comments: :ruby) or return text.length - i
+          j += 1 + group.length
+        else
+          j += 1
+        end
+      end
+      text.length - i
     end
 
     def operand_start?(text, i)
       j = i - 1
       j -= 1 while j >= 0 && text[j].match?(/\s/)
       j.negative? || text[j].match?(OPERAND_START)
+    end
+
+    # Whether `at` sits inside a Ruby `{}` hash literal, whose keys are the hash's and not keywords
+    # of the call around it. A `{` where an operand can start opens a hash; after a call or `->` it opens a block.
+    def in_hash_literal?(code, at)
+      code[0...at].to_enum(:scan, /\{/).any? do
+        open = Regexp.last_match.begin(0)
+        next false unless operand_start?(code, open) && !code[0...open].rstrip.end_with?("->")
+
+        group = span(code, open, comments: :ruby)
+        group && open + group.length > at
+      end
     end
 
     # `%w[a )]`: the literal runs to the delimiter that closes it, nesting for

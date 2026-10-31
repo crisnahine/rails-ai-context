@@ -25,6 +25,17 @@ RSpec.describe RailsAiContext::ErbSource do
     it "yields an empty body for an empty tag" do
       expect(described_class.tag_bodies("<%%>")).to eq("")
     end
+
+    it "blanks a Ruby comment inside a code tag" do
+      expect(described_class.tag_bodies(%(<% # render "x" %>)).strip).to eq("")
+      expect(described_class.tag_bodies("<%\n # @legacy = 1\n%>").strip).to eq("")
+      expect(described_class.tag_bodies("<% x = 1 # @ghost %>").strip).to eq("x = 1")
+    end
+
+    # Erubi prints `<%%= @hidden %>` as the text `<%= @hidden %>`.
+    it "reads an escaped <%% tag as text, not code" do
+      expect(described_class.tag_bodies("<p><%%= @hidden %></p>\n<%= @shown %>\n")).to eq(" @shown ")
+    end
   end
 
   describe ".ruby_in_place" do

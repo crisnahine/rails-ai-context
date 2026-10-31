@@ -44,6 +44,14 @@ module RailsAiContext
           path_name
       end
 
+      # The innermost class or module a line sits in, as written (`class Billing::Charge`); a `class << self` body is its class's.
+      def enclosing(source, line)
+        node = AstWalk.each(AstCache.parse_string(source).value).select do |n|
+          (n.is_a?(Prism::ClassNode) || n.is_a?(Prism::ModuleNode)) && (n.location.start_line..n.location.end_line).cover?(line)
+        end.last
+        node && "#{node.is_a?(Prism::ClassNode) ? 'class' : 'module'} #{node.constant_path.slice}"
+      end
+
       # The constant a file declares for `path_name`: the same name ignoring case, else the
       # shortest that ends in it (a plugin nests its tree under its own namespace).
       #

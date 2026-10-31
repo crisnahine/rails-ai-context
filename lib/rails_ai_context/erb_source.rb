@@ -7,7 +7,8 @@ module RailsAiContext
   # template's ivars, and the ENV names a `.yml` or a view reads - and a
   # second copy of the tag regex is a second answer to "what is a tag".
   module ErbSource
-    TAG = /<%={0,2}-?(.*?)-?%>/m
+    # Erubi prints `<%%` and what follows as text; a bare `<%%>` is still an empty tag.
+    TAG = /<%(?!%(?!>))={0,2}-?(.*?)-?%>/m
 
     module_function
 
@@ -33,9 +34,9 @@ module RailsAiContext
       src[/\A(?:#[^\n]*\n)*/].count("\n")
     end
 
-    # The code tag bodies, joined. Order is kept; line numbers are not.
+    # The code tag bodies, joined, with Ruby comments in them blanked. Order is kept; line numbers are not.
     def tag_bodies(source)
-      source.to_s.scan(TAG).flatten.reject { |body| comment?(body) }.join("\n")
+      source.to_s.scan(TAG).flatten.reject { |body| comment?(body) }.map { |body| RubySource.without_comments(body) }.join("\n")
     end
 
     # Only `<%#` (or `<%-#`) is an ERB comment; `<% # note` is code whose first line is a Ruby comment.
@@ -54,11 +55,28 @@ module RailsAiContext
         match = Regexp.last_match
         out << blank(text[last...match.begin(0)])
         body = match[1].to_s
-        out << (comment?(body) ? blank(body) : blank_comment_lines(body))
+        # Tags sharing a line are joined, so a comment left in would swallow the next tag's code.
+        out << (comment?(body) ? blank(body) : RubySource.without_comments(body))
         last = match.end(0)
       end
       out << blank(text[last..].to_s)
       out
+    end
+
+    # The template with what Ruby never runs blanked and every character offset kept: text and
+    # delimiters, `<%#` comments, and comments and string bodies in a tag. Only tags matching `only` are parsed; the rest blank.
+    def masked(source, only: nil)
+      text = source.to_s
+      out = +""
+      last = 0
+      text.to_enum(:scan, TAG).each do
+        match = Regexp.last_match
+        body = match[1].to_s
+        out << blank(text[last...match.begin(1)])
+        out << (comment?(body) || (only && !body.match?(only)) ? blank(body) : RubySource.code_only(body))
+        last = match.end(1)
+      end
+      out << blank(text[last..].to_s)
     end
 
     # Tags go and their newlines stay, so the rest parses at its written indentation;
@@ -111,19 +129,5 @@ module RailsAiContext
       text.gsub(/[^\n]/, " ")
     end
     private_class_method :blank
-
-    # Tags sharing a line are joined, so a comment left in would swallow the next tag's code.
-    def blank_comment_lines(body)
-      return body unless body.include?("#")
-
-      out = body.b
-      # Last first: a multibyte comment blanks to fewer bytes and would shift later offsets.
-      AstCache.parse_string(body).comments.reverse_each do |comment|
-        loc = comment.location
-        out[loc.start_offset...loc.end_offset] = blank(loc.slice).b
-      end
-      out.force_encoding(body.encoding)
-    end
-    private_class_method :blank_comment_lines
   end
 end
