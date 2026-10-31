@@ -38,7 +38,8 @@ module RailsAiContext
       # keeps, with no query (Reflection#has_active_cached_counter?).
       COUNTER_READS = %i[size any? empty? none?].to_set.freeze
 
-      STRICT_LOCALS = /\#\s+locals:\s+\((.*?)\)/m
+      # ActionView::Template::STRICT_LOCALS_REGEX.
+      STRICT_LOCALS = /\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m
       MAX_PARTIAL_DEPTH = 4
 
       # What an expression holds: records of `models` (several when a branch
@@ -215,9 +216,16 @@ module RailsAiContext
           body = Array(@models.dig(model, :scopes)).find { |s| s.is_a?(Hash) && s[:name].to_s == name }&.dig(:body)
           next unless body
 
-          called = body.to_s.scan(/\b([a-z_]\w*)\b/).flatten.uniq - [ name ]
+          called = called_names(body.to_s) - [ name ]
           ".#{body}" + called.map { |inner| scope_body([ model ], inner, depth + 1) }.join
         end.join
+      end
+
+      def called_names(code)
+        (@called_names ||= {})[code] ||= AstWalk.each(AstCache.parse_uncached(code).value)
+          .select { |node| node.is_a?(Prism::CallNode) }
+          .sort_by { |call| (call.message_loc || call.location).start_offset }
+          .map { |call| call.name.to_s }.uniq
       end
 
       # `current_user` is the signed-in User in Devise and in the Rails 8
@@ -559,12 +567,22 @@ module RailsAiContext
         node.unescaped if node.is_a?(Prism::SymbolNode) || node.is_a?(Prism::StringNode)
       end
 
-      # A partial's `locals:` magic comment gives each flag its default.
+      # A partial's `locals:` magic comment gives each flag its default; Rails
+      # compiles the list as the template method's parameters.
       def declared_flags(file)
         declared = RailsAiContext::SafeFile.read(file).to_s[STRICT_LOCALS, 1]
         return {} unless declared
 
-        declared.scan(/(\w+):\s*(true|false|nil)\b/).to_h { |name, value| [ name, value == "true" ] }
+        definition = AstCache.parse_uncached("def _(#{declared});end").value.statements.body.first
+        params = definition.parameters if definition.is_a?(Prism::DefNode)
+        Array(params&.keywords).each_with_object({}) do |param, found|
+          next unless param.is_a?(Prism::OptionalKeywordParameterNode)
+
+          case param.value
+          when Prism::TrueNode then found[param.name.to_s] = true
+          when Prism::FalseNode, Prism::NilNode then found[param.name.to_s] = false
+          end
+        end
       end
 
       # The partial Rails renders for a model's records: its to_partial_path, prefixed with the controller's namespace.

@@ -680,6 +680,16 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "keeps a model whose heredoc text reads like an abstract class line" do
+      models = static_models(
+        "app/models/application_record.rb" => "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n",
+        "app/models/post.rb" => "class Post < ApplicationRecord\n  DOC = <<~TEXT\n    self.abstract_class = true\n    primary_abstract_class\n  TEXT\n" \
+                                "  has_many :comments\nend\n"
+      )
+
+      expect(models.keys).to contain_exactly("Post")
+    end
+
     it "lists a class that shares a model file only when it reaches a record base through the app" do
       Dir.mktmpdir do |dir|
         files = {

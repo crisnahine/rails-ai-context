@@ -435,6 +435,37 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "the body of a custom validate method" do
+    it "is read from a def with parameters or a trailing comment" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "post.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~RUBY)
+          class Post < ApplicationRecord
+            validate :check_title, :not_locked
+
+            def check_title(record = nil)
+              errors.add(:title) unless title
+            end
+
+            def not_locked # rubocop:disable Metrics/AbcSize
+              errors.add(:base, "locked") if locked?
+            end
+          end
+        RUBY
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return(models: {
+          "Post" => { associations: [], validations: [], custom_validates: %w[check_title not_locked], file: "app/models/post.rb" }
+        })
+
+        text = described_class.call(model: "Post").content.first[:text]
+
+        expect(text).to include("- **Custom:** `check_title` → errors.add(:title) unless title")
+        expect(text).to include("- **Custom:** `not_locked` → errors.add(:base, \"locked\") if locked?")
+      end
+    end
+  end
+
   describe "a concern a macro includes" do
     it "says which macro" do
       allow(described_class).to receive(:cached_context).and_return(models: {

@@ -273,6 +273,20 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
     end
   end
 
+  it "keeps a class outside app/models whose superclass is written on the line after the <" do
+    Dir.mktmpdir do |dir|
+      {
+        "app/models/user.rb" => "class User < ApplicationRecord\nend\n",
+        "app/domain/post.rb" => "class Post <\n  ApplicationRecord\nend\n"
+      }.each do |name, source|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, name)))
+        File.write(File.join(dir, name), source)
+      end
+
+      expect(described_class.model_paths(dir).map(&:file)).to contain_exactly("app/models/user.rb", "app/domain/post.rb")
+    end
+  end
+
   it "keeps a class outside app/models only when its superclass resolves, from where it is declared, to a model" do
     Dir.mktmpdir do |dir|
       {

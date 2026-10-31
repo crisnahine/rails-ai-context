@@ -58,4 +58,27 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
     expect(sections).to eq([ [ "class definition", 1 ], [ "scopes", 2 ] ])
   end
+
+  it "does not label a line of heredoc text" do
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "app", "models", "article.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, <<~RUBY)
+        class Article < ApplicationRecord
+          SUMMARY = <<~TEXT
+            has_many rows per article
+          TEXT
+        end
+      RUBY
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Article" => { associations: [], validations: [], file: "app/models/article.rb" }
+      })
+
+      text = described_class.call(model: "Article").content.first[:text]
+
+      expect(text).to include("**Structure:** class definition(1-1) → constants(2-5)\n")
+    end
+  end
 end

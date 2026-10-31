@@ -130,7 +130,8 @@ module RailsAiContext
         model_paths(root).to_set(&:path_name)
       end
 
-      CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<[^\S\n]*([\w:]+)/
+      # Ruby reads a superclass on the line after the `<`.
+      CLASS_WITH_SUPERCLASS = /class[^\S\n]+([\w:]+)[^\S\n]*<\s*([\w:]+)/
       MODEL_BASES = %w[ActiveRecord::Base ApplicationRecord].freeze
 
       # A model can live in any autoload root; a class there is kept when its superclass is a model base,

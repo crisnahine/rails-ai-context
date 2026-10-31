@@ -500,8 +500,11 @@ module RailsAiContext
       # `primary_abstract_class`, so reading the assignment alone left the app's
       # own base looking like a model with a table.
       def abstract_class?(source)
-        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/) ||
-          source.match?(/^[^\S\n]*primary_abstract_class\b/)
+        return false unless source.include?("abstract_class")
+
+        code = RubySource.code_only(source)
+        code.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/) ||
+          code.match?(/^[^\S\n]*primary_abstract_class\b/)
       end
 
       # A file under any concerns/ that is not named for a class. One that is
