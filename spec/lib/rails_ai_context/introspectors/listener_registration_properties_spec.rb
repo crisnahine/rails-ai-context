@@ -51,6 +51,9 @@ RSpec.describe "Listener registration properties" do
             config.autoload_paths += %w[lib_static]
             config.log_tags ||= [ :request_id ]
             config.force_ssl &&= false
+            ENV["PROBE_KEY"] ||= "x"
+            ENV["PROBE_COUNT"] += "1"
+            ENV["PROBE_FLAG"] &&= "y"
             config.hosts << "probe" rescue nil
 
             if @state == 1
