@@ -5,6 +5,112 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A comment, a string or a heredoc is no longer read as code.** About 150
+  answers came from a regex that matched text Ruby never runs: a
+  commented-out line, a word inside a string, a line inside a heredoc or an
+  `=begin` block. Each of those readers now reads only the code, through
+  Prism, the existing listeners, or the new `RubySource`, which blanks
+  comments and string bodies while keeping every line and column. The
+  sections below list what each surface stops reporting and what it now
+  finds.
+- **ERB.** A `<%%` escape is text, as Erubi prints it. A Ruby comment inside a
+  code tag (`<% # render "old" %>`) counts for nothing, and text inside
+  `<!-- -->` is no markup, while ERB inside it still runs.
+- **Views and partials** (`rails_get_view`, `rails_get_partial_interface`).
+  A render inside a string, a comment or plain page text is no render, and a
+  `partial:` key inside another helper's hash (`data: { partial: }`) is no
+  partial. A form builder named in a string no longer renames a record
+  render. A partial's locals leave out its own variables and what a
+  commented-out loop names, and read `local_assigns` and `defined?` only from
+  Ruby. `formats:` and `partial:` inside a string value, a jbuilder line's
+  trailing comment and a Turbo Stream builder named in a comment no longer
+  move a render site. `rails_get_view` prints the form builders and
+  components the views section counted, which it never printed before.
+- **Turbo** (`rails_get_turbo_map`). A frame, stream action or Drive
+  attribute inside an ERB comment is not counted. A frame's `src:` and a
+  subscription's parts on the next line of a wrapped call are read, so the
+  stream wiring stops warning about a mismatch that is not there. A
+  permanent element's id comes from its `id` attribute, never `data-id`, and
+  elements whose attributes hold ERB, or that a tag helper writes, are found.
+  `format.turbo_stream` in a comment is no stream response.
+- **Stimulus** (`rails_get_stimulus`). A commented import, registration,
+  `extends`, `static targets`, `this.x()` call or Turbo event listener counts
+  for nothing. An arrow-function class field is an action, a wrapped import
+  is read, a class written on one line has its methods, and lifecycle lists
+  only the hooks the class defines (`this.observer.disconnect()` is no
+  hook). A commented alias entry and a commented plugin import in
+  `vite.config` are skipped.
+- **Controllers and actions** (`rails_get_context`, `rails_get_controllers`,
+  `rails_get_edit_context`, `rails_search_code`). Only a real assignment sets
+  an ivar: `@post == x` and `@post.title = x` do not. `render action: :show`
+  and `render "edit"` are read, so are methods called under a modifier `if`
+  and filters written as `private def`. A file that declares another class
+  first no longer lends that class's method. The class a method belongs to
+  respects nesting and `class << self`, so `class Error < StandardError; end`
+  on the line above no longer names it.
+- **Validate** (`rails_validate`, rails level). A route or helper inside a
+  heredoc or `=begin` block no longer silences a missing-route warning, and
+  every line of a multi-line `helper_method` counts. A controller set through
+  `data: { controller: }` is checked. An email address in a string is no
+  ivar, and a comparison is no assignment. A commented broadcast or
+  subscription is not checked. The memory warning skips chains over
+  `params`, strings and literals, such as `params.keys.map`.
+- **analyze_feature.** Tag-helper `data: { controller: }` is read, ERB inside
+  `data-controller` gives no names, the test count reads `it(...)`,
+  `specify` and `it { }` one-liners and skips heredoc text, and every
+  `ENV.fetch` form is listed.
+- **Conventions and test info** (`rails_get_config(section:"conventions")`,
+  `rails_get_test_info`). The create action ends at its own `end` inside a
+  namespace module, and commented code adds no permission check, rescue,
+  read-only page, default locale or UI language. Japanese flash text with
+  kanji is Japanese. Devise test helpers and route helpers count only where
+  the code uses them.
+- **Models, concerns and performance.** A custom validate method's body is
+  read when the def has parameters or a trailing comment. A heredoc adds no
+  structure line, makes no model abstract, and holds no concern macro. A
+  multi-line macro and an `included { }` block are read whole. A class whose
+  superclass sits on the next line is found. A comment naming
+  `Rails::Engine` makes no Rack app an engine. Strict locals read every
+  default, as Rails' own pattern does, a word in a scope's SQL string calls
+  no scope, a comparison or an `order` on a counter column is not a write,
+  and `Model.all` in a comment is not flagged.
+- **Jobs and services** (`rails_get_job_pattern`,
+  `rails_get_service_pattern`). Commented `queue_as`, broadcasts, mailers,
+  `include` words and `.success` calls count for nothing, and heredoc text
+  adds no guard clause. `queue_as proc { }.call` is a computed queue, not a
+  Proc. A mailer whose parent is the app's own mailer base is listed. A
+  whenever runner names the job it enqueues, or no class so its command
+  shows. A rescue modifier rescues StandardError, and a service named only
+  in a comment has no caller there.
+- **Config and data files.** The credentials example is read as YAML, so a
+  block scalar adds no key and nested keys keep their full path. A
+  `=begin` block sets no default locale. Shards come from the database list,
+  in the guide's layout too, and `shard_count:` is no shard. A computed puma
+  setting reads as unknown, while `ENV[...] || 2` keeps its default. A
+  commented health route is no health check, an `ENV.fetch` default names the
+  adapter, doctor finds a password in a flow-style mapping, the schema
+  version comes from the `define` call, mise's `[tools.ruby]` table is read,
+  and a `CREATE TABLE` or `CREATE VIEW` inside a PostgreSQL function body or
+  string is not a table or view.
+- **generate_test, diagnose, migration_advisor, review_changes.** A
+  paren-less `create :post` counts, a `def` inside a heredoc names no sign-in
+  helper, a string in an inclusion list is a value, and a `%r{}` format is
+  read like `/.../`. `diagnose` takes no receiver from a string.
+  `:null => false` gets the NOT NULL warning. A validation moved into a
+  heredoc or wrapped in `=begin` is reported as removed.
+- **Install and boot.** `::RailsAiContext.configure` is the gem's call, a
+  heredoc line is not, and a guard that is only a comment or closes before
+  the call does not count; a bare guard with a note after it is upgraded.
+  The generator leaves heredoc text alone and keeps every magic comment
+  above the guard it adds. The static tier reads heredoc escapes and `%W`
+  and `%I` lists. The CLI finds the app a Rails 5.1 engine's `bin/rails`
+  names through `__FILE__`, and a Rails 4.2 or 5.0 engine's `test/dummy` or
+  `spec/dummy`.
+
 ## [5.39.0] - 2026-10-31
 
 ### Changed
