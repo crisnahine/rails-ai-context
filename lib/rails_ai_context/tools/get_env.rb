@@ -2,6 +2,7 @@
 
 require "ipaddr"
 require "uri"
+require "yaml"
 
 module RailsAiContext
   module Tools
