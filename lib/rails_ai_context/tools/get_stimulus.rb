@@ -298,7 +298,8 @@ module RailsAiContext
           raw = RailsAiContext::SafeFile.read(path) or next
           next unless raw.include?("#{html_name}#")
 
-          raw.scan(descriptor) { |event, action| (found[action] ||= []) << event unless Array(found[action]).include?(event) }
+          markup = Introspectors::ViewTemplateIntrospector.strip_markup_comments(raw).gsub(/<!--.*?-->/m, "")
+          markup.scan(descriptor) { |event, action| (found[action] ||= []) << event unless Array(found[action]).include?(event) }
         end
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "view_action_events")

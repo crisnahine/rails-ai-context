@@ -484,6 +484,15 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
         expect(markup).to include(%(data-action="search#reset"))
       end
 
+      it "takes no event from an action the markup only names inside an HTML or ERB comment" do
+        File.write(File.join(@root, "app/views/products/_legacy.html.erb"),
+                   %(<!-- <button data-action="click->search#reset">Reset</button> -->\n<%# <a data-action="mouseover->search#reset"></a> %>\n))
+
+        expect(markup).to include(%(data-action="search#reset"))
+        expect(markup).not_to include("click->search#reset")
+        expect(markup).not_to include("mouseover->search#reset")
+      end
+
       it "writes the class and outlet attributes the controller reads" do
         expect(markup).to include(%(data-search-open-class="..."), %(data-search-no-results-class="..."), %(data-search-result-list-outlet="..."))
       end

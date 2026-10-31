@@ -48,6 +48,25 @@ RSpec.describe RailsAiContext::Introspectors::ModuleAliases do
     expect(resolve("~src/widget")).to eq(File.join(@root, "src/widget.ts"))
   end
 
+  it "reads no alias from an entry or a resolve block that is commented out" do
+    write("old/widget.ts", "")
+    write("vite.config.js", <<~JS)
+      export default {
+        // resolve: { alias: { "~stale": "./old" } },
+        resolve: { alias: {
+          // "~old": "./old",
+          /* "~legacy": "./old", */
+          "~src": "./src"
+        } }
+      }
+    JS
+
+    expect(resolve("~old/widget")).to be_nil
+    expect(resolve("~legacy/widget")).to be_nil
+    expect(resolve("~stale/widget")).to be_nil
+    expect(resolve("~src/widget")).to eq(File.join(@root, "src/widget.ts"))
+  end
+
   it "reads vite's own default, a URL off import.meta.url" do
     write("vite.config.ts", %(export default { resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } } }))
 

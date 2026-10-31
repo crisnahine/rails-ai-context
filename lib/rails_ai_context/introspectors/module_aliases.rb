@@ -150,6 +150,7 @@ module RailsAiContext
       # or `fileURLToPath(new URL(..., import.meta.url))`; a key ending in `$` is exact.
       def bundler_aliases(path)
         text = RailsAiContext::SafeFile.read(path) or return []
+        text = RailsAiContext::Brackets.without_comments(text, comments: :js)
         resolve_at = text.index(RESOLVE_BLOCK) or return []
         resolve = RailsAiContext::Brackets.span(text, text.index("{", resolve_at), comments: :js).to_s
         alias_at = resolve.index(ALIAS_BLOCK) or return []

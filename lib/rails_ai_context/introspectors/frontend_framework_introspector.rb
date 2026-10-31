@@ -304,6 +304,7 @@ module RailsAiContext
           next unless File.exist?(path)
 
           content = RailsAiContext::SafeFile.read(path) or next
+          content = RailsAiContext::Brackets.without_comments(content, comments: :js)
           VITE_IMPORT_MARKERS.each do |source, sym|
             found << sym if content.match?(/from\s+['"]#{Regexp.escape(source)}['"]/)
           end

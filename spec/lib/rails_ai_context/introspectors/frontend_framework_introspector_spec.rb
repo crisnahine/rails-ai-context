@@ -315,6 +315,19 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  describe "a vite config with a plugin import commented out" do
+    it "reads the framework from the live import only" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, "vite.config.ts"),
+                   %(// import react from '@vitejs/plugin-react'\n/* import { svelte } from "@sveltejs/vite-plugin-svelte" */\nimport vue from '@vitejs/plugin-vue'\nexport default {}\n))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frameworks].keys).to eq([ :vue ])
+      end
+    end
+  end
+
   # An Angular app that also depends on react read as React, because the
   # marker list decided the primary framework.
   describe "an app that depends on two frameworks" do
