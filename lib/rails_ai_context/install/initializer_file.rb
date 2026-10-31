@@ -122,11 +122,36 @@ module RailsAiContext
       private_class_method :configure_call?
 
       def bare_guard?(content)
-        content.match?(BARE_GUARD)
+        bare_guard_lines(content).any?
       end
 
-      # Either form counts as guarded, so a re-run neither double-wraps an
-      # initializer nor treats an unguarded one as guarded.
+      # The lines of the bare guards the configure call runs under. A closed
+      # `if defined?(RailsAiContext)` elsewhere in the file protects nothing.
+      def bare_guard_lines(content)
+        path = configure_path(content) or return []
+
+        lines = content.lines
+        path.each_cons(2).filter_map do |parent, child|
+          next unless parent[0] == :if && parent[2].equal?(child)
+
+          line = first_line(parent[1])
+          line if line && lines[line - 1].match?(BARE_GUARD)
+        end
+      end
+
+      def first_line(node)
+        return node[2][0] if node[0].is_a?(Symbol) && node[0].start_with?("@")
+
+        node.each do |child|
+          line = child.is_a?(Array) && first_line(child)
+          return line if line
+        end
+        nil
+      end
+      private_class_method :first_line
+
+      # Either form anywhere in the text, for a file with no configure call
+      # to place a guard around, so a re-run does not wrap it twice.
       def guarded?(content)
         content.match?(BARE_GUARD) || content.match?(CURRENT_GUARD)
       end

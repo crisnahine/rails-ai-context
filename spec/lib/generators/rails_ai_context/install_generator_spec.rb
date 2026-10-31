@@ -187,6 +187,22 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
                                                         "RailsAiContext.configure do |config|\n")
     end
 
+    it "wraps a configure call that a closed `if defined?(RailsAiContext)` above it does not cover, leaves that `if` alone, and the doctor agrees" do
+      File.write(initializer_path, "# frozen_string_literal: true\n\nif defined?(RailsAiContext)\n  x = 1\nend\n" \
+                                   "RailsAiContext.configure do |config|\nend\n")
+      said = []
+      allow(generator).to receive(:say) { |text, *| said << text }
+
+      2.times { generator.create_initializer }
+      content = File.read(initializer_path)
+
+      expect(content).to start_with("# frozen_string_literal: true\n\n#{RailsAiContext::Install::InitializerFile::GUARD_LINE}\n" \
+                                    "  if defined?(RailsAiContext)\n    x = 1\n  end\n  RailsAiContext.configure do |config|\n")
+      expect(content).to end_with("  end\nend\n")
+      expect(said.last).to eq("config/initializers/rails_ai_context.rb is up to date - no changes needed")
+      expect(RailsAiContext::Doctor.new(RailsAiContext::StaticApp.new(tmpdir)).send(:check_initializer_guard)).to be_nil
+    end
+
     it "keeps added sections inside the configure block for guarded initializers" do
       File.write(initializer_path, <<~RUBY)
         # frozen_string_literal: true

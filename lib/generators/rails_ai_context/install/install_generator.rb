@@ -541,9 +541,13 @@ module RailsAiContext
       # guard (written before this gem checked respond_to?(:configure)) in place.
       # No-op if the guard is already the current form.
       def upgrade_bare_guard(content)
-        upgraded = content.sub(BARE_GUARD_PATTERN) do
-          "#{Regexp.last_match(1)}#{RailsAiContext::Install::InitializerFile::GUARD_LINE}"
+        lines = content.lines
+        RailsAiContext::Install::InitializerFile.bare_guard_lines(content).each do |line|
+          lines[line - 1] = lines[line - 1].sub(BARE_GUARD_PATTERN) do
+            "#{Regexp.last_match(1)}#{RailsAiContext::Install::InitializerFile::GUARD_LINE}"
+          end
         end
+        upgraded = lines.join
         [ upgraded, upgraded != content ]
       end
 
@@ -564,7 +568,7 @@ module RailsAiContext
 
       def guarded_initializer?(content)
         file = RailsAiContext::Install::InitializerFile
-        file.guarded?(content) || file.any_guard_before_configure?(content)
+        file.configures?(content) ? file.any_guard_before_configure?(content) : file.guarded?(content)
       end
 
       def indent_content(content)
