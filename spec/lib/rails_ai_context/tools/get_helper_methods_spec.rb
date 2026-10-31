@@ -448,6 +448,12 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
 
         expect(includes_of(source)).to eq([ "- A::SanitizeHelper", "- A::TextHelper" ])
       end
+
+      it "lists a module named by an expression as its source text" do
+        source = "module DocsHelper\n  include Rails.application.routes.url_helpers\n  include Real\n\n  def visible; end\nend\n"
+
+        expect(includes_of(source)).to eq([ "- Rails.application.routes.url_helpers", "- Real" ])
+      end
     end
 
     context "when helpers live only in a pack" do

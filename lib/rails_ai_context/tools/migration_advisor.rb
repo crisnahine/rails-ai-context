@@ -624,7 +624,7 @@ module RailsAiContext
         def option_value(options, key)
           call = RailsAiContext::AstCache.parse_uncached("f(#{options})").value.statements.body.first if options
           hash = call.arguments&.arguments&.last if call.is_a?(Prism::CallNode)
-          return unless hash.is_a?(Prism::KeywordHashNode)
+          return unless hash.is_a?(Prism::KeywordHashNode) || hash.is_a?(Prism::HashNode)
 
           hash.elements.find { |pair| pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) && pair.key.unescaped == key.to_s }&.value
         end

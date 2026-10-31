@@ -197,6 +197,18 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(call_with(minitest_data)).not_to include("Devise::Test::IntegrationHelpers")
     end
 
+    it "does not sign in when only a comment names sign_in" do
+      File.write(File.join(@root, "test", "controllers", "posts_controller_test.rb"),
+                 "class PostsControllerTest < ActionDispatch::IntegrationTest\n" \
+                 "  include Devise::Test::IntegrationHelpers\n" \
+                 "  test \"x\" do\n    # sign_in users(:admin) once the login page ships\n    get posts_path\n  end\nend\n")
+
+      text = call_with(minitest_data)
+
+      expect(text).to include("include Devise::Test::IntegrationHelpers")
+      expect(text).not_to include("sign_in users(")
+    end
+
     it "does not hand fixture syntax to an app with no fixtures" do
       text = call_with(minitest_data.merge(fixtures: nil, fixture_names: nil))
 

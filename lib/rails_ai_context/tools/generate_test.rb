@@ -88,8 +88,9 @@ module RailsAiContext
             })[:calls].select { |call| call[:arguments].first.is_a?(Symbol) }
             create_count += factory_calls.count { |call| call[:name] == "create" }
             build_count += factory_calls.count { |call| call[:name] == "build" }
-            let_count += source.scan(/\blet[!]?\(:/).size
-            instance_var_count += source.scan(/@\w+\s*=/).size
+            code = RailsAiContext::RubySource.code_only(source)
+            let_count += code.scan(/\blet[!]?\(:/).size
+            instance_var_count += code.scan(/@\w+\s*=/).size
           end
 
           { factory: create_count >= build_count ? :create : :build, let: let_count > instance_var_count }

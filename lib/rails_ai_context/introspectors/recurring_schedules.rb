@@ -98,13 +98,16 @@ module RailsAiContext
         end
       end
 
-      # `Job.set(wait: 1.hour).perform_later` enqueues Job too.
+      # `Job.set(wait: 1.hour).perform_later` enqueues Job too, and `Job.new.perform` runs it inline.
       def runner_class(code)
         AstWalk.each(AstCache.parse_string(code).value) do |node|
-          next unless node.is_a?(Prism::CallNode) && RUNNER_CALLS.include?(node.name)
+          next unless node.is_a?(Prism::CallNode) && (RUNNER_CALLS.include?(node.name) || node.name == :perform)
 
           receiver = node.receiver
-          receiver = receiver.receiver if receiver.is_a?(Prism::CallNode) && receiver.name == :set
+          via = receiver.name if receiver.is_a?(Prism::CallNode)
+          next if node.name == :perform && via != :new
+
+          receiver = receiver.receiver if %i[set new].include?(via)
           return receiver.slice.delete_prefix("::") if receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
         end
         nil

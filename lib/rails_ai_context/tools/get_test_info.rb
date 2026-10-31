@@ -442,8 +442,9 @@ module RailsAiContext
             real_root = File.realpath(suite_root).to_s
             safe_glob(test_dir, "**/*_test.rb", real_root).first(5).each do |path|
               content = RailsAiContext::SafeFile.read(path) or next
-              has_devise = true if RailsAiContext::RubySource.without_comments(content).include?("Devise::Test")
-              has_sign_in = true if content.match?(/\bsign_in\b/)
+              code = RailsAiContext::RubySource.without_comments(content)
+              has_devise = true if code.include?("Devise::Test")
+              has_sign_in = true if code.match?(/\bsign_in\b/)
             end
           end
 

@@ -23,6 +23,17 @@ RSpec.describe RailsAiContext::Introspectors::RecurringSchedules do
       expect(tasks.first[:class]).to eq("DigestJob")
     end
 
+    it "takes the runner's class from a job it builds and performs inline" do
+      tasks = whenever_tasks(<<~RUBY)
+        every 1.day do
+          runner "ReportJob.new.perform"
+          runner "Billing::InvoiceJob.new(1).perform_now"
+        end
+      RUBY
+
+      expect(tasks.map { |task| task[:class] }).to eq(%w[ReportJob Billing::InvoiceJob])
+    end
+
     it "names no class for a runner that enqueues nothing, so its command shows" do
       tasks = whenever_tasks(<<~RUBY)
         every 1.day do

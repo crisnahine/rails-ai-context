@@ -1072,6 +1072,16 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     it "names a nested key by its full path, as the booted app does" do
       expect(keys_listed("stripe:\n  secret_key: x\n  public_key: y\n")).to eq(%w[stripe.public_key stripe.secret_key])
     end
+
+    it "lists the keys by their indentation when the file is not valid YAML" do
+      example = "aws:\n  access_key_id: %ACCESS%\n  secret: @placeholder\nbanner: |\n  note: not a key\nsecret_key_base: `generated`\n"
+
+      expect(keys_listed(example)).to eq(%w[aws.access_key_id aws.secret banner secret_key_base])
+    end
+
+    it "names a key whose value is not a mapping of names as one key" do
+      expect(keys_listed("secret_key_base: {{SECRET}}\nports: {1: web}\nempty: {}\n")).to eq(%w[empty ports secret_key_base])
+    end
   end
 
   describe "credentials and encrypted-columns trailer" do

@@ -2375,6 +2375,14 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).not_to include("let(:post)")
     end
 
+    it "reads the let or instance variable style from code, not comments or strings" do
+      lets = generated_for("let(:a) { create(:post) }\n# @a = create(:post)\nit \"sets @b = 1 and @c = 2\" do\nend\n")
+      ivars = generated_for("@a = create(:post)\n# let(:a) { create(:post) }\nit \"needs no let(:b) or let(:c)\" do\nend\n")
+
+      expect(lets).to include("let(:post) { create(:post) }")
+      expect(ivars).not_to include("let(:post)")
+    end
+
     it "follows the app to build when its specs build more than they create" do
       text = generated_for("let(:a) { build(:post) }\nlet(:b) { build(:post) }\n")
 

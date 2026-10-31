@@ -150,6 +150,17 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         .content.first[:text]).not_to include("without a default")
     end
 
+    it "reads null and default inside braces as the same options" do
+      [ "{ null: false }", "{ :null => false }" ].each do |options|
+        text = described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: options).content.first[:text]
+        expect(text).to include("`null: false` without a default fails")
+      end
+      [ "{ null: false, default: \"\" }", "{ :null => false, :default => \"\" }" ].each do |options|
+        text = described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: options).content.first[:text]
+        expect(text).not_to include("without a default")
+      end
+    end
+
     it "warns that create_table fails on a table that exists" do
       text = described_class.call(action: "create_table", table: "users", column: "name:string").content.first[:text]
       expect(text).to include("**Warning:** Table `users` already exists.")

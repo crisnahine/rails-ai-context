@@ -301,7 +301,7 @@ module RailsAiContext
         Introspectors::AstWalk.each(AstCache.parse_string(source).value).flat_map do |node|
           next [] unless node.is_a?(Prism::CallNode) && node.name == :include && node.receiver.nil?
 
-          Array(node.arguments&.arguments).filter_map { |arg| arg.slice if arg.is_a?(Prism::ConstantReadNode) || arg.is_a?(Prism::ConstantPathNode) }
+          Array(node.arguments&.arguments).map { |arg| arg.slice.gsub(/\s+/, " ") }
         end
       end
 
