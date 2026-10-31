@@ -196,6 +196,17 @@ module RailsAiContext
         end
       end
 
+      # The captures of each match in `text` that starts in code, not inside a
+      # string or heredoc; `literal_free` is the same source with those blanked.
+      private_class_method def self.code_scan(text, literal_free, pattern)
+        found = []
+        text.scan(pattern) do
+          match = Regexp.last_match
+          found << match.captures unless literal_free[match.begin(0)] == " "
+        end
+        found
+      end
+
       # Scan controllers for app-specific authorization, flash, and error-handling patterns
       private_class_method def self.detect_app_patterns
         controllers_dir = rails_app.root.join("app", "controllers").to_s
@@ -224,14 +235,16 @@ module RailsAiContext
           # not a second ProductsController.
           controller_name = path.delete_prefix("#{real_controllers_dir}/").delete_suffix(".rb")
 
-          auth_checks.concat(code.scan(/\b(can_\w+\??)/).flatten)
-          auth_denials.concat(code.scan(/redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).flatten
+          literal_free = RailsAiContext::RubySource.code_only(content)
+
+          auth_checks.concat(code_scan(code, literal_free, /\b(can_\w+\??)/).flatten)
+          auth_denials.concat(code_scan(code, literal_free, /redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).flatten
             .map { |a| "redirect_to ..., alert: \"#{a}\"" })
-          flash_notices.concat(code.scan(/notice:\s*"([^"]*)"/).flatten)
-          flash_alerts.concat(code.scan(/alert:\s*"([^"]*)"/).flatten)
+          flash_notices.concat(code_scan(code, literal_free, /notice:\s*"([^"]*)"/).flatten)
+          flash_alerts.concat(code_scan(code, literal_free, /alert:\s*"([^"]*)"/).flatten)
 
           # Not-found handling: set_* methods that rescue or redirect on missing records
-          code.scan(/def\s+(set_\w+)(.*?)(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |method_name, body|
+          code_scan(code, literal_free, /def\s+(set_\w+)(.*?)(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |method_name, body|
             if body.match?(/\brescue\b/)
               redirect_match = body.match(/redirect_to\s+(\S+)/)
               target = redirect_match ? redirect_match[1].sub(/,.*/, "") : "..."
@@ -272,8 +285,8 @@ module RailsAiContext
           end
 
           # Read-only page detection: controllers with show but no create/update/destroy
-          has_show = code.match?(/def\s+show\b/)
-          has_write = code.match?(/def\s+(create|update|destroy)\b/)
+          has_show = literal_free.match?(/def\s+show\b/)
+          has_write = literal_free.match?(/def\s+(create|update|destroy)\b/)
           if has_show && !has_write
             show_only_controllers << controller_name.camelize.sub(/Controller$/, "")
           end

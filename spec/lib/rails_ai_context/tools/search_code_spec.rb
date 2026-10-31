@@ -1315,6 +1315,21 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
+    it "reads a file's code once for all of its comment-line matches" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      source = "class Report\n  # heading_for one\n  # heading_for two\n  # heading_for three\n" \
+               "  def markdown\n    heading_for(1)\n  end\nend\n"
+
+      with_search_app("app/models/report.rb" => source) do
+        expect(RailsAiContext::RubySource).to receive(:code_only).once.and_call_original
+
+        text = described_class.call(pattern: "heading_for", match_type: "call", context_lines: 0).content.first[:text]
+
+        expect(text).to include("report.rb:6:")
+        expect(text).not_to include("report.rb:2:")
+      end
+    end
+
     it "names the class a traced method belongs to, past a class << self and a one-line nested class" do
       allow(RailsAiContext).to receive(:tier).and_return(:static)
 

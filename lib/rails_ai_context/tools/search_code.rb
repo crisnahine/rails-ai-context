@@ -199,7 +199,8 @@ module RailsAiContext
         # A definition or comment line stays as context, never as a call site.
         if match_type == "call"
           call_regex = build_regexp(search_pattern, timeout: 1)
-          all_results.map! { |r| match_row?(r) && not_a_call_site?(r, call_regex, root) ? r.merge(match: false) : r }
+          code_files = {}
+          all_results.map! { |r| match_row?(r) && not_a_call_site?(r, call_regex, root, code_files) ? r.merge(match: false) : r }
         end
         all_results = confirmed_rows(all_results, root, build_regexp(search_pattern, timeout: 1), context_lines)
 
@@ -665,7 +666,7 @@ module RailsAiContext
 
       # A definition or a comment line names a method without calling it,
       # except in the body of an endless def (`def call = sign(payload)`).
-      private_class_method def self.not_a_call_site?(row, call_regex, root)
+      private_class_method def self.not_a_call_site?(row, call_regex, root, code_files)
         content = row[:content].to_s
         return !endless_body(content).match?(call_regex) if content.match?(DEF_LINE)
 
@@ -676,12 +677,15 @@ module RailsAiContext
         return true unless RUBY_EXTNAMES.include?(ext)
 
         # A `#` line inside a heredoc is string text, and the code in its `#{}` runs.
-        !code_line(root, row).to_s.chomp.match?(call_regex)
+        !code_line(root, row, code_files).to_s.chomp.match?(call_regex)
       end
 
-      private_class_method def self.code_line(root, row)
-        source = RailsAiContext::SafeFile.read(File.join(root, row[:file].to_s))
-        source && RailsAiContext::RubySource.code_only(source).lines[row[:line_number].to_i - 1]
+      private_class_method def self.code_line(root, row, code_files)
+        lines = code_files.fetch(row[:file].to_s) do |file|
+          source = RailsAiContext::SafeFile.read(File.join(root, file))
+          code_files[file] = source && RailsAiContext::RubySource.code_only(source).lines
+        end
+        lines && lines[row[:line_number].to_i - 1]
       end
 
       # The expression after `=` in a one-line endless def, "" for any other def line.
@@ -817,7 +821,8 @@ module RailsAiContext
         call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
         call_results, call_truncated = cap_results(call_rows)
         call_regex = build_regexp(call_pattern, timeout: 1)
-        callers = call_results.reject { |r| not_a_call_site?(r, call_regex, root) }
+        code_files = {}
+        callers = call_results.reject { |r| not_a_call_site?(r, call_regex, root, code_files) }
 
         # Exclude the definition file+line to avoid self-reference
         def_locations = def_results.map { |r| "#{r[:file]}:#{r[:line_number]}" }.to_set

@@ -424,6 +424,29 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).not_to include("old text")
     end
 
+    it "lists no permission check or flash text that only a heredoc holds" do
+      File.write(File.join(controllers_dir, "posts_controller.rb"), <<~RUBY)
+        class PostsController < ApplicationController
+          UPGRADE_NOTE = <<~TEXT
+            can_edit? moved to the policy
+            redirect_to root_path, notice: "old text"
+            redirect_to root_path, alert: "old alert"
+          TEXT
+
+          def index
+            redirect_to root_path, notice: "Done."
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include(%(- Success: notice: "Done."))
+      expect(text).not_to include("can_edit?")
+      expect(text).not_to include("old text")
+      expect(text).not_to include("old alert")
+    end
+
     it "counts no read-only page from a commented-out show" do
       File.write(File.join(controllers_dir, "reports_controller.rb"), <<~RUBY)
         class ReportsController < ApplicationController
@@ -439,6 +462,31 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       text = described_class.call.content.first[:text]
 
       expect(text).not_to include("### Read-Only Page Pattern")
+    end
+
+    it "reads no read-only page or not-found handler from a def a heredoc holds" do
+      File.write(File.join(controllers_dir, "reports_controller.rb"), <<~RUBY)
+        class ReportsController < ApplicationController
+          SNIPPET = <<~TEXT
+            def show
+            end
+
+            def set_report
+              @report = Report.find(params[:id])
+            rescue ActiveRecord::RecordNotFound
+              redirect_to reports_path
+            end
+          TEXT
+
+          def index
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("### Read-Only Page Pattern")
+      expect(text).not_to include("set_report")
     end
   end
 

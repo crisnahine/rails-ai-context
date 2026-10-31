@@ -962,7 +962,13 @@ module RailsAiContext
         return warnings unless file.start_with?("app/")
 
         # Detect broadcasts in Ruby files
-        broadcasts = RailsAiContext::RubySource.without_comments(content).scan(/broadcast_(?:replace|append|prepend|remove|update|action)_to\s*\(\s*["']([^"']+)["']/).flatten
+        return warnings unless content.include?("broadcast_")
+
+        code = RailsAiContext::RubySource.code_only(content)
+        broadcasts = []
+        RailsAiContext::RubySource.without_comments(content).scan(/broadcast_(?:replace|append|prepend|remove|update|action)_to\s*\(\s*["']([^"']+)["']/) do
+          broadcasts << Regexp.last_match(1) unless code[Regexp.last_match.begin(0)] == " "
+        end
         return warnings if broadcasts.empty?
 
         # Scan views for turbo_stream_from subscriptions
@@ -995,7 +1001,9 @@ module RailsAiContext
       private_class_method def self.check_memory_loading(file, content)
         warnings = {}
         Introspectors::AstWalk.each(AstCache.parse_string(content).value) do |node|
-          next unless node.is_a?(Prism::CallNode) && node.block && MEMORY_LOAD_METHODS.include?(node.name.to_s)
+          next unless node.is_a?(Prism::CallNode) && MEMORY_LOAD_METHODS.include?(node.name.to_s)
+          # `select` with arguments and no block picks SQL columns.
+          next unless node.block || (node.arguments && node.name != :select)
           next unless relation_chain?(node.receiver)
 
           line = (node.message_loc || node.location).start_line
@@ -1010,9 +1018,10 @@ module RailsAiContext
       NOT_A_RELATION = %i[pluck ids to_a to_h keys values split to_s chars lines each_line bytes].freeze
       REQUEST_READERS = %i[params session cookies request flash headers].freeze
 
-      # A scope or association chain (`Post.active`, `current_user.posts`), never one over params or a literal.
+      # A scope or association chain ending in a call with no arguments (`Post.active`, `current_user.posts`),
+      # never one over params or a literal.
       private_class_method def self.relation_chain?(node)
-        return false unless node.is_a?(Prism::CallNode) && node.receiver
+        return false unless node.is_a?(Prism::CallNode) && node.receiver && node.arguments.nil? && node.block.nil?
 
         while node.is_a?(Prism::CallNode)
           return false if NOT_A_RELATION.include?(node.name) || (node.name == :select && node.arguments)

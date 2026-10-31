@@ -477,7 +477,7 @@ module RailsAiContext
         end
 
         def test_count(source)
-          Introspectors::AstWalk.each(AstCache.parse_string(source).value).count do |node|
+          Introspectors::AstWalk.each(AstCache.parse_uncached(source).value).count do |node|
             case node
             when Prism::CallNode then node.receiver.nil? && TEST_CALLS.include?(node.name) && !(node.arguments || node.block).nil?
             when Prism::DefNode then node.receiver.nil? && node.name.start_with?("test_")

@@ -457,6 +457,22 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         expect(broadcast_warnings(model)).to eq([ %(broadcast to "live_feed" - no matching turbo_stream_from found in views) ])
       end
 
+      it "checks no broadcast a heredoc's text holds" do
+        model = <<~RUBY
+          class Article < ApplicationRecord
+            UPGRADE_NOTE = <<~TEXT
+              broadcast_replace_to("old_channel") was removed
+            TEXT
+
+            def announce
+              broadcast_replace_to("live_feed")
+            end
+          end
+        RUBY
+
+        expect(broadcast_warnings(model)).to eq([ %(broadcast to "live_feed" - no matching turbo_stream_from found in views) ])
+      end
+
       it "counts no subscription an ERB comment holds" do
         model = "class Article < ApplicationRecord\n  def announce\n    broadcast_replace_to(\"live_feed\")\n    broadcast_append_to(\"side_feed\")\n  end\nend\n"
         view = %(<%# turbo_stream_from "live_feed" %>\n<%= turbo_stream_from "side_feed" %>\n)
@@ -1020,6 +1036,27 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       with_app_file("app/controllers/widgets_controller.rb", source) do |file, path|
         expect(described_class.check_rails_semantics(file, path).grep(/may load all records/))
           .to eq([ "line 5: scope chain followed by .map may load all records into memory - consider .pluck or SQL" ])
+      end
+    end
+
+    it "flags an enumerable call off a call that takes no arguments, with a block or without one" do
+      source = <<~RUBY
+        class ImportsController < ApplicationController
+          def create
+            rows = JSON.parse(request.body.read).map { |row| row["id"] }
+            files = Dir.glob("tmp/*.csv").map { |path| File.basename(path) }
+            lines = File.readlines(path).map { |line| line.strip }
+            keys = data.fetch(:k).map { |k| k.to_s }
+            found = connection.select_all(sql).map { |row| row["id"] }
+            columns = Article.published.select(:id, :title)
+            total = Article.all.reduce(:+)
+          end
+        end
+      RUBY
+
+      with_app_file("app/controllers/imports_controller.rb", source) do |file, path|
+        expect(described_class.check_rails_semantics(file, path).grep(/may load all records/))
+          .to eq([ "line 9: scope chain followed by .reduce may load all records into memory - consider .pluck or SQL" ])
       end
     end
   end
