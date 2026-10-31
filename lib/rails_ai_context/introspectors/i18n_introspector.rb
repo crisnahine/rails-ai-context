@@ -99,6 +99,7 @@ module RailsAiContext
       def default_locale_from_config
         entries = config_candidate_files.flat_map do |path, ambiguous|
           content = RailsAiContext::SafeFile.read(path)
+          content = RubySource.without_comments(content) if content
           (content&.scan(DEFAULT_LOCALE_ASSIGNMENT) || []).map do |spelling, locale|
             { spelling: spelling_of(spelling), ambiguous: ambiguous, value: locale }
           end

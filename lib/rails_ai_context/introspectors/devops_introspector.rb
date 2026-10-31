@@ -31,10 +31,6 @@ module RailsAiContext
 
       PUMA_SETTINGS = %i[threads workers port].freeze
 
-      # A number inside an ENV name is part of the name: the default in
-      # `ENV.fetch("PORT_2", 3000)` is 3000, not 2.
-      PUMA_INTEGER = /(?<!\w)\d+/
-
       def extract_puma_config
         path = File.join(root, "config/puma.rb")
         return nil unless File.exist?(path)
@@ -70,10 +66,38 @@ module RailsAiContext
 
       # An argument the listener could not read a literal from arrives as its
       # own source, which is where `ENV.fetch("PORT", 3000)` keeps its default.
+      # A value computed from a literal (`Etc.nprocessors - 1`) is unknown.
       def puma_integer(arg)
         return arg if arg.is_a?(Integer)
 
-        arg.to_s[PUMA_INTEGER]&.to_i
+        statements = AstCache.parse_string(arg.to_s).value.statements.body
+        literal_integer(statements.first) if statements.size == 1
+      end
+
+      def literal_integer(node)
+        case node
+        when Prism::IntegerNode then node.value
+        when Prism::StringNode then node.unescaped.to_i if node.unescaped.match?(/\A\d+\z/)
+        when Prism::CallNode then passed_through_integer(node)
+        when Prism::OrNode then literal_integer(node.right) if env_read?(node.left)
+        when Prism::ParenthesesNode
+          body = node.body
+          literal_integer(body.body.first) if body.is_a?(Prism::StatementsNode) && body.body.size == 1
+        end
+      end
+
+      def env_read?(node)
+        node.is_a?(Prism::CallNode) && node.name == :[] && EnvReferences.env_constant?(node.receiver)
+      end
+
+      # `ENV.fetch`'s default, positional or from a block, and `.to_i` or `Integer()` around a literal.
+      def passed_through_integer(node)
+        args = node.arguments&.arguments || []
+        case node.name
+        when :to_i then literal_integer(node.receiver) if args.empty?
+        when :Integer then literal_integer(args.first) if node.receiver.nil? && args.size == 1
+        when :fetch then literal_integer(EnvReferences.fetch_default(node))
+        end
       end
 
       def extract_procfile
@@ -109,7 +133,7 @@ module RailsAiContext
         # not bare method calls, so regex on content is appropriate.
         content = RailsAiContext::SafeFile.read(routes_path)
         return nil unless content
-        return true if content.match?(%r{["']/?(?:up|health|ping|status|healthz|alive|liveness|readiness)["']})
+        return true if RubySource.without_comments(content).match?(%r{["']/?(?:up|health|ping|status|healthz|alive|liveness|readiness)["']})
         nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "detect_health_check")

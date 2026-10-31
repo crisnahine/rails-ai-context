@@ -28,9 +28,29 @@ module RailsAiContext
       content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
       return nil unless content
 
-      match = content.match(/version:\s*([\d_]+)/)
-      match ? match[1].delete("_") : nil
+      AstCache.parse_string(content).value.statements.body.each do |node|
+        version = define_version(node)
+        return version if version
+      end
+      nil
     end
+
+    # The version keyword of `ActiveRecord::Schema.define` or `ActiveRecord::Schema[7.1].define`.
+    def self.define_version(node)
+      return unless node.is_a?(Prism::CallNode) && node.name == :define
+
+      receiver = node.receiver
+      receiver = receiver.receiver if receiver.is_a?(Prism::CallNode) && receiver.name == :[]
+      return unless receiver.is_a?(Prism::ConstantPathNode) && receiver.slice.delete_prefix("::") == "ActiveRecord::Schema"
+
+      (node.arguments&.arguments || []).grep(Prism::KeywordHashNode).flat_map(&:elements).each do |assoc|
+        next unless assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::SymbolNode) && assoc.key.unescaped == "version"
+
+        return assoc.value.value.to_s if assoc.value.is_a?(Prism::IntegerNode)
+      end
+      nil
+    end
+    private_class_method :define_version
 
     def self.from_structure_sql(path)
       content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)

@@ -38,6 +38,9 @@ module RailsAiContext
     MISE_TOOLS = /^[ \t]*\[tools\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
     # ruby = "3.3.6", ruby = ["3.3.6", ...] or ruby = { version = "3.3.6" }
     MISE_RUBY = /^[ \t]*["']?ruby["']?[ \t]*=[ \t]*(?:\[[ \t]*|\{[^}\n]*?version[ \t]*=[ \t]*)?["']([^"'\n]+)["']/
+    # [tools.ruby] with version = "3.3.6": the same table as ruby = { version = "3.3.6" }.
+    MISE_RUBY_TABLE = /^[ \t]*\[tools\.["']?ruby["']?\][ \t]*$(.*?)(?=^[ \t]*\[|\z)/m
+    MISE_TABLE_VERSION = /^[ \t]*["']?version["']?[ \t]*=[ \t]*["']([^"'\n]+)["']/
 
     class Spec
       # `ruby_engine` is a non-CRuby engine with its own version ("JRuby 9.4.8.0"); `outside_gemfile` is never read.
@@ -569,7 +572,7 @@ module RailsAiContext
       MISE_FILES.each do |name|
         content = read_inside(root, name)
         tools = content&.[](MISE_TOOLS, 1)
-        declared = version_string(tools&.[](MISE_RUBY, 1))
+        declared = version_string(tools&.[](MISE_RUBY, 1) || content&.[](MISE_RUBY_TABLE, 1)&.[](MISE_TABLE_VERSION, 1))
         return { name => declared } if declared
       end
       {}

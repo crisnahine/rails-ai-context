@@ -71,5 +71,15 @@ RSpec.describe RailsAiContext::SchemaVersion do
         expect(described_class.current(root)).to eq("20240101000000")
       end
     end
+
+    it "reads the version from the define call, not from a comment above it" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "db"))
+        File.write(File.join(root, "db/schema.rb"),
+                   "# Keep api version: 2 clients in mind.\nActiveRecord::Schema[7.1].define(version: 2024_05_01_120000) do\nend\n")
+
+        expect(described_class.current(root)).to eq("20240501120000")
+      end
+    end
   end
 end

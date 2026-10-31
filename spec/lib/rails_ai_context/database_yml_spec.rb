@@ -27,4 +27,26 @@ RSpec.describe RailsAiContext::DatabaseYml do
     expect(path_for(%("$user", public), username: "app")).to eq(%w[app public])
     expect(path_for(%($user, public), username: "app")).to eq(%w[app public])
   end
+
+  describe "an adapter the file computes in ERB" do
+    def adapter_for(value)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), "#{RailsAiContext.environment_name}:\n  adapter: #{value}\n")
+        described_class.adapter("primary", described_class.primary(dir))
+      end
+    end
+
+    it "reads the literal default ENV.fetch falls back to as the adapter's default" do
+      expect(adapter_for(%(<%= ENV.fetch("DB_ADAPTER", "mysql2") %>))).to eq([ "mysql2", true ])
+    end
+
+    it "reads the default a fetch block returns" do
+      expect(adapter_for(%(<%= ENV.fetch("DB_ADAPTER") { "postgresql" } %>))).to eq([ "postgresql", true ])
+    end
+
+    it "leaves a fetch whose result is computed on unknown" do
+      expect(adapter_for(%(<%= ENV.fetch("DB_ADAPTER", "mysql") + "2" %>))).to eq([ nil, false ])
+    end
+  end
 end

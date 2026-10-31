@@ -706,21 +706,10 @@ module RailsAiContext
       end
 
       private_class_method def self.parse_credentials_structure
-        # Look for credentials template or example
         root = rails_app.root.to_s
         RailsAiContext::Introspectors::EnvReferences::CREDENTIALS_EXAMPLES.each do |file|
-          path = File.join(root, file)
-          source = safe_read(path)
-          next unless source
-
           keys = []
-          source.each_line do |line|
-            stripped = line.strip
-            next if stripped.empty? || stripped.start_with?("#")
-            if (match = stripped.match(/\A(\w[\w.]*\w?):/))
-              keys << match[1]
-            end
-          end
+          extract_key_paths(RailsAiContext::ConfigYaml.read(root, file, label: "credentials example"), [], keys)
           return keys if keys.any?
         end
 

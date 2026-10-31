@@ -541,6 +541,22 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:default_locale]).to eq("en")
     end
 
+    it "ignores a default_locale inside an =begin block" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module Dummy
+            class Application < Rails::Application
+          =begin
+              config.i18n.default_locale = :fr
+          =end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:default_locale]).to eq("en")
+    end
+
     # Coverage is measured against the default locale's keys. With none to
     # measure against, every locale scores zero - and calling them all
     # untranslated says something false about each one.

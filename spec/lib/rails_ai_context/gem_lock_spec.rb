@@ -464,6 +464,14 @@ RSpec.describe RailsAiContext::GemLock do
       end
     end
 
+    it "reads the ruby tool written as its own [tools.ruby] table" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "mise.toml"), "[tools.ruby]\nversion = \"3.3.6\"\n\n[env]\nversion = \"no\"\n")
+
+        expect(described_class.for(dir).ruby_versions).to eq("mise.toml" => "3.3.6")
+      end
+    end
+
     it "reads the project config mise keeps in .mise/config.toml and .config/mise/config.toml" do
       %w[.mise/config.toml .config/mise/config.toml].each do |name|
         Dir.mktmpdir do |dir|

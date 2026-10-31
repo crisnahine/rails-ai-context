@@ -1051,6 +1051,29 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  describe "credentials keys read from an example file when the app cannot decrypt" do
+    def keys_listed(example)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "credentials.yml.example"), example)
+        allow(described_class).to receive(:rails_app).and_return(double("app", root: Pathname.new(dir)))
+        allow(described_class).to receive(:detect_credentials_keys).and_call_original
+        allow(Rails.application).to receive(:credentials).and_raise(ActiveSupport::EncryptedFile::MissingKeyError.new(key_path: "k", env_key: "K"))
+
+        text = described_class.call(detail: "standard").content.first[:text]
+        text[text.index("## Credentials Keys (values hidden)")..].scan(/^- `([^`]+)`$/).flatten
+      end
+    end
+
+    it "does not read text inside a block scalar as a key" do
+      expect(keys_listed("banner_text: >\n  maintenance: Saturday 2am\nsecret_key_base: x\n")).to eq(%w[banner_text secret_key_base])
+    end
+
+    it "names a nested key by its full path, as the booted app does" do
+      expect(keys_listed("stripe:\n  secret_key: x\n  public_key: y\n")).to eq(%w[stripe.public_key stripe.secret_key])
+    end
+  end
+
   describe "credentials and encrypted-columns trailer" do
     let(:credentials_keys) { %w[secret_key_base aws/access_key_id] }
     let(:encrypted_columns) { { "Keypair" => %w[private_key] } }
