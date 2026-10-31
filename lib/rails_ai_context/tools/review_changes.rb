@@ -487,7 +487,7 @@ module RailsAiContext
 
           # Check model diffs for removed validations
           model_files.each do |entry|
-            diff = get_file_diff(entry[:file], root, ref)
+            diff = get_file_diff(entry[:file], root, ref, whole: true)
             next unless diff
             removed_validations(diff).each do |line|
               warnings << "**Removed validation**: `#{entry[:file]}` - `#{RailsAiContext::Redaction.redact_source_line(line, path: entry[:file])}`"
@@ -511,15 +511,26 @@ module RailsAiContext
         # The validation lines a diff takes out and puts nothing back for. An
         # edited `validates :name, ...` line is one removed and one added, and
         # :name is still validated; a line whose names are all validated by an
-        # added line is an edit, and a commented-out line was no validation.
+        # added line is an edit, and a line in a comment, heredoc or `=begin` block validates nothing.
         def removed_validations(diff)
-          removed, added = %w[- +].map do |sign|
-            diff.lines.filter_map do |line|
-              next unless line.start_with?(sign) && !line.start_with?(sign * 3)
+          lines = diff.lines
+          return [] if lines.any? { |line| line.start_with?("@@@") }
 
-              code = line[1..].strip
-              code if code.match?(VALIDATION_LINE)
-            end
+          lines = lines.drop_while { |line| !line.start_with?("@@") } if lines.any? { |line| line.start_with?("@@") }
+          rows = lines.filter_map { |line| [ line[0], line.chomp[1..].to_s ] if line[0] && " +-".include?(line[0]) }
+          old_code, new_code = %w[+ -].map do |other_side|
+            RailsAiContext::RubySource.code_only(rows.reject { |mark, _| mark == other_side }.map(&:last).join("\n")).lines
+          end
+          old_line = new_line = 0
+          removed = []
+          added = []
+          rows.each do |mark, text|
+            was = mark != "+" && old_code[old_line].to_s.strip.match?(VALIDATION_LINE)
+            now = mark != "-" && new_code[new_line].to_s.strip.match?(VALIDATION_LINE)
+            removed << text.strip if was && !now
+            added << text.strip if now && !was
+            old_line += 1 unless mark == "+"
+            new_line += 1 unless mark == "-"
           end
           kept = added.flat_map { |code| validated_names(code) }.to_set
           removed.reject do |code|

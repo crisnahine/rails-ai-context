@@ -2380,6 +2380,13 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
       expect(text).to include("let(:post) { build(:post) }")
     end
+
+    it "counts a factory call written without parentheses" do
+      text = generated_for("let(:a) { build(:post) }\nlet(:b) { build(:post) }\n" \
+                           "let(:c) { create :post }\nlet(:d) { create :post }\nlet(:e) { create :post }\n")
+
+      expect(text).to include("let(:post) { create(:post) }")
+    end
   end
 
   # `belong_to(:[INFERRED])` and `belong_to(::"#{x}")` are both specs that do
@@ -2990,6 +2997,19 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(hand_written).to include("this app's sign_in_as is not known to get a request past require_login, so send what require_login checks.")
         expect(api).to include("this app's sign_in_as is not known to get a request past require_authentication")
         expect([ hand_written, api ]).to all(satisfy { |text| !text.include?("sign_in_as users(:one)") })
+      end
+    end
+
+    it "takes the helper from a def, not from a def's text inside a heredoc" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "test_helpers"))
+        File.write(File.join(root, "test", "test_helpers", "session_test_helper.rb"),
+                   "module SessionTestHelper\n  DOC = <<~TXT\n    def sign_in_as(user)\n  TXT\n\n  def log_in(user)\n  end\nend\n")
+
+        text = orders_test(root)
+
+        expect(text).to include("this app's log_in is not known to get a request past require_login")
+        expect(text).not_to include("sign_in_as")
       end
     end
 
@@ -3649,6 +3669,14 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(thing_text([ rule("format", "title", with: "/\\A[A-Z]{9}\\z/", allow_blank: true) ], permits: %w[title])).to include("let(:valid_attributes) { {  } }")
     end
 
+    it "satisfies a format written as a %r literal" do
+      text = thing_text([ rule("format", "body", with: "%r{\\A\\d+\\z}"), rule("format", "title", with: "%r{\\AABC\\z}i") ])
+
+      expect(text).to include('body: "1"')
+      expect(text).to include('title: "abc"')
+      expect(text).not_to include("validates format of")
+    end
+
     it "is one of the values an acceptance rule accepts" do
       text = thing_text([ rule("acceptance", "agreed", accept: [ "yes", "ok" ]) ], columns: { "agreed" => "string" })
 
@@ -3741,6 +3769,13 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       it "reads a method name in if or unless, and a rule that runs only on update, completely" do
         text = stuck_text([ rule("presence", "title", if: :paid?), rule("length", "body", minimum: 3, on: :update, comparison: "x") ], "rspec")
 
+        expect(text).not_to include("skip")
+      end
+
+      it "reads a string in an inclusion list as a value, whatever it spells" do
+        text = stuck_text([ rule("inclusion", "title", in: %w[proc lambda ->]) ], "rspec")
+
+        expect(text).not_to include("lambda or proc")
         expect(text).not_to include("skip")
       end
 
@@ -4083,6 +4118,15 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       text = user_test([ { kind: "format", attributes: %w[name], options: { with: "/\\A[\\w\\s-]+\\z/" } } ])
 
       expect(test_block(text, "validates format of name")).to include('skip "TODO: set name to a value the format rejects"')
+    end
+
+    it "skips a %r format whose pattern the made-up value matches" do
+      text = user_test([ { kind: "format", attributes: %w[name], options: { with: "%r{\\A[a-z-]+\\z}" } },
+                         { kind: "format", attributes: %w[status], options: { with: "%r{\\A[A-Z-]+\\z}i" } } ])
+
+      expect(test_block(text, "validates format of name")).to include('skip "TODO: set name to a value the format rejects"')
+      expect(test_block(text, "validates format of status")).to include('skip "TODO: set status to a value the format rejects"')
+      expect(text).not_to include('= "invalid-format"')
     end
 
     it "keeps the made-up value for a pattern it breaks, or one it cannot read" do

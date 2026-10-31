@@ -646,7 +646,12 @@ module RailsAiContext
           else /((?:@@?|\$)?\w+)\.#{Regexp.escape(method)}(?![\w?!])/
           end
           located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
-          failing = line.to_i.positive? && located.ok? && RailsAiContext::SafeFile.read(located.realpath).to_s.lines[line.to_i - 1]
+          if line.to_i.positive? && located.ok?
+            source = RailsAiContext::SafeFile.read(located.realpath).to_s
+            # A template is no Ruby program, so only a Ruby file has its strings and comments blanked.
+            source = RailsAiContext::RubySource.code_only(source) if file.to_s.end_with?(".rb", ".rake")
+            failing = source.lines[line.to_i - 1]
+          end
           return failing[call, 1] if failing
           return nil if method.start_with?("[")
 

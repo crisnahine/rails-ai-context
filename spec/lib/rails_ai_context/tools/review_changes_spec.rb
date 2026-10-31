@@ -254,6 +254,30 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
         expect(warnings).to eq([ "- **Removed validation**: `app/models/post.rb` - `validate :check_owner`" ])
       end
 
+      it "reports a removed validation whose text comes back only inside a heredoc" do
+        write("app/models/post.rb", "class Post < ApplicationRecord\n  NOTE = <<~TXT\n    validates :title, presence: true\n  TXT\nend\n")
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/Removed validation/).map(&:strip)
+
+        expect(warnings).to eq([ "- **Removed validation**: `app/models/post.rb` - `validates :title, presence: true`" ])
+      end
+
+      it "reports a validation wrapped in a =begin block, whose line the diff keeps as context" do
+        write("app/models/post.rb", "class Post < ApplicationRecord\n=begin\n  validates :title, presence: true\n=end\nend\n")
+
+        warnings = described_class.call(ref: "HEAD").content.first[:text].lines.grep(/Removed validation/).map(&:strip)
+
+        expect(warnings).to eq([ "- **Removed validation**: `app/models/post.rb` - `validates :title, presence: true`" ])
+      end
+
+      it "reads a validation taken back out of a =begin block as no removal" do
+        write("app/models/post.rb", "class Post < ApplicationRecord\n=begin\n  validates :title, presence: true\n=end\nend\n")
+        git("commit", "-q", "-am", "disable")
+        write("app/models/post.rb", "class Post < ApplicationRecord\n  validates :title, presence: true\nend\n")
+
+        expect(described_class.call(ref: "HEAD").content.first[:text]).not_to include("Removed validation")
+      end
+
       it "counts a controller as tested only by a changed test of its own" do
         { "app/controllers/posts_controller.rb" => "spec/requests/reposts_spec.rb",
           "app/controllers/admin/tags_controller.rb" => "spec/requests/tags_spec.rb",
