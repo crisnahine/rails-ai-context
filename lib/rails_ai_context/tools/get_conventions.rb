@@ -219,18 +219,19 @@ module RailsAiContext
 
         safe_glob(controllers_dir, "**/*.rb", real_root).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
+          code = RailsAiContext::RubySource.without_comments(content)
           # The path under app/controllers, so Api::V1::ProductsController is
           # not a second ProductsController.
           controller_name = path.delete_prefix("#{real_controllers_dir}/").delete_suffix(".rb")
 
-          auth_checks.concat(content.scan(/\b(can_\w+\??)/).flatten)
-          auth_denials.concat(content.scan(/redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).flatten
+          auth_checks.concat(code.scan(/\b(can_\w+\??)/).flatten)
+          auth_denials.concat(code.scan(/redirect_to\s+.+?,\s*alert:\s*"([^"]*)"/).flatten
             .map { |a| "redirect_to ..., alert: \"#{a}\"" })
-          flash_notices.concat(content.scan(/notice:\s*"([^"]*)"/).flatten)
-          flash_alerts.concat(content.scan(/alert:\s*"([^"]*)"/).flatten)
+          flash_notices.concat(code.scan(/notice:\s*"([^"]*)"/).flatten)
+          flash_alerts.concat(code.scan(/alert:\s*"([^"]*)"/).flatten)
 
           # Not-found handling: set_* methods that rescue or redirect on missing records
-          content.scan(/def\s+(set_\w+)(.*?)(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |method_name, body|
+          code.scan(/def\s+(set_\w+)(.*?)(?=\n\s*def\s|\n\s*end\s*\z)/m).each do |method_name, body|
             if body.match?(/\brescue\b/)
               redirect_match = body.match(/redirect_to\s+(\S+)/)
               target = redirect_match ? redirect_match[1].sub(/,.*/, "") : "..."
@@ -239,42 +240,40 @@ module RailsAiContext
           end
 
           # Create action flow detection
-          if content.match?(/def\s+create#{RailsAiContext::MethodName.definition_end("create")}/)
-            create_block = content[/def\s+create#{RailsAiContext::MethodName.definition_end("create")}.*?(?=\n\s{2}def\s|\n\s{2}private|\z)/m]
-            if create_block
-              flow_parts = []
-              if (style = permission_style(create_block))
-                flow_parts << "permission check"
-                permission_styles << style
-              end
-              flow_parts << "build" if create_block.match?(/\.new\(|\.build\(|\.create\(/)
-              # `create!` raises instead of returning false - it is not the
-              # save-then-branch flow this skeleton describes.
-              flow_parts << "save" if create_block.match?(/\.save\b(?!!)|\.create\b(?!!)/)
-              # A scaffolded HTML controller's `respond_to` block often has a
-              # `format.json { render json: ... }` branch alongside its HTML
-              # redirect - that's still an HTML-first flow, not a JSON API one.
-              # Only call it "render json" when there's no redirect_to at all.
-              is_json_response = !create_block.match?(/redirect_to/) && create_block.match?(/render\s+json:/)
-              if create_block.match?(/redirect_to|render\b/)
-                flow_parts << (is_json_response ? "render json" : "redirect/render")
-                is_json_response ? json_response_count += 1 : html_response_count += 1
-              end
-              if flow_parts.size >= 2
-                create_flows << "#{controller_name.camelize}: #{flow_parts.join(' → ')}"
-                create_flow_parts_seen.concat(flow_parts)
-                # Record the failure-branch status this create action renders,
-                # skipping success statuses so :created does not shadow it.
-                error_status = create_block.scan(/status:\s*:(\w+)/).flatten
-                  .find { |s| !%w[created ok found see_other].include?(s) }
-                create_error_statuses << error_status if error_status
-              end
+          create_block = RailsAiContext::Introspectors::ActionResolver.method_body(code, "create")&.dig(:code)
+          if create_block
+            flow_parts = []
+            if (style = permission_style(create_block))
+              flow_parts << "permission check"
+              permission_styles << style
+            end
+            flow_parts << "build" if create_block.match?(/\.new\(|\.build\(|\.create\(/)
+            # `create!` raises instead of returning false - it is not the
+            # save-then-branch flow this skeleton describes.
+            flow_parts << "save" if create_block.match?(/\.save\b(?!!)|\.create\b(?!!)/)
+            # A scaffolded HTML controller's `respond_to` block often has a
+            # `format.json { render json: ... }` branch alongside its HTML
+            # redirect - that's still an HTML-first flow, not a JSON API one.
+            # Only call it "render json" when there's no redirect_to at all.
+            is_json_response = !create_block.match?(/redirect_to/) && create_block.match?(/render\s+json:/)
+            if create_block.match?(/redirect_to|render\b/)
+              flow_parts << (is_json_response ? "render json" : "redirect/render")
+              is_json_response ? json_response_count += 1 : html_response_count += 1
+            end
+            if flow_parts.size >= 2
+              create_flows << "#{controller_name.camelize}: #{flow_parts.join(' → ')}"
+              create_flow_parts_seen.concat(flow_parts)
+              # Record the failure-branch status this create action renders,
+              # skipping success statuses so :created does not shadow it.
+              error_status = create_block.scan(/status:\s*:(\w+)/).flatten
+                .find { |s| !%w[created ok found see_other].include?(s) }
+              create_error_statuses << error_status if error_status
             end
           end
 
           # Read-only page detection: controllers with show but no create/update/destroy
-          has_show = content.match?(/def\s+show\b/)
-          has_write = content.match?(/def\s+(create|update|destroy)\b/)
+          has_show = code.match?(/def\s+show\b/)
+          has_write = code.match?(/def\s+(create|update|destroy)\b/)
           if has_show && !has_write
             show_only_controllers << controller_name.camelize.sub(/Controller$/, "")
           end
@@ -430,7 +429,7 @@ module RailsAiContext
         # Detect default locale from config
         app_config = rails_app.root.join("config", "application.rb")
         if File.exist?(app_config)
-          content = RailsAiContext::SafeFile.read(app_config) || ""
+          content = RailsAiContext::RubySource.without_comments(RailsAiContext::SafeFile.read(app_config) || "")
           if (match = content.match(/config\.i18n\.default_locale\s*=\s*[:"'](\w+)/))
             info << "**Default locale:** #{match[1]}"
           end
@@ -442,7 +441,8 @@ module RailsAiContext
           samples = []
           safe_glob(controllers_dir, "**/*.rb", real_root).first(10).each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
-            content.scan(/(?:notice|alert|flash\[:\w+\]):\s*"([^"]+)"/).each { |m| samples << m[0] }
+            RailsAiContext::RubySource.without_comments(content)
+              .scan(/(?:notice|alert|flash\[:\w+\]):\s*"([^"]+)"/).each { |m| samples << m[0] }
           end
           if samples.any?
             # Check if majority contains non-ASCII (CJK, Korean, etc.)
@@ -451,10 +451,11 @@ module RailsAiContext
             if ratio > 0.5
               if samples.any? { |s| s.match?(/[\uAC00-\uD7AF]/) }
                 info << "**Primary UI language:** Korean (detected from flash messages)"
-              elsif samples.any? { |s| s.match?(/[\u4E00-\u9FFF]/) }
-                info << "**Primary UI language:** Chinese (detected from flash messages)"
+              # Japanese writes with kanji too, so kana decides before ideographs do.
               elsif samples.any? { |s| s.match?(/[\u3040-\u309F\u30A0-\u30FF]/) }
                 info << "**Primary UI language:** Japanese (detected from flash messages)"
+              elsif samples.any? { |s| s.match?(/[\u4E00-\u9FFF]/) }
+                info << "**Primary UI language:** Chinese (detected from flash messages)"
               else
                 info << "**Primary UI language:** non-English (detected from flash messages)"
               end
@@ -491,7 +492,8 @@ module RailsAiContext
 
         test_files.first(5).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
-          hits = TEST_SIGNALS.select { |_, signal| content.match?(signal) }
+          code = RailsAiContext::RubySource.without_comments(content)
+          hits = TEST_SIGNALS.select { |_, signal| code.match?(signal) }
           next if hits.empty?
 
           found.update(hits)

@@ -239,6 +239,14 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
 
         expect(patterns).to include("soft_delete")
       end
+
+      it "reads no soft delete from a model comment when there is no readable dump" do
+        patterns = patterns_for(
+          models: { "thing.rb" => "class Thing < ApplicationRecord\n  # deleted_at was dropped\nend\n" }
+        )
+
+        expect(patterns).not_to include("soft_delete")
+      end
     end
 
     context "gem macros by the names the gems define" do

@@ -334,6 +334,23 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(text).not_to include("    sign_in")
     end
 
+    it "includes no Devise helpers that only a comment names" do
+      File.write(File.join(tests_dir, "posts_controller_test.rb"), <<~RUBY)
+        class PostsControllerTest < ActionDispatch::IntegrationTest
+          # include Devise::Test::IntegrationHelpers went away with Devise
+          test "index" do
+            get posts_path
+            assert_response :success
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("### Controller Test Pattern")
+      expect(text).not_to include("Devise::Test::IntegrationHelpers")
+    end
+
     it "renders no skeleton when no test asserts a response" do
       File.write(File.join(tests_dir, "quiet_controller_test.rb"), <<~RUBY)
         require "test_helper"
@@ -374,6 +391,54 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       expect(flash).to include("Notice 5.").and include("- _...and 1 more._")
       expect(flash).not_to include("Notice 6.")
       expect(flash.scan("more._").size).to eq(1)
+    end
+  end
+
+  describe "App Patterns - comments in controllers" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(controllers_dir)
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(described_class).to receive(:cached_context).and_return({ conventions: {} })
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "lists no permission check or flash text that only a comment names" do
+      File.write(File.join(controllers_dir, "posts_controller.rb"), <<~RUBY)
+        class PostsController < ApplicationController
+          # can_edit? moved to the policy
+          # redirect_to root_path, notice: "old text"
+          def index
+            redirect_to root_path, notice: "Done."
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include(%(- Success: notice: "Done."))
+      expect(text).not_to include("can_edit?")
+      expect(text).not_to include("old text")
+    end
+
+    it "counts no read-only page from a commented-out show" do
+      File.write(File.join(controllers_dir, "reports_controller.rb"), <<~RUBY)
+        class ReportsController < ApplicationController
+          # def show
+          #   @report = Report.find(params[:id])
+          # end
+
+          def index
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("### Read-Only Page Pattern")
     end
   end
 
@@ -571,6 +636,68 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         expect(text).not_to include("render json: @record")
       end
     end
+
+    it "ends a create action at its own end inside a namespace module" do
+      FileUtils.mkdir_p(File.join(controllers_dir, "admin"))
+      File.write(File.join(controllers_dir, "admin", "posts_controller.rb"), <<~RUBY)
+        module Admin
+          class PostsController < ApplicationController
+            def create
+              @post = Post.new(post_params)
+            end
+
+            def update
+              @post.save
+              redirect_to @post
+            end
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("Admin::PostsController:")
+    end
+
+    it "reads no create action from a commented-out def" do
+      File.write(File.join(controllers_dir, "posts_controller.rb"), <<~RUBY)
+        class PostsController < ApplicationController
+          # def create
+          #   @post = Post.new(post_params)
+          #   @post.save
+          #   redirect_to @post
+          # end
+
+          def show
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("### Create Action Pattern")
+    end
+
+    it "reads no permission check from a comment inside create" do
+      File.write(File.join(controllers_dir, "posts_controller.rb"), <<~RUBY)
+        class PostsController < ApplicationController
+          def create
+            # authorize! :create, Post was removed with CanCanCan
+            @post = Post.new(post_params)
+            if @post.save
+              redirect_to @post
+            else
+              render :new, status: :unprocessable_entity
+            end
+          end
+        end
+      RUBY
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- PostsController: build → save → redirect/render")
+      expect(text).not_to include("authorize!")
+    end
   end
 
   describe ".detect_frontend_stack" do
@@ -648,15 +775,39 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         expect(text).not_to include("- Not found: set_post →")
       end
     end
+
+    it "reads no rescue from a comment inside a set_ method" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RB)
+          class PostsController < ApplicationController
+            private
+
+            def set_post
+              @post = Post.find(params[:id])
+              # rescue ActiveRecord::RecordNotFound used to redirect_to posts_path
+            end
+          end
+        RB
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("Not found: set_post")
+      end
+    end
   end
 
   # `validates_timeliness.en.yml` translates en; the name before the locale is the gem's.
   describe "the locales line" do
-    def conventions_text(i18n)
+    def conventions_text(i18n, files: {})
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "locales"))
         File.write(File.join(dir, "config", "locales", "validates_timeliness.en.yml"), "en:\n  a: A\n")
         File.write(File.join(dir, "config", "locales", "fr.yml"), "fr:\n  a: A\n")
+        files.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, rel)))
+          File.write(File.join(dir, rel), body)
+        end
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
         context = { conventions: conventions_data }
         context[:i18n] = i18n if i18n
@@ -672,6 +823,43 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
 
     it "reads the locale part of a file name without the i18n section" do
       expect(conventions_text(nil)).to include("**Locales:** en, fr (2 total)")
+    end
+
+    it "reads no default locale from a commented-out setting" do
+      application = <<~RUBY
+        module Blog
+          class Application < Rails::Application
+            # config.i18n.default_locale = :de
+          end
+        end
+      RUBY
+
+      expect(conventions_text(nil, files: { "config/application.rb" => application })).not_to include("Default locale")
+    end
+
+    it "names no UI language from flash text in a comment" do
+      controller = <<~RUBY
+        class PostsController < ApplicationController
+          # redirect_to posts_path, notice: "Gespeichert, schön!"
+          def index
+          end
+        end
+      RUBY
+
+      expect(conventions_text(nil, files: { "app/controllers/posts_controller.rb" => controller })).not_to include("Primary UI language")
+    end
+
+    it "names Japanese for flash text that mixes kanji and kana" do
+      controller = <<~RUBY
+        class PostsController < ApplicationController
+          def create
+            redirect_to posts_path, notice: "保存しました"
+          end
+        end
+      RUBY
+
+      expect(conventions_text(nil, files: { "app/controllers/posts_controller.rb" => controller }))
+        .to include("**Primary UI language:** Japanese (detected from flash messages)")
     end
   end
 end

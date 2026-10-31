@@ -188,6 +188,15 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(call_with(minitest_data)).not_to include("sign_in users(")
     end
 
+    it "includes no Devise helpers that only a comment names" do
+      File.write(File.join(@root, "test", "controllers", "posts_controller_test.rb"),
+                 "class PostsControllerTest < ActionDispatch::IntegrationTest\n" \
+                 "  # include Devise::Test::IntegrationHelpers went away with Devise\n" \
+                 "  test \"x\" do\n    get posts_path\n  end\nend\n")
+
+      expect(call_with(minitest_data)).not_to include("Devise::Test::IntegrationHelpers")
+    end
+
     it "does not hand fixture syntax to an app with no fixtures" do
       text = call_with(minitest_data.merge(fixtures: nil, fixture_names: nil))
 
@@ -683,6 +692,18 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
 
           expect(text).to include("# spec/controllers/about_controller_spec.rb")
           expect(text).to include("`spec/system/about_spec.rb` (system")
+        end
+      end
+
+      it "does not list a spec that names the route helper only in a comment" do
+        Dir.mktmpdir do |root|
+          app_with(root, "spec/requests/health_spec.rb" =>
+                           "RSpec.describe 'Health' do\n  # visit about_path is old, this only checks the health route\n  it 'is up' do\n    get '/up'\n  end\nend\n")
+
+          text = described_class.call(controller: "AboutController", detail: "summary").content.first[:text]
+
+          expect(text).not_to include("Tests that exercise")
+          expect(text).not_to include("`spec/requests/health_spec.rb` (request")
         end
       end
     end
