@@ -519,6 +519,27 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
         expect(result[:turbo_stream_responses]).to eq([ { controller: "PostsController", action: "create" } ])
       end
     end
+
+    it "does not tie an action to a turbo_stream response named only in a comment" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def index
+              # format.turbo_stream was removed
+            end
+
+            def create
+              respond_to { |format| format.turbo_stream }
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:turbo_stream_responses]).to eq([ { controller: "PostsController", action: "create" } ])
+      end
+    end
   end
 
   describe "model broadcasts across every model directory" do
@@ -609,6 +630,120 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
 
         expect(result[:turbo_frames].map { |f| f[:id] }).to eq([ "comments", "dom_id(@post)" ])
       end
+    end
+  end
+
+  describe "ERB comments and calls wrapped over lines" do
+    def result_for(files)
+      Dir.mktmpdir do |dir|
+        files.each do |relative, body|
+          path = File.join(dir, relative)
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, body)
+        end
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call
+      end
+    end
+
+    it "does not list a frame inside an ERB comment tag" do
+      result = result_for("app/views/posts/index.html.erb" => <<~ERB)
+        <%# turbo_frame_tag "old_frame" %>
+        <%#= turbo_frame_tag "draft_panel" do %>
+        <%= turbo_frame_tag "real" %>
+      ERB
+
+      expect(result[:turbo_frames].map { |f| [ f[:id], f[:line] ] }).to eq([ [ "real", 3 ] ])
+    end
+
+    it "reads a frame's src written on the next line of the call" do
+      result = result_for("app/views/posts/index.html.erb" => <<~ERB)
+        <%= turbo_frame_tag "lazy",
+              src: posts_path %>
+        <%= turbo_frame_tag "eager" %>
+        <%= link_to "x", y, src: "other" %>
+      ERB
+
+      expect(result[:turbo_frames].map { |f| f.slice(:id, :src, :line, :snippet) }).to eq([
+        { id: "lazy", src: "posts_path", line: 1, snippet: %(<%= turbo_frame_tag "lazy",) },
+        { id: "eager", src: nil, line: 3, snippet: %(<%= turbo_frame_tag "eager" %>) }
+      ])
+    end
+
+    it "reads every stream part of a subscription wrapped over lines" do
+      result = result_for("app/views/articles/show.html.erb" => <<~ERB)
+        <%= turbo_stream_from @article,
+              :comments %>
+        <p>:other</p>
+      ERB
+
+      expect(result[:stream_subscriptions].map { |s| s.slice(:stream, :parts, :line) }).to eq([
+        { stream: "@article, comments", parts: [ { expr: "@article" }, { literal: "comments" } ], line: 1 }
+      ])
+    end
+
+    it "does not count a stream action inside an ERB comment tag" do
+      result = result_for("app/views/posts/update.turbo_stream.erb" => <<~ERB)
+        <%# turbo_stream.remove "x" %>
+        <%-# <turbo-stream action="append"> %>
+        <%= turbo_stream.replace "y" %>
+      ERB
+
+      expect(result[:stream_actions]).to eq("replace" => 1)
+    end
+
+    it "does not count a Turbo Drive attribute inside an ERB comment tag" do
+      result = result_for("app/views/posts/index.html.erb" => <<~ERB)
+        <%# was: data: { turbo_action: "replace" } %>
+        <%= link_to "x", "/", data: { turbo_action: "advance" } %>
+      ERB
+
+      expect(result[:turbo_drive_settings][:"data-turbo-action"]).to eq(1)
+    end
+
+    it "counts a native conditional only where ERB runs it, which includes inside an HTML comment" do
+      result = result_for("app/views/posts/index.html.erb" => <<~ERB)
+        <%# hidden: if hotwire_native_app? %>
+        <!-- if turbo_native_app? -->
+        <!-- <% if turbo_native_app? %>native<% end %> -->
+        <% if hotwire_native_app? %><% end %>
+      ERB
+
+      expect(result[:turbo_native][:native_conditionals]).to eq(2)
+    end
+  end
+
+  describe "permanent elements" do
+    def permanent_for(view)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/views/posts"))
+        File.write(File.join(dir, "app/views/posts/index.html.erb"), view)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call[:permanent_elements]
+      end
+    end
+
+    it "reads the id attribute, not a data attribute ending in id" do
+      expect(permanent_for(<<~ERB)).to eq([ { file: "posts/index.html.erb", id: "right" }, { file: "posts/index.html.erb", id: "audio" } ])
+        <div data-id="wrong" id="right" data-turbo-permanent></div>
+        <audio data-player-id='nope' data-turbo-permanent id='audio'></audio>
+      ERB
+    end
+
+    it "finds an element whose attributes hold ERB tags, with the id as written" do
+      expect(permanent_for(<<~ERB).map { |e| e[:id] }).to eq([ "<%= dom_id(@player) %>", %(<%= "row-\#{@row.id}" %>) ])
+        <div id="<%= dom_id(@player) %>" data-turbo-permanent></div>
+        <li class="<%= "a" if @b %>" id="<%= "row-\#{@row.id}" %>" data-turbo-permanent></li>
+      ERB
+    end
+
+    it "finds an element a Rails tag helper writes data-turbo-permanent for, and skips a nil value Rails omits" do
+      expect(permanent_for(<<~ERB).map { |e| e[:id] }).to eq(%w[player flash banner])
+        <%= tag.div id: "player", data: { turbo_permanent: true } %>
+        <%= content_tag :div, "", id: "flash", data: { turbo_permanent: "" } %>
+        <%= tag.div "data-turbo-permanent": true, id: :banner do %>
+        <% end %>
+        <%= tag.div id: "gone", data: { turbo_permanent: nil } %>
+        <%# tag.div id: "old", data: { turbo_permanent: true } %>
+      ERB
     end
   end
 end
