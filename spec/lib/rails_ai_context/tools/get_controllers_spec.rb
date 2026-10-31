@@ -1337,6 +1337,33 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
         expect(text[/## Side Effects\n(?:- .*\n?)*/].to_s.strip).to eq("## Side Effects\n- @widget.save")
       end
     end
+
+    it "filters a secret in a side effect's receiver as the source listing does" do
+      live_key = "sk_live_#{'b' * 24}"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def create
+              Billing::Client.new(api_key: "#{live_key}", retries: 3).save
+              redirect_to widgets_path
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => {
+            actions: %w[create], filters: [], parent_class: "ApplicationController",
+            file: "app/controllers/widgets_controller.rb"
+          } } }
+        )
+
+        text = described_class.call(controller: "WidgetsController", action: "create").content.first[:text]
+
+        expect(text).not_to include(live_key)
+        expect(text[/## Side Effects\n(?:- .*\n?)*/]).to include("[FILTERED]")
+      end
+    end
   end
 
   # ledger's index read `render json: accounts.map { |a| ... .as_json` and

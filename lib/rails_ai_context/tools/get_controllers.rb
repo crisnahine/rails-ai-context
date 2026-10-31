@@ -369,7 +369,7 @@ module RailsAiContext
           end
           if render_map[:side_effects].any?
             lines << "" << "## Side Effects"
-            render_map[:side_effects].each { |s| lines << "- #{s}" }
+            render_map[:side_effects].each { |s| lines << "- #{redacted(s, carried)}" }
           end
         else
           lines << "" << "_Could not extract source code. File: #{carried || "not recorded for #{controller_name}"}_"
