@@ -21,7 +21,6 @@
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/Rails-7.0_to_8.1-b4132c" alt="Rails 7.0 to 8.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/crisnahine/rails-ai-context?color=b4132c" alt="MIT license"></a>
   <a href="https://registry.modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP_Registry-listed-b4132c" alt="Listed in the MCP Registry"></a>
-  <a href="https://lobehub.com/mcp/crisnahine-rails-ai-context"><img src="https://lobehub.com/badge/mcp/crisnahine-rails-ai-context?style=flat" alt="rails-ai-context on the LobeHub MCP marketplace"></a>
 </p>
 
 <p align="center">
