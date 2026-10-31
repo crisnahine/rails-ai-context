@@ -20,10 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/`. The README leads with a figure of real answers in place of the
   GIFs, which are gone with `demo/`. The packaged gem gains the two files the
   README now links: `CODE_OF_CONDUCT.md` and ADR 0002.
-- **Cursor's tools guide rule is always applied.** With `generate_root_files`
-  off, `.cursor/rules/rails-mcp-tools.mdc` stands in for the root file, so its
-  frontmatter is now `alwaysApply: true` with a `description`, like the
-  project overview, in place of a rule the agent loaded only on request.
 - **A new `opencode.json` starts with `"$schema": "https://opencode.ai/config.json"`**,
   the line OpenCode adds itself to a config it loads without one. An existing
   `opencode.json` gets none added, and removing the gem's entry deletes an
@@ -74,8 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only 10 s for a server before 0.120 and the server boots the app first. A
   timeout you set is kept and none is added beside it, and a removal still
   takes the table, since the timeout configures only the gem's server.
-  `env_vars` names you added are merged into the list. The next install or context run replaces a table an earlier release
-  wrote. The install no longer adds `.codex/config.toml` to `.gitignore`,
+  `env_vars` names you added are merged into the list. The next install or
+  context run replaces a table an earlier release wrote. The install no longer adds `.codex/config.toml` to `.gitignore`,
   since the file is committed like the other MCP configs, and takes out the
   line an earlier release added. `rails ai:doctor` drops the
   "Codex env snapshot" check and no longer counts the Codex config as a file
@@ -89,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server in the folder it runs in, and the editor in the project's folder.
   VS Code keeps `${workspaceFolder}`. An entry an earlier release wrote is
   still read, and the next `init` in the folder rewrites it.
+- **The guide's Cursor table gives the tools guide rule's real scope.**
+  `.cursor/rules/rails-mcp-tools.mdc` has been `alwaysApply: true` since
+  5.38.2, and the table in `docs/GUIDE.md` still said the agent loaded it only
+  on request.
 
 ## [5.38.2] - 2026-10-29
 
