@@ -27,7 +27,7 @@ module RailsAiContext
         creates = []
         scan = SqlScan.new(content, family: dialect)
         each_create_table(content, scan, dialect) { |*create| creates << create }
-        view_matches = content.scan(VIEW)
+        view_matches = statement_matches(content, VIEW, scan, dialect)
         virtual_matches = content.scan(VIRTUAL_TABLE)
         relations = creates.map(&:first) + view_matches.map { |match| match[1] } + virtual_matches.map(&:first)
         names = PgNaming.names(path, relations: relations.map { |name| qualified_name(name) }, types: enums.keys)
@@ -230,6 +230,8 @@ module RailsAiContext
         scanner = StringScanner.new(content)
         base = 0
         while scanner.skip_until(CREATE_TABLE)
+          next if in_closed_string?(scan, scanner.pos - scanner.matched_size - base, content.bytesize - base, dialect)
+
           qualified = scanner[1]
           close = scan.paren_group(scanner.pos - base)
           unless close
@@ -243,6 +245,27 @@ module RailsAiContext
           inherits = scanner[1] if scanner.scan(INHERITS)
           yield qualified, body, inherits, trailer(scanner, scan, base)
         end
+      end
+
+      # Each match's groups, as String#scan gives them, but none that starts inside a closed string.
+      def statement_matches(content, pattern, scan, dialect)
+        scanner = StringScanner.new(content, fixed_anchor: true)
+        found = []
+        while scanner.skip_until(pattern)
+          next if in_closed_string?(scan, scanner.pos - scanner.matched_size, content.bytesize, dialect)
+
+          # Not `captures`: strscan before 3.0.8 (Ruby 3.1) gives "" for a group that did not match.
+          found << (1...scanner.size).map { |group| scanner[group] }
+        end
+        found
+      end
+
+      # A function body or COMMENT text is data. Where a backslash escapes a quote, a misread string closes late, so not there.
+      def in_closed_string?(scan, at, size, dialect)
+        return false if RailsAiContext::DatabaseFamily.of(dialect).backslash_escapes?
+
+        kind, from, to = scan.quoted_spans.bsearch { |_, _, span_end| span_end > at }
+        kind == :string && from <= at && to < size
       end
 
       # The table options after a CREATE TABLE body, to the statement's end or the line's.

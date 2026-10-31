@@ -83,10 +83,14 @@ module RailsAiContext
           files.each do |f|
             next if File.size(f) > config.max_test_file_size
             source = RailsAiContext::SafeFile.read(f) or next
-            create_count += source.scan(/create\(:/).size
-            build_count += source.scan(/build\(:/).size
-            let_count += source.scan(/\blet[!]?\(:/).size
-            instance_var_count += source.scan(/@\w+\s*=/).size
+            factory_calls = RailsAiContext::Introspectors::SourceIntrospector.walk_source(source, {
+              calls: -> { RailsAiContext::Introspectors::Listeners::MethodCallListener.new(names: %w[create build]) }
+            })[:calls].select { |call| call[:arguments].first.is_a?(Symbol) }
+            create_count += factory_calls.count { |call| call[:name] == "create" }
+            build_count += factory_calls.count { |call| call[:name] == "build" }
+            code = RailsAiContext::RubySource.code_only(source)
+            let_count += code.scan(/\blet[!]?\(:/).size
+            instance_var_count += code.scan(/@\w+\s*=/).size
           end
 
           { factory: create_count >= build_count ? :create : :build, let: let_count > instance_var_count }
@@ -793,7 +797,7 @@ module RailsAiContext
             safe_glob(dir, "*_helper.rb", real_root) + safe_glob(dir, "{test_helpers,support}/**/*.rb", real_root)
           end
           files.first(50).each do |path|
-            name = RailsAiContext::SafeFile.read(path).to_s[SIGN_IN_HELPER, 1]
+            name = RailsAiContext::RubySource.code_only(RailsAiContext::SafeFile.read(path).to_s)[SIGN_IN_HELPER, 1]
             return name if name
           end
           nil
@@ -1519,7 +1523,11 @@ module RailsAiContext
           return "#{model_name} runs validates_with #{rule[:validator]}".strip + "; supply a record that passes it" if kind == "validates_with"
           return "#{model_name} validates #{kind} of #{attrs.join(', ')}, which the gem cannot evaluate; supply a record that passes it" unless RULE_OPTIONS.key?(kind)
 
-          proc_key, = options.find { |_, value| Array(value).any? { |item| item.is_a?(Proc) || item.to_s.match?(PROC_SOURCE) } }
+          # Only a condition list holds callables; any other list (`in: %w[proc]`) holds values.
+          proc_key, = options.find do |key, value|
+            items = %i[if unless].include?(key.to_sym) ? Array(value) : [ value ]
+            items.any? { |item| item.is_a?(Proc) || (!item.is_a?(Array) && item.to_s.match?(PROC_SOURCE)) }
+          end
           return "#{model_name} validates #{kind} of #{attrs.join(', ')} with a lambda or proc in the #{proc_key} option; supply a record that passes it" if proc_key
 
           other = (options.keys.map(&:to_sym) - COMMON_RULE_OPTIONS - RULE_OPTIONS[kind]).first
@@ -2078,15 +2086,25 @@ module RailsAiContext
         def format_matcher(attr, options)
           source = (options[:with] || options[:without]).to_s
           pattern = if source == "URI::MailTo::EMAIL_REGEXP" then URI::MailTo::EMAIL_REGEXP
-          elsif source.start_with?("/") && (body = source[%r{\A/(.*)/([imx]*)\z}m, 1])
-            Regexp.new(body, source[%r{/([imx]*)\z}, 1].to_s.each_char.sum { |flag| { "i" => 1, "x" => 2, "m" => 4 }[flag] })
           elsif source.empty? && attr.end_with?("email") then URI::MailTo::EMAIL_REGEXP
+          else literal_regexp(source)
           end
           return nil unless pattern
 
           options[:without] ? ->(text) { !pattern.match?(text) } : ->(text) { pattern.match?(text) }
         rescue RegexpError
           nil
+        end
+
+        # The Regexp a literal's source spells, `/.../` and `%r{...}` alike; nil for any other expression.
+        def literal_regexp(source)
+          result = RailsAiContext::AstCache.parse_string(source.to_s)
+          body = result.value.statements.body
+          return nil unless result.success? && body.one? && body.first.is_a?(Prism::RegularExpressionNode)
+
+          node = body.first
+          Regexp.new(node.unescaped, (node.ignore_case? ? Regexp::IGNORECASE : 0) | (node.extended? ? Regexp::EXTENDED : 0) |
+                                     (node.multi_line? ? Regexp::MULTILINE : 0))
         end
 
         # The bounds a numericality rule sets and a test of a number against them, nil where a bound is no number.
@@ -2703,12 +2721,7 @@ module RailsAiContext
           pattern = options[:with]
           return pattern.match?(value) if pattern.is_a?(Regexp)
 
-          literal = pattern.to_s.match(%r{\A/(.*)/([mix]*)\z}m)
-          return false unless literal && !literal[1].include?("\#{")
-
-          flags = (literal[2].include?("i") ? Regexp::IGNORECASE : 0) | (literal[2].include?("x") ? Regexp::EXTENDED : 0) |
-                  (literal[2].include?("m") ? Regexp::MULTILINE : 0)
-          Regexp.new(literal[1], flags).match?(value)
+          literal_regexp(pattern)&.match?(value) || false
         rescue RegexpError
           false
         end

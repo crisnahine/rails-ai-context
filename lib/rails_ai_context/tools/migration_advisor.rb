@@ -399,7 +399,7 @@ module RailsAiContext
             lines << ""
           end
 
-          if table_exists && options.to_s.match?(/\bnull:\s*false\b/) && !options.to_s.match?(/\bdefault:/)
+          if table_exists && not_null_without_default?(options)
             lines << not_null_warning(table, column)
             lines << ""
           end
@@ -624,9 +624,13 @@ module RailsAiContext
         def option_value(options, key)
           call = RailsAiContext::AstCache.parse_uncached("f(#{options})").value.statements.body.first if options
           hash = call.arguments&.arguments&.last if call.is_a?(Prism::CallNode)
-          return unless hash.is_a?(Prism::KeywordHashNode)
+          return unless hash.is_a?(Prism::KeywordHashNode) || hash.is_a?(Prism::HashNode)
 
           hash.elements.find { |pair| pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) && pair.key.unescaped == key.to_s }&.value
+        end
+
+        def not_null_without_default?(options)
+          option_value(options, :null).is_a?(Prism::FalseNode) && option_value(options, :default).nil?
         end
 
         # The add_reference above as strong_migrations wants it on each
@@ -916,7 +920,7 @@ module RailsAiContext
               ]
             end
           when "add_column"
-            if options.to_s.match?(/null:\s*false/) && !options.to_s.include?("default:")
+            if not_null_without_default?(options)
               [
                 if family(table).postgresql?
                   "**Adding a `NOT NULL` column without a default rewrites the table** on older Postgres and fails on existing rows."

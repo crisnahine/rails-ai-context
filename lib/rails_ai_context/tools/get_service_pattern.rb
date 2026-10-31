@@ -276,7 +276,7 @@ module RailsAiContext
             public_methods: extract_public_methods(owned),
             init_params: extract_initialize_params(owned) || macro_constructor(macros, record, lookup, walks)&.dig(:signature),
             class_method_call: owned.any? { |m| m[:scope] == :class && m[:name] == "call" },
-            result_object: source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/),
+            result_object: RailsAiContext::RubySource.code_only(source).match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/),
             active_interaction: Introspectors::Interaction.interaction?(source, lookup: lookup),
             entryless: record[:entryless]
           }
@@ -545,33 +545,40 @@ module RailsAiContext
         owners.min_by { |o| [ o.count(":"), o.length ] }
       end
 
+      MIXIN_DEPENDENCIES = %i[include prepend singleton_include singleton_prepend].freeze
+
       private_class_method def self.extract_dependencies(source, own_class_name)
         deps = Set.new(Introspectors::SourceCalls.classes(source, own: own_class_name))
 
         # Mailers are invoked through their action name (PostMailer.published_email),
         # which no verb list can anticipate.
-        # regex over .rb content: vocabulary classification, a mailer call carries no verb to match.
-        source.scan(/([A-Z][\w:]*Mailer)\.\w+/).each do |match|
+        # regex over the code, comments and strings blanked: vocabulary classification, a mailer call carries no verb to match.
+        RailsAiContext::RubySource.code_only(source).scan(/([A-Z][\w:]*Mailer)\.\w+/).each do |match|
           cls = match[0]
           next if cls == own_class_name || cls == "ActionMailer"
           deps << cls
         end
 
-        # Explicit require or include
-        source.scan(/(?:include|prepend)\s+([\w:]+)/).each do |match|
-          deps << match[0]
+        mixins = Introspectors::SourceIntrospector.walk_source(source, { mixins: Introspectors::Listeners::MixinsListener })[:mixins]
+        mixins.each do |mixin|
+          deps << mixin[:name] if MIXIN_DEPENDENCIES.include?(mixin[:macro]) && !mixin[:inline]
         end
 
         deps.to_a.sort
       end
 
+      # A bare `rescue` and the `x rescue y` modifier both catch StandardError.
       private_class_method def self.extract_rescue_blocks(source)
         rescues = Set.new
-        source.scan(/rescue\s+([\w:]+(?:\s*,\s*[\w:]+)*)/).each do |match|
-          match[0].split(",").each { |r| rescues << r.strip }
+        Introspectors::AstWalk.each(RailsAiContext::AstCache.parse_string(source).value) do |node|
+          case node
+          when Prism::RescueNode
+            names = node.exceptions.map(&:slice)
+            names.empty? ? rescues << "StandardError (implicit)" : rescues.merge(names)
+          when Prism::RescueModifierNode
+            rescues << "StandardError (implicit)"
+          end
         end
-        # Also detect bare rescue
-        rescues << "StandardError (implicit)" if source.match?(/rescue\s*$/) || source.match?(/rescue\s*=>/)
         rescues.to_a.sort
       end
 
@@ -643,9 +650,12 @@ module RailsAiContext
           source = safe_read(real)
           next unless source
 
+          code = nil
           references.each do |name, reference|
             next unless source.match?(reference)
-            next unless source.gsub(definitions[name], "").match?(reference)
+
+            code ||= RailsAiContext::RubySource.without_comments(source)
+            next unless code.gsub(definitions[name], "").match?(reference)
 
             callers[name] << real.sub("#{real_root}/", "")
           end

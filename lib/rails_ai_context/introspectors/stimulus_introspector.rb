@@ -54,7 +54,8 @@ module RailsAiContext
             content = RailsAiContext::SafeFile.read(path) or next
             next unless content.include?("register")
 
-            found = content.scan(REGISTRATION)
+            code = js_code(content)
+            found = code.scan(REGISTRATION)
             next if found.empty?
 
             bindings = import_bindings(content)
@@ -86,11 +87,12 @@ module RailsAiContext
         NAMED_IMPORT = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s+["']([^"']+)["']/
 
         def import_bindings(content)
+          code = js_code(content)
           bindings = IMPORT_BINDINGS.each_with_object({}) do |pattern, found|
-            content.scan(pattern) { |klass, spec| found[klass] ||= spec }
+            code.scan(pattern) { |klass, spec| found[klass] ||= spec }
           end
           # `import { Autocomplete as Complete } from "x"` binds Complete.
-          content.scan(NAMED_IMPORT) do |names, spec|
+          code.scan(NAMED_IMPORT) do |names, spec|
             names.split(",").each do |entry|
               local = entry.split(/\s+as\s+/).last.to_s.strip
               bindings[local] ||= spec if local.match?(/\A[A-Za-z_$][\w$]*\z/)
@@ -336,10 +338,11 @@ module RailsAiContext
 
           seen << path
           content ||= RailsAiContext::SafeFile.read(path) or return false
-          return true if content.match?(STIMULUS_IMPORT)
+          code = js_code(content)
+          return true if code.match?(STIMULUS_IMPORT)
 
           bindings = import_bindings(content)
-          content.scan(EXTENDS).flatten.any? do |klass|
+          code.scan(EXTENDS).flatten.any? do |klass|
             spec = bindings[klass] or next false
 
             if (target = resolve_module(spec, path, aliases))
@@ -351,6 +354,10 @@ module RailsAiContext
         end
 
         MAX_BASE_DEPTH = 20
+
+        def js_code(content)
+          RailsAiContext::Brackets.without_comments(content, comments: :js)
+        end
       end
 
       # Where an identifier can be written: any template or Ruby file under `app`
@@ -394,6 +401,7 @@ module RailsAiContext
         return nil unless self.class.stimulus?(path, js_root, root.to_s, aliases, content)
 
         path_name = self.class.identifier_for(path, js_root).first
+        code = self.class.js_code(content)
 
         {
           name: name,
@@ -402,18 +410,18 @@ module RailsAiContext
           path_name: (path_name unless path_name == name),
           identifier_inferred: inferred || nil,
           file: relative,
-          targets: static_array(content, "targets", /["'](\w+)["']/),
+          targets: static_array(code, "targets", /["'](\w+)["']/),
           values: extract_values(content),
-          actions: extract_actions(content),
+          actions: extract_actions(code),
           # The methods the controller calls on itself (`this.render()`): one
           # no markup names is a helper the copy-paste markup leaves out.
-          self_calls: content.scan(/\bthis\.(\w+)\s*\(/).flatten.uniq.presence,
-          outlets: static_array(content, "outlets", /["']([^"']+)["']/),
-          classes: static_array(content, "classes", /["']([^"']+)["']/),
-          lifecycle: extract_lifecycle(content),
-          import_graph: extract_import_graph(content),
+          self_calls: code.scan(/\bthis\.(\w+)\s*\(/).flatten.uniq.presence,
+          outlets: static_array(code, "outlets", /["']([^"']+)["']/),
+          classes: static_array(code, "classes", /["']([^"']+)["']/),
+          lifecycle: extract_lifecycle(code),
+          import_graph: extract_import_graph(code),
           complexity: extract_complexity(content),
-          turbo_event_listeners: extract_turbo_event_listeners(content)
+          turbo_event_listeners: extract_turbo_event_listeners(code)
         }.compact
       rescue => e
         { name: File.basename(path), error: e.message }
@@ -460,21 +468,42 @@ module RailsAiContext
       # an action and pasted as `click->cart#quantityValueChanged`.
       CHANGE_CALLBACK = /\A\w+(?:ValueChanged|TargetConnected|TargetDisconnected|OutletConnected|OutletDisconnected)\z/
 
-      def extract_actions(content)
-        content.scan(/^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{/).flatten
-               .reject { |m| %w[constructor connect disconnect initialize if else for while switch catch function].include?(m) || m.match?(CHANGE_CALLBACK) }
+      def extract_actions(code)
+        class_methods(code).reject { |m| %w[constructor connect disconnect initialize if else for while switch catch function].include?(m) || m.match?(CHANGE_CALLBACK) }
       end
 
-      def extract_import_graph(content)
-        imports = []
-        content.each_line do |line|
-          if (match = line.match(/import\s+.*?from\s+["']([^"']+)["']/))
-            imports << match[1]
-          elsif (match = line.match(/import\s+["']([^"']+)["']/))
-            imports << match[1]
-          end
+      DEFAULT_CLASS = /\bexport\s+default\s+class\b[^{]*\{/
+      CLASS_HEAD = /\bclass\s[^{]*\{/
+      METHOD_MEMBER = /(?<![\w$.#])((?:(?:static|async|get|set)\s+)*)\*?\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*\{/
+      # Stimulus calls `controller[name]`, so a field holding a function is an action too.
+      FUNCTION_FIELD = /(?<![\w$.#])((?:static\s+)?)([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|(?:\(\s*\)|[A-Za-z_$][\w$]*)\s*=>)/
+
+      # The instance methods of the default-exported class, or of every class when none is exported.
+      def class_methods(code)
+        heads = [ code.match(DEFAULT_CLASS) ].compact
+        heads = code.to_enum(:scan, CLASS_HEAD).map { Regexp.last_match } if heads.empty?
+        heads.flat_map do |head|
+          body = RailsAiContext::Brackets.span(code, head.end(0) - 1, comments: :js) or next []
+          level = class_level(body[1...-1])
+          [ METHOD_MEMBER, FUNCTION_FIELD ].flat_map { |pattern| level.to_enum(:scan, pattern).map { Regexp.last_match } }
+                                           .sort_by { |member| member.begin(0) }
+                                           .filter_map { |member| member[2] unless member[1].match?(/\b(?:static|get|set)\b/) }
         end
-        imports
+      end
+
+      # The body with each nested group and string blanked, so a pattern sees only the class's own members.
+      def class_level(body)
+        level = +""
+        RailsAiContext::Brackets.each_top_level(body, comments: :js) do |piece, kind|
+          level << (%i[group string].include?(kind) && piece.length > 2 ? piece[0] + piece[1...-1].tr("^\n", " ") + piece[-1] : piece)
+        end
+        level
+      end
+
+      STATIC_IMPORT = /\bimport\s+(?:[^;"'`()]*?\bfrom\s*)?["']([^"']+)["']/
+
+      def extract_import_graph(code)
+        code.scan(STATIC_IMPORT).flatten
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_import_graph")
       end
@@ -497,9 +526,9 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_turbo_event_listeners")
       end
 
-      def extract_lifecycle(content)
-        hooks = content.scan(/\b(connect|disconnect|initialize)\s*\(\s*\)/).flatten.uniq
-        hooks += content.scan(/^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{/).flatten.grep(CHANGE_CALLBACK).uniq
+      def extract_lifecycle(code)
+        methods = class_methods(code)
+        hooks = (methods & %w[connect disconnect initialize]) + methods.grep(CHANGE_CALLBACK).uniq
         hooks.any? ? hooks : nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "extract_lifecycle")

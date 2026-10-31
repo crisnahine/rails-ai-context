@@ -134,7 +134,8 @@ which leaves the committed file as it is.
   folder, or the one app below it, as every command does. At user scope the
   plugin starts in every project; outside a Rails app its server connects with
   no tools and tells the session why. A monorepo's root whose `bin/rails`
-  boots an app below it serves that app. On Windows the plugin serves one app
+  boots an app below it serves that app, and an engine whose code is all in
+  `lib/` serves its `test/dummy` or `spec/dummy` app. On Windows the plugin serves one app
   per session: in a folder of several apps its server connects with no tools
   and names each app and the `--app-path` command that runs its tools.
   Elsewhere a folder that holds several apps

@@ -440,7 +440,7 @@ module RailsAiContext
         root = rails_app.root.to_s
         RunCache.fetch([ :direct_route_names, root ]) do
           app_sources(root, "config/routes.rb", "config/routes/**/*.rb").each_with_object(Set.new) do |source, names|
-            source.scan(/^\s*direct\s*\(?\s*[:"'](\w+)/) { |(name)| names << name }
+            macro_calls(source, :direct).each { |call| names << call[:args].first.to_s if call[:args].any? }
           end
         end
       end
@@ -454,7 +454,9 @@ module RailsAiContext
           names = Set.new
           app_sources(root, "app/helpers/**/*.rb").each { |source| names.merge(local_route_like_method_names(source)) }
           app_sources(root, "app/controllers/**/*.rb").each do |source|
-            source.scan(/\bhelper_method\b([^\n]*)/) { |(args)| names.merge(args.scan(/:(\w+_(?:path|url))\b/).flatten) }
+            macro_calls(source, :helper_method).each do |call|
+              names.merge(call[:args].map(&:to_s).select { |name| name.end_with?("_path", "_url") })
+            end
           end
           names
         end
@@ -466,6 +468,10 @@ module RailsAiContext
         patterns.flat_map { |pattern| RailsAiContext::PathResolver.glob(root, pattern) }.uniq.filter_map do |path|
           RailsAiContext::SafeFile.read(path) unless RailsAiContext::PathResolver.linked_out?(path, root)
         end
+      end
+
+      private_class_method def self.macro_calls(source, *names)
+        Introspectors::SourceIntrospector.walk_source(source, { calls: -> { Introspectors::Listeners::GenericMacroListener.new(*names) } })[:calls]
       end
 
       private_class_method def self.check_route_helpers_ast(file, visitor, context)
@@ -513,7 +519,7 @@ module RailsAiContext
       end
 
       private_class_method def self.local_route_like_method_names(content)
-        content.scan(/^\s*(?:(?:private|protected|public|private_class_method)\s+)*def\s+(?:self\.)?(\w+_(?:path|url))\b/).flatten.to_set
+        Introspectors::ActionResolver.methods_in(content).map { |m| m[:name].to_s }.select { |name| name.end_with?("_path", "_url") }.to_set
       end
 
       # An engine's view calls its helpers bare, so `shop.admin_orders` counts as admin_orders.
@@ -883,15 +889,11 @@ module RailsAiContext
         end
         return warnings if known.empty?
 
-        # Extract data-controller references from HTML
-        content.scan(/data-controller=["']([^"']+)["']/).each do |match|
-          controllers = match[0].split(/\s+/)
-          controllers.each do |name|
-            next if name.include?("<%") || name.include?("#") # dynamic
-            next if name.include?("--") # namespaced npm package
-            unless known.include?(name)
-              warnings << "data-controller=\"#{name}\" - Stimulus controller not found"
-            end
+        Introspectors::ViewTemplateIntrospector.template_stimulus_refs(content).each do |name|
+          next if name.include?("#") # dynamic
+          next if name.include?("--") # namespaced npm package
+          unless known.include?(name)
+            warnings << "data-controller=\"#{name}\" - Stimulus controller not found"
           end
         end
         warnings
@@ -903,10 +905,7 @@ module RailsAiContext
         warnings = []
         return warnings unless file.start_with?("app/views/") && !RailsAiContext::ViewFile.in_layouts?(file.delete_prefix("app/views/"))
 
-        # Tag bodies only, so HTML and JS text cannot look like an ivar. The
-        # in-place form blanks `<%#` comments, whose bodies are not code.
-        erb_content = RailsAiContext::ErbSource.ruby_in_place(content)
-        ivars = erb_content.scan(/@(\w+)/).flatten.uniq
+        ivars = Introspectors::ViewTemplateIntrospector.ivars_in(content, path: file)
         return warnings if ivars.empty?
 
         # Try to find the controller that renders this view
@@ -940,17 +939,7 @@ module RailsAiContext
         )
         sources = chain.sources.any? ? chain.sources : [ ctrl_source ]
 
-        # Detect ivars from controller - handles @a, @b = multi-assignment
-        set_ivars = []
-        sources.each do |source|
-          source.each_line do |line|
-            next unless line.include?("@")
-            if line.include?("=")
-              line.split("=", 2).first.scan(/@(\w+)/).each { |m| set_ivars << m[0] }
-            end
-          end
-        end
-        set_ivars.uniq!
+        set_ivars = sources.flat_map { |source| Introspectors::ActionResolver.assigned_ivars(source) }.uniq
         # Add common framework ivars that don't appear as explicit assignments
         set_ivars += %w[pagy current_user _request]
 
@@ -973,7 +962,13 @@ module RailsAiContext
         return warnings unless file.start_with?("app/")
 
         # Detect broadcasts in Ruby files
-        broadcasts = content.scan(/broadcast_(?:replace|append|prepend|remove|update|action)_to\s*\(\s*["']([^"']+)["']/).flatten
+        return warnings unless content.include?("broadcast_")
+
+        code = RailsAiContext::RubySource.code_only(content)
+        broadcasts = []
+        RailsAiContext::RubySource.without_comments(content).scan(/broadcast_(?:replace|append|prepend|remove|update|action)_to\s*\(\s*["']([^"']+)["']/) do
+          broadcasts << Regexp.last_match(1) unless code[Regexp.last_match.begin(0)] == " "
+        end
         return warnings if broadcasts.empty?
 
         # Scan views for turbo_stream_from subscriptions
@@ -983,7 +978,7 @@ module RailsAiContext
         subscriptions = Set.new
         RailsAiContext::FileWalk.glob(views_dir.to_s, "**/*.{erb,html.erb}", root: rails_app.root.to_s).each do |path|
           view_content = RailsAiContext::SafeFile.read(path) or next
-          view_content.scan(/turbo_stream_from\s+["']([^"']+)["']/).each do |match|
+          RailsAiContext::ErbSource.tag_bodies(view_content).scan(/turbo_stream_from\s+["']([^"']+)["']/).each do |match|
             subscriptions << match[0]
           end
         end
@@ -1004,25 +999,38 @@ module RailsAiContext
       MEMORY_LOAD_METHODS = %w[map filter_map flat_map select reject collect reduce inject each_with_object].freeze
 
       private_class_method def self.check_memory_loading(file, content)
-        warnings = []
-        content.each_line.with_index(1) do |line, num|
-          stripped = line.strip
-          next if stripped.start_with?("#")
+        warnings = {}
+        Introspectors::AstWalk.each(AstCache.parse_string(content).value) do |node|
+          next unless node.is_a?(Prism::CallNode) && MEMORY_LOAD_METHODS.include?(node.name.to_s)
+          # `select` with arguments and no block picks SQL columns.
+          next unless node.block || (node.arguments && node.name != :select)
+          next unless relation_chain?(node.receiver)
 
-          MEMORY_LOAD_METHODS.each do |method|
-            # Match: .scope.ruby_method{ or .scope.ruby_method do
-            next unless stripped.match?(/\.\w+\.#{method}\s*[\{\(]/) || stripped.match?(/\.\w+\.#{method}\s+do\b/)
-            # Skip if it's clearly not an AR chain (e.g., array.map)
-            next if stripped.match?(/\[\]\.#{method}/) || stripped.match?(/\.to_a\.#{method}/)
-            # Skip if preceded by pluck/select (already optimized)
-            next if stripped.match?(/\.pluck\(.*\)\.#{method}/) || stripped.match?(/\.select\(.*\)\.#{method}/)
-            warnings << "line #{num}: scope chain followed by .#{method} may load all records into memory - consider .pluck or SQL"
-            break # one warning per line
-          end
+          line = (node.message_loc || node.location).start_line
+          warnings[line] ||= "line #{line}: scope chain followed by .#{node.name} may load all records into memory - consider .pluck or SQL"
         end
-        warnings.first(3) # cap at 3 to avoid noise
+        warnings.sort.map(&:last).first(3) # cap at 3 to avoid noise
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "check_memory_loading")
+      end
+
+      # Methods no relation answers with a relation: once one is in the chain, the records are loaded or it was never a query.
+      NOT_A_RELATION = %i[pluck ids to_a to_h keys values split to_s chars lines each_line bytes].freeze
+      REQUEST_READERS = %i[params session cookies request flash headers].freeze
+
+      # A scope or association chain ending in a call with no arguments (`Post.active`, `current_user.posts`),
+      # never one over params or a literal.
+      private_class_method def self.relation_chain?(node)
+        return false unless node.is_a?(Prism::CallNode) && node.receiver && node.arguments.nil? && node.block.nil?
+
+        while node.is_a?(Prism::CallNode)
+          return false if NOT_A_RELATION.include?(node.name) || (node.name == :select && node.arguments)
+          return false if node.receiver.nil? && REQUEST_READERS.include?(node.name)
+
+          node = node.receiver
+        end
+        !node.is_a?(Prism::StringNode) && !node.is_a?(Prism::InterpolatedStringNode) &&
+          !node.is_a?(Prism::ArrayNode) && !node.is_a?(Prism::HashNode)
       end
 
       # ── CHECK 12: Performance warnings from introspector ───────────

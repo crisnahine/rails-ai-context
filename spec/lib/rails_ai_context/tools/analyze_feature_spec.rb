@@ -314,6 +314,28 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    it "counts the examples RSpec defines, in any call form, and none a heredoc's text names" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "spec", "models"))
+        File.write(File.join(tmp, "spec", "models", "article_spec.rb"), <<~RUBY)
+          RSpec.describe Article do
+            it("has a title") { expect(build(:article).title).to be_present }
+            specify { expect(build(:article).slug).to be_nil }
+            it { is_expected.to be_valid }
+            DOC = <<~TEXT
+              it "is text in a heredoc"
+            TEXT
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "article").content.first[:text]
+
+        expect(text).to include("- `spec/models/article_spec.rb` (3 tests)")
+      end
+    end
+
     it "finds the tests of the engine an app's test/dummy runs inside" do
       Dir.mktmpdir("rac_engine") do |engine|
         engine = File.realpath(engine)
@@ -1030,6 +1052,53 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
     end
   end
 
+  describe "the environment variables a feature's service reads" do
+    it "lists every fetch Ruby runs, with or without parentheses or a default, and none a comment names" do
+      Dir.mktmpdir("rac_env") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "services"))
+        File.write(File.join(tmp, "app", "services", "article_env.rb"), <<~RUBY)
+          class ArticleEnv
+            def self.key
+              # ENV["OLD_KEY"] removed
+              ENV.fetch "NEW_KEY"
+            end
+
+            def self.limit = ENV.fetch("ARTICLE_LIMIT", "5")
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "article").content.first[:text]
+
+        expect(text).to include("## Environment Dependencies\n- `ARTICLE_LIMIT`\n- `NEW_KEY`\n\n")
+      end
+    end
+
+    it "lists a read through ::ENV or an index op-assign, and not a plain write" do
+      Dir.mktmpdir("rac_env") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "services"))
+        File.write(File.join(tmp, "app", "services", "article_setup.rb"), <<~RUBY)
+          class ArticleSetup
+            def self.call
+              ENV["ARTICLE_A"] ||= "x"
+              ENV["ARTICLE_B"] += ":y"
+              ENV["ARTICLE_W"] = "1"
+              # ::ENV["ARTICLE_C"]
+              [ ::ENV["ARTICLE_I"], ::ENV.fetch("ARTICLE_L") ]
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "article").content.first[:text]
+
+        expect(text).to include("## Environment Dependencies\n- `ARTICLE_A`\n- `ARTICLE_B`\n- `ARTICLE_I`\n- `ARTICLE_L`\n\n")
+      end
+    end
+  end
+
   # spec/models/postmark_event_spec.rb tests PostmarkEvent, and user_mailer_spec.rb a mailer.
   describe "a test gap beside a test whose name only starts with the subject's" do
     def gaps(tmp, feature, models)
@@ -1292,6 +1361,41 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
         expect(described_class.call(feature: "post").content.first[:text]).to include("renders: posts/row, posts/frame, posts/box\n")
       end
+    end
+  end
+
+  describe "the Stimulus controllers a view declares" do
+    def stimulus_of(template)
+      Dir.mktmpdir("rac_views") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "views", "posts"))
+        File.write(File.join(tmp, "app", "views", "posts", "show.html.erb"), template)
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        row = described_class.call(feature: "post").content.first[:text][/^- `posts\/show\.html\.erb`.*$/]
+        return row.to_s[/stimulus: (.*)\z/, 1].to_s.split(", ")
+      end
+    end
+
+    it "reads a controller a tag helper's data hash sets, as Rails renders it to data-controller" do
+      template = <<~ERB
+        <%= tag.div data: { controller: "chart" } %>
+        <%= content_tag :ul, data: { controller: "sortable" } do %><% end %>
+        <%= form_with model: @post, data: { controller: "comment-form" } do |f| %><% end %>
+      ERB
+
+      expect(stimulus_of(template)).to contain_exactly("chart", "sortable", "comment-form")
+    end
+
+    # What an ERB tag in the attribute prints is decided at runtime.
+    it "lists the literal names of a data-controller and nothing an ERB tag in it writes" do
+      template = <<~ERB
+        <div data-controller="cart <%= extra %>"></div>
+        <div data-controller="tabs-<%= kind %>"></div>
+        <%# <div data-controller="retired"></div> %>
+      ERB
+
+      expect(stimulus_of(template)).to eq([ "cart" ])
     end
   end
 

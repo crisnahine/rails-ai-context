@@ -510,6 +510,45 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
     end
   end
 
+  describe "shards named in database.yml" do
+    def sharding_for(yml)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "database.yml"), yml)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).call[:sharding]
+      end
+    end
+
+    it "does not read a shard_count setting as a shard" do
+      sharding = sharding_for("production:\n  primary:\n    database: app\n    shard_count: 4\n")
+
+      expect(sharding).not_to have_key(:shard_names)
+    end
+
+    it "reads the guide's shard entries under the environment, leaving out their replicas" do
+      sharding = sharding_for(<<~YAML)
+        production:
+          primary:
+            database: my_primary_database
+            adapter: mysql2
+          primary_replica:
+            database: my_primary_database
+            adapter: mysql2
+            replica: true
+          primary_shard_one:
+            database: my_primary_shard_one
+            adapter: mysql2
+            migrations_paths: db/migrate_shards
+          primary_shard_one_replica:
+            database: my_primary_shard_one
+            adapter: mysql2
+            replica: true
+      YAML
+
+      expect(sharding[:shard_names]).to eq(%w[primary_shard_one])
+    end
+  end
+
   describe "model connection detection" do
     before do
       @models_dir = File.join(app.root.to_s, "app/models")

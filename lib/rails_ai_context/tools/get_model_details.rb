@@ -681,11 +681,9 @@ module RailsAiContext
         return {} unless source
         bodies = {}
         method_names.each do |name|
-          # Find the method body
-          if (match = source.match(/def\s+#{Regexp.escape(name)}\s*\n(.*?)(?=\n\s*end\b)/m))
-            body_lines = match[1].lines.map(&:strip).reject(&:empty?)
-            bodies[name] = body_lines.first&.truncate(120) if body_lines.any?
-          end
+          code = Introspectors::ActionResolver.method_body(source, name, owner: model_name)&.dig(:code) or next
+          body_lines = code.lines[1...-1].to_a.map(&:strip).reject(&:empty?)
+          bodies[name] = body_lines.first.truncate(120) if body_lines.any?
         end
         bodies
       rescue => e
@@ -760,7 +758,7 @@ module RailsAiContext
         full_path = resolved_model_path(model_name)
         source = RailsAiContext::SafeFile.read(full_path) or return nil
 
-        source_lines = source.lines
+        source_lines = RailsAiContext::RubySource.code_only(source).lines
         # A def's kind comes from the walk: a regex cannot see `class << self`,
         # `def Name.x`, or a def that only extends a scope.
         def_scopes = Introspectors::ActionResolver.methods_in(source).to_h { |m| [ m[:location], m[:scope] ] }

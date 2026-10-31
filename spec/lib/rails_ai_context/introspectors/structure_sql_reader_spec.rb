@@ -842,6 +842,37 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
     expect(described_class.parse(sql)[:tables].keys).to eq(%w[events_staging])
   end
 
+  it "reads no table from a CREATE TABLE inside a function body or a string" do
+    sql = <<~SQL
+      SET search_path = public;
+      CREATE FUNCTION make_ghost() RETURNS void LANGUAGE plpgsql AS $$
+      BEGIN
+        EXECUTE 'CREATE TABLE ghost (id integer)';
+      END;
+      $$;
+      CREATE TABLE public.users (
+          id bigint NOT NULL
+      );
+      COMMENT ON TABLE public.users IS 'see CREATE TABLE fake (x int)';
+    SQL
+
+    expect(described_class.parse(sql, dialect: :postgresql)[:tables].keys).to eq(%w[users])
+  end
+
+  it "reads no view from a CREATE VIEW inside a function body" do
+    sql = <<~SQL
+      CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$
+      BEGIN
+        EXECUTE 'CREATE VIEW ghost_v AS SELECT 1';
+      END;
+      $$;
+      CREATE VIEW public.real_v AS
+       SELECT 1 AS one;
+    SQL
+
+    expect(described_class.parse(sql, dialect: :postgresql)[:views].keys).to eq(%w[real_v])
+  end
+
   describe "INHERITS" do
     def columns(sql, table)
       described_class.parse(sql)[:tables][table][:columns].map { |c| c.values_at(:name, :type, :null) }

@@ -207,12 +207,49 @@ module RailsAiContext
           SourceScan.each(root, kind: kind, skip_concerns: false) do |record|
             next unless record.source.include?("_count")
 
-            record.source.scan(/(\w+_count)\s*[:=]/).each { |match| writers << match[0] }
+            writers.merge(counter_writes(AstCache.parse_string(record.source).value))
           end
         end
         @app_written_counter_columns = writers
       rescue StandardError => e
         @app_written_counter_columns = RailsAiContext.debug_fail(e, Set.new, label: "app_written_counter_columns")
+      end
+
+      COUNTER_COLUMN = /\A\w+_count\z/
+      # Calls whose keys, symbols or SQL set a column's value.
+      COUNTER_WRITE_CALLS = %i[
+        update update! update_columns update_column update_attribute update_attribute! update_all update_counters
+        increment increment! decrement decrement! increment_counter decrement_counter assign_attributes attributes=
+        write_attribute []= new build create create! insert insert! insert_all insert_all! upsert upsert_all
+      ].to_set.freeze
+
+      # A comparison or an `order(x_count: :desc)` reads the column; only an assignment or a write call sets it.
+      def counter_writes(tree)
+        AstWalk.each(tree).flat_map do |node|
+          case node
+          when Prism::CallOperatorWriteNode, Prism::CallOrWriteNode, Prism::CallAndWriteNode then [ node.read_name.to_s ]
+          when Prism::CallTargetNode then [ node.name.to_s.chomp("=") ]
+          when Prism::IndexOperatorWriteNode, Prism::IndexOrWriteNode, Prism::IndexAndWriteNode then written_columns(node.arguments)
+          when Prism::CallNode
+            if COUNTER_WRITE_CALLS.include?(node.name) then written_columns(node.arguments)
+            elsif node.attribute_write? then [ node.name.to_s.chomp("=") ]
+            else []
+            end
+          else []
+          end
+        end.grep(COUNTER_COLUMN)
+      end
+
+      def written_columns(arguments)
+        return [] unless arguments
+
+        AstWalk.each(arguments).flat_map do |node|
+          case node
+          when Prism::SymbolNode then [ node.unescaped ]
+          when Prism::StringNode then node.unescaped.scan(/(\w+_count)\s*=/).flatten
+          else []
+          end
+        end
       end
 
       def detect_missing_counter_cache(model_data, schema_data)
@@ -456,8 +493,10 @@ module RailsAiContext
         models = model_data.to_h { |model| [ model[:name], model ] }
 
         SourceScan.each(root, kind: "app/controllers").each do |record|
+          next unless record.source.include?(".all")
+
           nesting = controller_nesting(record)
-          record.source.scan(combined_pattern).each do |match|
+          RubySource.code_only(record.source).scan(combined_pattern).each do |match|
             scopes = match[0].start_with?("::") ? [] : nesting
             # A nearer constant with a file of its own takes the name, model or not.
             found = SuperclassChain.resolve_in_scope(record.path_name, match[0], nesting: scopes) do |name|

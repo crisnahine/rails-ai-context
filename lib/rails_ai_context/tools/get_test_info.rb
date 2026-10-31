@@ -303,7 +303,9 @@ module RailsAiContext
 
             source = RailsAiContext::SafeFile.read(real, max_size: max_test_file_size) or next
             named = rel.delete_prefix("#{dir}/").sub(/_(?:spec|test)\.rb\z/, "") == snake
-            [ rel, kind, source, named ] if named || source.match?(reaches)
+            # The raw match only spares the parse for a file that never names the route.
+            reached = !named && source.match?(reaches) && RailsAiContext::RubySource.without_comments(source).match?(reaches)
+            [ rel, kind, source, named ] if named || reached
           end
         end
         # A test named for the controller first, then those reaching its routes.
@@ -440,8 +442,9 @@ module RailsAiContext
             real_root = File.realpath(suite_root).to_s
             safe_glob(test_dir, "**/*_test.rb", real_root).first(5).each do |path|
               content = RailsAiContext::SafeFile.read(path) or next
-              has_devise = true if content.include?("Devise::Test")
-              has_sign_in = true if content.match?(/\bsign_in\b/)
+              code = RailsAiContext::RubySource.without_comments(content)
+              has_devise = true if code.include?("Devise::Test")
+              has_sign_in = true if code.match?(/\bsign_in\b/)
             end
           end
 

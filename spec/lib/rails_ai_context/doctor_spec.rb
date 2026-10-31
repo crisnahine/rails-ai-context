@@ -2750,6 +2750,15 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    it "warns about a literal secret written in a flow-style mapping" do
+      app_with("config/database.yml" => "production:\n  primary: { adapter: postgresql, password: s3cret }\n", ".gitignore" => "/.env*\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:warn)
+        expect(check.message).to eq("A literal secret in config/database.yml (`password` on line 2), which .gitignore does not cover")
+      end
+    end
+
     # Doctor asks the names the tools redact by, which a list of its own left short of.
     it "reads a secret by every name the tools redact by, and not by a descriptor's" do
       app_with("config/settings.local.yml" => "master_key: 0f1e2d3c4b5a6978\npepper: s4ltyp3pp3r\ntoken_ttl: 3600s\n", ".gitignore" => "/.env*\n") do |dir|

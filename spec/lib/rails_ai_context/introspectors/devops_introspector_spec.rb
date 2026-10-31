@@ -86,6 +86,27 @@ RSpec.describe RailsAiContext::Introspectors::DevOpsIntrospector do
         expect(result[:puma]).to eq(threads_min: 5, threads_max: 5)
       end
 
+      it "leaves a computed setting unread rather than taking its first digits" do
+        File.write(puma_config, <<~RUBY)
+          workers Etc.nprocessors - 1
+          port ENV.fetch("PORT", 3000) * 2
+          threads 1, 5
+        RUBY
+
+        expect(result[:puma]).to eq(threads_min: 1, threads_max: 5)
+      end
+
+      it "reads the default an ENV read falls back to with ||, as Heroku's puma.rb writes it" do
+        File.write(puma_config, <<~RUBY)
+          workers Integer(ENV['WEB_CONCURRENCY'] || 2)
+          threads_count = Integer(ENV['RAILS_MAX_THREADS'] || 5)
+          threads threads_count, threads_count
+          port (ENV['PORT'] || 3000).to_i
+        RUBY
+
+        expect(result[:puma]).to eq(workers: 2, port: 3000)
+      end
+
       # The generated puma.rb sets workers only in production, so refusing to
       # look inside a block would answer "no workers configured" for the
       # config most apps ship.
@@ -182,14 +203,18 @@ RSpec.describe RailsAiContext::Introspectors::DevOpsIntrospector do
       let(:routes_file) { File.join(Rails.root, "config/routes.rb") }
       let!(:original_routes) { File.read(routes_file) }
 
-      before do
-        File.write(routes_file, original_routes + "\n# get \"up\" => \"rails/health#show\"\n")
-      end
-
       after { File.write(routes_file, original_routes) }
 
       it "detects health check with word boundary" do
+        File.write(routes_file, original_routes.sub(/^end/, "  get \"up\" => \"rails/health#show\"\nend"))
+
         expect(result[:health_check]).to be true
+      end
+
+      it "does not count a health route that is commented out" do
+        File.write(routes_file, original_routes + "\n# get \"up\" => \"rails/health#show\"\n")
+
+        expect(result[:health_check]).to be_nil
       end
     end
   end

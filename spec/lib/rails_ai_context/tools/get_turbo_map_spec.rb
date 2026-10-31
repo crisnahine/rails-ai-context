@@ -212,6 +212,25 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         expect(text.scan("has no matching").size).to eq(1)
       end
     end
+
+    it "pairs a subscription wrapped over lines with its broadcast" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "views", "rooms"))
+        File.write(File.join(dir, "app", "models", "message.rb"),
+                   "class Message < ApplicationRecord\n  after_create_commit -> { broadcast_append_to :room, :messages }\nend\n")
+        File.write(File.join(dir, "app", "views", "rooms", "show.html.erb"),
+                   "<%= turbo_stream_from :room,\n      :messages %>\n")
+        app = RailsAiContext::StaticApp.new(dir)
+        allow(RailsAiContext).to receive(:default_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(turbo: RailsAiContext::Introspectors::TurboIntrospector.new(app).call)
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("- **Subscribers:** `app/views/rooms/show.html.erb:1`")
+        expect(text).not_to include("has no matching")
+      end
+    end
   end
 
   describe ".call when nothing is found" do

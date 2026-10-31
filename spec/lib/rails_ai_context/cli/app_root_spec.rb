@@ -98,6 +98,30 @@ RSpec.describe RailsAiContext::CLI::AppRoot do
                                                                        "no config/application.rb, config/environment.rb or app/**/*.rb." ])
     end
 
+    it "takes the app an engine's bin/rails names from __FILE__, as Rails 5.1 wrote it" do
+      root = dir("engine")
+      dir("engine/bin")
+      File.write(File.join(root, "bin", "rails"), "ENGINE_ROOT = File.expand_path('../..', __FILE__)\n" \
+                                                  "APP_PATH = File.expand_path('../../spec/internal/config/application', __FILE__)\n")
+      app("engine/test/dummy")
+      named = app("engine/spec/internal")
+
+      expect(described(described_class.target(root))).to eq([ :app, named ])
+    end
+
+    it "takes test/dummy, then spec/dummy, at an engine root whose bin/rails names no app, as Rails 4.2 and 5.0 wrote it" do
+      root = dir("engine")
+      dir("engine/bin")
+      File.write(File.join(root, "bin", "rails"), "ENGINE_ROOT = File.expand_path('../..', __FILE__)\n" \
+                                                  "ENGINE_PATH = File.expand_path('../../lib/eng/engine', __FILE__)\n")
+      spec_dummy = app("engine/spec/dummy")
+      expect(described(described_class.target(root))).to eq([ :app, spec_dummy ])
+
+      test_dummy = app("engine/test/dummy")
+      expect(described(described_class.target(root))).to eq([ :app, test_dummy ])
+      expect(described(described_class.target(dir("engine/lib")))).to eq([ :app, test_dummy ])
+    end
+
     it "serves nothing from the home folder or the filesystem root" do
       home = dir("home")
       app("home/shop")

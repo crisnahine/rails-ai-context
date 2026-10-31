@@ -137,7 +137,7 @@ Four more answer for the app's databases and for what `rails_query` runs on them
 
 ### AST Engine
 
-**Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
+Ruby source is read with **Prism**. A regex still reads Ruby only in a case the [AST-vs-regex rule](INTROSPECTORS.md#choosing-between-ast-and-regex) allows, such as a prefilter the parse then checks, or over the text `RubySource` gives it: comments, `=begin` blocks and string bodies blanked to spaces with every line and offset kept, so a comment, a string or a heredoc cannot match. The readers that also run before the app boots (the install's read of the initializer and its guard, and the settings read without running the app) parse with the standard library's Ripper, since an app's bundle may pin Prism.
 
 - **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by the SHA256 of the file's content; a stat match answers without a read for a file already two seconds older than the read that recorded it
 - **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
@@ -225,7 +225,7 @@ Result: controller and view tools automatically include relevant schema informat
 
 Thor-based CLI that works standalone (no Gemfile entry):
 
-- `AppRoot` - Decides which app a command reads before anything reads the working directory: `--app-path` as given, else the working directory, else the nearest app root above it, else the one app below it. Several below are refused by name, except by the plugin's serve, which `AppRoot.target` hands the folder of apps to route (see MCP Server), and `init`, which sets them all up
+- `AppRoot` - Decides which app a command reads before anything reads the working directory: `--app-path` as given, else the working directory, else the nearest app root above it, else the one app below it. A root that has a `bin/rails` and no app source reads the app that `bin/rails` names below it, else its `test/dummy` or `spec/dummy` app. Several below are refused by name, except by the plugin's serve, which `AppRoot.target` hands the folder of apps to route (see MCP Server), and `init`, which sets them all up
 - `EntryBoot` - Boots the app `AppRoot` chose for the standalone binary, or says which tier it fell back to
 - `Refusal` - Where the plugin's serve cannot serve, answers the MCP handshake with no tools and the reason, so Claude Code does not skip the plugin; also the line parse and the `initialize` answer the router and the proxy share
 - `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output

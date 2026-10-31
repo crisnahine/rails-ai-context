@@ -1568,6 +1568,29 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    it "does not call a mounted Rack app an engine for a comment naming Rails::Engine" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "lib"))
+        File.write(File.join(dir, "lib", "status_app.rb"), <<~RUBY)
+          # class StatusApp < Rails::Engine (before it was a plain Rack app)
+          class StatusApp
+            def self.call(_env) = [ 200, {}, [ "ok" ] ]
+          end
+        RUBY
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount StatusApp => "/status"
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:mounted_engines]).to eq([ { engine: "StatusApp", path: "/status" } ])
+        expect(result).not_to have_key(:engine_routes)
+      end
+    end
+
     # The app's table merges each update's PATCH and PUT, so an engine's
     # count beside it merges them too.
     it "merges an engine route's PATCH and PUT the way the app count does" do

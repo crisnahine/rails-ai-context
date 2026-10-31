@@ -231,6 +231,83 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("validates")
       end
 
+      it "shows a macro whose arguments run onto the next line as one call" do
+        File.write(File.join(model_concerns_dir, "authored.rb"), <<~RUBY)
+          module Authored
+            extend ActiveSupport::Concern
+
+            included do
+              has_many :posts,
+                dependent: :destroy
+            end
+          end
+        RUBY
+        described_class.reset_cache!
+
+        text = described_class.call(name: "Authored").content.first[:text]
+
+        expect(text).to include("## Macros & DSL\n- has_many :posts, dependent: :destroy\n")
+      end
+
+      it "shows a macro under a modifier if or unless with its condition" do
+        File.write(File.join(model_concerns_dir, "publishable.rb"), <<~RUBY)
+          module Publishable
+            extend ActiveSupport::Concern
+
+            included do
+              validates :body, length: { minimum: 200 } if Rails.env.production?
+              has_many :drafts,
+                dependent: :destroy unless Rails.env.test?
+              before_save do
+                self.slug = title.parameterize
+              end if Rails.env.production?
+            end
+          end
+        RUBY
+        described_class.reset_cache!
+
+        text = described_class.call(name: "Publishable").content.first[:text]
+
+        expect(text).to include("## Macros & DSL\n" \
+          "- validates :body, length: { minimum: 200 } if Rails.env.production?\n" \
+          "- has_many :drafts, dependent: :destroy unless Rails.env.test?\n" \
+          "- before_save do ... end if Rails.env.production?\n")
+      end
+
+      it "shows the macros of an included block written with braces" do
+        File.write(File.join(model_concerns_dir, "sluggable.rb"), <<~RUBY)
+          module Sluggable
+            extend ActiveSupport::Concern
+
+            included { validates :slug, presence: true }
+          end
+        RUBY
+        described_class.reset_cache!
+
+        text = described_class.call(name: "Sluggable").content.first[:text]
+
+        expect(text).to include("## Macros & DSL\n- validates :slug, presence: true\n")
+      end
+
+      it "does not read heredoc text in an included block as a macro" do
+        File.write(File.join(model_concerns_dir, "documented.rb"), <<~RUBY)
+          module Documented
+            extend ActiveSupport::Concern
+
+            included do
+              DOC = <<~TEXT
+                scope is fine
+              TEXT
+            end
+          end
+        RUBY
+        described_class.reset_cache!
+
+        text = described_class.call(name: "Documented").content.first[:text]
+
+        expect(text).not_to include("Macros & DSL")
+      end
+
       it "shows class methods from class_methods block" do
         result = described_class.call(name: "Authenticatable")
         text = result.content.first[:text]

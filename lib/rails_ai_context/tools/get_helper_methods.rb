@@ -179,7 +179,7 @@ module RailsAiContext
 
         # For standard/full: show included modules
         if detail != "summary"
-          included = source.scan(/^\s*include\s+(\S+)/).flatten
+          included = included_modules(source)
           if included.any?
             lines << "" << "## Includes"
             included.each { |i| lines << "- #{i}" }
@@ -295,6 +295,14 @@ module RailsAiContext
         lines << "## Declared in controllers with helper_method (#{declared.size})"
         declared.each { |d| lines << "- `#{d[:name]}` (#{d[:owner]}, `#{d[:path]}`)" }
         lines << ""
+      end
+
+      private_class_method def self.included_modules(source)
+        Introspectors::AstWalk.each(AstCache.parse_string(source).value).flat_map do |node|
+          next [] unless node.is_a?(Prism::CallNode) && node.name == :include && node.receiver.nil?
+
+          Array(node.arguments&.arguments).map { |arg| arg.slice.gsub(/\s+/, " ") }
+        end
       end
 
       private_class_method def self.view_callable(source)

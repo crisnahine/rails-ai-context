@@ -406,6 +406,26 @@ RSpec.describe RailsAiContext::UnbootedSettings do
     expect(read.config.excluded_models).to eq(%w[other])
   end
 
+  it "reads a %W and a %I list, escapes undone, and refuses one that interpolates" do
+    write("config/initializers/rails_ai_context.rb", configure("  config.excluded_models = %W[AdminUser Audit\\tLog A\\ B]\n  config.ai_tools = %I[claude cursor]"))
+    settings = read
+    expect([ settings.config.excluded_models, settings.ai_tools, settings.refusals ]).to eq([ [ "AdminUser", "Audit\tLog", "A B" ], %i[claude cursor], [] ])
+
+    write(".rails-ai-context.yml", "ai_tools: [codex]\n")
+    write("config/initializers/rails_ai_context.rb", configure("  config.ai_tools = %I[claude \#{ENV['X']}]"))
+    settings = read
+    expect(settings.ai_tools).to eq(%i[codex])
+    expect(settings.refusals.map { |refusal| [ refusal.key, refusal.reason ] }).to match([ [ :ai_tools, a_string_including("computed at boot") ] ])
+  end
+
+  it "reads the escapes inside a heredoc as Ruby does, and none inside a single-quoted one" do
+    write("config/initializers/rails_ai_context.rb", configure("  config.server_name = <<~NAME\n    my\\tapp\n  NAME"))
+    expect(read.config.server_name).to eq("my\tapp\n")
+
+    write("config/initializers/rails_ai_context.rb", configure("  config.server_name = <<~'NAME'\n    my\\tapp\\\\\n  NAME"))
+    expect(read.config.server_name).to eq("my\\tapp\\\\\n")
+  end
+
   it "reports a control or meta escape it does not undo, in a string, a symbol and a list" do
     [ '"\\M-a"', '"\\C-a"', '"\\ca"', ':"\\C-a"', '["A", "\\C-a"]' ].each do |source|
       write("config/initializers/rails_ai_context.rb", configure("  config.excluded_models = #{source}"))

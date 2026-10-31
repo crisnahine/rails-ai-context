@@ -69,8 +69,7 @@ module RailsAiContext
         return nil unless content&.match?(/shard/i)
 
         result = { detected: true }
-        # Extract shard names from database.yml (keep regex - YAML, not Ruby)
-        shard_names = content.scan(/^\s{4,}(\w*shard\w*):/).flatten.uniq
+        shard_names = shard_database_names
         result[:shard_names] = shard_names if shard_names.any?
 
         # Extract shard config from model source via AST
@@ -90,6 +89,11 @@ module RailsAiContext
         result
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "detect_sharding")
+      end
+
+      # A shard_count setting names no database, and a replica reads a shard already listed.
+      def shard_database_names
+        RailsAiContext::AppDatabases.for(root).filter_map { |db| db.name.to_s if db.name.to_s.include?("shard") && !db.replica }.uniq
       end
 
       def detect_model_connections

@@ -519,47 +519,59 @@ module RailsAiContext
         end
       end
 
+      # Common Rails macros an included block declares; a controller concern
+      # hands its private helpers to the views with helper_method.
+      CONCERN_MACRO = /\A(?:has_many|has_one|belongs_to|has_and_belongs_to_many|validates|validate|scope|enum|
+        before_\w+|after_\w+|around_\w+|attr_accessor|attr_reader|attr_writer|delegate|helper_method)\z/x
+
+      # Only an `included` block's calls: a `class_methods` body's
+      # `skip_before_action` declares nothing.
       private_class_method def self.parse_concern_macros(source)
-        macros = []
-        # Common Rails macros that might appear in included blocks
-        macro_patterns = [
-          /\A\s*(has_many|has_one|belongs_to|has_and_belongs_to_many)\s+(.+)/,
-          /\A\s*(validates|validate)\s+(.+)/,
-          /\A\s*(scope)\s+(.+)/,
-          /\A\s*(enum)\s+(.+)/,
-          /\A\s*(before_\w+|after_\w+|around_\w+)\s+(.+)/,
-          /\A\s*(attr_accessor|attr_reader|attr_writer)\s+(.+)/,
-          /\A\s*(delegate)\s+(.+)/,
-          # A controller concern hands its private helpers to the views this way.
-          /\A\s*(helper_method)\s+(.+)/
-        ]
-
-        # The block ends at the `end` indented as its `included do` line; past
-        # it, a `class_methods` body's `skip_before_action` declares nothing.
-        block_end = nil
-        source.each_line do |line|
-          if block_end.nil? && (opening = line.match(/\A(\s*)included\s+do\b/))
-            block_end = /\A#{opening[1]}end\b/
-            next
-          end
-          next unless block_end
-
-          if line.match?(block_end)
-            block_end = nil
-            next
-          end
-
-          macro_patterns.each do |pattern|
-            if (match = line.match(pattern))
-              macros << "#{match[1]} #{match[2].strip}"
-              break
-            end
-          end
+        tree = AstCache.parse_string(source.to_s).value
+        blocks = Introspectors::AstWalk.each(tree).select do |node|
+          node.is_a?(Prism::CallNode) && node.name == :included && node.receiver.nil? && node.block.is_a?(Prism::BlockNode)
         end
-
-        macros
+        calls = blocks.flat_map { |node| Introspectors::SourceIntrospector.calls_outside_methods(node.block).values.flatten }
+        modifiers = modifiers_by_statement(blocks)
+        calls.select { |call| call.name.to_s.match?(CONCERN_MACRO) }
+             .sort_by { |call| call.location.start_offset }
+             .filter_map { |call| macro_line(call, modifiers) }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "parse_concern_macros")
+      end
+
+      # `validates :x if cond` declares only when cond holds: each statement keyed to the modifier wrapping it.
+      private_class_method def self.modifiers_by_statement(blocks)
+        nodes = blocks.flat_map { |node| Introspectors::AstWalk.each(node.block).to_a }
+        nodes.each_with_object({}.compare_by_identity) do |node, found|
+          next unless node.is_a?(Prism::IfNode) || node.is_a?(Prism::UnlessNode)
+
+          statement = node.statements&.body&.first
+          found[statement] = node if statement && statement.location.start_offset < node.predicate.location.start_offset
+        end
+      end
+
+      # The call on one line: a block that spans lines shows its opening only,
+      # and its closing too when a modifier condition follows that.
+      private_class_method def self.macro_line(call, modifiers)
+        parts = Array(call.arguments&.arguments).map(&:slice)
+        block = call.block
+        parts << block.slice if block.is_a?(Prism::BlockArgumentNode)
+        text = parts.join(", ")
+        if block.is_a?(Prism::BlockNode)
+          opening = block.location.start_line == block.location.end_line ? block.slice : block.slice.lines.first
+          opening = "#{opening.strip} ... #{block.closing_loc.slice}" if modifiers.key?(call) && opening != block.slice
+          text = "#{text} #{opening}"
+        end
+        return if text.strip.empty?
+
+        node = call
+        while (modifier = modifiers[node])
+          keyword = modifier.is_a?(Prism::IfNode) ? "if" : "unless"
+          text = "#{text} #{keyword} #{modifier.predicate.slice}"
+          node = modifier
+        end
+        "#{call.name} #{text.gsub(/\s*\n\s*/, " ").strip}"
       end
 
       # The listener knows every callback macro Rails has, so the section no

@@ -31,12 +31,6 @@ module RailsAiContext
         }
       }.freeze
 
-      # The first `=` that assigns. `==`, `!=`, `>=`, `<=` and `=~` are reads
-      # of the ivar on their left, and counting one as an assignment made
-      # every guard clause look like a setter. A doubled bracket is the
-      # shift-assign, which does assign.
-      ASSIGNMENT = /(?<![=!<>~])=(?![=~])|(?<![<>])(?:<<|>>)=/
-
       WALKED_METHODS = ObjectSpace::WeakMap.new
 
       module_function
@@ -202,7 +196,9 @@ module RailsAiContext
 
       def scanned_body(lines, method_name)
         name_end = RailsAiContext::MethodName.definition_end(method_name)
-        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}#{name_end}/i) }
+        # A heredoc or comment line can read `def x` or `end`; only code decides.
+        code = RubySource.code_only(lines.join).lines
+        start_idx = code.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}#{name_end}/i) }
         return nil unless start_idx
 
         indent = lines[start_idx][/\A\s*/].length
@@ -211,7 +207,7 @@ module RailsAiContext
         lines[start_idx..].each_with_index do |line, i|
           body << line.rstrip
           end_idx = start_idx + i
-          break if i.positive? && line.match?(/\A\s{#{indent}}end\b/)
+          break if i.positive? && code[end_idx].to_s.match?(/\A\s{#{indent}}end\b/)
         end
 
         { code: body.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
@@ -221,15 +217,15 @@ module RailsAiContext
       # question, so a tool answers it from the source rather than from
       # another tool's rendered prose.
       #
-      # Only the left of an assignment counts, which is what tells `@post =`
-      # apart from a read of `@post` on the right and what makes
-      # `@a, @b = x` two names.
-      def assigned_ivars(action_source)
-        action_source.to_s.each_line.flat_map do |line|
-          split_at = line.index(ASSIGNMENT)
-          next [] unless split_at
-
-          line[0, split_at].scan(/@(\w+)/).flatten
+      # Only an assignment's target counts: `@post =` and each of `@a, @b = x`, never `@post.title =`.
+      # A caller that already parsed the snippet passes its `tree`.
+      def assigned_ivars(action_source, tree: nil)
+        AstWalk.each((tree || AstCache.parse_uncached(action_source.to_s)).value).filter_map do |node|
+          case node
+          when Prism::InstanceVariableWriteNode, Prism::InstanceVariableOperatorWriteNode, Prism::InstanceVariableOrWriteNode,
+               Prism::InstanceVariableAndWriteNode, Prism::InstanceVariableTargetNode
+            node.name.to_s.delete_prefix("@")
+          end
         end.uniq
       end
 
@@ -243,7 +239,7 @@ module RailsAiContext
       # template to cross-reference it against, so the call itself is the
       # only evidence it was used. `render json: @post.errors` counts `@post`.
       def rendered_ivars(action_source)
-        action_source.to_s.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
+        RubySource.code_only(action_source, cache: false).scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
       end
 
       # Keyed by the cached tree, so a tool asking one file for each of its

@@ -500,8 +500,17 @@ module RailsAiContext
       # `primary_abstract_class`, so reading the assignment alone left the app's
       # own base looking like a model with a table.
       def abstract_class?(source)
-        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/) ||
-          source.match?(/^[^\S\n]*primary_abstract_class\b/)
+        return false unless source.include?("abstract_class")
+
+        AstWalk.each(AstCache.parse_uncached(source).value).any? do |node|
+          next false unless node.is_a?(Prism::CallNode)
+
+          if node.name == :abstract_class=
+            node.receiver.is_a?(Prism::SelfNode) && node.arguments&.arguments&.first.is_a?(Prism::TrueNode)
+          else
+            node.name == :primary_abstract_class && node.receiver.nil?
+          end
+        end
       end
 
       # A file under any concerns/ that is not named for a class. One that is

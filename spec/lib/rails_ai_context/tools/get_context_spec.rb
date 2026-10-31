@@ -459,6 +459,136 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     end
   end
 
+  describe "the instance variable cross-check for an action" do
+    around { |example| Dir.mktmpdir { |dir| @dir = dir and example.run } }
+
+    def cross_check(source, action, templates:, filters: [])
+      FileUtils.mkdir_p(File.join(@dir, "app/controllers"))
+      File.write(File.join(@dir, "app/controllers/posts_controller.rb"), source)
+      allow(described_class).to receive_messages(
+        rails_app: RailsAiContext::StaticApp.new(@dir),
+        cached_context: {
+          controllers: { controllers: { "PostsController" => {
+            actions: [ action ], file: "app/controllers/posts_controller.rb", filters: filters
+          } } },
+          view_templates: { templates: templates }
+        }
+      )
+      base = RailsAiContext::Tools::BaseTool
+      allow(RailsAiContext::Tools::GetControllers).to receive(:call).and_return(base.text_response("# PostsController"))
+      allow(RailsAiContext::Tools::GetModelDetails).to receive(:call).and_return(base.empty_response("No model."))
+      allow(RailsAiContext::Tools::GetRoutes).to receive(:call).and_return(base.empty_response("No routes."))
+      allow(RailsAiContext::Tools::GetView).to receive(:call).and_return(base.empty_response("No views."))
+
+      described_class.call(controller: "PostsController", action: action).content.first[:text]
+    end
+
+    it "ignores a render inside a Ruby comment" do
+      templates = { "posts/show.html.erb" => { ivars: %w[post] }, "posts/edit.html.erb" => { ivars: %w[post categories] } }
+      text = cross_check(<<~RUBY, "show", templates: templates)
+        class PostsController < ApplicationController
+          def show
+            @post = Post.find(params[:id])
+            # render :edit
+          end
+        end
+      RUBY
+
+      expect(text).to include("- ✓ @post - set in controller, used in view")
+      expect(text).not_to include("@categories")
+      expect(text).not_to include("also renders")
+    end
+
+    it "counts the templates of render action: and of a render naming the template as a string" do
+      templates = { "posts/publish.html.erb" => { ivars: %w[post] }, "posts/show.html.erb" => { ivars: %w[post author] },
+                    "posts/edit.html.erb" => { ivars: %w[post categories] } }
+      text = cross_check(<<~RUBY, "publish", templates: templates)
+        class PostsController < ApplicationController
+          def publish
+            @post = Post.find(params[:id])
+            if @post.publish
+              render action: :show
+            else
+              render "edit"
+            end
+          end
+        end
+      RUBY
+
+      expect(text).to include("- ✗ @author - used in view but NOT set in controller")
+      expect(text).to include("- ✗ @categories - used in view but NOT set in controller")
+      expect(text).to include("_Note: This action also renders `show`, `edit`,")
+    end
+
+    it "counts what a method the action calls sets, under a modifier if or before a trailing comment" do
+      text = cross_check(<<~RUBY, "show", templates: { "posts/show.html.erb" => { ivars: %w[related comments] } })
+        class PostsController < ApplicationController
+          def show
+            load_related if user_signed_in?
+            load_comments # newest first
+          end
+
+          private
+
+          def load_related
+            @related = Post.limit(3)
+          end
+
+          def load_comments
+            @comments = Comment.all
+          end
+        end
+      RUBY
+
+      expect(text).to include("- ✓ @related - set by `load_related`, used in view")
+      expect(text).to include("- ✓ @comments - set by `load_comments`, used in view")
+    end
+
+    it "counts what a filter written as private def sets" do
+      source = <<~RUBY
+        class PostsController < ApplicationController
+          before_action :set_post, only: :show
+
+          def show
+          end
+
+          private def set_post
+            @post = Post.find(params[:id])
+          end
+        end
+      RUBY
+      text = cross_check(source, "show", templates: { "posts/show.html.erb" => { ivars: %w[post] } },
+                                         filters: [ { kind: "before", name: "set_post", only: %w[show] } ])
+
+      expect(text).to include("- ✓ @post - set by `set_post`, used in view")
+    end
+
+    it "reads the controller's own method when another class in the file defines the same name first" do
+      text = cross_check(<<~RUBY, "show", templates: { "posts/show.html.erb" => { ivars: %w[post] } })
+        class PostImporter
+          def load_post
+            @draft = :imported
+          end
+        end
+
+        class PostsController < ApplicationController
+          def show
+            load_post
+          end
+
+          private
+
+          def load_post
+            @post = Post.find(params[:id])
+          end
+        end
+      RUBY
+
+      expect(text).to include("- ✓ @post - set by `load_post`, used in view")
+      expect(text).not_to include("@draft")
+    end
+  end
+
   # The controllers section is a Hash of name => data. Reading it as a list of
   # entries raised a TypeError that the method-level rescue swallowed, which
   # threw away every schema block already appended and answered plain

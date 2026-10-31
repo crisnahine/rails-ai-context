@@ -11,7 +11,6 @@ module RailsAiContext
       # A drawn file can draw again. Rails allows it; this stops a cycle of
       # symlinked or mutually-drawing files from walking forever.
       MAX_DRAW_DEPTH = 5
-      ENGINE_CLASS = /<\s*(?:::)?Rails::Engine\b/
 
       # @return [Hash] routes grouped by controller
       def call
@@ -204,7 +203,11 @@ module RailsAiContext
         path = PathResolver.file_for_constant(app.root.to_s, name, roots: roots)
         return name.to_s.match?(Listeners::RoutesDslListener::ENGINE_NAME) unless path
 
-        SafeFile.read(path).to_s.match?(ENGINE_CLASS)
+        engine_source?(SafeFile.read(path).to_s)
+      end
+
+      def engine_source?(source)
+        DeclaredConstant.declarations(source, all: true).any? { |declaration| declaration.superclass == "Rails::Engine" }
       end
 
       # Rails names the proxy after the mount: its `as:`, else the engine's
@@ -225,7 +228,7 @@ module RailsAiContext
         source = constant_source(class_name)
         return Listeners::RoutesDslListener.mount_name(class_name) unless source
 
-        source.match?(ENGINE_CLASS) ? railtie_name(source, class_name) : Listeners::RoutesDslListener.underscored(class_name)
+        engine_source?(source) ? railtie_name(source, class_name) : Listeners::RoutesDslListener.underscored(class_name)
       end
 
       # The source of the file the app keeps a constant in, read once per name; nil when the app holds none it can read.

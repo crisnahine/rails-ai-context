@@ -143,6 +143,24 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         .content.first[:text]).not_to include("without a default")
     end
 
+    it "reads null and default written with hash rockets as the same options" do
+      text = described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: ":null => false").content.first[:text]
+      expect(text).to include("`null: false` without a default fails")
+      expect(described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: ":null => false, :default => \"\"")
+        .content.first[:text]).not_to include("without a default")
+    end
+
+    it "reads null and default inside braces as the same options" do
+      [ "{ null: false }", "{ :null => false }" ].each do |options|
+        text = described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: options).content.first[:text]
+        expect(text).to include("`null: false` without a default fails")
+      end
+      [ "{ null: false, default: \"\" }", "{ :null => false, :default => \"\" }" ].each do |options|
+        text = described_class.call(action: "add_column", table: "users", column: "sku", type: "string", options: options).content.first[:text]
+        expect(text).not_to include("without a default")
+      end
+    end
+
     it "warns that create_table fails on a table that exists" do
       text = described_class.call(action: "create_table", table: "users", column: "name:string").content.first[:text]
       expect(text).to include("**Warning:** Table `users` already exists.")
@@ -835,6 +853,12 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         text = response.content.first[:text]
         expect(text).to include("Strong Migrations Warnings")
         expect(text).to include("NOT NULL")
+      end
+
+      it "warns about a NOT NULL add_column whose options use hash rockets" do
+        text = described_class.call(action: "add_column", table: "users", column: "phone", type: "string", options: ":null => false").content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("Adding a `NOT NULL` column without a default")
       end
 
       it "does not warn about add_column when nullable" do

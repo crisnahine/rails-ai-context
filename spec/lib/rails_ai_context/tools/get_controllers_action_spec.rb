@@ -163,6 +163,42 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       expect(text_for("deactivate")).to include("edit_params")
     end
+
+    it "leaves out a params method the action names only in a comment or a string" do
+      File.write(File.join(@root, "app/controllers/admin/users_controller.rb"), <<~RUBY)
+        class Admin::UsersController < ApplicationController
+          def archive
+            # create_params was read here before the archive flow
+            Rails.logger.info("skipping edit_params")
+          end
+
+          private
+
+          def edit_params
+            params.require(:user).permit(:name)
+          end
+
+          def create_params
+            params.require(:user).permit(:name, :email, :role)
+          end
+        end
+      RUBY
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: {
+          "Admin::UsersController" => {
+            actions: %w[archive],
+            filters: [],
+            strong_params: [
+              { name: "edit_params", requires: "user", permits: %w[name] },
+              { name: "create_params", requires: "user", permits: %w[name email role] }
+            ],
+            file: "app/controllers/admin/users_controller.rb"
+          }
+        } }
+      })
+
+      expect(text_for("archive")).not_to include("## Strong Params")
+    end
   end
 
   describe "the applicable filters block" do

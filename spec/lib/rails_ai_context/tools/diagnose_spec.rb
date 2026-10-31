@@ -159,13 +159,13 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
     end
 
     describe "the nil receiver" do
-      def diagnose(source, line:, error: "NoMethodError: undefined method `name' for nil:NilClass")
+      def diagnose(source, line:, error: "NoMethodError: undefined method `name' for nil:NilClass", file: "app/controllers/widgets_controller.rb")
         Dir.mktmpdir do |dir|
-          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
-          File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), source)
+          FileUtils.mkdir_p(File.dirname(File.join(dir, file)))
+          File.write(File.join(dir, file), source)
           app = double(root: Pathname.new(dir))
           [ described_class, RailsAiContext::Tools::GetEditContext ].each { |tool| allow(tool).to receive(:rails_app).and_return(app) }
-          described_class.call(error: error, file: "app/controllers/widgets_controller.rb", line: line).content.first[:text]
+          described_class.call(error: error, file: file, line: line).content.first[:text]
         end
       end
 
@@ -226,6 +226,20 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
 
       it "does not take the receiver of a longer method that starts with the method's name" do
         text = diagnose("class WidgetsController\n  def show\n    user.name_for(@widget.name)\n  end\nend\n", line: 3)
+
+        expect(text).to include("`@widget` is nil when `.name` is called")
+      end
+
+      it "does not take the receiver from a string on the failing line" do
+        text = diagnose("class WidgetsController\n  def show\n    Rails.logger.info(\"sending to author.email\"); mail(to: editor.email)\n  end\nend\n",
+                        line: 3, error: "NoMethodError: undefined method `email' for nil")
+
+        expect(text).to include("`editor` is nil when `.email` is called")
+        expect(text).not_to include("`author` is nil")
+      end
+
+      it "reads the receiver on a line of a view template" do
+        text = diagnose("<h1><%= @widget.name %></h1>\n", line: 1, file: "app/views/widgets/show.html.erb")
 
         expect(text).to include("`@widget` is nil when `.name` is called")
       end

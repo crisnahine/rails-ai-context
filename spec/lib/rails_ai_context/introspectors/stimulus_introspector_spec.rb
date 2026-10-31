@@ -506,6 +506,37 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
+    it "binds the registered class to the import that is not commented out" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "frontend/src/stimulus/controllers")
+        FileUtils.mkdir_p(dir)
+        %w[menu legacy-menu].each do |name|
+          File.write(File.join(dir, "#{name}.controller.ts"),
+                     %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller {}\n))
+        end
+        File.write(File.join(root, "frontend/src/stimulus/setup.ts"),
+                   %(// import Menu from './controllers/legacy-menu.controller';\n) +
+                   %(import Menu from './controllers/menu.controller';\n) +
+                   %(application.register('main-menu', Menu);\n))
+
+        expect(controllers_in(root).to_h { |c| [ c[:file].delete_prefix("frontend/src/stimulus/controllers/"), [ c[:name], c[:identifier_inferred] ] ] })
+          .to eq("legacy-menu.controller.ts" => [ "legacy-menu", true ], "menu.controller.ts" => [ "main-menu", nil ])
+      end
+    end
+
+    it "reads no registration out of a commented-out register call" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "frontend/src/stimulus/controllers")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "tabs.controller.ts"),
+                   %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller {}\n))
+        File.write(File.join(root, "frontend/src/stimulus/setup.ts"),
+                   %(import Tabs from './controllers/tabs.controller';\n// application.register('ui-tabs', Tabs);\n))
+
+        expect(controllers_in(root).map { |c| [ c[:name], c[:identifier_inferred] ] }).to eq([ [ "tabs", true ] ])
+      end
+    end
+
     it "reads no registration out of a test file" do
       Dir.mktmpdir do |root|
         dir = File.join(root, "frontend/src/stimulus/controllers/dynamic")
@@ -974,6 +1005,28 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
       end
     end
 
+    it "does not count a file whose Stimulus import is commented out" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/components/menu_component"))
+        File.write(File.join(root, "app/components/menu_component/menu_controller.js"),
+                   %(// import { Controller } from "@hotwired/stimulus"\n/* import { Controller } from "stimulus" */\nexport default class Menu {}\n))
+
+        expect(names_in(root)).to eq([])
+      end
+    end
+
+    it "does not follow an extends that sits in a comment back to a Stimulus base" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/components/menu_component"))
+        File.write(File.join(root, "app/components/menu_component/base.js"),
+                   %(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller {}\n))
+        File.write(File.join(root, "app/components/menu_component/menu_controller.js"),
+                   %(import Base from "./base"\n// class Old extends Base {}\nexport default class Menu {}\n))
+
+        expect(names_in(root)).to eq([])
+      end
+    end
+
     it "does not count a file that only uses a stimulus helper package" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/javascript/widgets"))
@@ -1136,6 +1189,137 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
         expect(found["dynamic/generic-dialog-close.controller.ts"]).to eq([ "generic-dialog-close", true ])
       end
+    end
+  end
+
+  describe "what a controller's own source defines" do
+    def controller_from(source)
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/javascript/controllers"))
+        File.write(File.join(root, "app/javascript/controllers/form_controller.js"), source)
+        return described_class.new(double("app", root: Pathname.new(root))).call[:controllers].first
+      end
+    end
+
+    def actions_in(source) = controller_from(source)[:actions]
+
+    it "reads a method of a class written on one line" do
+      expect(actions_in(%(import { Controller } from "@hotwired/stimulus"\nexport default class extends Controller { go() {} }\n)))
+        .to eq(%w[go])
+    end
+
+    it "reads a class field holding a function, but no static one" do
+      expect(actions_in(<<~JS)).to eq(%w[toggle close open save])
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          toggle = (event) => { this.element.classList.toggle("open") }
+          close = async () => {}
+          open = event => {}
+          static build = () => {}
+          save() {}
+        }
+      JS
+    end
+
+    it "reads static targets from the declaration, not from a comment above it" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          // static targets = ["ghost"]
+          /** static targets = ["doc"] */
+          static targets = ["name", "email"]
+        }
+      JS
+
+      expect(controller[:targets]).to eq(%w[name email])
+    end
+
+    it "lists no self call that sits in a comment" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          save() {
+            // this.reset()
+            this.render()
+          }
+        }
+      JS
+
+      expect(controller[:self_calls]).to eq(%w[render])
+    end
+
+    it "records only the lifecycle hooks the class defines, not a hook-named call on another object" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          connect() {
+            this.observer = new MutationObserver(() => this.refresh())
+            this.observer.observe(this.element, { childList: true })
+          }
+
+          teardown() {
+            this.observer.disconnect()
+          }
+
+          refresh() {}
+        }
+      JS
+
+      expect(controller[:lifecycle]).to eq(%w[connect])
+    end
+
+    it "reads an import that spans several lines into the import graph" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        import {
+          debounce,
+          throttle
+        } from "lodash"
+        import "trix"
+        export default class extends Controller {}
+      JS
+
+      expect(controller[:import_graph]).to eq(%w[@hotwired/stimulus lodash trix])
+    end
+
+    it "lists no turbo event whose listener is commented out" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          connect() {
+            // document.addEventListener("turbo:load", this.refresh)
+            document.addEventListener("turbo:before-render", this.refresh)
+          }
+        }
+      JS
+
+      expect(controller[:turbo_event_listeners]).to eq(%w[turbo:before-render])
+    end
+
+    it "reads every method around a template literal that nests others inside its ${}" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          connect() {
+            this.render()
+          }
+
+          render() {
+            this.listTarget.innerHTML = `<ul>${this.itemsValue.map(item => `<li>${item}</li>`).join("")}</ul>`
+          }
+
+          table(rows) {
+            return `<table>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("")}</table>`
+          }
+
+          clear() {
+            this.itemsValue = []
+          }
+        }
+      JS
+
+      expect(controller[:actions]).to eq(%w[render table clear])
+      expect(controller[:lifecycle]).to eq(%w[connect])
     end
   end
 

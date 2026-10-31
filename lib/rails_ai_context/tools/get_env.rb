@@ -2,6 +2,7 @@
 
 require "ipaddr"
 require "uri"
+require "yaml"
 
 module RailsAiContext
   module Tools
@@ -706,25 +707,69 @@ module RailsAiContext
       end
 
       private_class_method def self.parse_credentials_structure
-        # Look for credentials template or example
         root = rails_app.root.to_s
         RailsAiContext::Introspectors::EnvReferences::CREDENTIALS_EXAMPLES.each do |file|
-          path = File.join(root, file)
-          source = safe_read(path)
-          next unless source
-
-          keys = []
-          source.each_line do |line|
-            stripped = line.strip
-            next if stripped.empty? || stripped.start_with?("#")
-            if (match = stripped.match(/\A(\w[\w.]*\w?):/))
-              keys << match[1]
-            end
-          end
+          content = RailsAiContext::SafePath.read(file, under: root).first or next
+          keys = credentials_example_keys(RailsAiContext::ErbSource.without_tags(content), file)
           return keys if keys.any?
         end
 
         []
+      end
+
+      # An example file holds placeholders (`%KEY%`, `@token`) that YAML refuses; its keys still read off the lines.
+      private_class_method def self.credentials_example_keys(content, file)
+        data = begin
+          YAML.safe_load(content, aliases: true, permitted_classes: [ Symbol, Date, Time ])
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, nil, label: "credentials example #{file}")
+        end
+        data.is_a?(Hash) ? example_key_paths(data) : credentials_keys_by_line(content)
+      end
+
+      # `{{SECRET}}` loads as a mapping keyed by a mapping, which is a placeholder value, not nested keys.
+      private_class_method def self.example_key_paths(hash, prefix = nil)
+        hash.flat_map do |key, value|
+          path = [ prefix, key.to_s ].compact.join(".")
+          names = value.is_a?(Hash) && value.any? && value.keys.all? { |inner| inner.is_a?(String) || inner.is_a?(Symbol) }
+          names ? example_key_paths(value, path) : [ path ]
+        end
+      end
+
+      CREDENTIALS_KEY_LINE = /\A(?<indent> *)(?<key>\w[\w.-]*):(?:[ \t]+(?<value>.*))?\z/
+      BLOCK_SCALAR = /\A[|>][-+0-9]*\s*(?:#.*)?\z/
+
+      # A key nested under another by indentation is named by its dotted path, and a block scalar's lines are its value.
+      private_class_method def self.credentials_keys_by_line(content)
+        open = []
+        paths = []
+        parents = Set.new
+        block_indent = nil
+
+        content.each_line do |line|
+          line = line.chomp
+          next if line.strip.empty? || line.lstrip.start_with?("#")
+
+          indent = line[/\A */].size
+          next if block_indent && indent > block_indent
+
+          block_indent = nil
+          match = line.match(CREDENTIALS_KEY_LINE) or next
+
+          open.pop while open.any? && open.last[:indent] >= indent
+          path = [ open.last&.fetch(:path), match[:key] ].compact.join(".")
+          parents << open.last[:path] if open.any?
+          paths << path
+
+          value = match[:value].to_s.strip
+          if value.match?(BLOCK_SCALAR)
+            block_indent = indent
+          elsif value.empty? || value.start_with?("#")
+            open << { indent: indent, path: path }
+          end
+        end
+
+        paths.uniq.reject { |path| parents.include?(path) }
       end
 
       private_class_method def self.detect_encrypted_columns

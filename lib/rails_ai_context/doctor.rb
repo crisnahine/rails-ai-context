@@ -6,6 +6,7 @@ require "fileutils"
 require "open3"
 require "rbconfig"
 require "tmpdir"
+require "yaml"
 
 module RailsAiContext
   # Diagnostic checker that validates the environment and reports
@@ -1880,13 +1881,35 @@ module RailsAiContext
     # parsing as YAML until it runs.
     def literal_secret(file)
       content = SafeFile.read(File.join(app.root, file)) or return nil
+      key, number = [ block_literal_secret(content), flow_literal_secret(content) ].compact.min_by(&:last)
+      "`#{key}` on line #{number}" if key
+    end
+
+    def block_literal_secret(content)
       content.each_line.with_index(1) do |line, number|
         key, value = line.chomp.match(/\A\s*-?\s*["']?([\w-]+)["']?\s*:\s*(.*?)\s*(?:\s#.*)?\z/)&.captures
         next if key.nil? || value.empty? || value.match?(NOT_LITERAL) || value.include?("<%")
 
         unquoted = value.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
-        return "`#{key}` on line #{number}" if Redaction.secret_name?(key) || unquoted.match?(URL_PASSWORD)
+        return [ key, number ] if Redaction.secret_name?(key) || unquoted.match?(URL_PASSWORD)
       end
+      nil
+    end
+
+    # A flow mapping (`{ adapter: postgresql, password: s3cret }`) can hold several keys on one line, so YAML reads it.
+    def flow_literal_secret(content)
+      Psych.parse_stream(ErbSource.without_tags(content)).each do |node|
+        next unless node.is_a?(Psych::Nodes::Mapping) && node.style == Psych::Nodes::Mapping::FLOW
+
+        node.children.each_slice(2) do |key, value|
+          next unless key.is_a?(Psych::Nodes::Scalar) && value.is_a?(Psych::Nodes::Scalar)
+          next if value.value.empty? || (value.plain && value.value.match?(NOT_LITERAL))
+
+          return [ key.value, key.start_line + 1 ] if Redaction.secret_name?(key.value) || value.value.match?(URL_PASSWORD)
+        end
+      end
+      nil
+    rescue Psych::Exception
       nil
     end
 

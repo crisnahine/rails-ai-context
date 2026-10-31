@@ -250,16 +250,37 @@ module RailsAiContext
         (missing_ivars.any? || all.any?) ? lines.join("\n") : nil
       end
 
-      KEYWORDS = %w[end else begin rescue ensure return super nil true false self yield next break redo retry].freeze
-
-      # [template, format] for each `render :name` in the action: a render
-      # inside a one-line `format.json { ... }` renders that format's template
-      # only, any other every format's.
+      # [template, format] for each template the action renders; one inside a
+      # `format.json { ... }` block renders that format's template only.
       private_class_method def self.rendered_with_formats(action_body)
-        action_body.each_line.flat_map do |line|
-          format = line[/\bformat\.(\w+)\s*(?:\{|do\b)/, 1]
-          line.scan(/render\s+:(\w+)/).flatten.map { |tmpl| [ tmpl, format ] }
-        end.uniq
+        found = []
+        visit = lambda do |node, format|
+          if node.is_a?(Prism::CallNode)
+            template = node.receiver.nil? && node.name == :render && rendered_template(node)
+            found << [ template, format ] if template
+            format = node.name.to_s if format_block?(node)
+          end
+          node.compact_child_nodes.each { |child| visit.call(child, format) }
+        end
+        visit.call(RailsAiContext::AstCache.parse_uncached(action_body).value, nil)
+        found.uniq
+      end
+
+      # `format.json { ... }`; `format.any(:html, :json) { ... }` names no one format.
+      private_class_method def self.format_block?(call)
+        call.block.is_a?(Prism::BlockNode) && call.arguments.nil? && call.receiver.respond_to?(:name) && call.receiver.name == :format
+      end
+
+      # A string with a slash is a template path, which may sit under another controller.
+      private_class_method def self.rendered_template(render)
+        first = render.arguments&.arguments&.first
+        if first.is_a?(Prism::KeywordHashNode)
+          first = first.elements.find do |pair|
+            pair.is_a?(Prism::AssocNode) && pair.key.is_a?(Prism::SymbolNode) && pair.key.unescaped == "action"
+          end&.value
+        end
+        name = first.unescaped if first.is_a?(Prism::SymbolNode) || first.is_a?(Prism::StringNode)
+        name unless name.nil? || name.include?("/")
       end
 
       # { ivar => the method that sets it } for the before and around
@@ -273,18 +294,27 @@ module RailsAiContext
         own = controller_source(ctx, controller_name)
         chain = RailsAiContext::ActionFilters.for(ctx, controller_name, action_name, root: root)[:chain]
         named = chain.select { |f| %w[before around].include?(f[:kind].to_s) }.map { |f| [ f[:name].to_s, f ] }
-        called = action_body.scan(/^\s*(?:[a-z_]\w*\s*=\s*)?([a-z_]\w*[?!]?)\s*(?:\(|$)/).flatten.uniq
-                            .reject { |name| name == action_name || KEYWORDS.include?(name) }.map { |name| [ name, {} ] }
+        called = RailsAiContext::Introspectors::AstWalk.each(RailsAiContext::AstCache.parse_uncached(action_body).value)
+          .filter_map { |node| node.name.to_s if node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)) }
+          .uniq.reject { |name| name == action_name }.map { |name| [ name, {} ] }
 
         (named + called).each_with_object({}) do |(name, filter), found|
-          sources = [ own, controller_source(ctx, filter[:from]), concern_source(root, filter[:from_concern]) ].compact
-          body = sources.lazy.filter_map { |source| resolver.method_body(source, name)&.dig(:code) }.first
-          next unless body&.match?(/\A\s*def\s+#{Regexp.escape(name)}\b/)
+          sources = [ [ own, controller_name ], [ controller_source(ctx, filter[:from]), filter[:from] ],
+                      [ concern_source(root, filter[:from_concern]), nil ] ].select(&:first)
+          body = sources.lazy.filter_map { |source, owner| own_method_body(source, name, owner) }.first
+          next unless body
 
           resolver.assigned_ivars(body).each { |ivar| found[ivar] ||= name }
         end
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "ivar_origins")
+      end
+
+      # The instance method of exactly this name that the owner defines itself.
+      private_class_method def self.own_method_body(source, name, owner = nil)
+        resolver = RailsAiContext::Introspectors::ActionResolver
+        method = resolver.own_methods_in(source, owner).find { |m| m[:scope] == :instance && m[:name] == name }
+        method && resolver.body_of(source, method)&.dig(:code)
       end
 
       private_class_method def self.controller_source(ctx, controller_name)

@@ -119,13 +119,12 @@ module RailsAiContext
             has_current_attributes = true if superclass == "ActiveSupport::CurrentAttributes"
           end
 
-          # A soft-delete column is a schema fact, so prefer the dump. Apps on
-          # structure.sql have no schema.rb to read, and fall back to the
-          # looser source match.
+          # A soft-delete column is a schema fact, so prefer the schema. An app
+          # with no dump and no migrations falls back to the looser source match.
           has_deleted_at = if schema_readable
             schema.any_column?("deleted_at") || schema.any_column?("discarded_at")
           else
-            model_records.any? { |record| record.source.match?(/deleted_at|discarded_at/) }
+            model_records.any? { |record| RubySource.without_comments(record.source).match?(/deleted_at|discarded_at/) }
           end
 
           patterns << "sti" if has_inheritance_column || has_sti_subclass

@@ -20,6 +20,8 @@ module RailsAiContext
         recede_or_redirect_back_or_to resume_or_redirect_back_or_to refresh_or_redirect_back_or_to
       ])
 
+      ID_ATTRIBUTE = /\sid\s*=\s*(?:"([^"]*)"|'([^']*)')/i
+
       def call
         broadcasts = scan_broadcasts
         {
@@ -45,10 +47,8 @@ module RailsAiContext
 
       def extract_turbo_frames
         frames = []
-        each_view_line do |file, line, line_num|
-          next unless line.match?(/(?<![\w.])turbo_frame_tag\b/)
-
-          frames << { id: frame_id(line), src: frame_src(line), file: file, line: line_num, snippet: line.strip }
+        each_view_call("turbo_frame_tag") do |file, call, line_num, original|
+          frames << { id: frame_id(call), src: frame_src(call), file: file, line: line_num, snippet: original.strip }
         end
         frames
       rescue => e
@@ -57,10 +57,8 @@ module RailsAiContext
 
       def extract_stream_subscriptions
         subscriptions = []
-        each_view_line do |file, line, line_num|
-          next unless line.match?(/(?<![\w.])turbo_stream_from\b/)
-
-          subscriptions << { stream: subscription_stream(line), parts: subscription_parts(line), file: file, line: line_num, snippet: line.strip }
+        each_view_call("turbo_stream_from") do |file, call, line_num, original|
+          subscriptions << { stream: subscription_stream(call), parts: subscription_parts(call), file: file, line: line_num, snippet: original.strip }
         end
         subscriptions
       rescue => e
@@ -81,7 +79,8 @@ module RailsAiContext
 
           content = RailsAiContext::SafeFile.read(real) or next
           file = path.sub("#{root}/", "")
-          files << { file: file, relative: relative, content: RailsAiContext::Redaction.source_slice(content, path: file) }
+          content = RailsAiContext::Redaction.source_slice(content, path: file)
+          files << { file: file, relative: relative, content: content, code: file.end_with?(".erb") ? without_erb_comments(content) : content }
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
           next
         end
@@ -94,12 +93,56 @@ module RailsAiContext
         RailsAiContext::ViewFile.root_for(path, PathResolver.view_dirs(root)) || views_dir
       end
 
-      # Views are not Ruby, so they are read line by line. Files are yielded
-      # in path order with their root-relative name and 1-based line.
-      def each_view_line
-        view_files.each do |entry|
-          entry[:content].each_line.with_index(1) { |line, line_num| yield entry[:file], line, line_num }
+      # An ERB comment tag and a Ruby comment in a code tag run nothing, so both are blanked;
+      # every line and offset stays.
+      def without_erb_comments(content)
+        return content unless content.include?("<%")
+
+        content.gsub(RailsAiContext::ErbSource::TAG) do |tag|
+          match = Regexp.last_match
+          body = match[1].to_s
+          next tag.tr("^\n", " ") if RailsAiContext::ErbSource.comment?(body)
+
+          from = match.begin(1) - match.begin(0)
+          tag[0...from] + RailsAiContext::RubySource.without_comments(body, cache: false) + tag[(from + body.length)..]
         end
+      end
+
+      # Views are not Ruby, so they are read line by line: each line calling `name` yields its
+      # root-relative file, the call's text, its 1-based number and the line as written.
+      def each_view_call(name)
+        pattern = /(?<![\w.])#{name}\b/
+        view_files.each do |entry|
+          code = entry[:code]
+          erb = entry[:file].end_with?(".erb")
+          originals = nil
+          offset = 0
+          code.each_line.with_index(1) do |line, line_num|
+            if (at = line =~ pattern)
+              originals ||= entry[:content].lines
+              call = (erb && erb_call_text(code, offset + at, name)) || line
+              yield entry[:file], call, line_num, originals[line_num - 1]
+            end
+            offset += line.length
+          end
+        end
+      end
+
+      # The call starting at `start` through its last argument, read from its tag's parsed
+      # body so wrapped arguments are in and a following statement is not; nil outside a tag.
+      def erb_call_text(code, start, name)
+        open = code.rindex("<%", start) or return nil
+        tag = RailsAiContext::ErbSource::TAG.match(code, open)
+        return nil unless tag && tag.begin(0) == open && tag.begin(1) <= start && start < tag.end(1)
+
+        body = tag[1]
+        at = body[0...(start - tag.begin(1))].bytesize
+        call = AstWalk.each(AstCache.parse_uncached(body).value).find do |node|
+          node.is_a?(Prism::CallNode) && node.name == name.to_sym && node.message_loc&.start_offset == at
+        end or return nil
+
+        stop = (call.closing_loc || call.arguments&.location || call.message_loc).end_offset
+        body.byteslice(at...stop)
       end
 
       # The first argument as written, minus a symbol colon or string quotes:
@@ -196,6 +239,7 @@ module RailsAiContext
         actions = Hash.new(0)
         stream_templates.each do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
+          content = without_erb_comments(content)
           content.scan(/turbo_stream\.(\w+)/).each { |action| actions[action[0]] += 1 }
           content.scan(/<turbo-stream\s+action=["'](\w+)["']/).each { |action| actions[action[0]] += 1 }
         end
@@ -411,10 +455,10 @@ module RailsAiContext
 
         elements = []
         view_files.each do |entry|
-          entry[:content].scan(/<[^>]*data-turbo-permanent[^>]*>/i).each do |tag|
-            id = tag.match(/id=["']([^"']+)["']/)&.send(:[], 1)
-            elements << { file: entry[:relative], id: id }
-          end
+          content = entry[:content]
+          found = markup_permanent_elements(content)
+          found.concat(helper_permanent_elements(content)) if entry[:file].end_with?(".erb") && content.match?(/turbo[_-]permanent/)
+          found.sort_by.with_index { |(line, _id), i| [ line, i ] }.each { |_line, id| elements << { file: entry[:relative], id: id } }
         end
 
         elements.uniq
@@ -422,12 +466,56 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_permanent_elements")
       end
 
+      # `[line, id]` for each element written with the attribute, the id as written.
+      def markup_permanent_elements(content)
+        return [] unless content.match?(/data-turbo-permanent/i)
+
+        # Masked so the `>` of an ERB tag inside an attribute does not end the element.
+        masked = content.gsub(RailsAiContext::ErbSource::TAG) { |tag| tag.tr("^\n", "_") }
+        masked.to_enum(:scan, /<[^>]*data-turbo-permanent[^>]*>/i).map do
+          from = Regexp.last_match.begin(0)
+          found = Regexp.last_match[0].match(ID_ATTRIBUTE)
+          group = found && (found[1] ? 1 : 2)
+          [ masked[0...from].count("\n") + 1, found && content[from + found.begin(group)...from + found.end(group)] ]
+        end
+      end
+
+      # `[line, id]` for each options hash a Rails tag helper writes the attribute
+      # from, `data: { turbo_permanent: }` or `"data-turbo-permanent":`; a nil value writes none.
+      def helper_permanent_elements(content)
+        src = RailsAiContext::ErbSource.compiled(content)
+        header = RailsAiContext::ErbSource.compiled_header_lines(src)
+        found = []
+        AstWalk.each(AstCache.parse_string(src).value) do |node|
+          next unless node.is_a?(Prism::HashNode) || node.is_a?(Prism::KeywordHashNode)
+
+          data = option(node) { |key| key == "data" }
+          value = option(node) { |key| key == "data-turbo-permanent" } ||
+                  (data.is_a?(Prism::HashNode) && option(data) { |key| key.tr("_", "-") == "turbo-permanent" })
+          next if !value || value.is_a?(Prism::NilNode)
+
+          id = option(node) { |key| key == "id" }
+          found << [ node.location.start_line - header, id.respond_to?(:unescaped) ? id.unescaped : id&.slice ]
+        end
+        found
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [], label: "helper_permanent_elements")
+      end
+
+      # The value of the first literal key the block accepts.
+      def option(hash)
+        hash.elements.each do |element|
+          return element.value if element.is_a?(Prism::AssocNode) && element.key.respond_to?(:unescaped) && yield(element.key.unescaped)
+        end
+        nil
+      end
+
       def extract_turbo_drive_settings
         return { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 } unless Dir.exist?(views_dir)
 
         counts = { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }
         view_files.each do |entry|
-          content = entry[:content]
+          content = entry[:code]
           counts[:"data-turbo-false"] += content.scan(ViewTemplateIntrospector.data_attr("data-turbo")).count { |m| m[0] == "false" }
           counts[:"data-turbo-false"] += content.scan(/data-turbo["']?\s*(?:=>|=|:)\s*false\b/).size
           counts[:"data-turbo-action"] += content.scan(ViewTemplateIntrospector.data_attr("data-turbo-action")).size
@@ -506,7 +594,7 @@ module RailsAiContext
 
         found = []
         current_action = nil
-        record.source.each_line do |line|
+        RailsAiContext::RubySource.without_comments(record.source).each_line do |line|
           if (match = line.match(/^\s*def\s+(\w+)/))
             current_action = match[1]
           end
@@ -535,7 +623,7 @@ module RailsAiContext
 
         count = 0
         view_files.each do |entry|
-          count += entry[:content].scan(/turbo_native_app\?|hotwire_native_app\?/).size
+          count += ViewTemplateIntrospector.code_in(entry[:content], path: entry[:file]).scan(NATIVE_HELPER).size
         end
 
         count

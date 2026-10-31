@@ -44,20 +44,33 @@ module RailsAiContext
       # ERB tag bodies, HAML or Slim Ruby, or any other template whole; string literals blanked where it is Ruby.
       def self.code_in(content, path: nil)
         text = content.to_s
+        RunCache.fetch([ :code_in, path.to_s, text.frozen? ? text : text.dup.freeze ]) { read_code_in(text, path) }
+      end
+
+      def self.read_code_in(text, path)
         if (pieces = RailsAiContext::MarkupSource.pieces(text, path))
           return pieces.map { |code, ruby| ruby ? strip_string_literals(code) : code }.join("\n")
         end
 
         erb = path ? path.to_s.end_with?(".erb") : RailsAiContext::ErbSource.tagged?(text)
-        ruby = erb ? RailsAiContext::ErbSource.tag_bodies(text) : text
-        erb || path.to_s.end_with?(*RenderCalls::RUBY_TEMPLATE_EXTENSIONS) ? strip_string_literals(ruby) : ruby
+        return strip_string_literals(RailsAiContext::ErbSource.tag_bodies(text)) if erb
+        return text unless path.to_s.end_with?(*RenderCalls::RUBY_TEMPLATE_EXTENSIONS)
+
+        strip_string_literals(RailsAiContext::RubySource.without_comments(text))
       end
+      private_class_method :read_code_in
 
       # Detect whether a view file is a Phlex view (Ruby DSL, not ERB)
       def self.phlex_view?(path, content)
         return false unless path.end_with?(".rb")
+
         # Check for Phlex class patterns: inherits from a View/Base class and defines view_template
-        content.match?(/class\s+\S+\s*<\s*\S+/) && content.match?(/def\s+view_template\b/)
+        subclass = view_template = false
+        AstWalk.each(AstCache.parse_string(content).value) do |node|
+          subclass ||= node.is_a?(Prism::ClassNode) && !node.superclass.nil?
+          view_template ||= node.is_a?(Prism::DefNode) && node.name == :view_template
+        end
+        subclass && view_template
       end
 
       # Extract component render calls from Phlex Ruby DSL
@@ -65,7 +78,7 @@ module RailsAiContext
       # Also matches: render Components::Nested::Name.new(...)
       def self.extract_phlex_component_renders(content)
         components = Set.new
-        content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each do |match|
+        RailsAiContext::RubySource.code_only(content).scan(COMPONENT_RENDER).each do |match|
           components << match[0]
         end
         components.to_a.sort
@@ -79,18 +92,35 @@ module RailsAiContext
 
       DATA_CONTROLLER_ATTR = data_attr("data-controller")
 
-      # `data: { controller: "x" }` in markup, never the routing `url_for(controller: "x")`.
-      DATA_HASH_CONTROLLER = /\bdata:\s*\{[^}]*\bcontroller:\s*["']([^"']+)["']/
+      # `data: { controller: "x" }` in markup, never the routing `url_for(controller: "x")`:
+      # read only from the data hash's own keys.
+      DATA_HASH_CONTROLLER = /(?<![\w-])controller:\s*["']([^"']+)["']/
 
       # Phlex keyword attribute: data_controller: "x".
       PHLEX_CONTROLLER_ATTR = /\bdata_controller:\s*["']([^"']+)["']/
 
       # Every Stimulus controller an element in this template declares.
       def self.stimulus_refs(content)
-        [ DATA_CONTROLLER_ATTR, DATA_HASH_CONTROLLER, PHLEX_CONTROLLER_ATTR ]
-          .flat_map { |pattern| content.scan(pattern).flat_map { |m| m[0].split } }
-          .uniq
+        (content.scan(DATA_CONTROLLER_ATTR).flat_map { |m| m[0].split } +
+          data_hash_controllers(content) +
+          content.scan(PHLEX_CONTROLLER_ATTR).flat_map { |m| m[0].split }).uniq
       end
+
+      # The markup and the Ruby in its tags read apart; a name an ERB tag writes into the attribute is left out.
+      def self.template_stimulus_refs(source)
+        markup = without_html_comments(source).gsub(RailsAiContext::ErbSource::TAG, "<%%>")
+        (stimulus_refs(markup) + stimulus_refs(RailsAiContext::ErbSource.tag_bodies(source))).reject { |name| name.include?("<%") }.uniq
+      end
+
+      def self.data_hash_controllers(content)
+        content.to_enum(:scan, DATA_HASH).flat_map do
+          hash = RailsAiContext::Brackets.span(content, Regexp.last_match.end(0), comments: :ruby) or next []
+          keys = +""
+          RailsAiContext::Brackets.each_top_level(hash[1...-1], comments: :ruby) { |piece, kind| keys << (kind == :group ? " " : piece) }
+          keys.scan(DATA_HASH_CONTROLLER).flat_map { |m| m[0].split }
+        end
+      end
+      private_class_method :data_hash_controllers
 
       # An app's own helper names its controller as surely as data-controller does.
       IDENTIFIER_HELPER = /\b(?:content|body)_controller\s*\(?\s*["']([\w-]+)["']/
@@ -111,11 +141,23 @@ module RailsAiContext
       # Every identifier a file names, however: wider than `stimulus_refs`, since a
       # file that only sets a target or an action still says what it is called.
       def self.stimulus_identifiers(content, ruby: false)
-        content = content.gsub(/^\s*#.*$/, "") if ruby
-        (stimulus_refs(content) +
-          [ IDENTIFIER_HELPER, TARGET_ATTR, TARGET_KEY ].flat_map { |pattern| content.scan(pattern).flatten } +
+        content = RailsAiContext::RubySource.without_comments(content) if ruby
+        (stimulus_refs(content) + helper_identifiers(content, ruby) +
+          [ TARGET_ATTR, TARGET_KEY ].flat_map { |pattern| content.scan(pattern).flatten } +
           (ruby ? ruby_identifiers(content) : action_identifiers(content))).uniq
       end
+
+      # A helper call counts where Ruby makes it, not in a string or page text; HAML and Slim are read whole.
+      def self.helper_identifiers(content, ruby)
+        calls = content.to_enum(:scan, IDENTIFIER_HELPER).map { Regexp.last_match }
+        return [] if calls.empty?
+
+        return calls.map { |call| call[1] } unless ruby || RailsAiContext::ErbSource.tagged?(content)
+
+        code = ruby ? RailsAiContext::RubySource.code_only(content) : RailsAiContext::ErbSource.masked(content, only: IDENTIFIER_HELPER)
+        calls.filter_map { |call| call[1] if code[call.begin(0)] != " " }
+      end
+      private_class_method :helper_identifiers
 
       # Descriptors are read inside quoted values only, so `users#show` in
       # prose is not a controller.
@@ -217,7 +259,8 @@ module RailsAiContext
       ].freeze
 
       def self.extract_phlex_helper_calls(content)
-        PHLEX_HELPER_METHODS.select { |method| content.match?(/\b#{method}\b/) }
+        code = RailsAiContext::RubySource.code_only(content)
+        PHLEX_HELPER_METHODS.select { |method| code.match?(/\b#{method}\b/) }
       end
 
       private
@@ -234,7 +277,7 @@ module RailsAiContext
           content = RailsAiContext::SafeFile.read(path) or next
           markup = self.class.strip_markup_comments(content)
 
-          slots = extract_slot_refs(markup)
+          slots = extract_slot_refs(self.class.code_in(markup, path: path))
 
           entry = {
             lines: content.lines.count,
@@ -281,13 +324,13 @@ module RailsAiContext
       BRACES = /\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/
       STRING_LITERAL = /"(?:[^"\\\n#]|\\.|#+(?:#{BRACES}|\\.|[^{"\\\n#]))*#*"|'(?:\\.|[^'\\\n])*'/
 
-      # Blanks HAML `-#` comments (and what is indented under them) and ERB `<%# %>`
-      # tags, keeping their lines so nothing else shifts.
+      # Blanks HAML `-#` comments (and what is indented under them), ERB `<%# %>`
+      # tags and the text of HTML comments, keeping their lines so nothing else shifts.
       def self.strip_markup_comments(content)
-        return content unless content.include?("-#") || content.include?("<%#") || content.include?("<%-#")
+        return content unless content.include?("-#") || content.include?("<%#") || content.include?("<%-#") || content.include?("<!--")
 
         block_indent = nil
-        content.gsub(/<%-?#.*?%>/m, "").lines.map { |line|
+        without_html_comments(content.gsub(/<%-?#.*?%>/m, "")).lines.map { |line|
           indent = line[/\A[ \t]*/].length
           if block_indent && (line.strip.empty? || indent > block_indent)
             "\n"
@@ -301,6 +344,20 @@ module RailsAiContext
         }.join
       end
 
+      HTML_COMMENT = /<!--.*?-->/m
+
+      # ERB inside an HTML comment still runs, so its tags stay; a `<!--` written inside a tag opens no comment.
+      def self.without_html_comments(content)
+        return content unless content.include?("<!--")
+
+        content.gsub(Regexp.union(RailsAiContext::ErbSource::TAG, HTML_COMMENT)) do |piece|
+          next piece unless piece.start_with?("<!--")
+
+          "<!--#{piece[4...-3].gsub(Regexp.union(RailsAiContext::ErbSource::TAG, /[^\n]/)) { |part| part.length > 1 ? part : " " }}-->"
+        end
+      end
+      private_class_method :without_html_comments
+
       def extract_ivars(content, path = nil)
         self.class.ivars_in(content, path: path)
       end
@@ -311,10 +368,11 @@ module RailsAiContext
           next unless RailsAiContext::ViewFile.template?(path)
           content = RailsAiContext::SafeFile.read(path) or next
           markup = self.class.strip_markup_comments(content)
+          code = self.class.code_in(markup, path: path)
           partials[relative] = {
             lines: content.lines.count,
-            fields: extract_model_fields(markup),
-            helpers: extract_helper_calls(markup),
+            fields: extract_model_fields(code),
+            helpers: extract_helper_calls(code),
             partials: extract_partial_refs(markup, File.dirname(relative), path)
           }
         end
@@ -361,6 +419,8 @@ module RailsAiContext
         helpers.uniq
       end
 
+      COMPONENT_RENDER = /render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/
+
       def extract_partial_refs(content, folder = ".", path = nil)
         refs = []
         spans = []
@@ -380,15 +440,31 @@ module RailsAiContext
         end
         # A render call's own arguments were read above, where a `partial:`
         # key nested in its locals is no partial of its own.
+        code = nil
         content.to_enum(:scan, RenderCalls::PARTIAL_ARG).each do
           match = Regexp.last_match
           next if spans.any? { |span| span.cover?(match.begin(0)) }
 
+          code ||= ruby_code(content, path)
+          next if code[match.begin(0)] == " "
+          next if RenderCalls.nested_hash_key?(code, match.begin(0))
+
           refs << match[2] if match[2].match?(RenderCalls::PARTIAL_NAME)
         end
-        # Phlex: render ComponentName.new(...) or render(ComponentName.new(...))
-        content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each { |m| refs << m[0] }
+        # Phlex: render ComponentName.new(...) or render(ComponentName.new(...)); a render call found above is code already.
+        content.to_enum(:scan, COMPONENT_RENDER).each do
+          match = Regexp.last_match
+          at = match.begin(0)
+          next unless spans.any? { |span| span.begin == at + "render".length } || (code ||= ruby_code(content, path))[at] != " "
+
+          refs << match[1]
+        end
         refs.uniq
+      end
+
+      # Only a tag that can hold what the partial scans read is parsed.
+      def ruby_code(content, path)
+        RenderCalls.code_text(content, RenderCalls.template_kind(content, path), /render|partial/)
       end
 
       # Globbed on its own: scan_partials reads each partial's references, which need the whole set first.

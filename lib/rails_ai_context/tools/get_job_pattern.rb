@@ -527,8 +527,10 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_queue(source)
-        match = source.match(/queue_as\s+[:'"](\w+)['"]?/)
-        match[1] if match
+        macros = Introspectors::SourceIntrospector.walk_source(source, {
+          macros: -> { Introspectors::Listeners::GenericMacroListener.new(:queue_as) }
+        })[:macros]
+        macros.first&.dig(:args)&.first&.to_s
       end
 
       # The introspector named the entry point when it is not perform: Que's run, or a base's execute.
@@ -549,24 +551,22 @@ module RailsAiContext
         body = perform && Introspectors::ActionResolver.body_of(source, perform)
         return [] unless body
 
-        guards = body[:code].lines.map(&:strip).select { |line|
-          line.match?(/\Areturn\s+(if|unless)\b/) || (line.match?(/\Areturn\b/) && line.length < 120)
+        code = Introspectors::ActionResolver.body_of(RailsAiContext::RubySource.code_only(source), perform)[:code].lines.map(&:strip)
+        guards = body[:code].lines.map(&:strip).select.with_index { |line, index|
+          code[index].to_s.match?(/\Areturn\s+(if|unless)\b/) || (code[index].to_s.match?(/\Areturn\b/) && line.length < 120)
         }.first(10)
         RailsAiContext::Redaction.redact_source_lines(guards)
       end
 
       private_class_method def self.extract_broadcasts(source)
-        broadcasts = Set.new
+        calls = Introspectors::SourceIntrospector.walk_source(source, {
+          calls: -> { Introspectors::Listeners::MethodCallListener.new(pattern: /\A\w+\z/) }
+        })[:calls]
 
-        source.scan(/(broadcast_\w+)\s*(?:_to\s+)?/).each do |match|
-          broadcasts << match[0]
-        end
-
-        source.scan(/Turbo::StreamsChannel\.\w+/).each do |match|
-          broadcasts << match
-        end
-
-        broadcasts.to_a.sort
+        calls.flat_map { |call|
+          [ (call[:name] if call[:name].start_with?("broadcast_")),
+            ("Turbo::StreamsChannel.#{call[:name]}" if call[:receiver].to_s.delete_prefix("::") == "Turbo::StreamsChannel") ]
+        }.compact.uniq.sort
       end
 
       private_class_method def self.recurring_lines(schedules)

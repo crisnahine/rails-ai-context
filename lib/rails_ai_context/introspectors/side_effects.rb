@@ -49,7 +49,7 @@ module RailsAiContext
       def of(source, enqueue_helpers, models: Set.new, columns: Set.new)
         writes = database_writes(source, Scope.new(models, columns))
         # A regex raises on bytes that are not UTF-8; Prism reads them as they are.
-        text = source.valid_encoding? ? source : source.scrub("?")
+        text = RubySource.without_comments(source.valid_encoding? ? source : source.scrub("?"))
         effects = EFFECTS.filter_map { |label, pattern| label if text.match?(pattern) }
         effects << "database write (#{writes.join(', ')})" if writes.any?
         effects << "job enqueue" if SourceCalls.enqueue_calls(source, enqueue_helpers).any?

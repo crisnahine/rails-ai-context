@@ -1090,6 +1090,24 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers].map { |m| m[:name] }).to include("ReceiptMailer")
     end
 
+    it "finds a mailer outside app/mailers whose parent is an app mailer base with another name" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
+        FileUtils.mkdir_p(File.join(dir, "app", "notifiers"))
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), "class ApplicationMailer < ActionMailer::Base\nend\n")
+        File.write(File.join(dir, "app", "notifiers", "base_notifier.rb"), "class BaseNotifier < ApplicationMailer\nend\n")
+        File.write(File.join(dir, "app", "notifiers", "weekly.rb"), <<~RUBY)
+          class Weekly < BaseNotifier
+            def digest
+              mail(to: "a@b.c")
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to include("Weekly")
+    end
+
     # A DeviseMailer and a DigestMailer: `action_methods` counts both, but
     # a method a callback macro names is a filter and a predicate delivers
     # nothing.
@@ -1805,6 +1823,17 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
           "ProcNewJob" => "#{described_class::PROC_QUEUE}: `Proc.new { :x }`",
           "UrgentJob" => "#{described_class::PROC_QUEUE}: `-> { arguments.first.urgent? ? :high : :low }`"
         )
+      end
+
+      it "does not call a queue read off a called Proc a Proc given to queue_as" do
+        result = static_result do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+          File.write(File.join(dir, "app", "jobs", "report_job.rb"), "class ReportJob < ActiveJob::Base\n  queue_as proc { :reports }.call\nend\n")
+        end
+
+        queue = result[:jobs].find { |j| j[:name] == "ReportJob" }[:queue]
+        expect(queue).not_to include(described_class::PROC_QUEUE)
+        expect(queue).to include("proc { :reports }.call")
       end
 
       # An app can keep a PDF style class, Styles::Base, in app/workers, and

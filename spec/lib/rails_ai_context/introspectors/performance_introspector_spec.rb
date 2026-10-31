@@ -990,6 +990,17 @@ end
         end
       end
 
+      it "does not take a comparison or an order on the counter column for the app writing it" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :tokens\n\n  def untouched? = tokens_count == 0\n\n" \
+          "  def self.busiest = order(tokens_count: :desc)\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(model: "Post", association: "tokens", column: "tokens_count"))
+      end
+
       # The row is keyed by the constant the app has, or the same tool then
       # answers "Model 'Invoice' not found" for a row it just printed.
       it "names a model nested in a module body by its qualified constant" do
@@ -1330,6 +1341,22 @@ end
           [ "app/controllers/admin/posts_controller.rb", "Admin::Post" ]
         )
         expect(findings.first[:suggestion]).to start_with("Admin::Post.all loads")
+      end
+    end
+
+    it "does not flag a Model.all that a comment or a string only names" do
+      Dir.mktmpdir do |dir|
+        {
+          "app/models/post.rb" => "class Post < ApplicationRecord\nend\n",
+          "app/controllers/posts_controller.rb" =>
+            "class PostsController < ApplicationController\n  def index\n    # Post.all is too slow\n" \
+            "    @posts = Post.limit(5)\n    flash[:notice] = \"Post.all was replaced\"\n  end\nend\n"
+        }.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), source)
+        end
+
+        expect(described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_all_in_controllers]).to be_empty
       end
     end
 

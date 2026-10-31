@@ -21,6 +21,23 @@ module RailsAiContext
         }
       end
 
+      # Only the Ruby a template runs, as [text, code]: ERB tag bodies, a HAML or Slim template's Ruby, or the
+      # file whole. Code is the same text with comments and string bodies blanked, every offset kept.
+      def self.template_ruby(path, text)
+        path = path.to_s
+        if path.end_with?(".erb")
+          ruby = RailsAiContext::ErbSource.tag_bodies(text)
+          return [ ruby, RailsAiContext::RubySource.code_only(ruby, cache: false) ]
+        end
+
+        if (pieces = RailsAiContext::MarkupSource.pieces(text, path))
+          code = pieces.map { |piece, ruby| ruby ? RailsAiContext::RubySource.code_only(piece, cache: false) : piece }
+          return [ pieces.map(&:first).join("\n"), code.join("\n") ]
+        end
+
+        [ text, path.end_with?(*RenderCalls::RUBY_TEMPLATE_EXTENSIONS) ? RailsAiContext::RubySource.code_only(text) : text ]
+      end
+
       private
 
       # Every view file across every views root, an in-repo engine's or plugin's
@@ -50,10 +67,12 @@ module RailsAiContext
       # The unnamed `yield`, where the action's own template lands.
       MAIN_YIELD = "(main)"
       def layout_yields(path, content)
-        ruby = layout_ruby(path, content)
+        ruby, code = self.class.template_ruby(path, content)
         found = []
         ruby.scan(Regexp.union(YIELD, CONTENT_FOR)) do
           m = Regexp.last_match
+          next if code[m.begin(0)] == " "
+
           if m[0].start_with?("yield")
             found << (m[1] || m[2] || MAIN_YIELD)
           elsif m[3] || !(m[6] || m[7])
@@ -61,13 +80,6 @@ module RailsAiContext
           end
         end
         found.uniq
-      end
-
-      # Only the Ruby a layout runs: ERB tag bodies, or a HAML or Slim layout's Ruby.
-      def layout_ruby(path, text)
-        return RailsAiContext::ErbSource.tag_bodies(text) if path.end_with?(".erb")
-
-        RailsAiContext::MarkupSource.pieces(text, path)&.map(&:first)&.join("\n") || text
       end
 
       def extract_templates
@@ -158,35 +170,48 @@ module RailsAiContext
 
       def detect_form_builders
         # The glob spans ERB, HAML, Slim and Phlex `.rb`, and only the last has
-        # a Ruby AST. One text matcher keeps the count consistent across them.
+        # a Ruby AST. One text matcher over each one's Ruby keeps the count consistent across them.
         counts = Hash.new(0)
         view_files("**/*.{erb,haml,slim,rb}").each do |path, _relative|
           content = RailsAiContext::SafeFile.read(path) or next
-          FORM_BUILDER_PATTERNS.each do |name, pattern|
-            count = content.scan(pattern).size
-            counts[name] += count if count > 0
-          end
+          self.class.form_builders_in(path, content).each { |name, count| counts[name] += count }
         end
 
-        counts.sort_by.with_index { |(_, v), i| [ -v, i ] }.to_h
+        self.class.ranked(counts)
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "detect_form_builders")
       end
 
-      def detect_component_usage
-        components = Set.new
-        view_files("**/*.{erb,haml,slim,rb}").each do |path, _relative|
-          content = RailsAiContext::SafeFile.read(path) or next
-          # Same mixed-extension glob as above: text matching, not AST.
-          # Match render ComponentName.new(...) or render(ComponentName.new(...))
-          content.scan(/render\s*\(?\s*([A-Z]\w+(?:::\w+)*(?:Component)?)\.new/).each do |match|
-            components << match[0]
-          end
-        end
+      # The form helpers one template calls, with how often.
+      def self.form_builders_in(path, content)
+        return {} unless FORM_BUILDER_PATTERNS.each_value.any? { |pattern| content.match?(pattern) }
 
-        components.to_a.sort
+        code = template_ruby(path, content).last
+        FORM_BUILDER_PATTERNS.to_h { |name, pattern| [ name, code.scan(pattern).size ] }.select { |_, count| count.positive? }
+      end
+
+      # Most used first; a tie keeps the order the counts came in.
+      def self.ranked(counts)
+        counts.sort_by.with_index { |(_, count), i| [ -count, i ] }.to_h
+      end
+
+      # render ComponentName.new(...) or render(ComponentName.new(...))
+      COMPONENT_RENDER = /render\s*\(?\s*([A-Z]\w+(?:::\w+)*(?:Component)?)\.new/
+
+      def detect_component_usage
+        view_files("**/*.{erb,haml,slim,rb}").flat_map do |path, _relative|
+          content = RailsAiContext::SafeFile.read(path) or next []
+          self.class.components_in(path, content)
+        end.uniq.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_component_usage")
+      end
+
+      # The components one template renders; the same mixed-extension text match as the form helpers.
+      def self.components_in(path, content)
+        return [] unless content.match?(COMPONENT_RENDER)
+
+        template_ruby(path, content).last.scan(COMPONENT_RENDER).flatten
       end
     end
   end

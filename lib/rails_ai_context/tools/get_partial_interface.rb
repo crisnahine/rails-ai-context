@@ -116,7 +116,7 @@ module RailsAiContext
         source_locals = if file_path.end_with?(".jbuilder")
           jbuilder_locals(source, helpers)
         else
-          extract_local_variable_references(source, helpers)
+          extract_local_variable_references(source, helpers, file_path)
         end
 
         # Combine: render-site locals first, then source-detected locals
@@ -126,7 +126,7 @@ module RailsAiContext
           .sort
 
         # Extract method calls only for confirmed locals
-        method_calls = extract_method_calls_on_locals(source, all_locals) if all_locals.any?
+        method_calls = extract_method_calls_on_locals(source, all_locals, file_path) if all_locals.any?
 
         case detail
         when "summary"
@@ -295,7 +295,7 @@ module RailsAiContext
 
       # Extract local variable references from ERB source.
       # Locals are variables NOT prefixed with @ and NOT known Ruby/Rails globals.
-      private_class_method def self.extract_local_variable_references(source, helpers = Set.new)
+      private_class_method def self.extract_local_variable_references(source, helpers = Set.new, path = nil)
         locals = Set.new
         # Known non-local identifiers to exclude
         known_non_locals = Set.new(%w[
@@ -317,52 +317,77 @@ module RailsAiContext
           turbo_frame_tag turbo_stream_from turbo_stream
           capture provide request response params session flash cookies
           current_page? url_for polymorphic_path polymorphic_url
-          new_record? persisted? errors model_name
+          new_record? persisted? errors model_name local_assigns
         ])
 
-        # Block parameters (form_with do |form|, errors.each do |error|) are
-        # yielded inside the template, not passed as render locals - names
-        # declared between pipes must not be reported as expected locals.
-        block_params = Set.new
-        source.scan(/(?:\bdo|\{)\s*\|([^|]+)\|/).each do |(params_str)|
-          params_str.split(",").each do |param|
-            name = param[/[a-z_]\w*/]
-            block_params << name if name
+        erb = path.nil? || path.end_with?(".erb")
+        template_nodes(source, path).each do |node|
+          case node
+          when Prism::StatementsNode
+            next unless erb
+
+            # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>.
+            # A name called with parentheses is a method, and one ending in
+            # _path or _url a route helper: `dom_id(notification)` and
+            # `mark_read_notification_path(notification)` were listed as locals.
+            node.body.each do |statement|
+              name = leading_name(statement)
+              locals << name if name && !(known_non_locals.include?(name) || helpers.include?(name) || route_helper?(name))
+            end
+          when Prism::CallNode
+            key = local_assigns_key(node)
+            locals << key if key
+          when Prism::DefinedNode
+            # 2. defined?(local) guard pattern
+            guarded = node.value
+            locals << guarded.name.to_s if guarded.is_a?(Prism::CallNode) && guarded.variable_call?
           end
         end
-
-        # High-confidence local detection only - avoids false positives from HTML/CSS text
-        source.scan(RailsAiContext::ErbSource::TAG).each do |match|
-          code = match[0].strip
-          next if code.start_with?("#")
-
-          # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>.
-          # A name called with parentheses is a method, and one ending in
-          # _path or _url a route helper: `dom_id(notification)` and
-          # `mark_read_notification_path(notification)` were listed as locals.
-          if (m = code.match(/\A\s*([a-z_]\w*)\s*(?:\z|\.)/))
-            name = m[1]
-            locals << name unless known_non_locals.include?(name) || block_params.include?(name) ||
-                                  helpers.include?(name) || route_helper?(name)
-          end
-
-          # 2. defined?(local) guard pattern
-          code.scan(/defined\?\s*\(?([a-z_]\w*)\)?/).each do |var_match|
-            locals << var_match[0]
-          end
-        end
-
-        # Also check for local_assigns usage: local_assigns[:name] or local_assigns.fetch(:name)
-        source.scan(/local_assigns\[:(\w+)\]/).each { |m| locals << m[0] }
-        source.scan(/local_assigns\.fetch\(:(\w+)/).each { |m| locals << m[0] }
-
-        # Also check for `defined?(name)` guard pattern
-        source.scan(/defined\?\((\w+)\)/).each { |m| locals << m[0] }
 
         # Filter out things that are clearly method definitions or blocks
         locals.reject { |l| l.match?(/\A(each|map|select|reject|find|collect|do|end)\z/) }.to_a.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_local_variable_references")
+      end
+
+      # Every node of the Ruby a template runs; text, HTML comments and `<%#`
+      # comments are no Ruby, as ERB sends them to the page.
+      private_class_method def self.template_nodes(source, path)
+        template_ruby(source, path).flat_map do |ruby|
+          Introspectors::AstWalk.each(RailsAiContext::AstCache.parse_string(ruby).value).to_a
+        end
+      end
+
+      # The template's Ruby in pieces that each parse alone: ERB compiled
+      # whole, each HAML or Slim piece, a Ruby template as it is.
+      private_class_method def self.template_ruby(source, path)
+        return [ RailsAiContext::ErbSource.compiled(source) ] if path.nil? || path.end_with?(".erb")
+
+        pieces = RailsAiContext::MarkupSource.pieces(source, path)
+        return pieces.map(&:first) if pieces
+
+        path.end_with?(*Introspectors::RenderCalls::RUBY_TEMPLATE_EXTENSIONS) ? [ source ] : []
+      end
+
+      # The bare call a statement opens with, as a passed-in local parses (`row` in `row.title`);
+      # nil for a block parameter or a local the template assigns.
+      private_class_method def self.leading_name(node)
+        until node.nil? || (node.is_a?(Prism::CallNode) && node.variable_call?)
+          start = node.location.start_offset
+          node = node.compact_child_nodes.find { |child| child.location.start_offset == start }
+        end
+        node&.name&.to_s
+      end
+
+      # `name` in local_assigns[:name] and local_assigns.fetch(:name).
+      private_class_method def self.local_assigns_key(node)
+        return unless %i[[] fetch].include?(node.name)
+
+        receiver = node.receiver
+        return unless receiver.is_a?(Prism::CallNode) && receiver.variable_call? && receiver.name == :local_assigns
+
+        key = node.arguments&.arguments&.first
+        key.unescaped if key.is_a?(Prism::SymbolNode)
       end
 
       # Every template a render site can sit in, jbuilder's Ruby included.
@@ -409,13 +434,29 @@ module RailsAiContext
           nested = kind == :comment || (kind == :group && !piece.start_with?("["))
           level << (nested ? " " * piece.length : piece)
         end
-        level[FORMATS_OPTION, 1]&.scan(/\w+/)
+        code = code_of(level)
+        level.to_enum(:scan, FORMATS_OPTION).map { Regexp.last_match }.find { |found| code[found.begin(0)] != " " }&.[](1)&.scan(/\w+/)
+      end
+
+      # `text` with every string, literal and comment blanked, inside brackets
+      # too, so a key found in it is code; each offset still points at `text`.
+      private_class_method def self.code_of(text)
+        out = +""
+        RailsAiContext::Brackets.each_top_level(text, comments: :ruby) do |piece, kind|
+          out << case kind
+          when :char then piece
+          when :group then piece[0] + code_of(piece[1...-1]) + piece[-1]
+          else piece.tr("^\n", " ")
+          end
+        end
+        out
       end
 
       # Where a render names the partial as its `partial:` option, or nil
       # where it names it first, as the shorthand does.
       private_class_method def self.partial_key_at(line, name)
-        line =~ /(?:\bpartial:|:partial\s*=>)\s*(["'])#{Regexp.escape(name)}\1/
+        code = code_of(line)
+        line.to_enum(:scan, /(?:\bpartial:|:partial\s*=>)\s*(["'])#{Regexp.escape(name)}\1/).map { Regexp.last_match.begin(0) }.find { |at| code[at] != " " }
       end
 
       # The formats a call in Ruby renders its partial in when it names none.
@@ -424,7 +465,7 @@ module RailsAiContext
       # helper the request decides, html or json alike, unless the call sits
       # in a `format.json { }` block of a respond_to.
       private_class_method def self.code_site_formats(call, relative, line, format_blocks)
-        return [ "html" ] if call.match?(/\bturbo_stream\.\w+/)
+        return [ "html" ] if code_of(call).match?(/\bturbo_stream\.\w+/)
 
         block = format_blocks.select { |from, to, _| from <= line && line <= to }.max_by(&:first)
         return (block.last == "any" ? nil : [ block.last ]) if block
@@ -499,11 +540,16 @@ module RailsAiContext
         lines = content.lines
         sites = []
         blocks = nil
-        content.to_enum(:scan, Introspectors::RenderCalls::PARTIAL_ARG).each do
+        reader = Introspectors::RenderCalls
+        kind = reader.template_kind(content, relative)
+        ruby_code = reader.code_text(content, kind, /partial/) unless kind == :markup
+        content.to_enum(:scan, reader::PARTIAL_ARG).each do
           match = Regexp.last_match
           at = match.begin(0)
           next unless names.include?(match[2])
           next if skip_spans.any? { |from, to| at >= from && at < to }
+          next if ruby_code && ruby_code[at] == " "
+          next if ruby_code && reader.nested_hash_key?(ruby_code, at)
 
           # The line the call starts on, which a trailing comma carries onto this one.
           start = content[0...at].count("\n")
@@ -538,10 +584,12 @@ module RailsAiContext
       # JbuilderTemplate#_render_partial_with_options reads its options.
       private_class_method def self.partial_call_locals(call)
         reader = Introspectors::RenderCalls
-        verb, args = call.match(/\bjson\.(partial!)\s*(.*)/m)&.captures || call.match(/\A\s*json\.(\w+!?)\s*(.*)/m)&.captures
-        return reader.passed_locals(call) unless args
+        code = code_of(call)
+        found = code.match(/\bjson\.(partial!)\s*/) || code.match(/\A\s*json\.(\w+!?)\s*/)
+        return reader.passed_locals(call) unless found
 
-        args = RailsAiContext::Brackets.unwrap(args.strip)
+        verb = found[1]
+        args = RailsAiContext::Brackets.unwrap(call[found.end(0)..].strip)
         keys = reader.hash_keys(args)
         own = keys.include?("locals") ? reader.locals_keys(args) : keys - JBUILDER_OPTIONS
         records = case verb
@@ -589,22 +637,22 @@ module RailsAiContext
           # one call whose arguments the line alone does not hold.
           covered = 0
           spans = []
-          reader.render_calls(content, path: file).each do |at, args|
+          reader.render_calls(content, path: file).each do |at, args, block|
             spans << [ at, at + args.length ]
-            # A render inside another's arguments is already part of that call's site.
+            # A render inside the arguments of a call already credited is part of that call's site.
             next if at < covered
 
-            covered = at + args.length
             line_num = content[0...at].count("\n") + 1
             line = reader.render_line(args)
             spanned = lines[(line_num - 1)..(line_num - 1 + args.chomp.count("\n"))]
             snippet = spanned.size > 1 ? spanned.join(" ").squish : lines[line_num - 1].strip
 
             matched_line = false
+            rendered = reader.partial_names(args, block: block)
             names.each do |search_name|
               # Match render "partial_name" or render partial: "partial_name",
               # the name whole: "comments/form" is another directory's form.
-              next unless line.match?(/render\s.*["']#{Regexp.escape(search_name)}["']/)
+              next unless rendered.include?(search_name)
 
               locals_passed = reader.render_locals(args)
 
@@ -612,6 +660,7 @@ module RailsAiContext
               named = named_formats(line, partial_key_at(line, search_name))
               site[:formats] = named if named
               sites << site
+              covered = at + args.length
               matched_line = true
               break # one match per call is enough
             end
@@ -627,6 +676,7 @@ module RailsAiContext
             next unless partial && reader.partial_key(partial, view_dir, on_disk) == canonical
 
             sites << { file: relative, line: line_num, locals: [], snippet: snippet }
+            covered = at + args.length
           end
 
           sites.concat(partial_arg_sites(content, relative, names, skip_spans: spans))
@@ -638,25 +688,28 @@ module RailsAiContext
       end
 
       # Extract method calls made on each local variable within the partial.
-      private_class_method def self.extract_method_calls_on_locals(source, locals)
+      private_class_method def self.extract_method_calls_on_locals(source, locals, path = nil)
         calls = {}
         return calls if locals.empty?
 
-        locals.each do |local|
-          methods = Set.new
-
+        wanted = locals.to_set
+        template_nodes(source, path).each do |node|
           # local.method_name or local&.method_name
-          source.scan(/(?<![@$\w.])#{Regexp.escape(local)}&?\.(\w+[?!]?)/).each do |match|
-            method_name = match[0]
-            # Exclude common Ruby/ERB noise
-            next if %w[to_s to_i to_f to_a to_h to_json to_param inspect class nil? is_a? respond_to? send freeze dup clone].include?(method_name)
-            methods << method_name
-          end
+          next unless node.is_a?(Prism::CallNode) && %w[. &.].include?(node.call_operator)
 
-          calls[local] = methods.to_a.sort if methods.any?
+          receiver = node.receiver
+          next unless (receiver.is_a?(Prism::CallNode) && receiver.variable_call?) || receiver.is_a?(Prism::LocalVariableReadNode)
+          next unless wanted.include?(receiver.name.to_s)
+
+          method_name = node.name.to_s.sub(/(?<=\w)=\z/, "")
+          next unless method_name.match?(/\A\w+[?!]?\z/)
+          # Exclude common Ruby/ERB noise
+          next if %w[to_s to_i to_f to_a to_h to_json to_param inspect class nil? is_a? respond_to? send freeze dup clone].include?(method_name)
+
+          (calls[receiver.name.to_s] ||= Set.new) << method_name
         end
 
-        calls
+        calls.transform_values { |methods| methods.to_a.sort }
       rescue => e
         RailsAiContext.debug_fail(e, {}, label: "extract_method_calls_on_locals")
       end

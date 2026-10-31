@@ -15,11 +15,9 @@ module RailsAiContext
     # the current group - so `defined?(RailsAiContext)` alone does not prove
     # `.configure` exists.
     module InitializerFile
-      BARE_GUARD = /^([ \t]*)if defined\?\(RailsAiContext\)$/
+      BARE_GUARD = /^([ \t]*)if defined\?\(RailsAiContext\)(?=[ \t]*(?:#.*)?\r?$)/
       CURRENT_GUARD = /^[ \t]*if defined\?\(RailsAiContext\)\s*&&\s*RailsAiContext\.respond_to\?\(:configure\)$/
       GUARD_LINE = "if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)"
-      CONFIGURE_CALL = /^[ \t]*RailsAiContext\.configure\b/
-      GUARD_EXPRESSION = /defined\?\(\s*RailsAiContext\b|RailsAiContext\.respond_to\?\(\s*:configure\s*\)/
 
       # The first `RailsAiContext.configure` call with a block. Lines count
       # from 1 and the column is in bytes. `param` is the block's one plain
@@ -88,15 +86,72 @@ module RailsAiContext
       # What a guard is there to protect: a file that never calls into the gem
       # needs none.
       def configures?(content)
-        content.match?(CONFIGURE_CALL)
+        !configure_path(content).nil?
       end
+
+      # The nodes from the root down to the first `RailsAiContext.configure`
+      # call, nil when the source does not parse or makes no such call.
+      def configure_path(content)
+        parser = BlockTree.new(content)
+        tree = parser.parse
+        return nil if parser.error? || tree.nil?
+
+        parents = {}.compare_by_identity
+        stack = [ tree ]
+        until stack.empty?
+          node = stack.pop
+          if configure_call?(node)
+            path = [ node ]
+            path.unshift(parents[path.first]) while parents.key?(path.first)
+            return path
+          end
+          node.reverse_each do |child|
+            next unless child.is_a?(Array)
+
+            parents[child] = node
+            stack << child
+          end
+        end
+        nil
+      end
+      private_class_method :configure_path
+
+      def configure_call?(node)
+        %i[call command_call].include?(node[0]) && node[3].is_a?(Array) && node[3][1] == "configure" && UnbootedSettings::Walk.gem?(node[1])
+      end
+      private_class_method :configure_call?
 
       def bare_guard?(content)
-        content.match?(BARE_GUARD)
+        bare_guard_lines(content).any?
       end
 
-      # Either form counts as guarded, so a re-run neither double-wraps an
-      # initializer nor treats an unguarded one as guarded.
+      # The lines of the bare guards the configure call runs under. A closed
+      # `if defined?(RailsAiContext)` elsewhere in the file protects nothing.
+      def bare_guard_lines(content)
+        path = configure_path(content) or return []
+
+        lines = content.lines
+        path.each_cons(2).filter_map do |parent, child|
+          next unless parent[0] == :if && parent[2].equal?(child)
+
+          line = first_line(parent[1])
+          line if line && lines[line - 1].match?(BARE_GUARD)
+        end
+      end
+
+      def first_line(node)
+        return node[2][0] if node[0].is_a?(Symbol) && node[0].start_with?("@")
+
+        node.each do |child|
+          line = child.is_a?(Array) && first_line(child)
+          return line if line
+        end
+        nil
+      end
+      private_class_method :first_line
+
+      # Either form anywhere in the text, for a file with no configure call
+      # to place a guard around, so a re-run does not wrap it twice.
       def guarded?(content)
         content.match?(BARE_GUARD) || content.match?(CURRENT_GUARD)
       end
@@ -104,14 +159,58 @@ module RailsAiContext
       # The two spellings this gem writes are not the only ones that work: a
       # hand-written `if RailsAiContext.respond_to?(:configure)` or an early
       # `return unless defined?(RailsAiContext)` protects the call just as
-      # well. Anything that tests for the gem above the configure call counts,
-      # so a report cannot call a safe file unguarded.
+      # well. Any test for the gem counts that the call runs under, or that an
+      # earlier exit takes, so a report cannot call a safe file unguarded.
       def any_guard_before_configure?(content)
-        index = content.index(CONFIGURE_CALL)
-        return false unless index
+        path = configure_path(content) or return false
 
-        content[0, index].match?(GUARD_EXPRESSION)
+        path.each_cons(2).any? do |parent, child|
+          next guards?(parent, child) unless parent[0].is_a?(Array)
+
+          parent.take_while { |statement| !statement.equal?(child) }.any? { |statement| exits_on_gem_test?(statement) }
+        end
       end
+
+      def guards?(node, child)
+        case node[0]
+        when :if, :unless, :elsif, :if_mod, :unless_mod, :ifop then !node[1].equal?(child) && tests_gem?(node[1])
+        when :binary then %i[&& and].include?(node[2]) && node[3].equal?(child) && tests_gem?(node[1])
+        else false
+        end
+      end
+      private_class_method :guards?
+
+      def exits_on_gem_test?(node)
+        case node[0]
+        when :if, :unless, :if_mod, :unless_mod then tests_gem?(node[1]) && UnbootedSettings::Walk.exits?(node[2])
+        when :binary then %i[|| or].include?(node[2]) && tests_gem?(node[1]) && UnbootedSettings::Walk.exits?(node[3])
+        else false
+        end
+      end
+      private_class_method :exits_on_gem_test?
+
+      # `defined?` of the gem or a name under it, or `respond_to?` asked of the gem.
+      def tests_gem?(condition)
+        walk = UnbootedSettings::Walk
+        stack = [ condition ]
+        until stack.empty?
+          node = stack.pop
+          next unless node.is_a?(Array)
+          return true if node[0] == :defined && under_gem?(node[1])
+          return true if node[0] == :method_add_arg && (call = walk.call_of(node[1])) && call.last == "respond_to?" && walk.gem?(call.first)
+
+          stack.concat(node)
+        end
+        false
+      end
+      private_class_method :tests_gem?
+
+      def under_gem?(node)
+        walk = UnbootedSettings::Walk
+        node = node[1] while node.is_a?(Array) && %i[const_path_ref call].include?(node[0]) && !walk.gem?(node)
+        walk.gem?(node)
+      end
+      private_class_method :under_gem?
     end
   end
 end

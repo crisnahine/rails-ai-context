@@ -283,6 +283,18 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.assigned_ivars(body)).to eq(%w[user count])
     end
 
+    it "counts only the assigned ivar, never one read before it or one whose attribute writer is called" do
+      body = <<~RUBY
+        def publish
+          if @post.valid? && (@saved = true)
+            @article.status = "draft"
+          end
+        end
+      RUBY
+
+      expect(described_class.assigned_ivars(body)).to eq(%w[saved])
+    end
+
     # A doubled angle bracket is a shift-assign; a single one is a comparison.
     it "counts a shift assignment" do
       expect(described_class.assigned_ivars("@buffer <<= x\n")).to eq(%w[buffer])
@@ -302,6 +314,10 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.rendered_ivars('redirect_to @post, notice: "ok"')).to eq([])
     end
 
+    it "ignores a json render inside a Ruby comment" do
+      expect(described_class.rendered_ivars("# render json: @secret\nhead :ok\n")).to eq([])
+    end
+
     it "answers the body of the named method with the lines it occupies" do
       source = "class C\n  def show\n    @a = 1\n  end\n\n  def edit; end\nend\n"
 
@@ -316,6 +332,27 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
 
       expect(described_class.method_body(source, "show"))
         .to eq(code: "  def show\n    @a = 1\n  end", start_line: 6, end_line: 8)
+    end
+
+    it "reads past a heredoc line reading end at the def's indent when the walk cannot answer" do
+      source = <<~RUBY
+        class Helper
+          def call; end
+        end
+
+        class PostsController < ApplicationController
+          def show
+            @note = <<~TXT
+          end
+            TXT
+            @post = Post.find(params[:id])
+          end
+        end
+      RUBY
+
+      body = described_class.method_body(source, "show")
+      expect(body&.dig(:code)).to include("@post = Post.find(params[:id])")
+      expect(body&.dig(:end_line)).to eq(11)
     end
 
     it "answers the same body for an action named in another case" do

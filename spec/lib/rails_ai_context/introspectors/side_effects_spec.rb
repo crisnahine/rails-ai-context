@@ -151,6 +151,18 @@ RSpec.describe RailsAiContext::Introspectors::SideEffects do
     expect(effects(source)).to eq([ "Turbo broadcast", "cache write", "email delivery", "logging", "notification", "transaction" ])
   end
 
+  it "counts no cache write or logging that only a comment names" do
+    source = <<~RUBY
+      def go
+        # Rails.cache.write("k", 1) once the store is up
+        # Rails.cache.fetch("k")
+        x = 1 # Rails.logger.info("x")
+      end
+    RUBY
+
+    expect(effects(source)).to eq([])
+  end
+
   it "counts a job the body enqueues, through the app's own enqueue helper too, and not one a comment names" do
     helpers = [ { owner: "Jobs", method: "enqueue", job_arg: 0 } ]
 

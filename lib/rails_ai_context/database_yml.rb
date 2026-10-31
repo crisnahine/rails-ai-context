@@ -156,8 +156,19 @@ module RailsAiContext
     # newlines so the rest of the file parses at its written indentation.
     def neutralize_erb(content)
       content.gsub(RailsAiContext::ErbSource::TAG) do |tag|
-        (tag.start_with?("<%=") ? ERB_SENTINEL + Regexp.last_match(1).to_s[ERB_DEFAULT, 2].to_s : "") + ("\n" * tag.count("\n"))
+        (tag.start_with?("<%=") ? ERB_SENTINEL + erb_default(Regexp.last_match(1).to_s).to_s : "") + ("\n" * tag.count("\n"))
       end
+    end
+
+    def erb_default(code)
+      code[ERB_DEFAULT, 2] || env_fetch_default(code)
+    end
+
+    # `ENV.fetch("X", "mysql2")` or `ENV.fetch("X") { "mysql2" }`: the literal is what runs with the variable unset.
+    def env_fetch_default(code)
+      statements = AstCache.parse_string(code).value.statements.body
+      default = Introspectors::EnvReferences.fetch_default(statements.first) if statements.size == 1
+      default.unescaped if default.is_a?(Prism::StringNode) && default.unescaped.match?(/\A[\w.-]+\z/)
     end
 
     def computed?(value)

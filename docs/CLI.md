@@ -77,7 +77,10 @@ directory if it is an app, else the nearest app root above it (a directory with
 `config/application.rb`, `config/environment.rb`, or a `bin/rails` that boots an
 app or an engine; never `$HOME`, `node_modules` or a gem install), else the one
 app a level or two below it - looked for everywhere but `/`, `$HOME` and the
-directories above it, which hold too much to search. A walk names the app it chose on stderr, as
+directories above it, which hold too much to search. A root found by its
+`bin/rails` alone, with no app source, reads the app below it that `bin/rails`
+names as `APP_PATH` (a monorepo's root), else its `test/dummy` or `spec/dummy`
+app (an engine whose code is all in `lib/`). A walk names the app it chose on stderr, as
 `[rails-ai-context] using app at a/`, so `serve` keeps stdout clean. A folder
 holding several apps is refused with one `--app-path` command per app, and
 `tool --list` there lists the tools without an app. The chosen root is the

@@ -4,11 +4,11 @@ module RailsAiContext
   module Introspectors
     module Listeners
       # Detects ENV variable access patterns via Prism AST:
-      # ENV["KEY"], ENV.fetch("KEY"), ENV.fetch("KEY", "default")
+      # ENV["KEY"], ENV.fetch("KEY"), ENV.fetch("KEY", "default"), ENV["KEY"] ||= "value"
       class EnvAccessListener < BaseListener
         def on_call_node_enter(node)
           return extract_creds(node) if creds_receiver?(node.receiver)
-          return unless env_receiver?(node.receiver)
+          return unless EnvReferences.env_constant?(node.receiver)
 
           case node.name
           when :[]
@@ -16,6 +16,19 @@ module RailsAiContext
           when :fetch
             extract_fetch(node)
           end
+        end
+
+        # `ENV["KEY"] ||= v`, `+= v` and `&&= v` read the variable before writing it; `ENV["KEY"] = v` reads nothing.
+        def on_index_or_write_node_enter(node)
+          extract_subscript(node) if EnvReferences.env_constant?(node.receiver)
+        end
+
+        def on_index_operator_write_node_enter(node)
+          on_index_or_write_node_enter(node)
+        end
+
+        def on_index_and_write_node_enter(node)
+          on_index_or_write_node_enter(node)
         end
 
         private
@@ -48,10 +61,6 @@ module RailsAiContext
             default:     literal_value(default),
             location:    node.location.start_line
           }
-        end
-
-        def env_receiver?(receiver)
-          receiver.is_a?(Prism::ConstantReadNode) && receiver.name == :ENV
         end
 
         def extract_subscript(node)
