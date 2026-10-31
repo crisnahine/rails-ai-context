@@ -150,7 +150,7 @@ module RailsAiContext
     end
 
     # A conditional skip never removes the filter; the record carries the
-    # condition. See CONTEXT.md, "Filter chain".
+    # condition. See GLOSSARY.md, "Filter chain".
     def conditional?(skip, action)
       !skip[:if].nil? || !skip[:unless].nil? || !skip[:condition].nil? || partial?(skip, action)
     end

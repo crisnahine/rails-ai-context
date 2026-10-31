@@ -2,7 +2,7 @@
 
 Status: accepted
 
-`rails-ai-context init` run in a folder of apps (a workspace, see `CONTEXT.md`) writes one server per app into the folder's own MCP configs (#429). Those files may be committed, so each entry has to find its app on any machine, and an AI tool gives a stdio server nothing to find it with but the command line, the environment and the directory it starts the server in.
+`rails-ai-context init` run in a folder of apps (a workspace, see `GLOSSARY.md`) writes one server per app into the folder's own MCP configs (#429). Those files may be committed, so each entry has to find its app on any machine, and an AI tool gives a stdio server nothing to find it with but the command line, the environment and the directory it starts the server in.
 
 ## What the tools do
 

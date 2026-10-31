@@ -76,7 +76,7 @@ RSpec.describe "rails-ai-context.gemspec" do
 
     expect(spec.files).to include(*code, *user_docs)
     expect(spec.files - code - user_docs).to all(satisfy { |f| links_from_package(root).include?(f) })
-    expect(spec.files).not_to include("AGENTS.md", "CLAUDE.md", "CONTEXT.md", "docs/RELEASING.md", "docs/agents/domain.md")
+    expect(spec.files).not_to include("AGENTS.md", "CLAUDE.md", "GLOSSARY.md", "docs/RELEASING.md", "docs/agents/domain.md")
   end
 
   it "packages every file a packaged Markdown file links to" do

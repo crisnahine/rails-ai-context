@@ -90,7 +90,7 @@ RSpec.describe RailsAiContext::Introspector do
     end
 
     # This context is written to .ai-context.json, which the app commits - see
-    # the Path entry in CONTEXT.md for why a machine path there is a defect.
+    # the Path entry in GLOSSARY.md for why a machine path there is a defect.
     #
     # The home directory is listed independently of what PortablePath knows:
     # built from its own prefixes alone, this passes whenever the module

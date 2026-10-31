@@ -6,7 +6,7 @@ require "pathname"
 module RailsAiContext
   module Install
     # A folder an editor or agent is opened at that is no Rails app and holds
-    # apps one or two levels down (CONTEXT.md, Workspace). AI tools read their
+    # apps one or two levels down (GLOSSARY.md, Workspace). AI tools read their
     # MCP config from the opened folder only, so the workspace's own configs
     # carry one server per app, each pointed at its app by a relative
     # --app-path, while each app keeps its own .rails-ai-context.yml and

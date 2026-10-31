@@ -8,7 +8,7 @@ module RailsAiContext
     # the standalone CLI all asked these questions separately and answered
     # them from copies that drifted.
     #
-    # Vocabulary per CONTEXT.md: "AI tool" for the assistant, "context files"
+    # Vocabulary per GLOSSARY.md: "AI tool" for the assistant, "context files"
     # for what the gem generates for it.
     #
     # context_paths lists the root file first, then the split-rule targets. The writers,

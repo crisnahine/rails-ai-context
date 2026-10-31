@@ -409,7 +409,7 @@ module RailsAiContext
       # Extract details purely from source file (for controllers not loaded as classes)
       def extract_details_from_source(record, class_name, source)
         # Carry the file that was read: the declared name does not round-trip
-        # back to a path. See CONTEXT.md, "Declared constant".
+        # back to a path. See GLOSSARY.md, "Declared constant".
         relative_file = record.file
         declaration = parent_declaration(source, class_name)
         parent = declaration&.superclass || "Unknown"
@@ -1334,7 +1334,7 @@ module RailsAiContext
       end
 
       # Ruby knows where the class was defined; the underscored name only
-      # agrees when the app registers no inflection. See CONTEXT.md,
+      # agrees when the app registers no inflection. See GLOSSARY.md,
       # "Declared constant".
       def source_path(ctrl)
         # The app's own, or the engine's its test/dummy runs in: a constant defined by a gem - or by

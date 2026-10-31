@@ -1,4 +1,4 @@
-# Context
+# Glossary
 
 Terms this project uses in a narrower sense than everyday English. One entry per term that has caused a naming collision or an ambiguous read.
 

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/`. The README leads with a figure of real answers in place of the
   GIFs, which are gone with `demo/`. The packaged gem gains the two files the
   README now links: `CODE_OF_CONDUCT.md` and ADR 0002.
+- **The glossary is `GLOSSARY.md`.** It was `CONTEXT.md`; every doc, ADR and
+  code comment that points at it uses the new name. The gem does not ship it.
 
 ## [5.38.2] - 2026-10-29
 

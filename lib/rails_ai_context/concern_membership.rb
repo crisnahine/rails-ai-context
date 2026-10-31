@@ -2,7 +2,7 @@
 
 module RailsAiContext
   # One answer to "which mixed-in modules count as this class's concerns",
-  # in the payload sense CONTEXT.md pins. Five renderers each carried their
+  # in the payload sense GLOSSARY.md pins. Five renderers each carried their
   # own filter set and they disagreed: one hid every namespaced concern, one
   # dropped the `excluded_concerns` config, and the two tiers of the
   # controller answer used different rules entirely.
