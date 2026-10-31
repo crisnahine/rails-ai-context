@@ -76,9 +76,10 @@ module RailsAiContext
       end
 
       WHENEVER_JOBS = %i[runner rake command].freeze
+      RUNNER_CALLS = %i[perform_later perform_now perform_async perform_in perform_at].freeze
 
       # `every 1.day, at: "4:30 am" do runner "CleanupJob.perform_later" end`: the job is
-      # the constant the runner's code starts with.
+      # the constant the runner's code enqueues or performs; other code shows as its command.
       def whenever(root)
         file = "config/schedule.rb"
         source = read_file(root, file) or return []
@@ -91,10 +92,22 @@ module RailsAiContext
           code = hit[:values].first
           next unless every && WHENEVER_JOBS.include?(hit[:macro]) && code.is_a?(String)
 
-          klass = code[/\A\s*(?:::)?([A-Z]\w*(?:::[A-Z]\w*)*)\./, 1] if hit[:macro] == :runner
+          klass = runner_class(code) if hit[:macro] == :runner
           { class: klass, command: hit[:macro] == :runner ? code : "#{hit[:macro]} #{code}",
             schedule: whenever_schedule(every), file: file }.compact
         end
+      end
+
+      # `Job.set(wait: 1.hour).perform_later` enqueues Job too.
+      def runner_class(code)
+        AstWalk.each(AstCache.parse_string(code).value) do |node|
+          next unless node.is_a?(Prism::CallNode) && RUNNER_CALLS.include?(node.name)
+
+          receiver = node.receiver
+          receiver = receiver.receiver if receiver.is_a?(Prism::CallNode) && receiver.name == :set
+          return receiver.slice.delete_prefix("::") if receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+        end
+        nil
       end
 
       def whenever_schedule(every)

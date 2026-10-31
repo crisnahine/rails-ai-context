@@ -443,6 +443,24 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("mailers")
         expect(text).to include("maintenance")
       end
+
+      it "lists the broadcasts the job calls, not one a comment names" do
+        File.write(File.join(jobs_dir, "refresh_job.rb"), <<~RUBY)
+          class RefreshJob < ApplicationJob
+            def perform(post)
+              # broadcast_replace_to was the old way
+              post.broadcast_append_to(:posts)
+            end
+          end
+        RUBY
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(job: "RefreshJob").content.first[:text]
+
+        expect(text).to include("## Turbo Broadcasts\n- `broadcast_append_to`\n")
+        expect(text).not_to include("`broadcast_replace_to`")
+      end
     end
 
     context "with a job whose retry configuration is parenthesised and spans lines" do
@@ -495,6 +513,26 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("**Perform:** `perform(user_id, message:, urgent: false)`")
         expect(text).to include("- `return if user_id.nil?`")
         expect(text).not_to include("return unless ready?")
+      end
+
+      it "lists no guard from a return line inside a heredoc" do
+        File.write(File.join(tmpdir, "app", "jobs", "note_job.rb"), <<~RUBY)
+          class NoteJob < ApplicationJob
+            def perform
+              note = <<~TEXT
+                return if done
+              TEXT
+              return if note.empty?
+            end
+          end
+        RUBY
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(job: "NoteJob").content.first[:text]
+
+        expect(text).to include("- `return if note.empty?`")
+        expect(text).not_to include("return if done")
       end
 
       it "describes a job that delegates perform, with no guard clauses, in detail and in the listing" do
@@ -1916,6 +1954,24 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
       expect(text).to include("not found")
       expect(text).to include("Billing::Invoices::CreateWorker")
+    end
+
+    it "takes no queue from a commented-out queue_as" do
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "quiet_worker.rb"), <<~RUBY)
+        class Billing::Invoices::QuietWorker
+          include Sidekiq::Job
+          # queue_as :low_priority
+
+          def perform(id); end
+        end
+      RUBY
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+      text = described_class.call(job: "Billing::Invoices::QuietWorker").content.first[:text]
+
+      expect(text).to include("# Billing::Invoices::QuietWorker")
+      expect(text).not_to include("low_priority")
     end
   end
 

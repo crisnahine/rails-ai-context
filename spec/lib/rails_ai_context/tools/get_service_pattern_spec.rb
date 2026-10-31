@@ -1311,6 +1311,101 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("lib/reporting/nightly.rb")
       end
     end
+
+    context "with a service that names things only in comments and strings" do
+      let(:tmpdir) { Dir.mktmpdir }
+      let(:services_dir) { File.join(tmpdir, "app", "services") }
+
+      def write_service(source)
+        FileUtils.mkdir_p(services_dir)
+        File.write(File.join(services_dir, "charge.rb"), source)
+      end
+
+      before { allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir)) }
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "does not take a result object from a comment" do
+        write_service(<<~RUBY)
+          class Charge
+            def call
+              # .success handled upstream
+              true
+            end
+          end
+        RUBY
+
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("# Service Objects (1)")
+        expect(text).not_to include("Result/value object")
+      end
+
+      it "does not list a mailer a comment names as a dependency" do
+        write_service(<<~RUBY)
+          class Charge
+            def call
+              # PostMailer.welcome was removed
+              ReceiptMailer.paid(1).deliver_later
+            end
+          end
+        RUBY
+
+        text = described_class.call(service: "Charge").content.first[:text]
+
+        expect(text).to include("- `ReceiptMailer`")
+        expect(text).not_to include("PostMailer")
+      end
+
+      it "lists only the modules the class includes, not include words in a comment or a string" do
+        write_service(<<~RUBY)
+          class Charge
+            include Loggable
+
+            # Totals include VAT
+            def call
+              "prepend Header"
+            end
+          end
+        RUBY
+
+        text = described_class.call(service: "Charge").content.first[:text]
+
+        expect(text).to include("## Dependencies\n- `Loggable`\n")
+        expect(text).not_to include("`VAT`")
+        expect(text).not_to include("`Header`")
+      end
+
+      it "reads a rescue modifier as rescuing StandardError, and no rescue from a comment" do
+        write_service(<<~RUBY)
+          class Charge
+            # Callers rescue Stripe::CardError themselves
+            def call
+              amount = compute rescue nil
+            end
+          end
+        RUBY
+
+        text = described_class.call(service: "Charge").content.first[:text]
+
+        expect(text).to include("## Error Handling\n- `rescue StandardError (implicit)`\n")
+        expect(text).not_to include("rescue nil`")
+        expect(text).not_to include("Stripe::CardError`")
+      end
+
+      it "does not count a file that names the service only in a comment as a caller" do
+        write_service("class Charge\n  def call; end\nend\n")
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers"))
+        File.write(File.join(tmpdir, "app", "jobs", "notify_job.rb"), "class NotifyJob\n  # Charge.new.call runs elsewhere\n  def perform; end\nend\n")
+        File.write(File.join(tmpdir, "app", "controllers", "charges_controller.rb"), "class ChargesController\n  def create\n    Charge.new.call\n  end\nend\n")
+
+        text = described_class.call(service: "Charge").content.first[:text]
+
+        expect(text).to include("## Called By\n- `app/controllers/charges_controller.rb`\n")
+        expect(text).not_to include("notify_job.rb")
+      end
+    end
   end
 
 

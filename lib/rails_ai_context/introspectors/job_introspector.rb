@@ -269,7 +269,7 @@ module RailsAiContext
         assigned = Array(ast[:procs]).find { |literal| literal[:constant] == source }
         return labelled(PROC_QUEUE, assigned[:source]) if assigned
 
-        source.match?(PROC_LITERAL) ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
+        Array(hit[:proc_lines]).any? ? labelled(PROC_QUEUE, source) : "`#{source}` (computed)"
       end
 
       # Resque reads @queue off the class itself, so a subclass does not inherit it, and
@@ -1313,22 +1313,50 @@ module RailsAiContext
         end
       end
 
-      # Every .rb under app/ that names a mailer parent. The line scan stops at
-      # the first match; a file that names none is scanned to its end.
+      # A prefilter: the files it keeps are parsed, and the walk decides what is a mailer.
+      CLASS_PARENT = /^\s*class\s+([\w:]+)\s*<\s*([\w:]+)/
+
+      # Every .rb under app/ that names a mailer parent, or an app class that
+      # does (`Weekly < BaseNotifier < ApplicationMailer`).
       def mailer_parent_files(seen)
-        SourceScan.paths(app.root, kind: "app").filter_map do |record|
-          next if seen.include?(record.file) || !names_mailer_parent?(record.path)
+        records = SourceScan.paths(app.root, kind: "app").to_a
+        lines = records.to_h { |record| [ record.path, class_lines(record.path) ] }
+        mailers = mailer_class_names(lines.values.flatten(1))
+        records.filter_map do |record|
+          next if seen.include?(record.file)
+          next unless lines[record.path].any? { |_, parent, named| named || mailers.any? { |name| same_constant?(parent, name) } }
 
           source = SafeFile.read(record.path) or next
           record.with(source: source)
         end
       end
 
-      def names_mailer_parent?(path)
-        File.foreach(path) { |line| return true if line.match?(MAILER_PARENT) }
-        false
+      # [class, parent, whether the parent is named like a mailer] per `class X < Y` line.
+      def class_lines(path)
+        found = []
+        File.foreach(path) do |line|
+          match = line.match(CLASS_PARENT) or next
+          found << [ match[1], match[2], line.match?(MAILER_PARENT) ]
+        end
+        found
       rescue StandardError
-        false
+        found
+      end
+
+      def mailer_class_names(lines)
+        names = Set.new
+        loop do
+          found = lines.filter_map { |name, parent, named| name if named || names.any? { |known| same_constant?(parent, known) } }
+          return names if found.all? { |name| names.include?(name) }
+
+          names.merge(found)
+        end
+      end
+
+      # Loose on purpose: a parent written inside or outside its namespace still matches.
+      def same_constant?(written, declared)
+        written = written.delete_prefix("::")
+        written == declared || declared.end_with?("::#{written}") || written.end_with?("::#{declared}")
       end
 
       # The public methods of a mailer and of its app parents below the app base, each with the visibility the nearest
