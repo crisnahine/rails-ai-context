@@ -369,9 +369,8 @@ module RailsAiContext
         path.end_with?(*Introspectors::RenderCalls::RUBY_TEMPLATE_EXTENSIONS) ? [ source ] : []
       end
 
-      # The name a statement opens with where Ruby reads a method call or a
-      # local passed in: `row` in `row.title`, never a block parameter or a
-      # variable the template assigns, which Ruby reads as its own locals.
+      # The bare call a statement opens with, as a passed-in local parses (`row` in `row.title`);
+      # nil for a block parameter or a local the template assigns.
       private_class_method def self.leading_name(node)
         until node.nil? || (node.is_a?(Prism::CallNode) && node.variable_call?)
           start = node.location.start_offset
@@ -447,7 +446,7 @@ module RailsAiContext
           out << case kind
           when :char then piece
           when :group then piece[0] + code_of(piece[1...-1]) + piece[-1]
-          else piece.gsub(/[^\n]/, " ")
+          else piece.tr("^\n", " ")
           end
         end
         out
@@ -540,7 +539,7 @@ module RailsAiContext
       private_class_method def self.partial_arg_sites(content, relative, names, skip_spans: [], code: false)
         lines = content.lines
         sites = []
-        blocks = nil
+        blocks = hashes = nil
         reader = Introspectors::RenderCalls
         kind = reader.template_kind(content, relative)
         ruby_code = reader.code_text(content, kind, /partial/) unless kind == :markup
@@ -549,7 +548,8 @@ module RailsAiContext
           at = match.begin(0)
           next unless names.include?(match[2])
           next if skip_spans.any? { |from, to| at >= from && at < to }
-          next if ruby_code && (ruby_code[at] == " " || RailsAiContext::Brackets.in_hash_literal?(ruby_code, at))
+          next if ruby_code && ruby_code[at] == " "
+          next if ruby_code && (hashes ||= RailsAiContext::Brackets.hash_literal_ranges(ruby_code)).any? { |range| range.cover?(at) }
 
           # The line the call starts on, which a trailing comma carries onto this one.
           start = content[0...at].count("\n")

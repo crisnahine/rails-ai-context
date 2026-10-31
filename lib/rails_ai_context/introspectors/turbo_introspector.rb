@@ -98,13 +98,12 @@ module RailsAiContext
         return content unless content.include?("<%")
 
         content.gsub(RailsAiContext::ErbSource::TAG) do |tag|
-          RailsAiContext::ErbSource.comment?(Regexp.last_match(1)) ? tag.gsub(/[^\n]/, " ") : tag
+          RailsAiContext::ErbSource.comment?(Regexp.last_match(1)) ? tag.tr("^\n", " ") : tag
         end
       end
 
-      # Views are not Ruby, so they are read line by line. Each line calling
-      # `name` is yielded, in path order, with its root-relative file name, the
-      # call's text, its 1-based number and the line as written.
+      # Views are not Ruby, so they are read line by line: each line calling `name` yields its
+      # root-relative file, the call's text, its 1-based number and the line as written.
       def each_view_call(name)
         pattern = /(?<![\w.])#{name}\b/
         view_files.each do |entry|
@@ -455,8 +454,10 @@ module RailsAiContext
 
       # `[line, id]` for each element written with the attribute, the id as written.
       def markup_permanent_elements(content)
+        return [] unless content.match?(/data-turbo-permanent/i)
+
         # Masked so the `>` of an ERB tag inside an attribute does not end the element.
-        masked = content.gsub(RailsAiContext::ErbSource::TAG) { |tag| tag.gsub(/[^\n]/, "_") }
+        masked = content.gsub(RailsAiContext::ErbSource::TAG) { |tag| tag.tr("^\n", "_") }
         masked.to_enum(:scan, /<[^>]*data-turbo-permanent[^>]*>/i).map do
           from = Regexp.last_match.begin(0)
           found = Regexp.last_match[0].match(ID_ATTRIBUTE)

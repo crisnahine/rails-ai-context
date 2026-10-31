@@ -27,11 +27,11 @@ module RailsAiContext
         path = path.to_s
         if path.end_with?(".erb")
           ruby = RailsAiContext::ErbSource.tag_bodies(text)
-          return [ ruby, RailsAiContext::RubySource.code_only(ruby) ]
+          return [ ruby, RailsAiContext::RubySource.code_only(ruby, cache: false) ]
         end
 
         if (pieces = RailsAiContext::MarkupSource.pieces(text, path))
-          code = pieces.map { |piece, ruby| ruby ? RailsAiContext::RubySource.code_only(piece) : piece }
+          code = pieces.map { |piece, ruby| ruby ? RailsAiContext::RubySource.code_only(piece, cache: false) : piece }
           return [ pieces.map(&:first).join("\n"), code.join("\n") ]
         end
 

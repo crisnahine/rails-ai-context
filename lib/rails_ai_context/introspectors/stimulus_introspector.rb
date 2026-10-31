@@ -495,7 +495,7 @@ module RailsAiContext
       def class_level(body)
         level = +""
         RailsAiContext::Brackets.each_top_level(body, comments: :js) do |piece, kind|
-          level << (%i[group string].include?(kind) && piece.length > 2 ? piece[0] + piece[1...-1].gsub(/[^\n]/, " ") + piece[-1] : piece)
+          level << (%i[group string].include?(kind) && piece.length > 2 ? piece[0] + piece[1...-1].tr("^\n", " ") + piece[-1] : piece)
         end
         level
       end

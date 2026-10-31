@@ -35,8 +35,10 @@ module RailsAiContext
     end
 
     # The code tag bodies, joined, with Ruby comments in them blanked. Order is kept; line numbers are not.
+    # One parse reads them all: a comment ends at the newline that joins its tag to the next.
     def tag_bodies(source)
-      source.to_s.scan(TAG).flatten.reject { |body| comment?(body) }.map { |body| RubySource.without_comments(body) }.join("\n")
+      text = source.to_s
+      once(:tag_bodies, text) { RubySource.without_comments(text.scan(TAG).flatten.reject { |body| comment?(body) }.join("\n"), cache: false) }
     end
 
     # Only `<%#` (or `<%-#`) is an ERB comment; `<% # note` is code whose first line is a Ruby comment.
@@ -49,34 +51,37 @@ module RailsAiContext
     # A `<%#` comment is blanked too.
     def ruby_in_place(source)
       text = source.to_s
-      out = +""
-      last = 0
-      text.to_enum(:scan, TAG).each do
-        match = Regexp.last_match
-        out << blank(text[last...match.begin(0)])
-        body = match[1].to_s
-        # Tags sharing a line are joined, so a comment left in would swallow the next tag's code.
-        out << (comment?(body) ? blank(body) : RubySource.without_comments(body))
-        last = match.end(0)
+      once(:ruby_in_place, text) do
+        out = +""
+        last = 0
+        text.to_enum(:scan, TAG).each do
+          match = Regexp.last_match
+          out << blank(text[last...match.begin(0)])
+          body = match[1].to_s
+          # Tags sharing a line are joined, so a comment left in would swallow the next tag's code.
+          out << (comment?(body) ? blank(body) : RubySource.without_comments(body, cache: false))
+          last = match.end(0)
+        end
+        out << blank(text[last..].to_s)
       end
-      out << blank(text[last..].to_s)
-      out
     end
 
     # The template with what Ruby never runs blanked and every character offset kept: text and
     # delimiters, `<%#` comments, and comments and string bodies in a tag. Only tags matching `only` are parsed; the rest blank.
     def masked(source, only: nil)
       text = source.to_s
-      out = +""
-      last = 0
-      text.to_enum(:scan, TAG).each do
-        match = Regexp.last_match
-        body = match[1].to_s
-        out << blank(text[last...match.begin(1)])
-        out << (comment?(body) || (only && !body.match?(only)) ? blank(body) : RubySource.code_only(body))
-        last = match.end(1)
+      once([ :masked, only ], text) do
+        out = +""
+        last = 0
+        text.to_enum(:scan, TAG).each do
+          match = Regexp.last_match
+          body = match[1].to_s
+          out << blank(text[last...match.begin(1)])
+          out << (comment?(body) || (only && !body.match?(only)) ? blank(body) : RubySource.code_only(body, cache: false))
+          last = match.end(1)
+        end
+        out << blank(text[last..].to_s)
       end
-      out << blank(text[last..].to_s)
     end
 
     # Tags go and their newlines stay, so the rest parses at its written indentation;
@@ -126,8 +131,14 @@ module RailsAiContext
     private_class_method :indent
 
     def blank(text)
-      text.gsub(/[^\n]/, " ")
+      text.tr("^\n", " ")
     end
     private_class_method :blank
+
+    # Each template is read by several readers in one run.
+    def once(kind, text, &read)
+      RunCache.fetch([ :erb_source, kind, text.frozen? ? text : text.dup.freeze ], &read)
+    end
+    private_class_method :once
   end
 end

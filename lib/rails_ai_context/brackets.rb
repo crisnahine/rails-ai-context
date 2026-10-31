@@ -72,7 +72,7 @@ module RailsAiContext
       i = 0
       while (i = text.index(LITERAL_START, i))
         length, kind = literal_at(text, i, comments)
-        out[i, length] = text[i, length].gsub(/[^\n]/, " ") if kind == :comment
+        out[i, length] = text[i, length].tr("^\n", " ") if kind == :comment
         i += length || 1
       end
       out
@@ -144,13 +144,24 @@ module RailsAiContext
     # Whether `at` sits inside a Ruby `{}` hash literal, whose keys are the hash's and not keywords
     # of the call around it. A `{` where an operand can start opens a hash; after a call or `->` it opens a block.
     def in_hash_literal?(code, at)
-      code[0...at].to_enum(:scan, /\{/).any? do
+      hash_literal_ranges(code).any? { |range| range.cover?(at) }
+    end
+
+    # Every `{}` hash literal in the text, as ranges, for a caller testing many offsets.
+    def hash_literal_ranges(code)
+      code.to_enum(:scan, /\{/).filter_map do
         open = Regexp.last_match.begin(0)
-        next false unless operand_start?(code, open) && !code[0...open].rstrip.end_with?("->")
+        next unless operand_start?(code, open) && !after_lambda_arrow?(code, open)
 
         group = span(code, open, comments: :ruby)
-        group && open + group.length > at
+        open...(open + group.length) if group
       end
+    end
+
+    def after_lambda_arrow?(code, open)
+      j = open - 1
+      j -= 1 while j >= 0 && code[j].match?(/\s/)
+      j >= 1 && code[j - 1, 2] == "->"
     end
 
     # `%w[a )]`: the literal runs to the delimiter that closes it, nesting for

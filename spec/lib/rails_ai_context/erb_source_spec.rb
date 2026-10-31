@@ -33,6 +33,21 @@ RSpec.describe RailsAiContext::ErbSource do
     end
 
     # Erubi prints `<%%= @hidden %>` as the text `<%= @hidden %>`.
+    it "blanks one tag's trailing comment without reaching the next tag on its line" do
+      bodies = described_class.tag_bodies(%(<% # tail %><%= @z %>\n<%= link_to "#", "#" + @y %>))
+
+      expect(bodies).to include("@z", %(link_to "#", "#" + @y))
+      expect(bodies).not_to include("tail")
+    end
+
+    it "reads a template's tags in one parse, kept out of the shared parse cache" do
+      source = (1..20).map { |i| "<%= @a#{i} # note #{i} %>\n" }.join
+      expect(RailsAiContext::AstCache).to receive(:parse_uncached).once.and_call_original
+      expect(RailsAiContext::AstCache).not_to receive(:parse_string)
+
+      expect(described_class.tag_bodies(source).scan(/@a\d+/).size).to eq(20)
+    end
+
     it "reads an escaped <%% tag as text, not code" do
       expect(described_class.tag_bodies("<p><%%= @hidden %></p>\n<%= @shown %>\n")).to eq(" @shown ")
     end

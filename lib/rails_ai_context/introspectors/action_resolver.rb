@@ -217,10 +217,8 @@ module RailsAiContext
       # question, so a tool answers it from the source rather than from
       # another tool's rendered prose.
       #
-      # Only the target of an assignment counts, which is what tells `@post =`
-      # apart from a read of `@post`, a comparison or `@post.title =`, and what
-      # makes `@a, @b = x` two names. A caller that already parsed the snippet
-      # passes its `tree`; a snippet stays out of the shared cache either way.
+      # Only an assignment's target counts: `@post =` and each of `@a, @b = x`, never `@post.title =`.
+      # A caller that already parsed the snippet passes its `tree`.
       def assigned_ivars(action_source, tree: nil)
         AstWalk.each((tree || AstCache.parse_uncached(action_source.to_s)).value).filter_map do |node|
           case node
@@ -241,7 +239,7 @@ module RailsAiContext
       # template to cross-reference it against, so the call itself is the
       # only evidence it was used. `render json: @post.errors` counts `@post`.
       def rendered_ivars(action_source)
-        RubySource.code_only(action_source).scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
+        RubySource.code_only(action_source, cache: false).scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
       end
 
       # Keyed by the cached tree, so a tool asking one file for each of its

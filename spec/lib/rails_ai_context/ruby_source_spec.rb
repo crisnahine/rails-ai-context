@@ -67,4 +67,20 @@ RSpec.describe RailsAiContext::RubySource do
       expect(described_class.code_only(source).length).to eq(source.length)
     end
   end
+
+  describe "a snippet read with cache: false" do
+    it "gives the same text and keeps nothing in the shared parse cache" do
+      snippet = %( link_to "a # b", path # note #{rand(1_000_000)}\n)
+      expect { described_class.code_only(snippet, cache: false) }.not_to(change { RailsAiContext::AstCache::STORE.size })
+      expect(described_class.code_only(snippet, cache: false)).to eq(described_class.code_only(snippet))
+    end
+
+    it "is parsed once per run however often it is asked for" do
+      snippet = %( x = 1 # note #{rand(1_000_000)}\n)
+      expect(RailsAiContext::AstCache).to receive(:parse_uncached).once.and_call_original
+      RailsAiContext::RunCache.around do
+        3.times { described_class.without_comments(snippet, cache: false) }
+      end
+    end
+  end
 end

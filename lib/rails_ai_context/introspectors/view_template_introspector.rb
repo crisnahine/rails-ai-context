@@ -44,6 +44,10 @@ module RailsAiContext
       # ERB tag bodies, HAML or Slim Ruby, or any other template whole; string literals blanked where it is Ruby.
       def self.code_in(content, path: nil)
         text = content.to_s
+        RunCache.fetch([ :code_in, path.to_s, text.frozen? ? text : text.dup.freeze ]) { read_code_in(text, path) }
+      end
+
+      def self.read_code_in(text, path)
         if (pieces = RailsAiContext::MarkupSource.pieces(text, path))
           return pieces.map { |code, ruby| ruby ? strip_string_literals(code) : code }.join("\n")
         end
@@ -54,6 +58,7 @@ module RailsAiContext
 
         strip_string_literals(RailsAiContext::RubySource.without_comments(text))
       end
+      private_class_method :read_code_in
 
       # Detect whether a view file is a Phlex view (Ruby DSL, not ERB)
       def self.phlex_view?(path, content)
@@ -147,17 +152,10 @@ module RailsAiContext
         calls = content.to_enum(:scan, IDENTIFIER_HELPER).map { Regexp.last_match }
         return [] if calls.empty?
 
-        if ruby
-          code = RailsAiContext::RubySource.code_only(content)
-          return calls.filter_map { |call| call[1] if code[call.begin(0)] != " " }
-        end
-        return calls.map { |call| call[1] } unless RailsAiContext::ErbSource.tagged?(content)
+        return calls.map { |call| call[1] } unless ruby || RailsAiContext::ErbSource.tagged?(content)
 
-        tags = content.to_enum(:scan, RailsAiContext::ErbSource::TAG).map { Regexp.last_match }
-        calls.filter_map do |call|
-          tag = tags.find { |t| t.begin(1) <= call.begin(0) && call.begin(0) < t.end(1) } or next
-          call[1] if RailsAiContext::RubySource.code_only(tag[1])[call.begin(0) - tag.begin(1)] != " "
-        end
+        code = ruby ? RailsAiContext::RubySource.code_only(content) : RailsAiContext::ErbSource.masked(content, only: IDENTIFIER_HELPER)
+        calls.filter_map { |call| call[1] if code[call.begin(0)] != " " }
       end
       private_class_method :helper_identifiers
 
@@ -442,13 +440,14 @@ module RailsAiContext
         end
         # A render call's own arguments were read above, where a `partial:`
         # key nested in its locals is no partial of its own.
-        code = nil
+        code = hashes = nil
         content.to_enum(:scan, RenderCalls::PARTIAL_ARG).each do
           match = Regexp.last_match
           next if spans.any? { |span| span.cover?(match.begin(0)) }
 
           code ||= ruby_code(content, path)
-          next if code[match.begin(0)] == " " || RailsAiContext::Brackets.in_hash_literal?(code, match.begin(0))
+          next if code[match.begin(0)] == " "
+          next if (hashes ||= RailsAiContext::Brackets.hash_literal_ranges(code)).any? { |range| range.cover?(match.begin(0)) }
 
           refs << match[2] if match[2].match?(RenderCalls::PARTIAL_NAME)
         end
