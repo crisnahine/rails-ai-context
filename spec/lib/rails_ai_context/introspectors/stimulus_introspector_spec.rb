@@ -1295,6 +1295,32 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
 
       expect(controller[:turbo_event_listeners]).to eq(%w[turbo:before-render])
     end
+
+    it "reads every method around a template literal that nests others inside its ${}" do
+      controller = controller_from(<<~JS)
+        import { Controller } from "@hotwired/stimulus"
+        export default class extends Controller {
+          connect() {
+            this.render()
+          }
+
+          render() {
+            this.listTarget.innerHTML = `<ul>${this.itemsValue.map(item => `<li>${item}</li>`).join("")}</ul>`
+          }
+
+          table(rows) {
+            return `<table>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("")}</table>`
+          }
+
+          clear() {
+            this.itemsValue = []
+          }
+        }
+      JS
+
+      expect(controller[:actions]).to eq(%w[render table clear])
+      expect(controller[:lifecycle]).to eq(%w[connect])
+    end
   end
 
   describe "static values read entry by entry" do

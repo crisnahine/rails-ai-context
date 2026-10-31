@@ -15,6 +15,14 @@ module RailsAiContext
     # A `/` opens a JS regex literal, a `?` a Ruby character and a `%` a Ruby
     # percent literal only where an operand can start, not after a value.
     OPERAND_START = /[(\[{,=:;!&|?+\-*%~^<>]/
+    OPERAND_KEYWORDS = {
+      js: %w[return typeof case in of delete void throw new else do yield await instanceof].freeze,
+      ruby: %w[return if unless while until and or not when in then else elsif do yield puts p].freeze
+    }.freeze
+    # `$x`, `@x` and `#x` are names, not keywords.
+    NAME_CHAR = /[[:word:]$@#]/
+    # The interpolation sigil and the quotes whose strings read it as code.
+    INTERPOLATION = { ruby: [ "#", %w[" `] ], js: [ "$", %w[`] ] }.freeze
     # A `/.../` regex literal, JavaScript's or Ruby's: a `/` inside a character class does not close it.
     REGEX_LITERAL = %r{\G/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n])+/[a-z]*}
     RUBY_CHAR = /\G\?(?:\\.|[^\s\w])(?![\w])/
@@ -41,7 +49,7 @@ module RailsAiContext
 
     # The text from the bracket at `open` through the one that closes it,
     # skipping strings, comments and the language's literals; nil when it never closes.
-    # ponytail: no heredocs, and `#{...}` is read as code only in double-quoted and backtick Ruby strings, not in percent or regex literals, nor a JS `${...}`; a real parser if that bites.
+    # ponytail: no heredocs, and interpolation is read as code only in double-quoted and backtick Ruby strings and JS template literals, not in percent or regex literals; a real parser if that bites.
     def span(text, open, comments: nil)
       return nil unless OPENERS.include?(text[open])
 
@@ -96,7 +104,7 @@ module RailsAiContext
       if comments && (match = text.match(COMMENTS[comments], i)) && match.begin(0) == i
         return [ match[0].length, :comment ]
       end
-      return nil unless "/?%".include?(char) && operand_start?(text, i)
+      return nil unless "/?%".include?(char) && operand_start?(text, i, comments)
 
       match =
         if char == "/" then text.match(REGEX_LITERAL, i)
@@ -109,14 +117,15 @@ module RailsAiContext
     end
 
     def string_length(text, i, comments = nil)
-      return interpolated_length(text, i) if comments == :ruby && text[i] != "'"
+      sigil, quotes = INTERPOLATION[comments]
+      return interpolated_length(text, i, sigil, comments) if quotes&.include?(text[i])
 
       match = text[i..][STRING]
       match ? match.length : text.length - i
     end
 
-    # A double-quoted or backtick Ruby string, each `#{...}` in it read as code.
-    def interpolated_length(text, i)
+    # A string whose `#{...}` or `${...}` is read as code, nested strings included.
+    def interpolated_length(text, i, sigil, comments)
       quote = text[i]
       j = i + 1
       while j < text.length
@@ -125,8 +134,8 @@ module RailsAiContext
           j += 2
         elsif char == quote
           return j - i + 1
-        elsif char == "#" && text[j + 1] == "{"
-          group = span(text, j + 1, comments: :ruby) or return text.length - i
+        elsif char == sigil && text[j + 1] == "{"
+          group = span(text, j + 1, comments: comments) or return text.length - i
           j += 1 + group.length
         else
           j += 1
@@ -135,33 +144,18 @@ module RailsAiContext
       text.length - i
     end
 
-    def operand_start?(text, i)
+    def operand_start?(text, i, comments = nil)
       j = i - 1
       j -= 1 while j >= 0 && text[j].match?(/\s/)
-      j.negative? || text[j].match?(OPERAND_START)
+      j.negative? || text[j].match?(OPERAND_START) || after_keyword?(text, j, comments)
     end
 
-    # Whether `at` sits inside a Ruby `{}` hash literal, whose keys are the hash's and not keywords
-    # of the call around it. A `{` where an operand can start opens a hash; after a call or `->` it opens a block.
-    def in_hash_literal?(code, at)
-      hash_literal_ranges(code).any? { |range| range.cover?(at) }
-    end
-
-    # Every `{}` hash literal in the text, as ranges, for a caller testing many offsets.
-    def hash_literal_ranges(code)
-      code.to_enum(:scan, /\{/).filter_map do
-        open = Regexp.last_match.begin(0)
-        next unless operand_start?(code, open) && !after_lambda_arrow?(code, open)
-
-        group = span(code, open, comments: :ruby)
-        open...(open + group.length) if group
-      end
-    end
-
-    def after_lambda_arrow?(code, open)
-      j = open - 1
-      j -= 1 while j >= 0 && code[j].match?(/\s/)
-      j >= 1 && code[j - 1, 2] == "->"
+    # `x.return / 2` calls a method named like the keyword, so its `/` divides.
+    def after_keyword?(text, last, comments)
+      keywords = OPERAND_KEYWORDS[comments] or return false
+      first = last + 1
+      first -= 1 while first.positive? && text[first - 1].match?(NAME_CHAR)
+      keywords.include?(text[first..last]) && (first.zero? || text[first - 1] != ".")
     end
 
     # `%w[a )]`: the literal runs to the delimiter that closes it, nesting for

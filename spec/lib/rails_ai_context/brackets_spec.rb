@@ -40,6 +40,16 @@ RSpec.describe RailsAiContext::Brackets do
       expect(described_class.span("{ half: a / 2, b: c / 3 } x", 0, comments: :js)).to eq("{ half: a / 2, b: c / 3 }")
     end
 
+    it "opens a literal after a keyword, but reads a slash after a name as division" do
+      expect(described_class.span(%({ return /["<>]/.test(v) } x), 0, comments: :js)).to eq(%({ return /["<>]/.test(v) }))
+      expect(described_class.span(%({ if (!v) return /x'/.exec(v) } x), 0, comments: :js)).to eq(%({ if (!v) return /x'/.exec(v) }))
+      expect(described_class.span(%{(when /'/ then 1) x}, 0, comments: :ruby)).to eq(%{(when /'/ then 1)})
+      expect(described_class.span(%{(return %w[a )] if x) y}, 0, comments: :ruby)).to eq(%{(return %w[a )] if x)})
+      expect(described_class.span(%{(return ?) if x) y}, 0, comments: :ruby)).to eq(%{(return ?) if x)})
+      expect(described_class.span("(f(x.return / 2) / 3) z", 0, comments: :js)).to eq("(f(x.return / 2) / 3)")
+      expect(described_class.span("(f(total / 2) / 3) z", 0, comments: :ruby)).to eq("(f(total / 2) / 3)")
+    end
+
     it "skips a Ruby character literal and a percent literal" do
       expect(described_class.span("(?), b) x", 0, comments: :ruby)).to eq("(?), b)")
       expect(described_class.span("(%w[a )], b) x", 0, comments: :ruby)).to eq("(%w[a )], b)")
