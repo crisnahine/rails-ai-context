@@ -1286,6 +1286,63 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
+    it "counts a call in a heredoc line that starts with #, and still no comment line" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      source = <<~'RB'
+        class Report
+          # heading_for runs once per report
+          def markdown
+            <<~MD
+              # #{heading_for(@article)}
+            MD
+          end
+
+          def heading_for(article)
+            article.title
+          end
+        end
+      RB
+
+      with_search_app("app/models/report.rb" => source) do
+        calls = described_class.call(pattern: "heading_for", match_type: "call", context_lines: 0).content.first[:text]
+        callers = described_class.call(pattern: "heading_for", match_type: "trace").content.first[:text][/## Called from.*/m]
+
+        expect(calls).to include("report.rb:5:")
+        expect(calls).not_to include("report.rb:2:")
+        expect(callers).to include("5: # \#{heading_for(@article)}")
+        expect(callers).not_to include("runs once per report")
+      end
+    end
+
+    it "names the class a traced method belongs to, past a class << self and a one-line nested class" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      source = <<~RB
+        class ChargeOrder
+          class PaymentFailed < StandardError; end
+
+          class << self
+            def build_charge
+              new
+            end
+          end
+
+          def charge_now
+            true
+          end
+        end
+      RB
+
+      with_search_app("app/services/charge_order.rb" => source) do
+        build = described_class.call(pattern: "build_charge", match_type: "trace").content.first[:text]
+        charge = described_class.call(pattern: "charge_now", match_type: "trace").content.first[:text]
+
+        expect(build).to include("**app/services/charge_order.rb:5** in `class ChargeOrder`")
+        expect(charge).to include("**app/services/charge_order.rb:10** in `class ChargeOrder`")
+      end
+    end
+
     # The parenthesis the old scan required is optional in Ruby, and a model
     # whose predicates read `requesting_access? && account.present?` reported
     # calling nothing at all.

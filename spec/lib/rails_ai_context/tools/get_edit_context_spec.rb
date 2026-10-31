@@ -278,6 +278,55 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
       end
     end
 
+    it "names the class a method belongs to, past a class << self and a one-line nested class" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/services"))
+        File.write(File.join(root, "app/services/import_rows.rb"), <<~RUBY)
+          class ImportRows
+            class InvalidRow < StandardError; end
+
+            class << self
+              def build(rows)
+                new(rows)
+              end
+            end
+
+            def call
+              rows.each(&:save!)
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        label = ->(near) { described_class.call(file: "app/services/import_rows.rb", near: near).content.first[:text][/\*\*Context:\*\* `[^`]*`/] }
+
+        expect(label.call("def build")).to eq("**Context:** `class ImportRows > def build`")
+        expect(label.call("def call")).to eq("**Context:** `class ImportRows > def call`")
+      end
+    end
+
+    it "lists no def line from inside a heredoc among the available methods" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/models"))
+        File.write(File.join(root, "app/models/doc.rb"), <<~RUBY)
+          class Doc
+            TEMPLATE = <<~CODE
+              def fake
+              end
+            CODE
+
+            def real
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(file: "app/models/doc.rb", near: "zzz_missing").content.first[:text]
+
+        expect(text).to end_with("Available methods:\n- `real` (line 7)")
+      end
+    end
+
     it "says a line past the end of the file is not in it when no near was given" do
       text = described_class.call(file: "app/models/user.rb", line: 9999).content.first[:text]
 

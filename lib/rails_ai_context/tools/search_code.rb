@@ -52,6 +52,7 @@ module RailsAiContext
         ".css" => CSS_NOT_A_CALL
       }.merge(%w[.scss .sass .less].to_h { |ext| [ ext, STYLESHEET_LINE ] })
        .merge(%w[.js .jsx .mjs .cjs .ts .tsx .mts .cts .vue .svelte].to_h { |ext| [ ext, JS_COMMENT ] }).freeze
+      RUBY_EXTNAMES = %w[.rb .rake .ru .jbuilder].freeze
 
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
@@ -198,7 +199,7 @@ module RailsAiContext
         # A definition or comment line stays as context, never as a call site.
         if match_type == "call"
           call_regex = build_regexp(search_pattern, timeout: 1)
-          all_results.map! { |r| match_row?(r) && not_a_call_site?(r, call_regex) ? r.merge(match: false) : r }
+          all_results.map! { |r| match_row?(r) && not_a_call_site?(r, call_regex, root) ? r.merge(match: false) : r }
         end
         all_results = confirmed_rows(all_results, root, build_regexp(search_pattern, timeout: 1), context_lines)
 
@@ -664,15 +665,23 @@ module RailsAiContext
 
       # A definition or a comment line names a method without calling it,
       # except in the body of an endless def (`def call = sign(payload)`).
-      private_class_method def self.not_a_call_site?(row, call_regex)
+      private_class_method def self.not_a_call_site?(row, call_regex, root)
         content = row[:content].to_s
         return !endless_body(content).match?(call_regex) if content.match?(DEF_LINE)
 
         ext = File.extname(row[:file].to_s)
         # A live ERB tag runs whatever comment surrounds it.
         return false if ext == ".erb" && content.match?(/<%(?!#)/)
+        return false unless content.match?(NOT_A_CALL_LINE.fetch(ext, HASH_COMMENT))
+        return true unless RUBY_EXTNAMES.include?(ext)
 
-        content.match?(NOT_A_CALL_LINE.fetch(ext, HASH_COMMENT))
+        # A `#` line inside a heredoc is string text, and the code in its `#{}` runs.
+        !code_line(root, row).to_s.chomp.match?(call_regex)
+      end
+
+      private_class_method def self.code_line(root, row)
+        source = RailsAiContext::SafeFile.read(File.join(root, row[:file].to_s))
+        source && RailsAiContext::RubySource.code_only(source).lines[row[:line_number].to_i - 1]
       end
 
       # The expression after `=` in a one-line endless def, "" for any other def line.
@@ -808,7 +817,7 @@ module RailsAiContext
         call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
         call_results, call_truncated = cap_results(call_rows)
         call_regex = build_regexp(call_pattern, timeout: 1)
-        callers = call_results.reject { |r| not_a_call_site?(r, call_regex) }
+        callers = call_results.reject { |r| not_a_call_site?(r, call_regex, root) }
 
         # Exclude the definition file+line to avoid self-reference
         def_locations = def_results.map { |r| "#{r[:file]}:#{r[:line_number]}" }.to_set
@@ -918,10 +927,12 @@ module RailsAiContext
         end
       end
 
-      # Extract class/module context for a line
+      # The innermost class or module holding a line, as written; a `class << self` body is its class's.
       private_class_method def self.extract_class_context(file_path, line_num)
-        lines = (RailsAiContext::SafeFile.read(file_path) || "").lines
-        # Walk backwards from the method to find the enclosing class/module
+        source = RailsAiContext::SafeFile.read(file_path) || ""
+        return Introspectors::DeclaredConstant.enclosing(source, line_num) if RUBY_EXTNAMES.include?(File.extname(file_path))
+
+        lines = source.lines
         (line_num - 2).downto(0) do |i|
           if lines[i]&.match?(/\A\s*(class|module)\s+(\S+)/)
             return lines[i].strip.sub(/\s*<.*/, "")

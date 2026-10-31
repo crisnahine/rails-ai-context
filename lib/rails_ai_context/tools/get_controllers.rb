@@ -346,11 +346,11 @@ module RailsAiContext
           lines << "" << "## Source (#{elsewhere ? "`#{elsewhere}`, #{span}" : span})"
           lines << "```ruby" << redacted(source_with_lines[:code], elsewhere || carried) << "```"
 
-          ivars = RailsAiContext::Introspectors::ActionResolver.assigned_ivars(source_with_lines[:code])
-          lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
-
           # A snippet is parsed once here and kept out of the shared cache, which holds whole files.
           tree = RailsAiContext::AstCache.parse_uncached(source_with_lines[:code])
+          ivars = RailsAiContext::Introspectors::ActionResolver.assigned_ivars(source_with_lines[:code], tree: tree)
+          lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
+
           called_methods = detect_called_private_methods(tree, source_path, source: source, owner: controller_name)
           if called_methods.any?
             lines << "" << "## Private Methods Called"
@@ -379,7 +379,7 @@ module RailsAiContext
         # controller, so `create_params`' permit list read as the fields
         # `deactivate` accepts.
         action_params = params_methods_for_action(info[:strong_params], source_with_lines, applicable,
-          source_path, source, owner: controller_name)
+          source_path, source, owner: controller_name, tree: tree)
 
         if action_params.any?
           lines << "" << "## Strong Params"
@@ -448,20 +448,26 @@ module RailsAiContext
       # plus the ones the filters that run before it name. With no source to
       # read, every method stays - a shorter list would be a guess.
       private_class_method def self.params_methods_for_action(strong_params, action_source, applicable, source_path, source,
-        owner: nil)
+        owner: nil, tree: nil)
         entries = Array(strong_params)
         return entries if entries.empty? || action_source.nil?
 
-        reachable = action_source[:code].to_s.dup
         filter_names = (applicable[:own] + applicable[:inherited]).filter_map { |f| f[:name].to_s }
+        trees = [ tree || RailsAiContext::AstCache.parse_uncached(action_source[:code].to_s) ]
         filter_names.each do |name|
           body = extract_method_with_lines(source_path, name, source: source, owner: owner)
-          reachable << "\n" << body[:code] if body
+          trees << RailsAiContext::AstCache.parse_uncached(body[:code]) if body
+        end
+        reachable = filter_names.to_set
+        trees.each do |parsed|
+          Introspectors::AstWalk.each(parsed.value) do |node|
+            reachable << node.name.to_s if node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode))
+          end
         end
 
         entries.select do |sp|
           name = sp.is_a?(Hash) ? sp[:name].to_s : sp.to_s
-          name.empty? || reachable.match?(/(?<![\w:])#{Regexp.escape(name)}(?![\w])/)
+          name.empty? || reachable.include?(name)
         end
       end
 
@@ -497,35 +503,34 @@ module RailsAiContext
         redirects, renders = render_and_redirect_calls(tree)
         side_effects = []
         enqueues = Introspectors::SourceCalls.enqueue_calls(code, enqueue_helpers, tree: tree).group_by { |hit| hit[:line] }
+        calls = Introspectors::AstWalk.each(tree.value)
+          .select { |node| node.is_a?(Prism::CallNode) && node.receiver }
+          .group_by { |node| node.location.start_line }
 
-        code.each_line.with_index(1) do |line, number|
-          stripped = line.strip
-
-          # Detect side effects
-          if stripped.match?(/\.save[!]?(\s|\(|$)/)
-            obj = stripped.match(/(\S+)\.save/)&.send(:[], 1) || "object"
-            side_effects << "#{obj}.save"
-          end
-          if stripped.match?(/\.update[!]?[\s(]/)
-            obj = stripped.match(/(\S+)\.update/)&.send(:[], 1) || "object"
-            side_effects << "#{obj}.update"
-          end
-          if stripped.match?(/\.destroy[!]?(\s|\(|$)/)
-            obj = stripped.match(/(\S+)\.destroy/)&.send(:[], 1) || "object"
-            side_effects << "#{obj}.destroy"
+        (calls.keys | enqueues.keys).sort.each do |number|
+          Array(calls[number]).each do |call|
+            effect = side_effect_text(call)
+            side_effects << effect if effect
           end
           Array(enqueues[number]).each { |hit| side_effects << "#{hit[:receiver]}.#{hit[:name]}" }
-          if (m = stripped.match(/(\S+)\.(increment_\w+[!]?)/))
-            side_effects << "#{m[1]}.#{m[2]}"
-          end
-          if (m = stripped.match(/(\S+)\.deliver(_later|_now)?/))
-            side_effects << "#{m[1]}.deliver#{m[2]}"
-          end
         end
 
         { redirects: redirects.uniq, renders: renders.uniq, side_effects: side_effects.uniq }
       rescue => e
         RailsAiContext.debug_fail(e, { redirects: [], renders: [], side_effects: [] }, label: "extract_render_map")
+      end
+
+      # `@post.save`, `user.increment_logins!`, `Mailer.welcome(u).deliver_later`, or nil for any other call.
+      private_class_method def self.side_effect_text(call)
+        name = call.name.to_s
+        verb = case name
+        when "save", "save!" then "save"
+        when "update", "update!" then "update"
+        when "destroy", "destroy!" then "destroy"
+        when /\Aincrement_\w+!?\z/ then name
+        when /\Adeliver(_later|_now)?!?\z/ then "deliver#{Regexp.last_match(1)}"
+        end
+        "#{call.receiver.slice.squish}.#{verb}" if verb
       end
 
       # Each render and redirect_to call as the source writes its arguments.

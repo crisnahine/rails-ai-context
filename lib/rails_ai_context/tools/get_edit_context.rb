@@ -93,7 +93,7 @@ module RailsAiContext
         end
 
         if matches.empty?
-          return empty_response("'#{echo_input(near)}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
+          return empty_response("'#{echo_input(near)}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(file, source_lines)}")
         end
 
         # Build context window around first match
@@ -130,8 +130,7 @@ module RailsAiContext
         # Detect enclosing class and method for context, named from the redacted lines: an endless
         # method's line is its whole body (`def headers = { "Authorization" => "Bearer ..." }`), and
         # the label keeps its name alone.
-        class_idx = match_idx.downto(0).find { |i| source_lines[i].match?(/\A\s*(class|module)\s/) }
-        class_name = class_idx && redacted[class_idx].strip.sub(/\s*<.*/, "")
+        class_name = enclosing_class(file, source_lines, match_idx, redacted)
         method_name = method_start ? redacted[method_start].strip.sub(/\s*\(.*/, "").sub(/\s+=\s.*/, "").sub(/\Adef\s+/, "def ") : nil
         context_label = [ class_name, method_name ].compact.join(" > ")
 
@@ -155,10 +154,12 @@ module RailsAiContext
       end
 
 
-      private_class_method def self.extract_methods(source_lines)
+      private_class_method def self.extract_methods(file, source_lines)
+        source = source_lines.join
+        code_lines = ruby?(file, source) ? RailsAiContext::RubySource.code_only(source).lines : source_lines
         methods = []
         source_lines.each_with_index do |line, idx|
-          if line.match?(/^\s*def\s+/)
+          if code_lines[idx].to_s.match?(/^\s*def\s+/)
             name = line.strip.sub(/^def\s+/, "").sub(/[\s(].*/, "")
             methods << "- `#{name}` (line #{idx + 1})"
           end
@@ -169,13 +170,28 @@ module RailsAiContext
       # The innermost method whose lines, as Prism reads them, hold the match; nil outside every method.
       private_class_method def self.enclosing_method(file, source_lines, match_idx)
         source = source_lines.join
-        # A .rake, Gemfile or .jbuilder is Ruby too, read only when it parses whole: error recovery finds a def in YAML's `def:` key.
-        return nil unless file.end_with?(".rb") || RailsAiContext::AstCache.parse_string(source).success?
+        return nil unless ruby?(file, source)
 
         line = match_idx + 1
         Introspectors::ActionResolver.methods_in(source)
           .select { |m| m[:location] && m[:end_location] && (m[:location]..m[:end_location]).cover?(line) }
           .min_by { |m| m[:end_location] - m[:location] }
+      end
+
+      # The innermost class or module holding the match, as written; a `class << self` body is its class's.
+      private_class_method def self.enclosing_class(file, source_lines, match_idx, redacted)
+        source = source_lines.join
+        unless ruby?(file, source)
+          class_idx = match_idx.downto(0).find { |i| source_lines[i].match?(/\A\s*(class|module)\s/) }
+          return class_idx && redacted[class_idx].strip.sub(/\s*<.*/, "")
+        end
+
+        Introspectors::DeclaredConstant.enclosing(source, match_idx + 1)
+      end
+
+      # A .rake, Gemfile or .jbuilder is Ruby too, read only when it parses whole: error recovery finds a def in YAML's `def:` key.
+      private_class_method def self.ruby?(file, source)
+        file.end_with?(".rb") || RailsAiContext::AstCache.parse_string(source).success?
       end
     end
   end
