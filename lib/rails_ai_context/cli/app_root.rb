@@ -52,7 +52,7 @@ module RailsAiContext
 
         # A monorepo's root runs the app its bin/rails boots, as a folder holding that one app: init sets it up from the root,
         # whose .mcp.json a session started there reads (ADR-0005).
-        booted = binstub_app(result.root)
+        booted = binstub_app(result.root) || dummy_below(result.root)
         if booted
           walk = Result.new(root: booted, walked: :down, below: [ booted ], base: result.root, explicit: false, cwd: result.cwd)
           return Target.new(kind: :app, root: booted, apps: [], resolution: walk)
@@ -81,10 +81,19 @@ module RailsAiContext
       end
       private_class_method :binstub_app
 
+      # An engine's test/dummy or spec/dummy app, as dummy_app finds one where bin/rails names none (Rails 4.2 and 5.0 wrote no APP_PATH).
+      def self.dummy_below(root)
+        [ File.join(root, "test", "dummy"), File.join(root, "spec", "dummy") ].find { |dir| EntryBoot.app_present?(dir, allow_source_only: true) }
+      end
+      private_class_method :dummy_below
+
       # The folder bin/rails's APP_PATH names, nil where it names none.
       def self.app_path_dir(root)
-        named = File.binread(File.join(root, "bin", "rails"), 4096)[/^\s*APP_PATH\s*=\s*File\.expand_path\(\s*["']([^"'#]+)["']\s*,\s*__dir__\s*\)/, 1]
-        named && File.dirname(File.expand_path(named.force_encoding(root.encoding), File.join(root, "bin")), 2)
+        named, anchor = File.binread(File.join(root, "bin", "rails"), 4096)
+          .match(/^\s*APP_PATH\s*=\s*File\.expand_path\(\s*["']([^"'#]+)["']\s*,\s*(__dir__|__FILE__)\s*\)/)&.captures
+        # Rails 5.1 expanded from __FILE__, which starts at bin/rails itself rather than at bin/.
+        base = anchor == "__FILE__" ? File.join(root, "bin", "rails") : File.join(root, "bin")
+        named && File.dirname(File.expand_path(named.force_encoding(root.encoding), base), 2)
       rescue SystemCallError, IOError
         nil
       end

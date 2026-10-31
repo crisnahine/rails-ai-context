@@ -142,6 +142,19 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       )
     end
 
+    it "keeps every magic comment above the guard it adds, where Ruby still reads it" do
+      [ "# encoding: utf-8\n# frozen_string_literal: true\n", "# typed: true\n# frozen_string_literal: true\n" ].each do |magic|
+        File.write(initializer_path, "#{magic}\nRailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+        allow(generator).to receive(:say)
+
+        generator.create_initializer
+
+        expect(File.read(initializer_path)).to start_with("#{magic}\n#{RailsAiContext::Install::InitializerFile::GUARD_LINE}\n"), magic
+        out, err, = Open3.capture3(RbConfig.ruby, "-wc", initializer_path)
+        expect([ out, err ]).to eq([ "Syntax OK\n", "" ]), magic
+      end
+    end
+
     it "upgrades a bare defined?(RailsAiContext) guard to check respond_to?(:configure) too" do
       File.write(initializer_path, <<~RUBY)
         # frozen_string_literal: true
@@ -161,6 +174,17 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
         "if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)\n"
       )
       expect(content).not_to include("if defined?(RailsAiContext)\n")
+    end
+
+    it "upgrades a bare guard with a note after it, and keeps the note" do
+      File.write(initializer_path, "if defined?(RailsAiContext) # absent outside development\n  " \
+                                   "RailsAiContext.configure do |config|\n    config.ai_tools = %i[claude]\n  end\nend\n")
+      allow(generator).to receive(:say)
+
+      generator.create_initializer
+
+      expect(File.read(initializer_path)).to start_with("#{RailsAiContext::Install::InitializerFile::GUARD_LINE} # absent outside development\n  " \
+                                                        "RailsAiContext.configure do |config|\n")
     end
 
     it "keeps added sections inside the configure block for guarded initializers" do
@@ -378,6 +402,23 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to include(other.gsub(/^/, "  "))
       expect(content).to include("    c.ai_tools = %i[claude copilot]\n", "    c.tool_mode = :mcp   # MCP primary + CLI fallback\n")
       expect(RailsAiContext::Install::SelectionRecord.read(root: tmpdir)).to eq(%i[claude copilot])
+    end
+
+    it "makes the commented-out selection line live and leaves the same text inside a heredoc as it is" do
+      File.write(initializer_path, <<~RUBY)
+        RailsAiContext.configure do |config|
+          NOTE = <<~TEXT
+            # config.tool_mode = :heredoc_text
+          TEXT
+          # config.tool_mode = :cli
+        end
+      RUBY
+      allow(generator).to receive(:say)
+
+      generator.create_initializer
+
+      content = File.read(initializer_path)
+      expect(content).to match(/^ +# config\.tool_mode = :heredoc_text\n +TEXT\n +config\.tool_mode = :mcp/)
     end
 
     it "leaves an initializer that does not parse as it is, and says so" do

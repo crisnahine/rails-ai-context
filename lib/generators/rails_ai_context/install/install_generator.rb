@@ -4,6 +4,7 @@ require "fileutils"
 require "pathname"
 require "json"
 require "open3"
+require "ripper"
 require "shellwords"
 require "thor/line_editor"
 
@@ -494,10 +495,16 @@ module RailsAiContext
         param = block_parameter(block)
         region = (content.byteslice(0, content.lines.first(block.call_line - 1).sum(&:bytesize)).length...
                   content.byteslice(0, block.close_offset(content)).length)
-        updated = content[region].sub(/^([ \t]*)#[ \t]*#{param}\.#{key}[ \t]*=.*$/) do
-          "#{Regexp.last_match(1)}#{param}.#{record.config_line(key, value).delete_prefix('config.')}"
+        comments = Ripper.lex(content).filter_map { |position, type, _| position if type == :on_comment }
+        position = region.begin
+        while (match = content.match(/^([ \t]*)#[ \t]*#{param}\.#{key}[ \t]*=.*$/, position)) && match.end(0) <= region.end
+          if comments.include?([ content[0...match.begin(0)].count("\n") + 1, match[1].bytesize ])
+            return [ "#{match.pre_match}#{match[1]}#{param}.#{record.config_line(key, value).delete_prefix('config.')}#{match.post_match}", true ]
+          end
+
+          position = match.end(0)
         end
-        [ "#{content[0...region.begin]}#{updated}#{content[region.end..]}", content[region] != updated ]
+        [ content, false ]
       end
 
       def configure_block(content)
@@ -519,9 +526,11 @@ module RailsAiContext
       def ensure_initializer_guard(content)
         return upgrade_bare_guard(content) if guarded_initializer?(content)
 
-        header_match = content.match(/\A# frozen_string_literal: true\n(?:\n)?/)
-        header = header_match ? "# frozen_string_literal: true\n\n" : ""
-        body = header_match ? content.delete_prefix(header_match[0]) : content
+        # Ruby reads a magic comment only above the first token, so the comments that open the file stay above the guard.
+        leading = content[/\A(?:[ \t]*(?:#.*)?\r?\n)*/]
+        leading = "" if !leading.include?("#") || content.delete_prefix(leading).strip.empty?
+        header = leading.empty? ? "" : "#{leading.rstrip}\n\n"
+        body = content.delete_prefix(leading)
         body = "#{body}\n" unless body.end_with?("\n")
 
         wrapped = "#{header}#{RailsAiContext::Install::InitializerFile::GUARD_LINE}\n#{indent_content(body)}end\n"

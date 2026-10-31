@@ -91,14 +91,14 @@ module RailsAiContext
       def on_qsymbols_new = SymbolList.new
       def on_symbols_new = SymbolList.new
 
-      %i[tstring_beg symbeg qwords_beg qsymbols_beg words_beg symbols_beg].each do |event|
+      %i[tstring_beg symbeg qwords_beg qsymbols_beg words_beg symbols_beg heredoc_beg].each do |event|
         define_method(:"on_#{event}") do |token|
           @openers.push([ event, token ])
           super(token)
         end
       end
 
-      %i[tstring_end label_end].each do |event|
+      %i[tstring_end label_end heredoc_end].each do |event|
         define_method(:"on_#{event}") do |token|
           @openers.pop
           super(token)
@@ -125,17 +125,20 @@ module RailsAiContext
         when :tstring_beg, :symbeg
           single = opener.match?(/\A(?::')?'\z|\A%q|\A%s|\A:'/)
           single ? token.gsub(/\\([\\#{Regexp.escape(opener[-1])}#{Regexp.escape(close)}])/, "\\1") : double(token, opener)
+        when :heredoc_beg then opener.match?(/\A<<[-~]?'/) ? token : double(token, opener)
+        # An escaped newline in a `%W[]` or `%I[]` list is a newline in the word.
+        when :words_beg, :symbols_beg then double(token, opener, joined: false)
         else token
         end
       end
 
-      def double(token, opener)
+      def double(token, opener, joined: true)
         token.gsub(/\\(?:u\{([0-9a-fA-F ]+)\}|u(\h{4})|x(\h{1,2})|([0-7]{1,3})|(\r?\n)|(.))/m) do
           if $1 then $1.split.map { |code| code.hex.chr(Encoding::UTF_8) }.join
           elsif $2 then $2.hex.chr(Encoding::UTF_8)
           elsif $3 then $3.hex.chr.force_encoding(Encoding::UTF_8)
           elsif $4 then $4.oct.chr.force_encoding(Encoding::UTF_8)
-          elsif $5 then ""
+          elsif $5 then joined ? "" : $5
           else
             @meta ||= %w[C c M].include?($6)
             ESCAPES.fetch($6, $6)
@@ -581,6 +584,8 @@ module RailsAiContext
           return "" if parts.empty?
 
           parts.size == 1 && parts.first[0] == :@tstring_content ? parts.first[1] : nil
+        # A word of a `%W[]` or `%I[]` list, its parts as the list holds them.
+        when Array then node.size == 1 && node.first[0] == :@tstring_content ? node.first[1] : nil
         end
       end
     end
