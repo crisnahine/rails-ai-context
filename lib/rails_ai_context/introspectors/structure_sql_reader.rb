@@ -252,7 +252,10 @@ module RailsAiContext
         scanner = StringScanner.new(content, fixed_anchor: true)
         found = []
         while scanner.skip_until(pattern)
-          found << scanner.captures unless in_closed_string?(scan, scanner.pos - scanner.matched_size, content.bytesize, dialect)
+          next if in_closed_string?(scan, scanner.pos - scanner.matched_size, content.bytesize, dialect)
+
+          # Not `captures`: strscan before 3.0.8 (Ruby 3.1) gives "" for a group that did not match.
+          found << (1...scanner.size).map { |group| scanner[group] }
         end
         found
       end
