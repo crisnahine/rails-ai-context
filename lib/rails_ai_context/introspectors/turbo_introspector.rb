@@ -93,12 +93,18 @@ module RailsAiContext
         RailsAiContext::ViewFile.root_for(path, PathResolver.view_dirs(root)) || views_dir
       end
 
-      # An ERB comment tag writes nothing, so it is blanked; every line and offset stays.
+      # An ERB comment tag and a Ruby comment in a code tag run nothing, so both are blanked;
+      # every line and offset stays.
       def without_erb_comments(content)
         return content unless content.include?("<%")
 
         content.gsub(RailsAiContext::ErbSource::TAG) do |tag|
-          RailsAiContext::ErbSource.comment?(Regexp.last_match(1)) ? tag.tr("^\n", " ") : tag
+          match = Regexp.last_match
+          body = match[1].to_s
+          next tag.tr("^\n", " ") if RailsAiContext::ErbSource.comment?(body)
+
+          from = match.begin(1) - match.begin(0)
+          tag[0...from] + RailsAiContext::RubySource.without_comments(body, cache: false) + tag[(from + body.length)..]
         end
       end
 
@@ -114,7 +120,7 @@ module RailsAiContext
           code.each_line.with_index(1) do |line, line_num|
             if (at = line =~ pattern)
               originals ||= entry[:content].lines
-              call = (erb && erb_call_text(code, offset + at)) || line
+              call = (erb && erb_call_text(code, offset + at, name)) || line
               yield entry[:file], call, line_num, originals[line_num - 1]
             end
             offset += line.length
@@ -122,13 +128,21 @@ module RailsAiContext
         end
       end
 
-      # From `start` through its ERB tag's `%>`, so wrapped arguments are read; nil outside a tag.
-      def erb_call_text(code, start)
+      # The call starting at `start` through its last argument, read from its tag's parsed
+      # body so wrapped arguments are in and a following statement is not; nil outside a tag.
+      def erb_call_text(code, start, name)
         open = code.rindex("<%", start) or return nil
-        return nil if (close = code.rindex("%>", start)) && close > open
+        tag = RailsAiContext::ErbSource::TAG.match(code, open)
+        return nil unless tag && tag.begin(0) == open && tag.begin(1) <= start && start < tag.end(1)
 
-        stop = code.index("%>", start) or return nil
-        code[start...stop + 2]
+        body = tag[1]
+        at = body[0...(start - tag.begin(1))].bytesize
+        call = AstWalk.each(AstCache.parse_uncached(body).value).find do |node|
+          node.is_a?(Prism::CallNode) && node.name == name.to_sym && node.message_loc&.start_offset == at
+        end or return nil
+
+        stop = (call.closing_loc || call.arguments&.location || call.message_loc).end_offset
+        body.byteslice(at...stop)
       end
 
       # The first argument as written, minus a symbol colon or string quotes:

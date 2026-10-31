@@ -710,6 +710,55 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
 
       expect(result[:turbo_native][:native_conditionals]).to eq(2)
     end
+
+    it "counts nothing a Ruby comment inside a code tag names, on one line or several" do
+      result = result_for(
+        "app/views/posts/index.html.erb" => <<~ERB,
+          <%
+            # turbo_frame_tag "multi_line_comment"
+            # turbo_stream_from :old_stream
+            # link_to "x", "/", data: { turbo_action: "replace" }
+            # if hotwire_native_app?
+            x = 1
+          %>
+          <% # turbo_frame_tag "single_line_comment" %>
+          <% # link_to "x", "/", data: { turbo_action: "replace" } %>
+          <%= turbo_frame_tag "real" %>
+          <!-- <%= link_to "y", "/", data: { turbo_action: "advance" } %> -->
+        ERB
+        "app/views/posts/update.turbo_stream.erb" => <<~ERB
+          <% # turbo_stream.remove "x" %>
+          <%
+            # turbo_stream.append "y"
+          %>
+          <%= turbo_stream.replace "z" %>
+        ERB
+      )
+
+      expect(result[:turbo_frames].map { |f| [ f[:id], f[:line] ] }).to eq([ [ "real", 10 ] ])
+      expect(result[:stream_subscriptions]).to eq([])
+      expect(result[:stream_actions]).to eq("replace" => 1)
+      expect(result[:turbo_drive_settings][:"data-turbo-action"]).to eq(1)
+      expect(result[:turbo_native][:native_conditionals]).to eq(0)
+    end
+
+    it "ends a call's text where the Ruby call ends, not at the tag's close" do
+      result = result_for("app/views/posts/index.html.erb" => <<~ERB)
+        <%
+          turbo_frame_tag "list", src: articles_path
+          concat turbo_stream_from current_user, :notifications
+        %>
+        <% if signed_in?
+          concat turbo_stream_from current_user, :alerts
+        end %>
+      ERB
+
+      expect(result[:turbo_frames].map { |f| f.slice(:id, :src, :line) }).to eq([ { id: "list", src: "articles_path", line: 2 } ])
+      expect(result[:stream_subscriptions].map { |s| s.slice(:stream, :parts, :line) }).to eq([
+        { stream: "current_user, notifications", parts: [ { expr: "current_user" }, { literal: "notifications" } ], line: 3 },
+        { stream: "current_user, alerts", parts: [ { expr: "current_user" }, { literal: "alerts" } ], line: 6 }
+      ])
+    end
   end
 
   describe "permanent elements" do
