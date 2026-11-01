@@ -9,11 +9,12 @@
 
 <p align="center">
   <a href="docs/SETUP.md"><img src="https://img.shields.io/badge/works_with-555" alt="Works with"></a>
-  <a href="docs/SETUP.md#claude-code"><img src="https://img.shields.io/badge/Claude_Code-b4132c?logo=claude&logoColor=white" alt="Claude Code"></a>
-  <a href="docs/SETUP.md#cursor"><img src="https://img.shields.io/badge/Cursor-b4132c?logo=cursor&logoColor=white" alt="Cursor"></a>
-  <a href="docs/SETUP.md#github-copilot"><img src="https://img.shields.io/badge/GitHub_Copilot-b4132c?logo=githubcopilot&logoColor=white" alt="GitHub Copilot"></a>
-  <a href="docs/SETUP.md#opencode"><img src="https://img.shields.io/badge/OpenCode-b4132c?logo=opencode&logoColor=white" alt="OpenCode"></a>
-  <a href="docs/SETUP.md#codex-cli"><img src="https://img.shields.io/badge/Codex_CLI-b4132c?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTMgNS40IDQuNCA0bDggOC04IDhMMyAxOC42IDkuNiAxMnpNMTMgMThoOHYyaC04eiIvPjwvc3ZnPg%3D%3D" alt="Codex CLI"></a>
+  <a href="docs/SETUP.md#claude-code"><img src="https://img.shields.io/badge/Claude_Code-D97757?logo=claudecode&logoColor=white" alt="Claude Code"></a>
+  <a href="docs/SETUP.md#cursor"><img src="https://img.shields.io/badge/Cursor-000000?logo=cursor&logoColor=white" alt="Cursor"></a>
+  <a href="docs/SETUP.md#github-copilot"><img src="https://img.shields.io/badge/GitHub_Copilot-000000?logo=githubcopilot&logoColor=white" alt="GitHub Copilot"></a>
+  <a href="docs/SETUP.md#opencode"><img src="https://img.shields.io/badge/OpenCode-000000?logo=opencode&logoColor=white" alt="OpenCode"></a>
+  <a href="docs/SETUP.md#codex-cli"><img src="https://img.shields.io/badge/Codex_CLI-000000?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTMgNS40IDQuNCA0bDggOC04IDhMMyAxOC42IDkuNiAxMnpNMTMgMThoOHYyaC04eiIvPjwvc3ZnPg%3D%3D" alt="Codex CLI"></a>
+  <a href="docs/CLI.md"><img src="https://img.shields.io/badge/Any_terminal-4D4D4D?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMyAzaDE4YTIgMiAwIDAgMSAyIDJ2MTRhMiAyIDAgMCAxLTIgMkgzYTIgMiAwIDAgMS0yLTJWNWEyIDIgMCAwIDEgMi0yem0wIDJ2MTRoMThWNXptMyAzLjRMNy40IDdsNSA1LTUgNUw2IDE1LjYgOS42IDEyek0xMyAxNWg1djJoLTV6Ii8%2BPC9zdmc%2B" alt="Any terminal"></a>
 </p>
 
 <p align="center">
