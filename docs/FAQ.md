@@ -2,7 +2,7 @@
 
 # FAQ
 
-**Frequently asked questions about rails-ai-context.**
+**Answers about rails-ai-context: MCP support, production safety, running without a database, generated files, and how it compares to a hand-written CLAUDE.md.**
 
 [Quickstart](QUICKSTART.md) · [Recipes](RECIPES.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Configuration](CONFIGURATION.md)
 
