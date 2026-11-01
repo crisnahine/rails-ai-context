@@ -100,26 +100,31 @@ RSpec.describe "the website build" do
     expect(readme.scan(/\b(\d+) introspectors\b/).flatten.uniq).to eq([ counts["introspectors"] ])
   end
 
-  # The README's FAQ card is a picture, so a question renamed in docs/FAQ.md would stay on it unnoticed.
-  it "asks on the README's FAQ card only questions the FAQ answers, the same in both themes and in the alt text" do
+  # The README's FAQ card is a picture, so a question or answer changed in docs/FAQ.md would stay on it unnoticed.
+  it "puts on the README's FAQ card only the FAQ's questions and its first question's answer, the same in both themes" do
     readme = File.read(File.join(root, "README.md"))
     section = nil
-    answered = File.readlines(File.join(root, "docs", "FAQ.md"), chomp: true).filter_map do |line|
-      section = line.delete_prefix("## ").delete_suffix("...") if line.start_with?("## ")
-      next unless line.start_with?("### ")
+    faq = File.read(File.join(root, "docs", "FAQ.md")).split(/^(?=##+ )/).each_with_object({}) do |block, found|
+      heading, body = block.split("\n", 2)
+      section = heading.delete_prefix("## ").delete_suffix("...") if heading.start_with?("## ")
+      next unless heading.start_with?("### ")
 
-      question = line.delete_prefix("### ")
-      question.start_with?("...") ? "#{section} #{question.delete_prefix('...')}" : question
+      question = heading.delete_prefix("### ")
+      question = "#{section} #{question.delete_prefix('...')}" if question.start_with?("...")
+      found[question] = body.to_s.delete("*")
     end
     cards = %w[light dark].map do |theme|
       svg = File.read(File.join(root, "docs", "assets", "faq-#{theme}.svg"))
-      svg.scan(%r{<text class="q"[^>]*>([^<]+)</text>}).flatten.map { |question| CGI.unescapeHTML(question) }
+      %w[q a].to_h { |kind| [ kind, svg.scan(%r{<text class="#{kind}"[^>]*>(.*?)</text>}).flatten.map { |text| CGI.unescapeHTML(text.gsub(/<[^>]+>/, "")) } ] }
     end
+    featured, *others = cards.first["q"]
 
-    expect(cards.first).not_to be_empty
     expect(cards.last).to eq(cards.first)
-    expect(answered).to include(*cards.first)
-    expect(readme).to include(%(<a href="#{Site::SITE}/FAQ.html"><picture>), *cards.first)
+    expect(others).not_to be_empty
+    expect(faq.keys).to include(featured, *others)
+    expect(cards.first["a"]).not_to be_empty
+    cards.first["a"].each { |line| expect(faq[featured]).to include(line), "the FAQ's answer to #{featured} holds no: #{line}" }
+    expect(readme).to include(%(<a href="#{Site::SITE}/FAQ.html"><picture>), featured, *others)
   end
 
   it "draws the plate from the model answer's own lines, with a key number on each kind of fact" do

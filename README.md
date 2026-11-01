@@ -35,7 +35,7 @@
 </p>
 
 <p align="center">
-  <a href="https://crisnahine.github.io/rails-ai-context/FAQ.html"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-dark.svg"><img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-light.svg" alt="Questions before you install? Read the FAQ. Six that come up first: Do I need MCP support in my AI tool? Is this safe for production? Does it work without a database? Can tools read my .env or credentials? Do I need to commit the generated files? How does this compare to a hand-written CLAUDE.md?" width="860"></picture></a>
+  <a href="https://crisnahine.github.io/rails-ai-context/FAQ.html"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-dark.svg"><img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-light.svg" alt="Questions before you install? Read the FAQ. Do I need MCP support in my AI tool? No. The gem works three ways. 1, MCP server: AI calls tools via the protocol, the best experience. 2, Static files: generated context files (CLAUDE.md, .cursor/rules/, etc.). 3, CLI: the same 35 tools from the terminal, no server needed. More questions the FAQ answers: What does this gem do? Which AI tools are supported? Is this safe for production? Does it work without a database? Do I need to commit the generated files? How does this compare to a hand-written CLAUDE.md?" width="860"></picture></a>
 </p>
 
 <p align="center">

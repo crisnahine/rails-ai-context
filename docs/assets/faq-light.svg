@@ -1,27 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="860" height="256" viewBox="0 0 860 256" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Noto Sans&quot;, Helvetica, Arial, sans-serif">
-<rect x="0.75" y="0.75" width="858.5" height="254.5" rx="12" fill="#ffffff" stroke="#d1d9e0" stroke-width="1.5"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="438" viewBox="0 0 860 438" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Noto Sans&quot;, Helvetica, Arial, sans-serif">
+<rect x="0.75" y="0.75" width="858.5" height="436.5" rx="12" fill="#ffffff" stroke="#d1d9e0" stroke-width="1.5"/>
 <circle cx="44" cy="48" r="18" fill="#b4132c"/>
 <text x="44" y="55" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">?</text>
 <text x="74" y="45" font-size="19" font-weight="600" fill="#1f2328">Questions before you install?</text>
-<text x="74" y="67" font-size="13" fill="#59636e">Short answers on setup, safety and the tools. Six that come up first:</text>
+<text x="74" y="67" font-size="13" fill="#59636e">Short answers on setup, safety and the tools. Start with this one:</text>
 <rect x="666" y="28" width="170" height="40" rx="20" fill="#b4132c"/>
 <text x="751" y="53" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">Read the FAQ →</text>
-<rect x="24" y="92" width="400" height="40" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
-<text x="38" y="117" font-size="13" font-weight="700" fill="#b4132c">Q</text>
-<text class="q" x="56" y="117" font-size="13" fill="#1f2328">Do I need MCP support in my AI tool?</text>
-<rect x="436" y="92" width="400" height="40" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
-<text x="450" y="117" font-size="13" font-weight="700" fill="#b4132c">Q</text>
-<text class="q" x="468" y="117" font-size="13" fill="#1f2328">Is this safe for production?</text>
-<rect x="24" y="144" width="400" height="40" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
-<text x="38" y="169" font-size="13" font-weight="700" fill="#b4132c">Q</text>
-<text class="q" x="56" y="169" font-size="13" fill="#1f2328">Does it work without a database?</text>
-<rect x="436" y="144" width="400" height="40" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
-<text x="450" y="169" font-size="13" font-weight="700" fill="#b4132c">Q</text>
-<text class="q" x="468" y="169" font-size="13" fill="#1f2328">Can tools read my .env or credentials?</text>
-<rect x="24" y="196" width="400" height="40" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
-<text x="38" y="221" font-size="13" font-weight="700" fill="#b4132c">Q</text>
-<text class="q" x="56" y="221" font-size="13" fill="#1f2328">Do I need to commit the generated files?</text>
-<rect x="436" y="196" width="400" height="40" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
-<text x="450" y="221" font-size="13" font-weight="700" fill="#b4132c">Q</text>
-<text class="q" x="468" y="221" font-size="13" fill="#1f2328">How does this compare to a hand-written CLAUDE.md?</text>
+<rect x="24" y="88" width="812" height="180" rx="10" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="42" y="118" font-size="14" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="62" y="118" font-size="16" font-weight="600" fill="#1f2328">Do I need MCP support in my AI tool?</text>
+<text class="a" x="42" y="144" font-size="14" fill="#1f2328"><tspan font-weight="700" fill="#b4132c">No.</tspan> The gem works three ways:</text>
+<rect x="40" y="160" width="252" height="92" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="64" cy="186" r="11" fill="#b4132c"/>
+<text x="64" y="190.5" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+<text class="a" x="84" y="191" font-size="15" font-weight="600" fill="#1f2328">MCP server</text>
+<text class="a" x="56" y="218" font-size="13" fill="#59636e">AI calls tools via the protocol</text>
+<rect x="56" y="225" width="100" height="20" rx="10" fill="#fbe7ea"/>
+<text class="a" x="106" y="239" font-size="11" font-weight="600" fill="#b4132c" text-anchor="middle">best experience</text>
+<rect x="304" y="160" width="252" height="92" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="328" cy="186" r="11" fill="#b4132c"/>
+<text x="328" y="190.5" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+<text class="a" x="348" y="191" font-size="15" font-weight="600" fill="#1f2328">Static files</text>
+<text class="a" x="320" y="218" font-size="13" fill="#59636e">Generated context files</text>
+<text class="a" x="320" y="237" font-size="11" font-family="ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, monospace" fill="#59636e">(CLAUDE.md, .cursor/rules/, etc.)</text>
+<rect x="568" y="160" width="252" height="92" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="592" cy="186" r="11" fill="#b4132c"/>
+<text x="592" y="190.5" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+<text class="a" x="612" y="191" font-size="15" font-weight="600" fill="#1f2328">CLI</text>
+<text class="a" x="584" y="218" font-size="13" fill="#59636e">Same 35 tools from the terminal,</text>
+<text class="a" x="584" y="237" font-size="13" fill="#59636e">no server needed</text>
+<rect x="24" y="284" width="400" height="38" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="38" y="308" font-size="13" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="56" y="308" font-size="13" fill="#1f2328">What does this gem do?</text>
+<rect x="436" y="284" width="400" height="38" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="450" y="308" font-size="13" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="468" y="308" font-size="13" fill="#1f2328">Which AI tools are supported?</text>
+<rect x="24" y="334" width="400" height="38" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="38" y="358" font-size="13" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="56" y="358" font-size="13" fill="#1f2328">Is this safe for production?</text>
+<rect x="436" y="334" width="400" height="38" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="450" y="358" font-size="13" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="468" y="358" font-size="13" fill="#1f2328">Does it work without a database?</text>
+<rect x="24" y="384" width="400" height="38" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="38" y="408" font-size="13" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="56" y="408" font-size="13" fill="#1f2328">Do I need to commit the generated files?</text>
+<rect x="436" y="384" width="400" height="38" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="450" y="408" font-size="13" font-weight="700" fill="#b4132c">Q</text>
+<text class="q" x="468" y="408" font-size="13" fill="#1f2328">How does this compare to a hand-written CLAUDE.md?</text>
 </svg>
