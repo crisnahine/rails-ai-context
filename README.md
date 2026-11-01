@@ -8,9 +8,12 @@
 <h3 align="center">Your coding agent guesses your Rails app. Let it ask.</h3>
 
 <p align="center">
-  rails-ai-context turns your Rails app into the source of truth for Claude Code, Cursor, GitHub Copilot,
-  OpenCode and Codex CLI: 35 read-only tools answer from the schema, the models, the routes, the controllers
-  and the views, over MCP or in any terminal, and still answer when the app cannot boot.
+  <a href="docs/SETUP.md"><img src="https://img.shields.io/badge/works_with-555" alt="Works with"></a>
+  <a href="docs/SETUP.md#claude-code"><img src="https://img.shields.io/badge/Claude_Code-b4132c?logo=claude&logoColor=white" alt="Claude Code"></a>
+  <a href="docs/SETUP.md#cursor"><img src="https://img.shields.io/badge/Cursor-b4132c?logo=cursor&logoColor=white" alt="Cursor"></a>
+  <a href="docs/SETUP.md#github-copilot"><img src="https://img.shields.io/badge/GitHub_Copilot-b4132c?logo=githubcopilot&logoColor=white" alt="GitHub Copilot"></a>
+  <a href="docs/SETUP.md#opencode"><img src="https://img.shields.io/badge/OpenCode-b4132c?logo=opencode&logoColor=white" alt="OpenCode"></a>
+  <a href="docs/SETUP.md#codex-cli"><img src="https://img.shields.io/badge/Codex_CLI-b4132c?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTMgNS40IDQuNCA0bDggOC04IDhMMyAxOC42IDkuNiAxMnpNMTMgMThoOHYyaC04eiIvPjwvc3ZnPg%3D%3D" alt="Codex CLI"></a>
 </p>
 
 <p align="center">
@@ -37,6 +40,8 @@
 <p align="center">
   <a href="https://crisnahine.github.io/rails-ai-context/FAQ.html"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-dark.svg"><img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-light.svg" alt="Questions before you install? Read the FAQ. Do I need MCP support in my AI tool? No. The gem works three ways. 1, MCP server: AI calls tools via the protocol, the best experience. 2, Static files: generated context files (CLAUDE.md, .cursor/rules/, etc.). 3, CLI: the same 35 tools from the terminal, no server needed. More questions the FAQ answers: What does this gem do? Which AI tools are supported? Is this safe for production? Does it work without a database? Do I need to commit the generated files? How does this compare to a hand-written CLAUDE.md?" width="860"></picture></a>
 </p>
+
+<br>
 
 <p align="center">
   <picture>
