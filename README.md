@@ -26,11 +26,16 @@
 <p align="center">
   <a href="https://crisnahine.github.io/rails-ai-context/">Website</a> ·
   <a href="#try-it-in-your-rails-app">Quick start</a> ·
+  <a href="https://crisnahine.github.io/rails-ai-context/FAQ.html"><b>FAQ</b></a> ·
   <a href="#what-it-does">What it does</a> ·
   <a href="#a-closer-look">A closer look</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/TOOLS.md">Tools reference</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+<p align="center">
+  <a href="https://crisnahine.github.io/rails-ai-context/FAQ.html"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-dark.svg"><img src="https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/docs/assets/faq-light.svg" alt="Questions before you install? Read the FAQ. Six that come up first: Do I need MCP support in my AI tool? Is this safe for production? Does it work without a database? Can tools read my .env or credentials? Do I need to commit the generated files? How does this compare to a hand-written CLAUDE.md?" width="860"></picture></a>
 </p>
 
 <p align="center">
@@ -424,6 +429,10 @@ Outside development and test it refuses every request with a 403 unless you set
 MCP config written for them. Any other MCP client, such as Claude Desktop, Windsurf, Zed or a JetBrains
 IDE (Copilot or AI Assistant), gets an entry from `rails-ai-context mcp-entry`. A tool with no MCP at all
 gets the CLI setup, where the context files name the shell commands.
+
+**Still wondering about something?** [The FAQ](https://crisnahine.github.io/rails-ai-context/FAQ.html)
+answers the rest: install, the tools, configuration, context files, performance, security, and how it
+compares to a hand-written `CLAUDE.md` or pasting `schema.rb` into the prompt.
 
 ## What it will not do
 

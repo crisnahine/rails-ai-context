@@ -100,6 +100,28 @@ RSpec.describe "the website build" do
     expect(readme.scan(/\b(\d+) introspectors\b/).flatten.uniq).to eq([ counts["introspectors"] ])
   end
 
+  # The README's FAQ card is a picture, so a question renamed in docs/FAQ.md would stay on it unnoticed.
+  it "asks on the README's FAQ card only questions the FAQ answers, the same in both themes and in the alt text" do
+    readme = File.read(File.join(root, "README.md"))
+    section = nil
+    answered = File.readlines(File.join(root, "docs", "FAQ.md"), chomp: true).filter_map do |line|
+      section = line.delete_prefix("## ").delete_suffix("...") if line.start_with?("## ")
+      next unless line.start_with?("### ")
+
+      question = line.delete_prefix("### ")
+      question.start_with?("...") ? "#{section} #{question.delete_prefix('...')}" : question
+    end
+    cards = %w[light dark].map do |theme|
+      svg = File.read(File.join(root, "docs", "assets", "faq-#{theme}.svg"))
+      svg.scan(%r{<text class="q"[^>]*>([^<]+)</text>}).flatten.map { |question| CGI.unescapeHTML(question) }
+    end
+
+    expect(cards.first).not_to be_empty
+    expect(cards.last).to eq(cards.first)
+    expect(answered).to include(*cards.first)
+    expect(readme).to include(%(<a href="#{Site::SITE}/FAQ.html"><picture>), *cards.first)
+  end
+
   it "draws the plate from the model answer's own lines, with a key number on each kind of fact" do
     plate = Site.plate(answers.fetch("model_details")["text"])
     rows = plate.scan(%r{<span class="row[^"]*">(?:<i aria-hidden="true">\d+</i>)?(.*?)</span>}).flatten.map { |row| CGI.unescapeHTML(row) }

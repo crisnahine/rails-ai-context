@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="256" viewBox="0 0 860 256" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Noto Sans&quot;, Helvetica, Arial, sans-serif">
+<rect x="0.75" y="0.75" width="858.5" height="254.5" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+<circle cx="44" cy="48" r="18" fill="#ff6e80"/>
+<text x="44" y="55" font-size="20" font-weight="700" fill="#0d1117" text-anchor="middle">?</text>
+<text x="74" y="45" font-size="19" font-weight="600" fill="#e6edf3">Questions before you install?</text>
+<text x="74" y="67" font-size="13" fill="#9198a1">Short answers on setup, safety and the tools. Six that come up first:</text>
+<rect x="666" y="28" width="170" height="40" rx="20" fill="#ff6e80"/>
+<text x="751" y="53" font-size="15" font-weight="600" fill="#0d1117" text-anchor="middle">Read the FAQ →</text>
+<rect x="24" y="92" width="400" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="38" y="117" font-size="13" font-weight="700" fill="#ff6e80">Q</text>
+<text class="q" x="56" y="117" font-size="13" fill="#e6edf3">Do I need MCP support in my AI tool?</text>
+<rect x="436" y="92" width="400" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="450" y="117" font-size="13" font-weight="700" fill="#ff6e80">Q</text>
+<text class="q" x="468" y="117" font-size="13" fill="#e6edf3">Is this safe for production?</text>
+<rect x="24" y="144" width="400" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="38" y="169" font-size="13" font-weight="700" fill="#ff6e80">Q</text>
+<text class="q" x="56" y="169" font-size="13" fill="#e6edf3">Does it work without a database?</text>
+<rect x="436" y="144" width="400" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="450" y="169" font-size="13" font-weight="700" fill="#ff6e80">Q</text>
+<text class="q" x="468" y="169" font-size="13" fill="#e6edf3">Can tools read my .env or credentials?</text>
+<rect x="24" y="196" width="400" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="38" y="221" font-size="13" font-weight="700" fill="#ff6e80">Q</text>
+<text class="q" x="56" y="221" font-size="13" fill="#e6edf3">Do I need to commit the generated files?</text>
+<rect x="436" y="196" width="400" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="450" y="221" font-size="13" font-weight="700" fill="#ff6e80">Q</text>
+<text class="q" x="468" y="221" font-size="13" fill="#e6edf3">How does this compare to a hand-written CLAUDE.md?</text>
+</svg>
