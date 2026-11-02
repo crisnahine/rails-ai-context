@@ -357,9 +357,19 @@ module Site
     end
   end
 
+  # No doc links every decision record, and search engines need a link to find
+  # a page when they have not read the sitemap.
+  def decision_index(pages)
+    items = pages.select { |page| page[:source].start_with?("docs/adr/") }.map do |page|
+      "<li><a href=\"#{escape(page[:out])}\">#{escape(page[:title])}</a></li>"
+    end
+    "<h2 id=\"decision-records\">Decision records</h2>\n<ul>\n#{items.join("\n")}\n</ul>\n"
+  end
+
   def render_doc(page, pages, template, values, root: ROOT, commit:)
     text = page[:text]
     content = rewrite_links(render_markdown(text), pages, from: page, commit: commit)
+    content += decision_index(pages) if page[:source] == "docs/ARCHITECTURE.md"
     prefix = Pathname(".").relative_path_from(Pathname(page[:out]).dirname).to_s
     prefix = prefix == "." ? "" : "#{prefix}/"
     nav = DOC_NAV.map do |name, label|
