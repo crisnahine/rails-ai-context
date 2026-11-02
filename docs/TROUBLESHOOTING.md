@@ -2,7 +2,7 @@
 
 # Troubleshooting
 
-**Common issues and how to fix them.**
+**Common rails-ai-context problems and how to fix them: a server the AI tool never lists, a boot that fails, a Windows path.**
 
 [Quickstart](QUICKSTART.md) · [Configuration](CONFIGURATION.md) · [AI Tool Setup](SETUP.md) · [FAQ](FAQ.md)
 
