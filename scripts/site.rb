@@ -487,21 +487,30 @@ module Site
   end
 
   def live_page(url)
-    response = Net::HTTP.get_response(URI(url))
+    uri = URI(url)
+    response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https", open_timeout: 5, read_timeout: 10, max_retries: 0) { |http| http.get(uri.request_uri) }
     response.body if response.is_a?(Net::HTTPOK)
   rescue StandardError
     nil
   end
 
-  # The sitemap's pages in `out` that differ from the live ones, since IndexNow
-  # asks for changed URLs only. Every page names the commit it was built from,
-  # which is no change. A page that cannot be read counts as changed.
+  # The URLs this build adds, changes or removes, which is what IndexNow asks
+  # for. Every page names the commit it was built from, which is no change, and
+  # a page that cannot be read counts as changed.
+  # shortcut: the live copy can be 10 minutes old, so a change undone that fast goes unsubmitted; the sitemap's lastmod still shows it.
   def changed_urls(out, live: method(:live_page))
-    content = ->(html) { html.to_s.b.gsub(/\b\h{7,40}\b/, "") }
-    File.read(File.join(out, "sitemap.xml")).scan(%r{<loc>([^<]+)</loc>}).flatten.reject do |url|
+    locations = ->(sitemap) { sitemap.to_s.scan(%r{<loc>([^<]+)</loc>}).flatten }
+    content = lambda do |html|
+      html = html.to_s.b
+      commit = html[%r{/tree/(\h{40})}, 1]
+      commit ? html.gsub(commit, "").gsub(commit[0, 7], "") : html
+    end
+    urls = locations.call(File.read(File.join(out, "sitemap.xml")))
+    changed = urls.reject do |url|
       file = url.delete_prefix(SITE).delete_prefix("/")
       content.call(live.call(url)) == content.call(File.binread(File.join(out, file.empty? ? "index.html" : file)))
     end
+    changed + (locations.call(live.call("#{SITE}/sitemap.xml")) - urls)
   end
 
   def indexnow_payload(urls)

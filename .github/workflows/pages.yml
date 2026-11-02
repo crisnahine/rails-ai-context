@@ -58,7 +58,14 @@ jobs:
       - name: Compare the pages with the live site
         id: changed
         if: github.ref == 'refs/heads/main'
-        run: echo "payload=$(bundle exec ruby scripts/site.rb indexnow _site)" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          if payload=$(bundle exec ruby scripts/site.rb indexnow _site); then
+            echo "payload=$payload" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::could not compare the pages with the live site, so this deploy tells IndexNow nothing"
+          fi
 
       - name: Upload the site
         if: github.ref == 'refs/heads/main'
@@ -87,7 +94,8 @@ jobs:
 
   # Tells Bing and the other IndexNow engines which pages this deploy changed.
   # The key is public and the job holds no token. A refused ping leaves a
-  # warning, since it says nothing about the deploy.
+  # warning, since it says nothing about the deploy; the next build sees the
+  # page as unchanged and won't resend it, so the sitemap's lastmod is the fallback.
   indexnow:
     name: Tell IndexNow what changed
     if: github.ref == 'refs/heads/main' && needs.build.outputs.indexnow != ''
@@ -100,7 +108,7 @@ jobs:
         env:
           PAYLOAD: ${{ needs.build.outputs.indexnow }}
         run: |
-          code=$(curl -sS -o response.txt -w '%{http_code}' --retry 2 -X POST https://api.indexnow.org/indexnow \
+          code=$(curl -sS -o response.txt -w '%{http_code}' --retry 2 --max-time 30 -X POST https://api.indexnow.org/indexnow \
             -H 'Content-Type: application/json; charset=utf-8' -d "$PAYLOAD") || code=none
           echo "IndexNow answered $code for: $PAYLOAD"
           case "$code" in

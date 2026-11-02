@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "socket"
 require "tmpdir"
 require "yaml"
 
@@ -256,7 +257,8 @@ RSpec.describe "the website build" do
 
   it "names the pages that differ from the live site, ignoring the commit each one was built from", skip: no_markdown do
     scratch do |out|
-      Site.build(out: out, answers: answers, commit: commit)
+      expect(Site).to receive(:sitemap).with(anything, root: root).and_call_original
+      Site.build(out: out, answers: answers, commit: commit, root: root)
       tools = "#{Site::SITE}/TOOLS.html"
       live = lambda do |url|
         file = url == "#{Site::SITE}/" ? "index.html" : url.delete_prefix("#{Site::SITE}/")
@@ -266,6 +268,49 @@ RSpec.describe "the website build" do
       expect(Site.changed_urls(out, live: live)).to eq([])
       expect(Site.changed_urls(out, live: ->(url) { url == tools ? "older" : live.call(url) })).to eq([ tools ])
       expect(Site.changed_urls(out, live: ->(url) { url == tools ? nil : live.call(url) })).to eq([ tools ])
+      expect(Site.changed_urls(out, live: ->(url) { url == tools ? "#{live.call(url)}4194304" : live.call(url) })).to eq([ tools ])
+
+      gone = "#{Site::SITE}/GONE.html"
+      expect(Site.changed_urls(out, live: ->(url) { url.end_with?("sitemap.xml") ? "#{live.call(url)}<loc>#{gone}</loc>" : live.call(url) })).to eq([ gone ])
+    end
+  end
+
+  it "reads a live page only when it answers 200, and treats a failure as no page" do
+    server = TCPServer.new("127.0.0.1", 0)
+    port = server.addr[1]
+    thread = Thread.new do
+      2.times do
+        client = server.accept
+        path = client.gets.split[1]
+        loop { break if client.gets.to_s.strip.empty? }
+        body = path == "/ok" ? "the page" : "missing"
+        client.write("HTTP/1.1 #{path == '/ok' ? '200 OK' : '404 Not Found'}\r\nContent-Length: #{body.size}\r\nConnection: close\r\n\r\n#{body}")
+        client.close
+      end
+    end
+
+    expect(Site.live_page("http://127.0.0.1:#{port}/ok")).to eq("the page")
+    expect(Site.live_page("http://127.0.0.1:#{port}/gone")).to be_nil
+    thread.join
+    server.close
+    expect(Site.live_page("http://127.0.0.1:#{port}/ok")).to be_nil
+  end
+
+  it "puts each page's date in the sitemap, read from the root the site is built from" do
+    allow(Site).to receive(:last_modified).with("docs/TOOLS.md", root: "/some/root").and_return("2026-01-02")
+    allow(Site).to receive(:last_modified).with("docs/NEW.md", root: "/some/root").and_return(nil)
+    sitemap = Site.sitemap([ { source: "docs/TOOLS.md", out: "TOOLS.html" }, { source: "docs/NEW.md", out: "NEW.html" } ], root: "/some/root")
+
+    expect(sitemap).to include("<loc>#{Site::SITE}/TOOLS.html</loc><lastmod>2026-01-02</lastmod>", "<loc>#{Site::SITE}/NEW.html</loc></url>")
+  end
+
+  it "fails the indexnow command when there is no build to compare, so the workflow can warn" do
+    Dir.mktmpdir do |dir|
+      out, err, status = Open3.capture3(RbConfig.ruby, File.join(root, "scripts", "site.rb"), "indexnow", dir)
+
+      expect(status.success?).to be(false)
+      expect(out).to eq("")
+      expect(err).to include("sitemap.xml")
     end
   end
 
