@@ -326,6 +326,22 @@ RSpec.describe "the website build" do
     end
   end
 
+  it "links every sitemap page from the landing page, so a crawler finds them without the sitemap", skip: no_markdown do
+    scratch do |out|
+      Site.build(out: out, answers: answers, commit: commit)
+      reached = [ "index.html" ]
+      reached.each do |page|
+        File.read(File.join(out, page)).scan(/href="([^"#:]+\.html)(?:#[^"]*)?"/).flatten.each do |link|
+          target = Pathname(File.dirname(page)).join(link).cleanpath.to_s
+          reached << target if File.exist?(File.join(out, target)) && !reached.include?(target)
+        end
+      end
+      listed = File.read(File.join(out, "sitemap.xml")).scan(%r{<loc>#{Regexp.escape(Site::SITE)}/([^<]*)</loc>}).flatten.map { |page| page.empty? ? "index.html" : page }
+
+      expect(listed - reached).to eq([])
+    end
+  end
+
   it "leaves alone a directory it did not write" do
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "keep.txt"), "mine")
