@@ -17,9 +17,12 @@
 
 require "cgi"
 require "fileutils"
+require "json"
+require "net/http"
 require "open3"
 require "pathname"
 require "rbconfig"
+require "uri"
 
 module Site
   ROOT = File.expand_path("..", __dir__)
@@ -27,6 +30,8 @@ module Site
   SAMPLE_APP = "site/sample_app"
   REPO = "https://github.com/crisnahine/rails-ai-context"
   SITE = "https://crisnahine.github.io/rails-ai-context"
+  # Public by design: IndexNow reads it back from the site to prove the pages are ours.
+  INDEXNOW_KEY = "5272fe4a95483563c52a0be32ef9c8f4"
   # Left in a build so a later one knows the directory is its own to replace; Pages serves no dot file.
   MARK = ".rails-ai-context-site"
 
@@ -381,9 +386,21 @@ module Site
     page[:text].lines.map(&:strip).find { |text| text.match?(/\A\*\*.+\*\*\z/) }&.delete("*")
   end
 
-  def sitemap(pages)
-    urls = [ "#{SITE}/" ] + pages.map { |page| "#{SITE}/#{page[:out]}" }
-    entries = urls.map { |url| "  <url><loc>#{escape(url)}</loc></url>" }
+  # The day a file's content last changed. A shallow clone dates every file to
+  # its one commit, and search engines stop trusting a lastmod that is wrong.
+  def last_modified(file, root: ROOT)
+    shallow, status = Open3.capture2("git", "-C", root, "rev-parse", "--is-shallow-repository")
+    return nil unless status.success? && shallow.strip == "false"
+
+    date, status = Open3.capture2("git", "-C", root, "log", "-1", "--format=%cs", "--", file)
+    date.strip if status.success? && !date.strip.empty?
+  end
+
+  def sitemap(pages, root: ROOT)
+    entries = [ "  <url><loc>#{escape(SITE)}/</loc></url>" ] + pages.map do |page|
+      lastmod = last_modified(page[:source], root: root)
+      "  <url><loc>#{escape("#{SITE}/#{page[:out]}")}</loc>#{"<lastmod>#{lastmod}</lastmod>" if lastmod}</url>"
+    end
     %(<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n#{entries.join("\n")}\n</urlset>\n)
   end
 
@@ -448,9 +465,10 @@ module Site
       written << page[:out]
     end
     indexed = pages.reject { |page| page[:source].match?(DOC_UNINDEXED) }
-    File.write(File.join(out, "sitemap.xml"), sitemap(indexed))
+    File.write(File.join(out, "sitemap.xml"), sitemap(indexed, root: root))
     File.write(File.join(out, "llms.txt"), llms_txt(indexed, values))
-    written.push("sitemap.xml", "llms.txt")
+    File.write(File.join(out, "#{INDEXNOW_KEY}.txt"), INDEXNOW_KEY)
+    written.push("sitemap.xml", "llms.txt", "#{INDEXNOW_KEY}.txt")
 
     # The page's own files: the stylesheet, the script, and nothing a build
     # left behind (a dot file, the sample app, the two templates).
@@ -467,9 +485,37 @@ module Site
     end
     written
   end
+
+  def live_page(url)
+    response = Net::HTTP.get_response(URI(url))
+    response.body if response.is_a?(Net::HTTPOK)
+  rescue StandardError
+    nil
+  end
+
+  # The sitemap's pages in `out` that differ from the live ones, since IndexNow
+  # asks for changed URLs only. Every page names the commit it was built from,
+  # which is no change. A page that cannot be read counts as changed.
+  def changed_urls(out, live: method(:live_page))
+    content = ->(html) { html.to_s.b.gsub(/\b\h{7,40}\b/, "") }
+    File.read(File.join(out, "sitemap.xml")).scan(%r{<loc>([^<]+)</loc>}).flatten.reject do |url|
+      file = url.delete_prefix(SITE).delete_prefix("/")
+      content.call(live.call(url)) == content.call(File.binread(File.join(out, file.empty? ? "index.html" : file)))
+    end
+  end
+
+  def indexnow_payload(urls)
+    JSON.generate(host: URI(SITE).host, key: INDEXNOW_KEY, keyLocation: "#{SITE}/#{INDEXNOW_KEY}.txt", urlList: urls)
+  end
 end
 
 if $PROGRAM_NAME == __FILE__
+  # Run before the deploy, while the live pages are still the old ones.
+  if ARGV.first == "indexnow" && ARGV.size == 2
+    urls = Site.changed_urls(File.expand_path(ARGV[1]))
+    puts Site.indexnow_payload(urls) unless urls.empty?
+    exit 0
+  end
   if ARGV.size != 1
     warn "usage: bundle exec ruby scripts/site.rb <out>"
     exit 2

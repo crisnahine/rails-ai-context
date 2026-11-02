@@ -28,8 +28,13 @@ jobs:
     name: Build the site
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      indexnow: ${{ steps.changed.outputs.payload }}
     steps:
+      # The whole history: each page's lastmod in the sitemap is its source file's last commit.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -49,6 +54,11 @@ jobs:
         env:
           RAILS_AI_CONTEXT_NO_UPDATE_CHECK: "1"
         run: bundle exec ruby scripts/site.rb _site
+
+      - name: Compare the pages with the live site
+        id: changed
+        if: github.ref == 'refs/heads/main'
+        run: echo "payload=$(bundle exec ruby scripts/site.rb indexnow _site)" >> "$GITHUB_OUTPUT"
 
       - name: Upload the site
         if: github.ref == 'refs/heads/main'
@@ -74,3 +84,26 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+  # Tells Bing and the other IndexNow engines which pages this deploy changed.
+  # The key is public and the job holds no token. A refused ping leaves a
+  # warning, since it says nothing about the deploy.
+  indexnow:
+    name: Tell IndexNow what changed
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.indexnow != ''
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Submit the changed pages
+        env:
+          PAYLOAD: ${{ needs.build.outputs.indexnow }}
+        run: |
+          code=$(curl -sS -o response.txt -w '%{http_code}' --retry 2 -X POST https://api.indexnow.org/indexnow \
+            -H 'Content-Type: application/json; charset=utf-8' -d "$PAYLOAD") || code=none
+          echo "IndexNow answered $code for: $PAYLOAD"
+          case "$code" in
+            200|202) ;;
+            *) echo "::warning::IndexNow answered $code: $(cat response.txt 2>/dev/null)" ;;
+          esac

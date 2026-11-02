@@ -236,6 +236,51 @@ RSpec.describe "the website build" do
     end
   end
 
+  it "dates a page by its source file's last commit, and not at all from a shallow clone" do
+    Dir.mktmpdir("rails-ai-context-site-") do |dir|
+      repo = File.join(dir, "repo")
+      git = ->(*args, cwd: repo) { system({ "GIT_COMMITTER_DATE" => "2026-03-04T05:06:07Z" }, "git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@example.com", *args, out: File::NULL, err: File::NULL) or raise "git #{args.first} failed" }
+      FileUtils.mkdir_p(repo)
+      git.call("init")
+      File.write(File.join(repo, "page.md"), "# Page\n")
+      git.call("add", ".")
+      git.call("commit", "-m", "page")
+
+      expect(Site.last_modified("page.md", root: repo)).to eq("2026-03-04")
+      expect(Site.last_modified("never-committed.md", root: repo)).to be_nil
+
+      git.call("clone", "--depth", "1", "file://#{repo}", File.join(dir, "shallow"), cwd: dir)
+      expect(Site.last_modified("page.md", root: File.join(dir, "shallow"))).to be_nil
+    end
+  end
+
+  it "names the pages that differ from the live site, ignoring the commit each one was built from", skip: no_markdown do
+    scratch do |out|
+      Site.build(out: out, answers: answers, commit: commit)
+      tools = "#{Site::SITE}/TOOLS.html"
+      live = lambda do |url|
+        file = url == "#{Site::SITE}/" ? "index.html" : url.delete_prefix("#{Site::SITE}/")
+        File.binread(File.join(out, file)).gsub(commit, "f" * 40).gsub(commit[0, 7], "f" * 7)
+      end
+
+      expect(Site.changed_urls(out, live: live)).to eq([])
+      expect(Site.changed_urls(out, live: ->(url) { url == tools ? "older" : live.call(url) })).to eq([ tools ])
+      expect(Site.changed_urls(out, live: ->(url) { url == tools ? nil : live.call(url) })).to eq([ tools ])
+    end
+  end
+
+  it "hands IndexNow a key the site serves, scoped to the site's own path", skip: no_markdown do
+    scratch do |out|
+      Site.build(out: out, answers: answers, commit: commit)
+      payload = JSON.parse(Site.indexnow_payload([ "#{Site::SITE}/TOOLS.html" ]))
+
+      expect(payload).to include("host" => "crisnahine.github.io", "key" => Site::INDEXNOW_KEY, "urlList" => [ "#{Site::SITE}/TOOLS.html" ])
+      expect(payload["keyLocation"]).to start_with("#{Site::SITE}/")
+      expect(File.read(File.join(out, File.basename(payload["keyLocation"])))).to eq(Site::INDEXNOW_KEY)
+      expect(Site::INDEXNOW_KEY).to match(/\A[a-zA-Z0-9-]{8,128}\z/)
+    end
+  end
+
   it "leaves alone a directory it did not write" do
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "keep.txt"), "mine")
