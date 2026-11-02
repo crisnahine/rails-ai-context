@@ -2,7 +2,7 @@
 
 # rails-ai-context - Complete Guide
 
-**The all-in-one reference. Everything in one file.**
+**The all-in-one rails-ai-context reference: every command, parameter and option in one file.**
 
 [Quickstart](QUICKSTART.md) · [Tools](TOOLS.md) · [Recipes](RECIPES.md) · [FAQ](FAQ.md)
 

@@ -342,6 +342,35 @@ RSpec.describe "the website build" do
     end
   end
 
+  it "gives a page a title search results won't cut, without the site's name twice" do
+    expect(Site.page_title("FAQ")).to eq("FAQ · rails-ai-context")
+    expect(Site.page_title("rails-ai-context documentation")).to eq("rails-ai-context documentation")
+
+    long = Site.page_title("Derive Prism listener registration ourselves, not via prism's register_public_methods")
+    expect(long).to eq("Derive Prism listener registration ourselves, not via...")
+    expect(long.length).to be <= 60
+  end
+
+  it "describes a page by its bold line, or else its first paragraph of prose" do
+    expect(Site.description({ text: "# T\n\n**The line.**\n\nProse.\n" })).to eq("The line.")
+    expect(Site.description({ text: "# T\n\nStatus: accepted\n\nThe `first` [part](a.md) of\nit.\n\nMore.\n" })).to eq("The first part of it.")
+    expect(Site.description({ text: "# T\n\n#{'word ' * 60}\n" }).length).to be <= 155
+    expect(Site.description({ text: "# T\n\n- a list\n" })).to be_nil
+  end
+
+  it "holds every indexed docs page to a title and a description search results can show", skip: no_markdown do
+    scratch do |out|
+      Site.build(out: out, answers: answers, commit: commit)
+      pages = File.read(File.join(out, "sitemap.xml")).scan(%r{<loc>#{Regexp.escape(Site::SITE)}/([^<]+)</loc>}).flatten
+      lengths = pages.to_h do |page|
+        html = File.read(File.join(out, page))
+        [ page, [ CGI.unescapeHTML(html[%r{<title>(.*?)</title>}, 1]).length, CGI.unescapeHTML(html[/name="description" content="([^"]*)"/, 1]).length ] ]
+      end
+
+      expect(lengths.reject { |_, (title, description)| title <= 60 && description.between?(50, 160) }).to eq({})
+    end
+  end
+
   it "leaves alone a directory it did not write" do
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "keep.txt"), "mine")

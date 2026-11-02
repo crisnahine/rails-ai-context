@@ -2,7 +2,7 @@
 
 # CLI Reference
 
-**All commands available from the terminal.**
+**All rails-ai-context commands available from the terminal, with their flags.**
 
 [Quickstart](QUICKSTART.md) · [Tools Reference](TOOLS.md) · [Standalone](STANDALONE.md) · [Configuration](CONFIGURATION.md)
 

@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-**All 35 read-only tools, with every parameter.**
+**All 35 read-only tools rails-ai-context gives an AI coding agent, with every parameter.**
 
 [Quickstart](QUICKSTART.md) · [Recipes](RECIPES.md) · [Custom Tools](CUSTOM_TOOLS.md) · [CLI Reference](CLI.md)
 

@@ -2,7 +2,7 @@
 
 # Architecture
 
-**How rails-ai-context is built, and why.**
+**How rails-ai-context is built, and why: its modules and the request lifecycle.**
 
 [Tools Reference](TOOLS.md) · [Introspectors](INTROSPECTORS.md) · [Security](SECURITY.md) · [Custom Tools](CUSTOM_TOOLS.md)
 

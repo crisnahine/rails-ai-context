@@ -379,6 +379,7 @@ module Site
     end.join("\n")
     fill(template, values.merge(
       "title" => escape(page[:title]),
+      "pageTitle" => escape(page_title(page[:title])),
       "description" => escape(description(page) || "#{page[:title]}: rails-ai-context documentation."),
       "pageUrl" => "#{SITE}/#{page[:out]}",
       "robots" => page[:source].match?(DOC_UNINDEXED) ? %(<meta name="robots" content="noindex">\n) : "",
@@ -391,9 +392,25 @@ module Site
     ), ->(file) { read(file, root: root) })
   end
 
-  # A page's first line set wholly in bold, if it has one.
+  def clip(text, limit)
+    text.length <= limit ? text : "#{text[0, limit - 3].sub(/\s+\S*\z/, '')}..."
+  end
+
+  # Search results cut a title at about 60 characters, so a long one drops the site's name first.
+  def page_title(title)
+    return clip(title, 60) if title.include?("rails-ai-context")
+
+    full = "#{title} · rails-ai-context"
+    full.length <= 60 ? full : clip(title, 60)
+  end
+
+  # A page's first line set wholly in bold, or else its first paragraph of prose.
   def description(page)
-    page[:text].lines.map(&:strip).find { |text| text.match?(/\A\*\*.+\*\*\z/) }&.delete("*")
+    bold = page[:text].lines.map(&:strip).find { |text| text.match?(/\A\*\*.+\*\*\z/) }
+    return bold.delete("*") if bold
+
+    prose = page[:text].split(/\n{2,}/).map(&:strip).find { |block| block.match?(/\A[[:alpha:]`]/) && !block.start_with?("Status:") }
+    prose && clip(prose.gsub(/\[([^\]]+)\]\([^)]*\)/, '\1').delete("`*").gsub(/\s+/, " "), 155)
   end
 
   # The day a file's content last changed. A shallow clone dates every file to
